@@ -15,14 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Fuzz test that runs every valid `AggregateExec` chain over the same data
-//! and asserts identical results.
+//! Fuzz tests that run every valid `AggregateExec` chain over the same data
+//! and assert identical results.
 //!
-//! The case space is the cross product of independent axes: the operator
-//! [`Chain`], the group [`Keys`] (one per `GroupValues` implementation), the
-//! [`Aggregates`], the source [`Order`], the group [`Cardinality`], the
-//! [`Memory`] budget and whether the skip-partial probe may fire. Only the
-//! combinations that cannot be planned are left out, see [`all_shapes`].
+//! One test per operator [`Chain`], each running the chain over the cross
+//! product of the other axes: the group [`Keys`] (one per `GroupValues`
+//! implementation), the [`Aggregates`], the source [`Order`], the group
+//! [`Cardinality`], the [`Memory`] budget and whether the skip-partial probe
+//! may fire. Only the combinations that cannot be planned are left out, see
+//! [`shapes`].
 
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
@@ -39,7 +40,6 @@ use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef, SortOptions};
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::prelude::SessionConfig;
-use datafusion_common::Result;
 use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_common::utils::get_available_parallelism;
 use datafusion_common_runtime::JoinSet;
@@ -69,228 +69,137 @@ use rand::{Rng, SeedableRng};
 use AggregateMode::*;
 use Operator::*;
 
-// ---------------------------------------------------------------------------
-// Case space
-// ---------------------------------------------------------------------------
+mod assertions;
+mod case_space;
+mod context;
+mod data;
+mod plan;
 
-const ROWS: usize = 32 * 1024;
-const PARTITIONS: usize = 4;
-const BATCH_SIZE: usize = 64;
-/// The fair pool caps every spillable consumer at `pool / consumers`, and a
-/// chain registers up to twenty consumers (aggregate streams plus one per
-/// repartition channel). The cap has to clear a small table's legitimate
-/// footprint, which at very low cardinality is dominated by the `count
-/// distinct` sets and grows in steps of roughly 100 KB, while a final table at
-/// very high cardinality must still exceed it.
-const LIMITED_POOL_BYTES: usize = 4 * 1024 * 1024;
+use assertions::*;
+use case_space::*;
+use context::*;
+use data::*;
+use plan::*;
 
-/// How the source data is ordered relative to the group keys.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum Order {
-    /// Not ordered. Aggregates see `InputOrderMode::Linear`.
-    Unordered,
-    /// Sorted by the first key only. Aggregates see
-    /// `InputOrderMode::PartiallySorted([0])`.
-    SortedByFirstKey,
-    /// Sorted by all keys. Aggregates see `InputOrderMode::Sorted`.
-    SortedByAllKeys,
+// What is tested
+// ==============
+//
+// Every test below is one physical plan shape, an `AggregateExec` chain.
+// `chain` lists its operators bottom-up, source first; the doc comment shows
+// the same plan as DataFusion prints it. The test runs that plan for every
+// query and input below and asserts it returns the same rows as the plain
+// single-stage aggregate `SINGLE`.
+//
+// The table (`data.rs`), 32K rows, generated from a fixed seed:
+//
+//   k1 Int64, k2 Int64        two-column key, k1 alone has fewer distinct
+//                             values than (k1, k2)
+//   v  Int64                  the aggregated value, -1000..1000
+//   b  Boolean                one column per `GroupValues` implementation,
+//   s  Utf8                   each with one distinct value per (k1, k2)
+//   sv Utf8View               group (Boolean: two)
+//   p  Int64
+//   st Struct<list: List<Int64>, num: Int64>
+//
+// Every key column has about 3% nulls. The number of groups is the
+// cardinality axis: 32K (one row per group), 1K, 16 or 2.
+//
+// The queries (`case_space.rs`), one per key set times one per aggregate list:
+//
+//   SELECT <aggs> FROM t                            -- no GROUP BY
+//   SELECT k1, k2, <aggs> FROM t GROUP BY k1, k2    -- GroupValuesColumn
+//   SELECT b,  <aggs> FROM t GROUP BY b             -- GroupValuesBoolean
+//   SELECT s,  <aggs> FROM t GROUP BY s             -- GroupValuesBytes
+//   SELECT sv, <aggs> FROM t GROUP BY sv            -- GroupValuesBytesView
+//   SELECT p,  <aggs> FROM t GROUP BY p             -- GroupValuesPrimitive
+//   SELECT b, s, sv, p, <aggs> FROM t GROUP BY b, s, sv, p
+//   SELECT st, <aggs> FROM t GROUP BY st            -- row format fallback
+//
+//   <aggs> is one of
+//     count(v), count(DISTINCT v), sum(v), avg(v), min(v), max(v)
+//     nothing, as in SELECT DISTINCT keys
+//     max(v) alone, the one aggregate the TopK stream supports
+//
+//   TopK chains add LIMIT 64K, above any group count, so all groups survive.
+//
+// The input (`data.rs`), for each query:
+//
+//   order        unordered (shuffled, round-robin over partitions), sorted by
+//                the first key, or sorted by all keys, each partition sorted
+//   partitions   1 or 4, in batches of 64 rows
+//   memory       unlimited, or a 4 MB pool too small for a 32K-group table
+//   skip-partial on or off, where a `Partial` stage on unordered input runs it
+//
+// Not every combination can be planned, see `shapes` and `Shape::orders`.
+//
+// Per case, besides the rows matching `SINGLE`, the test asserts
+// (`assertions.rs`) that the plan was built as intended (modes, input order
+// modes, partition counts), that nothing fails or hangs, in particular not
+// with out of memory, that only spill-capable stages spill, and that the
+// skip-partial probe fires exactly when it may. Per chain, at least one case
+// must spill when the chain has a spill-capable stage on unordered input.
+
+/// The reference chain every other chain is compared against.
+const SINGLE: Chain = chain("single", &[Aggregate(Single)], 1);
+
+/// `Single` on one partition. Also the reference every other chain is compared
+/// against.
+///
+/// ```text
+/// AggregateExec: mode=Single
+///   DataSourceExec: partitions=1
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+async fn single() {
+    assert_chain_matches_single_aggregate(SINGLE).await;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Cardinality {
-    VeryHigh,
-    Medium,
-    Low,
-    VeryLow,
-}
-
-impl Cardinality {
-    const ALL: [Self; 4] = [Self::VeryHigh, Self::Medium, Self::Low, Self::VeryLow];
-
-    /// Number of distinct `(k1, k2)` groups.
-    fn groups(self) -> usize {
-        match self {
-            Self::VeryHigh => ROWS,
-            Self::Medium => ROWS / 32,
-            Self::Low => 16,
-            Self::VeryLow => 2,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Memory {
-    /// Unlimited pool. Nothing spills or emits early.
-    Unlimited,
-    /// Pool sized so final and single hash tables cannot fit.
-    Limited,
-}
-
-/// One operator in a chain, listed bottom to top.
-#[derive(Clone, Copy, Debug)]
-enum Operator {
-    Aggregate(AggregateMode),
-    /// `AggregateExec` with `limit_options` set, which selects
-    /// `GroupedTopKAggregateStream` regardless of mode.
-    TopK(AggregateMode),
-    /// `RepartitionExec` hashed on the group keys. Destroys ordering.
-    HashRepartition,
-    /// `RepartitionExec` hashed on the group keys with `preserve_order`.
-    OrderPreservingHashRepartition,
-    /// `CoalescePartitionsExec`. Destroys ordering.
-    CoalescePartitions,
-    /// `SortPreservingMergeExec` on the current ordering.
-    SortPreservingMerge,
-}
-
-/// The `GROUP BY` keys. Every key type has its own `GroupValues`
-/// implementation, so each is a value of this axis.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum Keys {
-    /// No `GROUP BY`.
-    None,
-    /// `k1, k2` (two Int64), handled by `GroupValuesColumn`.
-    TwoInts,
-    /// `b` (Boolean), handled by `GroupValuesBoolean`.
-    Boolean,
-    /// `s` (Utf8), handled by `GroupValuesBytes`.
-    Bytes,
-    /// `sv` (Utf8View), handled by `GroupValuesBytesView`.
-    BytesView,
-    /// `p` (Int64 with as many distinct values as groups), handled by
-    /// `GroupValuesPrimitive`.
-    Primitive,
-    /// `b, s, sv, p`, handled by `GroupValuesColumn` with mixed column types.
-    Mixed,
-    /// `st` (Struct of a List<Int64> and an Int64), which no specialized
-    /// implementation supports, so it falls back to the row format
-    /// `GroupValuesRows`.
-    Struct,
-}
-
-impl Keys {
-    const ALL: [Self; 8] = [
-        Self::None,
-        Self::TwoInts,
-        Self::Boolean,
-        Self::Bytes,
-        Self::BytesView,
-        Self::Primitive,
-        Self::Mixed,
-        Self::Struct,
-    ];
-
-    /// Key columns, in `GROUP BY` order.
-    fn columns(self) -> &'static [&'static str] {
-        match self {
-            Keys::None => &[],
-            Keys::TwoInts => &["k1", "k2"],
-            Keys::Boolean => &["b"],
-            Keys::Bytes => &["s"],
-            Keys::BytesView => &["sv"],
-            Keys::Primitive => &["p"],
-            Keys::Mixed => &["b", "s", "sv", "p"],
-            Keys::Struct => &["st"],
-        }
-    }
-
-    /// Whether the source can be sorted by the keys. Struct columns cannot be
-    /// sorted by the arrow sort kernels, so those keys only run unordered.
-    fn sortable(self) -> bool {
-        self != Keys::Struct
-    }
-
-    /// Whether the number of groups is `Cardinality::groups()`. Every key
-    /// column has one distinct value per group except the Boolean one.
-    fn tracks_cardinality(self) -> bool {
-        !matches!(self, Keys::None | Keys::Boolean)
-    }
-
-    /// Whether `GroupedTopKAggregateStream` supports these keys: exactly one
-    /// primitive or string column.
-    fn top_k_supported(self) -> bool {
-        matches!(self, Keys::Bytes | Keys::BytesView | Keys::Primitive)
-    }
-}
-
-/// The aggregate expressions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Aggregates {
-    /// count, count distinct, sum, avg, min, max: non-trivial partial state so
-    /// the Partial, PartialReduce and Final stages are actually exercised.
-    /// `avg` (two-field state) and `count distinct` (set state) matter most.
-    All,
-    /// No aggregate expressions, as `SELECT DISTINCT` plans: the
-    /// accumulator-free path of every stream.
-    None,
-    /// `max(v)` only, the one aggregate the TopK stream supports. Chains using
-    /// `Operator::TopK` set a limit larger than any possible group count, so
-    /// the result must still be the complete aggregate.
-    Max,
-}
-
-impl Aggregates {
-    const ALL: [Self; 3] = [Self::All, Self::None, Self::Max];
-}
-
-/// The logical query a chain computes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Query {
-    keys: Keys,
-    aggregates: Aggregates,
-}
-
-/// Larger than any possible number of groups, so TopK keeps every group.
-const TOP_K_LIMIT: usize = 2 * ROWS;
-
-/// Everything that varies for a case apart from the shape itself. Passed as a
-/// struct so a new dimension does not change every shape predicate.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct CaseParams {
-    order: Order,
-    cardinality: Cardinality,
-    memory: Memory,
-    /// Whether the skip-partial probe may fire. Only varied for shapes with a
-    /// grouped `Partial` stage on Linear input, since nothing else runs it.
-    skip_partial_enabled: bool,
-}
-
-/// An operator chain, independent of the query it computes.
-#[derive(Debug)]
-struct Chain {
-    name: &'static str,
-    operators: &'static [Operator],
-    /// Source partition count.
-    source_partitions: usize,
-}
-
-const fn chain(
-    name: &'static str,
-    operators: &'static [Operator],
-    source_partitions: usize,
-) -> Chain {
-    Chain {
-        name,
-        operators,
-        source_partitions,
-    }
-}
-
-/// Every chain the planner can produce. Each runs over every query it can be
-/// planned for, see [`all_shapes`].
-const CHAINS: &[Chain] = &[
-    chain("single", &[Aggregate(Single)], 1),
-    chain(
+/// Each partition aggregates its own keys in one pass.
+///
+/// ```text
+/// AggregateExec: mode=SinglePartitioned
+///   RepartitionExec: partitioning=Hash(keys)
+///     DataSourceExec: partitions=PARTITIONS
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+async fn single_partitioned() {
+    assert_chain_matches_single_aggregate(chain(
         "single_partitioned",
         &[HashRepartition, Aggregate(SinglePartitioned)],
         PARTITIONS,
-    ),
-    chain(
+    ))
+    .await;
+}
+
+/// The shuffle keeps the source ordering, so the single stage still sees sorted
+/// input.
+///
+/// ```text
+/// AggregateExec: mode=SinglePartitioned
+///   RepartitionExec: partitioning=Hash(keys), preserve_order=true
+///     DataSourceExec: partitions=PARTITIONS
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+async fn single_partitioned_order_preserving() {
+    assert_chain_matches_single_aggregate(chain(
         "single_partitioned_order_preserving",
         &[OrderPreservingHashRepartition, Aggregate(SinglePartitioned)],
         PARTITIONS,
-    ),
-    chain(
+    ))
+    .await;
+}
+
+/// The planner's default two-stage plan.
+///
+/// ```text
+/// AggregateExec: mode=FinalPartitioned
+///   RepartitionExec: partitioning=Hash(keys)
+///     AggregateExec: mode=Partial
+///       DataSourceExec: partitions=PARTITIONS
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+async fn partial_repartition_final() {
+    assert_chain_matches_single_aggregate(chain(
         "partial_repartition_final",
         &[
             Aggregate(Partial),
@@ -298,13 +207,40 @@ const CHAINS: &[Chain] = &[
             Aggregate(FinalPartitioned),
         ],
         PARTITIONS,
-    ),
-    chain(
+    ))
+    .await;
+}
+
+/// Two stages merged into one output partition.
+///
+/// ```text
+/// AggregateExec: mode=Final
+///   CoalescePartitionsExec
+///     AggregateExec: mode=Partial
+///       DataSourceExec: partitions=PARTITIONS
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+async fn partial_coalesce_final() {
+    assert_chain_matches_single_aggregate(chain(
         "partial_coalesce_final",
         &[Aggregate(Partial), CoalescePartitions, Aggregate(Final)],
         PARTITIONS,
-    ),
-    chain(
+    ))
+    .await;
+}
+
+/// Two stages whose shuffle keeps the source ordering, so the final stage sees
+/// sorted input.
+///
+/// ```text
+/// AggregateExec: mode=FinalPartitioned
+///   RepartitionExec: partitioning=Hash(keys), preserve_order=true
+///     AggregateExec: mode=Partial
+///       DataSourceExec: partitions=PARTITIONS
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+async fn partial_order_preserving_repartition_final() {
+    assert_chain_matches_single_aggregate(chain(
         "partial_order_preserving_repartition_final",
         &[
             Aggregate(Partial),
@@ -312,18 +248,59 @@ const CHAINS: &[Chain] = &[
             Aggregate(FinalPartitioned),
         ],
         PARTITIONS,
-    ),
-    chain(
+    ))
+    .await;
+}
+
+/// Two stages merged by a sort-preserving merge, so the final stage sees sorted
+/// input.
+///
+/// ```text
+/// AggregateExec: mode=Final
+///   SortPreservingMergeExec: [keys]
+///     AggregateExec: mode=Partial
+///       DataSourceExec: partitions=PARTITIONS
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+async fn partial_sort_preserving_merge_final() {
+    assert_chain_matches_single_aggregate(chain(
         "partial_sort_preserving_merge_final",
         &[Aggregate(Partial), SortPreservingMerge, Aggregate(Final)],
         PARTITIONS,
-    ),
-    chain(
+    ))
+    .await;
+}
+
+/// Two stages back to back on one partition, no shuffle between.
+///
+/// ```text
+/// AggregateExec: mode=Final
+///   AggregateExec: mode=Partial
+///     DataSourceExec: partitions=1
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+async fn partial_final_single_partition() {
+    assert_chain_matches_single_aggregate(chain(
         "partial_final_single_partition",
         &[Aggregate(Partial), Aggregate(Final)],
         1,
-    ),
-    chain(
+    ))
+    .await;
+}
+
+/// Three stages with a `PartialReduce` between two shuffles.
+///
+/// ```text
+/// AggregateExec: mode=FinalPartitioned
+///   RepartitionExec: partitioning=Hash(keys)
+///     AggregateExec: mode=PartialReduce
+///       RepartitionExec: partitioning=Hash(keys)
+///         AggregateExec: mode=Partial
+///           DataSourceExec: partitions=PARTITIONS
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+async fn partial_repartition_reduce_repartition_final() {
+    assert_chain_matches_single_aggregate(chain(
         "partial_repartition_reduce_repartition_final",
         &[
             Aggregate(Partial),
@@ -333,8 +310,23 @@ const CHAINS: &[Chain] = &[
             Aggregate(FinalPartitioned),
         ],
         PARTITIONS,
-    ),
-    chain(
+    ))
+    .await;
+}
+
+/// Three stages: a shuffled `PartialReduce` merged into one final partition.
+///
+/// ```text
+/// AggregateExec: mode=Final
+///   CoalescePartitionsExec
+///     AggregateExec: mode=PartialReduce
+///       RepartitionExec: partitioning=Hash(keys)
+///         AggregateExec: mode=Partial
+///           DataSourceExec: partitions=PARTITIONS
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+async fn partial_repartition_reduce_coalesce_final() {
+    assert_chain_matches_single_aggregate(chain(
         "partial_repartition_reduce_coalesce_final",
         &[
             Aggregate(Partial),
@@ -344,8 +336,24 @@ const CHAINS: &[Chain] = &[
             Aggregate(Final),
         ],
         PARTITIONS,
-    ),
-    chain(
+    ))
+    .await;
+}
+
+/// Three stages where `PartialReduce` and `Final` each run on one coalesced
+/// partition.
+///
+/// ```text
+/// AggregateExec: mode=Final
+///   CoalescePartitionsExec
+///     AggregateExec: mode=PartialReduce
+///       CoalescePartitionsExec
+///         AggregateExec: mode=Partial
+///           DataSourceExec: partitions=PARTITIONS
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+async fn partial_coalesce_reduce_coalesce_final() {
+    assert_chain_matches_single_aggregate(chain(
         "partial_coalesce_reduce_coalesce_final",
         &[
             Aggregate(Partial),
@@ -355,8 +363,22 @@ const CHAINS: &[Chain] = &[
             Aggregate(Final),
         ],
         PARTITIONS,
-    ),
-    chain(
+    ))
+    .await;
+}
+
+/// `PartialReduce` directly on top of `Partial`, before the shuffle.
+///
+/// ```text
+/// AggregateExec: mode=FinalPartitioned
+///   RepartitionExec: partitioning=Hash(keys)
+///     AggregateExec: mode=PartialReduce
+///       AggregateExec: mode=Partial
+///         DataSourceExec: partitions=PARTITIONS
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+async fn partial_local_reduce_repartition_final() {
+    assert_chain_matches_single_aggregate(chain(
         "partial_local_reduce_repartition_final",
         &[
             Aggregate(Partial),
@@ -365,9 +387,24 @@ const CHAINS: &[Chain] = &[
             Aggregate(FinalPartitioned),
         ],
         PARTITIONS,
-    ),
-    // ordered PartialReduce has no dedicated stream, lands on the fallback
-    chain(
+    ))
+    .await;
+}
+
+/// Three stages joined by order-preserving shuffles. Ordered `PartialReduce`
+/// has no dedicated stream and lands on the fallback.
+///
+/// ```text
+/// AggregateExec: mode=FinalPartitioned
+///   RepartitionExec: partitioning=Hash(keys), preserve_order=true
+///     AggregateExec: mode=PartialReduce
+///       RepartitionExec: partitioning=Hash(keys), preserve_order=true
+///         AggregateExec: mode=Partial
+///           DataSourceExec: partitions=PARTITIONS
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+async fn partial_reduce_final_order_preserving() {
+    assert_chain_matches_single_aggregate(chain(
         "partial_reduce_final_order_preserving",
         &[
             Aggregate(Partial),
@@ -377,748 +414,76 @@ const CHAINS: &[Chain] = &[
             Aggregate(FinalPartitioned),
         ],
         PARTITIONS,
-    ),
-    chain("top_k_single", &[TopK(Single)], 1),
-    // planner shape: the limit lands on the aggregate under the sort
-    chain(
+    ))
+    .await;
+}
+
+/// `GroupedTopKAggregateStream` alone. The limit is above the group count, so
+/// every group survives.
+///
+/// ```text
+/// AggregateExec: mode=Single, lim=[TOP_K_LIMIT]
+///   DataSourceExec: partitions=1
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+async fn top_k_single() {
+    assert_chain_matches_single_aggregate(chain("top_k_single", &[TopK(Single)], 1))
+        .await;
+}
+
+/// Planner shape for `GROUP BY ... ORDER BY max(v) LIMIT n`: the limit lands on
+/// the final stage.
+///
+/// ```text
+/// AggregateExec: mode=FinalPartitioned, lim=[TOP_K_LIMIT]
+///   RepartitionExec: partitioning=Hash(keys)
+///     AggregateExec: mode=Partial
+///       DataSourceExec: partitions=PARTITIONS
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+async fn top_k_partial_repartition_final() {
+    assert_chain_matches_single_aggregate(chain(
         "top_k_partial_repartition_final",
         &[Aggregate(Partial), HashRepartition, TopK(FinalPartitioned)],
         PARTITIONS,
-    ),
-    chain(
+    ))
+    .await;
+}
+
+/// TopK final stage on one coalesced partition.
+///
+/// ```text
+/// AggregateExec: mode=Final, lim=[TOP_K_LIMIT]
+///   CoalescePartitionsExec
+///     AggregateExec: mode=Partial
+///       DataSourceExec: partitions=PARTITIONS
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+async fn top_k_partial_coalesce_final() {
+    assert_chain_matches_single_aggregate(chain(
         "top_k_partial_coalesce_final",
         &[Aggregate(Partial), CoalescePartitions, TopK(Final)],
         PARTITIONS,
-    ),
-    chain(
+    ))
+    .await;
+}
+
+/// TopK on both stages.
+///
+/// ```text
+/// AggregateExec: mode=FinalPartitioned, lim=[TOP_K_LIMIT]
+///   RepartitionExec: partitioning=Hash(keys)
+///     AggregateExec: mode=Partial, lim=[TOP_K_LIMIT]
+///       DataSourceExec: partitions=PARTITIONS
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+async fn top_k_both_stages() {
+    assert_chain_matches_single_aggregate(chain(
         "top_k_both_stages",
         &[TopK(Partial), HashRepartition, TopK(FinalPartitioned)],
         PARTITIONS,
-    ),
-];
-
-fn chain_by_name(name: &str) -> &'static Chain {
-    CHAINS.iter().find(|chain| chain.name == name).unwrap()
-}
-
-impl Chain {
-    /// Whether the chain hashes or sorts on the group keys, so it cannot run
-    /// without any.
-    fn needs_keys(&self) -> bool {
-        self.operators.iter().any(|operator| {
-            matches!(
-                operator,
-                HashRepartition
-                    | OrderPreservingHashRepartition
-                    | SortPreservingMerge
-                    | TopK(_)
-            )
-        })
-    }
-
-    fn is_top_k(&self) -> bool {
-        self.operators
-            .iter()
-            .any(|operator| matches!(operator, TopK(_)))
-    }
-}
-
-/// A plan shape: a chain computing a query.
-#[derive(Clone, Copy, Debug)]
-struct Shape {
-    chain: &'static Chain,
-    query: Query,
-}
-
-impl Shape {
-    fn name(&self) -> String {
-        format!(
-            "{} {:?} {:?}",
-            self.chain.name, self.query.keys, self.query.aggregates
-        )
-    }
-
-    /// Source orders that make sense for this shape. Order-preserving shuffles
-    /// need an ordering to preserve; no-grouping chains ignore ordering.
-    fn orders(&self) -> Vec<Order> {
-        let needs_ordered_input = self.chain.operators.iter().any(|operator| {
-            matches!(
-                operator,
-                OrderPreservingHashRepartition | SortPreservingMerge
-            )
-        });
-        let keys = self.query.keys.columns();
-        let mut orders = vec![];
-        if !needs_ordered_input {
-            orders.push(Order::Unordered);
-        }
-        if self.query.keys.sortable() && !keys.is_empty() {
-            // With a single key, sorting by the first key is already sorting
-            // by all keys.
-            if keys.len() > 1 {
-                orders.push(Order::SortedByFirstKey);
-            }
-            orders.push(Order::SortedByAllKeys);
-        }
-        orders
-    }
-
-    /// Whether some `Partial` stage of this shape runs the skip-partial probe
-    /// for the given source order: grouped, not TopK, and Linear input.
-    fn has_skip_partial_candidate(&self, order: Order) -> bool {
-        if self.query.keys == Keys::None {
-            return false;
-        }
-        let mut current = order;
-        for operator in self.chain.operators {
-            match operator {
-                HashRepartition | CoalescePartitions => current = Order::Unordered,
-                Aggregate(Partial) if current == Order::Unordered => return true,
-                _ => {}
-            }
-        }
-        false
-    }
-}
-
-/// Every chain over every query it can be planned for.
-///
-/// - Without keys a chain can neither hash nor sort, and `max` alone is a
-///   subset of the full aggregate list, so only that list runs.
-/// - The TopK stream needs one primitive or string key with either a single
-///   `max` or no aggregates at all (the `DISTINCT ... LIMIT` form).
-/// - Every other chain runs the full aggregate list and the accumulator-free
-///   form; `max` alone adds nothing there.
-fn all_shapes() -> Vec<Shape> {
-    let mut shapes = vec![];
-    for chain in CHAINS {
-        for keys in Keys::ALL {
-            for aggregates in Aggregates::ALL {
-                let valid = if keys == Keys::None {
-                    !chain.needs_keys() && aggregates == Aggregates::All
-                } else if chain.is_top_k() {
-                    keys.top_k_supported() && aggregates != Aggregates::All
-                } else {
-                    aggregates != Aggregates::Max
-                };
-                if valid {
-                    shapes.push(Shape {
-                        chain,
-                        query: Query { keys, aggregates },
-                    });
-                }
-            }
-        }
-    }
-    shapes
-}
-
-#[derive(Clone, Debug)]
-struct Case {
-    shape: Shape,
-    params: CaseParams,
-}
-
-fn all_cases() -> Vec<Case> {
-    // `AGGREGATE_CHAIN_SHAPES=a,b` restricts the run to shapes whose name
-    // contains one of the given substrings, to reproduce or bisect quickly.
-    let shape_filter: Vec<String> = std::env::var("AGGREGATE_CHAIN_SHAPES")
-        .map(|value| value.split(',').map(str::to_string).collect())
-        .unwrap_or_default();
-    let mut cases = vec![];
-    for shape in all_shapes().into_iter().filter(|shape| {
-        shape_filter.is_empty()
-            || shape_filter
-                .iter()
-                .any(|needle| shape.name().contains(needle))
-    }) {
-        for order in shape.orders() {
-            let skip_partial_variants: &[bool] =
-                if shape.has_skip_partial_candidate(order) {
-                    &[true, false]
-                } else {
-                    &[true]
-                };
-            for cardinality in Cardinality::ALL {
-                for memory in [Memory::Unlimited, Memory::Limited] {
-                    for &skip_partial_enabled in skip_partial_variants {
-                        cases.push(Case {
-                            shape,
-                            params: CaseParams {
-                                order,
-                                cardinality,
-                                memory,
-                                skip_partial_enabled,
-                            },
-                        });
-                    }
-                }
-            }
-        }
-    }
-    cases
-}
-
-// ---------------------------------------------------------------------------
-// Data generation
-// ---------------------------------------------------------------------------
-
-/// `k1 Int64 nullable, k2 Int64 nullable, v Int64`
-/// `k1, k2 Int64` (two-key query), `v Int64` (aggregated), and one column per
-/// key type: `b Boolean`, `s Utf8`, `sv Utf8View`, `p Int64`, and
-/// `st Struct<list: List<Int64>, num: Int64>`.
-/// Every key column is nullable.
-fn schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("k1", DataType::Int64, true),
-        Field::new("k2", DataType::Int64, true),
-        Field::new("v", DataType::Int64, false),
-        Field::new("b", DataType::Boolean, true),
-        Field::new("s", DataType::Utf8, true),
-        Field::new("sv", DataType::Utf8View, true),
-        Field::new("p", DataType::Int64, true),
-        Field::new_struct("st", struct_fields(), true),
-    ]))
-}
-
-/// About 3% nulls.
-fn not_null(rng: &mut StdRng) -> bool {
-    rng.random_range(0..100) >= 3
-}
-
-fn struct_fields() -> Fields {
-    Fields::from(vec![
-        Field::new("list", DataType::new_list(DataType::Int64, true), true),
-        Field::new("num", DataType::Int64, true),
-    ])
-}
-
-/// The raw rows for one cardinality, deterministic per seed. The same multiset
-/// is used for every `Order` and `Shape` so results are comparable.
-///
-/// Requirements:
-/// - exactly `ROWS` rows
-/// - `cardinality.groups()` distinct `(k1, k2)` pairs, spread so that `k1`
-///   alone has fewer distinct values than `(k1, k2)`. Otherwise
-///   `SortedByFirstKey` degenerates into `SortedByAllKeys`.
-/// - some nulls in `k1` and `k2`
-fn generate_rows(cardinality: Cardinality, seed: u64) -> RecordBatch {
-    let mut rng = StdRng::seed_from_u64(seed);
-    let groups = cardinality.groups();
-    // `k2` cycles through at most sqrt(groups) values, so `k1` alone has fewer
-    // distinct values than the `(k1, k2)` pair.
-    let k2_values = (groups as f64).sqrt().ceil().max(2.0) as i64;
-
-    let mut k1 = Vec::with_capacity(ROWS);
-    let mut k2 = Vec::with_capacity(ROWS);
-    let mut v = Vec::with_capacity(ROWS);
-    let mut b = Vec::with_capacity(ROWS);
-    let mut s = Vec::with_capacity(ROWS);
-    let mut sv = Vec::with_capacity(ROWS);
-    let mut p = Vec::with_capacity(ROWS);
-    let mut st_list = ListBuilder::new(Int64Builder::new());
-    let mut st_num = Vec::with_capacity(ROWS);
-    let mut st_valid = Vec::with_capacity(ROWS);
-    for row in 0..ROWS {
-        let group = (row % groups) as i64;
-        k1.push(not_null(&mut rng).then_some(group / k2_values));
-        k2.push(not_null(&mut rng).then_some(group % k2_values));
-        v.push(rng.random_range(-1_000i64..1_000));
-        // every key-type column has `groups` distinct values (boolean: two)
-        b.push(not_null(&mut rng).then_some(group % 2 == 0));
-        s.push(not_null(&mut rng).then(|| format!("s{group:06}")));
-        sv.push(not_null(&mut rng).then(|| format!("sv{group:06}")));
-        p.push(not_null(&mut rng).then_some(group));
-        // struct { list: [group, group + 1], [] or null; num: group or null }
-        st_valid.push(not_null(&mut rng));
-        match rng.random_range(0..100) {
-            0..3 => st_list.append_null(),
-            3..6 => st_list.append(true),
-            _ => {
-                st_list.values().append_value(group);
-                st_list.values().append_value(group + 1);
-                st_list.append(true);
-            }
-        }
-        st_num.push(not_null(&mut rng).then_some(group));
-    }
-    let st = StructArray::try_new(
-        struct_fields(),
-        vec![
-            Arc::new(st_list.finish()),
-            Arc::new(Int64Array::from(st_num)),
-        ],
-        Some(NullBuffer::from(st_valid)),
-    )
-    .unwrap();
-
-    RecordBatch::try_new(
-        schema(),
-        vec![
-            Arc::new(Int64Array::from(k1)),
-            Arc::new(Int64Array::from(k2)),
-            Arc::new(Int64Array::from(v)),
-            Arc::new(BooleanArray::from(b)),
-            Arc::new(StringArray::from(s)),
-            Arc::new(StringViewArray::from(sv)),
-            Arc::new(Int64Array::from(p)),
-            Arc::new(st),
-        ],
-    )
-    .unwrap()
-}
-
-/// Arrange `rows` for the given `order` and split into `partitions` partitions
-/// of `BATCH_SIZE` batches.
-///
-/// - `Unordered`: shuffle rows, round-robin into partitions
-/// - `SortedByFirstKey`: sort by `k1` (nulls first), contiguous slice per partition
-/// - `SortedByAllKeys`: sort by `k1, k2` (nulls first), contiguous slice per partition
-///
-/// Every partition individually satisfies the ordering.
-fn arrange(
-    rows: &RecordBatch,
-    keys: Keys,
-    order: Order,
-    partitions: usize,
-) -> Vec<Vec<RecordBatch>> {
-    let schema = rows.schema();
-    let per_partition: Vec<RecordBatch> = match source_ordering(&schema, keys, order) {
-        None => {
-            let mut permutation: Vec<u32> = (0..rows.num_rows() as u32).collect();
-            permutation.shuffle(&mut StdRng::seed_from_u64(0));
-            let shuffled =
-                take_record_batch(rows, &UInt32Array::from(permutation)).unwrap();
-            (0..partitions)
-                .map(|partition| {
-                    let indices: UInt32Array = (partition as u32
-                        ..shuffled.num_rows() as u32)
-                        .step_by(partitions)
-                        .collect();
-                    take_record_batch(&shuffled, &indices).unwrap()
-                })
-                .collect()
-        }
-        Some(ordering) => {
-            let sort_columns: Vec<SortColumn> = ordering
-                .iter()
-                .map(|sort_expr| SortColumn {
-                    values: sort_expr
-                        .expr
-                        .evaluate(rows)
-                        .unwrap()
-                        .into_array(rows.num_rows())
-                        .unwrap(),
-                    options: Some(sort_expr.options),
-                })
-                .collect();
-            let indices = lexsort_to_indices(&sort_columns, None).unwrap();
-            let sorted = take_record_batch(rows, &indices).unwrap();
-            let per_partition = sorted.num_rows().div_ceil(partitions);
-            (0..partitions)
-                .map(|partition| {
-                    let start = (partition * per_partition).min(sorted.num_rows());
-                    let length = per_partition.min(sorted.num_rows() - start);
-                    copy_rows(&sorted, start, length)
-                })
-                .collect()
-        }
-    };
-
-    // Copy every batch into its own buffers, as a real scan would produce.
-    // A slice shares the whole partition's buffers, and operators that
-    // account batches by `get_array_memory_size` (RepartitionExec, the merge)
-    // would charge every 64-row batch the size of the entire partition.
-    per_partition
-        .iter()
-        .map(|partition| {
-            (0..partition.num_rows())
-                .step_by(BATCH_SIZE)
-                .map(|start| {
-                    copy_rows(
-                        partition,
-                        start,
-                        BATCH_SIZE.min(partition.num_rows() - start),
-                    )
-                })
-                .collect()
-        })
-        .collect()
-}
-
-/// `batch[start..start + length]` in its own buffers. `take` copies where
-/// `slice` shares and `concat_batches` of one batch only slices.
-///
-/// Take from the unsliced batch: `take` on a list sizes the new values buffer
-/// as child length / list length * taken rows, so taking 64 rows out of a
-/// 64-row slice of a 32k-row list allocates a values buffer for the whole
-/// child, and `get_array_memory_size` reports capacity. That charged every
-/// batch about 500 KB instead of 5 KB.
-fn copy_rows(batch: &RecordBatch, start: usize, length: usize) -> RecordBatch {
-    let indices = UInt32Array::from_iter_values(start as u32..(start + length) as u32);
-    take_record_batch(batch, &indices).unwrap()
-}
-
-// ---------------------------------------------------------------------------
-// Plan construction
-// ---------------------------------------------------------------------------
-
-fn sort_expr(schema: &Schema, column: &str) -> PhysicalSortExpr {
-    PhysicalSortExpr::new(
-        col(column, schema).unwrap(),
-        SortOptions {
-            descending: false,
-            nulls_first: true,
-        },
-    )
-}
-
-/// The ordering the source declares for `order`.
-fn source_ordering(schema: &Schema, keys: Keys, order: Order) -> Option<LexOrdering> {
-    let keys = keys.columns();
-    let sort_columns: &[&str] = match order {
-        Order::Unordered => return None,
-        Order::SortedByFirstKey => &keys[..1],
-        Order::SortedByAllKeys => keys,
-    };
-    LexOrdering::new(sort_columns.iter().map(|column| sort_expr(schema, column)))
-}
-
-fn source(
-    partitions: &[Vec<RecordBatch>],
-    keys: Keys,
-    order: Order,
-) -> Arc<dyn ExecutionPlan> {
-    let schema = schema();
-    let mut memory_source =
-        MemorySourceConfig::try_new(partitions, Arc::clone(&schema), None).unwrap();
-    if let Some(ordering) = source_ordering(&schema, keys, order) {
-        memory_source = memory_source
-            .try_with_sort_information(vec![ordering])
-            .unwrap();
-    }
-    DataSourceExec::from_data_source(memory_source)
-}
-
-fn group_by(schema: &Schema, keys: Keys) -> PhysicalGroupBy {
-    PhysicalGroupBy::new_single(
-        keys.columns()
-            .iter()
-            .map(|key| (col(key, schema).unwrap(), key.to_string()))
-            .collect(),
-    )
-}
-
-fn aggregates(schema: &SchemaRef, query: Query) -> Vec<Arc<AggregateFunctionExpr>> {
-    let value_column = || vec![col("v", schema).unwrap()];
-    let build = |builder: AggregateExprBuilder, alias: &str| {
-        Arc::new(
-            builder
-                .schema(Arc::clone(schema))
-                .alias(alias)
-                .build()
-                .unwrap(),
-        )
-    };
-    if query.aggregates == Aggregates::None {
-        return vec![];
-    }
-    if query.aggregates == Aggregates::Max {
-        // TopK supports exactly one min/max aggregate over a non-nullable input
-        return vec![build(
-            AggregateExprBuilder::new(max_udaf(), value_column()),
-            "max",
-        )];
-    }
-    vec![
-        build(
-            AggregateExprBuilder::new(count_udaf(), value_column()),
-            "count",
-        ),
-        build(
-            AggregateExprBuilder::new(count_udaf(), value_column()).distinct(),
-            "count_distinct",
-        ),
-        build(AggregateExprBuilder::new(sum_udaf(), value_column()), "sum"),
-        // avg has no Int64 groups accumulator; the values are small integers so
-        // the Float64 sum stays exact and the result is order-independent.
-        build(
-            AggregateExprBuilder::new(
-                avg_udaf(),
-                vec![cast(col("v", schema).unwrap(), schema, DataType::Float64).unwrap()],
-            ),
-            "avg",
-        ),
-        build(AggregateExprBuilder::new(min_udaf(), value_column()), "min"),
-        build(AggregateExprBuilder::new(max_udaf(), value_column()), "max"),
-    ]
-}
-
-/// Folds `shape.operators` bottom-up into a plan. The group-by, aggregate
-/// expressions and hash keys are rewritten after every aggregate stage so the
-/// next stage consumes that stage's output.
-fn build_plan(shape: &Shape, input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-    let input_schema = schema();
-    let mut plan = input;
-    let mut group_by = group_by(&input_schema, shape.query.keys);
-    let mut aggregates = aggregates(&input_schema, shape.query);
-    let mut hash_keys: Vec<Arc<dyn PhysicalExpr>> = group_by.input_exprs();
-
-    for operator in shape.chain.operators {
-        plan = match operator {
-            Aggregate(mode) | TopK(mode) => {
-                let limit_options = matches!(operator, TopK(_))
-                    .then(|| LimitOptions::new_with_order(TOP_K_LIMIT, true));
-                let aggregate = Arc::new(
-                    AggregateExec::try_new(
-                        *mode,
-                        group_by.clone(),
-                        aggregates.clone(),
-                        vec![None; aggregates.len()],
-                        plan,
-                        Arc::clone(&input_schema),
-                    )
-                    .unwrap()
-                    .with_limit_options(limit_options),
-                );
-                group_by = aggregate.group_expr().as_final();
-                aggregates = aggregate.aggr_expr().to_vec();
-                hash_keys = aggregate.output_group_expr();
-                aggregate
-            }
-            HashRepartition => Arc::new(
-                RepartitionExec::try_new(
-                    plan,
-                    Partitioning::Hash(hash_keys.clone(), PARTITIONS),
-                )
-                .unwrap(),
-            ),
-            OrderPreservingHashRepartition => Arc::new(
-                RepartitionExec::try_new(
-                    plan,
-                    Partitioning::Hash(hash_keys.clone(), PARTITIONS),
-                )
-                .unwrap()
-                .with_preserve_order(),
-            ),
-            CoalescePartitions => Arc::new(CoalescePartitionsExec::new(plan)),
-            SortPreservingMerge => {
-                let ordering = plan.properties().output_ordering().cloned().unwrap();
-                Arc::new(SortPreservingMergeExec::new(ordering, plan))
-            }
-        };
-    }
-    plan
-}
-
-// ---------------------------------------------------------------------------
-// Execution context
-// ---------------------------------------------------------------------------
-
-fn task_context(case: &Case) -> Arc<TaskContext> {
-    let config = SessionConfig::new()
-        .with_batch_size(BATCH_SIZE)
-        .with_target_partitions(PARTITIONS)
-        // The default is 100k rows. Lower it so the skip-partial probe can
-        // fire on our per-partition row counts. A ratio threshold of 1.0
-        // disables the probe entirely.
-        .set_usize(
-            "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
-            1024,
-        );
-    let mut config = config;
-    config
-        .options_mut()
-        .execution
-        .skip_partial_aggregation_probe_ratio_threshold =
-        if case.params.skip_partial_enabled {
-            0.8
-        } else {
-            1.0
-        };
-
-    let runtime = match case.params.memory {
-        // Not using UnboundedMemoryPool, so users would still think that we have a valid pool, but just with enough memory
-        Memory::Unlimited => RuntimeEnvBuilder::new().with_memory_limit(usize::MAX, 1.0),
-        // Small enough that a very-high-cardinality final table spills, large
-        // enough that the legacy stream can still reserve its sort headroom
-        // and that RepartitionExec / SortPreservingMergeExec succeed. The
-        // fair pool keeps one stage from starving the others.
-        Memory::Limited => {
-            RuntimeEnvBuilder::new().with_memory_pool(Arc::new(TrackConsumersPool::new(
-                FairSpillPool::new(LIMITED_POOL_BYTES),
-                NonZeroUsize::new(5).unwrap(),
-            )))
-        }
-    }
-    .build_arc()
-    .unwrap();
-
-    Arc::new(
-        TaskContext::default()
-            .with_session_config(config)
-            .with_runtime(runtime),
-    )
-}
-
-// ---------------------------------------------------------------------------
-// Assertions
-// ---------------------------------------------------------------------------
-
-/// All `AggregateExec` nodes in the plan, bottom-up.
-fn aggregate_nodes(plan: &Arc<dyn ExecutionPlan>) -> Vec<Arc<dyn ExecutionPlan>> {
-    let mut nodes = vec![];
-    let mut node = Arc::clone(plan);
-    loop {
-        if node.downcast_ref::<AggregateExec>().is_some() {
-            nodes.push(Arc::clone(&node));
-        }
-        match node.children().first() {
-            Some(child) => node = Arc::clone(child),
-            None => break,
-        }
-    }
-    nodes.reverse();
-    nodes
-}
-
-fn as_aggregate(node: &Arc<dyn ExecutionPlan>) -> &AggregateExec {
-    node.downcast_ref::<AggregateExec>().unwrap()
-}
-
-/// Expected source order seen by each aggregate stage, bottom-up. Ordering is
-/// lost at `HashRepartition` and `CoalescePartitions`, and kept by the
-/// order-preserving shuffles and by aggregate stages themselves.
-fn expected_orders(shape: &Shape, source_order: Order) -> Vec<Order> {
-    let mut current = source_order;
-    let mut expected = vec![];
-    for operator in shape.chain.operators {
-        match operator {
-            HashRepartition | CoalescePartitions => current = Order::Unordered,
-            // `AggregateExec::try_new` forces `InputOrderMode::Linear` for
-            // partial reduce, since it emits its groups in hash table order,
-            // and it advertises no output ordering either. Everything above it
-            // is unordered until something sorts again.
-            Aggregate(PartialReduce) => {
-                expected.push(Order::Unordered);
-                current = Order::Unordered;
-            }
-            Aggregate(_) | TopK(_) => expected.push(current),
-            OrderPreservingHashRepartition | SortPreservingMerge => {}
-        }
-    }
-    expected
-}
-
-fn order_matches(query: Query, expected: Order, actual: &InputOrderMode) -> bool {
-    // With a single group key, sorting by the first key already covers every
-    // group key.
-    let single_key = query.keys.columns().len() == 1;
-    match (expected, actual) {
-        (Order::Unordered, InputOrderMode::Linear) => true,
-        (Order::SortedByFirstKey, InputOrderMode::PartiallySorted(indices)) => {
-            !single_key && indices == &[0]
-        }
-        (Order::SortedByFirstKey, InputOrderMode::Sorted) => single_key,
-        (Order::SortedByAllKeys, InputOrderMode::Sorted) => true,
-        _ => false,
-    }
-}
-
-/// Whether this stage's stream is allowed to spill.
-fn can_spill(aggregate: &AggregateExec) -> bool {
-    if aggregate.limit_options().is_some() {
-        // GroupedTopKAggregateStream keeps a bounded heap and never spills
-        return false;
-    }
-    let spilling_mode = match aggregate.mode() {
-        Final | FinalPartitioned | Single | SinglePartitioned => true,
-        // Both partial streams emit their state early instead of spilling.
-        PartialReduce | Partial => false,
-    };
-    let has_groups = !aggregate.group_expr().is_empty();
-    spilling_mode && has_groups && *aggregate.input_order_mode() != InputOrderMode::Sorted
-}
-
-/// Whether this stage runs the skip-partial probe.
-fn runs_skip_partial_probe(aggregate: &AggregateExec) -> bool {
-    *aggregate.mode() == Partial
-        && aggregate.limit_options().is_none()
-        && !aggregate.group_expr().is_empty()
-        && *aggregate.input_order_mode() == InputOrderMode::Linear
-}
-
-fn check_plan_shape(case: &Case, plan: &Arc<dyn ExecutionPlan>) {
-    if case.shape.query.keys == Keys::None {
-        return;
-    }
-    let nodes = aggregate_nodes(plan);
-    let expected = expected_orders(&case.shape, case.params.order);
-    assert_eq!(nodes.len(), expected.len(), "{case:?}");
-    for (node, expected_order) in nodes.iter().zip(expected) {
-        let aggregate = as_aggregate(node);
-        assert!(
-            order_matches(
-                case.shape.query,
-                expected_order,
-                aggregate.input_order_mode()
-            ),
-            "{case:?}: expected {expected_order:?} got {:?}\n{}",
-            aggregate.input_order_mode(),
-            displayable(plan.as_ref()).indent(true)
-        );
-    }
-}
-
-/// Returns a description of every stage that spilled, bottom-up, such as
-/// `Final(Linear)`.
-fn check_metrics(case: &Case, plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
-    let mut spilled = vec![];
-    for node in aggregate_nodes(plan) {
-        let aggregate = as_aggregate(&node);
-        let mode = aggregate.mode();
-        let metrics = node.metrics().unwrap();
-        let spill_count = metrics.spill_count().unwrap_or(0);
-        if spill_count > 0 {
-            spilled.push(format!("{mode:?}({:?})", aggregate.input_order_mode()));
-        }
-        let skipped_rows = metrics
-            .sum_by_name("skipped_aggregation_rows")
-            .map(|metric| metric.as_usize())
-            .unwrap_or(0);
-
-        match case.params.memory {
-            Memory::Unlimited => {
-                assert_eq!(spill_count, 0, "{case:?}: unexpected spill in {mode:?}");
-            }
-            Memory::Limited => {
-                // Whether a spilling-capable stage actually spills depends on
-                // the pool geometry, so only the run-wide coverage check in the
-                // driver requires it. Streams that cannot spill must not.
-                if !can_spill(aggregate) {
-                    assert_eq!(spill_count, 0, "{case:?}: {mode:?} must never spill");
-                }
-            }
-        }
-
-        // Boolean keys have two groups whatever `cardinality` says, far
-        // below the ratio.
-        if case.params.memory == Memory::Unlimited
-            && case.params.cardinality == Cardinality::VeryHigh
-            && case.shape.query.keys.tracks_cardinality()
-            && case.params.skip_partial_enabled
-            && runs_skip_partial_probe(aggregate)
-        {
-            assert!(
-                skipped_rows > 0,
-                "{case:?}: skip-partial probe did not fire"
-            );
-        }
-        if !case.params.skip_partial_enabled || !runs_skip_partial_probe(aggregate) {
-            assert_eq!(skipped_rows, 0, "{case:?}: skip-partial fired in {mode:?}");
-        }
-    }
-    spilled
+    ))
+    .await;
 }
 
 // ---------------------------------------------------------------------------
@@ -1210,7 +575,7 @@ async fn run_case_inner(case: &Case, partitions: &[Vec<RecordBatch>]) -> Outcome
 fn reference_case(query: Query, cardinality: Cardinality) -> Case {
     Case {
         shape: Shape {
-            chain: chain_by_name("single"),
+            chain: SINGLE,
             query,
         },
         params: CaseParams {
@@ -1222,8 +587,11 @@ fn reference_case(query: Query, cardinality: Cardinality) -> Case {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn aggregate_chain_fuzz() {
+/// Runs every case of `chain` and asserts each returns the rows of the
+/// `SINGLE` chain for its query, see the test preamble for the full list of
+/// checks. A failure does not stop the run, so one run reports every failing
+/// case.
+async fn assert_chain_matches_single_aggregate(chain: Chain) {
     const SEED: u64 = 42;
     let mut total_spilled = 0;
     let mut failures: Vec<String> = vec![];
@@ -1234,7 +602,7 @@ async fn aggregate_chain_fuzz() {
 
     for cardinality in Cardinality::ALL {
         let rows = generate_rows(cardinality, SEED);
-        let cases: Vec<Case> = all_cases()
+        let cases: Vec<Case> = cases(chain)
             .into_iter()
             .filter(|case| case.params.cardinality == cardinality)
             .collect();
@@ -1287,12 +655,17 @@ async fn aggregate_chain_fuzz() {
         total_spilled += spilled.len();
     }
     // A shape filter may select only shapes that cannot spill
-    if std::env::var("AGGREGATE_CHAIN_SHAPES").is_err() {
-        assert!(total_spilled > 0, "no case exercised the spill path");
+    if chain.expects_spill() && std::env::var("AGGREGATE_CHAIN_SHAPES").is_err() {
+        assert!(
+            total_spilled > 0,
+            "{}: no case exercised the spill path",
+            chain.name
+        );
     }
     assert!(
         failures.is_empty(),
-        "{} cases failed:\n\n{}",
+        "{}: {} cases failed:\n\n{}",
+        chain.name,
         failures.len(),
         failures.join("\n\n")
     );
@@ -1303,8 +676,7 @@ async fn aggregate_chain_fuzz() {
 /// case there. Generous, so only a real hang fires it.
 const CASE_TIMEOUT_SECS: u64 = 600;
 
-/// Waits for one case and files it under spilled, finished or failed. A
-/// failure does not stop the run, so one run reports every failing case.
+/// Waits for one case and files it under spilled, finished or failed.
 async fn collect_finished(
     join_set: &mut JoinSet<(Case, Vec<String>)>,
     spilled: &mut Vec<(Case, Vec<String>)>,
@@ -1355,37 +727,4 @@ fn print_cases(cardinality: Cardinality, outcome: &str, cases: &[(Case, Vec<Stri
     for line in lines {
         log::debug!("{line}");
     }
-}
-
-/// Reproduces one failing cell from its seed.
-#[expect(dead_code)]
-async fn run_single_case(
-    chain_name: &str,
-    keys: Keys,
-    aggregates: Aggregates,
-    order: Order,
-    cardinality: Cardinality,
-    memory: Memory,
-    seed: u64,
-) -> Result<()> {
-    let shape = Shape {
-        chain: chain_by_name(chain_name),
-        query: Query { keys, aggregates },
-    };
-    let rows = generate_rows(cardinality, seed);
-    let reference = reference_case(shape.query, cardinality);
-    let case = Case {
-        shape,
-        params: CaseParams {
-            order,
-            cardinality,
-            memory,
-            skip_partial_enabled: true,
-        },
-    };
-    let inputs = Arc::new(arrange_all(&rows, [&case, &reference].into_iter()));
-    let expected = run_case(reference, Arc::clone(&inputs)).await;
-    let actual = run_case(case, inputs).await;
-    assert_eq!(actual.output, expected.output);
-    Ok(())
 }
