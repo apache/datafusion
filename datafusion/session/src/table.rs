@@ -227,10 +227,6 @@ pub trait TableProvider: Any + Debug + Sync + Send {
         'life1: 'async_trait,
         Self: 'async_trait,
     {
-        // Note: this bridge cannot honor `args.offset()`, since `scan` has no
-        // offset parameter. This is exactly why `supports_offset_pushdown`
-        // defaults to `false`: only providers that override `scan_with_args`
-        // directly can honor an offset.
         let plan = self.scan(
             state,
             args.projection(),
@@ -240,15 +236,8 @@ pub trait TableProvider: Any + Debug + Sync + Send {
         Box::pin(async move { Ok(plan.await?.into()) })
     }
 
-    /// Tests whether this table provider can guarantee that a scan built via
-    /// [`Self::scan_with_args`] omits *exactly* the first [`ScanArgs::offset`]
-    /// rows it would otherwise have produced.
-    ///
-    /// Returning `true` is a firm guarantee, not a hint: a caller that
-    /// pushes a skip into `ScanArgs::offset` may rely on it to avoid
-    /// re-applying the same skip above the scan. Returning `false` (the
-    /// default) means `ScanArgs::offset` is ignored or only partially
-    /// honored, so callers must not assume rows were skipped.
+    /// Specify if DataFusion should provide the offset to the
+    /// TableProvider to apply *during* the scan.
     fn supports_offset_pushdown(&self) -> bool {
         false
     }

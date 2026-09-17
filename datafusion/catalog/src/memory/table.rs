@@ -49,7 +49,7 @@ use datafusion_physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
     PhysicalExpr, PlanProperties, ReplaceChildrenOptions, collect_partitioned,
 };
-use datafusion_session::{ScanArgs, Session};
+use datafusion_session::Session;
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
@@ -149,10 +149,7 @@ impl MemTable {
         let schema = t.schema();
         let constraints = t.constraints().cloned().unwrap_or_default();
 
-        let exec = t
-            .scan_with_args(state, ScanArgs::default())
-            .await?
-            .into_inner();
+        let exec = t.scan(state, None, &[], None).await?;
         let data = collect_partitioned(exec, state.task_ctx()).await?;
 
         // Optionally repartition the collected batches.

@@ -64,11 +64,7 @@ async fn check_stats_precision_with_filter_pushdown() {
     options.execution.collect_statistics = true;
 
     // Scan without filter, stats are exact
-    let exec = table
-        .scan_with_args(&state, ScanArgs::default())
-        .await
-        .unwrap()
-        .into_inner();
+    let exec = table.scan(&state, None, &[], None).await.unwrap();
     assert_eq!(
         StatisticsContext::new()
             .compute(exec.as_ref(), &StatisticsArgs::new())
@@ -83,13 +79,9 @@ async fn check_stats_precision_with_filter_pushdown() {
     // source operator after the appropriate optimizer pass.
     let filter_expr = Expr::gt(col("id"), lit(1));
     let exec_with_filter = table
-        .scan_with_args(
-            &state,
-            ScanArgs::default().with_filters(Some(std::slice::from_ref(&filter_expr))),
-        )
+        .scan(&state, None, std::slice::from_ref(&filter_expr), None)
         .await
-        .unwrap()
-        .into_inner();
+        .unwrap();
 
     let ctx = SessionContext::new();
     let df_schema = DFSchema::try_from(table.schema()).unwrap();
@@ -142,11 +134,7 @@ async fn load_table_stats_with_session_level_cache() {
 
     //Session 1 first time list files
     assert_eq!(get_static_cache_size(&state1), 0);
-    let exec1 = table1
-        .scan_with_args(&state1, ScanArgs::default())
-        .await
-        .unwrap()
-        .into_inner();
+    let exec1 = table1.scan(&state1, None, &[], None).await.unwrap();
 
     assert_eq!(
         StatisticsContext::new()
@@ -169,11 +157,7 @@ async fn load_table_stats_with_session_level_cache() {
     //Session 2 first time list files
     //check session 1 cache result not show in session 2
     assert_eq!(get_static_cache_size(&state2), 0);
-    let exec2 = table2
-        .scan_with_args(&state2, ScanArgs::default())
-        .await
-        .unwrap()
-        .into_inner();
+    let exec2 = table2.scan(&state2, None, &[], None).await.unwrap();
     assert_eq!(
         StatisticsContext::new()
             .compute(exec2.as_ref(), &StatisticsArgs::new())
@@ -194,11 +178,7 @@ async fn load_table_stats_with_session_level_cache() {
     //Session 1 second time list files
     //check session 1 cache result not show in session 2
     assert_eq!(get_static_cache_size(&state1), 1);
-    let exec3 = table1
-        .scan_with_args(&state1, ScanArgs::default())
-        .await
-        .unwrap()
-        .into_inner();
+    let exec3 = table1.scan(&state1, None, &[], None).await.unwrap();
     assert_eq!(
         StatisticsContext::new()
             .compute(exec3.as_ref(), &StatisticsArgs::new())
@@ -335,11 +315,7 @@ async fn list_files_with_session_level_cache() {
 
     //Session 1 first time list files
     assert_eq!(get_list_file_cache_size(&state1), 0);
-    let exec1 = table1
-        .scan_with_args(&state1, ScanArgs::default())
-        .await
-        .unwrap()
-        .into_inner();
+    let exec1 = table1.scan(&state1, None, &[], None).await.unwrap();
     let data_source_exec = exec1.downcast_ref::<DataSourceExec>().unwrap();
     let data_source = data_source_exec.data_source();
     let parquet1 = data_source.downcast_ref::<FileScanConfig>().unwrap();
@@ -352,11 +328,7 @@ async fn list_files_with_session_level_cache() {
     //Session 2 first time list files
     //check session 1 cache result not show in session 2
     assert_eq!(get_list_file_cache_size(&state2), 0);
-    let exec2 = table2
-        .scan_with_args(&state2, ScanArgs::default())
-        .await
-        .unwrap()
-        .into_inner();
+    let exec2 = table2.scan(&state2, None, &[], None).await.unwrap();
     let data_source_exec = exec2.downcast_ref::<DataSourceExec>().unwrap();
     let data_source = data_source_exec.data_source();
     let parquet2 = data_source.downcast_ref::<FileScanConfig>().unwrap();
@@ -369,11 +341,7 @@ async fn list_files_with_session_level_cache() {
     //Session 1 second time list files
     //check session 1 cache result not show in session 2
     assert_eq!(get_list_file_cache_size(&state1), 1);
-    let exec3 = table1
-        .scan_with_args(&state1, ScanArgs::default())
-        .await
-        .unwrap()
-        .into_inner();
+    let exec3 = table1.scan(&state1, None, &[], None).await.unwrap();
     let data_source_exec = exec3.downcast_ref::<DataSourceExec>().unwrap();
     let data_source = data_source_exec.data_source();
     let parquet3 = data_source.downcast_ref::<FileScanConfig>().unwrap();

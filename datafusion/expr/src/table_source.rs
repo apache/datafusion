@@ -119,11 +119,6 @@ pub trait TableSource: Any + Sync + Send {
     /// Tests whether the underlying table provider can guarantee that a scan
     /// omits *exactly* the first `offset` rows it would otherwise have
     /// produced.
-    ///
-    /// Returning `true` is a firm guarantee, not a hint: the optimizer may
-    /// rely on it to push a `LIMIT ... OFFSET ...` skip into the scan and
-    /// avoid re-applying it above. Returning `false` (the default) keeps the
-    /// skip always enforced above the scan.
     fn supports_offset_pushdown(&self) -> bool {
         false
     }

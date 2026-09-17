@@ -24,7 +24,7 @@ mod test {
     use arrow_schema::{DataType, Field, Schema, SortOptions};
     use datafusion::datasource::listing::ListingTable;
     use datafusion::prelude::SessionContext;
-    use datafusion_catalog::{ScanArgs, TableProvider};
+    use datafusion_catalog::TableProvider;
     use datafusion_common::Result;
     use datafusion_common::stats::Precision;
     use datafusion_common::{
@@ -109,10 +109,9 @@ mod test {
         let table = ctx.table_provider(table_name.as_str()).await.unwrap();
         let listing_table = table.downcast_ref::<ListingTable>().unwrap().clone();
         listing_table
-            .scan_with_args(&ctx.state(), ScanArgs::default())
+            .scan(&ctx.state(), None, &[], None)
             .await
             .unwrap()
-            .into_inner()
     }
 
     // Date32 values for test data (days since 1970-01-01):

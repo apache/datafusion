@@ -80,7 +80,7 @@ pub struct ListFilesResult {
 /// * Reading multiple files as a single table
 /// * Hive style partitioning (e.g., directories named `date=2024-06-01`)
 /// * Merges schemas from files with compatible but not identical schemas (see [`ListingTableConfig::file_schema`])
-/// * `limit`, `filter` and `projection` pushdown for formats that support it (e.g.,
+/// * `limit`, `offset`, `filter` and `projection` pushdown for formats that support it (e.g.,
 ///   Parquet)
 /// * Statistics collection and pruning based on file metadata
 /// * Pre-existing sort order (see [`ListingOptions::file_sort_order`])
@@ -759,8 +759,6 @@ impl ListingTable {
             .create_physical_plan(state, scan_config)
             .await?;
 
-        // `supports_offset_pushdown` returns `true`, so we must actually
-        // skip the first `offset` rows here rather than merely hinting.
         let plan: Arc<dyn ExecutionPlan> = match offset {
             Some(skip) => Arc::new(GlobalLimitExec::new(plan, skip, limit)),
             None => plan,
