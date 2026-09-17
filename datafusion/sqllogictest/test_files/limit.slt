@@ -455,6 +455,50 @@ SELECT * FROM (SELECT a, b FROM ordered_prefix ORDER BY b LIMIT 4 OFFSET 3) ORDE
 1 5
 1 6
 
+# A sort required by a window function, reaching the limit through a projection,
+# also stays above LIMIT ... OFFSET so the input can stop after `skip + fetch`
+# rows. It used to be pushed below the limit as a TopK over the whole input
+# (#25378).
+statement ok
+CREATE TABLE window_over_limit (id INT, kind VARCHAR) AS VALUES
+  (19, 'a'), (18, 'a'), (17, 'a'), (16, 'a'), (15, 'a'),
+  (14, 'a'), (13, 'a'), (12, 'a'), (11, 'a'), (10, 'a'),
+  (9, 'a'), (8, 'a'), (7, 'a'), (6, 'a'), (5, 'a'),
+  (4, 'a'), (3, 'a'), (2, 'a'), (1, 'a'), (0, 'a');
+
+query TT
+EXPLAIN SELECT row_number() OVER (ORDER BY id) AS rn, id
+FROM (SELECT id FROM window_over_limit WHERE kind = 'a' LIMIT 5 OFFSET 5);
+----
+logical_plan
+01)Projection: row_number() ORDER BY [window_over_limit.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn, window_over_limit.id
+02)--WindowAggr: windowExpr=[[row_number() ORDER BY [window_over_limit.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+03)----Projection: window_over_limit.id
+04)------Limit: skip=5, fetch=5
+05)--------Filter: window_over_limit.kind = Utf8View("a")
+06)----------TableScan: window_over_limit projection=[id, kind]
+physical_plan
+01)ProjectionExec: expr=[row_number() ORDER BY [window_over_limit.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@1 as rn, id@0 as id]
+02)--BoundedWindowAggExec: wdw=[row_number() ORDER BY [window_over_limit.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [window_over_limit.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------ProjectionExec: expr=[id@0 as id]
+05)--------GlobalLimitExec: skip=5, fetch=5
+06)----------FilterExec: kind@1 = a, fetch=10
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+SELECT row_number() OVER (ORDER BY id) AS rn, id
+FROM (SELECT id FROM window_over_limit WHERE kind = 'a' LIMIT 5 OFFSET 5);
+----
+1 10
+2 11
+3 12
+4 13
+5 14
+
+statement ok
+DROP TABLE window_over_limit;
+
 # The aggregate does not need to be computed because the input statistics are exact and
 # an OFFSET, but no LIMIT, is specified.
 query TT
