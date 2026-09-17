@@ -171,6 +171,7 @@ cargo run --example dataframe -- dataframe
 | ------------------------ | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | composed_extension_codec | [`proto/composed_extension_codec.rs`](examples/proto/composed_extension_codec.rs) | Use multiple extension codecs for serialization/deserialization               |
 | expression_deduplication | [`proto/expression_deduplication.rs`](examples/proto/expression_deduplication.rs) | Example of expression caching/deduplication using the codec decorator pattern |
+| extension_plan_registry  | [`proto/extension_plan_registry.rs`](examples/proto/extension_plan_registry.rs)   | Decode two crates' extension plans by name, with no composed codec            |
 
 ## Query Planning Examples
 

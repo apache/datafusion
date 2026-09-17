@@ -208,9 +208,9 @@ impl PhysicalSortExpr {
     }
 
     /// Reconstruct a [`PhysicalSortExpr`] from its protobuf representation.
-    pub fn try_from_proto(
+    pub fn try_from_proto<S>(
         node: &datafusion_proto_models::protobuf::PhysicalSortExprNode,
-        ctx: &crate::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+        ctx: &crate::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_, S>,
     ) -> Result<Self> {
         let datafusion_proto_models::protobuf::PhysicalSortExprNode {
             expr,
@@ -273,9 +273,9 @@ pub fn sort_exprs_try_to_proto<E: std::borrow::Borrow<PhysicalSortExpr>>(
 ///
 /// [`PhysicalSortExprNode`]: datafusion_proto_models::protobuf::PhysicalSortExprNode
 #[cfg(feature = "proto")]
-pub fn sort_exprs_try_from_proto(
+pub fn sort_exprs_try_from_proto<S>(
     nodes: &[datafusion_proto_models::protobuf::PhysicalSortExprNode],
-    ctx: &crate::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ctx: &crate::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_, S>,
 ) -> Result<Vec<PhysicalSortExpr>> {
     nodes
         .iter()
@@ -295,9 +295,9 @@ pub fn optional_ordering_try_to_proto(
 /// Counterpart of [`optional_ordering_try_to_proto`]: an empty list decodes
 /// as `None`.
 #[cfg(feature = "proto")]
-pub fn optional_ordering_try_from_proto(
+pub fn optional_ordering_try_from_proto<S>(
     nodes: &[datafusion_proto_models::protobuf::PhysicalSortExprNode],
-    ctx: &crate::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+    ctx: &crate::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_, S>,
 ) -> Result<Option<LexOrdering>> {
     Ok(LexOrdering::new(sort_exprs_try_from_proto(nodes, ctx)?))
 }

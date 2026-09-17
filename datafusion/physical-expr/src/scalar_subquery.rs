@@ -207,9 +207,9 @@ impl ScalarSubqueryExpr {
     /// decode context (which lives in a crate that cannot depend on
     /// `datafusion-expr`). The match arm in `from_proto.rs` fetches it from the
     /// plan-level decode context and passes it in.
-    pub fn try_from_proto(
+    pub fn try_from_proto<S>(
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
-        _ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+        _ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_, S>,
         results: &ScalarSubqueryResults,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         use datafusion_physical_expr_common::expect_expr_variant;
@@ -374,7 +374,6 @@ mod proto_tests {
     use super::*;
     use crate::proto_test_util::{StubEncoder, UnreachableDecoder, column_node};
     use datafusion_common::DataFusionError;
-    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
     use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
     use datafusion_proto_models::protobuf::{
         PhysicalExprNode, PhysicalScalarSubqueryExprNode, physical_expr_node,
@@ -446,7 +445,8 @@ mod proto_tests {
         // results container the surrounding exec would provide.
         let decoder = UnreachableDecoder;
         let schema = Schema::empty();
-        let dec_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let dec_ctx = session.ctx(&schema, &decoder);
         let decoded =
             ScalarSubqueryExpr::try_from_proto(&node, &dec_ctx, &results).unwrap();
         let decoded = decoded
@@ -472,7 +472,8 @@ mod proto_tests {
         let results = ScalarSubqueryResults::new(1);
         let decoder = UnreachableDecoder;
         let schema = Schema::empty();
-        let dec_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let dec_ctx = session.ctx(&schema, &decoder);
 
         let err =
             ScalarSubqueryExpr::try_from_proto(&node, &dec_ctx, &results).unwrap_err();
@@ -489,7 +490,8 @@ mod proto_tests {
         let results = ScalarSubqueryResults::new(1);
         let decoder = UnreachableDecoder;
         let schema = Schema::empty();
-        let dec_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let dec_ctx = session.ctx(&schema, &decoder);
 
         let err =
             ScalarSubqueryExpr::try_from_proto(&node, &dec_ctx, &results).unwrap_err();
