@@ -4,6 +4,7 @@ group null_aware_join
 load sql_benchmarks/null_aware_join/init/load.sql
 
 expect_plan HashJoinExec
+expect_plan null_aware: true
 
 run
 -- Q6: non-equality-correlated NOT IN, 50% NULL on the outer side.
