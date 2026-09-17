@@ -22,7 +22,9 @@ use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::physical_expr::LexOrdering;
 use datafusion::physical_plan::empty::EmptyExec;
-use datafusion::physical_plan::expressions::{PhysicalSortExpr, col};
+use datafusion::physical_plan::expressions::{
+    NormalizeFloatZeroExpr, PhysicalSortExpr, col,
+};
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::prelude::SessionContext;
@@ -54,6 +56,20 @@ fn roundtrip_sort() -> Result<()> {
             },
         },
     ]
+    .into();
+    roundtrip_test(Arc::new(SortExec::new(
+        sort_exprs,
+        Arc::new(EmptyExec::new(schema)),
+    )))
+}
+
+#[test]
+fn roundtrip_sort_with_normalized_float_zero() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+    let sort_exprs = [PhysicalSortExpr {
+        expr: Arc::new(NormalizeFloatZeroExpr::new(col("a", &schema)?)),
+        options: SortOptions::default(),
+    }]
     .into();
     roundtrip_test(Arc::new(SortExec::new(
         sort_exprs,
