@@ -84,11 +84,11 @@ use plan::*;
 // What is tested
 // ==============
 //
-// Every test below is one physical plan shape, an `AggregateExec` chain.
-// `chain` lists its operators bottom-up, source first; the doc comment shows
-// the same plan as DataFusion prints it. The test runs that plan for every
-// query and input below and asserts it returns the same rows as the plain
-// single-stage aggregate `SINGLE`.
+// Every test below is one physical plan shape, an `AggregateExec` chain, run
+// over every combination of the axes listed in its `ChainTest`. Each run must
+// return the same rows as the plain single-stage aggregate `SINGLE`. To test
+// one case, narrow the lists in place. `chain` lists the operators bottom-up,
+// source first; the doc comment shows the same plan as DataFusion prints it.
 //
 // The table (`data.rs`), 32K rows, generated from a fixed seed:
 //
@@ -101,43 +101,41 @@ use plan::*;
 //   p  Int64
 //   st Struct<list: List<Int64>, num: Int64>
 //
-// Every key column has about 3% nulls. The number of groups is the
-// cardinality axis: 32K (one row per group), 1K, 16 or 2.
+// Every key column has about 3% nulls. `cardinalities` is the number of
+// groups: 32K (one row per group), 1K, 16 or 2.
 //
-// The queries (`case_space.rs`), one per key set times one per aggregate list:
+// `group_by` picks the query, one per `GroupValues` implementation:
 //
-//   SELECT <aggs> FROM t                            -- no GROUP BY
-//   SELECT k1, k2, <aggs> FROM t GROUP BY k1, k2    -- GroupValuesColumn
-//   SELECT b,  <aggs> FROM t GROUP BY b             -- GroupValuesBoolean
-//   SELECT s,  <aggs> FROM t GROUP BY s             -- GroupValuesBytes
-//   SELECT sv, <aggs> FROM t GROUP BY sv            -- GroupValuesBytesView
-//   SELECT p,  <aggs> FROM t GROUP BY p             -- GroupValuesPrimitive
-//   SELECT b, s, sv, p, <aggs> FROM t GROUP BY b, s, sv, p
-//   SELECT st, <aggs> FROM t GROUP BY st            -- row format fallback
+//   Keys::None       SELECT <aggs> FROM t
+//   Keys::TwoInts    SELECT k1, k2, <aggs> FROM t GROUP BY k1, k2   -- Column
+//   Keys::Boolean    SELECT b,  <aggs> FROM t GROUP BY b            -- Boolean
+//   Keys::Bytes      SELECT s,  <aggs> FROM t GROUP BY s            -- Bytes
+//   Keys::BytesView  SELECT sv, <aggs> FROM t GROUP BY sv           -- BytesView
+//   Keys::Primitive  SELECT p,  <aggs> FROM t GROUP BY p            -- Primitive
+//   Keys::Mixed      SELECT b, s, sv, p, <aggs> FROM t GROUP BY b, s, sv, p
+//   Keys::Struct     SELECT st, <aggs> FROM t GROUP BY st           -- row fallback
 //
-//   <aggs> is one of
-//     count(v), count(DISTINCT v), sum(v), avg(v), min(v), max(v)
-//     nothing, as in SELECT DISTINCT keys
-//     max(v) alone, the one aggregate the TopK stream supports
+// `aggregates` picks <aggs>:
 //
-//   TopK chains add LIMIT 64K, above any group count, so all groups survive.
+//   Aggregates::All   count(v), count(DISTINCT v), sum(v), avg(v), min(v), max(v)
+//   Aggregates::None  nothing, as in SELECT DISTINCT keys
+//   Aggregates::Max   max(v) alone, the one aggregate the TopK stream supports
 //
-// The input (`data.rs`), for each query:
+// TopK chains add LIMIT 64K, above any group count, so all groups survive.
 //
-//   order        unordered (shuffled, round-robin over partitions), sorted by
-//                the first key, or sorted by all keys, each partition sorted
-//   partitions   1 or 4, in batches of 64 rows
-//   memory       unlimited, or a 4 MB pool too small for a 32K-group table
-//   skip-partial on or off, where a `Partial` stage on unordered input runs it
-//
-// Not every combination can be planned, see `shapes` and `Shape::orders`.
+// `orders` arranges the source: shuffled and round-robin over the partitions,
+// or sorted by the first key or by all keys with each partition sorted.
+// `memory` is an unlimited pool or a 4 MB one too small for a 32K-group
+// table. Combinations a key set cannot take, such as sorting struct keys,
+// are skipped in `ChainTest::cases`; combinations a chain cannot run panic
+// there.
 //
 // Per case, besides the rows matching `SINGLE`, the test asserts
 // (`assertions.rs`) that the plan was built as intended (modes, input order
 // modes, partition counts), that nothing fails or hangs, in particular not
 // with out of memory, that only spill-capable stages spill, and that the
-// skip-partial probe fires exactly when it may. Per chain, at least one case
-// must spill when the chain has a spill-capable stage on unordered input.
+// skip-partial probe fires exactly when it may. Per test, at least one case
+// must spill when the axes allow it, see `ChainTest::expects_spill`.
 
 /// The reference chain every other chain is compared against.
 const SINGLE: Chain = chain("single", &[Aggregate(Single)], 1);
@@ -151,7 +149,17 @@ const SINGLE: Chain = chain("single", &[Aggregate(Single)], 1);
 /// ```
 #[tokio::test(flavor = "multi_thread")]
 async fn single() {
-    assert_chain_matches_single_aggregate(SINGLE).await;
+    ChainTest {
+        chain: SINGLE,
+        group_by: &Keys::ALL,
+        aggregates: &Aggregates::HASH,
+        orders: &Order::ALL,
+        cardinalities: &Cardinality::ALL,
+        memory: &Memory::ALL,
+        skip_partial_config: &[true, false],
+    }
+    .assert_matches_single_aggregate()
+    .await;
 }
 
 /// Each partition aggregates its own keys in one pass.
@@ -163,11 +171,20 @@ async fn single() {
 /// ```
 #[tokio::test(flavor = "multi_thread")]
 async fn single_partitioned() {
-    assert_chain_matches_single_aggregate(chain(
-        "single_partitioned",
-        &[HashRepartition, Aggregate(SinglePartitioned)],
-        PARTITIONS,
-    ))
+    ChainTest {
+        chain: chain(
+            "single_partitioned",
+            &[HashRepartition, Aggregate(SinglePartitioned)],
+            PARTITIONS,
+        ),
+        group_by: &Keys::GROUPED,
+        aggregates: &Aggregates::HASH,
+        orders: &Order::ALL,
+        cardinalities: &Cardinality::ALL,
+        memory: &Memory::ALL,
+        skip_partial_config: &[true, false],
+    }
+    .assert_matches_single_aggregate()
     .await;
 }
 
@@ -181,11 +198,20 @@ async fn single_partitioned() {
 /// ```
 #[tokio::test(flavor = "multi_thread")]
 async fn single_partitioned_order_preserving() {
-    assert_chain_matches_single_aggregate(chain(
-        "single_partitioned_order_preserving",
-        &[OrderPreservingHashRepartition, Aggregate(SinglePartitioned)],
-        PARTITIONS,
-    ))
+    ChainTest {
+        chain: chain(
+            "single_partitioned_order_preserving",
+            &[OrderPreservingHashRepartition, Aggregate(SinglePartitioned)],
+            PARTITIONS,
+        ),
+        group_by: &Keys::GROUPED,
+        aggregates: &Aggregates::HASH,
+        orders: &Order::SORTED,
+        cardinalities: &Cardinality::ALL,
+        memory: &Memory::ALL,
+        skip_partial_config: &[true, false],
+    }
+    .assert_matches_single_aggregate()
     .await;
 }
 
@@ -199,15 +225,24 @@ async fn single_partitioned_order_preserving() {
 /// ```
 #[tokio::test(flavor = "multi_thread")]
 async fn partial_repartition_final() {
-    assert_chain_matches_single_aggregate(chain(
-        "partial_repartition_final",
-        &[
-            Aggregate(Partial),
-            HashRepartition,
-            Aggregate(FinalPartitioned),
-        ],
-        PARTITIONS,
-    ))
+    ChainTest {
+        chain: chain(
+            "partial_repartition_final",
+            &[
+                Aggregate(Partial),
+                HashRepartition,
+                Aggregate(FinalPartitioned),
+            ],
+            PARTITIONS,
+        ),
+        group_by: &Keys::GROUPED,
+        aggregates: &Aggregates::HASH,
+        orders: &Order::ALL,
+        cardinalities: &Cardinality::ALL,
+        memory: &Memory::ALL,
+        skip_partial_config: &[true, false],
+    }
+    .assert_matches_single_aggregate()
     .await;
 }
 
@@ -221,11 +256,20 @@ async fn partial_repartition_final() {
 /// ```
 #[tokio::test(flavor = "multi_thread")]
 async fn partial_coalesce_final() {
-    assert_chain_matches_single_aggregate(chain(
-        "partial_coalesce_final",
-        &[Aggregate(Partial), CoalescePartitions, Aggregate(Final)],
-        PARTITIONS,
-    ))
+    ChainTest {
+        chain: chain(
+            "partial_coalesce_final",
+            &[Aggregate(Partial), CoalescePartitions, Aggregate(Final)],
+            PARTITIONS,
+        ),
+        group_by: &Keys::ALL,
+        aggregates: &Aggregates::HASH,
+        orders: &Order::ALL,
+        cardinalities: &Cardinality::ALL,
+        memory: &Memory::ALL,
+        skip_partial_config: &[true, false],
+    }
+    .assert_matches_single_aggregate()
     .await;
 }
 
@@ -240,15 +284,24 @@ async fn partial_coalesce_final() {
 /// ```
 #[tokio::test(flavor = "multi_thread")]
 async fn partial_order_preserving_repartition_final() {
-    assert_chain_matches_single_aggregate(chain(
-        "partial_order_preserving_repartition_final",
-        &[
-            Aggregate(Partial),
-            OrderPreservingHashRepartition,
-            Aggregate(FinalPartitioned),
-        ],
-        PARTITIONS,
-    ))
+    ChainTest {
+        chain: chain(
+            "partial_order_preserving_repartition_final",
+            &[
+                Aggregate(Partial),
+                OrderPreservingHashRepartition,
+                Aggregate(FinalPartitioned),
+            ],
+            PARTITIONS,
+        ),
+        group_by: &Keys::GROUPED,
+        aggregates: &Aggregates::HASH,
+        orders: &Order::SORTED,
+        cardinalities: &Cardinality::ALL,
+        memory: &Memory::ALL,
+        skip_partial_config: &[true, false],
+    }
+    .assert_matches_single_aggregate()
     .await;
 }
 
@@ -263,11 +316,20 @@ async fn partial_order_preserving_repartition_final() {
 /// ```
 #[tokio::test(flavor = "multi_thread")]
 async fn partial_sort_preserving_merge_final() {
-    assert_chain_matches_single_aggregate(chain(
-        "partial_sort_preserving_merge_final",
-        &[Aggregate(Partial), SortPreservingMerge, Aggregate(Final)],
-        PARTITIONS,
-    ))
+    ChainTest {
+        chain: chain(
+            "partial_sort_preserving_merge_final",
+            &[Aggregate(Partial), SortPreservingMerge, Aggregate(Final)],
+            PARTITIONS,
+        ),
+        group_by: &Keys::GROUPED,
+        aggregates: &Aggregates::HASH,
+        orders: &Order::SORTED,
+        cardinalities: &Cardinality::ALL,
+        memory: &Memory::ALL,
+        skip_partial_config: &[true, false],
+    }
+    .assert_matches_single_aggregate()
     .await;
 }
 
@@ -280,11 +342,20 @@ async fn partial_sort_preserving_merge_final() {
 /// ```
 #[tokio::test(flavor = "multi_thread")]
 async fn partial_final_single_partition() {
-    assert_chain_matches_single_aggregate(chain(
-        "partial_final_single_partition",
-        &[Aggregate(Partial), Aggregate(Final)],
-        1,
-    ))
+    ChainTest {
+        chain: chain(
+            "partial_final_single_partition",
+            &[Aggregate(Partial), Aggregate(Final)],
+            1,
+        ),
+        group_by: &Keys::ALL,
+        aggregates: &Aggregates::HASH,
+        orders: &Order::ALL,
+        cardinalities: &Cardinality::ALL,
+        memory: &Memory::ALL,
+        skip_partial_config: &[true, false],
+    }
+    .assert_matches_single_aggregate()
     .await;
 }
 
@@ -300,17 +371,26 @@ async fn partial_final_single_partition() {
 /// ```
 #[tokio::test(flavor = "multi_thread")]
 async fn partial_repartition_reduce_repartition_final() {
-    assert_chain_matches_single_aggregate(chain(
-        "partial_repartition_reduce_repartition_final",
-        &[
-            Aggregate(Partial),
-            HashRepartition,
-            Aggregate(PartialReduce),
-            HashRepartition,
-            Aggregate(FinalPartitioned),
-        ],
-        PARTITIONS,
-    ))
+    ChainTest {
+        chain: chain(
+            "partial_repartition_reduce_repartition_final",
+            &[
+                Aggregate(Partial),
+                HashRepartition,
+                Aggregate(PartialReduce),
+                HashRepartition,
+                Aggregate(FinalPartitioned),
+            ],
+            PARTITIONS,
+        ),
+        group_by: &Keys::GROUPED,
+        aggregates: &Aggregates::HASH,
+        orders: &Order::ALL,
+        cardinalities: &Cardinality::ALL,
+        memory: &Memory::ALL,
+        skip_partial_config: &[true, false],
+    }
+    .assert_matches_single_aggregate()
     .await;
 }
 
@@ -326,17 +406,26 @@ async fn partial_repartition_reduce_repartition_final() {
 /// ```
 #[tokio::test(flavor = "multi_thread")]
 async fn partial_repartition_reduce_coalesce_final() {
-    assert_chain_matches_single_aggregate(chain(
-        "partial_repartition_reduce_coalesce_final",
-        &[
-            Aggregate(Partial),
-            HashRepartition,
-            Aggregate(PartialReduce),
-            CoalescePartitions,
-            Aggregate(Final),
-        ],
-        PARTITIONS,
-    ))
+    ChainTest {
+        chain: chain(
+            "partial_repartition_reduce_coalesce_final",
+            &[
+                Aggregate(Partial),
+                HashRepartition,
+                Aggregate(PartialReduce),
+                CoalescePartitions,
+                Aggregate(Final),
+            ],
+            PARTITIONS,
+        ),
+        group_by: &Keys::GROUPED,
+        aggregates: &Aggregates::HASH,
+        orders: &Order::ALL,
+        cardinalities: &Cardinality::ALL,
+        memory: &Memory::ALL,
+        skip_partial_config: &[true, false],
+    }
+    .assert_matches_single_aggregate()
     .await;
 }
 
@@ -353,17 +442,26 @@ async fn partial_repartition_reduce_coalesce_final() {
 /// ```
 #[tokio::test(flavor = "multi_thread")]
 async fn partial_coalesce_reduce_coalesce_final() {
-    assert_chain_matches_single_aggregate(chain(
-        "partial_coalesce_reduce_coalesce_final",
-        &[
-            Aggregate(Partial),
-            CoalescePartitions,
-            Aggregate(PartialReduce),
-            CoalescePartitions,
-            Aggregate(Final),
-        ],
-        PARTITIONS,
-    ))
+    ChainTest {
+        chain: chain(
+            "partial_coalesce_reduce_coalesce_final",
+            &[
+                Aggregate(Partial),
+                CoalescePartitions,
+                Aggregate(PartialReduce),
+                CoalescePartitions,
+                Aggregate(Final),
+            ],
+            PARTITIONS,
+        ),
+        group_by: &Keys::ALL,
+        aggregates: &Aggregates::HASH,
+        orders: &Order::ALL,
+        cardinalities: &Cardinality::ALL,
+        memory: &Memory::ALL,
+        skip_partial_config: &[true, false],
+    }
+    .assert_matches_single_aggregate()
     .await;
 }
 
@@ -378,16 +476,25 @@ async fn partial_coalesce_reduce_coalesce_final() {
 /// ```
 #[tokio::test(flavor = "multi_thread")]
 async fn partial_local_reduce_repartition_final() {
-    assert_chain_matches_single_aggregate(chain(
-        "partial_local_reduce_repartition_final",
-        &[
-            Aggregate(Partial),
-            Aggregate(PartialReduce),
-            HashRepartition,
-            Aggregate(FinalPartitioned),
-        ],
-        PARTITIONS,
-    ))
+    ChainTest {
+        chain: chain(
+            "partial_local_reduce_repartition_final",
+            &[
+                Aggregate(Partial),
+                Aggregate(PartialReduce),
+                HashRepartition,
+                Aggregate(FinalPartitioned),
+            ],
+            PARTITIONS,
+        ),
+        group_by: &Keys::GROUPED,
+        aggregates: &Aggregates::HASH,
+        orders: &Order::ALL,
+        cardinalities: &Cardinality::ALL,
+        memory: &Memory::ALL,
+        skip_partial_config: &[true, false],
+    }
+    .assert_matches_single_aggregate()
     .await;
 }
 
@@ -404,17 +511,26 @@ async fn partial_local_reduce_repartition_final() {
 /// ```
 #[tokio::test(flavor = "multi_thread")]
 async fn partial_reduce_final_order_preserving() {
-    assert_chain_matches_single_aggregate(chain(
-        "partial_reduce_final_order_preserving",
-        &[
-            Aggregate(Partial),
-            OrderPreservingHashRepartition,
-            Aggregate(PartialReduce),
-            OrderPreservingHashRepartition,
-            Aggregate(FinalPartitioned),
-        ],
-        PARTITIONS,
-    ))
+    ChainTest {
+        chain: chain(
+            "partial_reduce_final_order_preserving",
+            &[
+                Aggregate(Partial),
+                OrderPreservingHashRepartition,
+                Aggregate(PartialReduce),
+                OrderPreservingHashRepartition,
+                Aggregate(FinalPartitioned),
+            ],
+            PARTITIONS,
+        ),
+        group_by: &Keys::GROUPED,
+        aggregates: &Aggregates::HASH,
+        orders: &Order::SORTED,
+        cardinalities: &Cardinality::ALL,
+        memory: &Memory::ALL,
+        skip_partial_config: &[true, false],
+    }
+    .assert_matches_single_aggregate()
     .await;
 }
 
@@ -427,8 +543,17 @@ async fn partial_reduce_final_order_preserving() {
 /// ```
 #[tokio::test(flavor = "multi_thread")]
 async fn top_k_single() {
-    assert_chain_matches_single_aggregate(chain("top_k_single", &[TopK(Single)], 1))
-        .await;
+    ChainTest {
+        chain: chain("top_k_single", &[TopK(Single)], 1),
+        group_by: &Keys::TOP_K,
+        aggregates: &Aggregates::TOP_K,
+        orders: &Order::ALL,
+        cardinalities: &Cardinality::ALL,
+        memory: &Memory::ALL,
+        skip_partial_config: &[true, false],
+    }
+    .assert_matches_single_aggregate()
+    .await;
 }
 
 /// Planner shape for `GROUP BY ... ORDER BY max(v) LIMIT n`: the limit lands on
@@ -442,11 +567,20 @@ async fn top_k_single() {
 /// ```
 #[tokio::test(flavor = "multi_thread")]
 async fn top_k_partial_repartition_final() {
-    assert_chain_matches_single_aggregate(chain(
-        "top_k_partial_repartition_final",
-        &[Aggregate(Partial), HashRepartition, TopK(FinalPartitioned)],
-        PARTITIONS,
-    ))
+    ChainTest {
+        chain: chain(
+            "top_k_partial_repartition_final",
+            &[Aggregate(Partial), HashRepartition, TopK(FinalPartitioned)],
+            PARTITIONS,
+        ),
+        group_by: &Keys::TOP_K,
+        aggregates: &Aggregates::TOP_K,
+        orders: &Order::ALL,
+        cardinalities: &Cardinality::ALL,
+        memory: &Memory::ALL,
+        skip_partial_config: &[true, false],
+    }
+    .assert_matches_single_aggregate()
     .await;
 }
 
@@ -460,11 +594,20 @@ async fn top_k_partial_repartition_final() {
 /// ```
 #[tokio::test(flavor = "multi_thread")]
 async fn top_k_partial_coalesce_final() {
-    assert_chain_matches_single_aggregate(chain(
-        "top_k_partial_coalesce_final",
-        &[Aggregate(Partial), CoalescePartitions, TopK(Final)],
-        PARTITIONS,
-    ))
+    ChainTest {
+        chain: chain(
+            "top_k_partial_coalesce_final",
+            &[Aggregate(Partial), CoalescePartitions, TopK(Final)],
+            PARTITIONS,
+        ),
+        group_by: &Keys::TOP_K,
+        aggregates: &Aggregates::TOP_K,
+        orders: &Order::ALL,
+        cardinalities: &Cardinality::ALL,
+        memory: &Memory::ALL,
+        skip_partial_config: &[true, false],
+    }
+    .assert_matches_single_aggregate()
     .await;
 }
 
@@ -478,11 +621,20 @@ async fn top_k_partial_coalesce_final() {
 /// ```
 #[tokio::test(flavor = "multi_thread")]
 async fn top_k_both_stages() {
-    assert_chain_matches_single_aggregate(chain(
-        "top_k_both_stages",
-        &[TopK(Partial), HashRepartition, TopK(FinalPartitioned)],
-        PARTITIONS,
-    ))
+    ChainTest {
+        chain: chain(
+            "top_k_both_stages",
+            &[TopK(Partial), HashRepartition, TopK(FinalPartitioned)],
+            PARTITIONS,
+        ),
+        group_by: &Keys::TOP_K,
+        aggregates: &Aggregates::TOP_K,
+        orders: &Order::ALL,
+        cardinalities: &Cardinality::ALL,
+        memory: &Memory::ALL,
+        skip_partial_config: &[true, false],
+    }
+    .assert_matches_single_aggregate()
     .await;
 }
 
@@ -587,51 +739,69 @@ fn reference_case(query: Query, cardinality: Cardinality) -> Case {
     }
 }
 
-/// Runs every case of `chain` and asserts each returns the rows of the
-/// `SINGLE` chain for its query, see the test preamble for the full list of
-/// checks. A failure does not stop the run, so one run reports every failing
-/// case.
-async fn assert_chain_matches_single_aggregate(chain: Chain) {
-    const SEED: u64 = 42;
-    let mut total_spilled = 0;
-    let mut failures: Vec<String> = vec![];
-    // Every in-flight case holds several copies of the dataset and its own
-    // partitioned streams, so bound the concurrency by the cores at hand
-    // instead of spawning the whole matrix.
-    let max_concurrent_cases = get_available_parallelism();
+impl ChainTest {
+    /// Runs every case and asserts each returns the rows of the `SINGLE`
+    /// chain for its query, see the preamble for the full list of checks. A
+    /// failure does not stop the run, so one run reports every failing case.
+    async fn assert_matches_single_aggregate(self) {
+        const SEED: u64 = 42;
+        let chain = self.chain;
+        let mut total_spilled = 0;
+        let mut failures: Vec<String> = vec![];
+        // Every in-flight case holds several copies of the dataset and its own
+        // partitioned streams, so bound the concurrency by the cores at hand
+        // instead of spawning the whole matrix.
+        let max_concurrent_cases = get_available_parallelism();
 
-    for cardinality in Cardinality::ALL {
-        let rows = generate_rows(cardinality, SEED);
-        let cases: Vec<Case> = cases(chain)
-            .into_iter()
-            .filter(|case| case.params.cardinality == cardinality)
-            .collect();
-        let mut reference_cases: Vec<Case> = vec![];
-        for case in &cases {
-            let query = case.shape.query;
-            if !reference_cases.iter().any(|case| case.shape.query == query) {
-                reference_cases.push(reference_case(query, cardinality));
+        for cardinality in Cardinality::ALL {
+            let rows = generate_rows(cardinality, SEED);
+            let cases: Vec<Case> = self
+                .cases()
+                .into_iter()
+                .filter(|case| case.params.cardinality == cardinality)
+                .collect();
+            let mut reference_cases: Vec<Case> = vec![];
+            for case in &cases {
+                let query = case.shape.query;
+                if !reference_cases.iter().any(|case| case.shape.query == query) {
+                    reference_cases.push(reference_case(query, cardinality));
+                }
             }
-        }
-        let inputs = Arc::new(arrange_all(&rows, cases.iter().chain(&reference_cases)));
+            let inputs =
+                Arc::new(arrange_all(&rows, cases.iter().chain(&reference_cases)));
 
-        let mut expected_by_query: Vec<(Query, String)> = Vec::new();
-        for case in reference_cases {
-            let query = case.shape.query;
-            let outcome = run_case(case, Arc::clone(&inputs)).await;
-            expected_by_query.push((query, outcome.output));
-        }
+            let mut expected_by_query: Vec<(Query, String)> = Vec::new();
+            for case in reference_cases {
+                let query = case.shape.query;
+                let outcome = run_case(case, Arc::clone(&inputs)).await;
+                expected_by_query.push((query, outcome.output));
+            }
 
-        let mut join_set = JoinSet::new();
-        let (mut spilled, mut finished) = (vec![], vec![]);
-        for case in cases {
-            let inputs = Arc::clone(&inputs);
-            let expected = expected_by_query
-                .iter()
-                .find(|(query, _)| *query == case.shape.query)
-                .map(|(_, expected)| expected.clone())
-                .unwrap();
-            while join_set.len() >= max_concurrent_cases {
+            let mut join_set = JoinSet::new();
+            let (mut spilled, mut finished) = (vec![], vec![]);
+            for case in cases {
+                let inputs = Arc::clone(&inputs);
+                let expected = expected_by_query
+                    .iter()
+                    .find(|(query, _)| *query == case.shape.query)
+                    .map(|(_, expected)| expected.clone())
+                    .unwrap();
+                while join_set.len() >= max_concurrent_cases {
+                    collect_finished(
+                        &mut join_set,
+                        &mut spilled,
+                        &mut finished,
+                        &mut failures,
+                    )
+                    .await;
+                }
+                join_set.spawn(async move {
+                    let outcome = run_case(case.clone(), inputs).await;
+                    assert_eq!(outcome.output, expected, "{case:?}");
+                    (case, outcome.spilled)
+                });
+            }
+            while !join_set.is_empty() {
                 collect_finished(
                     &mut join_set,
                     &mut spilled,
@@ -640,35 +810,25 @@ async fn assert_chain_matches_single_aggregate(chain: Chain) {
                 )
                 .await;
             }
-            join_set.spawn(async move {
-                let outcome = run_case(case.clone(), inputs).await;
-                assert_eq!(outcome.output, expected, "{case:?}");
-                (case, outcome.spilled)
-            });
+            print_cases(cardinality, "spilled", &spilled);
+            print_cases(cardinality, "finished without spilling", &finished);
+            total_spilled += spilled.len();
         }
-        while !join_set.is_empty() {
-            collect_finished(&mut join_set, &mut spilled, &mut finished, &mut failures)
-                .await;
+        if self.expects_spill() {
+            assert!(
+                total_spilled > 0,
+                "{}: no case exercised the spill path",
+                chain.name
+            );
         }
-        print_cases(cardinality, "spilled", &spilled);
-        print_cases(cardinality, "finished without spilling", &finished);
-        total_spilled += spilled.len();
-    }
-    // A shape filter may select only shapes that cannot spill
-    if chain.expects_spill() && std::env::var("AGGREGATE_CHAIN_SHAPES").is_err() {
         assert!(
-            total_spilled > 0,
-            "{}: no case exercised the spill path",
-            chain.name
+            failures.is_empty(),
+            "{}: {} cases failed:\n\n{}",
+            chain.name,
+            failures.len(),
+            failures.join("\n\n")
         );
     }
-    assert!(
-        failures.is_empty(),
-        "{}: {} cases failed:\n\n{}",
-        chain.name,
-        failures.len(),
-        failures.join("\n\n")
-    );
 }
 
 /// A case takes about two seconds alone in a debug build, but CI runs the

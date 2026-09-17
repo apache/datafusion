@@ -41,6 +41,16 @@ pub(super) enum Order {
     SortedByAllKeys,
 }
 
+impl Order {
+    pub(super) const ALL: [Self; 3] = [
+        Self::Unordered,
+        Self::SortedByFirstKey,
+        Self::SortedByAllKeys,
+    ];
+    /// For chains that preserve ordering, which need an ordering to preserve.
+    pub(super) const SORTED: [Self; 2] = [Self::SortedByFirstKey, Self::SortedByAllKeys];
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Cardinality {
     VeryHigh,
@@ -70,6 +80,10 @@ pub(super) enum Memory {
     Unlimited,
     /// Pool sized so final and single hash tables cannot fit.
     Limited,
+}
+
+impl Memory {
+    pub(super) const ALL: [Self; 2] = [Self::Unlimited, Self::Limited];
 }
 
 /// One operator in a chain, listed bottom to top.
@@ -125,6 +139,19 @@ impl Keys {
         Self::Mixed,
         Self::Struct,
     ];
+    /// Every `GROUP BY`, for chains that hash or sort on the keys.
+    pub(super) const GROUPED: [Self; 7] = [
+        Self::TwoInts,
+        Self::Boolean,
+        Self::Bytes,
+        Self::BytesView,
+        Self::Primitive,
+        Self::Mixed,
+        Self::Struct,
+    ];
+    /// The keys `GroupedTopKAggregateStream` supports: one primitive or
+    /// string column.
+    pub(super) const TOP_K: [Self; 3] = [Self::Bytes, Self::BytesView, Self::Primitive];
 
     /// Key columns, in `GROUP BY` order.
     pub(super) fn columns(self) -> &'static [&'static str] {
@@ -176,7 +203,10 @@ pub(super) enum Aggregates {
 }
 
 impl Aggregates {
-    pub(super) const ALL: [Self; 3] = [Self::All, Self::None, Self::Max];
+    /// For hash chains: `max` alone is a subset of `All` and adds nothing.
+    pub(super) const HASH: [Self; 2] = [Self::All, Self::None];
+    /// For TopK chains, which support a single `max` or no aggregates.
+    pub(super) const TOP_K: [Self; 2] = [Self::Max, Self::None];
 }
 
 /// The logical query a chain computes.
@@ -284,23 +314,27 @@ impl Shape {
         )
     }
 
-    /// Source orders that make sense for this shape. Order-preserving shuffles
-    /// need an ordering to preserve; no-grouping chains ignore ordering.
-    pub(super) fn orders(&self) -> Vec<Order> {
-        let keys = self.query.keys.columns();
-        let mut orders = vec![];
-        if !self.chain.preserves_order() {
-            orders.push(Order::Unordered);
-        }
-        if self.query.keys.sortable() && !keys.is_empty() {
-            // With a single key, sorting by the first key is already sorting
-            // by all keys.
-            if keys.len() > 1 {
-                orders.push(Order::SortedByFirstKey);
-            }
-            orders.push(Order::SortedByAllKeys);
-        }
-        orders
+    /// The subset of `requested` the source can be arranged in for these keys.
+    /// Struct keys cannot be sorted, and with a single key sorting by the
+    /// first key is already sorting by all keys.
+    pub(super) fn orders(&self, requested: &[Order]) -> Vec<Order> {
+        let keys = self.query.keys;
+        requested
+            .iter()
+            .copied()
+            .filter(|order| match order {
+                Order::Unordered => {
+                    assert!(
+                        !self.chain.preserves_order(),
+                        "{}: an order-preserving chain needs sorted input",
+                        self.chain.name
+                    );
+                    true
+                }
+                Order::SortedByFirstKey => keys.sortable() && keys.columns().len() > 1,
+                Order::SortedByAllKeys => keys.sortable() && !keys.columns().is_empty(),
+            })
+            .collect()
     }
 
     /// Whether some `Partial` stage of this shape runs the skip-partial probe
@@ -321,34 +355,19 @@ impl Shape {
     }
 }
 
-/// Every query the chain can be planned for.
-///
-/// - Without keys a chain can neither hash nor sort, and `max` alone is a
-///   subset of the full aggregate list, so only that list runs.
-/// - The TopK stream needs one primitive or string key with either a single
-///   `max` or no aggregates at all (the `DISTINCT ... LIMIT` form).
-/// - Every other chain runs the full aggregate list and the accumulator-free
-///   form; `max` alone adds nothing there.
-pub(super) fn shapes(chain: Chain) -> Vec<Shape> {
-    let mut shapes = vec![];
-    for keys in Keys::ALL {
-        for aggregates in Aggregates::ALL {
-            let valid = if keys == Keys::None {
-                !chain.needs_keys() && aggregates == Aggregates::All
-            } else if chain.is_top_k() {
-                keys.top_k_supported() && aggregates != Aggregates::All
-            } else {
-                aggregates != Aggregates::Max
-            };
-            if valid {
-                shapes.push(Shape {
-                    chain,
-                    query: Query { keys, aggregates },
-                });
-            }
-        }
-    }
-    shapes
+/// One test: a chain and the axes it runs over. Every field is a list so a
+/// test reads as the cases it covers, and narrowing a list runs just those.
+pub(super) struct ChainTest {
+    pub(super) chain: Chain,
+    pub(super) group_by: &'static [Keys],
+    pub(super) aggregates: &'static [Aggregates],
+    pub(super) orders: &'static [Order],
+    pub(super) cardinalities: &'static [Cardinality],
+    pub(super) memory: &'static [Memory],
+    /// Whether the skip-partial probe may fire. Only a grouped `Partial`
+    /// stage on unordered input runs it; elsewhere the setting changes
+    /// nothing and only the first value runs.
+    pub(super) skip_partial_config: &'static [bool],
 }
 
 #[derive(Clone, Debug)]
@@ -357,44 +376,81 @@ pub(super) struct Case {
     pub(super) params: CaseParams,
 }
 
-/// Every case of the chain: each valid query over every source order,
-/// cardinality, memory budget and skip-partial setting.
-pub(super) fn cases(chain: Chain) -> Vec<Case> {
-    // `AGGREGATE_CHAIN_SHAPES=a,b` restricts the run to shapes whose name
-    // contains one of the given substrings, to reproduce or bisect quickly.
-    let shape_filter: Vec<String> = std::env::var("AGGREGATE_CHAIN_SHAPES")
-        .map(|value| value.split(',').map(str::to_string).collect())
-        .unwrap_or_default();
-    let mut cases = vec![];
-    for shape in shapes(chain).into_iter().filter(|shape| {
-        shape_filter.is_empty()
-            || shape_filter
-                .iter()
-                .any(|needle| shape.name().contains(needle))
-    }) {
-        for order in shape.orders() {
-            let skip_partial_variants: &[bool] =
-                if shape.has_skip_partial_candidate(order) {
-                    &[true, false]
+impl ChainTest {
+    /// Every query of the test: each key set with each aggregate list.
+    /// Without keys only the full aggregate list runs: `max` alone is a
+    /// subset of it and no aggregates at all is not a query.
+    fn shapes(&self) -> Vec<Shape> {
+        let chain = self.chain;
+        let mut shapes = vec![];
+        for &keys in self.group_by {
+            assert!(
+                keys != Keys::None || !chain.needs_keys(),
+                "{}: the chain hashes or sorts on group keys, so it needs some",
+                chain.name
+            );
+            assert!(
+                !chain.is_top_k() || keys.top_k_supported(),
+                "{}: TopK needs one primitive or string key, not {keys:?}",
+                chain.name
+            );
+            for &aggregates in self.aggregates {
+                assert!(
+                    !chain.is_top_k() || aggregates != Aggregates::All,
+                    "{}: TopK supports a single max or no aggregates, not {aggregates:?}",
+                    chain.name
+                );
+                if keys == Keys::None && aggregates != Aggregates::All {
+                    continue;
+                }
+                shapes.push(Shape {
+                    chain,
+                    query: Query { keys, aggregates },
+                });
+            }
+        }
+        shapes
+    }
+
+    /// Every case of the test: each query over each source order,
+    /// cardinality, memory budget and skip-partial setting.
+    pub(super) fn cases(&self) -> Vec<Case> {
+        let mut cases = vec![];
+        for shape in self.shapes() {
+            for order in shape.orders(self.orders) {
+                let skip_partial = if shape.has_skip_partial_candidate(order) {
+                    self.skip_partial_config
                 } else {
-                    &[true]
+                    &self.skip_partial_config[..1]
                 };
-            for cardinality in Cardinality::ALL {
-                for memory in [Memory::Unlimited, Memory::Limited] {
-                    for &skip_partial_enabled in skip_partial_variants {
-                        cases.push(Case {
-                            shape,
-                            params: CaseParams {
-                                order,
-                                cardinality,
-                                memory,
-                                skip_partial_enabled,
-                            },
-                        });
+                for &cardinality in self.cardinalities {
+                    for &memory in self.memory {
+                        for &skip_partial_enabled in skip_partial {
+                            cases.push(Case {
+                                shape,
+                                params: CaseParams {
+                                    order,
+                                    cardinality,
+                                    memory,
+                                    skip_partial_enabled,
+                                },
+                            });
+                        }
                     }
                 }
             }
         }
+        cases
     }
-    cases
+
+    /// Whether some case must spill: the chain has a spill-capable stage on
+    /// unordered input and the axes include the very-high-cardinality table
+    /// under the limited pool that cannot fit.
+    pub(super) fn expects_spill(&self) -> bool {
+        self.chain.expects_spill()
+            && self.orders.contains(&Order::Unordered)
+            && self.cardinalities.contains(&Cardinality::VeryHigh)
+            && self.memory.contains(&Memory::Limited)
+            && self.group_by.iter().any(|keys| keys.tracks_cardinality())
+    }
 }
