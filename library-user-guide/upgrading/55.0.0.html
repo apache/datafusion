@@ -453,6 +453,38 @@
 <h1>Upgrade Guides<a class="headerlink" href="#upgrade-guides" title="Link to this heading">#</a></h1>
 <section id="datafusion-55-0-0">
 <h2>DataFusion 55.0.0<a class="headerlink" href="#datafusion-55-0-0" title="Link to this heading">#</a></h2>
+<section id="filter-predicate-evaluation-order-may-differ-from-query-text">
+<h3>Filter predicate evaluation order may differ from query text<a class="headerlink" href="#filter-predicate-evaluation-order-may-differ-from-query-text" title="Link to this heading">#</a></h3>
+<p>The logical optimizer now reorders filters so that cheap predicates (most binary
+comparisons, <code class="docutils literal notranslate"><span class="pre">IS</span> <span class="pre">NULL</span></code>, <code class="docutils literal notranslate"><span class="pre">Between</span></code>, <code class="docutils literal notranslate"><span class="pre">InList</span></code>, etc.) evaluate before expensive
+ones (<code class="docutils literal notranslate"><span class="pre">LIKE</span></code>, regex, scalar function calls, subqueries). For example,
+<code class="docutils literal notranslate"><span class="pre">WHERE</span> <span class="pre">col</span> <span class="pre">LIKE</span> <span class="pre">'%foo%'</span> <span class="pre">AND</span> <span class="pre">col2</span> <span class="pre">=</span> <span class="pre">5</span></code> may evaluate <code class="docutils literal notranslate"><span class="pre">col2</span> <span class="pre">=</span> <span class="pre">5</span></code> before
+<code class="docutils literal notranslate"><span class="pre">col</span> <span class="pre">LIKE</span> <span class="pre">'%foo%'</span></code>.</p>
+<p><strong>Evaluation order has never been guaranteed to match the order written in the
+query.</strong> The SQL standard explicitly allows implementations to evaluate operands
+in any order; major engines (PostgreSQL, SQL Server, Oracle, MySQL) document the
+same. Queries should not rely on left-to-right evaluation or short-circuit
+semantics for <code class="docutils literal notranslate"><span class="pre">AND</span></code> or <code class="docutils literal notranslate"><span class="pre">OR</span></code>. Previous versions of DataFusion already reordered
+predicates (e.g., as part of expression simplification or predicate pushdown);
+the new reordering pass just increases the scenarios where the optimizer will
+change predicate evaluation order.</p>
+<p><strong>Fallible-predicate patterns are particularly affected.</strong> For example:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">WHERE</span><span class="w"> </span><span class="n">s</span><span class="w"> </span><span class="o">~</span><span class="w"> </span><span class="s1">&#39;^[0-9]+$&#39;</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="k">CAST</span><span class="p">(</span><span class="n">s</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="nb">INT</span><span class="p">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+</pre></div>
+</div>
+<p>The intent is likely to filter non-numeric strings before the <code class="docutils literal notranslate"><span class="pre">CAST</span></code> runs,
+but this depends on evaluation-order behavior the SQL standard does not
+guaranteed. The new reorder makes this kind of pattern more likely to fail
+at runtime if the optimizer moves the <code class="docutils literal notranslate"><span class="pre">CAST</span></code> ahead of the regex. To force
+conditional evaluation, rewrite using <code class="docutils literal notranslate"><span class="pre">CASE</span></code>, which has standardized
+short-circuit semantics:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">WHERE</span><span class="w"> </span><span class="k">CASE</span><span class="w"> </span><span class="k">WHEN</span><span class="w"> </span><span class="n">s</span><span class="w"> </span><span class="o">~</span><span class="w"> </span><span class="s1">&#39;^[0-9]+$&#39;</span><span class="w"> </span><span class="k">THEN</span><span class="w"> </span><span class="k">CAST</span><span class="p">(</span><span class="n">s</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="nb">INT</span><span class="p">)</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="k">ELSE</span><span class="w"> </span><span class="k">false</span><span class="w"> </span><span class="k">END</span>
+</pre></div>
+</div>
+<p>Volatile expressions (<code class="docutils literal notranslate"><span class="pre">random()</span></code>, <code class="docutils literal notranslate"><span class="pre">now()</span></code>, etc.) are exempt — their position
+in the conjunct list is preserved so the number of times they evaluate per
+query does not change.</p>
+</section>
 <section id="map-casts-with-nested-structs-use-schema-evolution-rules">
 <h3>Map casts with nested Structs use schema-evolution rules<a class="headerlink" href="#map-casts-with-nested-structs-use-schema-evolution-rules" title="Link to this heading">#</a></h3>
 <p>Casts of a <code class="docutils literal notranslate"><span class="pre">Map</span></code> whose key or value recursively contains a <code class="docutils literal notranslate"><span class="pre">Struct</span></code> now adapt
@@ -610,6 +642,11 @@ arm.</p>
 </pre></div>
 </div>
 <p>Use <code class="docutils literal notranslate"><span class="pre">temp_file.size()</span></code> instead of <a class="reference external" href="https://docs.rs/datafusion-execution/latest/datafusion_execution/disk_manager/struct.RefCountedTempFile.html#method.current_disk_usage"><code class="docutils literal notranslate"><span class="pre">RefCountedTempFile::current_disk_usage</span></code></a>.</p>
+</section>
+<section id="new-dialect-spark-variant">
+<h3>New <code class="docutils literal notranslate"><span class="pre">Dialect::Spark</span></code> variant<a class="headerlink" href="#new-dialect-spark-variant" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">Dialect</span></code> enum in <code class="docutils literal notranslate"><span class="pre">datafusion_common::config</span></code> now includes a <code class="docutils literal notranslate"><span class="pre">Spark</span></code> variant.
+If you match exhaustively on <code class="docutils literal notranslate"><span class="pre">Dialect</span></code>, add a <code class="docutils literal notranslate"><span class="pre">Dialect::Spark</span></code> arm.</p>
 </section>
 <section id="dialect-available-replaced-by-dialect-available">
 <h3><code class="docutils literal notranslate"><span class="pre">Dialect::AVAILABLE</span></code> replaced by <code class="docutils literal notranslate"><span class="pre">Dialect::available()</span></code><a class="headerlink" href="#dialect-available-replaced-by-dialect-available" title="Link to this heading">#</a></h3>
@@ -1788,11 +1825,13 @@ use <code class="docutils literal notranslate"><span class="pre">UNBOUNDED</span
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-55-0-0">DataFusion 55.0.0</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filter-predicate-evaluation-order-may-differ-from-query-text">Filter predicate evaluation order may differ from query text</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#map-casts-with-nested-structs-use-schema-evolution-rules">Map casts with nested Structs use schema-evolution rules</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#tableprovider-scan-takes-option-usize-for-the-projection"><code class="docutils literal notranslate"><span class="pre">TableProvider::scan</span></code> takes <code class="docutils literal notranslate"><span class="pre">Option&lt;&amp;[usize]&gt;</span></code> for the projection</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dataframe-fill-null-now-borrows-its-arguments"><code class="docutils literal notranslate"><span class="pre">DataFrame::fill_null</span></code> now borrows its arguments</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filescanconfig-partitioned-by-file-group-removed"><code class="docutils literal notranslate"><span class="pre">FileScanConfig::partitioned_by_file_group</span></code> removed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#user-spillfile-traits-instead-of-refcountedtempfile">User <code class="docutils literal notranslate"><span class="pre">SpillFile</span></code> traits instead of <code class="docutils literal notranslate"><span class="pre">RefCountedTempFile</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#new-dialect-spark-variant">New <code class="docutils literal notranslate"><span class="pre">Dialect::Spark</span></code> variant</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dialect-available-replaced-by-dialect-available"><code class="docutils literal notranslate"><span class="pre">Dialect::AVAILABLE</span></code> replaced by <code class="docutils literal notranslate"><span class="pre">Dialect::available()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#spill-record-batch-by-size-removed"><code class="docutils literal notranslate"><span class="pre">spill_record_batch_by_size</span></code> removed</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#createexternaltable-supports-multiple-locations"><code class="docutils literal notranslate"><span class="pre">CreateExternalTable</span></code> supports multiple locations</a></li>
