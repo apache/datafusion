@@ -20,6 +20,7 @@
 use arrow::datatypes::Field;
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::{Result, not_impl_err};
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::utils::format_state_name;
@@ -44,13 +45,13 @@ make_udaf_expr_and_func!(
 > SELECT column_name, GROUPING(column_name) AS group_column
   FROM table_name
   GROUP BY GROUPING SETS ((column_name), ());
-+-------------+-------------+
++-------------+--------------+
 | column_name | group_column |
-+-------------+-------------+
-| value1      | 0           |
-| value2      | 0           |
-| NULL        | 1           |
-+-------------+-------------+
++-------------+--------------+
+| value1      | 0            |
+| value2      | 0            |
+| NULL        | 1            |
++-------------+--------------+
 ```"#,
     argument(
         name = "expression",
@@ -109,5 +110,14 @@ impl AggregateUDFImpl for Grouping {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // The result depends only on which grouping set a row belongs to, not
+        // on how many rows share a value, so duplicates cannot change it.
+        // `ResolveGroupingFunction` replaces the call before the optimizer
+        // runs, so this tag is not reachable from SQL and the accumulator
+        // above is never built.
+        DistinctHandling::Insensitive
     }
 }

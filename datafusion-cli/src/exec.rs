@@ -73,12 +73,7 @@ pub async fn exec_from_lines(
 
     for line in reader.lines() {
         match line {
-            Ok(line) if line.starts_with("#!") => {
-                continue;
-            }
-            Ok(line) if line.starts_with("--") => {
-                continue;
-            }
+            Ok(line) if line.starts_with("#!") || line.starts_with("--") => {}
             Ok(line) => {
                 let line = line.trim_end();
                 query.push_str(line);
@@ -148,7 +143,7 @@ pub async fn exec_from_repl(
                         Command::OutputFormat(subcommand) => {
                             if let Some(subcommand) = subcommand {
                                 if let Ok(command) = subcommand.parse::<OutputFormat>() {
-                                    if let Err(e) = command.execute(print_options).await {
+                                    if let Err(e) = command.execute(print_options) {
                                         eprintln!("{e}")
                                     }
                                 } else {
@@ -197,7 +192,6 @@ pub async fn exec_from_repl(
             Err(ReadlineError::Interrupted) => {
                 println!("^C");
                 rl.helper().unwrap().reset_hint();
-                continue;
             }
             Err(ReadlineError::Eof) => {
                 println!("\\q");
@@ -423,16 +417,17 @@ async fn create_plan(
 
         // Expose stdin (e.g. `cat data.csv | datafusion-cli`) as a `stdin://`
         // object store, registered like any other scheme in `get_object_store`.
-        cmd.location = StdinUtils::rewrite_location(&cmd.location, format.as_ref());
-
-        register_object_store_and_config_extensions(
-            ctx,
-            &cmd.location,
-            &cmd.options,
-            format,
-            resolve_region,
-        )
-        .await?;
+        for location in &mut cmd.locations {
+            *location = StdinUtils::rewrite_location(location, format.as_ref());
+            register_object_store_and_config_extensions(
+                ctx,
+                location,
+                &cmd.options,
+                format.clone(),
+                resolve_region,
+            )
+            .await?;
+        }
     }
 
     if let LogicalPlan::Copy(copy_to) = &mut plan {
@@ -535,14 +530,16 @@ mod tests {
 
         if let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(cmd)) = &plan {
             let format = config_file_type_from_str(&cmd.file_type);
-            register_object_store_and_config_extensions(
-                &ctx,
-                &cmd.location,
-                &cmd.options,
-                format,
-                false,
-            )
-            .await?;
+            for location in &cmd.locations {
+                register_object_store_and_config_extensions(
+                    &ctx,
+                    location,
+                    &cmd.options,
+                    format.clone(),
+                    false,
+                )
+                .await?;
+            }
         } else {
             return plan_err!("LogicalPlan is not a CreateExternalTable");
         }

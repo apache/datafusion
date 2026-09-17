@@ -72,6 +72,7 @@ use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::utils::combine_limit;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::empty::EmptyExec;
+use datafusion_physical_plan::execution_plan::replace_children_if_necessary;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
@@ -403,7 +404,7 @@ pub(crate) fn pushdown_limits(
         .collect::<Result<_>>()?;
 
     if changed {
-        new_node.data.with_new_children(new_children)
+        replace_children_if_necessary(new_node.data, new_children)
     } else {
         Ok(new_node.data)
     }

@@ -38,11 +38,11 @@ use std::sync::Arc;
 | {k: v}                     |
 +----------------------------+
 > select arrow_metadata(col, 'k') from table;
-+-------------------------------+
-| arrow_metadata(table.col, 'k')|
-+-------------------------------+
-| v                             |
-+-------------------------------+
++--------------------------------+
+| arrow_metadata(table.col, 'k') |
++--------------------------------+
+| v                              |
++--------------------------------+
 ```"#,
     argument(
         name = "expression",
@@ -120,13 +120,11 @@ impl ScalarUDFImpl for ArrowMetadataFunc {
         let metadata = args.arg_fields[0].metadata();
 
         if args.args.len() == 2 {
-            let key = match &args.args[1] {
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(key))) => key,
-                _ => {
-                    return exec_err!(
-                        "Second argument to arrow_metadata must be a string literal key"
-                    );
-                }
+            let ColumnarValue::Scalar(ScalarValue::Utf8(Some(key))) = &args.args[1]
+            else {
+                return exec_err!(
+                    "Second argument to arrow_metadata must be a string literal key"
+                );
             };
             let value = metadata.get(key).cloned();
             Ok(ColumnarValue::Scalar(ScalarValue::Utf8(value)))

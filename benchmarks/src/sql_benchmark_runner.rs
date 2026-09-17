@@ -20,16 +20,20 @@
 
 use crate::sql_benchmark::SqlBenchmark;
 use crate::util::{CommonOpt, print_memory_stats};
+use clap::Parser;
 use criterion::{Criterion, SamplingMode};
 use datafusion::error::Result;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DataFusionError, exec_datafusion_err};
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Write as _;
 use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use tokio::runtime::Runtime;
+
+const CRITERION_MAX_DIRECTORY_NAME_LEN: usize = 64;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BenchmarkFilter {
@@ -42,9 +46,67 @@ pub struct BenchmarkFilter {
 pub struct SqlRunConfig {
     pub common: CommonOpt,
     pub filter: BenchmarkFilter,
+    pub replacements: HashMap<String, String>,
+    pub query_filename: Option<String>,
     pub persist_results: bool,
     pub validate_results: bool,
     pub output: Option<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+#[command(ignore_errors = true)]
+struct CriterionHarnessEnv {
+    #[command(flatten)]
+    options: CommonOpt,
+
+    #[arg(
+        env = "BENCH_PERSIST_RESULTS",
+        long = "persist_results",
+        default_value = "false",
+        action = clap::ArgAction::SetTrue
+    )]
+    persist_results: bool,
+
+    #[arg(
+        env = "BENCH_VALIDATE",
+        long = "validate_results",
+        default_value = "false",
+        action = clap::ArgAction::SetTrue
+    )]
+    validate: bool,
+
+    #[arg(env = "BENCH_NAME")]
+    name: Option<String>,
+
+    #[arg(env = "BENCH_SUBGROUP")]
+    subgroup: Option<String>,
+
+    #[arg(env = "BENCH_QUERY")]
+    query: Option<String>,
+
+    #[arg(env = "BENCH_NAMESPACE")]
+    criterion_namespace: Option<String>,
+}
+
+/// Builds the direct Criterion harness configuration from its `BENCH_*`
+/// environment variables.
+pub fn criterion_harness_config_from_env() -> (SqlRunConfig, Option<String>) {
+    let args = CriterionHarnessEnv::parse();
+    let config = SqlRunConfig {
+        common: args.options,
+        filter: BenchmarkFilter {
+            name: args.name,
+            subgroup: args.subgroup,
+            query: args.query,
+        },
+        replacements: default_criterion_replacements(),
+        query_filename: None,
+        persist_results: args.persist_results,
+        validate_results: args.validate,
+        output: None,
+    };
+
+    (config, args.criterion_namespace)
 }
 
 /// Runs the selected SQL benchmarks through a caller-provided Criterion instance.
@@ -53,18 +115,39 @@ pub fn run_criterion_benchmarks_impl(
     config: &SqlRunConfig,
     criterion: &mut Criterion,
 ) -> Result<()> {
+    run_criterion_benchmarks_impl_with_namespace(benchmark_dir, config, None, criterion)
+}
+
+/// Runs the selected SQL benchmarks through a caller-provided Criterion instance,
+/// optionally appending a safe invocation namespace to each benchmark group.
+pub fn run_criterion_benchmarks_impl_with_namespace(
+    benchmark_dir: &Path,
+    config: &SqlRunConfig,
+    namespace: Option<&str>,
+    criterion: &mut Criterion,
+) -> Result<()> {
+    validate_criterion_namespace(namespace)?;
+
     let rt = make_tokio_runtime()?;
     let listing_ctx = make_ctx(&config.common)?;
-    let all_benchmarks = rt.block_on(load_benchmark_definitions(
+    let all_benchmarks = rt.block_on(load_benchmark_definitions_for_query(
         &config.filter,
         &listing_ctx,
         benchmark_dir,
+        &config.replacements,
+        config.query_filename.as_deref(),
     ))?;
     let selected = filter_benchmarks(&config.filter, all_benchmarks.clone());
 
     ensure_selection(&config.filter, &all_benchmarks, &selected)?;
 
+    let mut named_benchmarks = Vec::with_capacity(selected.len());
     for (group_name, benchmarks) in selected {
+        named_benchmarks
+            .push((criterion_group_name(&group_name, namespace)?, benchmarks));
+    }
+
+    for (group_name, benchmarks) in named_benchmarks {
         let mut group = criterion.benchmark_group(group_name);
 
         group.sample_size(10);
@@ -83,6 +166,43 @@ pub fn run_criterion_benchmarks_impl(
     }
 
     Ok(())
+}
+
+fn validate_criterion_namespace(namespace: Option<&str>) -> Result<()> {
+    let Some(namespace) = namespace else {
+        return Ok(());
+    };
+
+    if namespace.is_empty()
+        || !namespace.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || "_-".contains(character)
+        })
+    {
+        return Err(exec_datafusion_err!(
+            "criterion namespace must be nonempty and contain only lowercase ASCII letters, digits, '_', or '-'"
+        ));
+    }
+
+    Ok(())
+}
+
+fn criterion_group_name(group_name: &str, namespace: Option<&str>) -> Result<String> {
+    validate_criterion_namespace(namespace)?;
+
+    let Some(namespace) = namespace else {
+        return Ok(group_name.to_string());
+    };
+
+    let group_name = format!("{group_name}__{namespace}");
+    if group_name.len() > CRITERION_MAX_DIRECTORY_NAME_LEN {
+        return Err(exec_datafusion_err!(
+            "criterion group with namespace must not exceed {CRITERION_MAX_DIRECTORY_NAME_LEN} bytes"
+        ));
+    }
+
+    Ok(group_name)
 }
 
 /// Runs one benchmark case inside Criterion and converts benchmark panics to errors.
@@ -110,7 +230,7 @@ fn run_criterion_benchmark(
 
     match result {
         Ok(()) => {
-            print_memory_stats();
+            print_memory_stats(&*ctx.runtime_env().memory_pool);
             Ok(())
         }
         Err(payload) => Err(panic_payload_to_error(payload.as_ref())),
@@ -132,6 +252,23 @@ fn panic_payload_to_error(payload: &(dyn Any + Send)) -> DataFusionError {
 
 pub fn default_sql_benchmark_directory() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sql_benchmarks")
+}
+
+/// Replacements used by the Criterion SQL benchmark harness.
+pub fn default_criterion_replacements() -> HashMap<String, String> {
+    criterion_replacements(std::env::var("DATA_DIR").ok())
+}
+
+fn criterion_replacements(data_dir: Option<String>) -> HashMap<String, String> {
+    HashMap::from([(
+        "data_dir".to_string(),
+        data_dir.unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("data")
+                .to_string_lossy()
+                .into_owned()
+        }),
+    )])
 }
 
 fn make_tokio_runtime() -> Result<Runtime> {
@@ -163,11 +300,41 @@ pub async fn load_benchmark_definitions(
     filter: &BenchmarkFilter,
     ctx: &SessionContext,
     benchmark_dir: &Path,
+    replacements: &HashMap<String, String>,
+) -> Result<BTreeMap<String, Vec<SqlBenchmark>>> {
+    load_benchmark_definitions_for_query(filter, ctx, benchmark_dir, replacements, None)
+        .await
+}
+
+/// Loads benchmark definitions, optionally limiting discovery to one filename.
+pub async fn load_benchmark_definitions_for_query(
+    filter: &BenchmarkFilter,
+    ctx: &SessionContext,
+    benchmark_dir: &Path,
+    replacements: &HashMap<String, String>,
+    query_filename: Option<&str>,
 ) -> Result<BTreeMap<String, Vec<SqlBenchmark>>> {
     let mut benches = BTreeMap::new();
-    let replacements = benchmark_replacements(filter);
+    let mut replacements = replacements.clone();
+    let selected_suite_dir = filter
+        .name
+        .as_ref()
+        .map(|name| benchmark_dir.join(name.to_ascii_lowercase()))
+        .filter(|path| path.is_dir());
+    let discovery_dir = selected_suite_dir.as_deref().unwrap_or(benchmark_dir);
+    if let Some(subgroup) = &filter.subgroup {
+        replacements.insert("bench_subgroup".to_string(), subgroup.to_string());
+    }
 
-    for path in discover_benchmark_paths(benchmark_dir)? {
+    for path in discover_benchmark_paths(discovery_dir)?
+        .into_iter()
+        .filter(|path| {
+            query_filename.is_none_or(|filename| {
+                path.file_name()
+                    .is_some_and(|candidate| candidate.eq_ignore_ascii_case(filename))
+            })
+        })
+    {
         let benchmark = SqlBenchmark::new_with_replacements(
             ctx,
             &path,
@@ -186,29 +353,10 @@ pub async fn load_benchmark_definitions(
     Ok(benches)
 }
 
-/// Builds template replacements from CLI values that also appear in benchmark files.
-fn benchmark_replacements(filter: &BenchmarkFilter) -> HashMap<String, String> {
-    let mut replacements = HashMap::new();
-    let data_dir = std::env::var("DATA_DIR").unwrap_or_else(|_| {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("data")
-            .to_string_lossy()
-            .into_owned()
-    });
-
-    replacements.insert("data_dir".to_string(), data_dir);
-
-    if let Some(subgroup) = &filter.subgroup {
-        replacements.insert("bench_subgroup".to_string(), subgroup.to_string());
-    }
-
-    replacements
-}
-
 pub fn sort_benchmarks(benchmarks: &mut BTreeMap<String, Vec<SqlBenchmark>>) {
-    benchmarks
-        .values_mut()
-        .for_each(|benchmarks| benchmarks.sort_by(|a, b| a.name().cmp(b.name())));
+    for benchmarks in benchmarks.values_mut() {
+        benchmarks.sort_by(|a, b| a.name().cmp(b.name()));
+    }
 }
 
 /// Applies benchmark, subgroup, and query filters to discovered benchmark groups.
@@ -325,7 +473,7 @@ pub fn format_benchmark_list(benchmarks: &BTreeMap<String, Vec<SqlBenchmark>>) -
         } else {
             "queries"
         };
-        output.push_str(&format!("  {name:<24} {} {query_word}\n", benchmarks.len()));
+        writeln!(output, "  {name:<24} {} {query_word}", benchmarks.len()).ok();
     }
 
     output.trim_end().to_string()
@@ -407,7 +555,7 @@ fn format_subgroup_list(benchmark_name: &str, benchmarks: &[SqlBenchmark]) -> St
         output.push_str("  <none>");
     } else {
         for entry in entries {
-            output.push_str(&format!("  {entry}\n"));
+            writeln!(output, "  {entry}").ok();
         }
     }
 
@@ -453,7 +601,7 @@ fn format_query_list(
         output.push_str("  <none>");
     } else {
         for entry in entries {
-            output.push_str(&format!("  {entry}\n"));
+            writeln!(output, "  {entry}").ok();
         }
     }
 
@@ -560,6 +708,155 @@ mod tests {
         path
     }
 
+    #[tokio::test]
+    async fn caller_replacements_reach_parser() {
+        let temp = tempfile::tempdir().unwrap();
+        write_benchmark(
+            temp.path(),
+            "alpha/benchmarks/q01.benchmark",
+            "name Q01\n\nload\nSELECT '${ALPHA_FORMAT}'\n\nrun\nSELECT 1\n",
+        );
+        let replacements =
+            HashMap::from([("alpha_format".to_string(), "csv".to_string())]);
+
+        let result = load_benchmark_definitions(
+            &BenchmarkFilter {
+                name: Some("alpha".to_string()),
+                subgroup: None,
+                query: Some("1".to_string()),
+            },
+            &SessionContext::new(),
+            temp.path(),
+            &replacements,
+        )
+        .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn query_filename_filters_paths_before_parsing() {
+        let temp = tempfile::tempdir().unwrap();
+        write_benchmark(
+            temp.path(),
+            "alpha/benchmarks/q07.benchmark",
+            "name Q07\n\nrun\nSELECT 7\n",
+        );
+        write_benchmark(
+            temp.path(),
+            "alpha/benchmarks/q08.benchmark",
+            "this is not a benchmark definition",
+        );
+        write_benchmark(
+            temp.path(),
+            "beta/benchmarks/q07.benchmark",
+            "this is not a benchmark definition",
+        );
+
+        let benches = load_benchmark_definitions_for_query(
+            &BenchmarkFilter {
+                name: Some("alpha".to_string()),
+                subgroup: None,
+                query: Some("7".to_string()),
+            },
+            &SessionContext::new(),
+            temp.path(),
+            &HashMap::new(),
+            Some("q07.benchmark"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(benches["alpha"].len(), 1);
+        assert_eq!(benches["alpha"][0].name(), "Q07");
+    }
+
+    #[test]
+    fn criterion_replacements_use_benchmarks_data_directory() {
+        let expected = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("data")
+            .to_string_lossy()
+            .into_owned();
+
+        assert_eq!(criterion_replacements(None)["data_dir"], expected);
+    }
+
+    #[test]
+    fn criterion_replacements_use_explicit_data_directory() {
+        let replacements = criterion_replacements(Some("/custom/data".to_string()));
+
+        assert_eq!(replacements["data_dir"], "/custom/data");
+    }
+
+    #[tokio::test]
+    async fn query_filename_keeps_matches_in_multiple_subgroups() {
+        let temp = tempfile::tempdir().unwrap();
+        for subgroup in ["aggregate", "window"] {
+            write_benchmark(
+                temp.path(),
+                &format!("alpha/benchmarks/{subgroup}/q03.benchmark"),
+                &format!("name Q03\nsubgroup {subgroup}\n\nrun\nSELECT 3\n"),
+            );
+        }
+
+        let filter = BenchmarkFilter {
+            name: Some("alpha".to_string()),
+            subgroup: None,
+            query: Some("3".to_string()),
+        };
+        let benches = load_benchmark_definitions_for_query(
+            &filter,
+            &SessionContext::new(),
+            temp.path(),
+            &HashMap::new(),
+            Some("q03.benchmark"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(filter_benchmarks(&filter, benches)["alpha"].len(), 2);
+
+        let filter = BenchmarkFilter {
+            subgroup: Some("window".to_string()),
+            ..filter
+        };
+        let benches = load_benchmark_definitions_for_query(
+            &filter,
+            &SessionContext::new(),
+            temp.path(),
+            &HashMap::new(),
+            Some("q03.benchmark"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(filter_benchmarks(&filter, benches)["alpha"].len(), 1);
+    }
+
+    #[tokio::test]
+    async fn query_filename_accepts_alphanumeric_pattern() {
+        let temp = tempfile::tempdir().unwrap();
+        write_benchmark(
+            temp.path(),
+            "imdb/benchmarks/01a.benchmark",
+            "name Q01a\n\nrun\nSELECT 1\n",
+        );
+
+        let benches = load_benchmark_definitions_for_query(
+            &BenchmarkFilter {
+                name: Some("imdb".to_string()),
+                subgroup: None,
+                query: Some("1a".to_string()),
+            },
+            &SessionContext::new(),
+            temp.path(),
+            &HashMap::new(),
+            Some("01a.benchmark"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(benches["imdb"][0].name(), "Q01a");
+    }
+
     #[test]
     fn normalizes_query_like_existing_sql_harness() {
         assert_eq!(normalize_query("1"), "Q01");
@@ -584,5 +881,85 @@ mod tests {
 
         assert_eq!(benchmark.group(), "tpch");
         assert_eq!(criterion_function_name(&benchmark), "Q01_sf1");
+    }
+
+    #[test]
+    fn criterion_group_names_include_safe_namespaces() {
+        assert_eq!(criterion_group_name("tpch", None).unwrap(), "tpch");
+        assert_eq!(
+            criterion_group_name("tpch", Some("parquet-sf1")).unwrap(),
+            "tpch__parquet-sf1"
+        );
+        assert_eq!(
+            criterion_group_name("tpch", Some("memory_sf1")).unwrap(),
+            "tpch__memory_sf1"
+        );
+    }
+
+    #[test]
+    fn criterion_group_names_reject_unsafe_namespaces() {
+        for namespace in ["", "csv/sf1", "csv sf1", "csv.sf1", "parquét"] {
+            let error = criterion_group_name("tpch", Some(namespace)).unwrap_err();
+
+            assert!(error.to_string().contains("namespace"), "{error}");
+        }
+    }
+
+    #[test]
+    fn criterion_group_names_reject_windows_case_collisions() {
+        let error = criterion_group_name("tpch", Some("Parquet")).unwrap_err();
+
+        assert!(error.to_string().contains("lowercase"), "{error}");
+        assert_eq!(
+            criterion_group_name("tpch", Some("parquet")).unwrap(),
+            "tpch__parquet"
+        );
+    }
+
+    #[test]
+    fn criterion_group_names_reject_components_criterion_would_truncate() {
+        let group_name = "g".repeat(55);
+
+        assert_eq!(
+            criterion_group_name(&group_name, Some("1234567"))
+                .unwrap()
+                .len(),
+            64
+        );
+
+        let first = criterion_group_name(&group_name, Some("12345678"));
+        let second = criterion_group_name(&group_name, Some("12345679"));
+
+        assert!(first.unwrap_err().to_string().contains("64 bytes"));
+        assert!(second.unwrap_err().to_string().contains("64 bytes"));
+    }
+
+    #[test]
+    fn criterion_harness_reads_namespace_from_env_in_subprocess() {
+        const CHILD_ENV: &str = "DATAFUSION_CRITERION_HARNESS_ENV_TEST_CHILD";
+
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let (_, namespace) = criterion_harness_config_from_env();
+
+            assert_eq!(namespace.as_deref(), Some("parquet_sf1"));
+            return;
+        }
+
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "sql_benchmark_runner::tests::criterion_harness_reads_namespace_from_env_in_subprocess",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .env("BENCH_NAMESPACE", "parquet_sf1")
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "child failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

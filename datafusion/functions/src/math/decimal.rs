@@ -18,7 +18,10 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, PrimitiveArray};
-use arrow::datatypes::{ArrowNativeTypeOp, DecimalType};
+use arrow::datatypes::{
+    ArrowNativeTypeOp, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
+    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType, DecimalType,
+};
 use arrow::error::ArrowError;
 use arrow_buffer::ArrowNativeType;
 use datafusion_common::{DataFusionError, Result};
@@ -27,6 +30,7 @@ pub(super) fn apply_decimal_op<T, F>(
     array: &ArrayRef,
     precision: u8,
     scale: i8,
+    output_scale: i8,
     fn_name: &str,
     op: F,
 ) -> Result<ArrayRef>
@@ -41,13 +45,17 @@ where
 
     let factor = decimal_scale_factor::<T>(scale, fn_name)?;
     let decimal = array.as_primitive::<T>();
-    let data_type = array.data_type().clone();
+    let data_type = T::TYPE_CONSTRUCTOR(precision, output_scale);
 
     let result: PrimitiveArray<T> = decimal.try_unary(|value| {
         let new_value = op(value, factor);
-        T::validate_decimal_precision(new_value, precision, scale).map_err(|_| {
-            ArrowError::ComputeError(format!("Decimal overflow while applying {fn_name}"))
-        })?;
+        T::validate_decimal_precision(new_value, precision, output_scale).map_err(
+            |_| {
+                ArrowError::ComputeError(format!(
+                    "Decimal overflow while applying {fn_name}"
+                ))
+            },
+        )?;
         Ok::<_, ArrowError>(new_value)
     })?;
 
@@ -74,38 +82,66 @@ where
     })
 }
 
+/// Compute the return precision for floor/ceil result to accommodate the result
+pub(super) fn decimal_floor_ceil_precision(
+    precision: u8,
+    scale: i8,
+    max_precision: u8,
+) -> u8 {
+    ((precision as i64) - (scale as i64) + 1).clamp(1, max_precision as i64) as u8
+}
+
+pub(super) fn decimal_floor_ceil_return_type(arg_type: &DataType) -> DataType {
+    match arg_type {
+        DataType::Null => DataType::Float64,
+        DataType::Decimal32(precision, scale) if *scale > 0 => DataType::Decimal32(
+            decimal_floor_ceil_precision(*precision, *scale, DECIMAL32_MAX_PRECISION),
+            0,
+        ),
+        DataType::Decimal64(precision, scale) if *scale > 0 => DataType::Decimal64(
+            decimal_floor_ceil_precision(*precision, *scale, DECIMAL64_MAX_PRECISION),
+            0,
+        ),
+        DataType::Decimal128(precision, scale) if *scale > 0 => DataType::Decimal128(
+            decimal_floor_ceil_precision(*precision, *scale, DECIMAL128_MAX_PRECISION),
+            0,
+        ),
+        DataType::Decimal256(precision, scale) if *scale > 0 => DataType::Decimal256(
+            decimal_floor_ceil_precision(*precision, *scale, DECIMAL256_MAX_PRECISION),
+            0,
+        ),
+        other => other.clone(),
+    }
+}
+
+/// Computes `ceil(value / factor)` as an integer at scale 0,
+/// avoiding overflow with carrying to next decimal points (999 -> 1000)
 pub(super) fn ceil_decimal_value<T>(value: T, factor: T) -> T
 where
     T: ArrowNativeTypeOp + std::ops::Rem<Output = T>,
 {
+    let quotient = value.div_wrapping(factor);
     let remainder = value % factor;
 
-    if remainder == T::ZERO {
-        return value;
-    }
-
-    if value >= T::ZERO {
-        let increment = factor.sub_wrapping(remainder);
-        value.add_wrapping(increment)
+    if remainder != T::ZERO && value > T::ZERO {
+        quotient.add_wrapping(T::ONE)
     } else {
-        value.sub_wrapping(remainder)
+        quotient
     }
 }
 
+/// Computes `floor(value / factor)` as an integer at scale 0,
+/// avoiding overflow with carrying to next decimal points (-999 -> -1000)
 pub(super) fn floor_decimal_value<T>(value: T, factor: T) -> T
 where
     T: ArrowNativeTypeOp + std::ops::Rem<Output = T>,
 {
+    let quotient = value.div_wrapping(factor);
     let remainder = value % factor;
 
-    if remainder == T::ZERO {
-        return value;
-    }
-
-    if value >= T::ZERO {
-        value.sub_wrapping(remainder)
+    if remainder != T::ZERO && value < T::ZERO {
+        quotient.sub_wrapping(T::ONE)
     } else {
-        let adjustment = factor.add_wrapping(remainder);
-        value.sub_wrapping(adjustment)
+        quotient
     }
 }

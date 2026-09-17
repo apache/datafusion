@@ -45,7 +45,16 @@ evaluation returns an error.
 "#,
     syntax_example = "file_row_index()",
     sql_example = r#"```sql
-SELECT file_row_index() FROM t;
+> COPY (SELECT * from values (100), (200), (300)) to '/tmp/foo.parquet';
+
+> select *, input_file_name(), file_row_index() from '/tmp/foo.parquet';
++---------+-------------------+------------------+
+| column1 | input_file_name() | file_row_index() |
++---------+-------------------+------------------+
+| 100     | tmp/foo.parquet   | 0                |
+| 200     | tmp/foo.parquet   | 1                |
+| 300     | tmp/foo.parquet   | 2                |
++---------+-------------------+------------------+
 ```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]

@@ -1,0 +1,7 @@
+subgroup control
+
+template sql_benchmarks/parquet_row_filter_skip/parquet_row_filter_skip.benchmark.template
+SUBGROUP=control
+QPAD=10
+DATASET=scrambled
+NAME=control_q10_scrambled_never_matched

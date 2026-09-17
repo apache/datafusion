@@ -550,7 +550,7 @@ mod tests {
             ),
         ];
 
-        cases.iter().for_each(|(source, _tz_opt, expected)| {
+        for (source, _tz_opt, expected) in &cases {
             let input = source
                 .iter()
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
@@ -586,6 +586,6 @@ mod tests {
             } else {
                 panic!("unexpected column type");
             }
-        });
+        }
     }
 }

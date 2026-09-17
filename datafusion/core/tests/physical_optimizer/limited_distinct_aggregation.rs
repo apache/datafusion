@@ -104,8 +104,8 @@ async fn test_partial_final() -> Result<()> {
     Ok(())
 }
 
-// Ensure operator respect the soft limit and stops early: `AggregateExec`'s
-// `output_rows` metric should be smaller than then total distinct group count.
+// Ensure operator respects the soft limit and stops early: `AggregateExec`'s
+// `output_rows` metric should be smaller than the total distinct group count.
 #[tokio::test]
 async fn limited_distinct_aggregate_stream_respects_soft_limit() -> Result<()> {
     // Snapshot for an aggregate operator node from `EXPLAIN ANALYZE`.
@@ -214,6 +214,125 @@ async fn limited_distinct_aggregate_stream_respects_soft_limit() -> Result<()> {
     assert!(
         final_aggregate.output_rows <= 100,
         "final aggregate should stop before emitting all distinct groups: {metrics:?}"
+    );
+
+    Ok(())
+}
+
+// Ensure operator respects the soft limit and stops early: `AggregateExec`'s
+// `output_rows` metric should be smaller than the total distinct group count.
+#[tokio::test]
+async fn single_distinct_aggregate_stream_respects_soft_limit() -> Result<()> {
+    // Snapshot for an aggregate operator node from `EXPLAIN ANALYZE`.
+    //
+    // Example: In an `EXPLAIN ANALYZE` output
+    // ```txt
+    // AggregateExec: mode=single, aggr=[], lim=[10], metrics=[output_rows=10, ...]
+    //   ProjectionExec: metrics=[output_rows=10, ...]
+    // ```
+    //
+    // `output_rows` comes from the `AggregateExec` itself, while `input_rows`
+    // is the `output_rows` metric of its direct input operator (such as a `ProjectionExec`).
+    // Tracking both distinguishes early input termination from the downstream `LimitExec`
+    // merely stopping after it receives enough output rows.
+    //
+    // we get:
+    // ```txt
+    // AggregateRuntimeMetric {
+    //     mode: Single,
+    //     limit: Some(10),
+    //     input_rows: 10,
+    //     output_rows: 10,
+    // }
+    // ```
+    #[derive(Debug)]
+    struct AggregateRuntimeMetric {
+        mode: AggregateMode,
+        limit: Option<usize>,
+        input_rows: usize,
+        output_rows: usize,
+    }
+
+    fn collect_aggregate_runtime_metrics(
+        plan: &Arc<dyn ExecutionPlan>,
+        metrics: &mut Vec<AggregateRuntimeMetric>,
+    ) {
+        if let Some(agg) = plan.downcast_ref::<AggregateExec>() {
+            let input_rows = agg
+                .input()
+                .metrics()
+                .and_then(|metrics| metrics.aggregate_by_name().output_rows())
+                .expect("The input Exec should record output_rows after execution");
+
+            let output_rows = agg
+                .metrics()
+                .and_then(|metrics| metrics.aggregate_by_name().output_rows())
+                .expect("AggregateExec should record output_rows after execution");
+
+            metrics.push(AggregateRuntimeMetric {
+                mode: *agg.mode(),
+                limit: agg.limit_options().map(|config| config.limit()),
+                input_rows,
+                output_rows,
+            });
+        }
+
+        for child in plan.children() {
+            collect_aggregate_runtime_metrics(child, metrics);
+        }
+    }
+
+    fn aggregate_runtime_metrics(
+        plan: &Arc<dyn ExecutionPlan>,
+    ) -> Vec<AggregateRuntimeMetric> {
+        let mut metrics = vec![];
+        collect_aggregate_runtime_metrics(plan, &mut metrics);
+        metrics
+    }
+
+    let cfg = SessionConfig::new()
+        .with_target_partitions(1)
+        .with_batch_size(10)
+        .set_bool("datafusion.execution.enable_migration_aggregate", true);
+
+    let ctx = SessionContext::new_with_config(cfg);
+
+    let dataframe = ctx
+        .sql(
+            "SELECT DISTINCT value % 100000 AS v \
+             FROM generate_series(1000000) \
+             LIMIT 10",
+        )
+        .await?;
+    let plan = dataframe.create_physical_plan().await?;
+    let formatted_plan = displayable(plan.as_ref()).indent(false).to_string();
+    assert!(
+        formatted_plan.contains("AggregateExec: mode=Single"),
+        "expected a single aggregate in plan:\n{formatted_plan}"
+    );
+
+    let batches = collect(Arc::clone(&plan), ctx.task_ctx()).await?;
+    assert_eq!(
+        batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+        10
+    );
+
+    let metrics = aggregate_runtime_metrics(&plan);
+    let single = metrics
+        .iter()
+        .find(|metric| metric.mode == AggregateMode::Single)
+        .expect("expected single aggregate metrics");
+
+    assert_eq!(single.limit, Some(10));
+
+    assert!(
+        single.input_rows <= 10,
+        "single aggregate should stop reading input after reaching the soft limit: {metrics:?}"
+    );
+
+    assert!(
+        single.output_rows <= 10,
+        "single aggregate should stop before emitting all distinct groups: {metrics:?}"
     );
 
     Ok(())

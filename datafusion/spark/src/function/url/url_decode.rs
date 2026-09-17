@@ -18,7 +18,9 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, LargeStringArray, StringArray, StringViewArray};
+use arrow::array::{
+    Array, ArrayRef, LargeStringBuilder, StringBuilder, StringViewBuilder,
+};
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{
     as_large_string_array, as_string_array, as_string_view_array,
@@ -61,18 +63,25 @@ impl UrlDecode {
     ///
     /// # Returns
     ///
-    /// * `Ok(String)` - The decoded string
+    /// * `Ok(Cow<str>)` - The decoded string, borrowed from `value` when there
+    ///   was nothing to rewrite and owned otherwise
     /// * `Err(DataFusionError)` - If the input is malformed or contains invalid UTF-8
-    ///
-    fn decode(value: &str) -> Result<String> {
+    fn decode(value: &str) -> Result<Cow<'_, str>> {
         // Check if the string has valid percent encoding
         Self::validate_percent_encoding(value)?;
 
-        let replaced = Self::replace_plus(value.as_bytes());
-        percent_decode(&replaced)
-            .decode_utf8()
-            .map_err(|e| exec_datafusion_err!("Invalid UTF-8 sequence: {e}"))
-            .map(|parsed| parsed.into_owned())
+        match Self::replace_plus(value.as_bytes()) {
+            // No '+' was rewritten, so the decode can borrow from `value` itself.
+            Cow::Borrowed(bytes) => percent_decode(bytes)
+                .decode_utf8()
+                .map_err(|e| exec_datafusion_err!("Invalid UTF-8 sequence: {e}")),
+            // Rewriting '+' already allocated, so owning the decoded form here
+            // costs nothing beyond what has been spent.
+            Cow::Owned(bytes) => percent_decode(&bytes)
+                .decode_utf8()
+                .map(|decoded| Cow::Owned(decoded.into_owned()))
+                .map_err(|e| exec_datafusion_err!("Invalid UTF-8 sequence: {e}")),
+        }
     }
 
     /// Replace b'+' with b' '
@@ -155,6 +164,15 @@ impl ScalarUDFImpl for UrlDecode {
     }
 }
 
+/// How [`spark_handled_url_decode`] reacts to a malformed input value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OnDecodeError {
+    /// Propagate the error, as `url_decode` does.
+    Fail,
+    /// Return NULL for that row, as `try_url_decode` does.
+    Null,
+}
+
 /// Core implementation of URL decoding function.
 ///
 /// # Arguments
@@ -165,38 +183,59 @@ impl ScalarUDFImpl for UrlDecode {
 ///
 /// * `Ok(ArrayRef)` - A new array of the same type containing decoded strings
 /// * `Err(DataFusionError)` - If validation fails or invalid arguments are provided
-///
 fn spark_url_decode(args: &[ArrayRef]) -> Result<ArrayRef> {
-    spark_handled_url_decode(args, |x| x)
+    spark_handled_url_decode(args, OnDecodeError::Fail)
 }
 
 pub fn spark_handled_url_decode(
     args: &[ArrayRef],
-    err_handle_fn: impl Fn(Result<Option<String>>) -> Result<Option<String>>,
+    on_error: OnDecodeError,
 ) -> Result<ArrayRef> {
     if args.len() != 1 {
         return exec_err!("`url_decode` expects 1 argument");
     }
 
+    // Decoded values go straight into the builder, so a row that needs no
+    // unescaping is copied once rather than materialised as its own `String`.
+    macro_rules! decode_all {
+        ($array:expr, $builder:expr) => {{
+            let array = $array;
+            let mut builder = $builder;
+            for value in array.iter() {
+                let Some(value) = value else {
+                    builder.append_null();
+                    continue;
+                };
+                match UrlDecode::decode(value) {
+                    Ok(decoded) => builder.append_value(&decoded),
+                    Err(e) => match on_error {
+                        OnDecodeError::Fail => return Err(e),
+                        OnDecodeError::Null => builder.append_null(),
+                    },
+                }
+            }
+            Ok(Arc::new(builder.finish()) as ArrayRef)
+        }};
+    }
+
     match &args[0].data_type() {
-        DataType::Utf8 => as_string_array(&args[0])?
-            .iter()
-            .map(|x| x.map(UrlDecode::decode).transpose())
-            .map(&err_handle_fn)
-            .collect::<Result<StringArray>>()
-            .map(|array| Arc::new(array) as ArrayRef),
-        DataType::LargeUtf8 => as_large_string_array(&args[0])?
-            .iter()
-            .map(|x| x.map(UrlDecode::decode).transpose())
-            .map(&err_handle_fn)
-            .collect::<Result<LargeStringArray>>()
-            .map(|array| Arc::new(array) as ArrayRef),
-        DataType::Utf8View => as_string_view_array(&args[0])?
-            .iter()
-            .map(|x| x.map(UrlDecode::decode).transpose())
-            .map(&err_handle_fn)
-            .collect::<Result<StringViewArray>>()
-            .map(|array| Arc::new(array) as ArrayRef),
+        DataType::Utf8 => {
+            let array = as_string_array(&args[0])?;
+            let builder =
+                StringBuilder::with_capacity(array.len(), array.value_data().len());
+            decode_all!(array, builder)
+        }
+        DataType::LargeUtf8 => {
+            let array = as_large_string_array(&args[0])?;
+            let builder =
+                LargeStringBuilder::with_capacity(array.len(), array.value_data().len());
+            decode_all!(array, builder)
+        }
+        DataType::Utf8View => {
+            let array = as_string_view_array(&args[0])?;
+            let builder = StringViewBuilder::with_capacity(array.len());
+            decode_all!(array, builder)
+        }
         other => exec_err!("`url_decode`: Expr must be STRING, got {other:?}"),
     }
 }
@@ -205,49 +244,77 @@ pub fn spark_handled_url_decode(
 mod tests {
 
     use super::*;
+    use arrow::array::{LargeStringArray, StringArray, StringViewArray};
+
+    const INPUT: [Option<&str>; 7] = [
+        Some("https%3A%2F%2Fspark.apache.org"),
+        Some("inva+lid://user:pass@host/file\\;param?query\\;p2"),
+        Some("inva lid://user:pass@host/file\\;param?query\\;p2"),
+        Some("%7E%21%40%23%24%25%5E%26%2A%28%29%5F%2B"),
+        Some("%E4%BD%A0%E5%A5%BD"),
+        Some(""),
+        None,
+    ];
+
+    const EXPECTED: [Option<&str>; 7] = [
+        Some("https://spark.apache.org"),
+        Some("inva lid://user:pass@host/file\\;param?query\\;p2"),
+        Some("inva lid://user:pass@host/file\\;param?query\\;p2"),
+        Some("~!@#$%^&*()_+"),
+        Some("你好"),
+        Some(""),
+        None,
+    ];
+
+    // '%2s' is not a valid percent encoded character
+    const MALFORMED_INPUT: [Option<&str>; 3] = [
+        Some("http%3A%2F%2spark.apache.org"),
+        // Valid cases
+        Some("https%3A%2F%2Fspark.apache.org"),
+        None,
+    ];
 
     #[test]
-    fn test_decode() -> Result<()> {
-        let input = Arc::new(StringArray::from(vec![
-            Some("https%3A%2F%2Fspark.apache.org"),
-            Some("inva+lid://user:pass@host/file\\;param?query\\;p2"),
-            Some("inva lid://user:pass@host/file\\;param?query\\;p2"),
-            Some("%7E%21%40%23%24%25%5E%26%2A%28%29%5F%2B"),
-            Some("%E4%BD%A0%E5%A5%BD"),
-            Some(""),
-            None,
-        ]));
-        let expected = StringArray::from(vec![
-            Some("https://spark.apache.org"),
-            Some("inva lid://user:pass@host/file\\;param?query\\;p2"),
-            Some("inva lid://user:pass@host/file\\;param?query\\;p2"),
-            Some("~!@#$%^&*()_+"),
-            Some("你好"),
-            Some(""),
-            None,
-        ]);
-
-        let result = spark_url_decode(&[input as ArrayRef])?;
+    fn test_decode_utf8() -> Result<()> {
+        let input = Arc::new(StringArray::from(INPUT.to_vec())) as ArrayRef;
+        let result = spark_url_decode(&[input])?;
         let result = as_string_array(&result)?;
+        assert_eq!(&StringArray::from(EXPECTED.to_vec()), result);
+        Ok(())
+    }
 
-        assert_eq!(&expected, result);
+    #[test]
+    fn test_decode_large_utf8() -> Result<()> {
+        let input = Arc::new(LargeStringArray::from(INPUT.to_vec())) as ArrayRef;
+        let result = spark_url_decode(&[input])?;
+        let result = as_large_string_array(&result)?;
+        assert_eq!(&LargeStringArray::from(EXPECTED.to_vec()), result);
+        Ok(())
+    }
 
+    #[test]
+    fn test_decode_utf8_view() -> Result<()> {
+        let input = Arc::new(StringViewArray::from(INPUT.to_vec())) as ArrayRef;
+        let result = spark_url_decode(&[input])?;
+        let result = as_string_view_array(&result)?;
+        assert_eq!(&StringViewArray::from(EXPECTED.to_vec()), result);
         Ok(())
     }
 
     #[test]
     fn test_decode_error() -> Result<()> {
-        let input = Arc::new(StringArray::from(vec![
-            Some("http%3A%2F%2spark.apache.org"), // '%2s' is not a valid percent encoded character
-            // Valid cases
-            Some("https%3A%2F%2Fspark.apache.org"),
-            None,
-        ]));
+        let inputs: [ArrayRef; 3] = [
+            Arc::new(StringArray::from(MALFORMED_INPUT.to_vec())),
+            Arc::new(LargeStringArray::from(MALFORMED_INPUT.to_vec())),
+            Arc::new(StringViewArray::from(MALFORMED_INPUT.to_vec())),
+        ];
 
-        let result = spark_url_decode(&[input]);
-        assert!(
-            result.is_err_and(|e| e.to_string().contains("Invalid percent-encoding"))
-        );
+        for input in inputs {
+            let result = spark_url_decode(&[input]);
+            assert!(
+                result.is_err_and(|e| e.to_string().contains("Invalid percent-encoding"))
+            );
+        }
 
         Ok(())
     }

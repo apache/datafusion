@@ -31,6 +31,7 @@ use datafusion_common::{
     DataFusionError, Result, ScalarValue, downcast_value, internal_err, not_impl_err,
     plan_err,
 };
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
@@ -139,10 +140,9 @@ impl ApproxPercentileCont {
                         vec![TypeSignatureClass::Numeric],
                         NativeType::Float64,
                     ),
-                    Coercion::new_implicit(
-                        TypeSignatureClass::Native(logical_float64()),
+                    Coercion::new_implicit_native(
+                        logical_float64(),
                         vec![TypeSignatureClass::Numeric],
-                        NativeType::Float64,
                     ),
                 ]),
                 // 3 args - numeric, percentile (float), number of centroid for T-Digest (integer)
@@ -152,10 +152,9 @@ impl ApproxPercentileCont {
                         vec![TypeSignatureClass::Numeric],
                         NativeType::Float64,
                     ),
-                    Coercion::new_implicit(
-                        TypeSignatureClass::Native(logical_float64()),
+                    Coercion::new_implicit_native(
+                        logical_float64(),
                         vec![TypeSignatureClass::Numeric],
-                        NativeType::Float64,
                     ),
                     Coercion::new_implicit(
                         TypeSignatureClass::Integer,
@@ -325,6 +324,13 @@ impl AggregateUDFImpl for ApproxPercentileCont {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // Duplicate-sensitive, but the accumulator does not read
+        // `is_distinct` and today silently returns the non-distinct answer.
+        // The tag records the intent; enforcement is a follow-up change.
+        DistinctHandling::Unsupported
     }
 }
 

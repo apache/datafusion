@@ -44,6 +44,7 @@ use datafusion_expr::{
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_lateral_join::DecorrelateLateralJoin;
 use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
+use crate::eliminate_aggregate_distinct::EliminateAggregateDistinct;
 use crate::eliminate_cross_join::EliminateCrossJoin;
 use crate::eliminate_duplicated_expr::EliminateDuplicatedExpr;
 use crate::eliminate_filter::EliminateFilter;
@@ -308,6 +309,7 @@ impl Optimizer {
             // Filters can't be pushed down past Limits, we should do PushDownFilter after PushDownLimit
             Arc::new(PushDownLimit::new()),
             Arc::new(PushDownFilter::new()),
+            Arc::new(EliminateAggregateDistinct::new()),
             Arc::new(SingleDistinctToGroupBy::new()),
             // The previous optimizations added expressions and projections,
             // that might benefit from the following rules
@@ -409,6 +411,11 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
         LogicalPlan::Join(Join { left, right, .. }) => {
             let l = f(Arc::make_mut(left))?;
             let r = f(Arc::make_mut(right))?;
+            l || r
+        }
+        LogicalPlan::AsOfJoin(join) => {
+            let l = f(Arc::make_mut(&mut join.left))?;
+            let r = f(Arc::make_mut(&mut join.right))?;
             l || r
         }
         LogicalPlan::Union(Union { inputs, .. }) => {
@@ -963,7 +970,7 @@ mod tests {
             .enumerate()
             .map(|(i, (qualifier, field))| {
                 let metadata =
-                    [("key".into(), format!("value {i}"))].into_iter().collect();
+                    std::iter::once(("key".into(), format!("value {i}"))).collect();
 
                 let new_arrow_field = field.as_ref().clone().with_metadata(metadata);
                 (qualifier.cloned(), Arc::new(new_arrow_field))
@@ -1043,9 +1050,8 @@ mod tests {
             plan: LogicalPlan,
             _config: &dyn OptimizerConfig,
         ) -> Result<Transformed<LogicalPlan>> {
-            let projection = match plan {
-                LogicalPlan::Projection(p) => p,
-                _ => return Ok(Transformed::no(plan)),
+            let LogicalPlan::Projection(projection) = plan else {
+                return Ok(Transformed::no(plan));
             };
 
             let expr = Expr::from(Column::from(projection.schema.qualified_field(0)));

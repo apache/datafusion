@@ -18,10 +18,7 @@
 use std::sync::Arc;
 
 use datafusion_common::Result;
-use datafusion_physical_expr::{
-    Distribution, EquivalenceProperties, LexOrdering, LexRequirement, Partitioning,
-    PhysicalExpr, physical_exprs_equal,
-};
+use datafusion_physical_expr::{Distribution, LexOrdering, LexRequirement};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -159,60 +156,6 @@ pub fn is_coalesce_partitions(plan: &Arc<dyn ExecutionPlan>) -> bool {
 /// Checks whether the given operator is a [`RepartitionExec`].
 pub fn is_repartition(plan: &Arc<dyn ExecutionPlan>) -> bool {
     plan.is::<RepartitionExec>()
-}
-
-/// TODO: remove once Range generally satisfies KeyPartitioned requirements
-/// through Partitioning::satisfaction.
-/// See <https://github.com/apache/datafusion/issues/23266>.
-///
-/// Checks whether range partitioning satisfies a key partitioning requirement.
-/// This is intentionally separate from general partitioning satisfaction while
-/// range reuse is rolled out operator by operator.
-pub(crate) fn range_partitioning_satisfies_key_partitioning(
-    partitioning: &Partitioning,
-    required_exprs: &[Arc<dyn PhysicalExpr>],
-    eq_properties: &EquivalenceProperties,
-    allow_subset: bool,
-) -> bool {
-    match partitioning {
-        Partitioning::Range(range) => {
-            let partition_exprs = range
-                .ordering()
-                .iter()
-                .map(|sort_expr| Arc::clone(&sort_expr.expr))
-                .collect::<Vec<_>>();
-
-            if partition_exprs.is_empty() || required_exprs.is_empty() {
-                return false;
-            }
-
-            let eq_group = eq_properties.eq_group();
-            let normalized_partition_exprs = partition_exprs
-                .iter()
-                .map(|expr| eq_group.normalize_expr(Arc::clone(expr)))
-                .collect::<Vec<_>>();
-            let normalized_required_exprs = required_exprs
-                .iter()
-                .map(|expr| eq_group.normalize_expr(Arc::clone(expr)))
-                .collect::<Vec<_>>();
-
-            if physical_exprs_equal(
-                &normalized_required_exprs,
-                &normalized_partition_exprs,
-            ) {
-                return true;
-            }
-
-            allow_subset
-                && normalized_partition_exprs.len() < normalized_required_exprs.len()
-                && normalized_partition_exprs.iter().all(|partition_expr| {
-                    normalized_required_exprs
-                        .iter()
-                        .any(|required_expr| partition_expr.eq(required_expr))
-                })
-        }
-        _ => false,
-    }
 }
 
 /// Checks whether the given operator is a limit;

@@ -29,6 +29,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion_common::{ScalarValue, config::Dialect};
 use datafusion_expr::col;
 use rand_distr::num_traits::NumCast;
+use std::fmt::Write as _;
 use std::hint::black_box;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -82,6 +83,55 @@ fn physical_plan(ctx: &SessionContext, rt: &Runtime, sql: &str) {
             .await
             .unwrap()
     }));
+}
+
+/// Read the `q{N}.sql` query files from `dir`, in ascending numeric order.
+///
+/// The files are discovered by listing the directory rather than by walking a
+/// hardcoded range, so newly added queries are picked up without changing this
+/// code. Entries that do not match `q{N}.sql` (such as the `sorted_data`
+/// directory alongside the ClickBench queries) are ignored.
+///
+/// Panics if `dir` contains no queries, or if the numbering is not contiguous
+/// starting at `q0.sql`. A gap almost certainly means a query file was lost, and
+/// silently benchmarking a subset would hide that.
+fn read_numbered_queries(dir: &str) -> Vec<String> {
+    let entries = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("Failed to read query directory '{dir}': {e}"));
+
+    let mut numbers = entries
+        .map(|entry| {
+            entry.unwrap_or_else(|e| panic!("Failed to read entry in '{dir}': {e}"))
+        })
+        .filter_map(|entry| {
+            let file_name = entry.file_name();
+            let stem = file_name
+                .to_str()?
+                .strip_prefix('q')?
+                .strip_suffix(".sql")?;
+            stem.parse::<usize>().ok()
+        })
+        .collect::<Vec<_>>();
+    numbers.sort_unstable();
+
+    assert!(
+        !numbers.is_empty(),
+        "No `q{{N}}.sql` query files found in '{dir}'"
+    );
+    assert_eq!(
+        numbers,
+        (0..numbers.len()).collect::<Vec<_>>(),
+        "Query files in '{dir}' are not numbered contiguously from q0.sql"
+    );
+
+    numbers
+        .into_iter()
+        .map(|q| {
+            let path = format!("{dir}q{q}.sql");
+            std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("Failed to read query file '{path}': {e}"))
+        })
+        .collect()
 }
 
 /// Create schema with the specified number of columns
@@ -290,15 +340,17 @@ fn union_orderby_query(n: usize) -> String {
             })
             .collect::<Vec<_>>()
             .join(", ");
-        query.push_str(&format!("(SELECT {select_list} FROM t ORDER BY c{i})"));
+        write!(query, "(SELECT {select_list} FROM t ORDER BY c{i})").ok();
     }
-    query.push_str(&format!(
+    write!(
+        query,
         "\nORDER BY {}",
         (0..n)
             .map(|i| format!("c{i}"))
             .collect::<Vec<_>>()
             .join(", ")
-    ));
+    )
+    .ok();
     query
 }
 
@@ -394,9 +446,10 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 let source = format!(
                     "SELECT 1 AS n{}",
-                    (0..partitioning_columns)
-                        .map(|i| format!(", {i} AS c{i}"))
-                        .collect::<String>()
+                    (0..partitioning_columns).fold(String::new(), |mut acc, i| {
+                        write!(acc, ", {i} AS c{i}").ok();
+                        acc
+                    })
                 );
                 let window = format!(
                     "SUM(n) OVER (PARTITION BY {}) AS sum_n",
@@ -632,20 +685,13 @@ fn criterion_benchmark(c: &mut Criterion) {
     // });
 
     // -- clickbench --
-    let clickbench_queries = (0..=42)
-        .map(|q| {
-            std::fs::read_to_string(format!(
-                "{benchmarks_path}queries/clickbench/queries/q{q}.sql"
-            ))
-            .unwrap()
-        })
-        .chain((0..=7).map(|q| {
-            std::fs::read_to_string(format!(
-                "{benchmarks_path}queries/clickbench/extended/q{q}.sql"
-            ))
-            .unwrap()
-        }))
-        .collect::<Vec<_>>();
+    let clickbench_queries =
+        read_numbered_queries(&format!("{benchmarks_path}queries/clickbench/queries/"))
+            .into_iter()
+            .chain(read_numbered_queries(&format!(
+                "{benchmarks_path}queries/clickbench/extended/"
+            )))
+            .collect::<Vec<_>>();
 
     let clickbench_ctx = register_clickbench_hits_table(&rt);
 

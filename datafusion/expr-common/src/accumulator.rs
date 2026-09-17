@@ -18,8 +18,79 @@
 //! Accumulator module contains the trait definition for aggregation function's accumulators.
 
 use arrow::array::ArrayRef;
-use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_common::{Result, ScalarValue, instant::Instant, internal_err};
 use std::fmt::Debug;
+use std::sync::Arc;
+use std::time::Duration;
+
+/// A metric owned by one aggregate implementation.
+///
+/// Aggregate implementations use this interface for optional internal
+/// subphases. The execution engine owns metric registration and aggregation.
+pub trait AggregateMetric: Debug + Send + Sync + std::panic::RefUnwindSafe {
+    /// Adds elapsed time to this metric.
+    fn add_duration(&self, duration: Duration);
+}
+
+/// Factory for optional metrics owned by one aggregate expression.
+///
+/// `subphase` must be a stable static identifier. Repeated requests for the
+/// same subphase must return handles that update the same metric identity. An
+/// implementation may request no metrics. The execution engine assigns the
+/// aggregate expression identity.
+pub trait AggregateMetrics: Debug + Send + Sync {
+    /// Returns the metric for an aggregate-owned internal subphase.
+    fn metric(&self, subphase: &'static str) -> Arc<dyn AggregateMetric>;
+}
+
+/// Publishes aggregate-owned timing when dropped.
+///
+/// Create this before the operation that may return an error, and scope each
+/// [`Self::timer`] to only the aggregate-owned work. All timed intervals are
+/// combined into one metric update when the recorder is dropped.
+pub struct AggregateMetricRecorder {
+    metric: Option<Arc<dyn AggregateMetric>>,
+    duration: Duration,
+}
+
+impl AggregateMetricRecorder {
+    /// Creates a recorder for an optional aggregate-owned metric.
+    pub fn new(metric: Option<Arc<dyn AggregateMetric>>) -> Self {
+        Self {
+            metric,
+            duration: Duration::ZERO,
+        }
+    }
+
+    /// Starts timing one aggregate-owned interval.
+    pub fn timer(&mut self) -> Option<AggregateMetricTimer<'_>> {
+        self.metric.as_ref()?;
+        Some(AggregateMetricTimer {
+            duration: &mut self.duration,
+            start: Instant::now(),
+        })
+    }
+}
+
+impl Drop for AggregateMetricRecorder {
+    fn drop(&mut self) {
+        if let Some(metric) = &self.metric {
+            metric.add_duration(self.duration);
+        }
+    }
+}
+
+/// One aggregate-owned interval recorded by [`AggregateMetricRecorder`].
+pub struct AggregateMetricTimer<'a> {
+    duration: &'a mut Duration,
+    start: Instant,
+}
+
+impl Drop for AggregateMetricTimer<'_> {
+    fn drop(&mut self) {
+        *self.duration += self.start.elapsed();
+    }
+}
 
 /// Tracks an aggregate function's state.
 ///
@@ -49,6 +120,15 @@ use std::fmt::Debug;
 /// [`merge_batch`]: Self::merge_batch
 /// [window function]: https://en.wikipedia.org/wiki/Window_function_(SQL)
 pub trait Accumulator: Send + Sync + Debug + std::any::Any {
+    /// Supplies optional metrics owned by this aggregate expression.
+    ///
+    /// The grouped accumulator adapter supplies these metrics to every
+    /// accumulator it creates. Call this immediately after construction and
+    /// before the accumulator is used; replacing metrics after use is
+    /// unsupported. The default preserves compatibility for accumulators
+    /// without internal submetrics.
+    fn set_metrics(&mut self, _metrics: Arc<dyn AggregateMetrics>) {}
+
     /// Updates the accumulator's state from its input.
     ///
     /// `values` contains the arguments to this aggregate function.
@@ -57,6 +137,33 @@ pub trait Accumulator: Send + Sync + Debug + std::any::Any {
     /// and `update_batch` adds each of the input values to the
     /// running sum.
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()>;
+
+    /// Returns an optional metric timed once per grouped adapter input batch.
+    ///
+    /// A grouped accumulator adapter uses this for aggregate-owned work it
+    /// dispatches to one accumulator per group. The default preserves the
+    /// usual per-accumulator update path.
+    fn grouped_update_batch_metric(&self) -> Option<Arc<dyn AggregateMetric>> {
+        None
+    }
+
+    /// Updates state when called by a grouped accumulator adapter.
+    ///
+    /// The default delegates to [`Self::update_batch`]. Implementations that
+    /// return a [`Self::grouped_update_batch_metric`] can avoid timing every
+    /// per-group call; the adapter records one interval for the full batch.
+    fn update_batch_grouped(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.update_batch(values)
+    }
+
+    /// Merges state when called by a grouped accumulator adapter.
+    ///
+    /// The default delegates to [`Self::merge_batch`]. Implementations that
+    /// return a [`Self::grouped_update_batch_metric`] can avoid timing every
+    /// per-group merge; the adapter records one interval for the full batch.
+    fn merge_batch_grouped(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.merge_batch(states)
+    }
 
     /// Returns the final aggregate value.
     ///
@@ -92,6 +199,8 @@ pub trait Accumulator: Send + Sync + Debug + std::any::Any {
     ///
     /// "Allocated" means that for internal containers such as `Vec`,
     /// the `capacity` should be used not the `len`.
+    ///
+    /// May be expensive; check the implementation before calling on hot paths.
     fn size(&self) -> usize;
 
     /// Returns the intermediate state of the accumulator, consuming the

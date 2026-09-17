@@ -52,7 +52,7 @@ mod tests {
         let all_lines: Vec<&str> = pretty.trim().lines().collect();
         let header = &all_lines[..3];
         let mut data: Vec<&str> = all_lines[3..all_lines.len() - 1].to_vec();
-        data.sort();
+        data.sort_unstable();
         let footer = &all_lines[all_lines.len() - 1..];
         header
             .iter()
@@ -214,7 +214,7 @@ mod tests {
         Ok(())
     }
 
-    #[ignore]
+    #[ignore = "Missing support for enum function arguments"]
     #[tokio::test]
     async fn tpch_test_07() -> Result<()> {
         let plan_str = tpch_plan_to_string(7).await?;
@@ -222,7 +222,7 @@ mod tests {
         Ok(())
     }
 
-    #[ignore]
+    #[ignore = "Missing support for enum function arguments"]
     #[tokio::test]
     async fn tpch_test_08() -> Result<()> {
         let plan_str = tpch_plan_to_string(8).await?;
@@ -230,7 +230,7 @@ mod tests {
         Ok(())
     }
 
-    #[ignore]
+    #[ignore = "Missing support for enum function arguments"]
     #[tokio::test]
     async fn tpch_test_09() -> Result<()> {
         let plan_str = tpch_plan_to_string(9).await?;
@@ -352,7 +352,7 @@ mod tests {
         Ok(())
     }
 
-    #[ignore]
+    #[ignore = "Test file is empty"]
     #[tokio::test]
     async fn tpch_test_15() -> Result<()> {
         let plan_str = tpch_plan_to_string(15).await?;

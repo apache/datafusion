@@ -109,7 +109,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     ))
                 }
                 e => {
-                    self.sql_expr_to_logical_expr(e, order_by_schema, planner_context)?
+                    let expr = self.sql_expr_to_logical_expr(
+                        e,
+                        order_by_schema,
+                        planner_context,
+                    )?;
+                    let (expr, _) = expr.infer_placeholder_types(order_by_schema)?;
+                    expr
                 }
             };
             sort_expr_vec.push(make_sort_expr(expr, asc, nulls_first));

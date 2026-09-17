@@ -498,6 +498,26 @@ SELECT arrow_typeof(m) FROM (SELECT m FROM t_map_int UNION ALL SELECT m FROM t_m
 ----
 Map("entries": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted)
 
+# Map key coercion uses the common Int64 type for UInt32 and Int32 keys.
+query ? rowsort
+SELECT map([arrow_cast(1, 'UInt32')], ['a'])
+UNION ALL
+SELECT map([arrow_cast(2, 'Int32')], ['b']);
+----
+{1: a}
+{2: b}
+
+query T
+SELECT arrow_typeof(m)
+FROM (
+  SELECT map([arrow_cast(1, 'UInt32')], ['a']) AS m
+  UNION ALL
+  SELECT map([arrow_cast(2, 'Int32')], ['b']) AS m
+)
+LIMIT 1;
+----
+Map("entries": non-null Struct("key": non-null Int64, "value": Utf8), unsorted)
+
 statement ok
 DROP TABLE t_map_int;
 
@@ -552,6 +572,10 @@ query B rowsort
 SELECT arrow_cast('hello', 'RunEndEncoded("run_ends": non-null Int32, "values": Utf8)') ~ 'ell';
 ----
 true
+
+# The type argument to arrow_cast must remain a literal after planning.
+statement error arrow_cast requires its second argument
+SELECT arrow_cast(1, cast('Utf8' as varchar));
 
 # -------------------------------------------------
 # Cleanup
