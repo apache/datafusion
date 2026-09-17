@@ -2372,6 +2372,47 @@ mod tests {
         "#)
     }
 
+    /// A filter can name a column bare (`a`) while the projection below it
+    /// outputs the qualified `test.a`, as eliminating the empty side of a union
+    /// leaves behind. The merge must match the two, and not add a bare `a`
+    /// beside `test.a`, which is an ambiguous schema.
+    #[test]
+    fn test_merge_bare_column_into_qualified_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let projection = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                col("test.a"),
+                col("test.b"),
+                (col("test.c") + lit(1)).alias("d"),
+            ])?
+            .build()?;
+        let predicate =
+            leaf_udf(Expr::Column(Column::new_unqualified("a")), "x").eq(lit(1));
+        let plan = LogicalPlan::Filter(datafusion_expr::Filter::try_new(
+            predicate,
+            Arc::new(projection),
+        )?);
+
+        assert_stages!(plan, @r#"
+        ## Original Plan
+        Filter: leaf_udf(a, Utf8("x")) = Int32(1)
+          Projection: test.a, test.b, test.c + Int32(1) AS d
+            TableScan: test projection=[a, b, c]
+
+        ## After Extraction
+        Projection: test.a, test.b, d
+          Filter: __datafusion_extracted_1 = Int32(1)
+            Projection: test.a, test.b, test.c + Int32(1) AS d, leaf_udf(a, Utf8("x")) AS __datafusion_extracted_1
+              TableScan: test projection=[a, b, c]
+
+        ## After Pushdown
+        (same as after extraction)
+
+        ## Optimized
+        (same as after pushdown)
+        "#)
+    }
+
     /// A projection can spell a pass-through column as a same-name alias
     /// (`test.a AS a`). Merging an extraction into it must treat that alias as
     /// the pass-through it is, and not add `test.a` beside the `a` it outputs,
