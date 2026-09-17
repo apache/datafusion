@@ -178,7 +178,7 @@ use crate::{
 };
 use datafusion_common::config::ConfigOptions;
 use parking_lot::Mutex;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use arrow::array::{ArrayRef, UInt8Array, UInt16Array, UInt32Array, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -191,7 +191,7 @@ use datafusion_common::{
     assert_eq_or_internal_err, internal_err, not_impl_err,
 };
 use datafusion_execution::TaskContext;
-use datafusion_expr::{Accumulator, Aggregate};
+use datafusion_expr::{Accumulator, Aggregate, AggregateMetrics};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
@@ -1033,6 +1033,8 @@ impl AggregateExec {
         let required_input_ordering =
             LexRequirement::new(new_requirements).map(OrderingRequirements::new_soft);
 
+        // Constant expressions never change, so they cannot mark a completed group.
+        // Exclude them from both the ordering indices and the group expression count.
         // If our aggregation has grouping sets then our base grouping exprs will
         // be expanded based on the flags in `group_by.groups` where for each
         // group we swap the grouping expr for `null` if the flag is `true`
@@ -1041,9 +1043,18 @@ impl AggregateExec {
         let indices: Vec<usize> = indices
             .into_iter()
             .filter(|idx| group_by.groups.iter().all(|group| !group[*idx]))
+            .filter(|idx| {
+                input_eq_properties
+                    .is_expr_constant(&groupby_exprs[*idx])
+                    .is_none()
+            })
             .collect();
 
-        let mut input_order_mode = if indices.len() == groupby_exprs.len()
+        let num_non_constant_groupby_exprs = groupby_exprs
+            .iter()
+            .filter(|expr| input_eq_properties.is_expr_constant(expr).is_none())
+            .count();
+        let mut input_order_mode = if indices.len() == num_non_constant_groupby_exprs
             && !indices.is_empty()
             && group_by.groups.len() == 1
         {
@@ -1219,9 +1230,26 @@ impl AggregateExec {
             )?));
         }
 
-        // grouping by an expression that has a sort/limit upstream
+        // Grouping by an expression that has a sort/limit upstream.
+        //
+        // `GroupedTopKAggregateStream` keeps a priority queue, so it only works
+        // when an ordering direction is available: either this is a MIN/MAX
+        // aggregate, whose direction is implied by the accumulator, or the
+        // optimizer pushed a direction down next to the limit.
+        //
+        // A direction-less limit is a soft hint pushed by
+        // `LimitedDistinctAggregation`, which only pushes it while
+        // `is_unordered_unfiltered_group_by_distinct()` holds. That predicate is
+        // not stable: a later rule such as `EnsureRequirements` can insert the
+        // sort a window function requires below this aggregate, which gives the
+        // rebuilt aggregate an output ordering and makes the predicate false
+        // without ever supplying a direction. Falling back to the regular
+        // grouped streams is correct in that case, because they treat the limit
+        // as a soft limit and the `LIMIT` above this aggregate still truncates
+        // the result.
         if let Some(config) = self.limit_options
             && !self.is_unordered_unfiltered_group_by_distinct()
+            && (config.descending.is_some() || self.get_minmax_desc().is_some())
         {
             return Ok(StreamType::GroupedPriorityQueue(
                 GroupedTopKAggregateStream::new(self, context, partition, config.limit)?,
@@ -2205,13 +2233,27 @@ impl ExecutionPlan for AggregateExec {
         // the result of SUM or COUNT), as those require computing all groups first.
 
         // Grouping columns are output before aggregate columns, in the same order
-        // as the grouping expressions. A grouping-set null mask marks grouping
-        // columns that are not available in that set.
-        let mut allowed_indices: HashSet<usize> =
-            (0..self.group_by.expr().len()).collect();
-        for null_mask in self.group_by.groups() {
-            allowed_indices.retain(|idx| null_mask.get(*idx) != Some(&true));
-        }
+        // as the grouping expressions. Map each grouping output position to the
+        // input column it reads, by position rather than by name, so that
+        // same-named grouping columns stay distinct. Only grouping expressions
+        // that are plain input columns can be mapped; a grouping-set null mask
+        // marks grouping columns that are not available in that set.
+        let column_mapping: HashMap<usize, usize> = self
+            .group_by
+            .expr()
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| {
+                self.group_by
+                    .groups()
+                    .iter()
+                    .all(|null_mask| null_mask.get(*idx) != Some(&true))
+            })
+            .filter_map(|(idx, (expr, _))| {
+                expr.downcast_ref::<Column>()
+                    .map(|column| (idx, column.index()))
+            })
+            .collect();
 
         let child = self.children()[0];
         // Global aggregates and grouping sets containing an empty grouping set
@@ -2227,9 +2269,9 @@ impl ExecutionPlan for AggregateExec {
         let mut child_desc = if may_emit_on_empty_input {
             ChildFilterDescription::all_unsupported(&parent_filters)
         } else {
-            ChildFilterDescription::from_child_with_allowed_indices(
+            ChildFilterDescription::from_child_with_column_mapping(
                 &parent_filters,
-                allowed_indices,
+                column_mapping,
                 child,
             )?
         };
@@ -2971,6 +3013,18 @@ pub fn create_accumulators(
         .collect()
 }
 
+pub(crate) fn create_accumulators_with_metrics(
+    aggr_expr: &[Arc<AggregateFunctionExpr>],
+    aggregate_metrics: &[Arc<dyn AggregateMetrics>],
+) -> Result<Vec<AccumulatorItem>> {
+    debug_assert_eq!(aggr_expr.len(), aggregate_metrics.len());
+    aggr_expr
+        .iter()
+        .zip(aggregate_metrics)
+        .map(|(expr, metrics)| expr.create_accumulator_with_metrics(Arc::clone(metrics)))
+        .collect()
+}
+
 /// returns a vector of ArrayRefs, where each entry corresponds to either the
 /// final value (mode = Final, FinalPartitioned and Single) or states (mode = Partial)
 pub fn finalize_aggregation(
@@ -3175,6 +3229,7 @@ pub fn evaluate_group_by(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::task::{Context, Poll};
 
     use super::*;
@@ -3196,7 +3251,7 @@ mod tests {
 
     use arrow::array::{
         BooleanArray, DictionaryArray, Float32Array, Float64Array, Int32Array,
-        Int64Array, NullArray, StructArray, UInt32Array, UInt64Array,
+        Int64Array, NullArray, StringArray, StructArray, UInt32Array, UInt64Array,
     };
     use arrow::compute::{SortOptions, concat_batches};
     use arrow::datatypes::Int32Type;
@@ -3207,7 +3262,7 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
     use datafusion_expr::{
-        Accumulator, AggregateUDF, AggregateUDFImpl, EmitTo, GroupsAccumulator,
+        Accumulator, AggregateUDF, AggregateUDFImpl, EmitTo, GroupsAccumulator, Operator,
         Signature, Volatility,
     };
     use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
@@ -3221,7 +3276,7 @@ mod tests {
     use datafusion_physical_expr::Partitioning;
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
-    use datafusion_physical_expr::expressions::{Literal, NotExpr};
+    use datafusion_physical_expr::expressions::{Literal, NotExpr, binary};
 
     use crate::projection::ProjectionExec;
     use crate::repartition::RepartitionExec;
@@ -4661,6 +4716,87 @@ mod tests {
             "partial reduce advertised an ordering it does not maintain: {:?}",
             partial_reduce.properties().output_ordering()
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn constant_grouping_expr_is_not_a_completion_boundary() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, true),
+            Field::new("market", DataType::Utf8, true),
+            Field::new("value", DataType::Int64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![None, Some(10), Some(10)])),
+                Arc::new(StringArray::from(vec![Some("US"), Some("US"), Some("US")])),
+                Arc::new(Int64Array::from(vec![3, 1, 2])),
+            ],
+        )?;
+
+        let build_aggregate = |input: Arc<dyn ExecutionPlan>| -> Result<AggregateExec> {
+            let predicate =
+                binary(col("market", &schema)?, Operator::Eq, lit("US"), &schema)?;
+            let input = Arc::new(FilterExecBuilder::new(predicate, input).build()?);
+            AggregateExec::try_new(
+                AggregateMode::Single,
+                PhysicalGroupBy::new_single(vec![
+                    (col("key", &schema)?, "key".to_string()),
+                    (col("market", &schema)?, "market".to_string()),
+                ]),
+                vec![Arc::new(
+                    AggregateExprBuilder::new(count_udaf(), vec![col("value", &schema)?])
+                        .schema(Arc::clone(&schema))
+                        .alias("COUNT(value)")
+                        .build()?,
+                )],
+                vec![None],
+                input,
+                Arc::clone(&schema),
+            )
+        };
+
+        let unordered_input = TestMemoryExec::try_new_exec(
+            &[vec![batch.clone()]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let aggregate = build_aggregate(unordered_input)?;
+        assert_eq!(aggregate.input_order_mode(), &InputOrderMode::Linear);
+        assert_eq!(
+            aggregate.schema().as_ref(),
+            &Schema::new(vec![
+                Field::new("key", DataType::Int32, true),
+                Field::new("market", DataType::Utf8, true),
+                Field::new("COUNT(value)", DataType::Int64, false),
+            ])
+        );
+
+        let output =
+            collect(aggregate.execute(0, Arc::new(TaskContext::default()))?).await?;
+        assert_eq!(output.iter().map(RecordBatch::num_rows).sum::<usize>(), 2);
+        assert_snapshot!(batches_to_sort_string(&output), @r"
++-----+--------+--------------+
+| key | market | COUNT(value) |
++-----+--------+--------------+
+|     | US     | 1            |
+| 10  | US     | 2            |
++-----+--------+--------------+
+");
+
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(
+            Column::new("key", 0),
+        ))])
+        .unwrap();
+        let ordered_input =
+            TestMemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None)?
+                .try_with_sort_information(vec![ordering])?;
+        let ordered_input =
+            Arc::new(TestMemoryExec::update_cache(&Arc::new(ordered_input)));
+        let aggregate = build_aggregate(ordered_input)?;
+        assert_eq!(aggregate.input_order_mode(), &InputOrderMode::Sorted);
 
         Ok(())
     }
@@ -6552,7 +6688,10 @@ mod tests {
             ");
                 }
             }
-            Err(e) => assert!(matches!(e, DataFusionError::ResourcesExhausted(_))),
+            Err(e) => assert!(
+                matches!(e.find_root(), DataFusionError::ResourcesExhausted(_)),
+                "unexpected error: {e}"
+            ),
         }
 
         Ok(())
