@@ -79,6 +79,25 @@ SELECT unnest(nullif(s, s)) FROM nested_struct;
 ----
 NULL NULL
 
+query I
+SELECT unnest(nullif(s, s)['inner']) FROM nested_struct;
+----
+NULL
+
+query I
+WITH unnested(items, inner_struct) AS (
+    SELECT unnest(nullif(s, s)) FROM nested_struct
+)
+SELECT unnest(inner_struct) FROM unnested;
+----
+NULL
+
+query ITI
+SELECT unnest(nullif(s, s)), unnest([1, 2]) FROM struct_values;
+----
+NULL NULL 1
+NULL NULL 2
+
 query ?
 SELECT unnest(arrow_cast(NULL, 'Struct("a": Null)'));
 ----

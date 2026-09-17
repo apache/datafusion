@@ -18,15 +18,14 @@
 use std::sync::{Arc, OnceLock};
 
 use arrow::array::{
-    Array, ArrayRef, Capacities, MutableArrayData, Scalar, cast::AsArray, make_array,
+    Array, Capacities, MutableArrayData, Scalar, cast::AsArray, make_array,
     make_comparator,
 };
-use arrow::array::{BooleanArray, layout};
-use arrow::buffer::NullBuffer;
-use arrow::compute::{SortOptions, nullif};
+use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, FieldRef};
 
 use datafusion_common::cast::{as_map_array, as_struct_array};
+use datafusion_common::utils::apply_parent_nulls;
 use datafusion_common::{
     Result, ScalarValue, exec_datafusion_err, exec_err, internal_err, plan_datafusion_err,
 };
@@ -190,46 +189,6 @@ fn process_map_with_nested_key(
     let data = mutable.freeze();
     let data = make_array(data);
     Ok(ColumnarValue::Array(data))
-}
-
-/// Apply a struct's nulls to one of its fields.
-fn apply_parent_nulls(
-    col: &ArrayRef,
-    parent_nulls: Option<&NullBuffer>,
-) -> Result<ArrayRef> {
-    let Some(parent_nulls) = parent_nulls else {
-        // If there are no parent nulls to apply, we can just return
-        return Ok(Arc::clone(col));
-    };
-
-    // NullArray is already entirely null and cannot have a validity bitmap.
-    // If we have 0 parent nulls, we can also avoid extra work.
-    if col.data_type().is_null() || parent_nulls.null_count() == 0 {
-        return Ok(Arc::clone(col));
-    }
-
-    if layout(col.data_type()).can_contain_null_mask {
-        // `nullif` marks a row null where the mask is true and keeps the
-        // field's own nulls. Only the validity bitmap is rebuilt; the value
-        // buffers and child arrays are shared with `col`.
-        let null_parents = BooleanArray::new(!parent_nulls.inner(), None);
-        return Ok(nullif(col.as_ref(), &null_parents)?);
-    }
-
-    // Unions and run-end encoded arrays have no validity bitmap of their own
-    // and represent nulls in their children. Rebuild the array so null parents
-    // become null values in those children.
-    let data = col.to_data();
-    let mut mutable = MutableArrayData::new(vec![&data], true, data.len());
-    let mut end = 0;
-    for (start, valid_end) in parent_nulls.valid_slices() {
-        mutable.try_extend_nulls(start - end)?;
-        mutable.try_extend(0, start, valid_end)?;
-        end = valid_end;
-    }
-    mutable.try_extend_nulls(data.len() - end)?;
-
-    Ok(make_array(mutable.freeze()))
 }
 
 /// Extract a single field from a struct or map array
@@ -712,6 +671,7 @@ mod tests {
         ArrayRef, Int32Array, Int32Builder, ListArray, ListBuilder, MapBuilder, RunArray,
         StructArray, UnionArray,
     };
+    use arrow::buffer::NullBuffer;
     use arrow::datatypes::{Fields, Int32Type, UnionFields};
 
     #[test]

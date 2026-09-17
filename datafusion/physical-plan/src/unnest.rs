@@ -46,6 +46,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_ord::cmp::lt;
 use async_trait::async_trait;
 use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::utils::apply_parent_nulls;
 use datafusion_common::{
     Constraints, HashMap, HashSet, Result, UnnestOptions, exec_datafusion_err, exec_err,
     internal_err,
@@ -770,17 +771,10 @@ fn flatten_struct_cols(
                     if struct_arr.null_count() == 0 {
                         Ok(struct_arr.columns().to_vec())
                     } else {
-                        let validity = is_not_null(struct_arr)?;
                         struct_arr
                             .columns()
                             .iter()
-                            .map(|column| {
-                                Ok(zip(
-                                    &validity,
-                                    column,
-                                    &Scalar::new(new_null_array(column.data_type(), 1)),
-                                )?)
-                            })
+                            .map(|column| apply_parent_nulls(column, struct_arr.nulls()))
                             .collect()
                     }
                 }
@@ -1450,8 +1444,9 @@ fn repeat_arrs_from_indices(
 mod tests {
     use super::*;
     use arrow::array::{
-        GenericListArray, Int32Array, NullArray, NullBufferBuilder, OffsetSizeTrait,
-        RunArray, StringArray, UnionArray,
+        BooleanArray, DictionaryArray, GenericListArray, Int32Array, MapArray, NullArray,
+        NullBufferBuilder, OffsetSizeTrait, RunArray, StringArray, StringViewArray,
+        UnionArray, layout,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer};
     use arrow::datatypes::{Field, Int32Type, UnionFields};
@@ -1510,6 +1505,205 @@ mod tests {
                         ]))
                     );
                     assert_eq!(result.slice(0, 1).as_ref(), child.slice(0, 1).as_ref());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[case::values(false)]
+    #[case::buffers(true)]
+    #[tokio::test]
+    async fn test_unnest_struct_parent_nulls(#[case] check_buffers: bool) -> Result<()> {
+        let values =
+            Int32Array::from(vec![Some(10), Some(20), None, Some(40), Some(50), None]);
+        let child_nulls = values.nulls().cloned();
+        let strings = vec![
+            Some("first value longer than twelve bytes"),
+            Some("second value longer than twelve bytes"),
+            None,
+            Some("fourth value longer than twelve bytes"),
+            Some("fifth value longer than twelve bytes"),
+            None,
+        ];
+        let list_values = vec![
+            Some(vec![Some(1), None]),
+            Some(vec![]),
+            None,
+            Some(vec![Some(4)]),
+            Some(vec![Some(5), Some(6)]),
+            None,
+        ];
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(list_values.clone());
+        let large_list =
+            LargeListArray::from_iter_primitive::<Int32Type, _, _>(list_values);
+        let nested = StructArray::new(
+            vec![Field::new("v", DataType::Int32, true)].into(),
+            vec![Arc::new(values.clone())],
+            child_nulls.clone(),
+        );
+        let entries = StructArray::new(
+            vec![
+                Field::new("key", DataType::Int32, false),
+                Field::new("value", DataType::Int32, true),
+            ]
+            .into(),
+            vec![
+                Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4, 5])),
+                Arc::new(values.clone()),
+            ],
+            None,
+        );
+        let mut children: Vec<ArrayRef> = vec![
+            Arc::new(values.clone()),
+            Arc::new(BooleanArray::from(vec![
+                Some(true),
+                Some(false),
+                None,
+                Some(true),
+                Some(false),
+                None,
+            ])),
+            Arc::new(StringArray::from(strings.clone())),
+            Arc::new(StringViewArray::from(strings)),
+            Arc::new(NullArray::new(6)),
+            Arc::new(list.clone()),
+            Arc::new(large_list.clone()),
+            Arc::new(ListViewArray::from(list)),
+            Arc::new(LargeListViewArray::from(large_list)),
+            Arc::new(FixedSizeListArray::new(
+                Arc::new(Field::new_list_field(DataType::Int32, true)),
+                1,
+                Arc::new(values.clone()),
+                child_nulls.clone(),
+            )),
+            Arc::new(nested),
+            Arc::new(MapArray::new(
+                Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+                OffsetBuffer::new(vec![0, 1, 2, 3, 4, 5, 6].into()),
+                entries,
+                child_nulls,
+                false,
+            )),
+            Arc::new(DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![Some(0), Some(1), None, Some(0), Some(2), None]),
+                Arc::new(StringArray::from(vec![Some("first"), None, Some("last")])),
+            )?),
+            Arc::new(RunArray::<Int32Type>::try_new(
+                &Int32Array::from(vec![2, 3, 5, 6]),
+                &Int32Array::from(vec![Some(10), None, Some(40), None]),
+            )?),
+        ];
+        for offsets in [None, Some(vec![0, 0, 2, 3, 4, 5].into())] {
+            children.push(Arc::new(UnionArray::try_new(
+                UnionFields::try_new(
+                    [3, 7],
+                    [
+                        Field::new("int", DataType::Int32, true),
+                        Field::new("string", DataType::Utf8, true),
+                    ],
+                )?,
+                vec![3, 3, 3, 7, 7, 3].into(),
+                offsets,
+                vec![
+                    Arc::new(values.clone()),
+                    Arc::new(StringArray::from(vec!["text"; 6])),
+                ],
+            )?));
+        }
+        let fields: Vec<Field> = children
+            .iter()
+            .enumerate()
+            .map(|(i, child)| {
+                Field::new(format!("v{i}"), child.data_type().clone(), true)
+            })
+            .collect();
+        let schema = Arc::new(Schema::new(fields.clone()));
+        for nulls in [
+            None,
+            Some(NullBuffer::new_valid(6)),
+            Some(NullBuffer::from(vec![true, false, true, true, false, true])),
+            Some(NullBuffer::new_null(6)),
+        ] {
+            let parent = StructArray::new(fields.clone().into(), children.clone(), nulls);
+            for (offset, len) in [(0, 6), (1, 4)] {
+                let parent = parent.slice(offset, len);
+                let batch = RecordBatch::try_from_iter(vec![(
+                    "s",
+                    Arc::new(parent.clone()) as ArrayRef,
+                )])?;
+                let source = crate::test::TestMemoryExec::try_new_exec(
+                    &[vec![batch.clone()]],
+                    batch.schema(),
+                    None,
+                )?;
+                let unnest = UnnestExec::new(
+                    source,
+                    vec![],
+                    vec![0],
+                    Arc::clone(&schema),
+                    UnnestOptions::default(),
+                )?;
+                let batches = crate::common::collect(
+                    unnest.execute(0, Arc::new(TaskContext::default()))?,
+                )
+                .await?;
+                assert_eq!(batches.len(), 1);
+                assert_eq!(batches[0].schema(), schema);
+                assert_eq!(batches[0].num_rows(), len);
+                for (result, child) in batches[0].columns().iter().zip(parent.columns()) {
+                    let actual = result.to_data();
+                    actual.validate_full()?;
+                    assert_eq!(result.data_type(), child.data_type());
+                    let child_nulls = child.logical_nulls();
+                    let result_nulls = result.logical_nulls();
+                    for row in 0..len {
+                        assert_eq!(
+                            result_nulls
+                                .as_ref()
+                                .is_some_and(|nulls| nulls.is_null(row)),
+                            parent.is_null(row)
+                                || child_nulls
+                                    .as_ref()
+                                    .is_some_and(|nulls| nulls.is_null(row)),
+                            "{:?}, row {row}",
+                            child.data_type(),
+                        );
+                        if parent.is_valid(row) {
+                            assert_eq!(
+                                result.slice(row, 1).as_ref(),
+                                child.slice(row, 1).as_ref()
+                            );
+                        }
+                    }
+                    if check_buffers && layout(child.data_type()).can_contain_null_mask {
+                        let expected = child.to_data();
+                        assert_eq!(actual.offset(), expected.offset());
+                        assert_eq!(actual.buffers().len(), expected.buffers().len());
+                        for (actual, expected) in
+                            actual.buffers().iter().zip(expected.buffers())
+                        {
+                            assert!(
+                                actual.ptr_eq(expected),
+                                "value buffer copied for {:?}",
+                                child.data_type()
+                            );
+                        }
+                        assert_eq!(
+                            actual.child_data().len(),
+                            expected.child_data().len()
+                        );
+                        for (actual, expected) in
+                            actual.child_data().iter().zip(expected.child_data())
+                        {
+                            assert!(
+                                actual.ptr_eq(expected),
+                                "child buffers copied for {:?}",
+                                child.data_type()
+                            );
+                        }
+                    }
                 }
             }
         }
