@@ -1,0 +1,24 @@
+name Q06
+group mark_join_to_semi
+
+load sql_benchmarks/mark_join_to_semi/init/load.sql
+
+# Count must match the already-converted top-level predicate at every size.
+assert I
+SELECT count(*) = (SELECT count(*) FROM mjs_outer o WHERE EXISTS (SELECT 1 FROM mjs_inner_p50 i WHERE i.k = o.k) AND g = 0)
+FROM (SELECT o.id, o.g, EXISTS (SELECT 1 FROM mjs_inner_p50 i WHERE i.k = o.k) AS e
+      FROM mjs_outer o) t
+WHERE e AND g = 0;
+----
+true
+
+expect_plan HashJoinExec
+
+run
+-- Q6: equality, 50% match, extra outer conjunct.
+SELECT count(*)
+FROM (SELECT o.id, o.g, EXISTS (SELECT 1 FROM mjs_inner_p50 i WHERE i.k = o.k) AS e
+      FROM mjs_outer o) t
+WHERE e AND g = 0;
+
+cleanup sql_benchmarks/mark_join_to_semi/init/cleanup.sql

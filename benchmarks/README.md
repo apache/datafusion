@@ -996,6 +996,27 @@ queries, whose cost grows with its square, and `NAJ_LARGE_ROWS` (default
 NAJ_ROWS=20000 ./bench.sh run null_aware_join
 ```
 
+## MARK to SEMI/ANTI joins
+
+This suite measures filtering a projected `EXISTS` or `NOT EXISTS` marker.
+Q01-Q03 vary equality-match selectivity (1%, 50%, 99%); Q04 keeps non-matches;
+Q05 also selects the marker; Q06 adds an outer filter; Q07 uses an inequality
+correlation; Q08 is an OR control that must keep its mark join.
+
+Each convertible query checks its count against the equivalent top-level
+`WHERE EXISTS` or `WHERE NOT EXISTS`. Plan checks use operator names so the same
+suite runs before and after the conversion. SQL logic tests pin the join types.
+
+`MJS_ROWS` (default `100000000`) controls the equality inputs and `MJS_NLJ_ROWS`
+(default `150000`) controls the inequality inputs, whose work grows quadratically.
+All tables are built from `range()`.
+
+```bash
+./bench.sh data mark_join_to_semi
+./bench.sh run mark_join_to_semi
+MJS_ROWS=1000000 MJS_NLJ_ROWS=5000 ./bench.sh run mark_join_to_semi
+```
+
 ## Sort Merge Join
 
 This benchmark focuses on the performance of queries with sort merge joins, minimizing other overheads such as scanning data sources or evaluating predicates.

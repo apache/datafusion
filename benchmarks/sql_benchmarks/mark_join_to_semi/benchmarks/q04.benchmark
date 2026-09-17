@@ -1,0 +1,24 @@
+name Q04
+group mark_join_to_semi
+
+load sql_benchmarks/mark_join_to_semi/init/load.sql
+
+# Count must match the already-converted top-level predicate at every size.
+assert I
+SELECT count(*) = (SELECT count(*) FROM mjs_outer o WHERE NOT EXISTS (SELECT 1 FROM mjs_inner_p50 i WHERE i.k = o.k))
+FROM (SELECT o.id, NOT EXISTS (SELECT 1 FROM mjs_inner_p50 i WHERE i.k = o.k) AS ne
+      FROM mjs_outer o) t
+WHERE ne;
+----
+true
+
+expect_plan HashJoinExec
+
+run
+-- Q4: NOT EXISTS to anti, equality, 50% match.
+SELECT count(*)
+FROM (SELECT o.id, NOT EXISTS (SELECT 1 FROM mjs_inner_p50 i WHERE i.k = o.k) AS ne
+      FROM mjs_outer o) t
+WHERE ne;
+
+cleanup sql_benchmarks/mark_join_to_semi/init/cleanup.sql

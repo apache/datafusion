@@ -199,3 +199,64 @@ WHERE l.k < 0 OR NOT EXISTS (SELECT 1 FROM mk_r r WHERE l.k > r.k);
 ----
 1 10
 NULL 50
+
+# ==================================================================
+# Part 3: MARK to SEMI/ANTI through projected EXISTS.
+# The same config matrix exercises swapped RightSemi/RightAnti hash joins and
+# LeftSemi/LeftAnti sort-merge joins. Conversion also permits partitioned hash
+# execution instead of the null-aware mark's CollectLeft mode.
+# ==================================================================
+
+query II rowsort
+SELECT k, v FROM (SELECT l.k, l.v, EXISTS (SELECT 1 FROM mk_r r WHERE l.k = r.k) AS m FROM mk_l l) t WHERE m;
+----
+1 10
+2 20
+
+query II rowsort
+SELECT k, v FROM (SELECT l.k, l.v, EXISTS (SELECT 1 FROM mk_r r WHERE l.k = r.k) AS m FROM mk_l l) t WHERE NOT m;
+----
+3 30
+4 40
+NULL 50
+
+query IB rowsort
+SELECT k, m FROM (SELECT l.k, l.v, EXISTS (SELECT 1 FROM mk_r r WHERE l.k = r.k) AS m FROM mk_l l) t WHERE m;
+----
+1 true
+2 true
+
+query IB rowsort
+SELECT k, m FROM (SELECT l.k, l.v, EXISTS (SELECT 1 FROM mk_r r WHERE l.k = r.k) AS m FROM mk_l l) t WHERE NOT m;
+----
+3 false
+4 false
+NULL false
+
+query II rowsort
+SELECT k, v FROM (SELECT l.k, l.v, NOT EXISTS (SELECT 1 FROM mk_r r WHERE l.k = r.k) AS m FROM mk_l l) t WHERE m;
+----
+3 30
+4 40
+NULL 50
+
+query II rowsort
+SELECT k, v FROM (SELECT l.k, l.v, EXISTS (SELECT 1 FROM mk_empty r WHERE l.k = r.k) AS m FROM mk_l l) t WHERE m;
+----
+
+
+query IB rowsort
+SELECT k, m FROM (SELECT l.k, l.v, EXISTS (SELECT 1 FROM mk_empty r WHERE l.k = r.k) AS m FROM mk_l l) t WHERE NOT m;
+----
+1 false
+2 false
+3 false
+4 false
+NULL false
+
+# Clearing a null-aware positive mark must also work with partitioned joins.
+query II rowsort
+SELECT k, v FROM mk_l WHERE (k IN (SELECT k FROM mk_r)) IS TRUE;
+----
+1 10
+2 20

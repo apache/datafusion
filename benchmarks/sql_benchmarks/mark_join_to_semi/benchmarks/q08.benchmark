@@ -1,0 +1,15 @@
+name Q08
+group mark_join_to_semi
+
+load sql_benchmarks/mark_join_to_semi/init/load.sql
+
+expect_plan Mark
+
+run
+-- Q8: equality, 50% match, OR control (must remain MARK).
+SELECT count(*)
+FROM (SELECT o.id, o.g, EXISTS (SELECT 1 FROM mjs_inner_p50 i WHERE i.k = o.k) AS e
+      FROM mjs_outer o) t
+WHERE e OR g = 0;
+
+cleanup sql_benchmarks/mark_join_to_semi/init/cleanup.sql

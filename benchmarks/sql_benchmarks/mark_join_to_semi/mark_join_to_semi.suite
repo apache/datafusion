@@ -1,0 +1,31 @@
+description = "MARK to SEMI/ANTI joins: match selectivity, projected markers, outer filters, and inequality correlations"
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[[options]]
+name = "rows"
+short = "r"
+env = "MJS_ROWS"
+default = "100000000"
+values = ["100000000", "..."]
+help = "Outer rows for equality queries Q01-Q06 and Q08. Inner tables cover 1%, 50%, or 99% of the outer keys."
+
+[[options]]
+name = "nlj-rows"
+short = "l"
+env = "MJS_NLJ_ROWS"
+default = "150000"
+values = ["150000", "..."]
+help = "Rows per table for inequality query Q07. Nested-loop join work grows with the square of this value."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- mark_join_to_semi"
+description = "Run all queries at the default sizes."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- mark_join_to_semi --query 7 --nlj-rows 20000"
+description = "Run the inequality correlation with 20,000 rows per table."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- mark_join_to_semi --rows 1000000"
+description = "Run a smaller equality workload."

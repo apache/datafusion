@@ -112,6 +112,7 @@ parquet_row_filter_skip: Per-RG fully-matched RowFilter skip on Parquet (apache/
                           range filter + pushdown, so most row groups are fully matched and the per-row RowFilter is skipped on them
                           (subgroups via BENCH_SUBGROUP: skip = clustered key so the skip fires, control = scrambled key so it never fires)
                           (data generated inline by the suite's load SQL; knobs: PRED_ROWS, RG_SIZE)
+mark_join_to_semi:      MARK to SEMI/ANTI join micro-benchmarks across match selectivity and correlation shapes
 null_aware_join:        Null-aware (NOT IN) hash join micro-benchmarks: uncorrelated, non-equality-correlated and equality-correlated
                           NOT IN across NULL fractions, to measure the per-pair join-filter work the correlated cases do
                           (data generated inline by the suite's load SQL from range(); knobs: NAJ_ROWS, NAJ_LARGE_ROWS)
@@ -274,6 +275,9 @@ main() {
                 parquet_row_filter_skip)
                     # Data is generated inline by the suite's load SQL (COPY).
                     echo "parquet_row_filter_skip: no external data to generate"
+                    ;;
+                mark_join_to_semi)
+                    echo "mark_join_to_semi: no external data to generate"
                     ;;
                 null_aware_join)
                     # Data is generated inline by the suite's load SQL from range().
@@ -499,6 +503,7 @@ main() {
                     run_smj
                     run_dict 
                     run_null_aware_join
+                    run_mark_join_to_semi
                     ;;
                 tpch)
                     run_tpch "1" "parquet"
@@ -526,6 +531,9 @@ main() {
                     ;;
                 parquet_row_filter_skip)
                     run_parquet_row_filter_skip
+                    ;;
+                mark_join_to_semi)
+                    run_mark_join_to_semi
                     ;;
                 null_aware_join)
                     run_null_aware_join
@@ -945,6 +953,17 @@ run_parquet_row_filter_skip() {
       PRED_ROWS="${PRED_ROWS:-10000000}" \
       RG_SIZE="${RG_SIZE:-1000000}" \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# MARK to SEMI/ANTI conversion. Inputs are built inline from range().
+# MJS_ROWS sizes equality joins; MJS_NLJ_ROWS sizes the quadratic inequality join.
+run_mark_join_to_semi() {
+    echo "Running mark_join_to_semi benchmark (rows=${MJS_ROWS:-100000000}, nlj_rows=${MJS_NLJ_ROWS:-150000})..."
+    debug_run env BENCH_NAME=mark_join_to_semi \
+      MJS_ROWS="${MJS_ROWS:-100000000}" \
+      MJS_NLJ_ROWS="${MJS_NLJ_ROWS:-150000}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
       bash -c "$SQL_CARGO_COMMAND"
 }
 

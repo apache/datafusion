@@ -1,0 +1,24 @@
+name Q01
+group mark_join_to_semi
+
+load sql_benchmarks/mark_join_to_semi/init/load.sql
+
+# Count must match the already-converted top-level predicate at every size.
+assert I
+SELECT count(*) = (SELECT count(*) FROM mjs_outer o WHERE EXISTS (SELECT 1 FROM mjs_inner_p01 i WHERE i.k = o.k))
+FROM (SELECT o.id, EXISTS (SELECT 1 FROM mjs_inner_p01 i WHERE i.k = o.k) AS e
+      FROM mjs_outer o) t
+WHERE e;
+----
+true
+
+expect_plan HashJoinExec
+
+run
+-- Q1: equality, 1% match, marker not selected.
+SELECT count(*)
+FROM (SELECT o.id, EXISTS (SELECT 1 FROM mjs_inner_p01 i WHERE i.k = o.k) AS e
+      FROM mjs_outer o) t
+WHERE e;
+
+cleanup sql_benchmarks/mark_join_to_semi/init/cleanup.sql

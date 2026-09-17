@@ -36,6 +36,7 @@ in the community:
 | `h2o`                 | The `h2o` benchmark                                                |
 | `hj`                  | Hash join benchmark                                                |
 | `imdb`                | IMDb benchmark                                                     |
+| `mark_join_to_semi` | MARK to SEMI/ANTI conversion: 1%/50%/99% match rates, negation, projected marker, outer filter, inequality correlation, and an OR control. Inline `range()` inputs; `MJS_ROWS` sizes equality queries and `MJS_NLJ_ROWS` sizes the quadratic inequality query. |
 | `nlj`                 | Nested‑loop join benchmark                                         |
 | `null_aware_join`     | Null-aware (`NOT IN`) hash join micro-benchmarks. Q01-Q03 are uncorrelated `NOT IN` across NULL fractions and are linear in the table size (`NAJ_LARGE_ROWS`, default `1000000`). Q04-Q08 are correlated, so the correlation predicate stays behind as a join filter that the join applies per candidate (build row × probe row) pair while deciding which outer rows are UNKNOWN; without an equality correlation there are no scope keys to narrow those pairs, so their cost grows with the square of `NAJ_ROWS` (default `10000`). Q08 adds an equality correlation, which turns those pairs into a hash lookup. All tables are built inline from `range()`, so there is no data step. |
 | `push_down_topk`      | `ORDER BY ... LIMIT` over outer joins (TPC-H data); exercises pushing a TopK through a join |

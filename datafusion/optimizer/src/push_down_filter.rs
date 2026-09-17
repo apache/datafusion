@@ -30,18 +30,18 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    Column, DFSchema, Result, assert_eq_or_internal_err, internal_err, plan_err,
-    qualified_name,
+    Column, DFSchema, NullEquality, Result, ScalarValue, TableReference,
+    assert_eq_or_internal_err, internal_err, plan_err, qualified_name,
 };
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::expr_rewriter::replace_col;
-use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan};
+use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan, build_join_schema};
 use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    BinaryExpr, Distinct, Expr, Filter, Operator, Projection,
-    TableProviderFilterPushDown, and, or,
+    BinaryExpr, Distinct, Expr, ExprSchemable, Filter, Operator, Projection,
+    TableProviderFilterPushDown, and, lit, or,
 };
 
 use crate::optimizer::ApplyOrder;
@@ -59,6 +59,15 @@ use datafusion_expr::ExpressionPlacement;
 ///
 /// The goal of this rule is to improve query performance by eliminating
 /// redundant work.
+///
+/// A conjunct requiring a mark join's marker to be true converts the join to a
+/// semi join. Requiring false converts a two-valued mark join to an anti join.
+/// A projection restores the marker as a constant for any remaining consumers.
+/// See DuckDB's [PushdownMarkJoin] and Neumann, Leis, and Kemper,
+/// [The Complete Story of Joins (in HyPer)], BTW 2017, §3.3 and §4.4.
+///
+/// [PushdownMarkJoin]: https://github.com/duckdb/duckdb/blob/main/src/optimizer/pushdown/pushdown_mark_join.cpp
+/// [The Complete Story of Joins (in HyPer)]: https://www.cs.cmu.edu/~15721-f24/papers/Story_of_Joins.pdf
 ///
 /// For example, given a plan that sorts all values where `a > 10`:
 ///
@@ -524,18 +533,200 @@ fn push_down_all_join(
     )))
 }
 
+enum MarkValue {
+    True,
+    False,
+}
+
+/// Recognize whole conjuncts that select one value of a mark column.
+fn classify_mark_predicate(
+    expr: &Expr,
+    is_mark: &impl Fn(&Expr) -> bool,
+) -> Option<MarkValue> {
+    match expr {
+        Expr::Column(_) if is_mark(expr) => Some(MarkValue::True),
+        Expr::IsTrue(expr) if is_mark(expr) => Some(MarkValue::True),
+        Expr::Not(expr) | Expr::IsFalse(expr) | Expr::IsNotTrue(expr)
+            if is_mark(expr) =>
+        {
+            Some(MarkValue::False)
+        }
+        Expr::BinaryExpr(BinaryExpr { left, op, right })
+            if (is_mark(left)
+                && matches!(
+                    right.as_ref(),
+                    Expr::Literal(ScalarValue::Boolean(Some(true)), _)
+                ))
+                || (is_mark(right)
+                    && matches!(
+                        left.as_ref(),
+                        Expr::Literal(ScalarValue::Boolean(Some(true)), _)
+                    )) =>
+        {
+            match op {
+                Operator::IsNotDistinctFrom => Some(MarkValue::True),
+                Operator::IsDistinctFrom => Some(MarkValue::False),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Preserve the mark join's output schema, including for positional aliases.
+struct MarkJoinRewrite {
+    preserved: Vec<Expr>,
+    qualifier: Option<TableReference>,
+    name: String,
+    value: Expr,
+}
+
+impl MarkJoinRewrite {
+    fn restore_mark_column(self, plan: LogicalPlan) -> Result<LogicalPlan> {
+        let mut exprs = self.preserved;
+        exprs.push(self.value.alias_qualified(self.qualifier, self.name));
+        Ok(LogicalPlan::Projection(Projection::try_new(
+            exprs,
+            Arc::new(plan),
+        )?))
+    }
+}
+
+fn try_convert_mark_join(
+    join: &mut Join,
+    predicates: &mut Vec<Expr>,
+    on_filters: &mut [Expr],
+) -> Result<Option<MarkJoinRewrite>> {
+    if !matches!(join.join_type, JoinType::LeftMark | JoinType::RightMark)
+        || predicates.is_empty()
+    {
+        return Ok(None);
+    }
+
+    let schema = Arc::clone(&join.schema);
+    let mark_idx = schema.fields().len() - 1;
+    // A lower mark join may contribute another column named "mark". Resolve
+    // the qualified column against this join's schema to distinguish them.
+    let is_mark = |expr: &Expr| matches!(expr, Expr::Column(col) if schema.maybe_index_of_column(col) == Some(mark_idx));
+    let Some((idx, value)) = predicates.iter().enumerate().find_map(|(idx, expr)| {
+        classify_mark_predicate(expr, &is_mark).map(|value| (idx, value))
+    }) else {
+        return Ok(None);
+    };
+
+    // Non-null-aware marks are two-valued despite their nullable schema field.
+    // IS NOT TRUE could select an anti join even for a null-aware mark, but
+    // restoring its marker as false would lose the original NULL values.
+    if matches!(value, MarkValue::False) && join.null_aware {
+        return Ok(None);
+    }
+
+    let new_type = match (join.join_type, &value) {
+        (JoinType::LeftMark, MarkValue::True) => JoinType::LeftSemi,
+        (JoinType::LeftMark, MarkValue::False) => JoinType::LeftAnti,
+        (JoinType::RightMark, MarkValue::True) => JoinType::RightSemi,
+        (JoinType::RightMark, MarkValue::False) => JoinType::RightAnti,
+        _ => unreachable!(),
+    };
+    let value = lit(matches!(value, MarkValue::True));
+    let (qualifier, field) = schema.qualified_field(mark_idx);
+    let rewrite = MarkJoinRewrite {
+        preserved: (0..mark_idx)
+            .map(|idx| {
+                let (qualifier, field) = schema.qualified_field(idx);
+                Expr::Column(Column::new(qualifier.cloned(), field.name()))
+            })
+            .collect(),
+        qualifier: qualifier.cloned(),
+        name: field.name().clone(),
+        value: value.clone(),
+    };
+
+    predicates.remove(idx);
+    for predicate in predicates.iter_mut() {
+        *predicate = predicate
+            .clone()
+            .transform_down(|expr| {
+                if is_mark(&expr) {
+                    Ok(Transformed::yes(value.clone()))
+                } else {
+                    Ok(Transformed::no(expr))
+                }
+            })?
+            .data;
+    }
+    predicates.retain(|expr| {
+        !matches!(expr, Expr::Literal(ScalarValue::Boolean(Some(true)), _))
+    });
+    // Any predicates kept above the converted join must not read its vanished mark.
+    debug_assert!(predicates.iter().all(|expr| {
+        expr.column_refs()
+            .iter()
+            .all(|col| schema.maybe_index_of_column(col) != Some(mark_idx))
+    }));
+
+    join.join_type = new_type;
+    join.null_aware = false;
+    join.schema = Arc::new(build_join_schema(
+        join.left.schema(),
+        join.right.schema(),
+        &new_type,
+    )?);
+    simplify_null_safe_join_conditions(join, on_filters)?;
+    Ok(Some(rewrite))
+}
+
+/// Narrow null-safe equality only on joins converted from MARK, matching DuckDB.
+fn simplify_null_safe_join_conditions(
+    join: &mut Join,
+    on_filters: &mut [Expr],
+) -> Result<()> {
+    if join.null_equality == NullEquality::NullEqualsNull {
+        let mut can_use_equality = true;
+        for (left, right) in &join.on {
+            if left.nullable(join.left.schema())?
+                && right.nullable(join.right.schema())?
+            {
+                can_use_equality = false;
+                break;
+            }
+        }
+        if can_use_equality {
+            join.null_equality = NullEquality::NullEqualsNothing;
+        }
+    }
+
+    let is_non_nullable = |expr: &Expr| {
+        [join.left.schema(), join.right.schema()]
+            .iter()
+            .any(|schema| matches!(expr.nullable(schema.as_ref()), Ok(false)))
+    };
+    for expr in on_filters {
+        if let Expr::BinaryExpr(BinaryExpr { left, op, right }) = expr
+            && *op == Operator::IsNotDistinctFrom
+            && (is_non_nullable(left) || is_non_nullable(right))
+        {
+            *op = Operator::Eq;
+        }
+    }
+    Ok(())
+}
+
 fn push_down_join(
     mut join: Join,
     parent_predicate: Option<Expr>,
 ) -> Result<Transformed<LogicalPlan>> {
     // Split the parent predicate into individual conjunctive parts.
-    let predicates = parent_predicate.map_or_else(Vec::new, split_conjunction_owned);
+    let mut predicates = parent_predicate.map_or_else(Vec::new, split_conjunction_owned);
 
     // Extract conjunctions from the JOIN's ON filter, if present.
-    let on_filters = join
+    let mut on_filters = join
         .filter
         .take()
         .map_or_else(Vec::new, split_conjunction_owned);
+
+    let mark_rewrite =
+        try_convert_mark_join(&mut join, &mut predicates, &mut on_filters)?;
 
     // Are there any new join predicates that can be inferred from the filter expressions?
     let inferred_join_predicates = with_debug_timing("infer_join_predicates", || {
@@ -552,14 +743,20 @@ fn push_down_join(
         );
     }
 
-    if on_filters.is_empty()
+    let result = if on_filters.is_empty()
         && predicates.is_empty()
         && inferred_join_predicates.is_empty()
     {
-        return Ok(Transformed::no(LogicalPlan::Join(join)));
-    }
+        Transformed::no(LogicalPlan::Join(join))
+    } else {
+        push_down_all_join(predicates, inferred_join_predicates, join, on_filters)?
+    };
 
-    push_down_all_join(predicates, inferred_join_predicates, join, on_filters)
+    if let Some(rewrite) = mark_rewrite {
+        Ok(Transformed::yes(rewrite.restore_mark_column(result.data)?))
+    } else {
+        Ok(result)
+    }
 }
 
 /// Extracts any equi-join join predicates from the given filter expressions.
@@ -1436,12 +1633,14 @@ fn expr_columns(exprs: &[Expr]) -> HashSet<Column> {
 mod tests {
     use std::cmp::Ordering;
     use std::fmt::{Debug, Formatter};
+    use std::ops::Not;
 
     use arrow::datatypes::{Field, Schema, SchemaRef};
     use async_trait::async_trait;
 
     use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
     use datafusion_expr::expr::ScalarFunction;
+    use datafusion_expr::expr_fn::binary_expr;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         ColumnarValue, ExprFunctionExt, Extension, LogicalPlanBuilder,
@@ -1503,6 +1702,457 @@ mod tests {
                 .expect("failed to optimize plan");
             assert!(!transformed.transformed);
         }};
+    }
+
+    fn mark_join_plan(join_type: JoinType, null_aware: bool) -> Result<LogicalPlan> {
+        LogicalPlanBuilder::from(test_table_scan_with_name("test1")?)
+            .join_detailed_with_options(
+                test_table_scan_with_name("test2")?,
+                join_type,
+                (vec!["a"], vec!["a"]),
+                None,
+                NullEquality::NullEqualsNothing,
+                null_aware,
+            )?
+            .build()
+    }
+
+    #[test]
+    fn mark_filter_becomes_semi_join() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(mark_join_plan(JoinType::LeftMark, false)?)
+            .filter(col("test2.mark"))?
+            .build()?;
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: test1.a, test1.b, test1.c, Boolean(true) AS mark
+          LeftSemi Join: test1.a = test2.a
+            TableScan: test1
+            TableScan: test2
+        ")
+    }
+
+    #[test]
+    fn not_mark_filter_becomes_anti_join() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(mark_join_plan(JoinType::LeftMark, false)?)
+            .filter(col("test2.mark").not())?
+            .build()?;
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: test1.a, test1.b, test1.c, Boolean(false) AS mark
+          LeftAnti Join: test1.a = test2.a
+            TableScan: test1
+            TableScan: test2
+        ")
+    }
+
+    #[test]
+    fn mark_is_true_becomes_semi_join() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(mark_join_plan(JoinType::LeftMark, false)?)
+            .filter(col("test2.mark").is_true())?
+            .build()?;
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: test1.a, test1.b, test1.c, Boolean(true) AS mark
+          LeftSemi Join: test1.a = test2.a
+            TableScan: test1
+            TableScan: test2
+        ")
+    }
+
+    #[test]
+    fn mark_is_false_becomes_anti_join() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(mark_join_plan(JoinType::LeftMark, false)?)
+            .filter(col("test2.mark").is_false())?
+            .build()?;
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: test1.a, test1.b, test1.c, Boolean(false) AS mark
+          LeftAnti Join: test1.a = test2.a
+            TableScan: test1
+            TableScan: test2
+        ")
+    }
+
+    #[test]
+    fn mark_is_not_true_becomes_anti_join() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(mark_join_plan(JoinType::LeftMark, false)?)
+            .filter(col("test2.mark").is_not_true())?
+            .build()?;
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: test1.a, test1.b, test1.c, Boolean(false) AS mark
+          LeftAnti Join: test1.a = test2.a
+            TableScan: test1
+            TableScan: test2
+        ")
+    }
+
+    #[test]
+    fn mark_is_not_distinct_from_true_becomes_semi_join() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(mark_join_plan(JoinType::LeftMark, false)?)
+            .filter(binary_expr(
+                col("test2.mark"),
+                Operator::IsNotDistinctFrom,
+                lit(true),
+            ))?
+            .build()?;
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: test1.a, test1.b, test1.c, Boolean(true) AS mark
+          LeftSemi Join: test1.a = test2.a
+            TableScan: test1
+            TableScan: test2
+        ")
+    }
+
+    #[test]
+    fn true_is_not_distinct_from_mark_becomes_semi_join() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(mark_join_plan(JoinType::LeftMark, false)?)
+            .filter(binary_expr(
+                lit(true),
+                Operator::IsNotDistinctFrom,
+                col("test2.mark"),
+            ))?
+            .build()?;
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: test1.a, test1.b, test1.c, Boolean(true) AS mark
+          LeftSemi Join: test1.a = test2.a
+            TableScan: test1
+            TableScan: test2
+        ")
+    }
+
+    #[test]
+    fn mark_is_distinct_from_true_becomes_anti_join() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(mark_join_plan(JoinType::LeftMark, false)?)
+            .filter(binary_expr(
+                col("test2.mark"),
+                Operator::IsDistinctFrom,
+                lit(true),
+            ))?
+            .build()?;
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: test1.a, test1.b, test1.c, Boolean(false) AS mark
+          LeftAnti Join: test1.a = test2.a
+            TableScan: test1
+            TableScan: test2
+        ")
+    }
+
+    #[test]
+    fn true_is_distinct_from_mark_becomes_anti_join() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(mark_join_plan(JoinType::LeftMark, false)?)
+            .filter(binary_expr(
+                lit(true),
+                Operator::IsDistinctFrom,
+                col("test2.mark"),
+            ))?
+            .build()?;
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: test1.a, test1.b, test1.c, Boolean(false) AS mark
+          LeftAnti Join: test1.a = test2.a
+            TableScan: test1
+            TableScan: test2
+        ")
+    }
+
+    #[test]
+    fn right_mark_filter_becomes_right_semi_join() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(mark_join_plan(JoinType::RightMark, false)?)
+            .filter(col("test1.mark"))?
+            .build()?;
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: test2.a, test2.b, test2.c, Boolean(true) AS mark
+          RightSemi Join: test1.a = test2.a
+            TableScan: test1
+            TableScan: test2
+        ")
+    }
+
+    #[test]
+    fn not_right_mark_becomes_right_anti_join() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(mark_join_plan(JoinType::RightMark, false)?)
+            .filter(col("test1.mark").not())?
+            .build()?;
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: test2.a, test2.b, test2.c, Boolean(false) AS mark
+          RightAnti Join: test1.a = test2.a
+            TableScan: test1
+            TableScan: test2
+        ")
+    }
+
+    #[test]
+    fn null_aware_mark_join_blocks_anti_conversion() -> Result<()> {
+        let mark = col("test2.mark");
+        for predicate in [
+            mark.clone().not(),
+            mark.clone().is_false(),
+            mark.clone().is_not_true(),
+            binary_expr(mark.clone(), Operator::IsDistinctFrom, lit(true)),
+            binary_expr(lit(true), Operator::IsDistinctFrom, mark),
+        ] {
+            let plan =
+                LogicalPlanBuilder::from(mark_join_plan(JoinType::LeftMark, true)?)
+                    .filter(predicate)?
+                    .build()?;
+            assert_plan_not_transformed!(plan);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn null_aware_mark_join_allows_semi_conversion_and_inference() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(mark_join_plan(JoinType::LeftMark, true)?)
+            .filter(col("test2.mark").and(col("test1.a").gt(lit(2u32))))?
+            .build()?;
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: test1.a, test1.b, test1.c, Boolean(true) AS mark
+          LeftSemi Join: test1.a = test2.a
+            TableScan: test1, full_filters=[test1.a > UInt32(2)]
+            TableScan: test2, full_filters=[test2.a > UInt32(2)]
+        ")
+    }
+
+    #[test]
+    fn remaining_predicate_pushed_after_conversion() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(mark_join_plan(JoinType::LeftMark, false)?)
+            .filter(col("test2.mark").and(col("test1.b").gt(lit(2u32))))?
+            .build()?;
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: test1.a, test1.b, test1.c, Boolean(true) AS mark
+          LeftSemi Join: test1.a = test2.a
+            TableScan: test1, full_filters=[test1.b > UInt32(2)]
+            TableScan: test2
+        ")
+    }
+
+    #[test]
+    fn mark_in_or_not_converted() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(mark_join_plan(JoinType::LeftMark, false)?)
+            .filter(col("test2.mark").or(col("test1.b").gt(lit(2u32))))?
+            .build()?;
+        assert_plan_not_transformed!(plan);
+        Ok(())
+    }
+
+    #[test]
+    fn mark_is_null_not_converted() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(mark_join_plan(JoinType::LeftMark, false)?)
+            .filter(col("test2.mark").is_null())?
+            .build()?;
+        assert_plan_not_transformed!(plan);
+        Ok(())
+    }
+
+    #[test]
+    fn not_mark_or_not_converted() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(mark_join_plan(JoinType::LeftMark, false)?)
+            .filter(col("test2.mark").not().or(col("test1.b").gt(lit(2u32))))?
+            .build()?;
+        assert_plan_not_transformed!(plan);
+        Ok(())
+    }
+
+    #[test]
+    fn mark_is_not_false_not_converted() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(mark_join_plan(JoinType::LeftMark, false)?)
+            .filter(col("test2.mark").is_not_false())?
+            .build()?;
+        assert_plan_not_transformed!(plan);
+        Ok(())
+    }
+
+    #[test]
+    fn mark_substituted_in_remaining_predicate() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(mark_join_plan(JoinType::LeftMark, false)?)
+            .filter(
+                col("test2.mark").and(col("test2.mark").or(col("test1.b").gt(lit(2u32)))),
+            )?
+            .build()?;
+        // Apply pushdown before simplification to exercise marker substitution.
+        let rewritten = PushDownFilter::new()
+            .rewrite(plan, &OptimizerContext::new())?
+            .data;
+        assert_optimized_plan_eq_with_rewrite_predicate!(rewritten, @r"
+        Projection: test1.a, test1.b, test1.c, Boolean(true) AS mark
+          LeftSemi Join: test1.a = test2.a
+            TableScan: test1, full_filters=[Boolean(true)]
+            TableScan: test2
+        ")
+    }
+
+    #[test]
+    fn mark_preserved_for_parent_projection() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(mark_join_plan(JoinType::LeftMark, false)?)
+            .filter(col("test2.mark"))?
+            .project(vec![col("test1.a"), col("test2.mark")])?
+            .build()?;
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: test1.a, test2.mark
+          Projection: test1.a, test1.b, test1.c, Boolean(true) AS mark
+            LeftSemi Join: test1.a = test2.a
+              TableScan: test1
+              TableScan: test2
+        ")
+    }
+
+    #[test]
+    fn stacked_mark_joins_lower_mark_not_converted() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(mark_join_plan(JoinType::LeftMark, false)?)
+            .join(
+                test_table_scan_with_name("test3")?,
+                JoinType::LeftMark,
+                (vec!["test1.a"], vec!["test3.a"]),
+                None,
+            )?
+            .filter(col("test2.mark"))?
+            .build()?;
+        assert_optimized_plan_equal!(plan, @r"
+        LeftMark Join: test1.a = test3.a
+          Projection: test1.a, test1.b, test1.c, Boolean(true) AS mark
+            LeftSemi Join: test1.a = test2.a
+              TableScan: test1
+              TableScan: test2
+          TableScan: test3
+        ")
+    }
+
+    #[test]
+    fn mark_right_side_multi_relation_unqualified_mark() -> Result<()> {
+        let right = LogicalPlanBuilder::from(test_table_scan_with_name("test2")?)
+            .join(
+                test_table_scan_with_name("test3")?,
+                JoinType::Inner,
+                (vec!["a"], vec!["a"]),
+                None,
+            )?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(test_table_scan_with_name("test1")?)
+            .join(
+                right,
+                JoinType::LeftMark,
+                (vec!["a"], vec!["test2.a"]),
+                None,
+            )?
+            .filter(col("mark"))?
+            .build()?;
+        let rewritten = PushDownFilter::new()
+            .rewrite(plan.clone(), &OptimizerContext::new())?
+            .data;
+        assert!(rewritten.schema().qualified_field(3).0.is_none());
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: test1.a, test1.b, test1.c, Boolean(true) AS mark
+          LeftSemi Join: test1.a = test2.a
+            TableScan: test1
+            Inner Join: test2.a = test3.a
+              TableScan: test2
+              TableScan: test3
+        ")
+    }
+
+    fn nullable_mark_scan(name: &str, nullable: bool) -> Result<LogicalPlan> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::UInt32, nullable),
+            Field::new("b", DataType::UInt32, true),
+        ]);
+        table_scan(Some(name), &schema, None)?.build()
+    }
+
+    #[test]
+    fn null_equals_null_flips_when_one_side_non_nullable() -> Result<()> {
+        for (left_nullable, right_nullable) in
+            [(false, true), (true, false), (false, false)]
+        {
+            for predicate in [col("test2.mark"), col("test2.mark").not()] {
+                let plan =
+                    LogicalPlanBuilder::from(nullable_mark_scan("test1", left_nullable)?)
+                        .join_detailed(
+                            nullable_mark_scan("test2", right_nullable)?,
+                            JoinType::LeftMark,
+                            (vec!["a"], vec!["a"]),
+                            None,
+                            NullEquality::NullEqualsNull,
+                        )?
+                        .filter(predicate)?
+                        .build()?;
+                let rewritten = PushDownFilter::new()
+                    .rewrite(plan, &OptimizerContext::new())?
+                    .data;
+                let LogicalPlan::Projection(projection) = rewritten else {
+                    panic!("expected projection")
+                };
+                let LogicalPlan::Join(join) = projection.input.as_ref() else {
+                    panic!("expected join")
+                };
+                assert_eq!(join.null_equality, NullEquality::NullEqualsNothing);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn null_equals_null_stays_when_both_nullable() -> Result<()> {
+        // A non-nullable key does not justify narrowing a second, nullable key.
+        for keys in [vec!["b"], vec!["a", "b"]] {
+            let plan = LogicalPlanBuilder::from(nullable_mark_scan("test1", false)?)
+                .join_detailed(
+                    nullable_mark_scan("test2", false)?,
+                    JoinType::LeftMark,
+                    (keys.clone(), keys),
+                    None,
+                    NullEquality::NullEqualsNull,
+                )?
+                .filter(col("test2.mark"))?
+                .build()?;
+            let rewritten = PushDownFilter::new()
+                .rewrite(plan, &OptimizerContext::new())?
+                .data;
+            let LogicalPlan::Projection(projection) = rewritten else {
+                panic!("expected projection")
+            };
+            let LogicalPlan::Join(join) = projection.input.as_ref() else {
+                panic!("expected join")
+            };
+            assert_eq!(join.null_equality, NullEquality::NullEqualsNull);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn residual_is_not_distinct_from_becomes_eq_when_one_side_non_nullable() -> Result<()>
+    {
+        for nullable in [false, true] {
+            for reverse in [false, true] {
+                // Expressions, including reversed operands, must use child nullability.
+                let left = col("test1.b") + lit(1u32);
+                let right = col("test2.a") + lit(1u32);
+                let (left, right) = if reverse {
+                    (right, left)
+                } else {
+                    (left, right)
+                };
+                let filter =
+                    binary_expr(left.clone(), Operator::IsNotDistinctFrom, right.clone());
+                let plan = LogicalPlanBuilder::from(nullable_mark_scan("test1", true)?)
+                    .join(
+                        nullable_mark_scan("test2", nullable)?,
+                        JoinType::LeftMark,
+                        (vec!["a"], vec!["a"]),
+                        Some(filter.clone()),
+                    )?
+                    .filter(col("test2.mark"))?
+                    .build()?;
+                let rewritten = PushDownFilter::new()
+                    .rewrite(plan, &OptimizerContext::new())?
+                    .data;
+                let LogicalPlan::Projection(projection) = rewritten else {
+                    panic!("expected projection")
+                };
+                let LogicalPlan::Join(join) = projection.input.as_ref() else {
+                    panic!("expected join")
+                };
+                assert_eq!(
+                    join.filter,
+                    Some(if nullable { filter } else { left.eq(right) })
+                );
+            }
+        }
+        Ok(())
     }
 
     #[test]
@@ -3861,7 +4511,7 @@ mod tests {
                     vec![Column::from_qualified_name("test2.a")],
                 ),
                 None,
-                datafusion_common::NullEquality::NullEqualsNothing,
+                NullEquality::NullEqualsNothing,
                 true,
             )?
             .filter(col("test1.a").gt(lit(2u32)))?

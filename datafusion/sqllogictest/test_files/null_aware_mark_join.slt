@@ -446,17 +446,14 @@ WHERE (EXISTS (
 ----
 logical_plan
 01)Projection: outer_table.value
-02)--Filter: __correlated_sq_1.mark IS TRUE
-03)----Projection: outer_table.value, __correlated_sq_1.mark
-04)------LeftMark Join:  Filter: outer_table.id < __correlated_sq_1.id
-05)--------TableScan: outer_table projection=[id, value]
-06)--------SubqueryAlias: __correlated_sq_1
-07)----------TableScan: inner_table_no_null projection=[id]
+02)--LeftSemi Join:  Filter: outer_table.id < __correlated_sq_1.id
+03)----TableScan: outer_table projection=[id, value]
+04)----SubqueryAlias: __correlated_sq_1
+05)------TableScan: inner_table_no_null projection=[id]
 physical_plan
-01)FilterExec: mark@1 IS NOT DISTINCT FROM true, projection=[value@0]
-02)--NestedLoopJoinExec: join_type=RightMark, filter=id@0 < id@1, projection=[value@1, mark@2]
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)NestedLoopJoinExec: join_type=RightSemi, filter=id@0 < id@1, projection=[value@1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query T rowsort
 SELECT value

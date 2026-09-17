@@ -1,0 +1,938 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# PushDownFilter converts a whole conjunct on a MARK column to SEMI/ANTI.
+# !null_aware proves the mark is two-valued; the nullable schema field alone
+# cannot prove it. False-selecting predicates must keep null-aware marks.
+# A compensating projection restores the selected marker as a constant. This
+# preserves positional aliases and ancestor consumers, including the shape
+# DuckDB's no_mark_to_semi_if_mark_index_is_projected.test refuses to convert.
+# Null-safe equalities are narrowed only on converted joins and only when a
+# child schema proves an operand non-nullable.
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.optimizer.filter_null_join_keys = false;
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+statement ok
+CREATE TABLE pdm_outer(id INT, k INT) AS VALUES (1, 1), (2, 2), (3, 3), (4, NULL), (5, 2);
+
+statement ok
+CREATE TABLE pdm_inner(k INT) AS VALUES (2), (2), (NULL);
+
+statement ok
+CREATE TABLE pdm_inner_nn(k INT) AS VALUES (2), (2);
+
+statement ok
+CREATE TABLE pdm_empty(k INT);
+
+statement ok
+CREATE TABLE pdm_base(my_key INT, parent_key INT) AS VALUES (1, 2), (2, NULL), (3, 2);
+
+statement ok
+CREATE TABLE pdm_a(x BIGINT, g BIGINT) AS VALUES (1, 0), (NULL, 0);
+
+statement ok
+CREATE TABLE pdm_b(y BIGINT, g BIGINT) AS VALUES (1, 0), (NULL, 0);
+
+statement ok
+COPY (SELECT 1 AS y, 0 AS g) TO 'test_files/scratch/push_down_filter_mark_join/b.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE pdm_b_nn(y BIGINT NOT NULL, g BIGINT NOT NULL)
+STORED AS PARQUET LOCATION 'test_files/scratch/push_down_filter_mark_join/b.parquet';
+
+statement ok
+COPY (SELECT 1 AS x, 0 AS g) TO 'test_files/scratch/push_down_filter_mark_join/a.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE pdm_a_nn(x BIGINT NOT NULL, g BIGINT NOT NULL)
+STORED AS PARQUET LOCATION 'test_files/scratch/push_down_filter_mark_join/a.parquet';
+
+# A: conversions through derived tables, CTEs, and views.
+
+query TT
+EXPLAIN SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE e;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: o.id
+03)----LeftSemi Join: o.k = __correlated_sq_1.k
+04)------SubqueryAlias: o
+05)--------TableScan: pdm_outer projection=[id, k]
+06)------SubqueryAlias: __correlated_sq_1
+07)--------SubqueryAlias: i
+08)----------TableScan: pdm_inner projection=[k]
+
+query I rowsort
+SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE e;
+----
+2
+5
+
+query I rowsort
+WITH t AS (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) SELECT id FROM t WHERE e;
+----
+2
+5
+
+statement ok
+CREATE VIEW pdm_view AS SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o;
+
+query I rowsort
+SELECT id FROM pdm_view WHERE e;
+----
+2
+5
+
+query TT
+EXPLAIN SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE NOT e;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: o.id
+03)----LeftAnti Join: o.k = __correlated_sq_1.k
+04)------SubqueryAlias: o
+05)--------TableScan: pdm_outer projection=[id, k]
+06)------SubqueryAlias: __correlated_sq_1
+07)--------SubqueryAlias: i
+08)----------TableScan: pdm_inner projection=[k]
+
+query I rowsort
+SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE NOT e;
+----
+1
+3
+4
+
+query TT
+EXPLAIN SELECT id FROM (SELECT o.id, NOT EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS ne FROM pdm_outer o) t WHERE ne;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: o.id
+03)----LeftAnti Join: o.k = __correlated_sq_1.k
+04)------SubqueryAlias: o
+05)--------TableScan: pdm_outer projection=[id, k]
+06)------SubqueryAlias: __correlated_sq_1
+07)--------SubqueryAlias: i
+08)----------TableScan: pdm_inner projection=[k]
+
+query I rowsort
+SELECT id FROM (SELECT o.id, NOT EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS ne FROM pdm_outer o) t WHERE ne;
+----
+1
+3
+4
+
+query TT
+EXPLAIN SELECT id, e FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE e;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: o.id, Boolean(true) AS e
+03)----LeftSemi Join: o.k = __correlated_sq_1.k
+04)------SubqueryAlias: o
+05)--------TableScan: pdm_outer projection=[id, k]
+06)------SubqueryAlias: __correlated_sq_1
+07)--------SubqueryAlias: i
+08)----------TableScan: pdm_inner projection=[k]
+
+query IB rowsort
+SELECT id, e FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE e;
+----
+2 true
+5 true
+
+query TT
+EXPLAIN SELECT id, e FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE NOT e;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: o.id, Boolean(false) AS e
+03)----LeftAnti Join: o.k = __correlated_sq_1.k
+04)------SubqueryAlias: o
+05)--------TableScan: pdm_outer projection=[id, k]
+06)------SubqueryAlias: __correlated_sq_1
+07)--------SubqueryAlias: i
+08)----------TableScan: pdm_inner projection=[k]
+
+query IB rowsort
+SELECT id, e FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE NOT e;
+----
+1 false
+3 false
+4 false
+
+query TT
+EXPLAIN SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE e AND id > 2;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: o.id
+03)----LeftSemi Join: o.k = __correlated_sq_1.k
+04)------SubqueryAlias: o
+05)--------Filter: pdm_outer.id > Int32(2)
+06)----------TableScan: pdm_outer projection=[id, k]
+07)------SubqueryAlias: __correlated_sq_1
+08)--------SubqueryAlias: i
+09)----------TableScan: pdm_inner projection=[k]
+
+query I rowsort
+SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE e AND id > 2;
+----
+5
+
+query TT
+EXPLAIN SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE e IS TRUE;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: o.id
+03)----LeftSemi Join: o.k = __correlated_sq_1.k
+04)------SubqueryAlias: o
+05)--------TableScan: pdm_outer projection=[id, k]
+06)------SubqueryAlias: __correlated_sq_1
+07)--------SubqueryAlias: i
+08)----------TableScan: pdm_inner projection=[k]
+
+query I rowsort
+SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE e IS TRUE;
+----
+2
+5
+
+query TT
+EXPLAIN SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE e IS FALSE;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: o.id
+03)----LeftAnti Join: o.k = __correlated_sq_1.k
+04)------SubqueryAlias: o
+05)--------TableScan: pdm_outer projection=[id, k]
+06)------SubqueryAlias: __correlated_sq_1
+07)--------SubqueryAlias: i
+08)----------TableScan: pdm_inner projection=[k]
+
+query I rowsort
+SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE e IS FALSE;
+----
+1
+3
+4
+
+query TT
+EXPLAIN SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE e IS NOT TRUE;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: o.id
+03)----LeftAnti Join: o.k = __correlated_sq_1.k
+04)------SubqueryAlias: o
+05)--------TableScan: pdm_outer projection=[id, k]
+06)------SubqueryAlias: __correlated_sq_1
+07)--------SubqueryAlias: i
+08)----------TableScan: pdm_inner projection=[k]
+
+query I rowsort
+SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE e IS NOT TRUE;
+----
+1
+3
+4
+
+query TT
+EXPLAIN SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE e IS NOT DISTINCT FROM true;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: o.id
+03)----LeftSemi Join: o.k = __correlated_sq_1.k
+04)------SubqueryAlias: o
+05)--------TableScan: pdm_outer projection=[id, k]
+06)------SubqueryAlias: __correlated_sq_1
+07)--------SubqueryAlias: i
+08)----------TableScan: pdm_inner projection=[k]
+
+query I rowsort
+SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE e IS NOT DISTINCT FROM true;
+----
+2
+5
+
+query TT
+EXPLAIN SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE e IS DISTINCT FROM true;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: o.id
+03)----LeftAnti Join: o.k = __correlated_sq_1.k
+04)------SubqueryAlias: o
+05)--------TableScan: pdm_outer projection=[id, k]
+06)------SubqueryAlias: __correlated_sq_1
+07)--------SubqueryAlias: i
+08)----------TableScan: pdm_inner projection=[k]
+
+query I rowsort
+SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE e IS DISTINCT FROM true;
+----
+1
+3
+4
+
+# The LEFT JOIN below MARK must retain its null-extension semantics.
+query TT
+EXPLAIN SELECT my_key, e FROM (
+  SELECT b.my_key, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = p.my_key) AS e
+  FROM pdm_base b LEFT JOIN pdm_base p ON b.parent_key = p.my_key
+) t WHERE e;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: b.my_key, Boolean(true) AS e
+03)----LeftSemi Join: p.my_key = __correlated_sq_1.k
+04)------Projection: b.my_key, p.my_key
+05)--------Left Join: b.parent_key = p.my_key
+06)----------SubqueryAlias: b
+07)------------TableScan: pdm_base projection=[my_key, parent_key]
+08)----------SubqueryAlias: p
+09)------------TableScan: pdm_base projection=[my_key]
+10)------SubqueryAlias: __correlated_sq_1
+11)--------SubqueryAlias: i
+12)----------TableScan: pdm_inner projection=[k]
+
+query IB rowsort
+SELECT my_key, e FROM (
+  SELECT b.my_key, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = p.my_key) AS e
+  FROM pdm_base b LEFT JOIN pdm_base p ON b.parent_key = p.my_key
+) t WHERE e;
+----
+1 true
+3 true
+
+query TT
+EXPLAIN SELECT id, e FROM (SELECT id, EXISTS (SELECT 1 FROM pdm_inner) AS e FROM pdm_outer) t WHERE e;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: pdm_outer.id, Boolean(true) AS e
+03)----LeftSemi Join:
+04)------TableScan: pdm_outer projection=[id]
+05)------SubqueryAlias: __correlated_sq_1
+06)--------TableScan: pdm_inner projection=[]
+
+query IB rowsort
+SELECT id, e FROM (SELECT id, EXISTS (SELECT 1 FROM pdm_inner) AS e FROM pdm_outer) t WHERE e;
+----
+1 true
+2 true
+3 true
+4 true
+5 true
+
+query TT
+EXPLAIN SELECT id, e FROM (SELECT id, EXISTS (SELECT 1 FROM pdm_empty) AS e FROM pdm_outer) t WHERE e;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: pdm_outer.id, Boolean(true) AS e
+03)----LeftSemi Join:
+04)------TableScan: pdm_outer projection=[id]
+05)------SubqueryAlias: __correlated_sq_1
+06)--------TableScan: pdm_empty projection=[]
+
+query IB rowsort
+SELECT id, e FROM (SELECT id, EXISTS (SELECT 1 FROM pdm_empty) AS e FROM pdm_outer) t WHERE e;
+----
+
+
+query TT
+EXPLAIN SELECT id, e FROM (SELECT id, EXISTS (SELECT 1 FROM pdm_empty) AS e FROM pdm_outer) t WHERE NOT e;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: pdm_outer.id, Boolean(false) AS e
+03)----LeftAnti Join:
+04)------TableScan: pdm_outer projection=[id]
+05)------SubqueryAlias: __correlated_sq_1
+06)--------TableScan: pdm_empty projection=[]
+
+query IB rowsort
+SELECT id, e FROM (SELECT id, EXISTS (SELECT 1 FROM pdm_empty) AS e FROM pdm_outer) t WHERE NOT e;
+----
+1 false
+2 false
+3 false
+4 false
+5 false
+
+# B: non-conversions. OR/IS NULL do not constrain a marker to one value.
+
+query TT
+EXPLAIN SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE e OR id = 1;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: o.id
+03)----Filter: __correlated_sq_1.mark OR o.id = Int32(1)
+04)------Projection: o.id, __correlated_sq_1.mark
+05)--------LeftMark Join: o.k = __correlated_sq_1.k
+06)----------SubqueryAlias: o
+07)------------TableScan: pdm_outer projection=[id, k]
+08)----------SubqueryAlias: __correlated_sq_1
+09)------------SubqueryAlias: i
+10)--------------TableScan: pdm_inner projection=[k]
+
+query I rowsort
+SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE e OR id = 1;
+----
+1
+2
+5
+
+query TT
+EXPLAIN SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE e IS NULL;
+----
+logical_plan EmptyRelation: rows=0
+
+query I rowsort
+SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE e IS NULL;
+----
+
+
+query TT
+EXPLAIN SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE NOT e OR id = 2;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: o.id
+03)----Filter: NOT __correlated_sq_1.mark OR o.id = Int32(2)
+04)------Projection: o.id, __correlated_sq_1.mark
+05)--------LeftMark Join: o.k = __correlated_sq_1.k
+06)----------SubqueryAlias: o
+07)------------TableScan: pdm_outer projection=[id, k]
+08)----------SubqueryAlias: __correlated_sq_1
+09)------------SubqueryAlias: i
+10)--------------TableScan: pdm_inner projection=[k]
+
+query I rowsort
+SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE NOT e OR id = 2;
+----
+1
+2
+3
+4
+
+# NULL on the inner side makes every unmatched NOT IN result UNKNOWN.
+query TT
+EXPLAIN SELECT id FROM pdm_outer WHERE (k NOT IN (SELECT k FROM pdm_inner)) IS TRUE;
+----
+logical_plan
+01)Projection: pdm_outer.id
+02)--Filter: NOT __correlated_sq_1.mark IS TRUE
+03)----Projection: pdm_outer.id, __correlated_sq_1.mark
+04)------LeftMark Join: pdm_outer.k = __correlated_sq_1.k null_aware
+05)--------TableScan: pdm_outer projection=[id, k]
+06)--------SubqueryAlias: __correlated_sq_1
+07)----------TableScan: pdm_inner projection=[k]
+
+query I rowsort
+SELECT id FROM pdm_outer WHERE (k NOT IN (SELECT k FROM pdm_inner)) IS TRUE;
+----
+
+
+# NULL outer keys are UNKNOWN even when the inner side has no NULL values.
+query TT
+EXPLAIN SELECT id FROM pdm_outer WHERE (k NOT IN (SELECT k FROM pdm_inner_nn)) IS TRUE;
+----
+logical_plan
+01)Projection: pdm_outer.id
+02)--Filter: NOT __correlated_sq_1.mark IS TRUE
+03)----Projection: pdm_outer.id, __correlated_sq_1.mark
+04)------LeftMark Join: pdm_outer.k = __correlated_sq_1.k null_aware
+05)--------TableScan: pdm_outer projection=[id, k]
+06)--------SubqueryAlias: __correlated_sq_1
+07)----------TableScan: pdm_inner_nn projection=[k]
+
+query I rowsort
+SELECT id FROM pdm_outer WHERE (k NOT IN (SELECT k FROM pdm_inner_nn)) IS TRUE;
+----
+1
+3
+
+# C: null-safe equality. HashJoinExec alone prints NullsEqual.
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+# Control: an existing SEMI join keeps its null-safe equality.
+query TT
+EXPLAIN SELECT count(*) FROM pdm_a a WHERE EXISTS (SELECT 1 FROM pdm_b b WHERE a.x IS NOT DISTINCT FROM b.y);
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----Projection:
+04)------LeftSemi Join: a.x = __correlated_sq_1.y
+05)--------SubqueryAlias: a
+06)----------TableScan: pdm_a projection=[x]
+07)--------SubqueryAlias: __correlated_sq_1
+08)----------SubqueryAlias: b
+09)------------TableScan: pdm_b projection=[y]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))]
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(x@0, y@0)], projection=[], NullsEqual: true
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT count(*) FROM pdm_a a WHERE EXISTS (SELECT 1 FROM pdm_b b WHERE a.x IS NOT DISTINCT FROM b.y);
+----
+2
+
+query TT
+EXPLAIN SELECT count(*) FROM (SELECT EXISTS (SELECT 1 FROM pdm_b b WHERE a.x IS NOT DISTINCT FROM b.y) AS e FROM pdm_a a) t WHERE e;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----SubqueryAlias: t
+04)------Projection:
+05)--------LeftSemi Join: a.x = __correlated_sq_1.y
+06)----------SubqueryAlias: a
+07)------------TableScan: pdm_a projection=[x]
+08)----------SubqueryAlias: __correlated_sq_1
+09)------------SubqueryAlias: b
+10)--------------TableScan: pdm_b projection=[y]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))]
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(x@0, y@0)], projection=[], NullsEqual: true
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT count(*) FROM (SELECT EXISTS (SELECT 1 FROM pdm_b b WHERE a.x IS NOT DISTINCT FROM b.y) AS e FROM pdm_a a) t WHERE e;
+----
+2
+
+query TT
+EXPLAIN SELECT count(*) FROM (SELECT EXISTS (SELECT 1 FROM pdm_b_nn b WHERE a.x IS NOT DISTINCT FROM b.y) AS e FROM pdm_a a) t WHERE e;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----SubqueryAlias: t
+04)------Projection:
+05)--------LeftSemi Join: a.x = __correlated_sq_1.y
+06)----------SubqueryAlias: a
+07)------------TableScan: pdm_a projection=[x]
+08)----------SubqueryAlias: __correlated_sq_1
+09)------------SubqueryAlias: b
+10)--------------TableScan: pdm_b_nn projection=[y]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))]
+03)----HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(y@0, x@0)], projection=[]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_mark_join/b.parquet]]}, projection=[y], file_type=parquet
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT count(*) FROM (SELECT EXISTS (SELECT 1 FROM pdm_b_nn b WHERE a.x IS NOT DISTINCT FROM b.y) AS e FROM pdm_a a) t WHERE e;
+----
+1
+
+query TT
+EXPLAIN SELECT count(*) FROM (SELECT EXISTS (SELECT 1 FROM pdm_b b WHERE a.x IS NOT DISTINCT FROM b.y) AS e FROM pdm_a_nn a) t WHERE e;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----SubqueryAlias: t
+04)------Projection:
+05)--------LeftSemi Join: a.x = __correlated_sq_1.y
+06)----------SubqueryAlias: a
+07)------------TableScan: pdm_a_nn projection=[x]
+08)----------SubqueryAlias: __correlated_sq_1
+09)------------SubqueryAlias: b
+10)--------------TableScan: pdm_b projection=[y]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))]
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftSemi, on=[(x@0, y@0)], projection=[]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_mark_join/a.parquet]]}, projection=[x], file_type=parquet
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT count(*) FROM (SELECT EXISTS (SELECT 1 FROM pdm_b b WHERE a.x IS NOT DISTINCT FROM b.y) AS e FROM pdm_a_nn a) t WHERE e;
+----
+1
+
+# An equality key leaves the null-safe comparison as a residual join filter.
+query TT
+EXPLAIN SELECT count(*) FROM (SELECT EXISTS (SELECT 1 FROM pdm_b_nn b WHERE a.g = b.g AND a.x IS NOT DISTINCT FROM b.y) AS e FROM pdm_a a) t WHERE e;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----SubqueryAlias: t
+04)------Projection:
+05)--------LeftSemi Join: a.g = __correlated_sq_1.g, a.x = __correlated_sq_1.y
+06)----------SubqueryAlias: a
+07)------------TableScan: pdm_a projection=[x, g]
+08)----------SubqueryAlias: __correlated_sq_1
+09)------------Projection: b.g, b.y
+10)--------------SubqueryAlias: b
+11)----------------TableScan: pdm_b_nn projection=[y, g]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))]
+03)----HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(g@0, g@1), (y@1, x@0)], projection=[]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_mark_join/b.parquet]]}, projection=[g, y], file_type=parquet
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT count(*) FROM (SELECT EXISTS (SELECT 1 FROM pdm_b_nn b WHERE a.g = b.g AND a.x IS NOT DISTINCT FROM b.y) AS e FROM pdm_a a) t WHERE e;
+----
+1
+
+# An equality key leaves the null-safe comparison as a residual join filter.
+query TT
+EXPLAIN SELECT count(*) FROM (SELECT EXISTS (SELECT 1 FROM pdm_b b WHERE a.g = b.g AND a.x IS NOT DISTINCT FROM b.y) AS e FROM pdm_a a) t WHERE e;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----SubqueryAlias: t
+04)------Projection:
+05)--------LeftSemi Join: a.g = __correlated_sq_1.g Filter: a.x IS NOT DISTINCT FROM __correlated_sq_1.y
+06)----------SubqueryAlias: a
+07)------------TableScan: pdm_a projection=[x, g]
+08)----------SubqueryAlias: __correlated_sq_1
+09)------------Projection: b.g, b.y
+10)--------------SubqueryAlias: b
+11)----------------TableScan: pdm_b projection=[y, g]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))]
+03)----HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(g@0, g@1)], filter=x@0 IS NOT DISTINCT FROM y@1, projection=[]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT count(*) FROM (SELECT EXISTS (SELECT 1 FROM pdm_b b WHERE a.g = b.g AND a.x IS NOT DISTINCT FROM b.y) AS e FROM pdm_a a) t WHERE e;
+----
+2
+
+# D: inequality correlations.
+
+query TT
+EXPLAIN SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k < o.k) AS e FROM pdm_outer o) t WHERE e;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: o.id
+03)----LeftSemi Join:  Filter: __correlated_sq_1.k < o.k
+04)------SubqueryAlias: o
+05)--------TableScan: pdm_outer projection=[id, k]
+06)------SubqueryAlias: __correlated_sq_1
+07)--------SubqueryAlias: i
+08)----------TableScan: pdm_inner projection=[k]
+physical_plan
+01)NestedLoopJoinExec: join_type=RightSemi, filter=k@1 < k@0, projection=[id@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k < o.k) AS e FROM pdm_outer o) t WHERE e;
+----
+3
+
+# Unlike DuckDB's condition-based guard, !null_aware permits inequality ANTI too.
+query TT
+EXPLAIN SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k < o.k) AS e FROM pdm_outer o) t WHERE NOT e;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: o.id
+03)----LeftAnti Join:  Filter: __correlated_sq_1.k < o.k
+04)------SubqueryAlias: o
+05)--------TableScan: pdm_outer projection=[id, k]
+06)------SubqueryAlias: __correlated_sq_1
+07)--------SubqueryAlias: i
+08)----------TableScan: pdm_inner projection=[k]
+physical_plan
+01)NestedLoopJoinExec: join_type=RightAnti, filter=k@1 < k@0, projection=[id@0]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k < o.k) AS e FROM pdm_outer o) t WHERE NOT e;
+----
+1
+2
+4
+5
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = true;
+
+# The converted SEMI is now eligible for PiecewiseMergeJoin.
+query TT
+EXPLAIN SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k < o.k) AS e FROM pdm_outer o) t WHERE e;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: o.id
+03)----LeftSemi Join:  Filter: __correlated_sq_1.k < o.k
+04)------SubqueryAlias: o
+05)--------TableScan: pdm_outer projection=[id, k]
+06)------SubqueryAlias: __correlated_sq_1
+07)--------SubqueryAlias: i
+08)----------TableScan: pdm_inner projection=[k]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id]
+02)--PiecewiseMergeJoin: operator=Gt, join_type=LeftSemi, on=(k > k)
+03)----SortExec: expr=[k@1 ASC], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I rowsort
+SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k < o.k) AS e FROM pdm_outer o) t WHERE e;
+----
+3
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = false;
+
+# E: projected IN currently uses three mark joins plus CASE (#24972).
+# The single null-aware mark from #25338 must preserve these same results.
+# No plan snapshots: both representations are valid.
+
+query I rowsort
+SELECT id FROM (SELECT o.id, o.k IN (SELECT k FROM pdm_inner) AS m FROM pdm_outer o) t WHERE m;
+----
+2
+5
+
+query I rowsort
+SELECT id FROM (SELECT o.id, o.k NOT IN (SELECT k FROM pdm_inner) AS m FROM pdm_outer o) t WHERE m;
+----
+
+
+query I rowsort
+SELECT id FROM (SELECT o.id, o.k NOT IN (SELECT k FROM pdm_inner_nn) AS m FROM pdm_outer o) t WHERE m;
+----
+1
+3
+
+# F: NULL key filtering is legal on SEMI's preserved input, but not ANTI's.
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+statement ok
+set datafusion.optimizer.filter_null_join_keys = true;
+
+query TT
+EXPLAIN SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE e;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: o.id
+03)----LeftSemi Join: o.k = __correlated_sq_1.k
+04)------SubqueryAlias: o
+05)--------Filter: pdm_outer.k IS NOT NULL
+06)----------TableScan: pdm_outer projection=[id, k]
+07)------SubqueryAlias: __correlated_sq_1
+08)--------SubqueryAlias: i
+09)----------Filter: pdm_inner.k IS NOT NULL
+10)------------TableScan: pdm_inner projection=[k]
+
+query I rowsort
+SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE e;
+----
+2
+5
+
+query TT
+EXPLAIN SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE NOT e;
+----
+logical_plan
+01)SubqueryAlias: t
+02)--Projection: o.id
+03)----LeftAnti Join: o.k = __correlated_sq_1.k
+04)------SubqueryAlias: o
+05)--------TableScan: pdm_outer projection=[id, k]
+06)------SubqueryAlias: __correlated_sq_1
+07)--------SubqueryAlias: i
+08)----------Filter: pdm_inner.k IS NOT NULL
+09)------------TableScan: pdm_inner projection=[k]
+
+query I rowsort
+SELECT id FROM (SELECT o.id, EXISTS (SELECT 1 FROM pdm_inner i WHERE i.k = o.k) AS e FROM pdm_outer o) t WHERE NOT e;
+----
+1
+3
+4
+
+# G: = ANY goes through RewriteSetComparison's CASE over EXISTS marks.
+# A bare ANY filter exposes a whole true-selecting mark conjunct; the second
+# mark still tracks UNKNOWN. Wrapped/OR forms must preserve that distinction.
+
+statement ok
+set datafusion.optimizer.filter_null_join_keys = false;
+
+query TT
+EXPLAIN SELECT id FROM pdm_outer WHERE k = ANY (SELECT k FROM pdm_inner);
+----
+logical_plan
+01)Projection: pdm_outer.id
+02)--LeftMark Join:  Filter: pdm_outer.k = __correlated_sq_2.k IS NULL
+03)----LeftSemi Join:  Filter: pdm_outer.k = __correlated_sq_1.k IS TRUE
+04)------TableScan: pdm_outer projection=[id, k]
+05)------SubqueryAlias: __correlated_sq_1
+06)--------TableScan: pdm_inner projection=[k]
+07)----SubqueryAlias: __correlated_sq_2
+08)------TableScan: pdm_inner projection=[k]
+
+query I rowsort
+SELECT id FROM pdm_outer WHERE k = ANY (SELECT k FROM pdm_inner);
+----
+2
+5
+
+query TT
+EXPLAIN SELECT id FROM pdm_outer WHERE k = ANY (SELECT k FROM pdm_inner_nn);
+----
+logical_plan
+01)Projection: pdm_outer.id
+02)--LeftMark Join:  Filter: pdm_outer.k = __correlated_sq_2.k IS NULL
+03)----LeftSemi Join:  Filter: pdm_outer.k = __correlated_sq_1.k IS TRUE
+04)------TableScan: pdm_outer projection=[id, k]
+05)------SubqueryAlias: __correlated_sq_1
+06)--------TableScan: pdm_inner_nn projection=[k]
+07)----SubqueryAlias: __correlated_sq_2
+08)------TableScan: pdm_inner_nn projection=[k]
+
+query I rowsort
+SELECT id FROM pdm_outer WHERE k = ANY (SELECT k FROM pdm_inner_nn);
+----
+2
+5
+
+query TT
+EXPLAIN SELECT id FROM pdm_outer WHERE k = ANY (SELECT k FROM pdm_empty);
+----
+logical_plan
+01)Projection: pdm_outer.id
+02)--LeftMark Join:  Filter: pdm_outer.k = __correlated_sq_2.k IS NULL
+03)----LeftSemi Join:  Filter: pdm_outer.k = __correlated_sq_1.k IS TRUE
+04)------TableScan: pdm_outer projection=[id, k]
+05)------SubqueryAlias: __correlated_sq_1
+06)--------TableScan: pdm_empty projection=[k]
+07)----SubqueryAlias: __correlated_sq_2
+08)------TableScan: pdm_empty projection=[k]
+
+query I rowsort
+SELECT id FROM pdm_outer WHERE k = ANY (SELECT k FROM pdm_empty);
+----
+
+
+query TT
+EXPLAIN SELECT id FROM pdm_outer WHERE (k = ANY (SELECT k FROM pdm_inner)) IS TRUE;
+----
+logical_plan
+01)Projection: pdm_outer.id
+02)--Filter: __correlated_sq_1.mark IS NOT DISTINCT FROM Boolean(true) OR __correlated_sq_2.mark IS NOT DISTINCT FROM Boolean(true) AND __correlated_sq_1.mark IS DISTINCT FROM Boolean(true) AND Boolean(NULL) IS TRUE
+03)----Projection: pdm_outer.id, __correlated_sq_1.mark, __correlated_sq_2.mark
+04)------LeftMark Join:  Filter: pdm_outer.k = __correlated_sq_2.k IS NULL
+05)--------LeftMark Join:  Filter: pdm_outer.k = __correlated_sq_1.k IS TRUE
+06)----------TableScan: pdm_outer projection=[id, k]
+07)----------SubqueryAlias: __correlated_sq_1
+08)------------TableScan: pdm_inner projection=[k]
+09)--------SubqueryAlias: __correlated_sq_2
+10)----------TableScan: pdm_inner projection=[k]
+
+query I rowsort
+SELECT id FROM pdm_outer WHERE (k = ANY (SELECT k FROM pdm_inner)) IS TRUE;
+----
+2
+5
+
+query TT
+EXPLAIN SELECT id FROM pdm_outer WHERE (k = ANY (SELECT k FROM pdm_inner)) IS NULL;
+----
+logical_plan
+01)Projection: pdm_outer.id
+02)--Filter: __correlated_sq_1.mark IS NOT DISTINCT FROM Boolean(true) OR __correlated_sq_2.mark IS NOT DISTINCT FROM Boolean(true) AND __correlated_sq_1.mark IS DISTINCT FROM Boolean(true) AND Boolean(NULL) IS NULL
+03)----Projection: pdm_outer.id, __correlated_sq_1.mark, __correlated_sq_2.mark
+04)------LeftMark Join:  Filter: pdm_outer.k = __correlated_sq_2.k IS NULL
+05)--------LeftMark Join:  Filter: pdm_outer.k = __correlated_sq_1.k IS TRUE
+06)----------TableScan: pdm_outer projection=[id, k]
+07)----------SubqueryAlias: __correlated_sq_1
+08)------------TableScan: pdm_inner projection=[k]
+09)--------SubqueryAlias: __correlated_sq_2
+10)----------TableScan: pdm_inner projection=[k]
+
+query I rowsort
+SELECT id FROM pdm_outer WHERE (k = ANY (SELECT k FROM pdm_inner)) IS NULL;
+----
+1
+3
+4
+
+query TT
+EXPLAIN SELECT id FROM pdm_outer WHERE k = ANY (SELECT k FROM pdm_inner) OR id = 1;
+----
+logical_plan
+01)Projection: pdm_outer.id
+02)--LeftMark Join:  Filter: pdm_outer.k = __correlated_sq_2.k IS NULL
+03)----Projection: pdm_outer.id, pdm_outer.k
+04)------Filter: __correlated_sq_1.mark IS NOT DISTINCT FROM Boolean(true) OR pdm_outer.id = Int32(1)
+05)--------LeftMark Join:  Filter: pdm_outer.k = __correlated_sq_1.k IS TRUE
+06)----------TableScan: pdm_outer projection=[id, k]
+07)----------SubqueryAlias: __correlated_sq_1
+08)------------TableScan: pdm_inner projection=[k]
+09)----SubqueryAlias: __correlated_sq_2
+10)------TableScan: pdm_inner projection=[k]
+
+query I rowsort
+SELECT id FROM pdm_outer WHERE k = ANY (SELECT k FROM pdm_inner) OR id = 1;
+----
+1
+2
+5
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+statement ok
+RESET datafusion.optimizer.filter_null_join_keys;
+
+statement ok
+RESET datafusion.optimizer.enable_piecewise_merge_join;
