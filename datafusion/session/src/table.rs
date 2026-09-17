@@ -150,8 +150,8 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     ///
     /// # Limit
     ///
-    /// If `limit` is specified, the scan must produce *at least* this many
-    /// rows, though it may return more. Like Projection Pushdown and Filter
+    /// If `limit` is specified, the scan must produce *at most* this many
+    /// rows, though it may return less. Like Projection Pushdown and Filter
     /// Pushdown, DataFusion pushes `LIMIT`s as far down in the plan as
     /// possible. This is called "Limit Pushdown", and some sources can use the
     /// information to improve performance.
