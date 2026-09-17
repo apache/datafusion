@@ -146,6 +146,42 @@ impl BatchBuilder {
         &self.schema
     }
 
+    /// Release fully consumed batches after a merge drains at an input boundary.
+    /// Keeping their dictionaries can otherwise enlarge the next output even
+    /// though none of its rows refer to those batches.
+    pub(super) fn discard_consumed_batches(&mut self) {
+        assert!(self.indices.is_empty());
+        self.retain_current_batches(false);
+        self.release_unused_memory();
+    }
+
+    fn retain_current_batches(&mut self, keep_consumed: bool) {
+        let mut batch_idx = 0;
+        let mut retained = 0;
+        self.batches.retain(|(stream_idx, batch)| {
+            let stream_cursor = &mut self.cursors[*stream_idx];
+            let retain = stream_cursor.batch_idx == batch_idx
+                && (keep_consumed || stream_cursor.row_idx < batch.num_rows());
+            batch_idx += 1;
+
+            if retain {
+                stream_cursor.batch_idx = retained;
+                retained += 1;
+            } else {
+                self.batches_mem_used -= get_record_batch_memory_size(batch);
+            }
+            retain
+        });
+    }
+
+    fn release_unused_memory(&mut self) {
+        // Keep the initial grant to avoid re-admission between output batches.
+        let target = self.batches_mem_used.max(self.initial_reservation);
+        if self.reservation.size() > target {
+            self.reservation.shrink(self.reservation.size() - target);
+        }
+    }
+
     /// Try to interleave all columns using the given index slice.
     fn try_interleave_columns(
         &self,
@@ -183,10 +219,7 @@ impl BatchBuilder {
         // Release excess memory back to the pool, but never shrink below
         // initial_reservation to maintain the anti-starvation guarantee
         // for the merge phase.
-        let target = self.batches_mem_used.max(self.initial_reservation);
-        if self.reservation.size() > target {
-            self.reservation.shrink(self.reservation.size() - target);
-        }
+        self.release_unused_memory();
 
         RecordBatch::try_new(Arc::clone(&self.schema), columns).map_err(Into::into)
     }
