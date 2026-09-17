@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Single-stage aggregate stream for ordered raw input.
+//! Single-stage aggregate stream for raw input with group-completion guarantees.
 
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -34,6 +34,7 @@ use futures::stream::{Stream, StreamExt};
 use super::aggregate_hash_table::{
     OrderedAggregateTable, OrderedAggregateTableMetrics, SingleMarker,
 };
+use super::order::GroupCompletionMode;
 use super::ordered_final_stream::OrderedFinalAggregateStream;
 use super::{AggregateExec, create_schema};
 use crate::aggregates::AggregateMode;
@@ -44,8 +45,8 @@ use crate::spill::spill_manager::SpillManager;
 use crate::stream::EmptyRecordBatchStream;
 use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
 
-/// Single aggregate stream for `InputOrderMode::Sorted` and
-/// `InputOrderMode::PartiallySorted`.
+/// Single aggregate stream for [`GroupCompletionMode::Partial`] and
+/// [`GroupCompletionMode::Full`].
 ///
 /// # Example
 ///
@@ -62,20 +63,21 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
 /// Input: raw rows
 /// Output: final results for all groups (for example, `AVG(x)`)
 ///
-/// # Order-based Optimization
+/// # Group Completion Optimization
 ///
 /// For the aggregation work, the hash aggregation implementation is reused.
 ///
-/// After each input batch, check whether any groups can be emitted eagerly to
-/// improve memory efficiency. For example, if the last group key seen is
-/// `k = 100`, it is safe to emit all groups with keys less than 100 because the
-/// input is ordered.
+/// After each input batch, the group-completion mode determines whether any
+/// groups can be emitted eagerly to improve memory efficiency. For example, if
+/// the input is ordered by `k` and the last group key seen is `k = 100`, all
+/// groups with keys less than 100 are complete.
 ///
 /// # Memory Pressure and Spilling
 ///
-/// ## Fully ordered case
+/// ## Full group completion
 ///
-/// If the input is ordered by every group key, for example:
+/// Every complete grouping tuple is contiguous. Ordering by every group key is
+/// one way to establish this mode, for example:
 ///
 /// - Input order: `a, b`
 /// - `GROUP BY`: `a, b`
@@ -87,9 +89,10 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
 /// If a memory reservation nevertheless fails, the stream returns the error
 /// directly, indicating an unexpected behavior.
 ///
-/// ## Partially ordered case
+/// ## Partial group completion
 ///
-/// If the input is ordered by only a subset of the group keys, for example:
+/// Rows are contiguous for a subset of the group keys. Ordering by that subset
+/// is one way to establish this mode, for example:
 ///
 /// - Input order: `a`
 /// - `GROUP BY`: `a, b`
@@ -109,8 +112,8 @@ pub(crate) struct OrderedSingleAggregateStream {
     state: Option<OrderedSingleAggregateState>,
 }
 
-/// Spill configuration and accumulated runs for partially ordered single
-/// aggregation.
+/// Spill configuration and accumulated runs for single aggregation with partial
+/// group completion.
 ///
 /// Each spill event drains all currently buffered groups, sorts their intermediate
 /// states by the full group key, and writes them to one spill file. All files are
@@ -175,15 +178,15 @@ impl OrderedSingleSpillContext {
         context: &Arc<TaskContext>,
         partition: usize,
         batch_size: usize,
-        input_order_mode: &InputOrderMode,
+        group_completion_mode: &GroupCompletionMode,
         spill_schema: &SchemaRef,
         spill_metrics: SpillMetrics,
     ) -> Result<Self> {
         let group_schema = agg.group_by.group_schema(&agg.input().schema())?;
         let output_ordering = agg.cache.output_ordering();
-        let InputOrderMode::PartiallySorted(order_indices) = input_order_mode else {
+        let GroupCompletionMode::Partial(order_indices) = group_completion_mode else {
             return internal_err!(
-                "Ordered single spill requires partially ordered input"
+                "Ordered single spill requires partial group completion"
             );
         };
         let spill_indices = order_indices.iter().copied().chain(
@@ -222,6 +225,7 @@ impl OrderedSingleSpillContext {
         };
         final_agg.group_by = Arc::new(agg.group_by.as_final());
         final_agg.input_order_mode = InputOrderMode::Sorted;
+        final_agg.group_completion_mode = GroupCompletionMode::Full;
 
         Ok(Self {
             final_agg,
@@ -309,7 +313,7 @@ impl OrderedSingleSpillContext {
             &context,
             partition,
             merged,
-            &InputOrderMode::Sorted,
+            &GroupCompletionMode::Full,
             baseline_metrics.clone(),
             metrics,
             None,
@@ -329,7 +333,7 @@ impl OrderedSingleAggregateStream {
             agg.mode,
             AggregateMode::Single | AggregateMode::SinglePartitioned
         ));
-        debug_assert_ne!(agg.input_order_mode, InputOrderMode::Linear);
+        debug_assert_ne!(agg.group_completion_mode, GroupCompletionMode::None);
 
         let schema = Arc::clone(&agg.schema);
         let input = agg.input.execute(partition, Arc::clone(context))?;
@@ -353,7 +357,7 @@ impl OrderedSingleAggregateStream {
         )?;
 
         let can_spill =
-            matches!(agg.input_order_mode, InputOrderMode::PartiallySorted(_))
+            matches!(agg.group_completion_mode, GroupCompletionMode::Partial(_))
                 && context.runtime_env().disk_manager.tmp_files_enabled();
         let spill_context = if can_spill {
             Some(Box::new(OrderedSingleSpillContext::new(
@@ -361,7 +365,7 @@ impl OrderedSingleAggregateStream {
                 context,
                 partition,
                 batch_size,
-                &agg.input_order_mode,
+                &agg.group_completion_mode,
                 &state_schema,
                 spill_metrics,
             )?))
