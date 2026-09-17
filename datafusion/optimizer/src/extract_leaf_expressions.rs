@@ -728,18 +728,13 @@ fn build_extraction_projection_impl(
         // projection already carries match the one about to be added, and pushes the one
         // that is genuinely new under the name the input gives it. Left unresolved, the
         // merged projection would hold `t.c` and a bare `c` together, which
-        // `Projection::try_new` rejects as ambiguous.
+        // `Projection::try_new` rejects as ambiguous. A same-name alias such as
+        // `t.c AS c` is a pass-through as well, and counts the same as a bare `t.c`.
         let input_schema = existing.input.schema();
         let existing_cols: IndexSet<Column> = existing
             .expr
             .iter()
-            .filter_map(|e| {
-                if let Expr::Column(c) = e {
-                    resolve_against(input_schema, c)
-                } else {
-                    None
-                }
-            })
+            .filter_map(|e| resolve_against(input_schema, passthrough_column(e)?))
             .collect();
 
         for col in columns_needed {
@@ -2371,6 +2366,42 @@ mod tests {
               Filter: __datafusion_extracted_2 = Int32(1)
                 Projection: leaf_udf(test.a, Utf8("x")) AS __datafusion_extracted_2, test.a, test.b, test.c, leaf_udf(test.b, Utf8("y")) AS __datafusion_extracted_1
                   TableScan: test projection=[a, b, c]
+
+        ## Optimized
+        (same as after pushdown)
+        "#)
+    }
+
+    /// A projection can spell a pass-through column as a same-name alias
+    /// (`test.a AS a`). Merging an extraction into it must treat that alias as
+    /// the pass-through it is, and not add `test.a` beside the `a` it outputs,
+    /// which is an ambiguous schema.
+    #[test]
+    fn test_merge_into_projection_with_same_name_alias() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                col("test.a").alias("a"),
+                col("test.b").alias("b"),
+                col("test.c").alias("c"),
+            ])?
+            .filter(leaf_udf(col("a"), "x").eq(lit(1)))?
+            .build()?;
+
+        assert_stages!(plan, @r#"
+        ## Original Plan
+        Filter: leaf_udf(a, Utf8("x")) = Int32(1)
+          Projection: test.a AS a, test.b AS b, test.c AS c
+            TableScan: test projection=[a, b, c]
+
+        ## After Extraction
+        Projection: a, b, c
+          Filter: __datafusion_extracted_1 = Int32(1)
+            Projection: test.a AS a, test.b AS b, test.c AS c, leaf_udf(test.a, Utf8("x")) AS __datafusion_extracted_1
+              TableScan: test projection=[a, b, c]
+
+        ## After Pushdown
+        (same as after extraction)
 
         ## Optimized
         (same as after pushdown)
