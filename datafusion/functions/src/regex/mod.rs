@@ -19,12 +19,16 @@
 
 use arrow::array::ArrayRef;
 use arrow::compute::kernels::{cmp::eq, nullif::nullif};
-use arrow::error::ArrowError;
 use datafusion_common::{Result, ScalarValue};
-use regex::Regex;
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 use std::sync::Arc;
+
+pub(crate) use datafusion_physical_expr_common::regex::explain_regexp_kernel_error;
+// The compilation of a regular expression is shared with the physical
+// expressions, so that every caller reports a failure in the same way. These
+// re-exports keep the paths that callers of this crate already use.
+pub use datafusion_physical_expr_common::regex::{
+    compile_and_cache_regex, compile_regex,
+};
 pub mod regexpcount;
 pub mod regexpinstr;
 pub mod regexplike;
@@ -139,24 +143,6 @@ pub fn functions() -> Vec<Arc<datafusion_expr::ScalarUDF>> {
     ]
 }
 
-pub fn compile_and_cache_regex<'strings, 'cache>(
-    regex: &'strings str,
-    flags: Option<&'strings str>,
-    regex_cache: &'cache mut HashMap<(&'strings str, Option<&'strings str>), Regex>,
-) -> Result<&'cache Regex, ArrowError>
-where
-    'strings: 'cache,
-{
-    let result = match regex_cache.entry((regex, flags)) {
-        Entry::Occupied(occupied_entry) => occupied_entry.into_mut(),
-        Entry::Vacant(vacant_entry) => {
-            let compiled = compile_regex(regex, flags)?;
-            vacant_entry.insert(compiled)
-        }
-    };
-    Ok(result)
-}
-
 /// Maps `start`, a 1-based character position, to a byte offset in `value`.
 /// Positions `1..=n` (for an `n`-character string) map to the corresponding
 /// character's first byte; position `n + 1`, the end of the string, maps to
@@ -171,25 +157,6 @@ pub(crate) fn start_to_byte_offset(value: &str, start: i64) -> Option<usize> {
         .map(|(offset, _)| offset)
         .chain(std::iter::once(value.len()))
         .nth(start_index)
-}
-
-pub fn compile_regex(regex: &str, flags: Option<&str>) -> Result<Regex, ArrowError> {
-    let pattern = match flags {
-        None | Some("") => regex.to_string(),
-        Some(flags) => {
-            if flags.contains('g') {
-                return Err(ArrowError::ComputeError(
-                    "regexp_count()/regexp_instr() does not support the global flag"
-                        .to_string(),
-                ));
-            }
-            format!("(?{flags}){regex}")
-        }
-    };
-
-    Regex::new(&pattern).map_err(|_| {
-        ArrowError::ComputeError(format!("Regular expression did not compile: {pattern}"))
-    })
 }
 
 #[cfg(test)]

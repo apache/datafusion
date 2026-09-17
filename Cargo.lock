@@ -2495,6 +2495,7 @@ dependencies = [
  "parking_lot",
  "pin-project",
  "rand 0.9.4",
+ "regex",
 ]
 
 [[package]]

@@ -43,8 +43,8 @@ use datafusion_common::{
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, EmitTo, GroupsAccumulator, Signature,
-    Volatility,
+    Accumulator, AggregateMetric, AggregateMetricRecorder, AggregateMetrics,
+    AggregateUDFImpl, Documentation, EmitTo, GroupsAccumulator, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::filter_to_nulls;
 use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
@@ -853,6 +853,7 @@ pub struct DistinctArrayAggAccumulator {
     datatype: DataType,
     sort_options: Option<SortOptions>,
     ignore_nulls: bool,
+    distinct_metric: Option<Arc<dyn AggregateMetric>>,
 }
 
 /// Returns `true` if `dt` is, or recursively contains, a `Dictionary` type.
@@ -888,6 +889,7 @@ impl DistinctArrayAggAccumulator {
             datatype: datatype.clone(),
             sort_options,
             ignore_nulls,
+            distinct_metric: None,
         })
     }
 
@@ -911,14 +913,12 @@ impl DistinctArrayAggAccumulator {
         }
         Ok(())
     }
-}
 
-impl Accumulator for DistinctArrayAggAccumulator {
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![self.evaluate()?])
-    }
-
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+    fn update_batch_impl(
+        &mut self,
+        values: &[ArrayRef],
+        record_metric: bool,
+    ) -> Result<()> {
         if values.is_empty() {
             return Ok(());
         }
@@ -948,68 +948,119 @@ impl Accumulator for DistinctArrayAggAccumulator {
             return Ok(());
         }
 
-        self.ensure_state(col.data_type())?;
+        let distinct_metric = record_metric
+            .then(|| self.distinct_metric.clone())
+            .flatten();
+        let mut metric_recorder = AggregateMetricRecorder::new(distinct_metric);
+        {
+            let _timer = metric_recorder.timer();
+            self.ensure_state(col.data_type())?;
 
-        // Encode the entire incoming batch into rows_buffer in one pass.
-        let DistinctState {
-            converter,
-            group_rows,
-            counts,
-            row_hashes,
-            rows_buffer,
-        } = self.state.as_mut().unwrap();
-        rows_buffer.clear();
-        converter.append(rows_buffer, std::slice::from_ref(col))?;
+            // Encode the entire incoming batch into rows_buffer in one pass.
+            let DistinctState {
+                converter,
+                group_rows,
+                counts,
+                row_hashes,
+                rows_buffer,
+            } = self.state.as_mut().unwrap();
+            rows_buffer.clear();
+            converter.append(rows_buffer, std::slice::from_ref(col))?;
 
-        // Pre-compute all hashes for the batch in one SIMD-friendly pass.
-        self.hashes_buffer.clear();
-        self.hashes_buffer.resize(col.len(), 0);
-        create_hashes(
-            std::slice::from_ref(col),
-            &self.random_state,
-            &mut self.hashes_buffer,
-        )?;
+            // Pre-compute all hashes for the batch in one SIMD-friendly pass.
+            self.hashes_buffer.clear();
+            self.hashes_buffer.resize(col.len(), 0);
+            create_hashes(
+                std::slice::from_ref(col),
+                &self.random_state,
+                &mut self.hashes_buffer,
+            )?;
 
-        for (row_idx, &hash) in self.hashes_buffer.iter().enumerate() {
-            let row = rows_buffer.row(row_idx);
-            let entry = self.map.find_mut(hash, |&(h, group_idx)| {
-                h == hash && group_rows[group_idx].row() == row
-            });
-            match entry {
-                Some((_, group_idx)) => {
-                    // Already known: just increment the live refcount.
-                    counts[*group_idx] += 1;
-                }
-                None => {
-                    // New distinct value: own the encoded row, record it.
-                    let new_group_idx = group_rows.len();
-                    group_rows.push(row.owned());
-                    counts.push(1);
-                    row_hashes.push(hash);
-                    self.map.insert_accounted(
-                        (hash, new_group_idx),
-                        |&(h, _)| h,
-                        &mut self.map_size,
-                    );
+            for (row_idx, &hash) in self.hashes_buffer.iter().enumerate() {
+                let row = rows_buffer.row(row_idx);
+                let entry = self.map.find_mut(hash, |&(h, group_idx)| {
+                    h == hash && group_rows[group_idx].row() == row
+                });
+                match entry {
+                    Some((_, group_idx)) => {
+                        // Already known: just increment the live refcount.
+                        counts[*group_idx] += 1;
+                    }
+                    None => {
+                        // New distinct value: own the encoded row, record it.
+                        let new_group_idx = group_rows.len();
+                        group_rows.push(row.owned());
+                        counts.push(1);
+                        row_hashes.push(hash);
+                        self.map.insert_accounted(
+                            (hash, new_group_idx),
+                            |&(h, _)| h,
+                            &mut self.map_size,
+                        );
+                    }
                 }
             }
+            Ok(())
         }
-        Ok(())
     }
 
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+    fn merge_batch_impl(
+        &mut self,
+        states: &[ArrayRef],
+        record_metric: bool,
+    ) -> Result<()> {
         if states.is_empty() {
             return Ok(());
         }
 
         assert_eq_or_internal_err!(states.len(), 1, "expects single state");
 
-        // The DISTINCT state is `List<value>`.
-        states[0]
-            .as_list::<i32>()
-            .iter()
-            .flatten()
-            .try_for_each(|val| self.update_batch(&[val]))
+        let distinct_metric = record_metric
+            .then(|| self.distinct_metric.clone())
+            .flatten();
+        let mut metric_recorder = AggregateMetricRecorder::new(distinct_metric);
+
+        // The DISTINCT state is `List<value>`. This calls the update
+        // implementation once per state row, so record the submetric once for
+        // the entire merge rather than once per row.
+        {
+            let _timer = metric_recorder.timer();
+            states[0]
+                .as_list::<i32>()
+                .iter()
+                .flatten()
+                .try_for_each(|val| self.update_batch_impl(&[val], false))
+        }
+    }
+}
+
+impl Accumulator for DistinctArrayAggAccumulator {
+    fn set_metrics(&mut self, metrics: Arc<dyn AggregateMetrics>) {
+        self.distinct_metric = Some(metrics.metric("distinct"));
+    }
+
+    fn grouped_update_batch_metric(&self) -> Option<Arc<dyn AggregateMetric>> {
+        self.distinct_metric.clone()
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.update_batch_impl(values, true)
+    }
+
+    fn update_batch_grouped(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.update_batch_impl(values, false)
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.evaluate()?])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.merge_batch_impl(states, true)
+    }
+
+    fn merge_batch_grouped(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.merge_batch_impl(states, false)
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
@@ -1650,13 +1701,113 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ListBuilder, StringBuilder};
+    use arrow::array::{Int32Builder, ListBuilder, StringBuilder};
     use arrow::datatypes::Schema;
     use datafusion_common::cast::as_generic_string_array;
     use datafusion_common::internal_err;
     use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::expressions::Column;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Debug)]
+    struct CountingMetric(Arc<AtomicUsize>);
+
+    impl AggregateMetric for CountingMetric {
+        fn add_duration(&self, _duration: std::time::Duration) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[derive(Debug)]
+    struct CountingMetrics(Arc<AtomicUsize>);
+
+    impl AggregateMetrics for CountingMetrics {
+        fn metric(&self, _subphase: &'static str) -> Arc<dyn AggregateMetric> {
+            Arc::new(CountingMetric(Arc::clone(&self.0)))
+        }
+    }
+
+    #[test]
+    fn distinct_accumulator_records_metric_for_small_batches() -> Result<()> {
+        let metric_updates = Arc::new(AtomicUsize::new(0));
+        let mut accumulator =
+            DistinctArrayAggAccumulator::try_new(&DataType::Int32, None, false)?;
+        accumulator.set_metrics(Arc::new(CountingMetrics(Arc::clone(&metric_updates))));
+
+        accumulator.update_batch(&[Arc::new(Int32Array::from(vec![1]))])?;
+
+        assert_eq!(metric_updates.load(Ordering::Relaxed), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_accumulator_records_metric_on_update_error() -> Result<()> {
+        use arrow::array::StringArray;
+
+        let metric_updates = Arc::new(AtomicUsize::new(0));
+        let mut accumulator =
+            DistinctArrayAggAccumulator::try_new(&DataType::Int32, None, false)?;
+        accumulator.set_metrics(Arc::new(CountingMetrics(Arc::clone(&metric_updates))));
+
+        accumulator.update_batch(&[Arc::new(Int32Array::from(vec![1]))])?;
+        metric_updates.store(0, Ordering::Relaxed);
+
+        let result =
+            accumulator.update_batch(&[Arc::new(StringArray::from(vec!["bad"]))]);
+
+        assert!(result.is_err());
+        assert_eq!(metric_updates.load(Ordering::Relaxed), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_accumulator_records_metric_for_large_batches() -> Result<()> {
+        let metric_updates = Arc::new(AtomicUsize::new(0));
+        let mut accumulator =
+            DistinctArrayAggAccumulator::try_new(&DataType::Int32, None, false)?;
+        accumulator.set_metrics(Arc::new(CountingMetrics(Arc::clone(&metric_updates))));
+
+        accumulator.update_batch(&[Arc::new(Int32Array::from(vec![1; 16]))])?;
+
+        assert_eq!(metric_updates.load(Ordering::Relaxed), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_accumulator_records_merge_metric_once() -> Result<()> {
+        let mut builder = ListBuilder::new(Int32Builder::new());
+        for value in [1, 2, 3] {
+            builder.append_value([Some(value)]);
+        }
+        let state: ArrayRef = Arc::new(builder.finish());
+
+        let metric_updates = Arc::new(AtomicUsize::new(0));
+        let mut target =
+            DistinctArrayAggAccumulator::try_new(&DataType::Int32, None, false)?;
+        target.set_metrics(Arc::new(CountingMetrics(Arc::clone(&metric_updates))));
+        target.merge_batch(&[state])?;
+
+        assert_eq!(metric_updates.load(Ordering::Relaxed), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_accumulator_preserves_unwind_auto_traits() {
+        fn assert_unwind_traits<T: std::panic::UnwindSafe + std::panic::RefUnwindSafe>() {
+        }
+
+        assert_unwind_traits::<DistinctArrayAggAccumulator>();
+    }
+
+    #[test]
+    fn distinct_accumulator_size_includes_metric_handle() -> Result<()> {
+        let accumulator =
+            DistinctArrayAggAccumulator::try_new(&DataType::Int32, None, false)?;
+
+        assert_eq!(accumulator.size(), size_of_val(&accumulator));
+        Ok(())
+    }
 
     #[test]
     fn no_duplicates_no_distinct() -> Result<()> {
@@ -1944,7 +2095,7 @@ mod tests {
         acc2.update_batch(&[string_list_data([vec!["e", "f", "g"]])])?;
         acc1 = merge(acc1, acc2)?;
 
-        assert_eq!(acc1.size(), 2194);
+        assert_eq!(acc1.size(), 2210);
 
         Ok(())
     }
