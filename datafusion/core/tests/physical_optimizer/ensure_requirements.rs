@@ -1602,6 +1602,8 @@ fn test_keep_sort_above_ordered_limit_with_skip() -> Result<()> {
 }
 
 /// Refine the sort below the limit, retaining `skip + fetch` rows for OFFSET.
+/// Single partition: a coalesce below the sort would be parallelized into a
+/// merge first, which the next test covers.
 #[test]
 fn test_sort_pushed_into_sort_below_limit_with_skip() -> Result<()> {
     let source = Arc::new(MockMultiPartitionExec::new(1));
@@ -1620,20 +1622,47 @@ fn test_sort_pushed_into_sort_below_limit_with_skip() -> Result<()> {
     Ok(())
 }
 
-/// A finer sort must preserve the rows selected by each partition's limit.
+/// The sort below the limit is parallelized into a merge over per-partition
+/// sorts before pushdown runs. The limit then sits above a merge, not a sort,
+/// so the finer sort stays above it.
 #[test]
-fn test_keep_sort_above_ordered_local_limit() -> Result<()> {
-    let source = Arc::new(MockMultiPartitionExec::new(1));
-    let limit = Arc::new(LocalLimitExec::new(source, 10));
-    let mut ordering = sort_expr_on("a", 0, false, false);
-    ordering.extend(sort_expr_on("b", 1, false, false));
+fn test_keep_sort_above_limit_over_merged_sort() -> Result<()> {
+    let source = Arc::new(MockMultiPartitionExec::new(4));
+    let coalesce = Arc::new(CoalescePartitionsExec::new(source));
+    let mut ordering = sort_expr_on("b", 1, false, false);
+    let inner_sort = Arc::new(SortExec::new(ordering.clone(), coalesce));
+    let limit = Arc::new(GlobalLimitExec::new(inner_sort, 5, Some(10)));
+    ordering.extend(sort_expr_on("a", 0, false, false));
     let sort: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(ordering, limit));
 
     let optimized = optimize_and_sanity_check(sort)?;
     assert_snapshot!(plan_string(&optimized), @r"
-    SortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[false]
-      LocalLimitExec: fetch=10
-        MockMultiPartitionExec
+    SortExec: expr=[b@1 ASC NULLS LAST, a@0 ASC NULLS LAST], preserve_partitioning=[false]
+      GlobalLimitExec: skip=5, fetch=10
+        SortPreservingMergeExec: [b@1 ASC NULLS LAST]
+          SortExec: expr=[b@1 ASC NULLS LAST], preserve_partitioning=[true]
+            MockMultiPartitionExec
+    ");
+    Ok(())
+}
+
+/// Keep sorting above a per-partition limit so each partition keeps its
+/// first rows.
+#[test]
+fn test_keep_sort_above_local_limit() -> Result<()> {
+    let source = Arc::new(MockMultiPartitionExec::new(4));
+    let limit = Arc::new(LocalLimitExec::new(source, 10));
+    let coalesce = Arc::new(CoalescePartitionsExec::new(limit));
+    let mut ordering = sort_expr_on("a", 0, false, false);
+    ordering.extend(sort_expr_on("b", 1, false, false));
+    let sort: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(ordering, coalesce));
+
+    let optimized = optimize_and_sanity_check(sort)?;
+    assert_snapshot!(plan_string(&optimized), @r"
+    SortPreservingMergeExec: [a@0 ASC NULLS LAST, b@1 ASC NULLS LAST]
+      SortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[true]
+        LocalLimitExec: fetch=10
+          MockMultiPartitionExec
     ");
     Ok(())
 }
