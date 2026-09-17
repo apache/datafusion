@@ -8106,6 +8106,41 @@ c,a,b,d d,b,a,c
 statement ok
 drop table t;
 
+# A sort key repeated in an ordered aggregate's ORDER BY is redundant, and the
+# query must behave as if the key were listed once (issue #25398). Each `k` is
+# unique so every expected value is determined by the ordering.
+statement ok
+CREATE TABLE dup_sort_keys (g INT, k INT, v INT) AS VALUES
+  (1, 2, 20), (1, 1, 10), (2, 4, 40), (2, 3, 30);
+
+query IIII
+SELECT g,
+  first_value(v ORDER BY k, k),
+  last_value(v ORDER BY k, k),
+  nth_value(v, 2 ORDER BY k + 0, k + 0)
+FROM dup_sort_keys GROUP BY g ORDER BY g;
+----
+1 10 20 20
+2 30 40 40
+
+query I?T
+SELECT g,
+  array_agg(v ORDER BY k, k),
+  string_agg(CAST(v AS VARCHAR), ',' ORDER BY k DESC, k ASC)
+FROM dup_sort_keys GROUP BY g ORDER BY g;
+----
+1 [10, 20] 20,10
+2 [30, 40] 40,30
+
+query II
+SELECT DISTINCT ON (g) g, v FROM dup_sort_keys ORDER BY g, g, k;
+----
+1 10
+2 30
+
+statement ok
+drop table dup_sort_keys;
+
 
 # Tests for aggregating with NaN values
 statement ok

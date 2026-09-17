@@ -61,7 +61,7 @@ use datafusion_functions_aggregate_common::accumulator::{
 };
 use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
 #[derive(Debug, Clone)]
 struct AggregateHumanDisplay {
@@ -263,6 +263,15 @@ impl AggregateExprBuilder {
             is_reversed,
         } = self;
         assert_or_internal_err!(!args.is_empty(), "args should not be empty");
+
+        // A sort key that repeats an earlier one can never break a tie the earlier
+        // one left, so it is redundant (`ORDER BY b ASC, b DESC` orders like
+        // `ORDER BY b ASC`). Accumulators build their ordering with `LexOrdering`,
+        // which drops such repeats, so drop them here as well: the ordering state
+        // must have exactly one field per sort key the accumulators compare.
+        let order_bys = LexOrdering::new(order_bys)
+            .map(Vec::from)
+            .unwrap_or_default();
 
         let ordering_types = order_bys
             .iter()
