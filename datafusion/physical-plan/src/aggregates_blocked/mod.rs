@@ -642,8 +642,24 @@ impl BlockedAggregateExec {
         };
 
         exec.init_dynamic_filter();
+        exec.sync_fallback_dynamic_filter()?;
 
         Ok(exec)
+    }
+
+    /// The fallback exec creates its own `DynamicFilterPhysicalExpr` whenever it is (re)built
+    /// through `actual_try_new` / `try_new_with_schema`. Make it use this exec's filter instead:
+    /// only `self.dynamic_filter` is pushed down to the child (`gather_filters_for_pushdown`), so
+    /// a fallback stream updating a different filter object would never reach the scan. It also
+    /// keeps a plan re-created from proto (which restores one filter on both) equal to the original.
+    fn sync_fallback_dynamic_filter(&mut self) -> Result<()> {
+        let fallback = self.fallback_agg_exec.as_ref().clone();
+        let fallback = match self.dynamic_filter.as_ref() {
+            Some(dyn_filter) => fallback.set_dynamic_filter(Arc::clone(&dyn_filter.filter))?,
+            None => fallback.unset_dynamic_filter(),
+        };
+        self.fallback_agg_exec = Arc::new(fallback);
+        Ok(())
     }
 
     /// Aggregation mode (full, partial)
@@ -1691,12 +1707,16 @@ impl ExecutionPlan for BlockedAggregateExec {
         let fallback = Arc::clone(&self.fallback_agg_exec).replace_children(children.clone(), options.clone())?;
         let fallback = fallback.downcast_ref::<crate::aggregates::AggregateExec>().expect("must have AggregateExec").clone();
         match options.children_properties {
-            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
-                input: children.swap_remove(0),
-                metrics: ExecutionPlanMetricsSet::new(),
-                fallback_agg_exec: Arc::new(fallback),
-                ..Self::clone(&*self)
-            })),
+            ChildrenPropertiesMode::Keep => {
+                // share the metrics set with the fallback, as `try_new_with_schema` does
+                let metrics = ExecutionPlanMetricsSet::new();
+                Ok(Arc::new(Self {
+                    input: children.swap_remove(0),
+                    metrics: metrics.clone(),
+                    fallback_agg_exec: Arc::new(fallback.set_metrics(metrics)),
+                    ..Self::clone(&*self)
+                }))
+            }
             ChildrenPropertiesMode::Recompute => {
                 let mut me = BlockedAggregateExec::try_new_with_schema(
                     self.mode,
@@ -1710,6 +1730,8 @@ impl ExecutionPlan for BlockedAggregateExec {
                 )?;
                 me.limit_options = self.limit_options;
                 me.dynamic_filter.clone_from(&self.dynamic_filter);
+                // the fallback was rebuilt with a fresh filter above; point it at the restored one
+                me.sync_fallback_dynamic_filter()?;
                 Ok(Arc::new(me))
             }
         }
