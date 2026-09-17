@@ -1533,7 +1533,7 @@ fn test_collect_left_join_keeps_hash_partitioned_build_side_coalesce() -> Result
 }
 
 // ========================================================================
-// Limits with a `skip`
+// Sort pushdown through limits
 // ========================================================================
 
 /// Keep sorting above an unordered limit so its input can stop early and only
@@ -1556,10 +1556,29 @@ fn test_keep_sort_above_unordered_limit_with_skip() -> Result<()> {
     Ok(())
 }
 
-/// Refining an existing ordering can still push a TopK below the limit. It must
-/// retain `skip + fetch` rows so the offset does not reduce the result count.
+/// Keep sorting above OFFSET so it skips rows in input order.
 #[test]
-fn test_sort_pushed_below_ordered_limit_with_skip_keeps_skip_rows() -> Result<()> {
+fn test_keep_sort_above_limit_with_skip_only() -> Result<()> {
+    let source = Arc::new(MockMultiPartitionExec::new(4));
+    let coalesce = Arc::new(CoalescePartitionsExec::new(source));
+    let limit = Arc::new(GlobalLimitExec::new(coalesce, 5, None));
+    let sort: Arc<dyn ExecutionPlan> =
+        Arc::new(SortExec::new(sort_expr_on("a", 0, true, true), limit));
+
+    let optimized = optimize_and_sanity_check(sort)?;
+    assert_snapshot!(plan_string(&optimized), @r"
+    SortExec: expr=[a@0 DESC], preserve_partitioning=[false]
+      GlobalLimitExec: skip=5, fetch=None
+        CoalescePartitionsExec
+          MockMultiPartitionExec
+    ");
+    Ok(())
+}
+
+/// Source ordering on `[a]` must not let a TopK on `[a, b]` change which
+/// rows the limit selects.
+#[test]
+fn test_keep_sort_above_ordered_limit_with_skip() -> Result<()> {
     let source = Arc::new(MockMultiPartitionExec::new(4));
     let mut ordering = sort_expr_on("a", 0, false, false);
     let ordered_input = Arc::new(MockReqExec::new(
@@ -1573,11 +1592,48 @@ fn test_sort_pushed_below_ordered_limit_with_skip_keeps_skip_rows() -> Result<()
 
     let optimized = optimize_and_sanity_check(sort)?;
     assert_snapshot!(plan_string(&optimized), @r"
-    GlobalLimitExec: skip=5, fetch=10
-      SortExec: TopK(fetch=15), expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[false], sort_prefix=[a@0 ASC NULLS LAST]
+    SortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[false]
+      GlobalLimitExec: skip=5, fetch=10
         MockReqExec
           SortPreservingMergeExec: [a@0 ASC NULLS LAST]
             MockMultiPartitionExec
+    ");
+    Ok(())
+}
+
+/// Refine the sort below the limit, retaining `skip + fetch` rows for OFFSET.
+#[test]
+fn test_sort_pushed_into_sort_below_limit_with_skip() -> Result<()> {
+    let source = Arc::new(MockMultiPartitionExec::new(1));
+    let mut ordering = sort_expr_on("b", 1, false, false);
+    let inner_sort = Arc::new(SortExec::new(ordering.clone(), source));
+    let limit = Arc::new(GlobalLimitExec::new(inner_sort, 5, Some(10)));
+    ordering.extend(sort_expr_on("a", 0, false, false));
+    let sort: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(ordering, limit));
+
+    let optimized = optimize_and_sanity_check(sort)?;
+    assert_snapshot!(plan_string(&optimized), @r"
+    GlobalLimitExec: skip=5, fetch=10
+      SortExec: TopK(fetch=15), expr=[b@1 ASC NULLS LAST, a@0 ASC NULLS LAST], preserve_partitioning=[false]
+        MockMultiPartitionExec
+    ");
+    Ok(())
+}
+
+/// A finer sort must preserve the rows selected by each partition's limit.
+#[test]
+fn test_keep_sort_above_ordered_local_limit() -> Result<()> {
+    let source = Arc::new(MockMultiPartitionExec::new(1));
+    let limit = Arc::new(LocalLimitExec::new(source, 10));
+    let mut ordering = sort_expr_on("a", 0, false, false);
+    ordering.extend(sort_expr_on("b", 1, false, false));
+    let sort: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(ordering, limit));
+
+    let optimized = optimize_and_sanity_check(sort)?;
+    assert_snapshot!(plan_string(&optimized), @r"
+    SortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[false]
+      LocalLimitExec: fetch=10
+        MockMultiPartitionExec
     ");
     Ok(())
 }
