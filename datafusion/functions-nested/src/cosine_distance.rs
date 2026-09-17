@@ -17,7 +17,7 @@
 
 //! [`ScalarUDFImpl`] definitions for cosine_distance function.
 
-use crate::utils::make_scalar_function;
+use crate::utils::{make_scalar_function, needs_norm_scale, norm_scale};
 use arrow::array::{Array, ArrayRef, Float64Array, OffsetSizeTrait};
 use arrow::datatypes::{
     DataType,
@@ -197,15 +197,30 @@ fn general_cosine_distance<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Ar
         let vals1 = slice1.values();
         let vals2 = slice2.values();
 
-        let mut dot = 0.0;
-        let mut sq1 = 0.0;
-        let mut sq2 = 0.0;
-        for i in 0..len1 {
-            let a = vals1[i];
-            let b = vals2[i];
-            dot += a * b;
-            sq1 += a * a;
-            sq2 += b * b;
+        let (mut dot, mut sq1, mut sq2) = dot_and_squares(vals1, vals2, 1.0, 1.0);
+        // Cosine distance does not change when either vector is multiplied by a
+        // positive factor, so scale only a vector whose own sum of squares is
+        // out of range, and recompute only if there is something to scale. A
+        // vector whose sum is in range can stay unscaled: its products cannot
+        // overflow, and its underflow error is already negligible.
+        let rescale_both = !dot.is_finite();
+        let scale1 = if rescale_both || needs_norm_scale(sq1, len1) {
+            norm_scale(vals1.iter().copied())
+        } else {
+            None
+        };
+        let scale2 = if rescale_both || needs_norm_scale(sq2, len1) {
+            norm_scale(vals2.iter().copied())
+        } else {
+            None
+        };
+        if scale1.is_some() || scale2.is_some() {
+            (dot, sq1, sq2) = dot_and_squares(
+                vals1,
+                vals2,
+                scale1.unwrap_or(1.0),
+                scale2.unwrap_or(1.0),
+            );
         }
 
         if sq1 == 0.0 || sq2 == 0.0 {
@@ -216,4 +231,26 @@ fn general_cosine_distance<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Ar
     }
 
     Ok(Arc::new(builder.finish()) as ArrayRef)
+}
+
+/// Returns the dot product of `vals1 * scale1` and `vals2 * scale2`, and the
+/// sum of squares of each.
+#[inline]
+fn dot_and_squares(
+    vals1: &[f64],
+    vals2: &[f64],
+    scale1: f64,
+    scale2: f64,
+) -> (f64, f64, f64) {
+    let mut dot = 0.0;
+    let mut sq1 = 0.0;
+    let mut sq2 = 0.0;
+    for (a, b) in vals1.iter().zip(vals2) {
+        let a = a * scale1;
+        let b = b * scale2;
+        dot += a * b;
+        sq1 += a * a;
+        sq2 += b * b;
+    }
+    (dot, sq1, sq2)
 }
