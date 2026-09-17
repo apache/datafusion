@@ -395,6 +395,15 @@ select corr(sq.column1, sq.column2) from (values (1.1, 2.2)) as sq
 ----
 NULL
 
+# Grouped correlation must not lose precision when values have a large offset.
+query IR rowsort
+SELECT g, corr(x, x)
+FROM (VALUES (1, 1000000000.0), (1, 1000000007.0), (1, 1000000015.0), (2, 1.0)) AS t(g, x)
+GROUP BY g
+----
+1 1
+2 NULL
+
 # all_nulls_query_correlation
 query R
 with data as (
@@ -5123,6 +5132,35 @@ ORDER BY tag
 33 11 NULL 33 11 NULL 33 11 NULL B
 
 
+# bit_xor(DISTINCT) with GROUP BY must not use the non-distinct groups
+# accumulator: for tag A, 5 ^ 5 ^ 9 = 9 but 5 ^ 9 = 12. AND and OR are
+# idempotent, so they keep the groups accumulator.
+statement ok
+create table bit_distinct (c SMALLINT, tag varchar) as values
+  (5, 'A'), (5, 'A'), (9, 'A'), (33, 'B'), (33, 'B');
+
+query IIT
+SELECT bit_xor(DISTINCT c), count(c), tag FROM bit_distinct GROUP BY tag ORDER BY tag;
+----
+12 3 A
+33 2 B
+
+query IT
+SELECT bit_xor(DISTINCT c) FILTER (WHERE c > 4), tag FROM bit_distinct GROUP BY tag ORDER BY tag;
+----
+12 A
+33 B
+
+query IIIT
+SELECT bit_and(DISTINCT c), bit_or(DISTINCT c), count(c), tag FROM bit_distinct GROUP BY tag ORDER BY tag;
+----
+1 13 3 A
+33 33 2 B
+
+statement ok
+drop table bit_distinct;
+
+
 # bit_and_i32
 statement ok
 create table t (c int) as values (4), (7), (15);
@@ -7484,6 +7522,35 @@ set datafusion.optimizer.enable_distinct_aggregation_soft_limit = true;
 statement ok
 set datafusion.optimizer.repartition_aggregations = true;
 
+# A window function in the projection makes `EnsureRequirements` add a sort below
+# the distinct aggregation, so the aggregation ends up with an output ordering after
+# `LimitedDistinctAggregation` pushed a direction-less limit into it. The query
+# must still execute and return the distinct rows.
+statement ok
+CREATE TABLE distinct_limit_window_table(env VARCHAR, region VARCHAR, deployment VARCHAR) AS VALUES
+  ('prod', 'a', 'x'),
+  ('prod', 'a', 'y'),
+  ('staging', 'b', 'x');
+
+query TTI rowsort
+SELECT DISTINCT env, region, count(*) OVER (PARTITION BY env, deployment) AS n
+FROM distinct_limit_window_table
+LIMIT 30;
+----
+prod a 1
+staging b 1
+
+query TI rowsort
+SELECT DISTINCT env, count(*) OVER (PARTITION BY env) AS n
+FROM distinct_limit_window_table
+LIMIT 30;
+----
+prod 2
+staging 1
+
+statement ok
+DROP TABLE distinct_limit_window_table;
+
 #
 # regr_*() tests
 #
@@ -8722,9 +8789,9 @@ logical_plan
 15)------------EmptyRelation: rows=1
 physical_plan
 01)ProjectionExec: expr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST]@1 as last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))@2 as sum(DISTINCT Int64(1))]
-02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))], ordering_mode=Sorted
+02)--AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))]
 03)----RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=5
-04)------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))], ordering_mode=Sorted
+04)------AggregateExec: mode=Partial, gby=[id@0 as id], aggr=[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))]
 05)--------UnionExec
 06)----------ProjectionExec: expr=[1 as id, 2 as foo]
 07)------------PlaceholderRowExec

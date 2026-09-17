@@ -197,6 +197,23 @@ select
 ----
 NULL NULL
 
+# array_distance scales the differences before squaring them, so finite
+# inputs whose squares overflow or underflow still give the correct distance
+query RR
+select
+  array_distance([CAST(1e-200 AS DOUBLE)], [CAST(0 AS DOUBLE)]) / 1e-200,
+  array_distance([CAST(3e200 AS DOUBLE)], [CAST(-1e200 AS DOUBLE)]) / 1e200;
+----
+1 4
+
+# non-finite inputs propagate as before
+query RR
+select
+  array_distance([CAST('Infinity' AS DOUBLE)], [CAST(0 AS DOUBLE)]),
+  array_distance([CAST('NaN' AS DOUBLE)], [CAST(0 AS DOUBLE)]);
+----
+Infinity NaN
+
 # invalid argument count and types
 query error DataFusion error: Error during planning: Execution error: Function 'array_distance' user-defined coercion failed with: Execution error: array_distance function requires 2 arguments
 select array_distance();

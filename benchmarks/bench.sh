@@ -160,10 +160,12 @@ imdb:                   Join Order Benchmark (JOB) using the IMDB dataset conver
 
 # Micro-Benchmarks (specific operators and features)
 cancellation:           How long cancelling a query takes
+asof_join:              ASOF join workloads varying size, ordering, grouping, match direction, and payload width
 nlj:                    Benchmark for simple nested loop joins, testing various join scenarios
 hj:                     Benchmark for simple hash joins, testing various join scenarios
 smj:                    Benchmark for simple sort merge joins, testing various join scenarios
 dict:                   Benchmark for dictionary-encoded group-by scenarios
+array_agg_distinct:     1000K-group, two-row-per-group array_agg(DISTINCT) benchmark
 compile_profile:        Compile and execute TPC-H across selected Cargo profiles, reporting timing and binary size
 
 
@@ -238,6 +240,7 @@ main() {
                     data_clickbench_1
                     data_clickbench_partitioned
                     data_imdb
+                    data_asof_join
                     # nlj uses range() function, no data generation needed
                     ;;
                 tpch)
@@ -268,6 +271,9 @@ main() {
                 parquet_row_filter_skip)
                     # Data is generated inline by the suite's load SQL (COPY).
                     echo "parquet_row_filter_skip: no external data to generate"
+                    ;;
+                asof_join)
+                    data_asof_join
                     ;;
                 tpcds)
                     data_tpcds
@@ -479,6 +485,7 @@ main() {
                     run_h2o_join "BIG" "PARQUET" "join"
                     run_imdb
                     run_external_aggr
+                    run_asof_join
                     run_nlj
                     run_hj
                     run_tpcds
@@ -511,6 +518,9 @@ main() {
                     ;;
                 parquet_row_filter_skip)
                     run_parquet_row_filter_skip
+                    ;;
+                asof_join)
+                    run_asof_join
                     ;;
                 tpcds)
                     run_tpcds
@@ -650,6 +660,9 @@ main() {
                     ;;
                 dict)
                     run_dict
+                    ;;
+                array_agg_distinct)
+                    run_array_agg_distinct
                     ;;
                 compile_profile)
                     run_compile_profile "${PROFILE_ARGS[@]}"
@@ -1632,6 +1645,51 @@ run_topk_sorted_tpch() {
     $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" --sorted --limit 100 ${QUERY_ARG} ${LATENCY_ARG}
 }
 
+# Generates the pre-sorted Parquet inputs for the ASOF join benchmark.
+data_asof_join() {
+    ASOF_DIR="${DATA_DIR}/asof_join"
+    LEFT_FILE="${ASOF_DIR}/q07_left.parquet"
+    RIGHT_FILE="${ASOF_DIR}/q07_right.parquet"
+
+    if [ -f "${LEFT_FILE}" ] && [ -f "${RIGHT_FILE}" ]; then
+        echo "ASOF join benchmark data already exists at ${ASOF_DIR}"
+        return
+    fi
+
+    mkdir -p "${ASOF_DIR}"
+    echo "Generating ASOF join benchmark data at ${ASOF_DIR}..."
+    (
+        cd "${DATAFUSION_DIR}"
+        debug_run $CARGO_COMMAND -p datafusion-cli -- -c "
+            COPY (
+                SELECT value / 10 AS group_key,
+                       value % 10 + 1 AS ts,
+                       value AS payload
+                FROM range(100000)
+                ORDER BY group_key, ts
+            )
+            TO '${LEFT_FILE}' STORED AS PARQUET;
+
+            COPY (
+                SELECT value / 10 AS group_key,
+                       value % 10 AS ts,
+                       value AS payload
+                FROM range(100000)
+                ORDER BY group_key, ts
+            )
+            TO '${RIGHT_FILE}' STORED AS PARQUET;
+        "
+    )
+}
+
+# Runs the ASOF join benchmark
+run_asof_join() {
+    RESULTS_FILE="${RESULTS_DIR}/asof_join.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running ASOF join benchmark..."
+    debug_run $CARGO_COMMAND --bin benchmark_runner -- asof_join --iterations 5 --path "${DATA_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
 # Runs the nlj benchmark
 run_nlj() {
     RESULTS_FILE="${RESULTS_DIR}/nlj.json"
@@ -1663,6 +1721,14 @@ run_dict() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running dict benchmark..."
     debug_run $CARGO_COMMAND --bin dfbench -- dict --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the data-free high-cardinality array_agg(DISTINCT) SQL benchmark.
+run_array_agg_distinct() {
+    echo "Running array_agg_distinct benchmark..."
+    debug_run env BENCH_NAME=array_agg_distinct \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 

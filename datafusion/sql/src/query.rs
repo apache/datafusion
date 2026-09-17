@@ -27,11 +27,10 @@ use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, ExprWithAliasAndOrderBy, Ident, LimitClause, Offset, OffsetRows,
-    OrderBy, OrderByExpr, OrderByKind, PipeOperator, Query, SelectInto, SetExpr,
-    SetOperator, SetQuantifier, TableAlias,
+    Expr as SQLExpr, ExprWithAliasAndOrderBy, LimitClause, Offset, OffsetRows, OrderBy,
+    OrderByExpr, OrderByKind, PipeOperator, Query, SelectInto, SetExpr, SetOperator,
+    SetQuantifier, TableAlias, Value,
 };
-use sqlparser::tokenizer::Span;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logical plan from an SQL query/subquery
@@ -83,7 +82,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let plan = crate::stack::maybe_grow(|| {
                     self.set_expr_to_plan(other, planner_context)
                 })?;
-                let oby_exprs = to_order_by_exprs(order_by)?;
+                let oby_exprs =
+                    to_order_by_exprs(order_by, plan.schema().fields().len())?;
                 let order_by_rex = self.order_by_to_sort_expr(
                     oby_exprs,
                     plan.schema(),
@@ -379,8 +379,26 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 }
 
 /// Returns the order by expressions from the query.
-fn to_order_by_exprs(order_by: Option<OrderBy>) -> Result<Vec<OrderByExpr>> {
-    to_order_by_exprs_with_select(order_by, None)
+fn to_order_by_exprs(
+    order_by: Option<OrderBy>,
+    order_by_all_column_count: usize,
+) -> Result<Vec<OrderByExpr>> {
+    let Some(OrderBy { kind, interpolate }) = order_by else {
+        return Ok(vec![]);
+    };
+    if let Some(_interpolate) = interpolate {
+        return not_impl_err!("ORDER BY INTERPOLATE is not supported");
+    }
+    match kind {
+        OrderByKind::All(options) => Ok((1..=order_by_all_column_count)
+            .map(|position| OrderByExpr {
+                expr: SQLExpr::value(Value::Number(position.to_string(), false)),
+                options,
+                with_fill: None,
+            })
+            .collect()),
+        OrderByKind::Expressions(order_by_exprs) => Ok(order_by_exprs),
+    }
 }
 
 /// Returns the order by expressions from the query with the select expressions.
@@ -388,38 +406,8 @@ pub(crate) fn to_order_by_exprs_with_select(
     order_by: Option<OrderBy>,
     select_exprs: Option<&Vec<Expr>>,
 ) -> Result<Vec<OrderByExpr>> {
-    let Some(OrderBy { kind, interpolate }) = order_by else {
-        // If no order by, return an empty array.
-        return Ok(vec![]);
+    let Some(select_exprs) = select_exprs else {
+        return to_order_by_exprs(order_by, 0);
     };
-    if let Some(_interpolate) = interpolate {
-        return not_impl_err!("ORDER BY INTERPOLATE is not supported");
-    }
-    match kind {
-        OrderByKind::All(order_by_options) => {
-            let Some(exprs) = select_exprs else {
-                return Ok(vec![]);
-            };
-            let order_by_exprs = exprs
-                .iter()
-                .map(|select_expr| match select_expr {
-                    Expr::Column(column) => Ok(OrderByExpr {
-                        expr: SQLExpr::Identifier(Ident {
-                            value: column.name.clone(),
-                            quote_style: None,
-                            span: Span::empty(),
-                        }),
-                        options: order_by_options,
-                        with_fill: None,
-                    }),
-                    // TODO: Support other types of expressions
-                    _ => not_impl_err!(
-                        "ORDER BY ALL is not supported for non-column expressions"
-                    ),
-                })
-                .collect::<Result<Vec<_>>>()?;
-            Ok(order_by_exprs)
-        }
-        OrderByKind::Expressions(order_by_exprs) => Ok(order_by_exprs),
-    }
+    to_order_by_exprs(order_by, select_exprs.len())
 }

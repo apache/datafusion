@@ -214,6 +214,11 @@ pub(super) struct ProcessProbeBatchState {
     offset: MapOffset,
     /// Max joined probe-side index from current batch
     joined_probe_idx: Option<usize>,
+    /// Max probe-side index with a join-key match from current batch, before
+    /// the join filter is applied (unlike `joined_probe_idx`). Lets
+    /// `probe_hit_rate` and `avg_fanout` count a probe row whose matches span
+    /// several chunks only once.
+    matched_probe_idx: Option<u32>,
 }
 
 impl ProcessProbeBatchState {
@@ -222,6 +227,23 @@ impl ProcessProbeBatchState {
         if joined_probe_idx.is_some() {
             self.joined_probe_idx = joined_probe_idx;
         }
+    }
+
+    /// Returns how many probe rows in `right_indices`, the join-key matches of
+    /// the current chunk, have not been counted by a previous chunk of this
+    /// probe batch, and records the last matched index in `matched_probe_idx`.
+    fn count_new_matched_probe_rows(&mut self, right_indices: &UInt32Array) -> usize {
+        let values = right_indices.values();
+        let mut count = count_distinct_sorted_indices(right_indices);
+        // A probe row whose matches span a chunk boundary is the last index of the
+        // previous chunk and the first index of this one; count it only once.
+        if let (Some(&first), Some(&last)) = (values.first(), values.last()) {
+            if Some(first) == self.matched_probe_idx {
+                count -= 1;
+            }
+            self.matched_probe_idx = Some(last);
+        }
+        count
     }
 }
 
@@ -930,6 +952,7 @@ impl HashJoinStream {
                         valid_keys,
                         offset: (0, None),
                         joined_probe_idx: None,
+                        matched_probe_idx: None,
                     });
             }
             Some(Err(err)) => return Poll::Ready(Err(err)),
@@ -947,9 +970,13 @@ impl HashJoinStream {
         let state = self.state.try_as_process_probe_batch_mut()?;
         let build_side = self.build_side.try_as_ready_mut()?;
 
-        self.join_metrics
-            .probe_hit_rate
-            .add_total(state.batch.num_rows());
+        // A probe batch may be processed in several chunks; count its rows once,
+        // on the first chunked lookup (offset == (0, None)).
+        if state.offset == (0, None) {
+            self.join_metrics
+                .probe_hit_rate
+                .add_total(state.batch.num_rows());
+        }
 
         let timer = self.join_metrics.join_time.timer();
 
@@ -1034,17 +1061,15 @@ impl HashJoinStream {
             }
         };
 
-        let distinct_right_indices_count = count_distinct_sorted_indices(&right_indices);
+        let matched_probe_rows = state.count_new_matched_probe_rows(&right_indices);
 
         self.join_metrics
             .probe_hit_rate
-            .add_part(distinct_right_indices_count);
+            .add_part(matched_probe_rows);
 
         self.join_metrics.avg_fanout.add_part(left_indices.len());
 
-        self.join_metrics
-            .avg_fanout
-            .add_total(distinct_right_indices_count);
+        self.join_metrics.avg_fanout.add_total(matched_probe_rows);
 
         // apply join filter if exists
         let (left_indices, right_indices) = if let Some(filter) = &self.filter {
