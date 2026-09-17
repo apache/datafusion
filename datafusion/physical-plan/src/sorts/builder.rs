@@ -157,7 +157,11 @@ impl BatchBuilder {
         // Remove consumed indices, keeping any remaining for the next call.
         self.indices.drain(..rows_to_emit);
 
-        self.retain_live_batches();
+        if self.indices.is_empty() {
+            self.retain_cursor_batches();
+        } else {
+            self.retain_live_batches();
+        }
 
         // Release excess memory back to the pool, but never shrink below
         // initial_reservation to maintain the anti-starvation guarantee
@@ -168,6 +172,30 @@ impl BatchBuilder {
         }
 
         RecordBatch::try_new(Arc::clone(&self.schema), columns).map_err(Into::into)
+    }
+
+    fn retain_cursor_batches(&mut self) {
+        // New cursors are only created once the previous cursor for the stream
+        // is finished. This means all remaining rows from all but the last batch
+        // for each stream have been yielded to the newly created record batch
+        //
+        // We can therefore drop all but the last live cursor batch for each stream
+        let mut batch_idx = 0;
+        let mut retained = 0;
+        self.batches.retain(|(stream_idx, batch)| {
+            let stream_cursor = &mut self.cursors[*stream_idx];
+            let retain = stream_cursor.batch_idx == batch_idx
+                && stream_cursor.row_idx < batch.num_rows();
+            batch_idx += 1;
+
+            if retain {
+                stream_cursor.batch_idx = retained;
+                retained += 1;
+            } else {
+                self.batches_mem_used -= get_record_batch_memory_size(batch);
+            }
+            retain
+        });
     }
 
     fn retain_live_batches(&mut self) {
