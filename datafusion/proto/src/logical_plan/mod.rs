@@ -696,11 +696,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     projection = Some(column_indices);
                 }
 
-                LogicalPlanBuilder::scan_with_filters(
+                LogicalPlanBuilder::scan_with_filters_fetch_offset(
                     table_name,
                     provider_as_source(Arc::new(provider)),
                     projection,
                     filters,
+                    scan.fetch.map(|f| f as usize),
+                    scan.offset.map(|o| o as usize),
                 )?
                 .build()
             }
@@ -730,11 +732,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ctx,
                 )?;
 
-                LogicalPlanBuilder::scan_with_filters(
+                LogicalPlanBuilder::scan_with_filters_fetch_offset(
                     table_name,
                     provider_as_source(provider),
                     projection,
                     filters,
+                    scan.fetch.map(|f| f as usize),
+                    scan.offset.map(|o| o as usize),
                 )?
                 .build()
             }
@@ -1210,10 +1214,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let table_name =
                     from_table_reference(scan.table_name.as_ref(), "ViewScan")?;
 
-                LogicalPlanBuilder::scan(
+                LogicalPlanBuilder::scan_with_filters_fetch_offset(
                     table_name,
                     provider_as_source(Arc::new(provider)),
                     projection,
+                    vec![],
+                    scan.fetch.map(|f| f as usize),
+                    scan.offset.map(|o| o as usize),
                 )?
                 .build()
             }
@@ -1408,6 +1415,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                 source,
                 filters,
                 projection,
+                fetch,
+                offset,
                 ..
             }) => {
                 let provider = source_as_provider(source)?;
@@ -1540,6 +1549,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 projection,
                                 filters,
                                 file_sort_order: exprs_vec,
+                                fetch: fetch.map(|f| f as u64),
+                                offset: offset.map(|o| o as u64),
                             },
                         )),
                     })
@@ -1563,6 +1574,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     .definition()
                                     .map(|s| s.to_string())
                                     .unwrap_or_default(),
+                                fetch: fetch.map(|f| f as u64),
+                                offset: offset.map(|o| o as u64),
                             },
                         ))),
                     })
@@ -1610,6 +1623,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                         schema: Some(schema),
                         filters,
                         custom_table_data: bytes,
+                        fetch: fetch.map(|f| f as u64),
+                        offset: offset.map(|o| o as u64),
                     });
                     let node = LogicalPlanNode {
                         logical_plan_type: Some(scan),
