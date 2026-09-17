@@ -1222,6 +1222,9 @@ fn push_extraction_pairs(
             // the (None, true) fallback can't find the original aliases.
             // This handles: Extraction → Recovery(cols) → Filter → ... → TableScan
             // by pushing through the recovery projection AND the filter in one pass.
+
+            // TODO when `build_extraction_projection_impl` defers extraction, `try_push_input`
+            // will lead to an infinite recursion
             if is_pure_extraction_projection(&merged_plan)
                 && let Some(pushed) = try_push_input(&merged_plan, alias_generator)?
             {
