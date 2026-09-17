@@ -618,6 +618,22 @@ the advisory exceptions that CI uses. <code class="docutils literal notranslate"
 <p>The audit fetches the RustSec advisory database. A new advisory or a different
 <code class="docutils literal notranslate"><span class="pre">cargo-audit</span></code> version can change the result without any change to the repository.</p>
 </section>
+<section id="dependency-checks">
+<h2>Dependency Checks<a class="headerlink" href="#dependency-checks" title="Link to this heading">#</a></h2>
+<p>CI runs two dependency checks, and <code class="docutils literal notranslate"><span class="pre">./dev/rust_lint.sh</span></code> runs both:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">ci/scripts/check_circular_dependencies.sh</span></code> builds and runs <a class="reference external" href="https://github.com/apache/datafusion/tree/main/dev/depcheck"><code class="docutils literal notranslate"><span class="pre">dev/depcheck</span></code></a>,
+which fails on dependency cycles between DataFusion crates.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ci/scripts/check_unused_dependencies.sh</span></code> runs <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">machete</span> <span class="pre">--with-metadata</span></code>
+from the repository root. The lint suite installs <a class="reference external" href="https://github.com/bnjbvr/cargo-machete">cargo-machete</a> with the
+version in <code class="docutils literal notranslate"><span class="pre">ci/scripts/utils/tool_versions.sh</span></code> if it is missing.</p></li>
+</ul>
+<p>To run either check on its own:</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>./ci/scripts/check_circular_dependencies.sh
+./ci/scripts/check_unused_dependencies.sh
+</pre></div>
+</div>
+</section>
 <section id="benchmarks">
 <h2>Benchmarks<a class="headerlink" href="#benchmarks" title="Link to this heading">#</a></h2>
 <section id="criterion-benchmarks">
@@ -726,6 +742,7 @@ the advisory exceptions that CI uses. <code class="docutils literal notranslate"
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#documentation-link-checks">Documentation Link Checks</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#asf-status-check-validation">ASF Status Check Validation</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#security-audit">Security Audit</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#dependency-checks">Dependency Checks</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#benchmarks">Benchmarks</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#criterion-benchmarks">Criterion Benchmarks</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquet-sql-benchmarks">Parquet SQL Benchmarks</a></li>
