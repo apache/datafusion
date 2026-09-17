@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use crate::DefaultParquetFileReaderFactory;
 use crate::ParquetFileReaderFactory;
+use crate::ParquetFileSchemaProvider;
 use crate::opener::ParquetMorselizer;
 use crate::opener::build_pruning_predicates;
 use crate::opener::build_virtual_columns_state;
@@ -303,6 +304,8 @@ pub struct ParquetSource {
     pub(crate) predicate: Option<Arc<dyn PhysicalExpr>>,
     /// Optional user defined parquet file reader factory
     pub(crate) parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
+    /// Optional policy for deriving each file's Arrow schema after footer loading.
+    pub(crate) schema_provider: Option<Arc<dyn ParquetFileSchemaProvider>>,
     /// Batch size configuration
     pub(crate) batch_size: Option<usize>,
     /// Optional hint for the size of the parquet metadata
@@ -338,6 +341,7 @@ impl ParquetSource {
             metrics: ExecutionPlanMetricsSet::new(),
             predicate: None,
             parquet_file_reader_factory: None,
+            schema_provider: None,
             batch_size: None,
             metadata_size_hint: None,
             #[cfg(feature = "parquet_encryption")]
@@ -413,6 +417,21 @@ impl ParquetSource {
         parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
     ) -> Self {
         self.parquet_file_reader_factory = Some(parquet_file_reader_factory);
+        self
+    }
+
+    /// Derive each file's Arrow schema from its physical Parquet schema during
+    /// lazy opening, before advisory Arrow metadata is parsed.
+    ///
+    /// Explicit [`PartitionedFile::arrow_schema`](datafusion_datasource::PartitionedFile::arrow_schema)
+    /// takes precedence. The provider is independent of the file reader factory
+    /// and metadata cache; see [`ParquetFileSchemaProvider`] for its contract.
+    /// Plans using a provider require a custom codec for serialization.
+    pub fn with_schema_provider(
+        mut self,
+        schema_provider: Arc<dyn ParquetFileSchemaProvider>,
+    ) -> Self {
+        self.schema_provider = Some(schema_provider);
         self
     }
 
@@ -645,6 +664,7 @@ impl FileSource for ParquetSource {
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics().clone(),
             parquet_file_reader_factory,
+            schema_provider: self.schema_provider.clone(),
             pushdown_filters: self.pushdown_filters(),
             reorder_filters: self.reorder_filters(),
             force_filter_selections: self.force_filter_selections(),
@@ -1088,6 +1108,10 @@ impl FileSource for ParquetSource {
     > {
         use datafusion_proto_models::protobuf;
         use protobuf::physical_plan_node::PhysicalPlanType;
+
+        if self.schema_provider.is_some() {
+            return Ok(None);
+        }
 
         let predicate = self
             .filter()
