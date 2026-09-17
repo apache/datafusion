@@ -7155,31 +7155,22 @@ select count(*) over (order by l) from (values ([struct(1)]), ([struct(2)])) t(l
 query error DataFusion error: Internal error: Uncomparable values: List\(\[\[1\]\]\), List\(\[\[1\]\]\)
 select count(*) over (order by l) from (values ([[1]]), ([[2]])) t(l)
 
-# after a duration key the free-range check looks at every ORDER BY type: a
-# list of primitives is still fine,
-query I
+# after a duration key the free-range check looks at every ORDER BY type, and
+# a list is rejected at planning even though it sorts fine: the RANGE peer
+# check (`compare_rows`, then `ScalarValue::partial_cmp`) always orders a NULL
+# list element after a non-NULL one, while the sort applies NULLS FIRST to the
+# elements as well, so with tied durations `[NULL]` and `[1]` would be sorted
+# one way and compared the other
+query error Error during planning: RANGE window frames are not supported for ORDER BY type List
+select count(*) over (order by d, l nulls first) from (values (arrow_cast(1, 'Duration(Second)'), [NULL]), (arrow_cast(1, 'Duration(Second)'), [1])) t(d, l)
+
+# the check is on the type, not the values: a list without NULLs and a
+# dictionary-encoded list are rejected the same way
+query error Error during planning: RANGE window frames are not supported for ORDER BY type List
 select count(*) over (order by d, l) from (values (arrow_cast(1, 'Duration(Second)'), [1]), (arrow_cast(1, 'Duration(Second)'), [2])) t(d, l)
-----
-1
-2
 
-# but a list of nested elements is rejected at planning, instead of reaching
-# the execution error above
-query error Error during planning: RANGE window frames are not supported for ORDER BY type List
-select count(*) over (order by d, l) from (values (arrow_cast(1, 'Duration(Second)'), [struct(1)]), (arrow_cast(1, 'Duration(Second)'), [struct(2)])) t(d, l)
-
-# the check mirrors the arrow comparison kernels, not `DataType::is_nested`:
-# the kernels unwrap a single dictionary layer, so a list of doubly
-# dictionary-encoded strings is also rejected at planning
-query error Error during planning: RANGE window frames are not supported for ORDER BY type List
-select count(*) over (order by d, l) from (values (arrow_cast(1, 'Duration(Second)'), [arrow_cast(arrow_cast('a', 'Dictionary(UInt32, Utf8)'), 'Dictionary(Int32, Dictionary(UInt32, Utf8))')])) t(d, l)
-
-# while a single dictionary layer compares fine
-query I
-select count(*) over (order by d, l) from (values (arrow_cast(1, 'Duration(Second)'), [arrow_cast('a', 'Dictionary(Int32, Utf8)')]), (arrow_cast(1, 'Duration(Second)'), [arrow_cast('b', 'Dictionary(Int32, Utf8)')])) t(d, l)
-----
-1
-2
+query error Error during planning: RANGE window frames are not supported for ORDER BY type Dictionary\(Int32, List
+select count(*) over (order by d, l) from (values (arrow_cast(1, 'Duration(Second)'), arrow_cast([1], 'Dictionary(Int32, List(Int64))')), (arrow_cast(1, 'Duration(Second)'), arrow_cast([2], 'Dictionary(Int32, List(Int64))'))) t(d, l)
 
 # Window functions are not allowed in WHERE or HAVING: both are evaluated before
 # window functions are computed, so they are rejected during planning

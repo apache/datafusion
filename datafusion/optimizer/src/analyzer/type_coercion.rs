@@ -1150,50 +1150,31 @@ fn supports_free_range_frame(col_type: &DataType) -> bool {
     }
 }
 
-/// Whether `col_type` is a list whose elements the RANGE peer check cannot
-/// compare. Such a key sorts fine, since the sorter uses `make_comparator`,
-/// but the peer check goes through `ScalarValue::partial_cmp`, which compares
-/// list elements with the arrow `lt`/`eq` kernels and fails at execution when
-/// they reject the element type (see `list_element_comparable`).
-fn is_list_of_uncomparable(col_type: &DataType) -> bool {
+/// Whether `col_type` is a list, possibly behind dictionary or run-end
+/// encoding.
+///
+/// Lists are kept out of the free-range fallback because their peer
+/// comparison and the sort do not agree on element NULLs: `compare_rows`
+/// applies the NULLS FIRST / NULLS LAST option to the top-level value only and
+/// then calls `ScalarValue::partial_cmp`, whose `partial_cmp_list` always
+/// orders a NULL element after a non-NULL one (Postgres semantics), while the
+/// sorter's `make_comparator` applies the option to the elements as well. Under
+/// `ORDER BY d, l NULLS FIRST` with tied `d`, the sort puts `[NULL]` before
+/// `[1]` and the peer check orders them the other way round.
+fn is_list_type(col_type: &DataType) -> bool {
     match col_type {
-        DataType::List(field)
-        | DataType::LargeList(field)
-        | DataType::FixedSizeList(field, _) => {
-            !list_element_comparable(field.data_type())
+        DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
+            true
         }
-        DataType::Dictionary(_, value_type) => is_list_of_uncomparable(value_type),
-        DataType::RunEndEncoded(_, value_type) => {
-            is_list_of_uncomparable(value_type.data_type())
-        }
+        DataType::Dictionary(_, value_type) => is_list_type(value_type),
+        DataType::RunEndEncoded(_, value_type) => is_list_type(value_type.data_type()),
         _ => false,
     }
 }
 
-/// Mirrors what the arrow comparison kernels (`lt`, `eq`) accept: they unwrap
-/// one run-end-encoded layer, then one dictionary layer, and compare what is
-/// left only if it is a flat type. A nested element (`Struct`, `List`, ...) or a
-/// second encoding layer (`Dictionary<Dictionary<..>>`, `Dictionary<REE<..>>`)
-/// is rejected, even though `DataType::is_nested` sees through encodings.
-fn list_element_comparable(elem_type: &DataType) -> bool {
-    let elem_type = match elem_type {
-        DataType::RunEndEncoded(_, value_type) => value_type.data_type(),
-        other => other,
-    };
-    let elem_type = match elem_type {
-        DataType::Dictionary(_, value_type) => value_type.as_ref(),
-        other => other,
-    };
-    !elem_type.is_nested()
-        && !matches!(
-            elem_type,
-            DataType::Dictionary(_, _) | DataType::RunEndEncoded(_, _)
-        )
-}
-
 /// Errors if any ORDER BY expression has a type not supported in a free RANGE
 /// frame: a type with neither an offset target nor a sound peer comparison, or
-/// a list whose elements cannot be compared (see `is_list_of_uncomparable`).
+/// a list (see `is_list_type`).
 fn check_free_range_order_by_types(
     expressions: &[Sort],
     schema: &DFSchema,
@@ -1201,8 +1182,7 @@ fn check_free_range_order_by_types(
     for sort in expressions {
         let t = sort.expr.get_type(schema)?;
         let supported = supports_free_range_frame(&t)
-            || (extract_window_frame_target_type(&t).is_some()
-                && !is_list_of_uncomparable(&t));
+            || (extract_window_frame_target_type(&t).is_some() && !is_list_type(&t));
         if !supported {
             return plan_err!(
                 "RANGE window frames are not supported for ORDER BY type {t}"
@@ -1681,47 +1661,6 @@ mod test {
                 .unwrap(),
             ),
         }))
-    }
-
-    #[test]
-    fn free_range_list_element_comparable() {
-        use super::list_element_comparable;
-        use DataType::*;
-        let dict = |v: DataType| Dictionary(Box::new(Int32), Box::new(v));
-        let ree = |v: DataType| {
-            RunEndEncoded(
-                Arc::new(Field::new("run_ends", Int32, false)),
-                Arc::new(Field::new("values", v, true)),
-            )
-        };
-        let list = |v: DataType| List(Arc::new(Field::new_list_field(v, true)));
-
-        // flat elements, optionally behind one encoding layer, compare fine
-        for t in [
-            Int64,
-            Utf8,
-            Boolean,
-            Null,
-            Duration(TimeUnit::Second),
-            dict(Utf8),
-            ree(Utf8),
-            ree(dict(Utf8)),
-        ] {
-            assert!(list_element_comparable(&t), "{t} should be comparable");
-        }
-
-        // nested elements and a second encoding layer are not: the arrow
-        // comparison kernels unwrap only one run-end and one dictionary layer
-        for t in [
-            Struct(vec![Field::new("c0", Int64, true)].into()),
-            list(Int64),
-            dict(list(Int64)),
-            dict(dict(Utf8)),
-            dict(ree(Utf8)),
-            ree(ree(Utf8)),
-        ] {
-            assert!(!list_element_comparable(&t), "{t} should not be comparable");
-        }
     }
 
     macro_rules! assert_analyzed_plan_eq {
