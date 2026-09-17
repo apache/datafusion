@@ -3936,8 +3936,7 @@ mod test {
             .fetch_metadata()
             .await
             .unwrap();
-        assert!(original.column_index().is_some());
-        assert!(original.offset_index().is_some());
+        assert!(original.page_index().is_some());
         let mut opener = ParquetMorselizerBuilder::new()
             .with_store(Arc::clone(&store))
             .with_schema(Arc::clone(&schema))
