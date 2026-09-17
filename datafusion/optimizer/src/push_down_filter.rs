@@ -997,7 +997,16 @@ impl OptimizerRule for PushDownFilter {
             }
             LogicalPlan::Aggregate(mut agg) => {
                 // We can push down Predicate which in groupby_expr.
-                let group_expr_columns = expr_columns(&agg.group_expr);
+                // Volatile group keys are excluded: below the aggregate, the
+                // predicate would evaluate the key again and see a different
+                // value than the one used for grouping.
+                let non_volatile_group_exprs: Vec<Expr> = agg
+                    .group_expr
+                    .iter()
+                    .filter(|expr| !expr.is_volatile())
+                    .cloned()
+                    .collect();
+                let group_expr_columns = expr_columns(&non_volatile_group_exprs);
 
                 // As for plan Filter: Column(a+b) > 0 -- Agg: groupby:[Column(a)+Column(b)]
                 // After push, we need to replace `a+b` with Column(a)+Column(b)
@@ -4087,6 +4096,34 @@ mod tests {
               Projection: test1.a, sum(test1.b), TestScalarUDF() + Int32(1) AS r
                 Aggregate: groupBy=[[test1.a]], aggr=[[sum(test1.b)]]
                   TableScan: test1, full_filters=[test1.a > Int32(5)]
+        "
+        )
+    }
+
+    #[test]
+    fn test_filter_on_volatile_group_key_not_pushed_below_aggregate() -> Result<()> {
+        // SELECT r, sum(b) FROM test1 GROUP BY a, TestScalarUDF() + 1 AS r HAVING a > 5 AND r > 0.5
+        let table_scan = test_table_scan_with_name("test1")?;
+        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
+            signature: Signature::exact(vec![], Volatility::Volatile),
+        });
+        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a"), add(expr, lit(1)).alias("r")],
+                vec![sum(col("b"))],
+            )?
+            .filter(col("a").gt(lit(5)).and(col("r").gt(lit(0.5))))?
+            .build()?;
+
+        // `a > 5` is pushed below the aggregate, `r > 0.5` must stay above it
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: r > Float64(0.5)
+          Aggregate: groupBy=[[test1.a, TestScalarUDF() + Int32(1) AS r]], aggr=[[sum(test1.b)]]
+            TableScan: test1, full_filters=[test1.a > Int32(5)]
         "
         )
     }
