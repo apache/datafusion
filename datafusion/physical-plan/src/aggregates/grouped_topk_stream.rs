@@ -365,15 +365,12 @@ mod tests {
                 .build()?,
         );
         let aggregate_exec = Arc::new(
-            AggregateExec::try_new(
-                AggregateMode::Single,
-                group_by,
-                vec![aggregate],
-                vec![None],
-                input,
-                schema,
-            )?
-            .with_limit_options(Some(LimitOptions::new(2))),
+            AggregateExec::builder(AggregateMode::Single, input)
+                .with_group_by(group_by)
+                .with_aggr_exprs(vec![aggregate])
+                .with_input_schema(schema)
+                .with_limit_options(LimitOptions::new(2))
+                .build()?,
         );
         let context = Arc::new(TaskContext::default());
         let result = collect(Arc::clone(&aggregate_exec) as _, context).await?;

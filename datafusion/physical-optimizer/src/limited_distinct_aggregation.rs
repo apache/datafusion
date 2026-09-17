@@ -54,7 +54,12 @@ impl LimitedDistinctAggregation {
         }
 
         // We found what we want: clone, copy the limit down, and return modified node
-        let new_aggr = aggr.with_new_limit_options(Some(LimitOptions::new(limit)));
+        let new_aggr = aggr
+            .to_builder()
+            .with_limit_options(LimitOptions::new(limit))
+            .build()
+            // the aggregate cannot execute the limit: leave the plan alone
+            .ok()?;
 
         Some(Arc::new(new_aggr))
     }

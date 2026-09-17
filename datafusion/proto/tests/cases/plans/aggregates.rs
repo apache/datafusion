@@ -213,15 +213,15 @@ fn roundtrip_aggregate_with_limit() -> Result<()> {
             .map(Arc::new)?,
     ];
 
-    let agg = AggregateExec::try_new(
+    let agg = AggregateExec::builder(
         AggregateMode::Final,
-        PhysicalGroupBy::new_single(groups.clone()),
-        aggregates,
-        vec![None],
         Arc::new(EmptyExec::new(schema.clone())),
-        schema,
-    )?;
-    let agg = agg.with_limit_options(Some(LimitOptions::new_with_order(12, false)));
+    )
+    .with_group_by(PhysicalGroupBy::new_single(groups.clone()))
+    .with_aggr_exprs(aggregates)
+    .with_input_schema(schema)
+    .with_limit_options(LimitOptions::new_with_order(12, false))
+    .build()?;
     roundtrip_test(Arc::new(agg))
 }
 

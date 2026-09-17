@@ -4391,15 +4391,11 @@ mod tests {
         let final_input =
             TestMemoryExec::try_new_exec(&[input_batches], Arc::clone(&schema), None)?;
         let final_aggregate = Arc::new(
-            AggregateExec::try_new(
-                AggregateMode::Final,
-                group_by.as_final(),
-                vec![],
-                vec![],
-                final_input,
-                Arc::clone(&schema),
-            )?
-            .with_limit_options(Some(LimitOptions::new(2))),
+            AggregateExec::builder(AggregateMode::Final, final_input)
+                .with_group_by(group_by.as_final())
+                .with_input_schema(Arc::clone(&schema))
+                .with_limit_options(LimitOptions::new(2))
+                .build()?,
         );
 
         let final_stream = final_aggregate.execute_typed(0, &task_ctx)?;

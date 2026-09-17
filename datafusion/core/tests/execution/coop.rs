@@ -243,25 +243,22 @@ async fn agg_grouped_topk_yields(
     let group = binary(value_col.clone(), Divide, lit(1000000i64), &inf.schema())?;
 
     let aggr = Arc::new(
-        AggregateExec::try_new(
-            AggregateMode::Single,
-            PhysicalGroupBy::new(
+        AggregateExec::builder(AggregateMode::Single, inf.clone())
+            .with_group_by(PhysicalGroupBy::new(
                 vec![(group, "group".to_string())],
                 vec![],
                 vec![vec![false]],
                 false,
-            ),
-            vec![Arc::new(
+            ))
+            .with_aggr_exprs(vec![Arc::new(
                 AggregateExprBuilder::new(min_max::max_udaf(), vec![value_col.clone()])
                     .schema(inf.schema())
                     .alias("max")
                     .build()?,
-            )],
-            vec![None],
-            inf.clone(),
-            inf.schema(),
-        )?
-        .with_limit_options(Some(LimitOptions::new(100))),
+            )])
+            .with_input_schema(inf.schema())
+            .with_limit_options(LimitOptions::new(100))
+            .build()?,
     );
 
     query_yields(aggr, session_ctx.task_ctx()).await

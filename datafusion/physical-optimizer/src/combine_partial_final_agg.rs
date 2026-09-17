@@ -90,19 +90,17 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                 } else {
                     AggregateMode::SinglePartitioned
                 };
-                AggregateExec::try_new(
-                    mode,
-                    input_agg_exec.group_expr().clone(),
-                    input_agg_exec.aggr_expr().to_vec(),
-                    input_agg_exec.filter_expr().to_vec(),
-                    Arc::clone(input_agg_exec.input()),
-                    input_agg_exec.input_schema(),
-                )
-                .map(|combined_agg| {
-                    combined_agg.with_limit_options(agg_exec.limit_options())
-                })
-                .ok()
-                .map(Arc::new)
+                // the partial aggregate, re-planned in the combined mode and
+                // carrying the limit that was pushed into the final aggregate
+                input_agg_exec
+                    .to_builder()
+                    .with_mode(mode)
+                    .with_limit_options(agg_exec.limit_options())
+                    .build()
+                    // the combined aggregate cannot execute the limit: leave
+                    // the two aggregates alone
+                    .ok()
+                    .map(Arc::new)
             } else {
                 None
             };

@@ -251,16 +251,12 @@ fn aggregations_with_limit_combined() -> datafusion_common::Result<()> {
 
     let schema = partial_agg.schema();
     let final_agg = Arc::new(
-        AggregateExec::try_new(
-            AggregateMode::Final,
-            final_group_by,
-            aggr_expr,
-            vec![],
-            partial_agg,
-            schema,
-        )
-        .unwrap()
-        .with_limit_options(Some(LimitOptions::new(5))),
+        AggregateExec::builder(AggregateMode::Final, partial_agg)
+            .with_group_by(final_group_by)
+            .with_aggr_exprs(aggr_expr)
+            .with_input_schema(schema)
+            .with_limit_options(LimitOptions::new(5))
+            .build()?,
     );
     let plan: Arc<dyn ExecutionPlan> = final_agg;
     // should combine the Partial/Final AggregateExecs to a Single AggregateExec
