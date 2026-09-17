@@ -93,7 +93,7 @@ pub struct LimitPushdown {}
 ///
 /// [`LimitPushdown`]: crate::limit_pushdown::LimitPushdown
 #[derive(Default, Clone, Debug)]
-pub struct GlobalRequirements {
+pub(crate) struct GlobalRequirements {
     fetch: Option<usize>,
     skip: usize,
     satisfied: bool,
@@ -145,7 +145,7 @@ struct LimitInfo {
 ///
 /// If a limit is encountered, a [`TreeNodeRecursion::Stop`] is returned. Otherwise,
 /// return a [`TreeNodeRecursion::Continue`].
-pub fn pushdown_limit_helper(
+pub(crate) fn pushdown_limit_helper(
     mut pushdown_plan: Arc<dyn ExecutionPlan>,
     mut global_state: GlobalRequirements,
 ) -> Result<(Transformed<Arc<dyn ExecutionPlan>>, GlobalRequirements)> {

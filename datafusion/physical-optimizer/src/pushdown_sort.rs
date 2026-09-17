@@ -62,7 +62,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_physical_plan::SortOrderPushdownResult;
 use datafusion_physical_plan::buffer::BufferExec;
-use datafusion_physical_plan::limit::GlobalLimitExec;
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
@@ -107,11 +107,12 @@ impl PhysicalOptimizerRule for PushdownSort {
                 match sort_input.try_pushdown_sort(required_ordering)? {
                     SortOrderPushdownResult::Exact { inner } => {
                         // Preserve fetch (LIMIT) from the eliminated SortExec.
-                        // Use LocalLimitExec (not Global) since input is multi-partition.
+                        // Use LocalLimitExec (not Global) since input is multi-partition:
+                        // this rule runs after distribution enforcement, and
+                        // GlobalLimitExec requires a single input partition.
                         let inner = if let Some(fetch) = sort_child.fetch() {
                             inner.with_fetch(Some(fetch)).unwrap_or_else(|| {
-                                let mut limit =
-                                    GlobalLimitExec::new(inner, 0, Some(fetch));
+                                let mut limit = LocalLimitExec::new(inner, fetch);
                                 limit.set_required_ordering(Some(
                                     sort_child.expr().clone(),
                                 ));
