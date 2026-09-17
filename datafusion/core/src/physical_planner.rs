@@ -3534,6 +3534,7 @@ mod tests {
     use datafusion_functions_aggregate::count::{count_all, count_udaf};
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
+    use datafusion_physical_expr::expressions::Column as PhysColumn;
     use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -4193,6 +4194,45 @@ mod tests {
         assert_ne!(
             plan_fingerprint(one.as_ref()),
             plan_fingerprint(many.as_ref())
+        );
+        Ok(())
+    }
+
+    /// Ordering is the property this feature cares about most, since
+    /// `EnsureRequirements`, the rule that motivates it, exists to rewrite
+    /// ordering and distribution. A node that does not print its ordering
+    /// leaves two such plans rendering identically, so the fingerprint has to
+    /// reach into the properties to tell them apart.
+    #[tokio::test]
+    async fn fingerprint_separates_plans_differing_only_in_ordering() -> Result<()> {
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let unordered = Arc::new(NoOpExecutionPlan::new(Arc::clone(&schema)))
+            as Arc<dyn ExecutionPlan>;
+        let ordered = Arc::new(NoOpExecutionPlan::ordered_on(Arc::clone(&schema), "a"))
+            as Arc<dyn ExecutionPlan>;
+
+        // Precondition: the rendering, schema included, cannot tell them apart.
+        assert_eq!(
+            displayable(unordered.as_ref())
+                .set_show_schema(true)
+                .indent(true)
+                .to_string(),
+            displayable(ordered.as_ref())
+                .set_show_schema(true)
+                .indent(true)
+                .to_string(),
+            "the node does not print its ordering, so the rendering is the same",
+        );
+        // And confirm the orderings really do differ, so the test is not
+        // passing on two identically-unordered plans.
+        assert!(unordered.properties().output_ordering().is_none());
+        assert!(ordered.properties().output_ordering().is_some());
+
+        assert_ne!(
+            plan_fingerprint(unordered.as_ref()),
+            plan_fingerprint(ordered.as_ref()),
+            "a plan that claims an ordering must not be taken for one that does not",
         );
         Ok(())
     }
@@ -5816,6 +5856,27 @@ mod tests {
             let cache = Self::compute_properties(schema);
             Self {
                 cache: Arc::new(cache),
+            }
+        }
+
+        /// Same node, but claiming an output ordering on `column`. Its
+        /// rendering is identical to [`Self::new`]'s, which is what makes it
+        /// useful for checking that the fingerprint looks past the rendering.
+        fn ordered_on(schema: SchemaRef, column: &str) -> Self {
+            let mut eq = EquivalenceProperties::new(Arc::clone(&schema));
+            if let Some(ordering) = LexOrdering::new(vec![PhysicalSortExpr::new(
+                Arc::new(PhysColumn::new_with_schema(column, &schema).unwrap()),
+                SortOptions::default(),
+            )]) {
+                eq.add_orderings(vec![ordering.into_iter().collect::<Vec<_>>()]);
+            }
+            Self {
+                cache: Arc::new(PlanProperties::new(
+                    eq,
+                    Partitioning::UnknownPartitioning(1),
+                    EmissionType::Incremental,
+                    Boundedness::Bounded,
+                )),
             }
         }
 
