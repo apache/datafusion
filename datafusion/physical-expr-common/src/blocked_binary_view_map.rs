@@ -140,8 +140,6 @@ where
     output_type: OutputType,
     /// Underlying hash set for each distinct value
     map: hashbrown::hash_table::HashTable<Entry<V>>,
-    /// Total size of the map in bytes
-    map_size: usize,
 
     /// Views for all stored values (in insertion order)
     views: CopyItemBlockedVecBuilder<true, u128>,
@@ -174,7 +172,6 @@ where
 {
     pub fn new(output_type: OutputType, block_size: usize) -> Self {
         let map = hashbrown::hash_table::HashTable::with_capacity(INITIAL_MAP_CAPACITY);
-        let map_size = map.capacity() * size_of::<Entry<V>>();
 
         // The map keeps its own bookkeeping of which buffer blocks belong to which views
         // block, so every buffer block counts, the pre-opened one included
@@ -184,7 +181,6 @@ where
         Self {
             output_type,
             map,
-            map_size,
             views: CopyItemBlockedVecBuilder::new(block_size),
             buffer,
             // 1 empty block
@@ -397,7 +393,7 @@ where
                 };
 
                 self.map
-                    .insert_accounted(new_header, |h| h.hash, &mut self.map_size);
+                    .insert_unique(new_header.hash, new_header, |h| h.hash);
                 (payload, index)
             };
             observe_payload_fn(payload, index);
@@ -750,7 +746,7 @@ where
     pub fn size(&self) -> usize {
         // All fields below own their allocations. Count retained capacity rather
         // than used length because this value drives memory accounting.
-        self.map_size
+        self.map.allocation_size()
             + self.num_buffer_blocks_per_block.allocated_size()
             + self.block_starts.allocated_size()
             + self.views.allocated_size()
@@ -766,7 +762,6 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ArrowBytesMap")
             .field("map", &"<map>")
-            .field("map_size", &self.map_size)
             .field("views_len", &self.views.len())
             .field("completed_buffers", &(self.buffer.num_blocks() - 1))
             .field("random_state", &self.random_state)
@@ -996,7 +991,7 @@ where
 //     fn test_size_counts_initial_hash_table_capacity() {
 //         let map = BlockedArrowBytesViewMap::<()>::new(OutputType::Utf8View);
 //
-//         assert_eq!(map.size(), map.map.capacity() * size_of::<Entry<()>>());
+//         assert_eq!(map.size(), map.map.allocation_size());
 //     }
 //
 //     #[test]

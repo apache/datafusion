@@ -673,7 +673,7 @@ where
     /// Return the total size, in bytes, of memory used to store the data in
     /// this set, not including `self`
     pub fn size(&self) -> usize {
-          self.map.capacity() * size_of::<Entry<O, V>>()
+          self.map.allocation_size()
             + self.buffer.allocated_size()
             + self.offsets.allocated_size()
             + VecAllocExt::allocated_size(&self.hashes_buffer)
