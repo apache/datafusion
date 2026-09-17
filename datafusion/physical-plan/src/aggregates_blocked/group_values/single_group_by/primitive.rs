@@ -303,7 +303,7 @@ where
         let mut into_iter = all.into_iter();
 
         if let Some(null_idx) = self.null_group.take() {
-            for values in into_iter.by_ref().take(null_idx.block_index(self.block_size)) {
+            for values in into_iter.by_ref().take(null_idx.block_index()) {
                 blocks.push(vec![Self::build_no_nulls_primitive_arc(
                     values,
                     self.data_type.clone(),
@@ -313,7 +313,7 @@ where
             let block_with_nulls = into_iter.next().expect("must have block for nulls");
             blocks.push(vec![Self::build_with_nulls_primitive_arc(
                 block_with_nulls,
-                null_idx.index_in_block(self.block_size),
+                null_idx.index_in_block(),
                 self.data_type.clone(),
             )]);
         }
@@ -338,7 +338,7 @@ where
         let null_group = if self.values.len() == 0 {
             self.map.clear();
 
-            assert_eq!(self.null_group.map_or(0, |index| index.block_index(block_size)), 0);
+            assert_eq!(self.null_group.map_or(0, |index| index.block_index()), 0);
 
             self.null_group.take()
         } else {
@@ -364,7 +364,7 @@ where
             }
         };
 
-        let array = Self::build_primitive(values, null_group.map(|i| i.index_in_block(self.block_size)));
+        let array = Self::build_primitive(values, null_group.map(|i| i.index_in_block()));
 
         Ok(Some(vec![Arc::new(
             array.with_data_type(self.data_type.clone()),
@@ -392,7 +392,7 @@ where
                     *v = v.sub_flat(n, block_size);
                     None
                 }
-                Some(_) => self.null_group.take().map(|g| g.index_in_block(self.block_size)),
+                Some(_) => self.null_group.take().map(|g| g.index_in_block()),
                 None => None,
             };
             let first_values = self.values.take_n_fixed(n);

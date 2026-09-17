@@ -300,9 +300,8 @@ impl<const FIXED_BLOCK_SIZING: bool, T: Copy>
     /// TODO: O(blocks) walk, manual sizing is the rare path and its blocks are few
     #[inline]
     fn locate(&self, index: BlocksIndex) -> (usize, usize) {
-        let block_size = self.0.block_size();
-        let mut block = index.block_index(block_size);
-        let mut offset = index.index_in_block(block_size);
+        let mut block = index.block_index();
+        let mut offset = index.index_in_block();
         if FIXED_BLOCK_SIZING {
             return (block, offset);
         }

@@ -99,7 +99,7 @@ impl<const IS_FIXED_BLOCK_SIZE: bool, O: OffsetSizeTrait> ListGroupValueBuilder<
             return false;
         }
 
-        let block_index = lhs_row.block_index(self.batch_size());
+        let block_index = lhs_row.block_index();
         let values = array.values();
         for j in 0..lhs_len {
             if !self
@@ -209,7 +209,7 @@ impl<const IS_FIXED_BLOCK_SIZE: bool, O: OffsetSizeTrait> BlockedGroupColumn<IS_
         offsets.push(end);
 
         for row in selection.iter() {
-            let row_block_index = row.block_index(self.batch_size());
+            let row_block_index = row.block_index();
             nulls.append(!self.outer_nulls.is_null(row));
             let (start, row_end) = self.offsets.value_offsets(row);
             let start = start.as_usize();

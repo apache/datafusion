@@ -211,20 +211,20 @@ impl<
     {
         if Self::should_track_blocks_heap_allocation() {
             let before = HeapAllocatedSize::get_heap_allocated_size(&self[index]);
-            update_fn(&mut self.blocks[index.block_index(self.block_size)][index.index_in_block(self.block_size)]);
+            update_fn(&mut self.blocks[index.block_index()][index.index_in_block()]);
             let after = HeapAllocatedSize::get_heap_allocated_size(&self[index]);
             let mem =
-                &mut self.blocks_heap_allocated_sizes[index.block_index(self.block_size)];
+                &mut self.blocks_heap_allocated_sizes[index.block_index()];
             *mem = *mem - before + after;
 
             // Finished blocks are already counted in the total, keep it in sync
             // so that taking the block later subtracts what was added
-            if index.block_index(self.block_size) != self.current_block_index {
+            if index.block_index() != self.current_block_index {
                 self.finished_blocks_allocated_memory =
                     self.finished_blocks_allocated_memory - before + after;
             }
         } else {
-            update_fn(&mut self.blocks[index.block_index(self.block_size)][index.index_in_block(self.block_size)]);
+            update_fn(&mut self.blocks[index.block_index()][index.index_in_block()]);
         }
     }
 
@@ -779,8 +779,8 @@ where
     type Output = <CustomBlockProvider::Block as HeapAllocatedBlock>::Item;
 
     fn index(&self, index: BlocksIndex) -> &Self::Output {
-        &self.blocks[index.block_index(self.block_size)]
-            [index.index_in_block(self.block_size)]
+        &self.blocks[index.block_index()]
+            [index.index_in_block()]
     }
 }
 
@@ -800,7 +800,7 @@ where
     CustomBlockProvider::Block: IndexMut<usize, Output = <CustomBlockProvider::Block as HeapAllocatedBlock>::Item>,
 {
     fn index_mut(&mut self, index: BlocksIndex) -> &mut Self::Output {
-        &mut self.blocks[index.block_index(self.block_size)]
-            [index.index_in_block(self.block_size)]
+        &mut self.blocks[index.block_index()]
+            [index.index_in_block()]
     }
 }

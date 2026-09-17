@@ -579,8 +579,8 @@ where
     type Output = <CustomBlockProvider::Block as Block>::Item;
 
     fn index(&self, index: BlocksIndex) -> &Self::Output {
-        &self.blocks[index.block_index(self.block_size)]
-            [index.index_in_block(self.block_size)]
+        &self.blocks[index.block_index()]
+            [index.index_in_block()]
     }
 }
 
@@ -594,7 +594,7 @@ where
         IndexMut<usize, Output = <CustomBlockProvider::Block as Block>::Item>,
 {
     fn index_mut(&mut self, index: BlocksIndex) -> &mut Self::Output {
-        &mut self.blocks[index.block_index(self.block_size)]
-            [index.index_in_block(self.block_size)]
+        &mut self.blocks[index.block_index()]
+            [index.index_in_block()]
     }
 }

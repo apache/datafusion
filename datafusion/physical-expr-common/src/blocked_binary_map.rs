@@ -458,7 +458,7 @@ where
                     // Need to compare the bytes in the buffer
                     // SAFETY: buffer is only appended to, and we correctly inserted values and offsets
                     let existing_value =
-                        unsafe { self.buffer.block(header.index.block_index(self.block_size)).get_unchecked(header.range()) };
+                        unsafe { self.buffer.block(header.index.block_index()).get_unchecked(header.range()) };
                     value == existing_value
                 });
 
@@ -531,7 +531,7 @@ where
 
         if let Some((_, null_index)) = self.null.take() {
             if !null_index.is_in_block_0(self.block_size) {
-                for (offsets, values) in into_iter.by_ref().take(null_index.block_index(self.block_size)) {
+                for (offsets, values) in into_iter.by_ref().take(null_index.block_index()) {
                     blocks.push(
                         self.new_result(offsets, values, None)
                     );
@@ -541,7 +541,7 @@ where
             let (offsets, values) = into_iter.next().expect("must have since null exists");
             let num_values = offsets.len() - 1;
             blocks.push(
-                self.new_result(offsets, values, Some(single_null_buffer(num_values, null_index.index_in_block(self.block_size))))
+                self.new_result(offsets, values, Some(single_null_buffer(num_values, null_index.index_in_block())))
             );
         }
 
@@ -575,7 +575,7 @@ where
               .take()
               .map(|(_payload, null_index)| {
                   let num_values = offsets.len() - 1;
-                  single_null_buffer(num_values, null_index.index_in_block(self.block_size))
+                  single_null_buffer(num_values, null_index.index_in_block())
               })
         } else {
             if let Some((_, block_index)) = self.null.as_mut() {
@@ -629,7 +629,7 @@ where
               .take()
               .map(|(_payload, null_index)| {
                   let num_values = offsets.len() - 1;
-                  single_null_buffer(num_values, null_index.index_in_block(self.block_size))
+                  single_null_buffer(num_values, null_index.index_in_block())
               })
         } else {
             if let Some((_, block_index)) = self.null.as_mut() {

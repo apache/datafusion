@@ -585,7 +585,7 @@ impl BlocksIndex {
     }
 
     #[inline(always)]
-    pub fn block_index(&self, block_size: usize) -> usize {
+    pub fn block_index(&self) -> usize {
         self.block_index as usize
         // // Block sizes are batch sizes, almost always a power of two, and this runs per
         // // row in every accumulator and group values loop: a shift beats a division
@@ -597,7 +597,7 @@ impl BlocksIndex {
     }
 
     #[inline(always)]
-    pub fn index_in_block(&self, block_size: usize) -> usize {
+    pub fn index_in_block(&self) -> usize {
         self.index_in_block as usize
         // if block_size.is_power_of_two() {
         //     self.flat_index & (block_size - 1)
@@ -1052,8 +1052,8 @@ mod blocks_index_tests {
         for flat in 0..20usize {
             let index = BlocksIndex::from_index_in_fixed_block_size(flat, block_size);
             assert_eq!(index.into_index_in_fixed_block_size(block_size), flat);
-            assert_eq!(index.block_index(block_size), flat / block_size);
-            assert_eq!(index.index_in_block(block_size), flat % block_size);
+            assert_eq!(index.block_index(), flat / block_size);
+            assert_eq!(index.index_in_block(), flat % block_size);
             assert_eq!(
                 index.next_fixed(block_size).into_index_in_fixed_block_size(block_size),
                 flat + 1

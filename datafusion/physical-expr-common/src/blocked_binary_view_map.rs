@@ -299,7 +299,6 @@ where
         // Ensure lengths are equivalent
         assert_eq!(values.len(), self.hashes_buffer.len());
 
-        let block_size = self.block_size;
         for i in 0..values.len() {
             let view_u128 = input_views[i];
             let hash = self.hashes_buffer[i];
@@ -353,7 +352,7 @@ where
                         let offset = byte_view.offset as usize;
 
                         let start_block_index =
-                            self.block_starts[header.index.block_index(block_size)];
+                            self.block_starts[header.index.block_index()];
                         let block = self.buffer.block(start_block_index + buffer_index);
 
                         let stored_value = &block[offset..offset + stored_len];
@@ -429,7 +428,7 @@ where
         let views = self.views.take_block_finished()?;
         let null_buffer = match self.null.as_mut() {
             Some((_payload, null_index)) if null_index.is_in_block_0(self.block_size) => {
-                Some(Self::build_null_buffer_with_null_at_index(views.len(), null_index.index_in_block(self.block_size)))
+                Some(Self::build_null_buffer_with_null_at_index(views.len(), null_index.index_in_block()))
             }
             Some((_payload, null_index)) => {
                 *null_index = null_index.prev_block(self.block_size);
@@ -499,7 +498,7 @@ where
 
         let (null_block_index, null_index_in_block) = match self.null.take() {
             Some((_payload, null_index)) => {
-                (null_index.block_index(self.block_size), null_index.index_in_block(self.block_size))
+                (null_index.block_index(), null_index.index_in_block())
             }
             None => (usize::MAX, usize::MAX),
         };

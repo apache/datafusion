@@ -165,7 +165,7 @@ impl<const FIXED_BLOCK_SIZING: bool, B: ByteArrayType>
             (start_in_block.as_usize(), end_in_block.as_usize());
         let bytes_block = self
             .blocked_bytes
-            .block(index.block_index(self.block_size()));
+            .block(index.block_index());
 
         // Safety: the offsets are constructed correctly and never decrease
         unsafe { bytes_block.get_unchecked(start_in_block..end_in_block) }

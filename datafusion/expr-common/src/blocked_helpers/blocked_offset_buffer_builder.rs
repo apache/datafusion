@@ -84,9 +84,8 @@ impl<const FIXED_BLOCK_SIZING: bool, O: OffsetSizeTrait>
     /// `(start, end)` offsets within the block of item `index`
     #[inline]
     pub fn value_offsets(&self, index: BlocksIndex) -> (O, O) {
-        let block_size = self.block_size();
-        let block = self.slots.block(index.block_index(block_size));
-        let slot = index.index_in_block(block_size);
+        let block = self.slots.block(index.block_index());
+        let slot = index.index_in_block();
         (block[slot], block[slot + 1])
     }
 
@@ -422,8 +421,7 @@ impl<const FIXED_BLOCK_SIZING: bool, O: OffsetSizeTrait> Index<BlocksIndex>
 
     #[inline]
     fn index(&self, index: BlocksIndex) -> &Self::Output {
-        let block_size = self.block_size();
-        &self.slots.block(index.block_index(block_size))[index.index_in_block(block_size)]
+        &self.slots.block(index.block_index())[index.index_in_block()]
     }
 }
 

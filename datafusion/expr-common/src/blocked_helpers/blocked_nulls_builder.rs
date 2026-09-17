@@ -362,8 +362,8 @@ impl<const FIXED_BLOCK_SIZING: bool> BlockedNullsBuilder<FIXED_BLOCK_SIZING> {
     pub fn locate(&self, blocked_index: BlocksIndex) -> (usize, usize) {
         if FIXED_BLOCK_SIZING {
             return (
-                blocked_index.block_index(self.block_size),
-                blocked_index.index_in_block(self.block_size),
+                blocked_index.block_index(),
+                blocked_index.index_in_block(),
             );
         }
         // TODO - optimize this loop
