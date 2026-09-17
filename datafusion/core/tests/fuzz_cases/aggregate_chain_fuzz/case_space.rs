@@ -14,6 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 //! The case space: every axis a case varies along and the valid combinations.
 
 use super::*;

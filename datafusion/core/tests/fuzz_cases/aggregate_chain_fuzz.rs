@@ -100,6 +100,9 @@ use plan::*;
 /// The reference chain every other chain is compared against.
 const SINGLE: Chain = chain("single", &[Aggregate(Single)], 1);
 
+/// Fixed so every test sees the same table.
+const SEED: u64 = 42;
+
 /// `Single` on one partition. Also the reference every other chain is compared
 /// against.
 ///
@@ -704,7 +707,6 @@ impl ChainTest {
     /// chain for its query, see the preamble for the full list of checks. A
     /// failure does not stop the run, so one run reports every failing case.
     async fn assert_matches_single_aggregate(self) {
-        const SEED: u64 = 42;
         let chain = self.chain;
         let mut total_spilled = 0;
         let mut failures: Vec<String> = vec![];
