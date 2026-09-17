@@ -52,10 +52,12 @@ use datafusion_common::{Result, exec_datafusion_err, exec_err};
 /// See issue for details:
 /// - <https://github.com/apache/datafusion/issues/23076>
 ///
-/// # TODO
-/// It's named 'logical batch' because it's possible to swap the physical layout
-/// and keep the same interface for other usages. For example, segments are aligned
-/// at the same size, so it achieves O(1) access speed.
+/// # Potential Improvements
+///
+/// `LogicalBatch` exposes a logical view of the rows, independent of their
+/// physical layout. This allows alternative layouts without changing the
+/// interface. For example, fixed-size segments could enable O(1) lookup of
+/// the segment containing a given row.
 #[derive(Debug, Clone)]
 pub(crate) struct LogicalBatch {
     schema: SchemaRef,
