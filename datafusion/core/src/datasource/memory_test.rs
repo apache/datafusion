@@ -27,7 +27,7 @@ mod tests {
     use arrow::error::ArrowError;
     use arrow::record_batch::RecordBatch;
     use arrow_schema::SchemaRef;
-    use datafusion_catalog::{ScanArgs, TableProvider};
+    use datafusion_catalog::TableProvider;
     use datafusion_common::{Constraint, Constraints, DataFusionError, Result};
     use datafusion_expr::LogicalPlanBuilder;
     use datafusion_expr::dml::InsertOp;

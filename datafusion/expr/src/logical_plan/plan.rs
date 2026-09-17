@@ -3263,7 +3263,7 @@ impl TableScanBuilder {
             filters: vec![],
             fetch: None,
             offset: None,
-            statistics_requests: BTreeSet::default(),
+            statistics_requests: BTreeSet::new(),
         }
     }
 
@@ -6430,7 +6430,7 @@ mod tests {
             filters: vec![],
             fetch: None,
             offset: None,
-            statistics_requests: BTreeSet::default(),
+            statistics_requests: BTreeSet::new(),
         }));
         let col = schema.field_names()[0].clone();
 
@@ -6462,7 +6462,7 @@ mod tests {
             filters: vec![],
             fetch: None,
             offset: None,
-            statistics_requests: BTreeSet::default(),
+            statistics_requests: BTreeSet::new(),
         }));
         let col = schema.field_names()[0].clone();
 

@@ -1435,7 +1435,6 @@ fn expr_columns(exprs: &[Expr]) -> HashSet<Column> {
 #[cfg(test)]
 mod tests {
     use std::cmp::Ordering;
-    use std::collections::BTreeSet;
     use std::fmt::{Debug, Formatter};
 
     use arrow::datatypes::{Field, Schema, SchemaRef};

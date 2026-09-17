@@ -28,7 +28,6 @@ use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
-use datafusion_catalog::ScanArgs;
 use datafusion_common::stats::Precision;
 use datafusion_common::{DFSchema, TableReference};
 use datafusion_execution::cache::cache_manager::{
