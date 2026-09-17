@@ -3129,6 +3129,8 @@ pub struct TableScan {
     pub filters: Vec<Expr>,
     /// Optional number of rows to read
     pub fetch: Option<usize>,
+    /// Optional number of rows to skip
+    pub offset: Option<usize>,
     /// Statistics the planner would like the provider to answer for this
     /// scan, typically attached by a custom optimizer rule from the
     /// surrounding plan (e.g. Min/Max for sort keys).
@@ -3238,6 +3240,7 @@ pub struct TableScanBuilder {
     projection: Option<Vec<usize>>,
     filters: Vec<Expr>,
     fetch: Option<usize>,
+    offset: Option<usize>,
     statistics_requests: BTreeSet<StatisticsRequest>,
 }
 
@@ -3253,6 +3256,7 @@ impl TableScanBuilder {
             projection: None,
             filters: vec![],
             fetch: None,
+            offset: None,
             statistics_requests: BTreeSet::new(),
         }
     }
@@ -3275,6 +3279,12 @@ impl TableScanBuilder {
         self
     }
 
+    /// Set the number of rows to skip.
+    pub fn with_offset(mut self, offset: Option<usize>) -> Self {
+        self.offset = offset;
+        self
+    }
+
     /// Set the statistics requests for the scan. See
     /// [`TableScan::statistics_requests`].
     pub fn with_statistics_requests(
@@ -3294,6 +3304,7 @@ impl TableScanBuilder {
             projection,
             filters,
             fetch,
+            offset,
             statistics_requests,
         } = self;
 
@@ -3335,6 +3346,7 @@ impl TableScanBuilder {
             projected_schema,
             filters,
             fetch,
+            offset,
             statistics_requests,
         })
     }
@@ -3348,6 +3360,7 @@ impl From<TableScan> for TableScanBuilder {
             projection: scan.projection,
             filters: scan.filters,
             fetch: scan.fetch,
+            offset: scan.offset,
             statistics_requests: scan.statistics_requests,
         }
     }
@@ -6410,6 +6423,7 @@ mod tests {
             projected_schema: Arc::clone(&schema),
             filters: vec![],
             fetch: None,
+            offset: None,
             statistics_requests: BTreeSet::new(),
         }));
         let col = schema.field_names()[0].clone();
@@ -6441,6 +6455,7 @@ mod tests {
             projected_schema: Arc::clone(&unique_schema),
             filters: vec![],
             fetch: None,
+            offset: None,
             statistics_requests: BTreeSet::new(),
         }));
         let col = schema.field_names()[0].clone();
