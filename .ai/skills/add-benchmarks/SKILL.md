@@ -9,16 +9,18 @@ Follow these guidelines when designing or adding a new benchmark.
 
 ## Design principles
 
-### Benchmark at a higher level
+### Use the highest-level interface
 
-Try to move benchmarks to a higher level when possible. For example, prefer SQL
-benchmarks even for microbenchmarks of individual operators. When benchmarking a
+Use the highest-level interface possible, preferably SQL, while keeping the work
+around the operator being measured as cheap as possible. When benchmarking a
 function, exercise its evaluation path instead of benchmarking internal utility
 functions in isolation.
 
 This makes benchmarks easier to maintain and helps assess how much an optimization
 matters to end-to-end runtime. It also helps avoid spending time optimizing code
 that accounts for only a small fraction of the total runtime.
+
+Practical criteria for choosing SQL or Rust benchmarks: Try implementing the benchmark in SQL first. If a Rust microbenchmark still seems like a better fit, use Criterion.
 
 ### Vary the key workload axes
 
@@ -54,9 +56,9 @@ CROSS JOIN generate_series(1, 1000) AS r;
 For implementation details, see the
 [SQL benchmark README](../../../benchmarks/sql_benchmarks/README.md).
 
-1. **Isolate the operator being measured in microbenchmarks.**
+1. **Keep other operators cheap.**
 
-   When a microbenchmark targets a specific operator, keep the work done by
+   When a SQL benchmark targets a specific operator, keep the work done by
    other operators as lightweight as possible. For example, use a data source
    such as `generate_series()` instead of a Parquet scan so scan overhead does
    not dominate the measurement. See the [`nlj` benchmark](../../../benchmarks/sql_benchmarks/nlj/) for examples.
@@ -80,7 +82,3 @@ For implementation details, see the
    Tune the workload so each query takes roughly a few seconds per execution.
    This helps reduce the relative impact of timing noise while keeping the
    suite practical to run.
-
-## Rust microbenchmarks
-
-TODO
