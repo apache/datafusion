@@ -667,27 +667,24 @@ pub fn create_physical_expr(
 
             let schema_field = input_dfschema.field(index);
 
-            // LambdaVariable.field will be made optional as in Expr::Placeholder
-            // and only LambdaVariable.name used, and field.name ignored,
-            // so they're not enforced to match for logical expressions
-            // Rename the field to match the schema one and use it's PartialEq impl instead
-            // of checking property by property and fail if new properties get's added to it.
-            // While not necessary, the sql planner does create lambda vars with matching names,
-            // so this shouldn't allocate with a lambda var from it
-            let renamed_field = Arc::clone(field).renamed(name);
+            let variable: Arc<dyn PhysicalExpr> = Arc::new(
+                expressions::LambdaVariable::new(index, Arc::clone(schema_field)),
+            );
 
-            if &renamed_field != schema_field {
-                return plan_err!(
-                    "LambdaVariable field and schema field mismatch {} != {}",
-                    renamed_field,
-                    schema_field
+            // The lambda body was coerced against `field`, while the array bound at
+            // runtime has the type derived into the planning schema. Enforce `field`
+            // with a cast, the way scalar function arguments are cast to their coerced
+            // types, so a physical encoding such as a dictionary or a string view does
+            // not have to match what the plan was built with.
+            if field.data_type() != schema_field.data_type() {
+                return expressions::cast(
+                    variable,
+                    input_dfschema.inner(),
+                    field.data_type().clone(),
                 );
             }
 
-            Ok(Arc::new(expressions::LambdaVariable::new(
-                index,
-                Arc::clone(schema_field),
-            )))
+            Ok(variable)
         }
         // Window and aggregate functions are evaluated by dedicated plan
         // nodes, never by a physical expression. Reaching this point means

@@ -340,4 +340,29 @@ mod tests {
         DataFrame::new(ctx.state(), plan).show().await?;
         Ok(())
     }
+
+    // The read schema declares the list element as dictionary encoded while the lambda
+    // carries its own plain parameter type, as a producer that cannot express dictionary
+    // encoding in Substrait emits. Physical planning reconciles the two with a cast.
+    #[tokio::test]
+    async fn higher_order_function_with_dictionary_encoded_lambda_parameter() -> Result<()>
+    {
+        let proto_plan = read_json(
+            "tests/testdata/test_plans/any_match_dictionary_list_element.substrait.json",
+        );
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        assert_snapshot!(
+        plan,
+        @r#"
+        Projection: array_any_match(t.tags, (p0) -> p0 = Utf8("c")) AS matched
+          TableScan: t
+        "#
+        );
+
+        // Trigger execution to ensure plan validity
+        DataFrame::new(ctx.state(), plan).show().await?;
+        Ok(())
+    }
 }

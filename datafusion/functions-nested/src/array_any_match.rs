@@ -191,9 +191,12 @@ mod tests {
     use std::{collections::HashMap, sync::Arc};
 
     use arrow::{
-        array::{ArrayRef, BooleanArray, Int32Array, ListArray, RecordBatch},
+        array::{
+            ArrayRef, BooleanArray, DictionaryArray, Int32Array, ListArray, RecordBatch,
+            StringArray, StringViewArray,
+        },
         buffer::{NullBuffer, OffsetBuffer},
-        datatypes::{DataType, Field},
+        datatypes::{DataType, Field, UInt32Type},
     };
     use datafusion_common::{DFSchema, Result};
     use datafusion_expr::{
@@ -203,7 +206,7 @@ mod tests {
         lambda, lit,
         physical_planning_context::PhysicalPlanningContext,
     };
-    use datafusion_physical_expr::create_physical_expr;
+    use datafusion_physical_expr::{PhysicalExpr, create_physical_expr};
 
     use crate::array_any_match::{ArrayAnyMatch, array_any_match_higher_order_function};
     use crate::lambda_utils::test_utils::{
@@ -488,6 +491,107 @@ mod tests {
             result.as_any().downcast_ref::<BooleanArray>().unwrap(),
             &BooleanArray::from(vec![Some(true), Some(true), Some(false)])
         );
+        Ok(())
+    }
+
+    /// Plans `any_match(list, x -> x = 'c')` over two rows, `[a, b]` and `[c, a]`, built
+    /// from `values`, with the lambda variable declared as `declared` rather than as the
+    /// element type of the list.
+    fn plan_any_match_eq_c(
+        values: ArrayRef,
+        declared: DataType,
+    ) -> Result<(Arc<dyn PhysicalExpr>, RecordBatch)> {
+        let element_field =
+            Arc::new(Field::new_list_field(values.data_type().clone(), true));
+        let list = ListArray::new(
+            Arc::clone(&element_field),
+            OffsetBuffer::<i32>::from_lengths(vec![2, 2]),
+            values,
+            None,
+        );
+
+        let schema = DFSchema::from_unqualified_fields(
+            vec![Field::new("list", DataType::List(element_field), true)].into(),
+            HashMap::new(),
+        )?;
+
+        let expr = create_physical_expr(
+            &Expr::HigherOrderFunction(HigherOrderFunction::new(
+                array_any_match_higher_order_function(),
+                vec![
+                    col("list"),
+                    lambda(
+                        ["x"],
+                        Expr::LambdaVariable(LambdaVariable::new(
+                            "x".to_string(),
+                            Some(Arc::new(Field::new("x", declared, true))),
+                        ))
+                        .eq(lit("c")),
+                    ),
+                ],
+            )),
+            &schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+
+        let batch =
+            RecordBatch::try_new(Arc::clone(schema.inner()), vec![Arc::new(list)])?;
+
+        Ok((expr, batch))
+    }
+
+    fn run_any_match_eq_c(values: ArrayRef, declared: DataType) -> Result<ArrayRef> {
+        let (expr, batch) = plan_any_match_eq_c(values, declared)?;
+        expr.evaluate(&batch)?.into_array(2)
+    }
+
+    // The lambda variable carries the type the plan was built with, which need not match
+    // the physical encoding of the list elements.
+    #[test]
+    fn test_any_match_on_dictionary_encoded_elements() -> Result<()> {
+        let values: ArrayRef = Arc::new(DictionaryArray::<UInt32Type>::from_iter([
+            "a", "b", "c", "a",
+        ]));
+        let result = run_any_match_eq_c(values, DataType::Utf8)?;
+        assert_eq!(
+            result.as_any().downcast_ref::<BooleanArray>().unwrap(),
+            &BooleanArray::from(vec![Some(false), Some(true)])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_any_match_on_string_view_elements() -> Result<()> {
+        let values: ArrayRef = Arc::new(StringViewArray::from(vec!["a", "b", "c", "a"]));
+        let result = run_any_match_eq_c(values, DataType::Utf8)?;
+        assert_eq!(
+            result.as_any().downcast_ref::<BooleanArray>().unwrap(),
+            &BooleanArray::from(vec![Some(false), Some(true)])
+        );
+        Ok(())
+    }
+
+    // The declared type is reconciled by a cast around the lambda variable, rather than
+    // by the lambda observing the element type of the list.
+    #[test]
+    fn test_any_match_casts_lambda_variable_to_declared_type() -> Result<()> {
+        let values: ArrayRef = Arc::new(DictionaryArray::<UInt32Type>::from_iter([
+            "a", "b", "c", "a",
+        ]));
+        let (expr, _) = plan_any_match_eq_c(values, DataType::Utf8)?;
+        assert_eq!(
+            format!("{expr}"),
+            "array_any_match(list@0, (x) -> CAST(x@1 AS Utf8) = c)"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_any_match_does_not_cast_matching_lambda_variable() -> Result<()> {
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c", "a"]));
+        let (expr, _) = plan_any_match_eq_c(values, DataType::Utf8)?;
+        assert_eq!(format!("{expr}"), "array_any_match(list@0, (x) -> x@1 = c)");
         Ok(())
     }
 }
