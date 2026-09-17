@@ -788,6 +788,37 @@ filter on <code class="docutils literal notranslate"><span class="pre">a&#64;0</
 </pre></div>
 </div>
 </section>
+<section id="ensure-distribution-is-deprecated-in-favour-of-ensure-distribution-with-stats">
+<h3><code class="docutils literal notranslate"><span class="pre">ensure_distribution</span></code> is deprecated in favour of <code class="docutils literal notranslate"><span class="pre">ensure_distribution_with_stats</span></code><a class="headerlink" href="#ensure-distribution-is-deprecated-in-favour-of-ensure-distribution-with-stats" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">datafusion_physical_optimizer::enforce_distribution::ensure_distribution</span></code> now
+takes its <code class="docutils literal notranslate"><span class="pre">StatisticsContext</span></code> from the caller, so one context (and its
+memoization cache) can be shared across a whole bottom-up traversal. The old
+two-argument form is kept as a deprecated wrapper that allocates a fresh
+context per call, which recomputes each shared subtree’s statistics once per
+ancestor.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DistributionContext</span><span class="p">::</span><span class="n">new_default</span><span class="p">(</span><span class="n">plan</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">transform_up</span><span class="p">(</span><span class="o">|</span><span class="n">ctx</span><span class="o">|</span><span class="w"> </span><span class="n">ensure_distribution</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span><span class="w"> </span><span class="n">config</span><span class="p">))</span>
+<span class="w">    </span><span class="p">.</span><span class="n">data</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+
+<span class="c1">// After: one context for the whole walk. `StatsCache` is keyed by raw plan-node</span>
+<span class="c1">// pointers, so reset it whenever a node&#39;s plan pointer actually changed.</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">stats_ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">StatisticsContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DistributionContext</span><span class="p">::</span><span class="n">new_default</span><span class="p">(</span><span class="n">plan</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">transform_up</span><span class="p">(</span><span class="o">|</span><span class="n">ctx</span><span class="o">|</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">before</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">clone</span><span class="p">(</span><span class="o">&amp;</span><span class="n">ctx</span><span class="p">.</span><span class="n">plan</span><span class="p">);</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ensure_distribution_with_stats</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span><span class="w"> </span><span class="n">config</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">stats_ctx</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="o">!</span><span class="n">Arc</span><span class="p">::</span><span class="n">ptr_eq</span><span class="p">(</span><span class="o">&amp;</span><span class="n">before</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">result</span><span class="p">.</span><span class="n">data</span><span class="p">.</span><span class="n">plan</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="n">stats_ctx</span><span class="p">.</span><span class="n">reset_cache</span><span class="p">();</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
+<span class="w">    </span><span class="p">})</span>
+<span class="w">    </span><span class="p">.</span><span class="n">data</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Callers that only need the previous behaviour can keep using the deprecated
+form, or pass a freshly constructed <code class="docutils literal notranslate"><span class="pre">StatisticsContext</span></code> per call.</p>
+</section>
 </section>
 </section>
 
@@ -853,6 +884,7 @@ filter on <code class="docutils literal notranslate"><span class="pre">a&#64;0</
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#map-extract-element-at-return-an-empty-list-for-absent-keys"><code class="docutils literal notranslate"><span class="pre">map_extract</span></code> / <code class="docutils literal notranslate"><span class="pre">element_at</span></code> return an empty list for absent keys</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dataframe-from-columns-accepts-intoiterator"><code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> accepts <code class="docutils literal notranslate"><span class="pre">IntoIterator</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physical-filter-pushdown-resolves-columns-by-position">Physical filter pushdown resolves columns by position</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ensure-distribution-is-deprecated-in-favour-of-ensure-distribution-with-stats"><code class="docutils literal notranslate"><span class="pre">ensure_distribution</span></code> is deprecated in favour of <code class="docutils literal notranslate"><span class="pre">ensure_distribution_with_stats</span></code></a></li>
 </ul>
 </li>
 </ul>
