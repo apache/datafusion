@@ -165,18 +165,13 @@ mod tests {
     use super::*;
     use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_snapshot;
+    use crate::test::udfs::DistinctHandlingTestUDAF;
     use crate::test::*;
 
     use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
-    use arrow::datatypes::DataType;
-    use datafusion_expr::function::AccumulatorArgs;
-    use datafusion_expr::{
-        Accumulator, AggregateUDF, AggregateUDFImpl, ExprFunctionExt, LogicalPlanBuilder,
-        Signature, Volatility, col, lit,
-    };
+    use datafusion_expr::{AggregateUDF, ExprFunctionExt, LogicalPlanBuilder, col, lit};
     use datafusion_functions_aggregate::expr_fn::{bit_xor, max, min, sum};
 
-    use std::hash::{Hash, Hasher};
     use std::sync::Arc;
 
     macro_rules! assert_optimized_plan_equal {
@@ -196,66 +191,12 @@ mod tests {
         }};
     }
 
-    /// A user defined aggregate that reports the [`DistinctHandling`] it was
-    /// built with.
+    /// A user defined aggregate that reports the given [`DistinctHandling`].
     ///
     /// The tests above read the tag off built-in functions, which only covers
-    /// the variants those functions happen to carry. This one exercises the
-    /// public API a third-party function uses: an
-    /// [`AggregateUDFImpl::distinct_handling`] override.
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    struct TaggedUdaf {
-        name: &'static str,
-        handling: DistinctHandling,
-        signature: Signature,
-    }
-
-    impl TaggedUdaf {
-        fn new(name: &'static str, handling: DistinctHandling) -> Self {
-            Self {
-                name,
-                handling,
-                signature: Signature::any(1, Volatility::Immutable),
-            }
-        }
-    }
-
-    /// Hashed by name, which identifies the function here. `DistinctHandling`
-    /// is not `Hash`, and `AggregateUDFImpl` requires one through `DynHash`.
-    impl Hash for TaggedUdaf {
-        fn hash<H: Hasher>(&self, state: &mut H) {
-            self.name.hash(state);
-            self.signature.hash(state);
-        }
-    }
-
-    impl AggregateUDFImpl for TaggedUdaf {
-        fn name(&self) -> &str {
-            self.name
-        }
-
-        fn signature(&self) -> &Signature {
-            &self.signature
-        }
-
-        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-            Ok(DataType::UInt32)
-        }
-
-        fn accumulator(
-            &self,
-            _acc_args: AccumulatorArgs,
-        ) -> Result<Box<dyn Accumulator>> {
-            unimplemented!("the rule only rewrites the logical plan")
-        }
-
-        fn distinct_handling(&self) -> DistinctHandling {
-            self.handling
-        }
-    }
-
+    /// the variants those functions happen to carry.
     fn tagged(name: &'static str, handling: DistinctHandling) -> AggregateUDF {
-        AggregateUDF::from(TaggedUdaf::new(name, handling))
+        AggregateUDF::from(DistinctHandlingTestUDAF::new(name, handling))
     }
 
     /// `min(DISTINCT b)` loses the flag but keeps its column name.
