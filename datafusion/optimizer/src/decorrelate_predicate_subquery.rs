@@ -792,9 +792,7 @@ fn build_join_with_count_bug(
             .project(left_projection)?
             .build()?,
         _ => {
-            return internal_err!(
-                "build_join_with_count_bug: unsupported join type {join_type:?}"
-            );
+            return internal_err!("unsupported join type {join_type:?}");
         }
     };
 

@@ -622,7 +622,7 @@ fn remove_duplicated_filter(
             Expr::BinaryExpr(b) => b.op.swap() == Some(b.op),
             _ => true,
         },
-        "remove_duplicated_filter: in_predicate must use a commutative operator"
+        "in_predicate must use a commutative operator"
     );
 
     Ok(filters
