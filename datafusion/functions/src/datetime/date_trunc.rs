@@ -434,9 +434,12 @@ impl ScalarUDFImpl for DateTruncFunc {
         let precision = &input[0];
         let date_value = &input[1];
 
-        let has_timezone = matches!(date_value.range.data_type(), Timestamp(_, Some(_)));
+        let order_safe_input = matches!(
+            date_value.range.data_type(),
+            Timestamp(_, None) | Time32(_) | Time64(_)
+        );
 
-        if precision.sort_properties == SortProperties::Singleton && !has_timezone {
+        if precision.sort_properties == SortProperties::Singleton && order_safe_input {
             Ok(date_value.sort_properties)
         } else {
             Ok(SortProperties::Unordered)
@@ -923,8 +926,13 @@ mod tests {
         ));
         assert_eq!(
             function
-                .output_ordering(&[precision, timestamp_with_timezone])
+                .output_ordering(&[precision.clone(), timestamp_with_timezone])
                 .unwrap(),
+            SortProperties::Unordered
+        );
+        let unknown = ExprProperties::new_unknown().with_order(ordered);
+        assert_eq!(
+            function.output_ordering(&[precision, unknown]).unwrap(),
             SortProperties::Unordered
         );
     }

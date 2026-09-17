@@ -1679,6 +1679,29 @@ ORDER BY date_trunc('hour', ts);
 562129260 562125600
 562129259 562129200
 
+# An unknown range from a child function may hide a timezone-aware timestamp
+query II
+SELECT
+  c,
+  arrow_cast(
+    date_trunc('hour', from_unixtime(c, 'America/Goose_Bay')),
+    'Int64'
+  ) AS truncated
+FROM (
+  SELECT column1 AS c
+  FROM (
+    VALUES
+      (562129260::bigint),
+      (562129259::bigint)
+  )
+  ORDER BY c
+  LIMIT 2
+)
+ORDER BY date_trunc('hour', from_unixtime(c, 'America/Goose_Bay'));
+----
+562129260 562125600
+562129259 562129200
+
 statement ok
 CREATE TABLE timestamp_strings(ts varchar)
 AS VALUES
