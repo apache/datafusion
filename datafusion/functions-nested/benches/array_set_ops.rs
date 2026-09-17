@@ -38,11 +38,6 @@ const SEED: u64 = 42;
 /// Extra rows on each side when building sliced arrays, so the underlying
 /// values buffer is much larger than the visible portion.
 const SLICE_PADDING: usize = 5000;
-/// Keep the visible slice at two values while varying the backing array from
-/// 8 KiB to 8 MiB.
-const SLICED_FLOAT_BACKING_VALUES: &[usize] = &[1024, 1024 * 1024];
-/// Keep the backing array at 8 MiB while varying the visible slice.
-const SLICED_FLOAT_VISIBLE_VALUES: &[usize] = &[2, 2048];
 
 fn criterion_benchmark(c: &mut Criterion) {
     bench_array_union(c);
@@ -392,46 +387,14 @@ fn create_sliced_float_array(backing_values: usize, visible_values: usize) -> Ar
     Arc::new(array.slice(1, 1))
 }
 
-fn create_unsliced_float_array(value_count: usize) -> ArrayRef {
-    let values = Float64Array::from(
-        (0..value_count)
-            .map(|i| if i.is_multiple_of(2) { -0.0 } else { 0.0 })
-            .collect::<Vec<_>>(),
-    );
-    Arc::new(ListArray::new(
-        Arc::new(Field::new("item", DataType::Float64, true)),
-        OffsetBuffer::new(vec![0, value_count as i32].into()),
-        Arc::new(values),
-        None,
-    ))
-}
-
-/// Keep the visible list fixed at one `-0.0` and one `0.0` while increasing
-/// the backing values buffer. This isolates work outside the logical slice.
+/// Keep the visible list fixed at one `-0.0` and one `0.0` inside a much larger
+/// backing values buffer to catch regressions that process values outside the slice.
 fn bench_array_distinct_sliced_float(c: &mut Criterion) {
     let mut group = c.benchmark_group("array_distinct_sliced_float");
     let udf = ArrayDistinct::new();
+    let array = create_sliced_float_array(1024 * 1024, 2);
 
-    for &backing_values in SLICED_FLOAT_BACKING_VALUES {
-        let array = create_sliced_float_array(backing_values, 2);
-        group.bench_with_input(
-            BenchmarkId::new("backing_values", backing_values),
-            &backing_values,
-            |b, _| b.iter(|| invoke_unary_udf(&udf, &array, 1)),
-        );
-    }
-
-    for &visible_values in SLICED_FLOAT_VISIBLE_VALUES {
-        let array = create_sliced_float_array(1024 * 1024, visible_values);
-        group.bench_with_input(
-            BenchmarkId::new("visible_values", visible_values),
-            &visible_values,
-            |b, _| b.iter(|| invoke_unary_udf(&udf, &array, 1)),
-        );
-    }
-
-    let array = create_unsliced_float_array(1024);
-    group.bench_function("unsliced_values_1024", |b| {
+    group.bench_function("backing_values_1048576_visible_values_2", |b| {
         b.iter(|| invoke_unary_udf(&udf, &array, 1))
     });
     group.finish();

@@ -329,6 +329,18 @@ impl Display for SetOp {
     }
 }
 
+pub(crate) fn normalize_visible_values<OffsetSize: OffsetSizeTrait>(
+    array: &GenericListArray<OffsetSize>,
+) -> ArrayRef {
+    let first = array.offsets()[0].as_usize();
+    let len = array.offsets()[array.len()].as_usize() - first;
+    if first == 0 && len == array.values().len() {
+        normalize_float_zero(array.values())
+    } else {
+        normalize_float_zero(&array.values().slice(first, len))
+    }
+}
+
 fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     l: &GenericListArray<OffsetSize>,
     r: &GenericListArray<OffsetSize>,
@@ -351,27 +363,16 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
 
     let converter = RowConverter::new(vec![SortField::new(l.value_type())])?;
 
-    // ListArray::values() returns the full underlying array for sliced lists.
-    // Slice first so normalization only scans and, when -0.0 is present,
-    // allocates for values referenced by the logical array.
-    // Normalization keeps SQL signed-zero equality when rows are encoded.
+    // Normalize -0.0 → +0.0 so RowConverter (which uses IEEE 754 totalOrder
+    // and treats ±0 as distinct) groups them together. Use the normalized
+    // arrays for both row conversion and the final output values.
     let l_first = l.offsets()[0].as_usize();
     let l_len = l.offsets()[l.len()].as_usize() - l_first;
-    let l_values_norm = if l_first == 0 && l_len == l.values().len() {
-        normalize_float_zero(l.values())
-    } else {
-        normalize_float_zero(&l.values().slice(l_first, l_len))
-    };
-    let rows_l = converter.convert_columns(&[l_values_norm.slice(0, l_len)])?;
+    let l_values_norm = normalize_visible_values(l);
+    let rows_l = converter.convert_columns(&[Arc::clone(&l_values_norm)])?;
 
-    let r_first = r.offsets()[0].as_usize();
-    let r_len = r.offsets()[r.len()].as_usize() - r_first;
-    let r_values_norm = if r_first == 0 && r_len == r.values().len() {
-        normalize_float_zero(r.values())
-    } else {
-        normalize_float_zero(&r.values().slice(r_first, r_len))
-    };
-    let rows_r = converter.convert_columns(&[r_values_norm.slice(0, r_len)])?;
+    let r_values_norm = normalize_visible_values(r);
+    let rows_r = converter.convert_columns(&[Arc::clone(&r_values_norm)])?;
 
     // Indices from the row converter are 0-based in the per-side slice;
     // concatenating those same slices lets indices map directly into the
@@ -568,18 +569,12 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
 
     let converter = RowConverter::new(vec![SortField::new(dt.clone())])?;
 
-    // ListArray::values() returns the full underlying array for sliced lists.
-    // Slice first so normalization only scans and, when -0.0 is present,
-    // allocates for values referenced by the logical array.
-    // Normalization keeps SQL signed-zero equality and canonicalizes output.
+    // Normalize -0.0 → +0.0 so RowConverter (which uses IEEE 754 totalOrder
+    // and treats ±0 as distinct) groups them together, and so the output
+    // carries the canonical sign.
     let first_offset = value_offsets[0].as_usize();
-    let visible_len = value_offsets[array.len()].as_usize() - first_offset;
-    let values_norm = if first_offset == 0 && visible_len == array.values().len() {
-        normalize_float_zero(array.values())
-    } else {
-        normalize_float_zero(&array.values().slice(first_offset, visible_len))
-    };
-    let rows = converter.convert_columns(&[values_norm.slice(0, visible_len)])?;
+    let values_norm = normalize_visible_values(array);
+    let rows = converter.convert_columns(&[Arc::clone(&values_norm)])?;
 
     let mut indices: Vec<usize> = Vec::with_capacity(rows.num_rows());
     let mut seen = HashSet::new();

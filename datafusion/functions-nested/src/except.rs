@@ -17,6 +17,7 @@
 
 //! [`ScalarUDFImpl`] definition for array_except function.
 
+use crate::set_ops::normalize_visible_values;
 use crate::utils::{check_datatypes, make_scalar_function};
 use arrow::array::new_null_array;
 use arrow::array::{
@@ -27,7 +28,7 @@ use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::take;
 use arrow::datatypes::{DataType, FieldRef};
 use arrow::row::{RowConverter, SortField};
-use datafusion_common::utils::{ListCoercion, normalize_float_zero, take_function_args};
+use datafusion_common::utils::{ListCoercion, take_function_args};
 use datafusion_common::{HashSet, Result, internal_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -169,27 +170,15 @@ fn general_except<OffsetSize: OffsetSizeTrait>(
 ) -> Result<GenericListArray<OffsetSize>> {
     let converter = RowConverter::new(vec![SortField::new(l.value_type())])?;
 
-    // ListArray::values() returns the full underlying array for sliced lists.
-    // Slice first so normalization only scans and, when -0.0 is present,
-    // allocates for values referenced by the logical array.
-    // Normalization keeps SQL signed-zero equality when rows are encoded.
+    // Normalize -0.0 → +0.0 so RowConverter (IEEE 754 totalOrder) groups
+    // ±0 together for both the rhs lookup set and the lhs probe.
     let l_first = l.offsets()[0].as_usize();
-    let l_len = l.offsets()[l.len()].as_usize() - l_first;
-    let l_values_norm = if l_first == 0 && l_len == l.values().len() {
-        normalize_float_zero(l.values())
-    } else {
-        normalize_float_zero(&l.values().slice(l_first, l_len))
-    };
-    let l_rows = converter.convert_columns(&[l_values_norm.slice(0, l_len)])?;
+    let l_values_norm = normalize_visible_values(l);
+    let l_rows = converter.convert_columns(&[Arc::clone(&l_values_norm)])?;
 
     let r_first = r.offsets()[0].as_usize();
-    let r_len = r.offsets()[r.len()].as_usize() - r_first;
-    let r_values_norm = if r_first == 0 && r_len == r.values().len() {
-        normalize_float_zero(r.values())
-    } else {
-        normalize_float_zero(&r.values().slice(r_first, r_len))
-    };
-    let r_rows = converter.convert_columns(&[r_values_norm.slice(0, r_len)])?;
+    let r_values_norm = normalize_visible_values(r);
+    let r_rows = converter.convert_columns(&[Arc::clone(&r_values_norm)])?;
 
     let mut offsets = Vec::<OffsetSize>::with_capacity(l.len() + 1);
     offsets.push(OffsetSize::usize_as(0));
