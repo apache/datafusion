@@ -196,7 +196,7 @@ prost = "0.14.1"
 rand = "0.9"
 recursive = "0.1.1"
 regex = "1.12"
-rstest = "0.26.1"
+rstest = "0.27.0"
 serde_json = "1"
 sha2 = "^0.11.0"
 sqlparser = { version = "0.62.0", default-features = false, features = ["std", "visitor"] }
@@ -283,7 +283,6 @@ enum_glob_use = "allow"                      # 98 hits
 explicit_into_iter_loop = "allow"            # 55 hits
 explicit_iter_loop = "allow"                 # 189 hits
 float_cmp = "allow"                          # 8 hits; exact float comparisons are often intentional here
-from_iter_instead_of_collect = "allow"       # 51 hits
 if_not_else = "allow"                        # 133 hits
 ignored_unit_patterns = "allow"              # 52 hits
 implicit_clone = "allow"                     # 198 hits
