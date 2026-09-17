@@ -937,6 +937,11 @@ impl AggregateExec {
     /// Function used in `OptimizeAggregateOrder` optimizer rule,
     /// where we need parts of the new value, others cloned from the old one
     /// Rewrites aggregate exec with new aggregate expressions.
+    #[doc(hidden)]
+    #[deprecated(
+        since = "56.0.0",
+        note = "use `AggregateExec::to_builder().with_aggr_exprs(..).build()` instead"
+    )]
     pub fn with_new_aggr_exprs(
         &self,
         aggr_expr: impl Into<Arc<[Arc<AggregateFunctionExpr>]>>,
@@ -960,6 +965,11 @@ impl AggregateExec {
     }
 
     /// Clone this exec, overriding only the limit hint.
+    #[doc(hidden)]
+    #[deprecated(
+        since = "56.0.0",
+        note = "use `AggregateExec::to_builder().with_limit_options(..).build()` instead"
+    )]
     pub fn with_new_limit_options(&self, limit_options: Option<LimitOptions>) -> Self {
         Self {
             limit_options,
@@ -1036,12 +1046,25 @@ impl AggregateExec {
     }
 
     /// Set the limit options for this AggExec
+    #[doc(hidden)]
+    #[deprecated(
+        since = "56.0.0",
+        note = "use `AggregateExec::to_builder().with_limit_options(..).build()` instead"
+    )]
     pub fn with_limit_options(mut self, limit_options: Option<LimitOptions>) -> Self {
         self.limit_options = limit_options;
         self
     }
 
     /// Get the limit options (if set)
+    ///
+    /// Set them with
+    /// [`to_builder().with_limit_options(..)`](AggregateExec::to_builder).
+    ///
+    /// This is public for internal use only and is not part of the public API.
+    /// Unlike the setters it is not deprecated: it has no replacement, and
+    /// reading the limit of an aggregate is safe.
+    #[doc(hidden)]
     pub fn limit_options(&self) -> Option<LimitOptions> {
         self.limit_options
     }
