@@ -406,7 +406,25 @@ fn push_down_all_join(
 ) -> Result<Transformed<LogicalPlan>> {
     let is_inner_join = join.join_type == JoinType::Inner;
     // Get pushable predicates from current optimizer state
-    let (left_preserved, right_preserved) = lr_is_preserved(join.join_type);
+    let (left_preserved, mut right_preserved) = lr_is_preserved(join.join_type);
+    let (on_left_preserved, mut on_right_preserved) = on_lr_is_preserved(join.join_type);
+
+    // Null-aware joins (e.g. `NOT IN` with a nullable subquery) implement SQL
+    // three-valued logic: a NULL join key on the right/subquery side makes the
+    // predicate UNKNOWN and empties the result. Anything pushed into the right
+    // input runs before the join can observe those NULLs, so a null-rejecting
+    // predicate would drop them and silently produce wrong results.
+    // `infer_join_predicates` skips null-aware joins for the same reason.
+    //
+    // `on_right_preserved` is what actually matters here: it is what lets a
+    // right-only join filter — the shape `<constant> NOT IN (<subquery>)`
+    // produces — reach the subquery. `right_preserved` is already false for
+    // every join type that can carry `null_aware` today, so clearing it is
+    // defence in depth.
+    if join.null_aware {
+        right_preserved = false;
+        on_right_preserved = false;
+    }
 
     // The predicates can be divided to three categories:
     // 1) can push through join to its children(left or right)
@@ -447,7 +465,6 @@ fn push_down_all_join(
     }
 
     let mut on_filter_join_conditions = vec![];
-    let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(join.join_type);
     for on in on_filter {
         if on_left_preserved && checker.is_left_only(&on) {
             left_push.push(on)
@@ -3885,6 +3902,46 @@ mod tests {
         LeftAnti Join: test1.a = test2.a null_aware
           Projection: test1.a, test1.b
             TableScan: test1, full_filters=[test1.a > UInt32(2)]
+          Projection: test2.a, test2.b
+            TableScan: test2
+        "
+        )
+    }
+
+    /// Regression test for a null-aware LeftAnti join whose join filter only
+    /// references the subquery side, the shape produced by
+    /// `<constant> NOT IN (<subquery>)`. Pushing that filter into the right
+    /// input would drop the subquery's NULL rows before the join can observe
+    /// them, so `NOT IN` would wrongly evaluate to TRUE instead of UNKNOWN.
+    #[test]
+    fn null_aware_left_anti_join_keeps_right_only_join_filter() -> Result<()> {
+        let table_scan = test_table_scan_with_name("test1")?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join_detailed_with_options(
+                right,
+                JoinType::LeftAnti,
+                (Vec::<Column>::new(), Vec::<Column>::new()),
+                Some(lit(3u32).eq(col("test2.a"))),
+                datafusion_common::NullEquality::NullEqualsNothing,
+                true,
+            )?
+            .build()?;
+
+        // `UInt32(3) = test2.a` stays on the join: it must not become a
+        // `TableScan: test2, full_filters=[...]`.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        LeftAnti Join:  Filter: UInt32(3) = test2.a null_aware
+          Projection: test1.a, test1.b
+            TableScan: test1
           Projection: test2.a, test2.b
             TableScan: test2
         "
