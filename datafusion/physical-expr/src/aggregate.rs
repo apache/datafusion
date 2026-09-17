@@ -264,6 +264,15 @@ impl AggregateExprBuilder {
         } = self;
         assert_or_internal_err!(!args.is_empty(), "args should not be empty");
 
+        // An order-insensitive aggregate ignores its ORDER BY, so drop it here.
+        // Everything derived from `order_bys` below, such as the ordering fields
+        // in the aggregate's state, then agrees that there is no ordering.
+        let order_bys = if fun.order_sensitivity().is_insensitive() {
+            vec![]
+        } else {
+            order_bys
+        };
+
         let ordering_types = order_bys
             .iter()
             .map(|e| e.expr.data_type(&schema))
@@ -759,18 +768,11 @@ impl AggregateFunctionExpr {
 
     /// the field of the final result of this aggregation.
     pub fn state_fields(&self) -> Result<Vec<FieldRef>> {
-        // An order-insensitive aggregate is never fed its ORDER BY columns (see
-        // `order_bys`), so its state must not describe ordering fields either.
-        let ordering_fields = if self.order_sensitivity().is_insensitive() {
-            &[]
-        } else {
-            self.ordering_fields.as_slice()
-        };
         let args = StateFieldsArgs {
             name: &self.name,
             input_fields: &self.input_fields,
             return_field: Arc::clone(&self.return_field),
-            ordering_fields,
+            ordering_fields: &self.ordering_fields,
             is_distinct: self.is_distinct,
         };
 
