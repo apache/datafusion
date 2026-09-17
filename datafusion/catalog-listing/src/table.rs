@@ -602,7 +602,7 @@ impl ListingTable {
         let offset = args.offset();
         // The scan must read enough rows to satisfy `offset + limit`, not
         // just `limit`, before any rows are skipped below.
-        let inflated_limit = limit.map(|l| l + offset.unwrap_or(0));
+        let inflated_limit = limit.map(|l| l.saturating_add(offset.unwrap_or(0)));
 
         // extract types of partition columns
         let table_partition_cols = self

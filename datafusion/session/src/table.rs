@@ -238,6 +238,11 @@ pub trait TableProvider: Any + Debug + Sync + Send {
 
     /// Specify if DataFusion should provide the offset to the
     /// TableProvider to apply *during* the scan.
+    ///
+    /// # Note
+    ///
+    /// Make sure [`TableProvider::scan_with_args`] is overridden too
+    /// and [`ScanArgs::offset`] is used!
     fn supports_offset_pushdown(&self) -> bool {
         false
     }

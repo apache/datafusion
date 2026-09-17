@@ -646,7 +646,7 @@ async fn roundtrip_logical_plan_limit_offset() -> Result<()> {
         "expected offset to be pushed into the scan, got: {plan_str}"
     );
     assert!(
-        plan_str.contains("limit=5"),
+        plan_str.contains("fetch=5"),
         "expected limit to be pushed into the scan, got: {plan_str}"
     );
 

@@ -131,9 +131,11 @@ fn rewrite_limit(mut limit: Limit) -> Result<Transformed<LogicalPlan>> {
             // The source guarantees it will omit exactly the first `skip`
             // rows itself, so the remaining `Limit` only needs to trim to
             // `fetch` — its skip becomes 0.
-            scan.offset = Some(scan.offset.unwrap_or(0) + skip);
+            scan.offset = Some(scan.offset.unwrap_or(0).saturating_add(skip));
             let new_fetch = if fetch != 0 {
-                scan.fetch.map(|x| min(x, fetch)).or(Some(fetch))
+                scan.fetch
+                    .map(|existing_fetch| min(existing_fetch.saturating_sub(skip), fetch))
+                    .or(Some(fetch))
             } else {
                 Some(0)
             };

@@ -2585,8 +2585,13 @@ impl Unparser<'_> {
                     builder = builder.filter(filter)?;
                 }
 
-                if let Some(fetch) = table_scan.fetch {
-                    builder = builder.limit(0, Some(fetch))?;
+                match (table_scan.offset, table_scan.fetch) {
+                    (Some(offset), Some(fetch)) => {
+                        builder = builder.limit(offset, Some(fetch))?
+                    }
+                    (Some(offset), None) => builder = builder.limit(offset, None)?,
+                    (None, Some(fetch)) => builder = builder.limit(0, Some(fetch))?,
+                    (None, None) => (),
                 }
 
                 // If the table scan has an alias but no projection or filters, it means no column references are rebased.
