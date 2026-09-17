@@ -298,28 +298,23 @@ WHERE (id = ANY (SELECT id FROM inner_table_with_null)) IS NULL;
 ----
 logical_plan
 01)Projection: outer_table.value
-02)--Filter: __correlated_sq_1.mark OR __correlated_sq_2.mark AND NOT __correlated_sq_3.mark AND Boolean(NULL) IS NULL
-03)----Projection: outer_table.value, __correlated_sq_1.mark, __correlated_sq_2.mark, __correlated_sq_3.mark
-04)------LeftMark Join:  Filter: outer_table.id = __correlated_sq_3.id IS TRUE
-05)--------LeftMark Join:  Filter: outer_table.id = __correlated_sq_2.id IS NULL
-06)----------LeftMark Join:  Filter: outer_table.id = __correlated_sq_1.id IS TRUE
-07)------------TableScan: outer_table projection=[id, value]
-08)------------SubqueryAlias: __correlated_sq_1
-09)--------------TableScan: inner_table_with_null projection=[id]
-10)----------SubqueryAlias: __correlated_sq_2
-11)------------TableScan: inner_table_with_null projection=[id]
-12)--------SubqueryAlias: __correlated_sq_3
-13)----------TableScan: inner_table_with_null projection=[id]
+02)--Filter: __correlated_sq_1.mark IS NOT DISTINCT FROM Boolean(true) OR __correlated_sq_2.mark IS NOT DISTINCT FROM Boolean(true) AND __correlated_sq_1.mark IS DISTINCT FROM Boolean(true) AND Boolean(NULL) IS NULL
+03)----Projection: outer_table.value, __correlated_sq_1.mark, __correlated_sq_2.mark
+04)------LeftMark Join:  Filter: outer_table.id = __correlated_sq_2.id IS NULL
+05)--------LeftMark Join:  Filter: outer_table.id = __correlated_sq_1.id IS TRUE
+06)----------TableScan: outer_table projection=[id, value]
+07)----------SubqueryAlias: __correlated_sq_1
+08)------------TableScan: inner_table_with_null projection=[id]
+09)--------SubqueryAlias: __correlated_sq_2
+10)----------TableScan: inner_table_with_null projection=[id]
 physical_plan
-01)FilterExec: mark@1 OR mark@2 AND NOT mark@3 AND NULL IS NULL, projection=[value@0]
-02)--NestedLoopJoinExec: join_type=RightMark, filter=(id@0 = id@1) IS NOT DISTINCT FROM true, projection=[value@1, mark@2, mark@3, mark@4]
+01)FilterExec: mark@1 IS NOT DISTINCT FROM true OR mark@2 IS NOT DISTINCT FROM true AND mark@1 IS DISTINCT FROM true AND NULL IS NULL, projection=[value@0]
+02)--NestedLoopJoinExec: join_type=RightMark, filter=id@0 = id@1 IS NULL, projection=[value@1, mark@2, mark@3]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----NestedLoopJoinExec: join_type=RightMark, filter=id@0 = id@1 IS NULL
-05)------DataSourceExec: partitions=1, partition_sizes=[1]
-06)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-07)--------NestedLoopJoinExec: join_type=RightMark, filter=(id@0 = id@1) IS NOT DISTINCT FROM true
-08)----------DataSourceExec: partitions=1, partition_sizes=[1]
-09)----------DataSourceExec: partitions=1, partition_sizes=[1]
+04)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)------NestedLoopJoinExec: join_type=RightMark, filter=(id@0 = id@1) IS NOT DISTINCT FROM true
+06)--------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query T rowsort
 SELECT value
@@ -338,28 +333,23 @@ WHERE (id = ANY (SELECT id FROM inner_table_no_null)) IS TRUE;
 ----
 logical_plan
 01)Projection: outer_table.value
-02)--Filter: __correlated_sq_1.mark OR __correlated_sq_2.mark AND NOT __correlated_sq_3.mark AND Boolean(NULL) IS TRUE
-03)----Projection: outer_table.value, __correlated_sq_1.mark, __correlated_sq_2.mark, __correlated_sq_3.mark
-04)------LeftMark Join:  Filter: outer_table.id = __correlated_sq_3.id IS TRUE
-05)--------LeftMark Join:  Filter: outer_table.id = __correlated_sq_2.id IS NULL
-06)----------LeftMark Join:  Filter: outer_table.id = __correlated_sq_1.id IS TRUE
-07)------------TableScan: outer_table projection=[id, value]
-08)------------SubqueryAlias: __correlated_sq_1
-09)--------------TableScan: inner_table_no_null projection=[id]
-10)----------SubqueryAlias: __correlated_sq_2
-11)------------TableScan: inner_table_no_null projection=[id]
-12)--------SubqueryAlias: __correlated_sq_3
-13)----------TableScan: inner_table_no_null projection=[id]
+02)--Filter: __correlated_sq_1.mark IS NOT DISTINCT FROM Boolean(true) OR __correlated_sq_2.mark IS NOT DISTINCT FROM Boolean(true) AND __correlated_sq_1.mark IS DISTINCT FROM Boolean(true) AND Boolean(NULL) IS TRUE
+03)----Projection: outer_table.value, __correlated_sq_1.mark, __correlated_sq_2.mark
+04)------LeftMark Join:  Filter: outer_table.id = __correlated_sq_2.id IS NULL
+05)--------LeftMark Join:  Filter: outer_table.id = __correlated_sq_1.id IS TRUE
+06)----------TableScan: outer_table projection=[id, value]
+07)----------SubqueryAlias: __correlated_sq_1
+08)------------TableScan: inner_table_no_null projection=[id]
+09)--------SubqueryAlias: __correlated_sq_2
+10)----------TableScan: inner_table_no_null projection=[id]
 physical_plan
-01)FilterExec: (mark@1 OR mark@2 AND NOT mark@3 AND NULL) IS NOT DISTINCT FROM true, projection=[value@0]
-02)--NestedLoopJoinExec: join_type=RightMark, filter=(id@0 = id@1) IS NOT DISTINCT FROM true, projection=[value@1, mark@2, mark@3, mark@4]
+01)FilterExec: (mark@1 IS NOT DISTINCT FROM true OR mark@2 IS NOT DISTINCT FROM true AND mark@1 IS DISTINCT FROM true AND NULL) IS NOT DISTINCT FROM true, projection=[value@0]
+02)--NestedLoopJoinExec: join_type=RightMark, filter=id@0 = id@1 IS NULL, projection=[value@1, mark@2, mark@3]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----NestedLoopJoinExec: join_type=RightMark, filter=id@0 = id@1 IS NULL
-05)------DataSourceExec: partitions=1, partition_sizes=[1]
-06)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-07)--------NestedLoopJoinExec: join_type=RightMark, filter=(id@0 = id@1) IS NOT DISTINCT FROM true
-08)----------DataSourceExec: partitions=1, partition_sizes=[1]
-09)----------DataSourceExec: partitions=1, partition_sizes=[1]
+04)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)------NestedLoopJoinExec: join_type=RightMark, filter=(id@0 = id@1) IS NOT DISTINCT FROM true
+06)--------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query T rowsort
 SELECT value
