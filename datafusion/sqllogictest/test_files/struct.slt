@@ -1803,3 +1803,28 @@ drop view struct_ctor_view;
 
 statement ok
 drop table struct_ctor_null;
+
+# Merging an extraction projection into a projection whose output lost its
+# qualifier. Eliminating the empty side of the union leaves a projection of
+# bare column names over a qualified input, and the merge used to add the
+# pass-through columns under those bare names beside the qualified ones the
+# projection already carried, which is an ambiguous schema.
+statement ok
+create table leaf_merge_source(v int, s struct<a int>, env varchar) as values (1, {a: 10}, 'prod'), (2, {a: 20}, 'dev');
+
+query TI
+with samples as (
+  select v, s, env from leaf_merge_source
+),
+expanded as (
+  select v, s, env from samples
+  union all
+  select v, s, env from samples where 1 = 2
+)
+select env, sum(s['a']) from expanded group by env order by env;
+----
+dev 20
+prod 10
+
+statement ok
+drop table leaf_merge_source;

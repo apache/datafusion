@@ -637,6 +637,24 @@ impl<'a> LeafExpressionExtractor<'a> {
     }
 }
 
+/// The way `schema` names `col`, or `None` when it does not hold it unambiguously.
+///
+/// A qualified column is taken as it stands. An unqualified one is matched on name alone
+/// and comes back carrying the qualifier the schema gives that field, so a column pushed
+/// into a projection reads as the input spells it. A name the schema holds more than once
+/// resolves to nothing rather than to an arbitrary one of them.
+fn resolve_against(schema: &DFSchema, col: &Column) -> Option<Column> {
+    match &col.relation {
+        Some(relation) => schema
+            .has_column_with_qualified_name(relation, &col.name)
+            .then(|| col.clone()),
+        None => schema
+            .qualified_field_with_unqualified_name(&col.name)
+            .ok()
+            .map(|(qualifier, field)| Column::new(qualifier.cloned(), field.name())),
+    }
+}
+
 /// Build an extraction projection above the target node (shared by both passes).
 ///
 /// If the target is an existing projection, merges into it. This requires
@@ -702,27 +720,36 @@ fn build_extraction_projection_impl(
         // than target_schema (the projection's output) because columns produced
         // by alias expressions (e.g., CSE's __common_expr_N) exist in the output but
         // not the input, and cannot be added as pass-through Column references.
+        //
+        // Both sides of that check are read in the input's own spelling. A column can
+        // arrive here unqualified while the input names it `t.c`, and the other way round:
+        // a projection of bare names over a qualified input is what eliminating one side
+        // of a union leaves behind. Resolving both sides lets a pass-through the
+        // projection already carries match the one about to be added, and pushes the one
+        // that is genuinely new under the name the input gives it. Left unresolved, the
+        // merged projection would hold `t.c` and a bare `c` together, which
+        // `Projection::try_new` rejects as ambiguous.
+        let input_schema = existing.input.schema();
         let existing_cols: IndexSet<Column> = existing
             .expr
             .iter()
             .filter_map(|e| {
                 if let Expr::Column(c) = e {
-                    Some(c.clone())
+                    resolve_against(input_schema, c)
                 } else {
                     None
                 }
             })
             .collect();
 
-        let input_schema = existing.input.schema();
         for col in columns_needed {
             let col_expr = Expr::Column(col.clone());
             let resolved = replace_cols_by_name(col_expr, &replace_map)?;
             if let Expr::Column(resolved_col) = &resolved
-                && !existing_cols.contains(resolved_col)
-                && input_schema.has_column(resolved_col)
+                && let Some(input_col) = resolve_against(input_schema, resolved_col)
+                && !existing_cols.contains(&input_col)
             {
-                proj_exprs.push(Expr::Column(resolved_col.clone()));
+                proj_exprs.push(Expr::Column(input_col));
             }
             // If resolved to non-column expr, it's already computed by existing projection
         }
