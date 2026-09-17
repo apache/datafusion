@@ -271,21 +271,55 @@ impl ScalarUDFImpl for DateTruncFunc {
             let parsed_tz = parse_tz(tz_opt)?;
             let array = as_primitive_array::<T>(array)?;
 
+            // Timezones with a fixed UTC offset (including UTC itself) truncate
+            // identically to timezone-naive values shifted by that offset, so
+            // they can use the fast path.
+            let offset_nanos_opt = tz_opt.and_then(|tz| try_get_fixed_offset_nanos(tz));
+            let is_fixed_offset = tz_opt.is_none() || offset_nanos_opt.is_some();
+            let offset_nanos = offset_nanos_opt.unwrap_or(0);
+
             // fast path for fine granularity
             // For modern timezones, it's correct to truncate "minute" in this way.
             // Both datafusion and arrow are ignoring historical timezone's non-minute granularity
             // bias (e.g., Asia/Kathmandu before 1919 is UTC+05:41:16).
-            // In UTC, "hour" and "day" have uniform durations and can be truncated with simple arithmetic
+            // In UTC (or any fixed offset), "hour" and "day" have uniform durations and
+            // can be truncated with simple arithmetic
             if granularity.is_fine_granularity()
-                || (parsed_tz.is_none() && granularity.is_fine_granularity_utc())
+                || (is_fixed_offset && granularity.is_fine_granularity_utc())
             {
                 let result = general_date_trunc_array_fine_granularity(
                     T::UNIT,
                     array,
                     granularity,
+                    offset_nanos,
                     tz_opt.cloned(),
                 )?;
                 return Ok(ColumnarValue::Array(result));
+            }
+
+            // Coarse granularities (week, month, quarter, year) on timezone-naive
+            // or fixed-offset timestamps: truncate the offset-shifted value
+            // without a timezone and shift back, using integer calendar math per
+            // value instead of per-value chrono conversions.
+            if is_fixed_offset {
+                let offset_in_unit = offset_nanos / nanos_per_unit(T::UNIT);
+                let array: PrimitiveArray<T> = array
+                    .try_unary(|value| {
+                        let shifted = value.checked_add(offset_in_unit).ok_or_else(|| {
+                            exec_datafusion_err!("Timestamp {value} out of range")
+                        })?;
+                        let truncated =
+                            general_date_trunc(T::UNIT, shifted, None, granularity)?;
+                        truncated
+                            .checked_sub(offset_in_unit)
+                            .ok_or_else(|| {
+                                exec_datafusion_err!(
+                                    "Timestamp {value} out of range after truncating to {granularity}"
+                                )
+                            })
+                    })?
+                    .with_timezone_opt(tz_opt.cloned());
+                return Ok(ColumnarValue::Array(Arc::new(array)));
             }
 
             let array: PrimitiveArray<T> = array
@@ -725,7 +759,9 @@ fn date_trunc_coarse(granularity: DatePart, value: i64, tz: Option<Tz>) -> Resul
             // Use chrono DateTime<Tz> to clear the various fields because need to clear per timezone,
             // and NaiveDateTime (ISO 8601) has no concept of timezones
             let value = as_datetime_with_timezone::<TimestampNanosecondType>(value, tz)
-                .ok_or(exec_datafusion_err!("Timestamp {value} out of range"))?;
+                .ok_or_else(|| {
+                exec_datafusion_err!("Timestamp {value} out of range")
+            })?;
             _date_trunc_coarse_with_tz(granularity, value)?
         }
         None => _date_trunc_coarse_without_tz(granularity, value),
@@ -744,11 +780,14 @@ fn date_trunc_coarse(granularity: DatePart, value: i64, tz: Option<Tz>) -> Resul
 ///
 /// This function is timezone-agnostic and should only be used when:
 /// - No timezone is specified in the input, OR
+/// - The timezone is a fixed UTC offset (truncating the offset-shifted value
+///   and shifting back is equivalent to truncating in that timezone), OR
 /// - The granularity is less than hour as hour can be affected by DST transitions in some cases
 fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
     tu: TimeUnit,
     array: &PrimitiveArray<T>,
     granularity: DatePart,
+    offset_nanos: i64,
     tz_opt: Option<Arc<str>>,
 ) -> Result<ArrayRef> {
     let unit = match (tu, granularity) {
@@ -778,26 +817,42 @@ fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
 
     if let Some(unit) = unit {
         let unit = unit.get();
-        // Truncation can only underflow within one `unit` of `i64::MIN`.
-        // Track that possibility while computing the common case so the loop
-        // remains infallible and can be vectorized.
-        let underflow_bound = i64::MIN + unit;
+        // Truncate the value shifted by the (whole-unit) timezone offset and
+        // shift back: `truncate_tz(v) == truncate_naive(v + offset) - offset`.
+        // For fine granularities the offset is a multiple of `unit` and cancels
+        // out; for hour/day it shifts the result as required.
+        let offset_in_unit = offset_nanos / nanos_per_unit(tu);
+        let add_lower = i64::MIN.saturating_sub(offset_in_unit);
+        let add_upper = i64::MAX.saturating_sub(offset_in_unit);
+        // Truncation of the shifted value can only underflow within one `unit`
+        // of `i64::MIN`. Track that (plus a wrapping shift at either extreme)
+        // while computing the common case so the loop remains infallible and
+        // can be vectorized.
+        let underflow_bound = i64::MIN + unit - offset_in_unit.min(0);
         let mut maybe_underflow = false;
         let values: Vec<i64> = array
             .values()
             .iter()
             .map(|value| {
-                maybe_underflow |= *value < underflow_bound;
-                value.wrapping_sub(value.rem_euclid(unit))
+                maybe_underflow |=
+                    *value < add_lower || *value > add_upper || *value < underflow_bound;
+                let shifted = value.wrapping_add(offset_in_unit);
+                shifted.wrapping_sub(shifted.rem_euclid(unit)) - offset_in_unit
             })
             .collect();
         let array: PrimitiveArray<T> = if maybe_underflow {
             array.try_unary(|value| {
-                value.checked_sub(value.rem_euclid(unit)).ok_or_else(|| {
-                    exec_datafusion_err!(
-                        "Timestamp {value} out of range after truncating to {granularity}"
-                    )
-                })
+                let shifted = value.checked_add(offset_in_unit).ok_or_else(|| {
+                    exec_datafusion_err!("Timestamp {value} out of range")
+                })?;
+                shifted
+                    .checked_sub(shifted.rem_euclid(unit))
+                    .and_then(|truncated| truncated.checked_sub(offset_in_unit))
+                    .ok_or_else(|| {
+                        exec_datafusion_err!(
+                            "Timestamp {value} out of range after truncating to {granularity}"
+                        )
+                    })
             })?
         } else {
             PrimitiveArray::new(values.into(), array.nulls().cloned())
@@ -807,6 +862,16 @@ fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
     } else {
         // truncate to the same or smaller unit
         Ok(Arc::new(array.clone()))
+    }
+}
+
+/// Nanoseconds in one unit of the array's time unit.
+fn nanos_per_unit(tu: TimeUnit) -> i64 {
+    match tu {
+        Second => 1_000_000_000,
+        Millisecond => 1_000_000,
+        Microsecond => 1_000,
+        Nanosecond => 1,
     }
 }
 
@@ -833,7 +898,8 @@ fn general_date_trunc(
         tz,
     )?;
 
-    let result = match tu {
+    // rescale the nanosecond result back to the array's time unit
+    Ok(match tu {
         Second => match granularity {
             DatePart::Minute => nano / 1_000_000_000 / 60 * 60,
             _ => nano / 1_000_000_000,
@@ -856,8 +922,45 @@ fn general_date_trunc(
             DatePart::Microsecond => nano / 1_000 * 1_000,
             _ => nano,
         },
+    })
+}
+
+/// Returns the fixed UTC offset (in nanoseconds) for `tz`, when `tz` is a
+/// fixed-offset timezone, and `None` for named timezones (e.g. `Europe/Berlin`)
+/// which require timezone-aware (chrono) handling.
+///
+/// Accepts the same grammar as `arrow::array::timezone::parse_fixed_offset`
+/// (`+HH`, `+HHMM`, `+HH:MM` and their `-` counterparts), plus `UTC`, so that
+/// every timezone arrow treats as a fixed offset is handled here.
+///
+// TODO: make arrow's `Tz` exposes if it's a fixed-offset timezone so this helper could be eliminated.
+fn try_get_fixed_offset_nanos(tz: &str) -> Option<i64> {
+    if tz == "UTC" {
+        return Some(0);
+    }
+    let bytes = tz.as_bytes();
+    let mut values = match bytes.len() {
+        // [+-]HH:MM
+        6 if bytes[3] == b':' => [bytes[1], bytes[2], bytes[4], bytes[5]],
+        // [+-]HHMM
+        5 => [bytes[1], bytes[2], bytes[3], bytes[4]],
+        // [+-]HH
+        3 => [bytes[1], bytes[2], b'0', b'0'],
+        _ => return None,
     };
-    Ok(result)
+    for x in values.iter_mut() {
+        *x = x.wrapping_sub(b'0');
+    }
+    if values.iter().any(|x| *x > 9) {
+        return None;
+    }
+    let secs = (i64::from(values[0]) * 10 + i64::from(values[1])) * 60 * 60
+        + (i64::from(values[2]) * 10 + i64::from(values[3])) * 60;
+    match bytes[0] {
+        b'+' => Some(secs * NANOS_PER_SECOND),
+        b'-' => Some(-secs * NANOS_PER_SECOND),
+        _ => None,
+    }
 }
 
 fn parse_tz(tz: Option<&Arc<str>>) -> Result<Option<Tz>> {
@@ -998,6 +1101,61 @@ mod tests {
             err.contains("out of range after truncating to year"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn test_date_trunc_fixed_offset_fast_path_produces_same_results() {
+        // A fixed-offset timezone (e.g. "+05:45") must produce the same results
+        // as the IANA zone with the same offset (e.g. "Asia/Kathmandu"), for
+        // coarse granularities that go through the integer calendar path.
+        // Timestamps are post-1986 so Kathmandu's offset is exactly +05:45.
+        let timestamps = [
+            "2020-09-08T13:42:29.190855Z",
+            "1990-06-15T00:00:00.000000Z",
+            "2016-01-03T09:19:37.123456Z",
+            "2024-10-27T01:30:00.000000Z",
+        ];
+
+        let truncate = |granularity: &str, tz_opt: Option<Arc<str>>| -> Vec<i64> {
+            let input = timestamps
+                .iter()
+                .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
+                .collect::<TimestampNanosecondArray>()
+                .with_timezone_opt(tz_opt.clone());
+            let batch_len = input.len();
+            let arg_fields = vec![
+                Field::new("a", DataType::Utf8, false).into(),
+                Field::new("b", input.data_type().clone(), false).into(),
+            ];
+            let args = ScalarFunctionArgs {
+                args: vec![
+                    ColumnarValue::Scalar(ScalarValue::from(granularity.to_string())),
+                    ColumnarValue::Array(Arc::new(input)),
+                ],
+                arg_fields,
+                number_rows: batch_len,
+                return_field: Field::new(
+                    "f",
+                    DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
+                    true,
+                )
+                .into(),
+                config_options: Arc::new(ConfigOptions::default()),
+            };
+            let result = DateTruncFunc::new().invoke_with_args(args).unwrap();
+            let ColumnarValue::Array(result) = result else {
+                panic!("unexpected column type");
+            };
+            as_primitive_array::<TimestampNanosecondType>(&result)
+                .values()
+                .to_vec()
+        };
+
+        for granularity in ["hour", "day", "week", "month", "quarter", "year"] {
+            let fixed = truncate(granularity, Some(Arc::from("+05:45")));
+            let named = truncate(granularity, Some(Arc::from("Asia/Kathmandu")));
+            assert_eq!(fixed, named, "mismatch for {granularity}");
+        }
     }
 
     #[test]
@@ -1365,9 +1523,14 @@ mod tests {
         array: PrimitiveArray<T>,
         granularity: DatePart,
     ) {
-        let error =
-            general_date_trunc_array_fine_granularity(T::UNIT, &array, granularity, None)
-                .unwrap_err();
+        let error = general_date_trunc_array_fine_granularity(
+            T::UNIT,
+            &array,
+            granularity,
+            0,
+            None,
+        )
+        .unwrap_err();
         assert!(
             error
                 .strip_backtrace()
@@ -1409,6 +1572,7 @@ mod tests {
                 TimeUnit::Nanosecond,
                 &unsafe_input,
                 DatePart::Microsecond,
+                0,
                 None,
             )
             .is_err()
@@ -1423,6 +1587,7 @@ mod tests {
             TimeUnit::Nanosecond,
             &input,
             DatePart::Microsecond,
+            0,
             None,
         )
         .unwrap();
@@ -1448,6 +1613,7 @@ mod tests {
             TimeUnit::Nanosecond,
             &input,
             DatePart::Microsecond,
+            0,
             None,
         )
         .unwrap();
