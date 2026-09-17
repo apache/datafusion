@@ -1,0 +1,31 @@
+description = "Null-aware (NOT IN) hash join benchmarks: uncorrelated, non-equality-correlated, and equality-correlated NOT IN across NULL fractions"
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[[options]]
+name = "rows"
+short = "r"
+env = "NAJ_ROWS"
+default = "10000"
+values = ["10000", "..."]
+help = "Rows per table for the correlated NOT IN queries (Q04-Q08). These evaluate the join filter over candidate build x probe pairs, so their cost grows with the square of this value."
+
+[[options]]
+name = "large-rows"
+short = "l"
+env = "NAJ_LARGE_ROWS"
+default = "1000000"
+values = ["1000000", "..."]
+help = "Rows per table for the uncorrelated NOT IN queries (Q01-Q03), whose cost is linear in the table size."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- null_aware_join"
+description = "Run all null-aware join queries at the default sizes."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- null_aware_join --query 6"
+description = "Run only Q06, the worst case for filter evaluation over NULL build rows."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- null_aware_join -r 20000"
+description = "Run with 20,000 rows per table for the correlated queries (~4x the filter work of the default)."
