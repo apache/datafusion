@@ -749,11 +749,18 @@ impl AggregateFunctionExpr {
 
     /// the field of the final result of this aggregation.
     pub fn state_fields(&self) -> Result<Vec<FieldRef>> {
+        // An order-insensitive aggregate is never fed its ORDER BY columns (see
+        // `order_bys`), so its state must not describe ordering fields either.
+        let ordering_fields = if self.order_sensitivity().is_insensitive() {
+            &[]
+        } else {
+            self.ordering_fields.as_slice()
+        };
         let args = StateFieldsArgs {
             name: &self.name,
             input_fields: &self.input_fields,
             return_field: Arc::clone(&self.return_field),
-            ordering_fields: &self.ordering_fields,
+            ordering_fields,
             is_distinct: self.is_distinct,
         };
 

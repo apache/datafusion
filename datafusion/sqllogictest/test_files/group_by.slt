@@ -3075,6 +3075,21 @@ FRA 50 200
 GRC 30 80
 TUR 75 100
 
+# An ORDER BY on an order-insensitive aggregator is ignored, so its partial
+# state must not include ordering fields. MIN and MAX use the default state
+# fields; SUM is a control that already defines its own.
+query TRRR
+SELECT country, MIN(amount ORDER BY ts DESC) AS min1,
+  MAX(amount ORDER BY ts DESC) AS max1,
+  SUM(amount ORDER BY ts DESC) AS sum1
+  FROM sales_global
+  GROUP BY country
+  ORDER BY country
+----
+FRA 50 200 250
+GRC 30 80 110
+TUR 75 100 175
+
 # Conversion in between FIRST_VALUE and LAST_VALUE to resolve
 # contradictory requirements should work in multi partitions.
 query TT
