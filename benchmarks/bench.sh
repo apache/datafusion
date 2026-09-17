@@ -497,6 +497,7 @@ main() {
                     run_tpcds
                     run_smj
                     run_dict 
+                    run_null_aware_join
                     ;;
                 tpch)
                     run_tpch "1" "parquet"
