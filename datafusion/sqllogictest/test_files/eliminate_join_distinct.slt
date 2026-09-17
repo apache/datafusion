@@ -134,6 +134,81 @@ SELECT MIN(empty_r.id) FROM empty_r LEFT JOIN l ON l.id = empty_r.id;
 ----
 NULL
 
+# Aggregates that deduplicate their own input ignore join fanout as well.
+query TT
+EXPLAIN SELECT l.g, COUNT(DISTINCT l.x), SUM(DISTINCT l.x) FROM l JOIN r ON l.id = r.id GROUP BY l.g;
+----
+logical_plan
+01)Aggregate: groupBy=[[l.g]], aggr=[[count(DISTINCT l.x), sum(DISTINCT CAST(l.x AS Int64))]]
+02)--Projection: l.g, l.x
+03)----LeftSemi Join: l.id = r.id
+04)------TableScan: l projection=[id, g, x]
+05)------TableScan: r projection=[id]
+
+query III rowsort
+SELECT l.g, COUNT(DISTINCT l.x), SUM(DISTINCT l.x) FROM l JOIN r ON l.id = r.id GROUP BY l.g;
+----
+0 2 30
+2 0 NULL
+
+query TT
+EXPLAIN SELECT COUNT(DISTINCT l.x) FILTER (WHERE l.g = 0), MIN(l.x) FROM l JOIN r ON l.id = r.id;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[count(DISTINCT l.x) FILTER (WHERE l.g = Int32(0)) AS count(DISTINCT l.x) FILTER (WHERE l.g = Int64(0)), min(l.x)]]
+02)--Projection: l.g, l.x
+03)----LeftSemi Join: l.id = r.id
+04)------TableScan: l projection=[id, g, x]
+05)------TableScan: r projection=[id]
+
+query II
+SELECT COUNT(DISTINCT l.x) FILTER (WHERE l.g = 0), MIN(l.x) FROM l JOIN r ON l.id = r.id;
+----
+2 10
+
+query ?
+SELECT ARRAY_AGG(DISTINCT l.x ORDER BY l.x) FROM l JOIN r ON l.id = r.id;
+----
+[10, 20, NULL]
+
+# A DISTINCT aggregate with a non-DISTINCT sensitive companion must retain join fanout.
+query TT
+EXPLAIN SELECT COUNT(DISTINCT l.x), COUNT(l.g) FROM l JOIN r ON l.id = r.id;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[count(DISTINCT l.x), count(l.g)]]
+02)--Projection: l.g, l.x
+03)----Inner Join: l.id = r.id
+04)------TableScan: l projection=[id, g, x]
+05)------TableScan: r projection=[id]
+
+query II
+SELECT COUNT(DISTINCT l.x), COUNT(l.g) FROM l JOIN r ON l.id = r.id;
+----
+2 7
+
+# REGR_COUNT does not implement DISTINCT and counts every joined row, so
+# DISTINCT does not hide the join fanout and the join must stay an inner join.
+query TT
+EXPLAIN SELECT REGR_COUNT(DISTINCT l.x, l.g) FROM l JOIN r ON l.id = r.id;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[regr_count(DISTINCT CAST(l.x AS Float64), CAST(l.g AS Float64))]]
+02)--Projection: l.g, l.x
+03)----Inner Join: l.id = r.id
+04)------TableScan: l projection=[id, g, x]
+05)------TableScan: r projection=[id]
+
+query I
+SELECT REGR_COUNT(DISTINCT l.x, l.g) FROM l JOIN r ON l.id = r.id;
+----
+4
+
+query I
+SELECT REGR_COUNT(DISTINCT l.x, l.g) FROM l LEFT JOIN r ON l.id = r.id;
+----
+6
+
 # A limit below the aggregate still observes repeated join rows.
 query I
 SELECT MAX(x) FROM (SELECT l.x FROM l JOIN r ON l.id = r.id ORDER BY l.x NULLS LAST LIMIT 2);

@@ -257,9 +257,11 @@ fn rewrite_node(
             )?;
 
             // The input can ignore repeated rows when grouping expressions are
-            // repeatable and every aggregate ignores duplicates. This covers
-            // grouping-only and global aggregates. One sensitive aggregate makes
-            // input multiplicity observable, even beneath an insensitive ancestor.
+            // repeatable and every aggregate ignores duplicates, either by
+            // nature (`min`) or because it deduplicates its own input
+            // (`count(DISTINCT x)`). This covers grouping-only and global
+            // aggregates. One sensitive aggregate makes input multiplicity
+            // observable, even beneath an insensitive ancestor.
             let child_duplicate_insensitive = group_expr.iter().all(is_repeatable)
                 && aggr_expr.iter().all(is_duplicate_insensitive_aggregate);
 
@@ -689,8 +691,9 @@ mod tests {
         out_ref_col, scalar_subquery,
     };
     use datafusion_functions_aggregate::expr_fn::{
-        count, count_distinct, max, min, stddev,
+        corr, count, count_distinct, max, min, regr_count, stddev,
     };
+    use std::hash::{Hash, Hasher};
     use std::sync::Arc;
 
     macro_rules! assert_optimized_plan_equal {
@@ -865,16 +868,53 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_requires_insensitive_declaration() -> Result<()> {
-        // DISTINCT alone does not qualify a function without an Insensitive
-        // declaration, even beside an aggregate that does qualify.
-        for sensitive in [
-            count(col("l.x")),
-            count_distinct(col("l.x")),
-            stddev(col("l.x")).distinct().build()?,
+    fn distinct_sensitive_aggregates_enable_semi_joins() -> Result<()> {
+        // A `Sensitive` function called with DISTINCT deduplicates its own
+        // input, so it cannot observe rows repeated by the join.
+        for aggr_expr in [
+            vec![count_distinct(col("l.x"))],
+            vec![count_distinct(col("l.x")), count_distinct(col("l.y"))],
+            vec![
+                min(col("l.x")),
+                count(col("l.x"))
+                    .distinct()
+                    .filter(col("l.y").gt(lit(0)))
+                    .build()?,
+            ],
         ] {
             let plan = left_join_right()?
-                .aggregate(Vec::<Expr>::new(), vec![min(col("l.x")), sensitive])?
+                .aggregate(vec![col("l.id")], aggr_expr)?
+                .build()?;
+            let result = EliminateJoin::new().rewrite(plan, &OptimizerContext::new())?;
+            assert!(result.transformed);
+            let LogicalPlan::Aggregate(aggregate) = result.data else {
+                panic!("expected aggregate");
+            };
+            let LogicalPlan::Join(join) = aggregate.input.as_ref() else {
+                panic!("expected join");
+            };
+            assert_eq!(join.join_type, JoinType::LeftSemi);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_sensitive_aggregates_block_rewrite() -> Result<()> {
+        // One aggregate that observes repeated rows keeps the join, even
+        // beside aggregates that do not. DISTINCT does not qualify an
+        // `Unsupported` function: its accumulator does not deduplicate, and
+        // may silently compute the non-distinct answer.
+        for sensitive in [
+            count(col("l.x")),
+            stddev(col("l.x")).distinct().build()?,
+            corr(col("l.x"), col("l.y")).distinct().build()?,
+            regr_count(col("l.x"), col("l.y")).distinct().build()?,
+        ] {
+            let plan = left_join_right()?
+                .aggregate(
+                    Vec::<Expr>::new(),
+                    vec![min(col("l.x")), count_distinct(col("l.x")), sensitive],
+                )?
                 .build()?;
             assert!(
                 !EliminateJoin::new()
@@ -1101,14 +1141,31 @@ mod tests {
         Ok(())
     }
 
-    #[derive(Debug, PartialEq, Eq, Hash)]
-    struct InsensitiveUdaf {
+    /// An aggregate that declares the given [`DistinctHandling`].
+    #[derive(Debug, PartialEq, Eq)]
+    struct CustomUdaf {
         signature: Signature,
+        distinct_handling: DistinctHandling,
     }
 
-    impl AggregateUDFImpl for InsensitiveUdaf {
+    impl CustomUdaf {
+        fn new(volatility: Volatility, distinct_handling: DistinctHandling) -> Self {
+            Self {
+                signature: Signature::any(1, volatility),
+                distinct_handling,
+            }
+        }
+    }
+
+    impl Hash for CustomUdaf {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.signature.hash(state);
+        }
+    }
+
+    impl AggregateUDFImpl for CustomUdaf {
         fn name(&self) -> &str {
-            "custom_insensitive"
+            "custom_udaf"
         }
         fn signature(&self) -> &Signature {
             &self.signature
@@ -1120,8 +1177,41 @@ mod tests {
             unimplemented!("logical optimizer test")
         }
         fn distinct_handling(&self) -> DistinctHandling {
-            DistinctHandling::Insensitive
+            self.distinct_handling
         }
+    }
+
+    #[test]
+    fn distinct_only_qualifies_sensitive_udaf() -> Result<()> {
+        for (distinct_handling, distinct, expect_rewrite) in [
+            (DistinctHandling::Insensitive, false, true),
+            (DistinctHandling::Insensitive, true, true),
+            (DistinctHandling::Sensitive, false, false),
+            // The accumulator deduplicates its own input.
+            (DistinctHandling::Sensitive, true, true),
+            (DistinctHandling::Unsupported, false, false),
+            // The accumulator does not implement DISTINCT, so the input's
+            // repeated rows stay observable.
+            (DistinctHandling::Unsupported, true, false),
+        ] {
+            let udf = AggregateUDF::from(CustomUdaf::new(
+                Volatility::Immutable,
+                distinct_handling,
+            ));
+            let mut aggr = udf.call(vec![col("l.x")]);
+            if distinct {
+                aggr = aggr.distinct().build()?;
+            }
+            let plan = left_join_right()?
+                .aggregate(Vec::<Expr>::new(), vec![aggr])?
+                .build()?;
+            let result = EliminateJoin::new().rewrite(plan, &OptimizerContext::new())?;
+            assert_eq!(
+                result.transformed, expect_rewrite,
+                "{distinct_handling:?}, distinct={distinct}"
+            );
+        }
+        Ok(())
     }
 
     #[test]
@@ -1131,9 +1221,10 @@ mod tests {
             Volatility::Stable,
             Volatility::Volatile,
         ] {
-            let udf = AggregateUDF::from(InsensitiveUdaf {
-                signature: Signature::any(1, volatility),
-            })
+            let udf = AggregateUDF::from(CustomUdaf::new(
+                volatility,
+                DistinctHandling::Insensitive,
+            ))
             .with_aliases(["custom_alias"]);
             let plan = left_join_right()?
                 .aggregate(

@@ -59,9 +59,11 @@ pub(crate) fn is_repeatable(expr: &Expr) -> bool {
         .expect("expression traversal is infallible")
 }
 
-/// Whether an aggregate explicitly declares duplicate insensitivity and can
-/// safely ignore repeated input rows. Arguments, FILTER, and ORDER BY must
-/// also be repeatable: MIN(random()) still observes repetitions.
+/// Whether an aggregate can safely ignore repeated input rows. This holds when
+/// the function declares [`DistinctHandling::Insensitive`], or when it is
+/// called with `DISTINCT` and declares [`DistinctHandling::Sensitive`], so that
+/// its accumulator removes the repeated rows itself. Arguments, FILTER, and
+/// ORDER BY must also be repeatable: MIN(random()) still observes repetitions.
 pub(crate) fn is_duplicate_insensitive_aggregate(mut expr: &Expr) -> bool {
     while let Expr::Alias(alias) = expr {
         expr = &alias.expr;
@@ -69,9 +71,17 @@ pub(crate) fn is_duplicate_insensitive_aggregate(mut expr: &Expr) -> bool {
     let Expr::AggregateFunction(aggregate) = expr else {
         return false;
     };
+    let ignores_duplicates = match aggregate.func.distinct_handling() {
+        DistinctHandling::Insensitive => true,
+        DistinctHandling::Sensitive => aggregate.params.distinct,
+        // The accumulator does not implement `DISTINCT` and may silently
+        // compute the non-distinct answer, so the flag proves nothing.
+        // Variants added in the future are treated the same way.
+        _ => false,
+    };
     // Expr::is_volatile checks scalar functions only; check the aggregate
     // function's own volatility separately.
-    aggregate.func.distinct_handling() == DistinctHandling::Insensitive
+    ignores_duplicates
         && aggregate.func.signature().volatility != Volatility::Volatile
         && is_repeatable(expr)
 }
