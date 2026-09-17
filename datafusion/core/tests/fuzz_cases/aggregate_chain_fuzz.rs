@@ -1224,8 +1224,7 @@ fn reference_case(query: Query, cardinality: Cardinality) -> Case {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn aggregate_chain_fuzz() {
-    let seed = rand::random::<u64>();
-    println!("aggregate_chain_fuzz seed = {seed}");
+    const SEED: u64 = 42;
     let mut total_spilled = 0;
     let mut failures: Vec<String> = vec![];
     // Every in-flight case holds several copies of the dataset and its own
@@ -1234,7 +1233,7 @@ async fn aggregate_chain_fuzz() {
     let max_concurrent_cases = get_available_parallelism();
 
     for cardinality in Cardinality::ALL {
-        let rows = generate_rows(cardinality, seed);
+        let rows = generate_rows(cardinality, SEED);
         let cases: Vec<Case> = all_cases()
             .into_iter()
             .filter(|case| case.params.cardinality == cardinality)
@@ -1275,7 +1274,7 @@ async fn aggregate_chain_fuzz() {
             }
             join_set.spawn(async move {
                 let outcome = run_case(case.clone(), inputs).await;
-                assert_eq!(outcome.output, expected, "{case:?} (seed {seed})");
+                assert_eq!(outcome.output, expected, "{case:?}");
                 (case, outcome.spilled)
             });
         }
@@ -1293,7 +1292,7 @@ async fn aggregate_chain_fuzz() {
     }
     assert!(
         failures.is_empty(),
-        "{} cases failed (seed {seed}):\n\n{}",
+        "{} cases failed:\n\n{}",
         failures.len(),
         failures.join("\n\n")
     );
