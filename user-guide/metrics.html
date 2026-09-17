@@ -674,6 +674,24 @@ rather than using accumulators.</p>
 when it is evaluated per aggregate. The legacy grouped hash path evaluates
 filters collectively, so its per-aggregate <code class="docutils literal notranslate"><span class="pre">arguments</span></code> timers cover argument
 expressions only; their sum need not equal <code class="docutils literal notranslate"><span class="pre">aggregate_arguments_time</span></code>.</p>
+<p>Aggregate implementations can also expose optional internal submetrics. These
+use the <code class="docutils literal notranslate"><span class="pre">agg_expr_{index}_internal_{subphase}_time</span></code> naming and <code class="docutils literal notranslate"><span class="pre">aggregate</span></code>
+label. The <code class="docutils literal notranslate"><span class="pre">internal</span></code> segment keeps them separate from call-boundary timers;
+<code class="docutils literal notranslate"><span class="pre">subphase</span></code> is a stable identifier owned and documented by the aggregate
+implementation. They are registered lazily only when an aggregate requests
+them, so aggregates without internal submetrics add no metrics. Registration
+is per <code class="docutils literal notranslate"><span class="pre">(aggregate</span> <span class="pre">expression</span> <span class="pre">index,</span> <span class="pre">subphase,</span> <span class="pre">partition)</span></code>: replacement
+accumulators in that partition share the same time, and normal metric display
+combines that time across partitions. An aggregate may request its submetric
+during accumulator construction, so it can appear even when its input is empty.
+For example, <code class="docutils literal notranslate"><span class="pre">array_agg(DISTINCT</span> <span class="pre">...)</span></code> records the time spent deduplicating
+input values as <code class="docutils literal notranslate"><span class="pre">agg_expr_{index}_internal_distinct_time</span></code>. Grouped accumulation
+records this once per input batch, rather than once per group, to avoid making
+metric collection proportional to group cardinality. These submetrics complement
+the <code class="docutils literal notranslate"><span class="pre">update</span></code>, <code class="docutils literal notranslate"><span class="pre">merge</span></code>, <code class="docutils literal notranslate"><span class="pre">state</span></code>, and <code class="docutils literal notranslate"><span class="pre">evaluate</span></code> timers rather than subdividing or
+replacing them. An internal submetric may therefore overlap its enclosing phase
+timer; it is a supplementary diagnostic and must not be added to phase timings
+as a breakdown.</p>
 <p>Except for the <code class="docutils literal notranslate"><span class="pre">Summary</span></code> metric <code class="docutils literal notranslate"><span class="pre">reduction_factor</span></code>, these operator-level and
 per-aggregate metrics are <code class="docutils literal notranslate"><span class="pre">Dev</span></code> metrics. They appear in <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">ANALYZE</span></code> when
 <code class="docutils literal notranslate"><span class="pre">datafusion.explain.analyze_level</span></code> includes <code class="docutils literal notranslate"><span class="pre">Dev</span></code> (the default), but are omitted
