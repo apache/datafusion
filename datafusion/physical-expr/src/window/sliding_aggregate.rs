@@ -22,10 +22,11 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::aggregate::AggregateFunctionExpr;
-use crate::window::window_expr::{AggregateWindowExpr, WindowFn, filter_array};
-use crate::window::{
-    PartitionBatches, PartitionWindowAggStates, PlainAggregateWindowExpr, WindowExpr,
+use crate::window::aggregate::reverse_aggregate_window_expr;
+use crate::window::window_expr::{
+    AggregateWindowExpr, WindowEvalContext, WindowFn, filter_array,
 };
+use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowExpr};
 use crate::{PhysicalExpr, expressions::PhysicalSortExpr};
 
 use arrow::array::{ArrayRef, BooleanArray};
@@ -102,8 +103,9 @@ impl WindowExpr for SlidingAggregateWindowExpr {
         &self,
         partition_batches: &PartitionBatches,
         window_agg_state: &mut PartitionWindowAggStates,
+        eval_ctx: &WindowEvalContext<'_>,
     ) -> Result<()> {
-        self.aggregate_evaluate_stateful(partition_batches, window_agg_state)
+        self.aggregate_evaluate_stateful(partition_batches, window_agg_state, eval_ctx)
     }
 
     fn partition_by(&self) -> &[Arc<dyn PhysicalExpr>] {
@@ -119,34 +121,13 @@ impl WindowExpr for SlidingAggregateWindowExpr {
     }
 
     fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>> {
-        self.aggregate.reverse_expr().map(|reverse_expr| {
-            let reverse_window_frame = self.window_frame.reverse();
-            if reverse_window_frame.is_ever_expanding() {
-                Arc::new(PlainAggregateWindowExpr::new(
-                    Arc::new(reverse_expr),
-                    &self.partition_by.clone(),
-                    &self
-                        .order_by
-                        .iter()
-                        .map(|e| e.reverse())
-                        .collect::<Vec<_>>(),
-                    Arc::new(self.window_frame.reverse()),
-                    self.filter.clone(),
-                )) as _
-            } else {
-                Arc::new(SlidingAggregateWindowExpr::new(
-                    Arc::new(reverse_expr),
-                    &self.partition_by.clone(),
-                    &self
-                        .order_by
-                        .iter()
-                        .map(|e| e.reverse())
-                        .collect::<Vec<_>>(),
-                    Arc::new(self.window_frame.reverse()),
-                    self.filter.clone(),
-                )) as _
-            }
-        })
+        reverse_aggregate_window_expr(
+            &self.aggregate,
+            &self.partition_by,
+            &self.order_by,
+            &self.window_frame,
+            self.filter.as_ref(),
+        )
     }
 
     fn uses_bounded_memory(&self) -> bool {
@@ -207,6 +188,23 @@ impl AggregateWindowExpr for SlidingAggregateWindowExpr {
         filter_mask: Option<&BooleanArray>,
     ) -> Result<ScalarValue> {
         if cur_range.start == cur_range.end {
+            // Keep the accumulator synchronized with `last_range`. RANGE frames
+            // can become empty between two non-empty frames when the ORDER BY
+            // values contain gaps.
+            let retract_bound = last_range.end - last_range.start;
+            if retract_bound > 0 {
+                let slice_mask =
+                    filter_mask.map(|m| m.slice(last_range.start, retract_bound));
+                let retract: Vec<ArrayRef> = value_slice
+                    .iter()
+                    .map(|v| v.slice(last_range.start, retract_bound))
+                    .map(|arr| match &slice_mask {
+                        Some(m) => filter_array(&arr, m),
+                        None => Ok(arr),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                accumulator.retract_batch(&retract)?
+            }
             self.aggregate
                 .default_value(self.aggregate.field().data_type())
         } else {

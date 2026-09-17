@@ -23,6 +23,7 @@ use async_trait::async_trait;
 use datafusion_catalog::Session;
 use datafusion_expr::CreateExternalTable;
 pub use datafusion_expr::{TableProviderFilterPushDown, TableType};
+use futures::future::BoxFuture;
 
 use crate::catalog::{TableProvider, TableProviderFactory};
 use crate::datasource::listing_table_factory::ListingTableFactory;
@@ -48,7 +49,33 @@ impl DefaultTableFactory {
 
 #[async_trait]
 impl TableProviderFactory for DefaultTableFactory {
-    async fn create(
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn create<'life0, 'life1, 'life2, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        cmd: &'life2 CreateExternalTable,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn TableProvider>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.create_boxed(state, cmd)
+    }
+}
+
+impl DefaultTableFactory {
+    fn create_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        cmd: &'a CreateExternalTable,
+    ) -> BoxFuture<'a, Result<Arc<dyn TableProvider>>> {
+        Box::pin(self.create_inner(state, cmd))
+    }
+
+    async fn create_inner(
         &self,
         state: &dyn Session,
         cmd: &CreateExternalTable,

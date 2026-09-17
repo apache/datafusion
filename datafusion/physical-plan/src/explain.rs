@@ -22,13 +22,17 @@ use std::sync::Arc;
 use super::{DisplayAs, PlanProperties, SendableRecordBatchStream};
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
+use crate::{
+    ChildrenPropertiesMode, DisplayFormatType, ExecutionPlan, Partitioning,
+    ReplaceChildrenOptions,
+};
 
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use datafusion_common::display::StringifiedPlan;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::EquivalenceProperties;
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 
 use log::trace;
 
@@ -116,11 +120,29 @@ impl ExecutionPlan for ExplainExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -193,17 +215,26 @@ impl ExecutionPlan for ExplainExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
 
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `ExplainExec` is a compile error here until it is either serialized
+        // or explicitly documented as not needing to be.
+        let Self {
+            schema,
+            stringified_plans,
+            verbose,
+            // Derived from `schema`, recomputed on decode.
+            cache: _,
+        } = self;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Explain(
                     protobuf::ExplainExecNode {
-                        schema: Some(self.schema().as_ref().try_into()?),
-                        stringified_plans: self
-                            .stringified_plans()
+                        schema: Some(schema.as_ref().try_into()?),
+                        stringified_plans: stringified_plans
                             .iter()
                             .map(stringified_plan_to_proto)
                             .collect(),
-                        verbose: self.verbose(),
+                        verbose: *verbose,
                     },
                 ),
             ),
@@ -225,19 +256,25 @@ impl ExplainExec {
             protobuf::physical_plan_node::PhysicalPlanType::Explain,
             "ExplainExec",
         );
-        let schema = explain.schema.as_ref().ok_or_else(|| {
+        // Destructure exhaustively so that a new field on `ExplainExecNode` is
+        // a compile error here rather than a silently dropped field.
+        let protobuf::ExplainExecNode {
+            schema,
+            stringified_plans,
+            verbose,
+        } = explain;
+        let schema = schema.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "ExplainExec is missing required field 'schema'"
             )
         })?;
         Ok(Arc::new(ExplainExec::new(
             Arc::new(arrow::datatypes::Schema::try_from(schema)?),
-            explain
-                .stringified_plans
+            stringified_plans
                 .iter()
                 .map(stringified_plan_from_proto)
                 .collect(),
-            explain.verbose,
+            *verbose,
         )))
     }
 }

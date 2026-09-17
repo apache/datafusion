@@ -149,7 +149,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         error_message: &str,
         help_message: &str,
     ) -> Diagnostic {
-        let full_span = Span::union_iter(spans.0.iter().cloned());
+        let full_span = Span::union_iter(spans.0.iter().copied());
         let mut diagnostic = Diagnostic::new_error(error_message, full_span);
 
         for (i, span) in spans.iter().skip(1).enumerate() {

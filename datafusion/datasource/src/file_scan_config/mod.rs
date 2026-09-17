@@ -20,6 +20,13 @@
 
 pub(crate) mod sort_pushdown;
 
+/// Shared `FileScanConfig` <-> proto conversion, gated on the `proto` feature.
+/// Attaches inherent `try_to_proto` / `try_from_proto` /
+/// `parse_table_schema_from_proto` helpers to [`FileScanConfig`] used by every
+/// file source's `try_to_proto` hook.
+#[cfg(feature = "proto")]
+mod proto;
+
 use crate::file_groups::FileGroup;
 use crate::{
     PartitionedFile, display::FileGroupsDisplay, file::FileSource,
@@ -30,8 +37,10 @@ use crate::{
 use arrow::datatypes::Fields;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    Constraints, Result, ScalarValue, Statistics, internal_datafusion_err, internal_err,
+    Constraint, Constraints, Result, ScalarValue, Statistics, internal_datafusion_err,
+    internal_err,
 };
 use datafusion_execution::{
     SendableRecordBatchStream, TaskContext, object_store::ObjectStoreUrl,
@@ -39,6 +48,7 @@ use datafusion_execution::{
 use datafusion_expr::Operator;
 
 use crate::source::OpenArgs;
+use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::projection::{ProjectionExprs, ProjectionMapping};
 use datafusion_physical_expr::utils::reassign_expr_columns;
@@ -81,7 +91,9 @@ use std::{fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 /// # use arrow::datatypes::{Field, Fields, DataType, Schema, SchemaRef};
 /// # use object_store::ObjectStore;
 /// # use datafusion_common::Result;
+/// # use datafusion_common::tree_node::TreeNodeRecursion;
 /// # use datafusion_datasource::file::FileSource;
+/// # use datafusion_physical_plan::PhysicalExpr;
 /// # use datafusion_datasource::file_groups::FileGroup;
 /// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
@@ -111,6 +123,7 @@ use std::{fmt::Debug, fmt::Formatter, fmt::Result as FmtResult, sync::Arc};
 /// #  fn file_type(&self) -> &str { "parquet" }
 /// #  // Note that this implementation drops the projection on the floor, it is not complete!
 /// #  fn try_pushdown_projection(&self, projection: &ProjectionExprs) -> Result<Option<Arc<dyn FileSource>>> { Ok(Some(Arc::new(self.clone()) as Arc<dyn FileSource>)) }
+/// #  fn apply_expressions(&self, _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>) -> Result<TreeNodeRecursion> { Ok(TreeNodeRecursion::Continue) }
 /// #  }
 /// # impl ParquetSource {
 /// #  fn new(table_schema: impl Into<TableSchema>) -> Self { Self {table_schema: table_schema.into()} }
@@ -530,9 +543,10 @@ impl FileScanConfigBuilder {
         } = self;
 
         let constraints = constraints.unwrap_or_default();
-        let statistics = statistics.unwrap_or_else(|| {
+        let mut statistics = statistics.unwrap_or_else(|| {
             Statistics::new_unknown(file_source.table_schema().table_schema())
         });
+        add_key_distinct_counts(&constraints, &mut statistics);
         let file_compression_type =
             file_compression_type.unwrap_or(FileCompressionType::UNCOMPRESSED);
 
@@ -553,6 +567,32 @@ impl FileScanConfigBuilder {
             statistics,
             output_partitioning,
         }
+    }
+}
+
+/// Records that a key column holds one distinct value per row, which no file format
+/// stores. Single-column keys only: a composite key says nothing about its columns.
+fn add_key_distinct_counts(constraints: &Constraints, statistics: &mut Statistics) {
+    let num_rows = statistics.num_rows;
+    for constraint in constraints.iter() {
+        let (Constraint::PrimaryKey(indices) | Constraint::Unique(indices)) = constraint;
+        let [index] = indices[..] else {
+            continue;
+        };
+        let Some(column) = statistics.column_statistics.get_mut(index) else {
+            continue;
+        };
+        if column.distinct_count != Precision::Absent {
+            continue;
+        }
+        // A NULL is not a distinct value. A primary key has none; a unique column may
+        // repeat them, so an unknown count leaves the result inexact.
+        let nulls = match (constraint, column.null_count) {
+            (Constraint::PrimaryKey(_), Precision::Absent) => Precision::Exact(0),
+            (_, Precision::Absent) => Precision::Inexact(0),
+            (_, nulls) => nulls,
+        };
+        column.distinct_count = num_rows.sub(&nulls);
     }
 }
 
@@ -1154,6 +1194,14 @@ impl DataSource for FileScanConfig {
         Some(Arc::new(new_config))
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        // Delegate to the file source
+        self.file_source.apply_expressions(f)
+    }
+
     /// Create any shared state that should be passed between sibling streams
     /// during one execution.
     ///
@@ -1174,6 +1222,43 @@ impl DataSource for FileScanConfig {
         }
 
         Some(Arc::new(SharedWorkSource::from_config(self)) as Arc<dyn Any + Send + Sync>)
+    }
+
+    /// Serialize this file scan by delegating to the concrete
+    /// [`FileSource`]'s
+    /// [`try_to_proto`](crate::file::FileSource::try_to_proto) hook, passing
+    /// `self` as the shared spine it needs to emit the base config.
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        self.file_source().try_to_proto(self, ctx)
+    }
+}
+
+/// Separates files that require statistics reasoning from files proven empty.
+///
+/// The latter must remain in the scan even though they cannot affect ordering.
+fn partition_known_empty_files<'a>(
+    files: impl IntoIterator<Item = &'a PartitionedFile>,
+) -> (Vec<&'a PartitionedFile>, Vec<&'a PartitionedFile>) {
+    files
+        .into_iter()
+        .partition(|file| !file.statistics.as_deref().is_some_and(is_known_empty))
+}
+
+/// Appends empty files to the smallest groups without affecting their row order.
+fn append_known_empty_files(
+    file_groups: &mut [FileGroup],
+    empty_files: Vec<&PartitionedFile>,
+) {
+    for file in empty_files {
+        file_groups
+            .iter_mut()
+            .min_by_key(|group| group.len())
+            .expect("non-empty files must create at least one file group")
+            .push((*file).clone());
     }
 }
 
@@ -1233,7 +1318,9 @@ impl FileScanConfig {
     /// we can't guarantee the statistics are exact because we don't know how many
     /// rows will be filtered out.
     pub fn statistics(&self) -> Statistics {
-        if self.file_source.filter().is_some() {
+        let filter_may_change_row_count = self.file_source.filter().is_some()
+            && self.statistics.num_rows != Precision::Exact(0);
+        if filter_may_change_row_count {
             self.statistics.clone().to_inexact()
         } else {
             self.statistics.clone()
@@ -1355,11 +1442,16 @@ impl FileScanConfig {
             return Ok(vec![]);
         }
 
+        let (files, empty_files) = partition_known_empty_files(flattened_files);
+        if files.is_empty() {
+            return Ok(file_groups.to_vec());
+        }
+
         let statistics = MinMaxStatistics::new_from_files(
             sort_order,
             table_schema,
             None,
-            flattened_files.iter().copied(),
+            files.iter().copied(),
         )?;
 
         let indices_sorted_by_min = statistics.min_values_sorted();
@@ -1390,17 +1482,20 @@ impl FileScanConfig {
         file_groups_indices.retain(|group| !group.is_empty());
 
         // Assemble indices back into groups of PartitionedFiles
-        Ok(file_groups_indices
+        let mut file_groups = file_groups_indices
             .into_iter()
             .map(|file_group_indices| {
                 FileGroup::new(
                     file_group_indices
                         .into_iter()
-                        .map(|idx| flattened_files[idx].clone())
+                        .map(|idx| files[idx].clone())
                         .collect(),
                 )
             })
-            .collect())
+            .collect::<Vec<_>>();
+
+        append_known_empty_files(&mut file_groups, empty_files);
+        Ok(file_groups)
     }
 
     /// Attempts to do a bin-packing on files into file groups, such that any two files
@@ -1430,11 +1525,16 @@ impl FileScanConfig {
             return Ok(vec![]);
         }
 
+        let (files, empty_files) = partition_known_empty_files(flattened_files);
+        if files.is_empty() {
+            return Ok(file_groups.to_vec());
+        }
+
         let statistics = MinMaxStatistics::new_from_files(
             sort_order,
             table_schema,
             None,
-            flattened_files.iter().copied(),
+            files.iter().copied(),
         )
         .map_err(|e| {
             e.context("construct min/max statistics for split_groups_by_statistics")
@@ -1460,15 +1560,18 @@ impl FileScanConfig {
         }
 
         // Assemble indices back into groups of PartitionedFiles
-        Ok(file_groups_indices
+        let mut file_groups = file_groups_indices
             .into_iter()
             .map(|file_group_indices| {
                 file_group_indices
                     .into_iter()
-                    .map(|idx| flattened_files[idx].clone())
-                    .collect()
+                    .map(|idx| files[idx].clone())
+                    .collect::<FileGroup>()
             })
-            .collect())
+            .collect::<Vec<_>>();
+
+        append_known_empty_files(&mut file_groups, empty_files);
+        Ok(file_groups)
     }
 
     /// Write the data_type based on file_source
@@ -1563,15 +1666,24 @@ mod tests {
     use arrow::datatypes::Field;
     use datafusion_common::ColumnStatistics;
     use datafusion_common::stats::Precision;
+    use datafusion_common::tree_node::TreeNodeRecursion;
     use datafusion_common::{Result, assert_batches_eq, internal_err};
     use datafusion_execution::TaskContext;
     use datafusion_expr::SortExpr;
+    use datafusion_physical_expr::PhysicalExpr;
+
+    #[cfg(feature = "proto")]
+    use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
     use datafusion_physical_expr::create_physical_sort_expr;
     use datafusion_physical_expr::expressions::Literal;
     use datafusion_physical_expr::projection::ProjectionExpr;
     use datafusion_physical_expr::projection::ProjectionExprs;
     use datafusion_physical_plan::ExecutionPlan;
     use datafusion_physical_plan::execution_plan::collect;
+    #[cfg(feature = "proto")]
+    use datafusion_physical_plan::proto::{ExecutionPlanEncode, ExecutionPlanEncodeCtx};
+    #[cfg(feature = "proto")]
+    use datafusion_proto_models::protobuf::{PhysicalExprNode, PhysicalPlanNode};
     use futures::FutureExt as _;
     use futures::StreamExt as _;
     use futures::stream;
@@ -1628,6 +1740,122 @@ mod tests {
                 inner: Arc::new(self.clone()) as Arc<dyn FileSource>,
             })
         }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    }
+
+    #[cfg(feature = "proto")]
+    #[derive(Clone)]
+    struct ProtoHookSource {
+        metrics: ExecutionPlanMetricsSet,
+        table_schema: TableSchema,
+    }
+
+    #[cfg(feature = "proto")]
+    impl ProtoHookSource {
+        fn new(table_schema: TableSchema) -> Self {
+            Self {
+                metrics: ExecutionPlanMetricsSet::new(),
+                table_schema,
+            }
+        }
+    }
+
+    #[cfg(feature = "proto")]
+    impl FileSource for ProtoHookSource {
+        fn create_file_opener(
+            &self,
+            _object_store: Arc<dyn ObjectStore>,
+            _base_config: &FileScanConfig,
+            _partition: usize,
+        ) -> Result<Arc<dyn crate::file_stream::FileOpener>> {
+            internal_err!("not needed for proto delegation test")
+        }
+
+        fn table_schema(&self) -> &TableSchema {
+            &self.table_schema
+        }
+
+        fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
+            Arc::new(self.clone())
+        }
+
+        fn metrics(&self) -> &ExecutionPlanMetricsSet {
+            &self.metrics
+        }
+
+        fn file_type(&self) -> &str {
+            "proto-hook-test"
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn try_to_proto(
+            &self,
+            _base: &FileScanConfig,
+            _ctx: &ExecutionPlanEncodeCtx<'_>,
+        ) -> Result<Option<PhysicalPlanNode>> {
+            Ok(Some(PhysicalPlanNode::default()))
+        }
+    }
+
+    #[cfg(feature = "proto")]
+    struct UnusedPlanEncoder;
+
+    #[cfg(feature = "proto")]
+    impl ExecutionPlanEncode for UnusedPlanEncoder {
+        fn encode_plan(
+            &self,
+            _plan: &Arc<dyn ExecutionPlan>,
+        ) -> Result<PhysicalPlanNode> {
+            internal_err!("not needed for proto delegation test")
+        }
+
+        fn encode_expr(&self, _expr: &Arc<dyn PhysicalExpr>) -> Result<PhysicalExprNode> {
+            internal_err!("not needed for proto delegation test")
+        }
+
+        fn encode_udf(&self, _udf: &ScalarUDF) -> Result<Option<Vec<u8>>> {
+            internal_err!("not needed for proto delegation test")
+        }
+
+        fn encode_udaf(&self, _udaf: &AggregateUDF) -> Result<Option<Vec<u8>>> {
+            internal_err!("not needed for proto delegation test")
+        }
+
+        fn encode_udwf(&self, _udwf: &WindowUDF) -> Result<Option<Vec<u8>>> {
+            internal_err!("not needed for proto delegation test")
+        }
+    }
+
+    #[cfg(feature = "proto")]
+    #[test]
+    fn data_source_exec_delegates_proto_to_file_source() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let source = Arc::new(ProtoHookSource::new(TableSchema::from(&schema)));
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+                .build();
+        let exec = DataSourceExec::from_data_source(config);
+        let encoder = UnusedPlanEncoder;
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+
+        assert_eq!(exec.try_to_proto(&ctx)?, Some(PhysicalPlanNode::default()));
+        Ok(())
     }
 
     #[test]
@@ -1974,6 +2202,117 @@ mod tests {
     }
 
     // sets default for configs that play no role in projections
+    fn config_with_constraints(
+        table_schema: TableSchema,
+        statistics: Statistics,
+        constraints: Vec<Constraint>,
+        projection: Option<Vec<usize>>,
+    ) -> FileScanConfig {
+        FileScanConfigBuilder::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            Arc::new(MockSource::new(table_schema)),
+        )
+        .with_statistics(statistics)
+        .with_constraints(Constraints::new_unverified(constraints))
+        .with_projection_indices(projection)
+        .unwrap()
+        .build()
+    }
+
+    /// A key column has one distinct value per row, which no file format records.
+    #[test]
+    fn key_columns_report_a_distinct_count() {
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("part", DataType::Int32, false),
+            Field::new("code", DataType::Int32, true),
+        ]));
+        let table_schema = TableSchema::builder(Arc::clone(&file_schema)).build();
+        let mut statistics = Statistics::new_unknown(&file_schema);
+        statistics.num_rows = Precision::Exact(100);
+        // A unique column may repeat NULL, which is not a distinct value.
+        statistics.column_statistics[2].null_count = Precision::Exact(10);
+
+        let stats = |constraints| {
+            config_with_constraints(
+                table_schema.clone(),
+                statistics.clone(),
+                constraints,
+                None,
+            )
+            .statistics()
+        };
+
+        // A primary key cannot be null, so the count is as exact as the row count.
+        let primary_key = stats(vec![Constraint::PrimaryKey(vec![0])]);
+        assert_eq!(
+            primary_key.column_statistics[0].distinct_count,
+            Precision::Exact(100)
+        );
+        assert_eq!(
+            primary_key.column_statistics[1].distinct_count,
+            Precision::Absent
+        );
+
+        // The nulls a unique column may repeat are known here, so this is exact too.
+        let unique = stats(vec![Constraint::Unique(vec![2])]);
+        assert_eq!(
+            unique.column_statistics[2].distinct_count,
+            Precision::Exact(90)
+        );
+
+        // With an unknown null count it is not exact.
+        let mut unknown_nulls = statistics.clone();
+        unknown_nulls.column_statistics[2].null_count = Precision::Absent;
+        let unique = config_with_constraints(
+            table_schema.clone(),
+            unknown_nulls,
+            vec![Constraint::Unique(vec![2])],
+            None,
+        )
+        .statistics();
+        assert_eq!(
+            unique.column_statistics[2].distinct_count,
+            Precision::Inexact(100)
+        );
+
+        // A composite key leaves its columns alone: only the combination is unique.
+        let composite = stats(vec![Constraint::PrimaryKey(vec![0, 1])]);
+        assert_eq!(
+            composite.column_statistics[0].distinct_count,
+            Precision::Absent
+        );
+        assert_eq!(
+            composite.column_statistics[1].distinct_count,
+            Precision::Absent
+        );
+    }
+
+    /// The count has to reach the plan, which reads statistics through the projection.
+    #[test]
+    fn a_projected_scan_keeps_the_key_distinct_count() {
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("value", DataType::Int32, true),
+            Field::new("id", DataType::Int32, false),
+        ]));
+        let table_schema = TableSchema::builder(Arc::clone(&file_schema)).build();
+        let mut statistics = Statistics::new_unknown(&file_schema);
+        statistics.num_rows = Precision::Exact(100);
+
+        let config = config_with_constraints(
+            table_schema,
+            statistics,
+            vec![Constraint::PrimaryKey(vec![1])],
+            Some(vec![1]),
+        );
+
+        let projected = config.partition_statistics(None).unwrap();
+        assert_eq!(
+            projected.column_statistics[0].distinct_count,
+            Precision::Exact(100)
+        );
+    }
+
     fn config_for_projection(
         file_schema: SchemaRef,
         projection: Option<Vec<usize>>,
@@ -2406,6 +2745,78 @@ mod tests {
     }
 
     #[test]
+    fn split_groups_by_statistics_preserves_exact_empty_files() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Float64,
+            false,
+        )]));
+        let sort_order = LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(
+            Column::new("value", 0),
+        ))])
+        .unwrap();
+
+        let mixed_files = vec![FileGroup::new(vec![
+            make_file_with_stats("high", 20.0, 29.0),
+            make_exact_empty_file("empty"),
+            make_file_with_stats("low", 0.0, 9.0),
+        ])];
+        let split = FileScanConfig::split_groups_by_statistics(
+            &schema,
+            &mixed_files,
+            &sort_order,
+        )?;
+        let split_with_target =
+            FileScanConfig::split_groups_by_statistics_with_target_partitions(
+                &schema,
+                &mixed_files,
+                &sort_order,
+                2,
+            )?;
+
+        for result in [split, split_with_target] {
+            assert!(verify_sort_integrity(&result));
+            let mut file_names = result
+                .iter()
+                .flat_map(FileGroup::iter)
+                .map(|file| file.object_meta.location.to_string())
+                .collect::<Vec<_>>();
+            file_names.sort();
+            assert_eq!(file_names, ["empty", "high", "low"]);
+            assert!(result.iter().all(|group| !group.is_empty()));
+        }
+
+        let empty_files = vec![FileGroup::new(vec![
+            make_exact_empty_file("empty1"),
+            make_exact_empty_file("empty2"),
+        ])];
+        let split = FileScanConfig::split_groups_by_statistics(
+            &schema,
+            &empty_files,
+            &sort_order,
+        )?;
+        let split_with_target =
+            FileScanConfig::split_groups_by_statistics_with_target_partitions(
+                &schema,
+                &empty_files,
+                &sort_order,
+                2,
+            )?;
+
+        for result in [split, split_with_target] {
+            assert!(verify_sort_integrity(&result));
+            assert_eq!(result.len(), 1);
+            let file_names = result[0]
+                .iter()
+                .map(|file| file.object_meta.location.to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(file_names, ["empty1", "empty2"]);
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn test_partition_statistics_projection() {
         // This test verifies that partition_statistics applies projection correctly.
         // The old implementation had a bug where it returned file group statistics
@@ -2415,7 +2826,6 @@ mod tests {
         use crate::source::DataSourceExec;
         use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 
-        // Create a schema with 4 columns
         let schema = Arc::new(Schema::new(vec![
             Field::new("col0", DataType::Int32, false),
             Field::new("col1", DataType::Int32, false),
@@ -2497,6 +2907,45 @@ mod tests {
         // Verify row count and byte size
         assert_eq!(partition_stats.num_rows, Precision::Exact(100));
         assert_eq!(partition_stats.total_byte_size, Precision::Exact(800));
+    }
+
+    #[test]
+    fn test_statistics_with_filter() {
+        assert_num_rows_with_filter(Precision::Absent, Precision::Absent);
+        assert_num_rows_with_filter(Precision::Exact(100), Precision::Inexact(100));
+        assert_num_rows_with_filter(Precision::Inexact(100), Precision::Inexact(100));
+        assert_num_rows_with_filter(Precision::Exact(0), Precision::Exact(0));
+
+        /// Creates a [`FileScanConfig`] with a filter and calls [`FileScanConfig::statistics`].
+        /// Then the function checks the output num_rows stats, given the input num_rows stats.
+        fn assert_num_rows_with_filter(
+            input_num_rows: Precision<usize>,
+            expected_num_rows: Precision<usize>,
+        ) {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "col0",
+                DataType::Int32,
+                false,
+            )]));
+
+            let stats =
+                Statistics::new_unknown(schema.as_ref()).with_num_rows(input_num_rows);
+            let file_group =
+                FileGroup::new(vec![PartitionedFile::new("test.parquet", 1024)]);
+
+            let table_schema = TableSchema::from(&schema);
+            let config = FileScanConfigBuilder::new(
+                ObjectStoreUrl::parse("test:///").unwrap(),
+                Arc::new(MockSource::new(table_schema.clone()).with_filter(Arc::new(
+                    Literal::new(ScalarValue::Boolean(Some(true))),
+                ))),
+            )
+            .with_file_groups(vec![file_group])
+            .with_statistics(stats)
+            .build();
+
+            assert_eq!(config.statistics().num_rows, expected_num_rows,);
+        }
     }
 
     /// Regression test for reusing a `DataSourceExec` after its execution-local
@@ -2805,6 +3254,15 @@ mod tests {
         ))
     }
 
+    fn make_exact_empty_file(name: &str) -> PartitionedFile {
+        PartitionedFile::new(name.to_string(), 1024).with_statistics(Arc::new(
+            Statistics {
+                num_rows: Precision::Exact(0),
+                ..Default::default()
+            },
+        ))
+    }
+
     #[derive(Clone)]
     struct ExactSortPushdownSource {
         metrics: ExecutionPlanMetricsSet,
@@ -2854,6 +3312,13 @@ mod tests {
             Ok(SortOrderPushdownResult::Exact {
                 inner: Arc::new(self.clone()) as Arc<dyn FileSource>,
             })
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
         }
     }
 

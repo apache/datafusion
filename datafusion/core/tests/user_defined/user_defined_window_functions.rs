@@ -869,8 +869,7 @@ async fn test_metadata_based_window_fn() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("no_metadata", DataType::UInt64, true),
         Field::new("with_metadata", DataType::UInt64, true).with_metadata(
-            [("modify_values".to_string(), "double_output".to_string())]
-                .into_iter()
+            std::iter::once(("modify_values".to_string(), "double_output".to_string()))
                 .collect(),
         ),
     ]));
@@ -886,8 +885,7 @@ async fn test_metadata_based_window_fn() -> Result<()> {
 
     let no_output_meta_udf = WindowUDF::from(MetadataBasedWindowUdf::new(HashMap::new()));
     let with_output_meta_udf = WindowUDF::from(MetadataBasedWindowUdf::new(
-        [("output_metatype".to_string(), "custom_value".to_string())]
-            .into_iter()
+        std::iter::once(("output_metatype".to_string(), "custom_value".to_string()))
             .collect(),
     ));
 

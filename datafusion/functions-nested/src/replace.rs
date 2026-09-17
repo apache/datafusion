@@ -22,17 +22,20 @@ use arrow::array::{
     NullBufferBuilder, OffsetSizeTrait, Scalar, new_null_array,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::utils::ListCoercion;
-use datafusion_common::{Result, ScalarValue, exec_err, utils::take_function_args};
+use datafusion_common::{
+    Result, ScalarValue, exec_err, internal_err, utils::take_function_args,
+};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
-    ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
-use crate::utils::compare_element_to_list;
+use crate::utils::{compare_element_to_list, list_inner_field, list_type_with_element};
 
 use std::sync::Arc;
 
@@ -118,21 +121,28 @@ impl ScalarUDFImpl for ArrayReplace {
         &self.signature
     }
 
-    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        Ok(args[0].clone())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        replace_return_field(self.name(), args.arg_fields)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let return_type = args.return_field.data_type().clone();
         let [list_arg, from_arg, to_arg] = take_function_args(self.name(), &args.args)?;
         let num_rows = args.number_rows;
         let list_array = list_arg.to_array(num_rows)?;
         match (from_arg, to_arg) {
             (ColumnarValue::Scalar(scalar_from), ColumnarValue::Scalar(scalar_to)) => {
                 let result = array_replace_with_scalar_args(
+                    self.name(),
                     &list_array,
                     scalar_from,
                     scalar_to,
                     1i64,
+                    &return_type,
                 )?;
                 Ok(ColumnarValue::Array(result))
             }
@@ -140,10 +150,12 @@ impl ScalarUDFImpl for ArrayReplace {
                 let from_array = from_arg.to_array(num_rows)?;
                 let to_array = to_arg.to_array(num_rows)?;
                 let result = array_replace_internal(
+                    self.name(),
                     &list_array,
                     &from_array,
                     &to_array,
                     &[Some(1)],
+                    &return_type,
                 )?;
                 Ok(ColumnarValue::Array(result))
             }
@@ -217,11 +229,16 @@ impl ScalarUDFImpl for ArrayReplaceN {
         &self.signature
     }
 
-    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        Ok(args[0].clone())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        replace_return_field(self.name(), args.arg_fields)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let return_type = args.return_field.data_type().clone();
         let [list_arg, from_arg, to_arg, max_arg] =
             take_function_args(self.name(), &args.args)?;
         let num_rows = args.number_rows;
@@ -234,15 +251,17 @@ impl ScalarUDFImpl for ArrayReplaceN {
             ) => {
                 let ScalarValue::Int64(Some(n)) = scalar_max else {
                     return Ok(ColumnarValue::Array(new_null_array(
-                        list_array.data_type(),
+                        &return_type,
                         num_rows,
                     )));
                 };
                 let result = array_replace_with_scalar_args(
+                    self.name(),
                     &list_array,
                     scalar_from,
                     scalar_to,
                     *n,
+                    &return_type,
                 )?;
                 Ok(ColumnarValue::Array(result))
             }
@@ -251,10 +270,12 @@ impl ScalarUDFImpl for ArrayReplaceN {
                 let to_array = to_arg.to_array(num_rows)?;
                 let max_array = max_arg.to_array(num_rows)?;
                 let result = array_replace_n_inner(
+                    self.name(),
                     &list_array,
                     &from_array,
                     &to_array,
                     &max_array,
+                    &return_type,
                 )?;
                 Ok(ColumnarValue::Array(result))
             }
@@ -326,21 +347,28 @@ impl ScalarUDFImpl for ArrayReplaceAll {
         &self.signature
     }
 
-    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        Ok(args[0].clone())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_field_from_args should be used instead")
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        replace_return_field(self.name(), args.arg_fields)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let return_type = args.return_field.data_type().clone();
         let [list_arg, from_arg, to_arg] = take_function_args(self.name(), &args.args)?;
         let num_rows = args.number_rows;
         let list_array = list_arg.to_array(num_rows)?;
         match (from_arg, to_arg) {
             (ColumnarValue::Scalar(scalar_from), ColumnarValue::Scalar(scalar_to)) => {
                 let result = array_replace_with_scalar_args(
+                    self.name(),
                     &list_array,
                     scalar_from,
                     scalar_to,
                     i64::MAX,
+                    &return_type,
                 )?;
                 Ok(ColumnarValue::Array(result))
             }
@@ -348,10 +376,12 @@ impl ScalarUDFImpl for ArrayReplaceAll {
                 let from_array = from_arg.to_array(num_rows)?;
                 let to_array = to_arg.to_array(num_rows)?;
                 let result = array_replace_internal(
+                    self.name(),
                     &list_array,
                     &from_array,
                     &to_array,
                     &[Some(i64::MAX)],
+                    &return_type,
                 )?;
                 Ok(ColumnarValue::Array(result))
             }
@@ -365,6 +395,24 @@ impl ScalarUDFImpl for ArrayReplaceAll {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+}
+
+/// Return field shared by `array_replace`, `array_replace_n` and
+/// `array_replace_all`: the input list type, except that its inner field is
+/// nullable whenever the replacement element may be null.
+fn replace_return_field(name: &str, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+    // `array` is at index 0 and `to` at index 2 for all three functions.
+    // `from` never contributes values to the output, so `to` is the only
+    // argument besides `array` that can affect the output's type.
+    let [array_field, _from_field, to_field, ..] = arg_fields else {
+        return exec_err!(
+            "{name} expects at least 3 arguments, got {}",
+            arg_fields.len()
+        );
+    };
+    let data_type =
+        list_type_with_element(array_field.data_type(), to_field.is_nullable());
+    Ok(Arc::new(Field::new(name, data_type, true)))
 }
 
 /// For each element of `list_array[i]`, replaces up to `arr_n[i]`  occurrences
@@ -389,6 +437,7 @@ fn general_replace<O: OffsetSizeTrait>(
     from_array: &ArrayRef,
     to_array: &ArrayRef,
     arr_n: &[Option<i64>],
+    field: FieldRef,
 ) -> Result<ArrayRef> {
     // Build up the offsets for the final output array
     let mut offsets: Vec<O> = Vec::with_capacity(list_array.len() + 1);
@@ -502,7 +551,7 @@ fn general_replace<O: OffsetSizeTrait>(
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(list_array.value_type(), true)),
+        field,
         OffsetBuffer::<O>::new(offsets.into()),
         arrow::array::make_array(data),
         valid.finish(),
@@ -520,10 +569,17 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
     needle: &Scalar<ArrayRef>,
     scalar_to: &ScalarValue,
     max_replacements: i64,
+    field: FieldRef,
 ) -> Result<ArrayRef> {
-    // No replacement needed - return unchanged.
+    // No replacement needed, but the output still has to carry the promised
+    // field, which may be more nullable than the input's.
     if max_replacements <= 0 {
-        return Ok(Arc::new(list_array.clone()));
+        return Ok(Arc::new(GenericListArray::<O>::try_new(
+            field,
+            list_array.offsets().clone(),
+            Arc::clone(list_array.values()),
+            list_array.nulls().cloned(),
+        )?));
     }
 
     let first_offset = list_array.offsets()[0].to_usize().unwrap();
@@ -598,7 +654,7 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(list_array.value_type(), true)),
+        field,
         OffsetBuffer::new(offsets.into()),
         arrow::array::make_array(data),
         list_array.nulls().cloned(),
@@ -609,10 +665,12 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
 ///
 /// Uses a single bulk `not_distinct` comparison instead of per-row comparisons.
 fn array_replace_with_scalar_args(
+    name: &str,
     list_array: &ArrayRef,
     scalar_from: &ScalarValue,
     scalar_to: &ScalarValue,
     max_replacements: i64,
+    return_type: &DataType,
 ) -> Result<ArrayRef> {
     // `not_distinct` doesn't support nested types, fall back to the generic array path.
     if scalar_from.data_type().is_nested() {
@@ -620,56 +678,74 @@ fn array_replace_with_scalar_args(
         let from_array = scalar_from.to_array_of_size(num_rows)?;
         let to_array = scalar_to.to_array_of_size(num_rows)?;
         return array_replace_internal(
+            name,
             list_array,
             &from_array,
             &to_array,
             &vec![Some(max_replacements); num_rows],
+            return_type,
         );
     }
 
     let needle = Scalar::new(scalar_from.to_array_of_size(1)?);
     match list_array.data_type() {
-        DataType::List(_) => {
-            let list = list_array.as_list::<i32>();
-            general_replace_with_scalar::<i32>(list, &needle, scalar_to, max_replacements)
-        }
-        DataType::LargeList(_) => {
-            let list = list_array.as_list::<i64>();
-            general_replace_with_scalar::<i64>(list, &needle, scalar_to, max_replacements)
-        }
-        DataType::Null => Ok(new_null_array(list_array.data_type(), list_array.len())),
-        array_type => exec_err!("array_replace does not support type '{array_type}'."),
+        DataType::List(_) => general_replace_with_scalar::<i32>(
+            list_array.as_list::<i32>(),
+            &needle,
+            scalar_to,
+            max_replacements,
+            list_inner_field(name, return_type)?,
+        ),
+        DataType::LargeList(_) => general_replace_with_scalar::<i64>(
+            list_array.as_list::<i64>(),
+            &needle,
+            scalar_to,
+            max_replacements,
+            list_inner_field(name, return_type)?,
+        ),
+        DataType::Null => Ok(new_null_array(return_type, list_array.len())),
+        array_type => exec_err!("{name} does not support type '{array_type}'."),
     }
 }
 
 fn array_replace_internal(
+    name: &str,
     array: &ArrayRef,
     from: &ArrayRef,
     to: &ArrayRef,
     arr_n: &[Option<i64>],
+    return_type: &DataType,
 ) -> Result<ArrayRef> {
     match array.data_type() {
-        DataType::List(_) => {
-            let list_array = array.as_list::<i32>();
-            general_replace::<i32>(list_array, from, to, arr_n)
-        }
-        DataType::LargeList(_) => {
-            let list_array = array.as_list::<i64>();
-            general_replace::<i64>(list_array, from, to, arr_n)
-        }
-        DataType::Null => Ok(new_null_array(array.data_type(), array.len())),
-        array_type => exec_err!("array_replace does not support type '{array_type}'."),
+        DataType::List(_) => general_replace::<i32>(
+            array.as_list::<i32>(),
+            from,
+            to,
+            arr_n,
+            list_inner_field(name, return_type)?,
+        ),
+        DataType::LargeList(_) => general_replace::<i64>(
+            array.as_list::<i64>(),
+            from,
+            to,
+            arr_n,
+            list_inner_field(name, return_type)?,
+        ),
+        DataType::Null => Ok(new_null_array(return_type, array.len())),
+        array_type => exec_err!("{name} does not support type '{array_type}'."),
     }
 }
 
 fn array_replace_n_inner(
+    name: &str,
     array: &ArrayRef,
     from: &ArrayRef,
     to: &ArrayRef,
     max: &ArrayRef,
+    return_type: &DataType,
 ) -> Result<ArrayRef> {
     let arr_n = as_int64_array(max)?.iter().collect::<Vec<_>>();
-    array_replace_internal(array, from, to, &arr_n)
+    array_replace_internal(name, array, from, to, &arr_n, return_type)
 }
 
 #[cfg(test)]
@@ -696,7 +772,14 @@ mod tests {
             Some(NullBuffer::from(vec![true, false])),
         ));
 
-        let result = array_replace_n_inner(&array, &from, &to, &max)?;
+        let result = array_replace_n_inner(
+            "array_replace_n",
+            &array,
+            &from,
+            &to,
+            &max,
+            array.data_type(),
+        )?;
         let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
             Some(vec![Some(1), Some(9), Some(3)]),
             None,

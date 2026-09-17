@@ -34,7 +34,7 @@ use datafusion_common::{
     not_impl_err, plan_err,
     types::{NativeType, logical_string},
     utils::{
-        hex::{HexCase, encode_bytes as encode_hex, encode_bytes_to_slice},
+        hex::{HexCase, encode_bytes, encode_bytes_to_slice},
         take_function_args,
     },
 };
@@ -373,7 +373,7 @@ impl Encoding {
         match self {
             Self::Base64 => BASE64_ENGINE.encode(value),
             Self::Base64Padded => BASE64_ENGINE_PADDED.encode(value),
-            Self::Hex => encode_hex(value, HexCase::Lower),
+            Self::Hex => encode_bytes(value, HexCase::Lower),
         }
     }
 

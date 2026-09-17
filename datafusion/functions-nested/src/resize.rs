@@ -24,14 +24,16 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
-use arrow::datatypes::{ArrowNativeType, Field};
+use arrow::datatypes::Field;
 use arrow::datatypes::{
     DataType::{LargeList, List},
     FieldRef,
 };
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::utils::ListCoercion;
-use datafusion_common::{Result, ScalarValue, exec_err, internal_datafusion_err};
+use datafusion_common::{
+    Result, ScalarValue, exec_datafusion_err, exec_err, internal_datafusion_err,
+};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
     ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
@@ -49,8 +51,8 @@ make_udf_expr_and_func!(
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Resizes the list to contain size elements. Initializes new elements with value or empty if value is not set.",
-    syntax_example = "array_resize(array, size, value)",
+    description = "Resizes the list to contain size elements.",
+    syntax_example = "array_resize(array, size[, value])",
     sql_example = r#"```sql
 > select array_resize([1, 2, 3], 5, 0);
 +-------------------------------------+
@@ -66,7 +68,7 @@ make_udf_expr_and_func!(
     argument(name = "size", description = "New size of given array."),
     argument(
         name = "value",
-        description = "Defines new elements' value or empty if value is not set."
+        description = "If expanding the array, defines the values to fill in. Defaults to null."
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -186,6 +188,13 @@ fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+fn resize_count(count_array: &Int64Array, idx: usize) -> Result<usize> {
+    let c = count_array.value(idx);
+    usize::try_from(c).map_err(|_| {
+        exec_datafusion_err!("array_resize: size must not be negative, got {c}")
+    })
+}
+
 /// array_resize keep the original array and append the default element to the end
 fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
     array: &GenericListArray<O>,
@@ -206,9 +215,7 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
         if array.is_null(row_index) || count_array.is_null(row_index) {
             continue;
         }
-        let target_count = count_array.value(row_index).to_usize().ok_or_else(|| {
-            internal_datafusion_err!("array_resize: failed to convert size to usize")
-        })?;
+        let target_count = resize_count(count_array, row_index)?;
         output_values_len =
             output_values_len.checked_add(target_count).ok_or_else(|| {
                 internal_datafusion_err!("array_resize: output size overflow")
@@ -324,9 +331,7 @@ where
         }
         null_builder.append_non_null();
 
-        let count = count_array.value(row_index).to_usize().ok_or_else(|| {
-            internal_datafusion_err!("array_resize: failed to convert size to usize")
-        })?;
+        let count = resize_count(count_array, row_index)?;
         let count = O::usize_as(count);
         let start = offset_window[0];
         if start + count > offset_window[1] {
@@ -337,7 +342,7 @@ where
         } else {
             let end = start + count;
             mutable.try_extend(0, start.to_usize().unwrap(), end.to_usize().unwrap())?;
-        };
+        }
         offsets.push(offsets[row_index] + count);
     }
 

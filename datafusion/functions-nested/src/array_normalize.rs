@@ -17,7 +17,7 @@
 
 //! [`ScalarUDFImpl`] definitions for array_normalize function.
 
-use crate::utils::make_scalar_function;
+use crate::utils::{make_scalar_function, needs_norm_scale, norm_scale};
 use arrow::array::{
     Array, ArrayRef, Float64Array, GenericListArray, NullBufferBuilder, OffsetSizeTrait,
 };
@@ -51,11 +51,11 @@ make_udf_expr_and_func!(
     syntax_example = "array_normalize(array)",
     sql_example = r#"```sql
 > select array_normalize([3.0, 4.0]);
-+-----------------------------+
++----------------------------------+
 | array_normalize(List([3.0,4.0])) |
-+-----------------------------+
-| [0.6, 0.8]                  |
-+-----------------------------+
++----------------------------------+
+| [0.6, 0.8]                       |
++----------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -181,6 +181,22 @@ fn general_array_normalize<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Ar
             sq_sum += vals[i] * vals[i];
         }
 
+        // If a square may have overflowed or underflowed, recompute with scaled
+        // values. Dividing the scaled values by the scaled magnitude gives the
+        // same unit vector.
+        let scale = if needs_norm_scale(sq_sum, len) {
+            norm_scale(vals.iter().copied())
+        } else {
+            None
+        };
+        if let Some(scale) = scale {
+            sq_sum = 0.0;
+            for i in 0..len {
+                let scaled = vals[i] * scale;
+                sq_sum += scaled * scaled;
+            }
+        }
+
         // Zero magnitude: undefined normalization. Emit NULL row.
         if sq_sum == 0.0 {
             nulls.append_null();
@@ -189,8 +205,9 @@ fn general_array_normalize<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Ar
         }
 
         let mag = sq_sum.sqrt();
-        for i in 0..len {
-            new_values.push(vals[i] / mag);
+        match scale {
+            Some(scale) => new_values.extend(vals.iter().map(|v| v * scale / mag)),
+            None => new_values.extend(vals.iter().map(|v| v / mag)),
         }
         nulls.append_non_null();
         new_offsets.push(new_offsets[row] + O::usize_as(len));

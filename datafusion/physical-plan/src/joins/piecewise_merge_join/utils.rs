@@ -17,12 +17,14 @@
 
 use datafusion_expr::JoinType;
 
-// Returns boolean for whether the join is a right existence join
-pub(super) fn is_right_existence_join(join_type: JoinType) -> bool {
-    matches!(
-        join_type,
-        JoinType::RightAnti | JoinType::RightSemi | JoinType::RightMark
-    )
+// Returns boolean for whether the join is a right existence join served by
+// `RightExistencePWMJStream`, which reads nothing but a single min/max off the buffered side.
+//
+// `RightMark` is deliberately excluded even though it is a right existence join: it needs the
+// buffered side walked in order and an extra boolean column, so it must not inherit this
+// stream's relaxed input requirements if the `try_new` gate is ever loosened.
+pub(super) fn is_supported_right_existence_join(join_type: JoinType) -> bool {
+    matches!(join_type, JoinType::RightSemi | JoinType::RightAnti)
 }
 
 // Returns boolean for whether the join is an existence join
@@ -38,24 +40,20 @@ pub(super) fn is_existence_join(join_type: JoinType) -> bool {
     )
 }
 
+// Returns boolean for whether the join is an existence join that is currently supported by
+// `PiecewiseMergeJoin`, which is every one of them except the Mark joins
+pub(super) fn is_supported_existence_join(join_type: JoinType) -> bool {
+    matches!(
+        join_type,
+        JoinType::LeftSemi
+            | JoinType::LeftAnti
+            | JoinType::RightSemi
+            | JoinType::RightAnti
+    )
+}
+
 // Returns boolean to check if the join type needs to record
 // buffered side matches for classic joins
 pub(super) fn need_produce_result_in_final(join_type: JoinType) -> bool {
     matches!(join_type, JoinType::Full | JoinType::Left)
-}
-
-// Returns boolean for whether or not we need to build the buffered side
-// bitmap for marking matched rows on the buffered side.
-pub(super) fn build_visited_indices_map(join_type: JoinType) -> bool {
-    matches!(
-        join_type,
-        JoinType::Full
-            | JoinType::Left
-            | JoinType::LeftAnti
-            | JoinType::RightAnti
-            | JoinType::LeftSemi
-            | JoinType::RightSemi
-            | JoinType::LeftMark
-            | JoinType::RightMark
-    )
 }

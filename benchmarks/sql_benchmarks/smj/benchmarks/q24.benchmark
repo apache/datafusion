@@ -5,6 +5,7 @@ init
 set datafusion.optimizer.prefer_hash_join=false;
 
 expect_plan SortMergeJoinExec
+expect_plan LeftMark
 
 run
 -- Q24: LEFT MARK 1M x 10M | 1:10 | 1%

@@ -32,8 +32,9 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
-use super::aggregate_hash_table::{FinalMarker, OrderedAggregateTable};
-use super::group_values::GroupByMetrics;
+use super::aggregate_hash_table::{
+    FinalMarker, OrderedAggregateTable, OrderedAggregateTableMetrics,
+};
 use crate::aggregates::AggregateMode;
 use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
 use crate::sorts::IncrementalSortIterator;
@@ -97,6 +98,9 @@ struct OrderedFinalSpillContext {
 enum OrderedFinalAggregateState {
     ReadingInput {
         table: OrderedAggregateTable<FinalMarker>,
+        /// None if either
+        /// - Disk Manager doesn't enable temporary file creation
+        /// - The group keys are fully ordered, it's expected to use bounded memory
         spill_context: Option<Box<OrderedFinalSpillContext>>,
     },
     Spilling {
@@ -213,7 +217,7 @@ impl OrderedFinalSpillContext {
     fn into_replay_stream(
         self,
         baseline_metrics: &BaselineMetrics,
-        group_by_metrics: GroupByMetrics,
+        metrics: OrderedAggregateTableMetrics,
         reservation: MemoryReservation,
     ) -> Result<SendableRecordBatchStream> {
         let Self {
@@ -227,6 +231,10 @@ impl OrderedFinalSpillContext {
         } = self;
 
         let spill_schema = Arc::clone(spill_manager.schema());
+        // The merge and replay table are two components of the same aggregate
+        // operator. Keep them under one consumer registration so a fair memory
+        // pool does not divide this operator's quota between its own phases.
+        let merge_reservation = reservation.new_empty();
         let merged = StreamingMergeBuilder::new()
             .with_schema(spill_schema)
             .with_spill_manager(spill_manager)
@@ -234,7 +242,7 @@ impl OrderedFinalSpillContext {
             .with_expressions(&spill_expr)
             .with_metrics(baseline_metrics.intermediate())
             .with_batch_size(batch_size)
-            .with_reservation(reservation)
+            .with_reservation(merge_reservation)
             .build()?;
         let replay = OrderedFinalAggregateStream::new_with_input_and_metrics(
             &agg,
@@ -243,8 +251,9 @@ impl OrderedFinalSpillContext {
             merged,
             &InputOrderMode::Sorted,
             baseline_metrics.clone(),
-            group_by_metrics,
+            metrics,
             None,
+            reservation,
         )?;
         Ok(Box::pin(replay))
     }
@@ -274,8 +283,17 @@ impl OrderedFinalAggregateStream {
         input_order_mode: &InputOrderMode,
     ) -> Result<Self> {
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
-        let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);
+        let metrics = OrderedAggregateTableMetrics::new(agg, partition);
         let spill_metrics = SpillMetrics::new(&agg.metrics, partition);
+        let reservation =
+            MemoryConsumer::new(format!("OrderedFinalAggregateStream[{partition}]"))
+                // HACK: Technically, fully ordered aggregate is a non-spillable
+                // consumer, since it uses bounded memory. There is a known race
+                // condition bug, and we set it to spillable to let it have larger
+                // memory budget to suppress the bug.
+                // Bug issue: https://github.com/apache/datafusion/issues/17334
+                .with_can_spill(true)
+                .register(context.memory_pool());
         Self::new_with_input_and_metrics(
             agg,
             context,
@@ -283,8 +301,9 @@ impl OrderedFinalAggregateStream {
             input,
             input_order_mode,
             baseline_metrics,
-            group_by_metrics,
+            metrics,
             Some(spill_metrics),
+            reservation,
         )
     }
 
@@ -292,15 +311,19 @@ impl OrderedFinalAggregateStream {
         clippy::too_many_arguments,
         reason = "keeps replay metric reuse explicit"
     )]
-    fn new_with_input_and_metrics(
+    /// Builds the stream with the reservation of its logical aggregate operator.
+    /// Replay callers pass a sibling of the reservation used by the merge input,
+    /// keeping both components under one memory-consumer registration.
+    pub(in crate::aggregates) fn new_with_input_and_metrics(
         agg: &AggregateExec,
         context: &Arc<TaskContext>,
         partition: usize,
         input: SendableRecordBatchStream,
         input_order_mode: &InputOrderMode,
         baseline_metrics: BaselineMetrics,
-        group_by_metrics: GroupByMetrics,
+        metrics: OrderedAggregateTableMetrics,
         spill_metrics: Option<SpillMetrics>,
+        reservation: MemoryReservation,
     ) -> Result<Self> {
         debug_assert!(matches!(
             agg.mode,
@@ -337,13 +360,8 @@ impl OrderedFinalAggregateStream {
             Arc::clone(&schema),
             batch_size,
             input_order_mode,
-            group_by_metrics,
+            metrics,
         )?;
-        let reservation =
-            MemoryConsumer::new(format!("OrderedFinalAggregateStream[{partition}]"))
-                .with_can_spill(can_spill)
-                .register(context.memory_pool());
-
         Ok(Self {
             schema,
             input,
@@ -440,6 +458,8 @@ impl OrderedFinalAggregateStream {
                     Ok(()) => {}
                     Err(e @ DataFusionError::ResourcesExhausted(_)) => {
                         let Some(spill_context) = spill_context else {
+                            // `None` means spilling is not supported, see comments
+                            // at `OrderedFinalAggregateState` for details.
                             return ControlFlow::Break((
                                 Poll::Ready(Some(Err(e))),
                                 OrderedFinalAggregateState::Done,
@@ -635,12 +655,12 @@ impl OrderedFinalAggregateStream {
         let timer = elapsed_compute.timer();
         let replay = match spill_context.spill_table(&mut table) {
             Ok(()) => {
-                let group_by_metrics = table.group_by_metrics();
+                let metrics = table.metrics();
                 drop(table);
                 match self.reservation.try_resize(0) {
                     Ok(()) => (*spill_context).into_replay_stream(
                         &self.baseline_metrics,
-                        group_by_metrics,
+                        metrics,
                         self.reservation.new_empty(),
                     ),
                     Err(e) => Err(e),
@@ -856,7 +876,6 @@ impl Stream for OrderedFinalAggregateStream {
             match next_state {
                 ControlFlow::Continue(next_state) => {
                     self.state = Some(next_state);
-                    continue;
                 }
                 ControlFlow::Break((Poll::Ready(Some(Err(e))), next_state)) => {
                     // Errors are terminal: discard all operator state and release
@@ -879,5 +898,288 @@ impl Stream for OrderedFinalAggregateStream {
 impl RecordBatchStream for OrderedFinalAggregateStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ExecutionPlan;
+    use crate::aggregates::PhysicalGroupBy;
+    use crate::common::collect;
+    use crate::stream::RecordBatchStreamAdapter;
+    use crate::test::TestMemoryExec;
+    use arrow::array::{Int64Array, StringViewArray};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::memory_pool::{GreedyMemoryPool, MemoryPool};
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_functions_aggregate::{min_max::min_udaf, sum::sum_udaf};
+    use datafusion_physical_expr::aggregate::AggregateExprBuilder;
+    use datafusion_physical_expr::expressions::col;
+    use futures::FutureExt;
+    use futures::channel::mpsc;
+    use std::collections::BTreeMap;
+
+    #[derive(Clone, Copy)]
+    enum Finish {
+        Collect,
+        DropDuringMerge,
+        DropDuringReplay,
+        InputError,
+    }
+
+    #[tokio::test]
+    async fn spill_replay_with_another_ordered_partition() -> Result<()> {
+        for input_batches in [28, 36, 55, 63] {
+            run_shared_pool_case(input_batches, 600 * 1024, Finish::Collect).await?;
+        }
+        // The same input also produces the reference results without spilling.
+        run_shared_pool_case(63, 10 * 1024 * 1024, Finish::Collect).await
+    }
+
+    #[tokio::test]
+    async fn spill_replay_releases_memory_on_drop() -> Result<()> {
+        run_shared_pool_case(36, 600 * 1024, Finish::DropDuringMerge).await?;
+        run_shared_pool_case(36, 600 * 1024, Finish::DropDuringReplay).await
+    }
+
+    #[tokio::test]
+    async fn ordered_spill_releases_memory_on_input_error() -> Result<()> {
+        run_shared_pool_case(36, 600 * 1024, Finish::InputError).await
+    }
+
+    async fn run_shared_pool_case(
+        input_batches: i64,
+        limit: usize,
+        finish: Finish,
+    ) -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+            Field::new("v", DataType::Int64, false),
+            Field::new("s", DataType::Utf8View, false),
+        ]));
+        let groups = PhysicalGroupBy::new_single(vec![
+            (col("a", &schema)?, "a".into()),
+            (col("b", &schema)?, "b".into()),
+        ]);
+        let expressions = vec![
+            Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("sum")
+                    .build()?,
+            ),
+            Arc::new(
+                AggregateExprBuilder::new(min_udaf(), vec![col("s", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("min")
+                    .build()?,
+            ),
+        ];
+        let empty = TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let partial = AggregateExec::try_new(
+            AggregateMode::Partial,
+            groups.clone(),
+            expressions.clone(),
+            vec![None; 2],
+            empty,
+            Arc::clone(&schema),
+        )?;
+        let partial_schema = partial.schema();
+        let ordering =
+            LexOrdering::new([PhysicalSortExpr::new_default(col("a", &partial_schema)?)])
+                .unwrap();
+        let input = TestMemoryExec::try_new(
+            &[vec![], vec![]],
+            Arc::clone(&partial_schema),
+            None,
+        )?
+        .try_with_sort_information(vec![ordering])?;
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::FinalPartitioned,
+            groups.as_final(),
+            expressions,
+            vec![None; 2],
+            Arc::new(TestMemoryExec::update_cache(&Arc::new(input))),
+            schema,
+        )?;
+        assert_eq!(
+            aggregate.input_order_mode(),
+            &InputOrderMode::PartiallySorted(vec![0])
+        );
+
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(limit));
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(
+                    SessionConfig::new().with_batch_size(128).set_bool(
+                        "datafusion.execution.enable_migration_aggregate",
+                        true,
+                    ),
+                )
+                .with_runtime(
+                    RuntimeEnvBuilder::new()
+                        .with_max_spill_merge_fan_in(2)
+                        .with_memory_pool(Arc::clone(&pool))
+                        .build_arc()?,
+                ),
+        );
+        let mut streams = vec![];
+        let mut senders = vec![];
+        for partition in 0..2 {
+            let (sender, receiver) = mpsc::unbounded();
+            let input = Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&partial_schema),
+                receiver,
+            ));
+            let stream = OrderedFinalAggregateStream::new_with_input(
+                &aggregate,
+                &context,
+                partition,
+                input,
+                aggregate.input_order_mode(),
+            )?;
+            senders.push(sender);
+            streams.push(stream);
+        }
+        let mut expected = BTreeMap::new();
+        let mut make_batch = |partition: i64, start: i64| {
+            for value in start..start + 128 {
+                let entry = expected
+                    .entry((
+                        partition,
+                        if partition == 0 && value % 128 == 0 {
+                            0
+                        } else {
+                            value
+                        },
+                    ))
+                    .or_insert_with(|| (0, (value % 2).to_string()));
+                entry.0 += value * 2;
+            }
+            RecordBatch::try_new(
+                Arc::clone(&partial_schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![partition; 128])),
+                    Arc::new(Int64Array::from_iter_values((start..start + 128).map(
+                        |value| {
+                            if partition == 0 && value % 128 == 0 {
+                                0
+                            } else {
+                                value
+                            }
+                        },
+                    ))),
+                    Arc::new(Int64Array::from_iter_values(
+                        (start..start + 128).map(|v| v * 2),
+                    )),
+                    Arc::new(StringViewArray::from_iter_values(
+                        (start..start + 128).map(|v| if v % 2 == 0 { "0" } else { "1" }),
+                    )),
+                ],
+            )
+            .unwrap()
+        };
+        // Keep partition 1's incomplete ordered run live while partition 0 spills
+        // and replays. Channel inputs return Pending after each supplied batch,
+        // making this interleaving independent of task scheduling.
+        for batch in 0..55 {
+            senders[1]
+                .unbounded_send(Ok(make_batch(1, batch * 128)))
+                .unwrap();
+            assert!(streams[1].next().now_or_never().is_none());
+        }
+        let held = streams[1].reservation.size();
+        assert!(held > 500 * 1024);
+        for batch in 0..input_batches {
+            // Repeated keys cross spill runs, so replay must merge their sums.
+            senders[0]
+                .unbounded_send(Ok(make_batch(0, batch * 128)))
+                .unwrap();
+            assert!(streams[0].next().now_or_never().is_none());
+        }
+        if limit == 600 * 1024 {
+            assert!(aggregate.metrics().unwrap().spill_count().unwrap() > 0);
+        }
+        let mut first = streams.remove(0);
+        match finish {
+            Finish::Collect => {
+                senders[0].close_channel();
+                let mut output = collect(Box::pin(first)).await?;
+                assert_eq!(pool.reserved(), held);
+                senders[1].close_channel();
+                output.extend(collect(Box::pin(streams.remove(0))).await?);
+                let mut actual = BTreeMap::new();
+                for batch in output {
+                    let a = batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap();
+                    let b = batch
+                        .column(1)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap();
+                    let sum = batch
+                        .column(2)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap();
+                    let min = batch
+                        .column(3)
+                        .as_any()
+                        .downcast_ref::<StringViewArray>()
+                        .unwrap();
+                    for row in 0..batch.num_rows() {
+                        assert!(
+                            actual
+                                .insert(
+                                    (a.value(row), b.value(row)),
+                                    (sum.value(row), min.value(row).to_string())
+                                )
+                                .is_none()
+                        );
+                    }
+                }
+                assert_eq!(actual, expected);
+                assert_eq!(
+                    aggregate.metrics().unwrap().spill_count().unwrap() > 0,
+                    limit == 600 * 1024
+                );
+            }
+            Finish::DropDuringMerge => {
+                senders[0].close_channel();
+                let _ = first.next().now_or_never();
+                assert!(matches!(
+                    first.state.as_ref(),
+                    Some(OrderedFinalAggregateState::MergingSpills { .. })
+                ));
+                drop(first);
+            }
+            Finish::DropDuringReplay => {
+                senders[0].close_channel();
+                first.next().await.unwrap()?;
+                assert!(pool.reserved() > held);
+                drop(first);
+                assert_eq!(pool.reserved(), held);
+            }
+            Finish::InputError => {
+                senders[0]
+                    .unbounded_send(datafusion_common::exec_err!(
+                        "injected input failure"
+                    ))
+                    .unwrap();
+                let error = first.next().await.unwrap().unwrap_err();
+                assert!(error.to_string().contains("injected input failure"));
+                assert_eq!(pool.reserved(), held);
+                drop(first);
+            }
+        }
+        drop(streams);
+        assert_eq!(pool.reserved(), 0);
+        Ok(())
     }
 }

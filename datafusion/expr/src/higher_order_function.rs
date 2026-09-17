@@ -24,7 +24,7 @@ use crate::expr::{
 use crate::type_coercion::functions::value_fields_with_higher_order_udf;
 use crate::udf_eq::UdfEq;
 use crate::{ColumnarValue, Documentation, Expr, ExprSchemable};
-use arrow::array::{ArrayRef, RecordBatch};
+use arrow::array::{ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{DataType, FieldRef, Schema};
 use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
@@ -239,6 +239,26 @@ pub struct LambdaArgument {
     /// For example, for `array_transform([2], v -> -v)`,
     /// this will be `vec![Field::new("v", DataType::Int32, true)]`
     params: Vec<FieldRef>,
+    /// Indices into [`Self::params`] of the parameters that are actually
+    /// referenced by [`Self::body`] (taking nested-lambda shadowing into
+    /// account), in the original declaration order of `params`.
+    ///
+    /// [`Self::evaluate`] only evaluates and pushes the closures whose
+    /// corresponding parameter index appears here, so unused declared
+    /// parameters leave no slot in the merged batch and the body's compressed
+    /// column indices line up directly with what the evaluator built.
+    ///
+    /// Callers who already have a `LambdaExpr` should pass
+    /// `LambdaExpr::used_param_indices()` directly to [`Self::new`] — both
+    /// are indices into the same positionally-aligned `params` list.
+    ///
+    /// Every index here must be `< params.len()`; see the precondition on
+    /// [`Self::new`].
+    ///
+    /// Relies on captures sorting before this lambda's own params in the
+    /// planner's (un-projected) index space, which is what makes
+    /// `captures ++ used_params` below line up with the projected body.
+    used_param_indices: Vec<usize>,
     /// The body of the lambda
     ///
     /// For example, for `array_transform([2], v -> -v)`,
@@ -257,26 +277,45 @@ pub struct LambdaArgument {
 }
 
 impl LambdaArgument {
+    /// # Preconditions
+    ///
+    /// Every index in `used_param_indices` must be `< params.len()`;
+    /// violating this panics on out-of-bounds indexing below. Callers should
+    /// pass `LambdaExpr::used_param_indices()`, which always indexes into the
+    /// same `params` list, rather than constructing indices by hand.
     pub fn new(
         params: Vec<FieldRef>,
         body: Arc<dyn PhysicalExpr>,
         captures: Option<RecordBatch>,
+        used_param_indices: &[usize],
     ) -> Self {
-        let fields = match &captures {
+        debug_assert!(
+            used_param_indices.iter().all(|i| *i < params.len()),
+            "used_param_indices contains an index out of bounds for params \
+             (len {}): {:?}",
+            params.len(),
+            used_param_indices
+        );
+
+        let used_param_indices = used_param_indices.to_vec();
+        let effective_params = used_param_indices.iter().map(|i| Arc::clone(&params[*i]));
+
+        let fields: Vec<FieldRef> = match &captures {
             Some(batch) => batch
                 .schema_ref()
                 .fields()
                 .iter()
                 .cloned()
-                .chain(params.clone())
+                .chain(effective_params)
                 .collect(),
-            None => params.clone(),
+            None => effective_params.collect(),
         };
 
         let schema = Arc::new(Schema::new(fields));
 
         Self {
             params,
+            used_param_indices,
             body,
             schema,
             captures,
@@ -286,6 +325,11 @@ impl LambdaArgument {
     /// Evaluate this lambda
     /// `args` should evaluate to the value of each parameter
     /// of the correspondent lambda returned in [HigherOrderUDFImpl::lambda_parameters].
+    ///
+    /// Only the closures in `args` for parameters the lambda body actually
+    /// references are called; closures for declared-but-unused parameters
+    /// are skipped entirely. Callers should not rely on every closure in
+    /// `args` being invoked.
     ///
     /// `spread_captures` is responsible for transforming the captured column arrays
     /// so they align with the evaluation batch. Captures are snapshotted from the
@@ -344,6 +388,7 @@ impl LambdaArgument {
             spread_captures.as_ref(),
             Arc::clone(&self.schema),
             &self.params,
+            &self.used_param_indices,
             args,
         )?;
 
@@ -355,6 +400,7 @@ fn merge_captures_with_variables(
     captures: Option<&RecordBatch>,
     schema: SchemaRef,
     params: &[FieldRef],
+    used_param_indices: &[usize],
     variables: &[&dyn Fn() -> Result<ArrayRef>],
 ) -> Result<RecordBatch> {
     if variables.len() < params.len() {
@@ -365,22 +411,41 @@ fn merge_captures_with_variables(
         );
     }
 
+    let push_param_arrays = |columns: &mut Vec<ArrayRef>| -> Result<()> {
+        for &i in used_param_indices {
+            columns.push(variables[i]()?);
+        }
+        Ok(())
+    };
+
     let columns = match captures {
         Some(captures) => {
             let mut columns = captures.columns().to_vec();
-
-            for arg in &variables[..params.len()] {
-                columns.push(arg()?);
-            }
-
+            push_param_arrays(&mut columns)?;
             columns
         }
-        None => variables
-            .iter()
-            .take(params.len())
-            .map(|arg| arg())
-            .collect::<Result<_>>()?,
+        None => {
+            let mut columns = Vec::with_capacity(used_param_indices.len());
+            push_param_arrays(&mut columns)?;
+            columns
+        }
     };
+
+    if columns.is_empty() {
+        // No columns to derive a row count from, so borrow one variable's
+        // array length instead (all variables have the same length).
+        let row_count = variables.first().ok_or_else(|| {
+            internal_datafusion_err!(
+                "merge_captures_with_variables: no variables to derive a row count from"
+            )
+        })?()?
+        .len();
+        return Ok(RecordBatch::try_new_with_options(
+            schema,
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(row_count)),
+        )?);
+    }
 
     Ok(RecordBatch::try_new(schema, columns)?)
 }
@@ -1500,9 +1565,8 @@ mod tests {
                 unreachable!()
             };
 
-            let list_field = match list.data_type() {
-                DataType::List(field) => field,
-                _ => unreachable!(),
+            let DataType::List(list_field) = list.data_type() else {
+                unreachable!()
             };
 
             Ok(match (step, merge) {
@@ -1680,5 +1744,110 @@ mod tests {
             name.into(),
             Some(Arc::new(Field::new(name, dt, nullable))),
         ))
+    }
+
+    /// A physical expression that reads the column at a fixed index of the
+    /// batch it is evaluated against, for exercising [`LambdaArgument`]
+    /// directly without depending on `datafusion-physical-expr`.
+    #[derive(Debug, Eq, PartialEq, Hash)]
+    struct ColumnAt(usize);
+
+    impl std::fmt::Display for ColumnAt {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "column_at({})", self.0)
+        }
+    }
+
+    impl PhysicalExpr for ColumnAt {
+        fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Array(Arc::clone(batch.column(self.0))))
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            _children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            Ok(self)
+        }
+
+        fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{self}")
+        }
+    }
+
+    /// `(k, v) -> v` with only `v` used must push `v`'s array, not `k`'s.
+    #[test]
+    fn test_lambda_argument_evaluate_pushes_only_used_param() {
+        use arrow::array::Int32Array;
+
+        let k_field = Arc::new(Field::new("k", DataType::Int32, true));
+        let v_field = Arc::new(Field::new("v", DataType::Int32, true));
+
+        let body = Arc::new(ColumnAt(0)) as Arc<dyn PhysicalExpr>;
+        let lambda_arg = LambdaArgument::new(vec![k_field, v_field], body, None, &[1]);
+
+        let k_values: ArrayRef = Arc::new(Int32Array::from(vec![100, 200, 300]));
+        let v_values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let k_closure = || -> Result<ArrayRef> { Ok(Arc::clone(&k_values)) };
+        let v_closure = || -> Result<ArrayRef> { Ok(Arc::clone(&v_values)) };
+        let args: Vec<&dyn Fn() -> Result<ArrayRef>> = vec![&k_closure, &v_closure];
+
+        let result = lambda_arg
+            .evaluate(&args, |arrays| Ok(arrays.to_vec()))
+            .unwrap();
+        let ColumnarValue::Array(result) = result else {
+            unreachable!()
+        };
+
+        assert_eq!(
+            result.as_any().downcast_ref::<Int32Array>().unwrap(),
+            &Int32Array::from(vec![1, 2, 3]),
+            "body should read v's values, not k's"
+        );
+    }
+
+    /// Same as above, but with a capture occupying the leading slot.
+    #[test]
+    fn test_lambda_argument_evaluate_pushes_only_used_param_with_captures() {
+        use arrow::array::Int32Array;
+
+        let cap_field = Arc::new(Field::new("cap", DataType::Int32, true));
+        let k_field = Arc::new(Field::new("k", DataType::Int32, true));
+        let v_field = Arc::new(Field::new("v", DataType::Int32, true));
+
+        let body = Arc::new(ColumnAt(1)) as Arc<dyn PhysicalExpr>;
+
+        let cap_values: ArrayRef = Arc::new(Int32Array::from(vec![9, 9, 9]));
+        let captures = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![cap_field])),
+            vec![cap_values],
+        )
+        .unwrap();
+
+        let lambda_arg =
+            LambdaArgument::new(vec![k_field, v_field], body, Some(captures), &[1]);
+
+        let k_values: ArrayRef = Arc::new(Int32Array::from(vec![100, 200, 300]));
+        let v_values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let k_closure = || -> Result<ArrayRef> { Ok(Arc::clone(&k_values)) };
+        let v_closure = || -> Result<ArrayRef> { Ok(Arc::clone(&v_values)) };
+        let args: Vec<&dyn Fn() -> Result<ArrayRef>> = vec![&k_closure, &v_closure];
+
+        let result = lambda_arg
+            .evaluate(&args, |arrays| Ok(arrays.to_vec()))
+            .unwrap();
+        let ColumnarValue::Array(result) = result else {
+            unreachable!()
+        };
+
+        assert_eq!(
+            result.as_any().downcast_ref::<Int32Array>().unwrap(),
+            &Int32Array::from(vec![1, 2, 3]),
+            "body should read v's values, not k's or the capture's"
+        );
     }
 }

@@ -18,5 +18,6 @@
 //! Validates query's actual memory usage is consistent with the specified memory
 //! limit.
 
+mod smj_mem_validation;
 mod sort_mem_validation;
 mod utils;
