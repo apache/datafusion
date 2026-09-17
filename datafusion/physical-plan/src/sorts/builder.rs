@@ -26,12 +26,21 @@ use datafusion_execution::memory_pool::MemoryReservation;
 use log::warn;
 use std::sync::Arc;
 
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone)]
 struct BatchCursor {
     /// The index into BatchBuilder::batches
     batch_idx: usize,
     /// The row index within the given batch
     row_idx: usize,
+}
+
+impl BatchCursor {
+    /// A cursor whose batch has been released. `push_row` must not be called
+    /// for the stream until `push_batch` installs a new cursor.
+    const RELEASED: Self = Self {
+        batch_idx: usize::MAX,
+        row_idx: 0,
+    };
 }
 
 /// Provides an API to incrementally build a [`RecordBatch`] from partitioned [`RecordBatch`]
@@ -81,7 +90,7 @@ impl BatchBuilder {
         Self {
             schema,
             batches: Vec::with_capacity(stream_count * 2),
-            cursors: vec![BatchCursor::default(); stream_count],
+            cursors: vec![BatchCursor::RELEASED; stream_count],
             indices: Vec::with_capacity(batch_size),
             reservation,
             batches_mem_used: 0,
@@ -108,6 +117,14 @@ impl BatchBuilder {
 
     /// Append the next row from `stream_idx`
     pub fn push_row(&mut self, stream_idx: usize) {
+        debug_assert!(
+            self.batches
+                .get(self.cursors[stream_idx].batch_idx)
+                .is_some_and(|(_, batch)| {
+                    self.cursors[stream_idx].row_idx < batch.num_rows()
+                }),
+            "push_row on stream {stream_idx} with no live batch"
+        );
         let cursor = &mut self.cursors[stream_idx];
         let row_idx = cursor.row_idx;
         cursor.row_idx += 1;
@@ -184,14 +201,17 @@ impl BatchBuilder {
         let mut retained = 0;
         self.batches.retain(|(stream_idx, batch)| {
             let stream_cursor = &mut self.cursors[*stream_idx];
-            let retain = stream_cursor.batch_idx == batch_idx
-                && stream_cursor.row_idx < batch.num_rows();
+            let is_cursor_batch = stream_cursor.batch_idx == batch_idx;
+            let retain = is_cursor_batch && stream_cursor.row_idx < batch.num_rows();
             batch_idx += 1;
 
             if retain {
                 stream_cursor.batch_idx = retained;
                 retained += 1;
             } else {
+                if is_cursor_batch {
+                    *stream_cursor = BatchCursor::RELEASED;
+                }
                 self.batches_mem_used -= get_record_batch_memory_size(batch);
             }
             retain
@@ -204,15 +224,13 @@ impl BatchBuilder {
             retain_batch[*batch_idx] = true;
         }
 
-        let mut retain_cursor = vec![false; self.cursors.len()];
-        for (stream_idx, cursor) in self.cursors.iter().enumerate() {
-            if self.batches.get(cursor.batch_idx).is_some_and(
-                |(batch_stream_idx, batch)| {
-                    *batch_stream_idx == stream_idx && cursor.row_idx < batch.num_rows()
-                },
-            ) {
+        for cursor in &self.cursors {
+            if self
+                .batches
+                .get(cursor.batch_idx)
+                .is_some_and(|(_, batch)| cursor.row_idx < batch.num_rows())
+            {
                 retain_batch[cursor.batch_idx] = true;
-                retain_cursor[stream_idx] = true;
             }
         }
 
@@ -234,9 +252,10 @@ impl BatchBuilder {
         for (batch_idx, _) in &mut self.indices {
             *batch_idx = remap[*batch_idx];
         }
-        for (stream_idx, cursor) in self.cursors.iter_mut().enumerate() {
-            if retain_cursor[stream_idx] {
-                cursor.batch_idx = remap[cursor.batch_idx];
+        for cursor in &mut self.cursors {
+            if let Some(new_idx) = remap.get(cursor.batch_idx) {
+                // `usize::MAX` means the cursor's batch was released.
+                cursor.batch_idx = *new_idx;
             }
         }
     }
@@ -395,7 +414,7 @@ mod tests {
         push_n_rows(&mut builder, 0, 2);
         builder.push_batch(1, batch1).unwrap();
         push_n_rows(&mut builder, 1, 2);
-        // Keep one stream empty so stale default cursors cannot retain consumed batches.
+        // Keep one stream empty so an unloaded cursor cannot retain consumed batches.
         builder.push_batch(0, batch2).unwrap();
 
         let output = emit_n_rows(&mut builder, 2);
@@ -411,6 +430,28 @@ mod tests {
         assert_int_output(&output, &[20, 21, 30, 31]);
 
         assert!(builder.is_empty());
+        assert!(builder.batches.is_empty());
+        assert_eq!(builder.batches_mem_used, 0);
+        assert_eq!(builder.reservation.size(), 0);
+    }
+
+    #[test]
+    fn test_released_cursor_accepts_new_batch_for_stream() {
+        let batch0 = int_batch(vec![10]);
+        let batch1 = int_batch(vec![20]);
+        let schema = batch0.schema();
+        let mut builder = BatchBuilder::new(Arc::clone(&schema), 1, 1, reservation());
+
+        builder.push_batch(0, batch0).unwrap();
+        builder.push_row(0);
+        let output = emit_n_rows(&mut builder, 1);
+        assert_int_output(&output, &[10]);
+        assert!(builder.batches.is_empty());
+
+        builder.push_batch(0, batch1).unwrap();
+        builder.push_row(0);
+        let output = emit_n_rows(&mut builder, 1);
+        assert_int_output(&output, &[20]);
         assert!(builder.batches.is_empty());
         assert_eq!(builder.batches_mem_used, 0);
         assert_eq!(builder.reservation.size(), 0);
