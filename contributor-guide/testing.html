@@ -635,6 +635,18 @@ version in <code class="docutils literal notranslate"><span class="pre">ci/scrip
 </pre></div>
 </div>
 </section>
+<section id="examples-readme-check">
+<h2>Examples README Check<a class="headerlink" href="#examples-readme-check" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">datafusion-examples/README.md</span></code> is generated from the documentation comments in
+<code class="docutils literal notranslate"><span class="pre">datafusion-examples/examples/&lt;group&gt;/main.rs</span></code>. <code class="docutils literal notranslate"><span class="pre">ci/scripts/check_examples_docs.sh</span></code>
+regenerates it and fails if the committed file differs. <code class="docutils literal notranslate"><span class="pre">./dev/rust_lint.sh</span></code>
+runs it and needs <code class="docutils literal notranslate"><span class="pre">cargo</span></code> and <code class="docutils literal notranslate"><span class="pre">npx</span></code>. To run the check on its own, or to update
+the README:</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>./ci/scripts/check_examples_docs.sh
+./ci/scripts/check_examples_docs.sh<span class="w"> </span>--write
+</pre></div>
+</div>
+</section>
 <section id="benchmarks">
 <h2>Benchmarks<a class="headerlink" href="#benchmarks" title="Link to this heading">#</a></h2>
 <section id="criterion-benchmarks">
@@ -744,6 +756,7 @@ version in <code class="docutils literal notranslate"><span class="pre">ci/scrip
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#asf-status-check-validation">ASF Status Check Validation</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#security-audit">Security Audit</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#dependency-checks">Dependency Checks</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#examples-readme-check">Examples README Check</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#benchmarks">Benchmarks</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#criterion-benchmarks">Criterion Benchmarks</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquet-sql-benchmarks">Parquet SQL Benchmarks</a></li>
