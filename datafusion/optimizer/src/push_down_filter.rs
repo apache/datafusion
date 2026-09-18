@@ -4532,6 +4532,70 @@ mod tests {
         )
     }
 
+    /// A filter is not moved below a pure extraction projection, even when its
+    /// predicate only references pass-through columns.
+    ///
+    /// `PushDownLeafProjections` moves such a projection back below the filter,
+    /// so pushing here would make the two rules undo each other on every
+    /// optimizer pass. See <https://github.com/apache/datafusion/issues/14540>
+    /// and the module documentation.
+    #[test]
+    fn filter_not_pushed_through_pure_extraction_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // The shape `ExtractLeafExpressions` produces: one extraction alias
+        // plus pass-through columns.
+        let proj = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                leaf_udf_expr(col("a")).alias("__datafusion_extracted_1"),
+                col("b"),
+                col("c"),
+            ])?
+            .build()?;
+
+        // `b` is a plain pass-through column, so without the precedence rule
+        // this predicate would reach the scan as a `full_filters` entry.
+        let plan = LogicalPlanBuilder::from(proj)
+            .filter(col("b").gt(lit(5i64)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.b > Int64(5)
+          Projection: leaf_udf(test.a) AS __datafusion_extracted_1, test.b, test.c
+            TableScan: test
+        "
+        )
+    }
+
+    /// A projection that mixes an extraction alias with a computed expression is
+    /// not a pure extraction projection, so the filter still moves below it.
+    #[test]
+    fn filter_pushed_through_mixed_extraction_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let proj = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                leaf_udf_expr(col("a")).alias("__datafusion_extracted_1"),
+                (col("b") + lit(1i64)).alias("b_plus"),
+                col("c"),
+            ])?
+            .build()?;
+
+        let plan = LogicalPlanBuilder::from(proj)
+            .filter(col("c").gt(lit(5i64)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: leaf_udf(test.a) AS __datafusion_extracted_1, test.b + Int64(1) AS b_plus, test.c
+          TableScan: test, full_filters=[test.c > Int64(5)]
+        "
+        )
+    }
+
     #[test]
     fn filter_not_pushed_down_through_table_scan_with_fetch() -> Result<()> {
         let scan = test_table_scan()?;

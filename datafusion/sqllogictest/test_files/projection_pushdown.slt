@@ -2340,3 +2340,224 @@ logical_plan
 
 statement ok
 set datafusion.explain.logical_plan_only = false;
+
+#####################
+# Section 17: Precedence between PushDownFilter and PushDownLeafProjections
+#
+# Both rules move nodes towards the leaves, and for an adjacent filter and
+# "pure extraction projection" they want the opposite order. The precedence is:
+# the extraction projection wins. It stays next to the scan, so the scan can
+# absorb it and read only the struct leaf, and the filter stays above it.
+#
+# See https://github.com/apache/datafusion/issues/14540
+#####################
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE TABLE events_mem (
+    "date" DATE,
+    "timestamp" TIMESTAMP,
+    ids STRUCT<id1 VARCHAR, extra INT>,
+    structs STRUCT<var1 VARCHAR, extra VARCHAR>
+) AS VALUES
+    (DATE '2025-01-03', TIMESTAMP '2025-01-03 01:00:00', {id1: 'dev1', extra: 1}, {var1: 'user1', extra: 'e1'}),
+    (DATE '2025-01-03', TIMESTAMP '2025-01-03 02:00:00', {id1: 'dev1', extra: 2}, {var1: 'user2', extra: 'e2'}),
+    (DATE '2025-01-04', TIMESTAMP '2025-01-04 01:00:00', {id1: 'dev2', extra: 3}, {var1: 'user3', extra: 'e3'});
+
+# The query from #14540. The extraction projection is the bottom node and the
+# filter sits above it.
+query TT
+EXPLAIN WITH events AS (
+    SELECT ids.id1 AS device, structs.var1 AS user, "timestamp"
+    FROM events_mem
+    WHERE "date" = '2025-01-03'
+)
+SELECT *, LAG(user, 1) OVER (PARTITION BY device ORDER BY "timestamp") AS prev
+FROM events
+WHERE device IS NOT NULL AND device != '' AND user IS NOT NULL AND user != ''
+LIMIT 100;
+----
+logical_plan
+01)Projection: events.device, events.user, events.timestamp, lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS prev
+02)--Limit: skip=0, fetch=100
+03)----WindowAggr: windowExpr=[[lag(events.user, Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------SubqueryAlias: events
+05)--------Projection: __datafusion_extracted_1 AS device, __datafusion_extracted_2 AS user, events_mem.timestamp
+06)----------Filter: events_mem.date = Date32("2025-01-03") AND __datafusion_extracted_1 IS NOT NULL AND __datafusion_extracted_1 != Utf8View("") AND __datafusion_extracted_2 IS NOT NULL AND __datafusion_extracted_2 != Utf8View("")
+07)------------Projection: get_field(events_mem.ids, Utf8("id1")) AS __datafusion_extracted_1, get_field(events_mem.structs, Utf8("var1")) AS __datafusion_extracted_2, events_mem.date, events_mem.timestamp
+08)--------------TableScan: events_mem projection=[date, timestamp, ids, structs]
+physical_plan
+01)ProjectionExec: expr=[device@0 as device, user@1 as user, timestamp@2 as timestamp, lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as prev]
+02)--GlobalLimitExec: skip=0, fetch=100
+03)----BoundedWindowAggExec: wdw=[lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Utf8View }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[device@0 ASC NULLS LAST, timestamp@2 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------ProjectionExec: expr=[__datafusion_extracted_1@0 as device, __datafusion_extracted_2@1 as user, timestamp@2 as timestamp]
+06)----------FilterExec: date@2 = 2025-01-03 AND __datafusion_extracted_1@0 IS NOT NULL AND __datafusion_extracted_1@0 !=  AND __datafusion_extracted_2@1 IS NOT NULL AND __datafusion_extracted_2@1 != , projection=[__datafusion_extracted_1@0, __datafusion_extracted_2@1, timestamp@3]
+07)------------ProjectionExec: expr=[get_field(ids@2, id1) as __datafusion_extracted_1, get_field(structs@3, var1) as __datafusion_extracted_2, date@0 as date, timestamp@1 as timestamp]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Determinism: the plan is a fixed point reached before the default pass limit,
+# so it does not depend on which of the two rules runs last. One pass is enough
+# for the simple shape.
+statement ok
+SET datafusion.optimizer.max_passes = 1;
+
+query TT
+EXPLAIN SELECT ids['id1'] FROM events_mem WHERE "date" = '2025-01-03';
+----
+logical_plan
+01)Projection: __datafusion_extracted_1 AS events_mem.ids[id1]
+02)--Filter: events_mem.date = Date32("2025-01-03")
+03)----Projection: get_field(events_mem.ids, Utf8("id1")) AS __datafusion_extracted_1, events_mem.date
+04)------TableScan: events_mem projection=[date, ids]
+physical_plan
+01)ProjectionExec: expr=[__datafusion_extracted_1@0 as events_mem.ids[id1]]
+02)--FilterExec: date@1 = 2025-01-03, projection=[__datafusion_extracted_1@0]
+03)----ProjectionExec: expr=[get_field(ids@1, id1) as __datafusion_extracted_1, date@0 as date]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+RESET datafusion.optimizer.max_passes;
+
+query TT
+EXPLAIN SELECT ids['id1'] FROM events_mem WHERE "date" = '2025-01-03';
+----
+logical_plan
+01)Projection: __datafusion_extracted_1 AS events_mem.ids[id1]
+02)--Filter: events_mem.date = Date32("2025-01-03")
+03)----Projection: get_field(events_mem.ids, Utf8("id1")) AS __datafusion_extracted_1, events_mem.date
+04)------TableScan: events_mem projection=[date, ids]
+physical_plan
+01)ProjectionExec: expr=[__datafusion_extracted_1@0 as events_mem.ids[id1]]
+02)--FilterExec: date@1 = 2025-01-03, projection=[__datafusion_extracted_1@0]
+03)----ProjectionExec: expr=[get_field(ids@1, id1) as __datafusion_extracted_1, date@0 as date]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The #14540 shape needs a second pass, because the two filters merge into one.
+# It is stable from that pass on.
+statement ok
+SET datafusion.optimizer.max_passes = 2;
+
+query TT
+EXPLAIN WITH events AS (
+    SELECT ids.id1 AS device, structs.var1 AS user, "timestamp"
+    FROM events_mem
+    WHERE "date" = '2025-01-03'
+)
+SELECT *, LAG(user, 1) OVER (PARTITION BY device ORDER BY "timestamp") AS prev
+FROM events
+WHERE device IS NOT NULL AND device != '' AND user IS NOT NULL AND user != ''
+LIMIT 100;
+----
+logical_plan
+01)Projection: events.device, events.user, events.timestamp, lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS prev
+02)--Limit: skip=0, fetch=100
+03)----WindowAggr: windowExpr=[[lag(events.user, Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------SubqueryAlias: events
+05)--------Projection: __datafusion_extracted_1 AS device, __datafusion_extracted_2 AS user, events_mem.timestamp
+06)----------Filter: events_mem.date = Date32("2025-01-03") AND __datafusion_extracted_1 IS NOT NULL AND __datafusion_extracted_1 != Utf8View("") AND __datafusion_extracted_2 IS NOT NULL AND __datafusion_extracted_2 != Utf8View("")
+07)------------Projection: get_field(events_mem.ids, Utf8("id1")) AS __datafusion_extracted_1, get_field(events_mem.structs, Utf8("var1")) AS __datafusion_extracted_2, events_mem.date, events_mem.timestamp
+08)--------------TableScan: events_mem projection=[date, timestamp, ids, structs]
+physical_plan
+01)ProjectionExec: expr=[device@0 as device, user@1 as user, timestamp@2 as timestamp, lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as prev]
+02)--GlobalLimitExec: skip=0, fetch=100
+03)----BoundedWindowAggExec: wdw=[lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Utf8View }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[device@0 ASC NULLS LAST, timestamp@2 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------ProjectionExec: expr=[__datafusion_extracted_1@0 as device, __datafusion_extracted_2@1 as user, timestamp@2 as timestamp]
+06)----------FilterExec: date@2 = 2025-01-03 AND __datafusion_extracted_1@0 IS NOT NULL AND __datafusion_extracted_1@0 !=  AND __datafusion_extracted_2@1 IS NOT NULL AND __datafusion_extracted_2@1 != , projection=[__datafusion_extracted_1@0, __datafusion_extracted_2@1, timestamp@3]
+07)------------ProjectionExec: expr=[get_field(ids@2, id1) as __datafusion_extracted_1, get_field(structs@3, var1) as __datafusion_extracted_2, date@0 as date, timestamp@1 as timestamp]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+RESET datafusion.optimizer.max_passes;
+
+query TTT
+WITH events AS (
+    SELECT ids.id1 AS device, structs.var1 AS user, "timestamp"
+    FROM events_mem
+    WHERE "date" = '2025-01-03'
+)
+SELECT device, user, CAST(LAG(user, 1) OVER (PARTITION BY device ORDER BY "timestamp") AS VARCHAR) AS prev
+FROM events
+WHERE device IS NOT NULL AND device != '' AND user IS NOT NULL AND user != ''
+ORDER BY user;
+----
+dev1 user1 NULL
+dev1 user2 user1
+
+statement ok
+DROP TABLE events_mem;
+
+# Parquet: both properties must survive. `DataSourceExec` reads only the struct
+# leaf `ids.id1` (the `get_field` is in the scan projection), and the `date`
+# predicate reaches the scan for row group pruning.
+statement ok
+COPY (
+    SELECT
+        column1 AS "date",
+        column2 AS "timestamp",
+        column3 AS ids,
+        column4 AS structs
+    FROM VALUES
+        (DATE '2025-01-03', TIMESTAMP '2025-01-03 01:00:00', {id1: 'dev1', extra: 1}, {var1: 'user1', extra: 'e1'}),
+        (DATE '2025-01-03', TIMESTAMP '2025-01-03 02:00:00', {id1: 'dev1', extra: 2}, {var1: 'user2', extra: 'e2'}),
+        (DATE '2025-01-04', TIMESTAMP '2025-01-04 01:00:00', {id1: 'dev2', extra: 3}, {var1: 'user3', extra: 'e3'})
+) TO 'test_files/scratch/projection_pushdown/events.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE events_pq STORED AS PARQUET
+LOCATION 'test_files/scratch/projection_pushdown/events.parquet';
+
+query TT
+EXPLAIN SELECT ids['id1'] FROM events_pq WHERE "date" = '2025-01-03';
+----
+logical_plan
+01)Projection: __datafusion_extracted_1 AS events_pq.ids[id1]
+02)--Filter: events_pq.date = Date32("2025-01-03")
+03)----Projection: get_field(events_pq.ids, Utf8("id1")) AS __datafusion_extracted_1, events_pq.date
+04)------TableScan: events_pq projection=[date, ids], partial_filters=[events_pq.date = Date32("2025-01-03")]
+physical_plan
+01)ProjectionExec: expr=[__datafusion_extracted_1@0 as events_pq.ids[id1]]
+02)--FilterExec: date@1 = 2025-01-03, projection=[__datafusion_extracted_1@0]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/events.parquet]]}, projection=[get_field(ids@2, id1) as __datafusion_extracted_1, date], file_type=parquet, predicate=date@0 = 2025-01-03, pruning_predicate=date_null_count@2 != row_count@3 AND date_min@0 <= 2025-01-03 AND 2025-01-03 <= date_max@1, required_guarantees=[date in (2025-01-03)]
+
+query TT
+EXPLAIN WITH events AS (
+    SELECT ids.id1 AS device, structs.var1 AS user, "timestamp"
+    FROM events_pq
+    WHERE "date" = '2025-01-03'
+)
+SELECT *, LAG(user, 1) OVER (PARTITION BY device ORDER BY "timestamp") AS prev
+FROM events
+WHERE device IS NOT NULL AND device != '' AND user IS NOT NULL AND user != ''
+LIMIT 100;
+----
+logical_plan
+01)Projection: events.device, events.user, events.timestamp, lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS prev
+02)--Limit: skip=0, fetch=100
+03)----WindowAggr: windowExpr=[[lag(events.user, Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------SubqueryAlias: events
+05)--------Projection: __datafusion_extracted_1 AS device, __datafusion_extracted_2 AS user, events_pq.timestamp
+06)----------Filter: events_pq.date = Date32("2025-01-03") AND __datafusion_extracted_1 IS NOT NULL AND __datafusion_extracted_1 != Utf8("") AND __datafusion_extracted_2 IS NOT NULL AND __datafusion_extracted_2 != Utf8("")
+07)------------Projection: get_field(events_pq.ids, Utf8("id1")) AS __datafusion_extracted_1, get_field(events_pq.structs, Utf8("var1")) AS __datafusion_extracted_2, events_pq.date, events_pq.timestamp
+08)--------------TableScan: events_pq projection=[date, timestamp, ids, structs], partial_filters=[events_pq.date = Date32("2025-01-03")]
+physical_plan
+01)ProjectionExec: expr=[device@0 as device, user@1 as user, timestamp@2 as timestamp, lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as prev]
+02)--GlobalLimitExec: skip=0, fetch=100
+03)----BoundedWindowAggExec: wdw=[lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Utf8 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[device@0 ASC NULLS LAST, timestamp@2 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------ProjectionExec: expr=[__datafusion_extracted_1@0 as device, __datafusion_extracted_2@1 as user, timestamp@2 as timestamp]
+06)----------FilterExec: date@2 = 2025-01-03 AND __datafusion_extracted_1@0 IS NOT NULL AND __datafusion_extracted_1@0 !=  AND __datafusion_extracted_2@1 IS NOT NULL AND __datafusion_extracted_2@1 != , projection=[__datafusion_extracted_1@0, __datafusion_extracted_2@1, timestamp@3]
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/events.parquet]]}, projection=[get_field(ids@2, id1) as __datafusion_extracted_1, get_field(structs@3, var1) as __datafusion_extracted_2, date, timestamp], file_type=parquet, predicate=date@0 = 2025-01-03 AND get_field(ids@2, id1) IS NOT NULL AND get_field(ids@2, id1) !=  AND get_field(structs@3, var1) IS NOT NULL AND get_field(structs@3, var1) != , pruning_predicate=date_null_count@2 != row_count@3 AND date_min@0 <= 2025-01-03 AND 2025-01-03 <= date_max@1, required_guarantees=[date in (2025-01-03)]
+
+statement ok
+DROP TABLE events_pq;
+
+statement ok
+RESET datafusion.optimizer.max_passes;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
