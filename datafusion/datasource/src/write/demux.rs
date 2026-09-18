@@ -25,7 +25,7 @@ use datafusion_physical_plan::SendableRecordBatchStream;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow::array::{
     ArrayAccessor, RecordBatch, StringArray, StructArray, builder::UInt64Builder,
@@ -51,7 +51,7 @@ use rand::distr::SampleString;
 use tokio::sync::mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSender};
 
 /// Cumulative encoded bytes reported by an output file writer.
-pub type FileSize = Arc<AtomicUsize>;
+pub type FileSize = Arc<AtomicU64>;
 type RecordBatchReceiver = Receiver<RecordBatch>;
 pub type DemuxedStreamReceiver = UnboundedReceiver<(FileMetadata, RecordBatchReceiver)>;
 
@@ -185,9 +185,9 @@ async fn row_count_demuxer(
     };
 
     let max_bytes_per_file = if single_file_output {
-        usize::MAX
+        u64::MAX
     } else {
-        max_bytes_per_file
+        max_bytes_per_file as u64
     };
 
     if single_file_output {
@@ -299,7 +299,7 @@ fn create_new_file_stream(
     max_buffered_batches: usize,
     tx: &mut UnboundedSender<(FileMetadata, RecordBatchReceiver)>,
 ) -> Result<(Sender<RecordBatch>, FileSize)> {
-    let file_size = Arc::new(AtomicUsize::new(0));
+    let file_size = Arc::new(AtomicU64::new(0));
     let file_metadata = FileMetadata {
         path: generate_file_path(
             base_output_path,
@@ -369,7 +369,7 @@ async fn hive_style_partitions_demuxer(
                             &file_extension,
                             &base_output_path,
                         ),
-                        size: Arc::new(AtomicUsize::new(0)),
+                        size: Arc::new(AtomicU64::new(0)),
                     };
 
                     tx.send((file_metadata, part_rx)).map_err(|_| {

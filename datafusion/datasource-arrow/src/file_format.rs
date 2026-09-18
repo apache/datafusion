@@ -23,7 +23,6 @@ use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::io::{Seek, SeekFrom};
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
@@ -294,22 +293,18 @@ impl FileSink for ArrowFileSink {
                     .execution
                     .objectstore_writer_buffer_size,
             ))
+            .with_bytes_written_counter(file_metadata.size)
             .build()?;
             file_write_tasks.spawn(async move {
                 let mut row_count = 0;
-                let mut flushed_bytes = 0;
                 while let Some(batch) = rx.recv().await {
                     row_count += batch.num_rows();
                     arrow_writer.write(&batch)?;
                     let mut buff_to_flush = shared_buffer.buffer.try_lock().unwrap();
-                    file_metadata
-                        .size
-                        .store(flushed_bytes + buff_to_flush.len(), Ordering::Relaxed);
                     if buff_to_flush.len() > BUFFER_FLUSH_BYTES {
                         object_store_writer
                             .write_all(buff_to_flush.as_slice())
                             .await?;
-                        flushed_bytes += buff_to_flush.len();
                         buff_to_flush.clear();
                     }
                 }

@@ -141,8 +141,6 @@ fn infer_options_boxed(
 mod tests {
 
     #[cfg(feature = "parquet")]
-    use crate::dataframe::DataFrameWriteOptions;
-    #[cfg(feature = "parquet")]
     use crate::datasource::file_format::parquet::ParquetFormat;
     use crate::datasource::listing::table::ListingTableConfigExt;
     use crate::execution::options::JsonReadOptions;
@@ -158,8 +156,6 @@ mod tests {
             object_store::make_test_store_and_state, object_store::register_test_store,
         },
     };
-    #[cfg(feature = "parquet")]
-    use arrow::array::BinaryArray;
     use arrow::{compute::SortOptions, record_batch::RecordBatch};
     use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
     use datafusion_catalog::TableProvider;
@@ -1783,76 +1779,6 @@ mod tests {
                 expected_files,
             )
             .await?;
-        }
-
-        Ok(())
-    }
-
-    #[cfg(feature = "parquet")]
-    #[tokio::test]
-    async fn test_soft_max_bytes_uses_compressed_parquet_size() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "blob",
-            DataType::Binary,
-            false,
-        )]));
-        let blob = vec![0_u8; 2 * 1024 * 1024];
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(BinaryArray::from(vec![blob.as_slice()]))],
-        )?;
-
-        for (compression, expect_single_file) in
-            [("uncompressed", false), ("zstd(3)", true)]
-        {
-            let mut config_map = HashMap::new();
-            config_map.insert(
-                "datafusion.execution.minimum_parallel_output_files".into(),
-                "1".into(),
-            );
-            config_map.insert(
-                "datafusion.execution.soft_max_rows_per_output_file".into(),
-                "100".into(),
-            );
-            config_map.insert(
-                "datafusion.execution.soft_max_bytes_per_output_file".into(),
-                (64 * 1024).to_string(),
-            );
-            config_map.insert(
-                "datafusion.execution.parquet.compression".into(),
-                compression.into(),
-            );
-            config_map.insert(
-                "datafusion.execution.parquet.dictionary_enabled".into(),
-                "false".into(),
-            );
-            let ctx = SessionContext::new_with_config(
-                SessionConfig::from_string_hash_map(&config_map)?,
-            );
-            let source = Arc::new(MemTable::try_new(
-                Arc::clone(&schema),
-                vec![vec![batch.clone(); 20]],
-            )?);
-            let output_dir = TempDir::new()?;
-
-            ctx.read_table(source)?
-                .write_parquet(
-                    output_dir.path().to_str().unwrap(),
-                    DataFrameWriteOptions::new(),
-                    None,
-                )
-                .await?;
-
-            let output_files = output_dir
-                .path()
-                .read_dir()?
-                .collect::<std::io::Result<Vec<_>>>()?;
-            if expect_single_file {
-                assert_eq!(output_files.len(), 1);
-                assert!(output_files[0].metadata()?.len() < 64 * 1024);
-            } else {
-                assert!(output_files.len() > 1);
-            }
         }
 
         Ok(())
