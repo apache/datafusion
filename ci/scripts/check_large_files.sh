@@ -38,7 +38,8 @@ usage() {
   cat >&2 <<USAGE
 Usage: $SCRIPT_NAME [--base <ref>] [--head <ref>] [--max-bytes <n>]
 Fails if any file committed between <base> and <head> is larger than <n> bytes.
---base <ref>     Start of the commit range, exclusive. Defaults to the merge base of <head> and origin/main.
+--base <ref>     Start of the commit range, exclusive. Defaults to the merge base of <head> and main on the
+                 remote that points at apache/datafusion, or on origin when there is no such remote.
 --head <ref>     End of the commit range, inclusive. Defaults to HEAD.
 --max-bytes <n>  Size limit in bytes. Defaults to ${DEFAULT_MAX_FILE_SIZE_BYTES} (1.5 MB).
 USAGE
@@ -72,7 +73,25 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+# A leading zero is rejected too: bash would read the value as octal.
+if ! [[ "${MAX_FILE_SIZE_BYTES}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+  echo "[${SCRIPT_NAME}] --max-bytes must be a whole number of bytes, got \"${MAX_FILE_SIZE_BYTES}\"" >&2
+  exit 1
+fi
+
 cd "${ROOT_DIR}"
+
+# The remote that points at apache/datafusion, or origin when there is no such remote.
+upstream_remote() {
+  local remote
+  for remote in $(git remote); do
+    if [[ "$(git remote get-url "${remote}")" =~ github\.com[:/]apache/datafusion(\.git)?/?$ ]]; then
+      echo "${remote}"
+      return
+    fi
+  done
+  echo "origin"
+}
 
 if ! git rev-parse --verify --quiet "${HEAD_REF}^{commit}" > /dev/null; then
   echo "[${SCRIPT_NAME}] ${HEAD_REF} is not a commit" >&2
@@ -80,11 +99,12 @@ if ! git rev-parse --verify --quiet "${HEAD_REF}^{commit}" > /dev/null; then
 fi
 
 if [[ -z "${BASE_REF}" ]]; then
-  if ! git rev-parse --verify --quiet "origin/main^{commit}" > /dev/null; then
-    echo "[${SCRIPT_NAME}] origin/main is not available; pass --base <ref> to choose the start of the range" >&2
+  upstream_main="$(upstream_remote)/main"
+  if ! git rev-parse --verify --quiet "${upstream_main}^{commit}" > /dev/null; then
+    echo "[${SCRIPT_NAME}] ${upstream_main} is not available; fetch it or pass --base <ref> to choose the start of the range" >&2
     exit 1
   fi
-  BASE_REF="$(git merge-base "${HEAD_REF}" origin/main)"
+  BASE_REF="$(git merge-base "${HEAD_REF}" "${upstream_main}")"
 elif ! git rev-parse --verify --quiet "${BASE_REF}^{commit}" > /dev/null; then
   echo "[${SCRIPT_NAME}] ${BASE_REF} is not a commit" >&2
   exit 1
@@ -92,9 +112,20 @@ fi
 
 echo "[${SCRIPT_NAME}] Checking files committed in ${BASE_REF}..${HEAD_REF} against the ${MAX_FILE_SIZE_BYTES} byte limit"
 
+# Listing the objects into a variable, rather than piping them into the loop, makes a failing
+# git command fail the check instead of leaving the loop with nothing to read.
+objects="$(
+  git rev-list --objects "${BASE_REF}..${HEAD_REF}" \
+    | git cat-file --batch-check='%(objectname) %(objecttype) %(objectsize) %(rest)'
+)"
+
 exit_code=0
 # Only blobs are files. Commits and trees are listed too, and are skipped.
 while read -r id type size path; do
+  if [[ "${type}" == "missing" ]]; then
+    echo "[${SCRIPT_NAME}] Object ${id} is not in this clone, so its size cannot be checked. Fetch the full history and retry." >&2
+    exit 1
+  fi
   if [[ "${type}" == "blob" && "${size}" -gt "${MAX_FILE_SIZE_BYTES}" ]]; then
     exit_code=1
     echo "Object ${id} [${path}] has size ${size}, exceeding ${MAX_FILE_SIZE_BYTES} limit." >&2
@@ -102,9 +133,6 @@ while read -r id type size path; do
       echo "::error file=${path}::File ${path} has size ${size}, exceeding ${MAX_FILE_SIZE_BYTES} limit."
     fi
   fi
-done < <(
-  git rev-list --objects "${BASE_REF}..${HEAD_REF}" \
-    | git cat-file --batch-check='%(objectname) %(objecttype) %(objectsize) %(rest)'
-)
+done <<< "${objects}"
 
 exit "${exit_code}"

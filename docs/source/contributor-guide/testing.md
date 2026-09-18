@@ -260,8 +260,9 @@ The audit fetches the RustSec advisory database. A new advisory or a different
 `ci/scripts/check_large_files.sh` fails if any file committed between a base
 ref and a head ref is larger than 1.5 MB, the same check the "Large files PR
 check" workflow runs on pull requests. `./dev/rust_lint.sh` runs it against
-the merge base of `HEAD` and `origin/main`. To run the check on its own, or
-against a different range:
+the merge base of `HEAD` and `main` on the remote that points at
+`apache/datafusion`, or on `origin` when there is no such remote. To run the
+check on its own, or against a different range:
 
 ```shell
 ./ci/scripts/check_large_files.sh
