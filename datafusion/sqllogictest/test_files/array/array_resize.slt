@@ -193,4 +193,15 @@ NULL
 [61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 9, 9, 9, 9, 9]
 
 
+# a negative size is the caller's error, so it must not surface as an internal error
+query error DataFusion error: Execution error: array_resize: size must not be negative, got \-1
+select array_resize(make_array(1, 2, 3), -1, 0);
+
+query error DataFusion error: Execution error: array_resize: size must not be negative, got \-9223372036854775808
+select array_resize(make_array(1, 2, 3), -9223372036854775808, 0);
+
+query error DataFusion error: Execution error: array_resize: size must not be negative, got \-1
+select array_resize(arrow_cast(make_array(1, 2, 3), 'LargeList(Int64)'), -1, 0);
+
+
 include ./cleanup.slt.part

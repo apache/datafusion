@@ -7921,7 +7921,7 @@ mod tests {
 
         #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
         // ScalarValue has interior mutability but is intentionally used as hash key
-        let mut s = HashSet::with_capacity(0);
+        let mut s = HashSet::new();
         // do NOT clone `sv` here because this may shrink the vector capacity
         s.insert(v.pop().unwrap());
         // hashsets may easily grow during insert, so capacity is dynamic

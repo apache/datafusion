@@ -5,16 +5,15 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-
 
 statement ok
 set datafusion.optimizer.enable_piecewise_merge_join = true;
@@ -1236,6 +1235,804 @@ physical_plan
 04)------SortExec: expr=[v@1 ASC], preserve_partitioning=[false]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 06)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# ------------------------------------------------------------------
+# Right existence joins (RightSemi / RightAnti) via PiecewiseMergeJoin
+# ------------------------------------------------------------------
+# These mark the streamed (right) side, which for a single range predicate is decided by one
+# buffered key: the minimum for `<`/`<=`, the maximum for `>`/`>=`. So unlike LeftSemi/LeftAnti
+# there is no watermark and no final pass -- each streamed batch is filtered and emitted as it
+# arrives -- and no sort on either side, since a min/max is `O(B)` from any order. `EXISTS`
+# always decorrelates to a *Left* existence join, so these are reached through the explicit
+# join syntax instead.
+
+statement ok
+CREATE TABLE rex_l(v INT);
+
+statement ok
+INSERT INTO rex_l VALUES (2), (4);
+
+statement ok
+CREATE TABLE rex_r(id INT, v INT);
+
+statement ok
+INSERT INTO rex_r VALUES (1, 1), (2, 2), (3, 4), (4, 5), (5, NULL);
+
+# `>` : the deciding buffered key is max = 4. 4>{1,2}; 4 is not > 4 or 5; NULL matches nothing.
+query I
+SELECT r.id FROM rex_l l RIGHT SEMI JOIN rex_r r ON l.v > r.v ORDER BY 1;
+----
+1
+2
+
+query I
+SELECT r.id FROM rex_l l RIGHT ANTI JOIN rex_r r ON l.v > r.v ORDER BY 1;
+----
+3
+4
+5
+
+# `>=` additionally admits r.v = 4 via the equal buffered value, so it must differ from `>`.
+query I
+SELECT r.id FROM rex_l l RIGHT SEMI JOIN rex_r r ON l.v >= r.v ORDER BY 1;
+----
+1
+2
+3
+
+query I
+SELECT r.id FROM rex_l l RIGHT ANTI JOIN rex_r r ON l.v >= r.v ORDER BY 1;
+----
+4
+5
+
+# `<` : the deciding key flips to min = 2. 2<{4,5}; 2 is not < 1 or 2.
+query I
+SELECT r.id FROM rex_l l RIGHT SEMI JOIN rex_r r ON l.v < r.v ORDER BY 1;
+----
+3
+4
+
+query I
+SELECT r.id FROM rex_l l RIGHT ANTI JOIN rex_r r ON l.v < r.v ORDER BY 1;
+----
+1
+2
+5
+
+# `<=` additionally admits r.v = 2, so it must differ from `<`.
+query I
+SELECT r.id FROM rex_l l RIGHT SEMI JOIN rex_r r ON l.v <= r.v ORDER BY 1;
+----
+2
+3
+4
+
+query I
+SELECT r.id FROM rex_l l RIGHT ANTI JOIN rex_r r ON l.v <= r.v ORDER BY 1;
+----
+1
+5
+
+# **Neither** side is sorted: `required_input_ordering` is empty for both children, so the plan
+# has no `SortExec` at all. The buffered side only needs its min/max, which is `O(B)` from any
+# order -- every other PWMJ join type walks it and does require a global sort.
+query TT
+EXPLAIN SELECT r.id FROM rex_l l RIGHT SEMI JOIN rex_r r ON l.v > r.v ORDER BY 1;
+----
+logical_plan
+01)Sort: r.id ASC NULLS LAST
+02)--Projection: r.id
+03)----RightSemi Join:  Filter: l.v > r.v
+04)------SubqueryAlias: l
+05)--------TableScan: rex_l projection=[v]
+06)------SubqueryAlias: r
+07)--------TableScan: rex_r projection=[id, v]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[id@0 as id]
+03)----PiecewiseMergeJoin: operator=Gt, join_type=RightSemi, on=(v > v)
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A min/max combines across partitions, so the buffered side carries no `SinglePartition`
+# requirement and every partition of it is folded. A `UNION ALL` gives it two, and the deciding
+# key -- max = 7 -- is in the second one, so folding only the first would return {1,2} here.
+statement ok
+CREATE TABLE rex_l2(v INT);
+
+statement ok
+INSERT INTO rex_l2 VALUES (3), (7);
+
+query I
+SELECT r.id FROM (SELECT v FROM rex_l UNION ALL SELECT v FROM rex_l2) l
+RIGHT SEMI JOIN rex_r r ON l.v > r.v ORDER BY 1;
+----
+1
+2
+3
+4
+
+query I
+SELECT r.id FROM (SELECT v FROM rex_l UNION ALL SELECT v FROM rex_l2) l
+RIGHT ANTI JOIN rex_r r ON l.v > r.v ORDER BY 1;
+----
+5
+
+# `UnionExec` feeds the join directly with both partitions -- no `CoalescePartitionsExec`
+# funnelling every buffered row through one thread, which is what `SinglePartition` would force.
+# Nor is a `RepartitionExec` added to split it: `benefits_from_input_partitioning` declines that
+# for this side, since folding a batch is one linear scan and not worth a channel hop.
+query TT
+EXPLAIN SELECT r.id FROM (SELECT v FROM rex_l UNION ALL SELECT v FROM rex_l2) l
+RIGHT SEMI JOIN rex_r r ON l.v > r.v ORDER BY 1;
+----
+logical_plan
+01)Sort: r.id ASC NULLS LAST
+02)--Projection: r.id
+03)----RightSemi Join:  Filter: l.v > r.v
+04)------SubqueryAlias: l
+05)--------Union
+06)----------TableScan: rex_l projection=[v]
+07)----------TableScan: rex_l2 projection=[v]
+08)------SubqueryAlias: r
+09)--------TableScan: rex_r projection=[id, v]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[id@0 as id]
+03)----PiecewiseMergeJoin: operator=Gt, join_type=RightSemi, on=(v > v)
+04)------UnionExec
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)--------DataSourceExec: partitions=1, partition_sizes=[1]
+07)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# An empty buffered side has no key at all, so nothing matches: RightSemi is empty and
+# RightAnti keeps every streamed row, NULL-keyed ones included.
+statement ok
+CREATE TABLE rex_empty(v INT);
+
+query I
+SELECT r.id FROM rex_empty l RIGHT SEMI JOIN rex_r r ON l.v > r.v ORDER BY 1;
+----
+
+query I
+SELECT r.id FROM rex_empty l RIGHT ANTI JOIN rex_r r ON l.v > r.v ORDER BY 1;
+----
+1
+2
+3
+4
+5
+
+# The same holds when the buffered side is present but every key is NULL, since a NULL key
+# matches nothing either.
+statement ok
+CREATE TABLE rex_null_l(v INT);
+
+statement ok
+INSERT INTO rex_null_l VALUES (NULL), (NULL);
+
+query I
+SELECT r.id FROM rex_null_l l RIGHT SEMI JOIN rex_r r ON l.v > r.v ORDER BY 1;
+----
+
+query I
+SELECT r.id FROM rex_null_l l RIGHT ANTI JOIN rex_r r ON l.v > r.v ORDER BY 1;
+----
+1
+2
+3
+4
+5
+
+# An empty streamed side has nothing to filter, either way.
+statement ok
+CREATE TABLE rex_empty_r(id INT, v INT);
+
+query I
+SELECT r.id FROM rex_l l RIGHT SEMI JOIN rex_empty_r r ON l.v > r.v ORDER BY 1;
+----
+
+query I
+SELECT r.id FROM rex_l l RIGHT ANTI JOIN rex_empty_r r ON l.v > r.v ORDER BY 1;
+----
+
+# `count(*)` needs no column from the join, but the streamed side still has to project the
+# join key, so the output is never zero-column -- which `RecordBatch::try_new` would reject.
+query I
+SELECT count(*) FROM rex_l l RIGHT SEMI JOIN rex_r r ON l.v > r.v;
+----
+2
+
+# The planner's PWMJ gate only fires when the range predicate splits cleanly one operand per
+# side. A same-side-only operand (both columns from the streamed side, none from the buffered
+# side) or a literal-only operand (no column from either side) can't be split that way, so both
+# must fall back to NestedLoopJoin -- not error or panic, which they did before this predicate
+# shape was reachable for RightSemi/RightAnti (the gate previously excluded both join types
+# outright, so `side_of`'s classification of these shapes was never exercised for them).
+statement ok
+CREATE TABLE rex_gate_l(v INT);
+
+statement ok
+INSERT INTO rex_gate_l VALUES (1), (10);
+
+statement ok
+CREATE TABLE rex_gate_r(id INT, v INT);
+
+statement ok
+INSERT INTO rex_gate_r VALUES (1, 1), (2, 20);
+
+# Same-side operand: `pr.id`/`pr.v` are both columns of the streamed side alone, so the
+# predicate never references the buffered side at all -- equivalent to filtering the streamed
+# side by `id <= v` (the complement, since RightAnti keeps rows with no buffered match and no
+# buffered row can ever be a witness for a buffered-independent predicate once the buffered
+# side is non-empty).
+query I
+SELECT r.id FROM rex_gate_l l RIGHT ANTI JOIN rex_gate_r r ON r.id > r.v ORDER BY 1;
+----
+1
+2
+
+query TT
+EXPLAIN SELECT r.id FROM rex_gate_l l RIGHT ANTI JOIN rex_gate_r r ON r.id > r.v ORDER BY 1;
+----
+logical_plan
+01)Sort: r.id ASC NULLS LAST
+02)--Projection: r.id
+03)----RightAnti Join:  Filter: r.id > r.v
+04)------SubqueryAlias: l
+05)--------TableScan: rex_gate_l projection=[]
+06)------SubqueryAlias: r
+07)--------TableScan: rex_gate_r projection=[id, v]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[id@0 as id]
+03)----NestedLoopJoinExec: join_type=RightAnti, filter=join_proj_push_down_1@0, projection=[id@0, v@1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------ProjectionExec: expr=[id@0 as id, v@1 as v, id@0 > v@1 as join_proj_push_down_1]
+06)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Literal-only operand: `5` references no column from either side, so it has no side to fold
+# into either. `5 > r.v` is buffered-independent the same way, so RightAnti keeps rows where
+# `NOT (5 > r.v)`, i.e. `r.v >= 5`.
+query I
+SELECT r.id FROM rex_gate_l l RIGHT ANTI JOIN rex_gate_r r ON 5 > r.v ORDER BY 1;
+----
+2
+
+query TT
+EXPLAIN SELECT r.id FROM rex_gate_l l RIGHT ANTI JOIN rex_gate_r r ON 5 > r.v ORDER BY 1;
+----
+logical_plan
+01)Sort: r.id ASC NULLS LAST
+02)--Projection: r.id
+03)----RightAnti Join:  Filter: r.v < Int32(5)
+04)------SubqueryAlias: l
+05)--------TableScan: rex_gate_l projection=[]
+06)------SubqueryAlias: r
+07)--------TableScan: rex_gate_r projection=[id, v]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[id@0 as id]
+03)----NestedLoopJoinExec: join_type=RightAnti, filter=join_proj_push_down_1@0, projection=[id@0, v@1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------ProjectionExec: expr=[id@0 as id, v@1 as v, v@1 < 5 as join_proj_push_down_1]
+06)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Dictionary-encoded keys compare the buffered extreme as a dictionary `Scalar`, which is a
+# different arrow path from the primitive one above.
+statement ok
+CREATE TABLE rex_dict_l AS
+  SELECT arrow_cast(column1, 'Dictionary(Int32, Utf8)') AS v FROM (VALUES ('c'), (NULL));
+
+statement ok
+CREATE TABLE rex_dict_r AS
+  SELECT column1 AS id, arrow_cast(column2, 'Dictionary(Int32, Utf8)') AS v
+  FROM (VALUES (1, 'a'), (2, 'c'), (3, 'e'), (4, NULL));
+
+# `>` : the only buffered key is 'c', so only 'a' has something above it.
+query I
+SELECT r.id FROM rex_dict_l l RIGHT SEMI JOIN rex_dict_r r ON l.v > r.v ORDER BY 1;
+----
+1
+
+query I
+SELECT r.id FROM rex_dict_l l RIGHT ANTI JOIN rex_dict_r r ON l.v > r.v ORDER BY 1;
+----
+2
+3
+4
+
+# Float keys are the case where reducing the buffered side and comparing against the result must
+# agree on an ordering. Both use a *total* order (arrow's `cmp` kernels and `min`/`max` compare
+# floats with `total_cmp`), under which NaN is the largest value rather than incomparable. So the
+# buffered maximum below is NaN, and id 5 matches through `NaN > 2.0`; were the comparison IEEE
+# while the reduction stayed total, that would be false and no other buffered key is above 2.0,
+# so the row would be lost. id 4 is excluded for the mirror reason: nothing is above NaN.
+statement ok
+CREATE TABLE rex_f_l(v DOUBLE);
+
+statement ok
+INSERT INTO rex_f_l VALUES (1.0), (arrow_cast('NaN', 'Float64'));
+
+statement ok
+CREATE TABLE rex_f_r(id INT, v DOUBLE);
+
+statement ok
+INSERT INTO rex_f_r VALUES
+  (1, arrow_cast('-Inf', 'Float64')), (2, 0.0), (3, -0.0),
+  (4, arrow_cast('NaN', 'Float64')), (5, 2.0);
+
+query I
+SELECT r.id FROM rex_f_l l RIGHT SEMI JOIN rex_f_r r ON l.v > r.v ORDER BY 1;
+----
+1
+2
+3
+5
+
+query I
+SELECT r.id FROM rex_f_l l RIGHT ANTI JOIN rex_f_r r ON l.v > r.v ORDER BY 1;
+----
+4
+
+# No `SortExec` on either side for a float key either -- the operator is chosen for these types,
+# not silently replaced by a NestedLoopJoin that would answer the queries above identically.
+query TT
+EXPLAIN SELECT r.id FROM rex_f_l l RIGHT SEMI JOIN rex_f_r r ON l.v > r.v ORDER BY 1;
+----
+logical_plan
+01)Sort: r.id ASC NULLS LAST
+02)--Projection: r.id
+03)----RightSemi Join:  Filter: l.v > r.v
+04)------SubqueryAlias: l
+05)--------TableScan: rex_f_l projection=[v]
+06)------SubqueryAlias: r
+07)--------TableScan: rex_f_r projection=[id, v]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[id@0 as id]
+03)----PiecewiseMergeJoin: operator=Gt, join_type=RightSemi, on=(v > v)
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# String keys reduce through arrow's string kernels rather than the primitive ones: `Utf8` via
+# `min_string`/`max_string` and `Utf8View` via their view equivalents. Same shape as the
+# dictionary case above -- buffered 'c', so only 'a' has something above it.
+statement ok
+CREATE TABLE rex_s_l AS
+  SELECT arrow_cast(column1, 'Utf8') AS v FROM (VALUES ('c'), (NULL));
+
+statement ok
+CREATE TABLE rex_s_r AS
+  SELECT column1 AS id, arrow_cast(column2, 'Utf8') AS v
+  FROM (VALUES (1, 'a'), (2, 'c'), (3, 'e'), (4, NULL));
+
+query I
+SELECT r.id FROM rex_s_l l RIGHT SEMI JOIN rex_s_r r ON l.v > r.v ORDER BY 1;
+----
+1
+
+query I
+SELECT r.id FROM rex_s_l l RIGHT ANTI JOIN rex_s_r r ON l.v > r.v ORDER BY 1;
+----
+2
+3
+4
+
+statement ok
+CREATE TABLE rex_sv_l AS
+  SELECT arrow_cast(column1, 'Utf8View') AS v FROM (VALUES ('c'), (NULL));
+
+statement ok
+CREATE TABLE rex_sv_r AS
+  SELECT column1 AS id, arrow_cast(column2, 'Utf8View') AS v
+  FROM (VALUES (1, 'a'), (2, 'c'), (3, 'e'), (4, NULL));
+
+query I
+SELECT r.id FROM rex_sv_l l RIGHT SEMI JOIN rex_sv_r r ON l.v > r.v ORDER BY 1;
+----
+1
+
+query I
+SELECT r.id FROM rex_sv_l l RIGHT ANTI JOIN rex_sv_r r ON l.v > r.v ORDER BY 1;
+----
+2
+3
+4
+
+# ------------------------------------------------------------------
+# Right existence joins: nested and dictionary key regressions, PWMJ on vs. off
+# ------------------------------------------------------------------
+# The buffered-side reduction (`min_batch`/`max_batch`) handles List/Struct/Dictionary keys
+# through the same generic path the earlier Dictionary case above exercises, but comparing the
+# reduced extreme against the streamed batch is a separate step: it goes through `apply_cmp`,
+# which dispatches List/Struct (and a dictionary of either) to a nested-aware comparator instead
+# of arrow's `lt`/`lt_eq`/`gt`/`gt_eq` kernels, which reject those types outright. Each key type
+# below runs the same query with PWMJ enabled and disabled and checks the two agree, so a
+# regression in that dispatch fails a result comparison rather than only an internal error.
+
+statement ok
+CREATE TABLE rex_list_l(v INT[]);
+
+statement ok
+INSERT INTO rex_list_l VALUES ([2]), ([4]);
+
+statement ok
+CREATE TABLE rex_list_r(id INT, v INT[]);
+
+statement ok
+INSERT INTO rex_list_r VALUES (1, [1]), (2, [2]), (3, [4]), (4, [5]), (5, NULL);
+
+query I
+SELECT r.id FROM rex_list_l l RIGHT SEMI JOIN rex_list_r r ON l.v > r.v ORDER BY 1;
+----
+1
+2
+
+query I
+SELECT r.id FROM rex_list_l l RIGHT ANTI JOIN rex_list_r r ON l.v > r.v ORDER BY 1;
+----
+3
+4
+5
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = false;
+
+query TT
+EXPLAIN SELECT r.id FROM rex_list_l l RIGHT SEMI JOIN rex_list_r r ON l.v > r.v ORDER BY 1;
+----
+logical_plan
+01)Sort: r.id ASC NULLS LAST
+02)--Projection: r.id
+03)----RightSemi Join:  Filter: l.v > r.v
+04)------SubqueryAlias: l
+05)--------TableScan: rex_list_l projection=[v]
+06)------SubqueryAlias: r
+07)--------TableScan: rex_list_r projection=[id, v]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--NestedLoopJoinExec: join_type=RightSemi, filter=v@0 > v@1, projection=[id@0]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+SELECT r.id FROM rex_list_l l RIGHT SEMI JOIN rex_list_r r ON l.v > r.v ORDER BY 1;
+----
+1
+2
+
+query I
+SELECT r.id FROM rex_list_l l RIGHT ANTI JOIN rex_list_r r ON l.v > r.v ORDER BY 1;
+----
+3
+4
+5
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = true;
+
+# `LargeList` and `FixedSizeList` go through the same nested-aware `apply_cmp` dispatch as
+# `List` above (`DataType::is_nested()` is true for all three), so this pins that the dispatch
+# isn't accidentally keyed on `List` specifically. Same shape and expected rows as the `List`
+# case, cast from the same underlying array.
+statement ok
+CREATE TABLE rex_largelist_l AS SELECT arrow_cast(v, 'LargeList(Int32)') AS v FROM rex_list_l;
+
+statement ok
+CREATE TABLE rex_largelist_r AS SELECT id, arrow_cast(v, 'LargeList(Int32)') AS v FROM rex_list_r;
+
+# Confirms PWMJ, not a silent NestedLoopJoin fallback, is what the flag-on queries below
+# actually exercise -- unlike the `List` block above, which never checks this for either type.
+query TT
+EXPLAIN SELECT r.id FROM rex_largelist_l l RIGHT SEMI JOIN rex_largelist_r r ON l.v > r.v ORDER BY 1;
+----
+logical_plan
+01)Sort: r.id ASC NULLS LAST
+02)--Projection: r.id
+03)----RightSemi Join:  Filter: l.v > r.v
+04)------SubqueryAlias: l
+05)--------TableScan: rex_largelist_l projection=[v]
+06)------SubqueryAlias: r
+07)--------TableScan: rex_largelist_r projection=[id, v]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[id@0 as id]
+03)----PiecewiseMergeJoin: operator=Gt, join_type=RightSemi, on=(v > v)
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+SELECT r.id FROM rex_largelist_l l RIGHT SEMI JOIN rex_largelist_r r ON l.v > r.v ORDER BY 1;
+----
+1
+2
+
+query I
+SELECT r.id FROM rex_largelist_l l RIGHT ANTI JOIN rex_largelist_r r ON l.v > r.v ORDER BY 1;
+----
+3
+4
+5
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = false;
+
+query I
+SELECT r.id FROM rex_largelist_l l RIGHT SEMI JOIN rex_largelist_r r ON l.v > r.v ORDER BY 1;
+----
+1
+2
+
+query I
+SELECT r.id FROM rex_largelist_l l RIGHT ANTI JOIN rex_largelist_r r ON l.v > r.v ORDER BY 1;
+----
+3
+4
+5
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = true;
+
+# `FixedSizeList` additionally has a statically known width, which is a different arrow layout
+# from `List`/`LargeList`'s offsets buffer. Built from literal `VALUES` rather than cast from
+# `rex_list_l`/`rex_list_r` (unlike the `LargeList` case above): a `WHERE v IS NOT NULL` filter
+# to drop the source's NULL row -- needed because a NULL `FixedSizeList` value still has to
+# report the declared list size -- repartitions the result, which would make the `EXPLAIN`
+# below depend on `target_partitions` instead of pinning the join operator choice.
+statement ok
+CREATE TABLE rex_fsl_l AS
+  SELECT arrow_cast(column1, 'FixedSizeList(1, Int32)') AS v FROM (VALUES ([2]), ([4]));
+
+statement ok
+CREATE TABLE rex_fsl_r AS
+  SELECT column1 AS id, arrow_cast(column2, 'FixedSizeList(1, Int32)') AS v
+  FROM (VALUES (1, [1]), (2, [2]), (3, [4]), (4, [5]));
+
+query TT
+EXPLAIN SELECT r.id FROM rex_fsl_l l RIGHT SEMI JOIN rex_fsl_r r ON l.v > r.v ORDER BY 1;
+----
+logical_plan
+01)Sort: r.id ASC NULLS LAST
+02)--Projection: r.id
+03)----RightSemi Join:  Filter: l.v > r.v
+04)------SubqueryAlias: l
+05)--------TableScan: rex_fsl_l projection=[v]
+06)------SubqueryAlias: r
+07)--------TableScan: rex_fsl_r projection=[id, v]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[id@0 as id]
+03)----PiecewiseMergeJoin: operator=Gt, join_type=RightSemi, on=(v > v)
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+SELECT r.id FROM rex_fsl_l l RIGHT SEMI JOIN rex_fsl_r r ON l.v > r.v ORDER BY 1;
+----
+1
+2
+
+query I
+SELECT r.id FROM rex_fsl_l l RIGHT ANTI JOIN rex_fsl_r r ON l.v > r.v ORDER BY 1;
+----
+3
+4
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = false;
+
+query I
+SELECT r.id FROM rex_fsl_l l RIGHT SEMI JOIN rex_fsl_r r ON l.v > r.v ORDER BY 1;
+----
+1
+2
+
+query I
+SELECT r.id FROM rex_fsl_l l RIGHT ANTI JOIN rex_fsl_r r ON l.v > r.v ORDER BY 1;
+----
+3
+4
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = true;
+
+statement ok
+CREATE TABLE rex_struct_l AS
+  SELECT named_struct('v', column1) AS v FROM (VALUES (2), (4)) t(column1);
+
+statement ok
+CREATE TABLE rex_struct_r AS
+  SELECT column1 AS id, named_struct('v', column2) AS v
+  FROM (VALUES (1, 1), (2, 2), (3, 4), (4, 5)) t(column1, column2);
+
+query I
+SELECT r.id FROM rex_struct_l l RIGHT SEMI JOIN rex_struct_r r ON l.v > r.v ORDER BY 1;
+----
+1
+2
+
+query I
+SELECT r.id FROM rex_struct_l l RIGHT ANTI JOIN rex_struct_r r ON l.v > r.v ORDER BY 1;
+----
+3
+4
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = false;
+
+query TT
+EXPLAIN SELECT r.id FROM rex_struct_l l RIGHT SEMI JOIN rex_struct_r r ON l.v > r.v ORDER BY 1;
+----
+logical_plan
+01)Sort: r.id ASC NULLS LAST
+02)--Projection: r.id
+03)----RightSemi Join:  Filter: l.v > r.v
+04)------SubqueryAlias: l
+05)--------TableScan: rex_struct_l projection=[v]
+06)------SubqueryAlias: r
+07)--------TableScan: rex_struct_r projection=[id, v]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--NestedLoopJoinExec: join_type=RightSemi, filter=v@0 > v@1, projection=[id@0]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+SELECT r.id FROM rex_struct_l l RIGHT SEMI JOIN rex_struct_r r ON l.v > r.v ORDER BY 1;
+----
+1
+2
+
+query I
+SELECT r.id FROM rex_struct_l l RIGHT ANTI JOIN rex_struct_r r ON l.v > r.v ORDER BY 1;
+----
+3
+4
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = true;
+
+# `Dictionary` of a non-nested value type is not itself `is_nested()`, so `apply_cmp` takes the
+# plain kernel path rather than the nested one above -- covered here for the same on/off
+# comparison, reusing the tables the earlier Dictionary case created.
+query I
+SELECT r.id FROM rex_dict_l l RIGHT SEMI JOIN rex_dict_r r ON l.v > r.v ORDER BY 1;
+----
+1
+
+query I
+SELECT r.id FROM rex_dict_l l RIGHT ANTI JOIN rex_dict_r r ON l.v > r.v ORDER BY 1;
+----
+2
+3
+4
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = false;
+
+query I
+SELECT r.id FROM rex_dict_l l RIGHT SEMI JOIN rex_dict_r r ON l.v > r.v ORDER BY 1;
+----
+1
+
+query I
+SELECT r.id FROM rex_dict_l l RIGHT ANTI JOIN rex_dict_r r ON l.v > r.v ORDER BY 1;
+----
+2
+3
+4
+
+statement ok
+set datafusion.optimizer.enable_piecewise_merge_join = true;
+
+# A temporal key checks that the reduced extreme keeps its own type: a `Date32` minimum that came
+# back as the underlying `Int32` would fail the comparison against a `Date32` streamed column
+# rather than answer it wrongly.
+statement ok
+CREATE TABLE rex_dt_l(v DATE);
+
+statement ok
+INSERT INTO rex_dt_l VALUES (DATE '2024-03-01'), (NULL);
+
+statement ok
+CREATE TABLE rex_dt_r(id INT, v DATE);
+
+statement ok
+INSERT INTO rex_dt_r VALUES
+  (1, DATE '2024-01-15'), (2, DATE '2024-03-01'), (3, DATE '2024-06-30'), (4, NULL);
+
+query I
+SELECT r.id FROM rex_dt_l l RIGHT SEMI JOIN rex_dt_r r ON l.v > r.v ORDER BY 1;
+----
+1
+
+query I
+SELECT r.id FROM rex_dt_l l RIGHT ANTI JOIN rex_dt_r r ON l.v > r.v ORDER BY 1;
+----
+2
+3
+4
+
+# Every streamed partition emits its own rows here, rather than one elected partition emitting
+# everything at the end as LeftSemi/LeftAnti do. The filter lets the streamed side be
+# repartitioned, and the EXPLAIN below asserts that it really is.
+query I
+SELECT r.id FROM rex_l l RIGHT SEMI JOIN (SELECT * FROM rex_r WHERE id > 0) r ON l.v > r.v ORDER BY 1;
+----
+1
+2
+
+query I
+SELECT r.id FROM rex_l l RIGHT ANTI JOIN (SELECT * FROM rex_r WHERE id > 0) r ON l.v > r.v ORDER BY 1;
+----
+3
+4
+5
+
+query TT
+EXPLAIN SELECT r.id FROM rex_l l RIGHT SEMI JOIN (SELECT * FROM rex_r WHERE id > 0) r ON l.v > r.v ORDER BY 1;
+----
+logical_plan
+01)Sort: r.id ASC NULLS LAST
+02)--Projection: r.id
+03)----RightSemi Join:  Filter: l.v > r.v
+04)------SubqueryAlias: l
+05)--------TableScan: rex_l projection=[v]
+06)------SubqueryAlias: r
+07)--------Filter: rex_r.id > Int32(0)
+08)----------TableScan: rex_r projection=[id, v]
+physical_plan
+01)SortPreservingMergeExec: [id@0 ASC NULLS LAST]
+02)--SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[id@0 as id]
+04)------PiecewiseMergeJoin: operator=Gt, join_type=RightSemi, on=(v > v)
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)----------FilterExec: id@0 > 0
+08)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The streamed side's ordering survives this join -- one output batch per streamed batch, in
+# order, with rows only removed -- so `maintains_input_order` claims it. Here that claim is
+# load-bearing rather than merely advertised: the `LIMIT` pins an ordering below the join that the
+# optimizer cannot drop, the outer `ORDER BY` requires that same ordering above it, and the plan
+# below shows no `SortExec` above the join -- it was removed because the join carries the streamed
+# side's ordering through. A wrong claim would surface as wrong row order here, not a slow plan.
+query I
+SELECT r.id FROM rex_l l RIGHT SEMI JOIN (SELECT * FROM rex_r ORDER BY id DESC LIMIT 5) r ON l.v > r.v
+ORDER BY r.id DESC;
+----
+2
+1
+
+query I
+SELECT r.id FROM rex_l l RIGHT ANTI JOIN (SELECT * FROM rex_r ORDER BY id DESC LIMIT 5) r ON l.v > r.v
+ORDER BY r.id DESC;
+----
+5
+4
+3
+
+query TT
+EXPLAIN SELECT r.id FROM rex_l l RIGHT SEMI JOIN (SELECT * FROM rex_r ORDER BY id DESC LIMIT 5) r ON l.v > r.v
+ORDER BY r.id DESC;
+----
+logical_plan
+01)Sort: r.id DESC NULLS FIRST
+02)--Projection: r.id
+03)----RightSemi Join:  Filter: l.v > r.v
+04)------SubqueryAlias: l
+05)--------TableScan: rex_l projection=[v]
+06)------SubqueryAlias: r
+07)--------Sort: rex_r.id DESC NULLS FIRST, fetch=5
+08)----------TableScan: rex_r projection=[id, v]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id]
+02)--PiecewiseMergeJoin: operator=Gt, join_type=RightSemi, on=(v > v)
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----SortExec: TopK(fetch=5), expr=[id@0 DESC], preserve_partitioning=[false]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 set datafusion.optimizer.enable_piecewise_merge_join = false;

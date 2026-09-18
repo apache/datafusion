@@ -253,6 +253,16 @@ impl AggregateUDF {
         self.inner.groups_accumulator_supported(args)
     }
 
+    /// See [`AggregateUDFImpl::groups_accumulator_supported_for_types`] for more details.
+    pub fn groups_accumulator_supported_for_types(
+        &self,
+        arg_types: &[DataType],
+        is_distinct: bool,
+    ) -> Option<bool> {
+        self.inner
+            .groups_accumulator_supported_for_types(arg_types, is_distinct)
+    }
+
     /// See [`AggregateUDFImpl::create_groups_accumulator`] for more details.
     pub fn create_groups_accumulator(
         &self,
@@ -348,6 +358,11 @@ impl AggregateUDF {
     /// See [`AggregateUDFImpl::supports_within_group_clause`] for more details.
     pub fn supports_within_group_clause(&self) -> bool {
         self.inner.supports_within_group_clause()
+    }
+
+    /// See [`AggregateUDFImpl::distinct_handling`] for more details.
+    pub fn distinct_handling(&self) -> DistinctHandling {
+        self.inner.distinct_handling()
     }
 
     /// Returns the documentation for this Aggregate UDF.
@@ -615,6 +630,32 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// query.
     fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
         false
+    }
+
+    /// The same question as [`Self::groups_accumulator_supported`], asked with
+    /// only the information a logical plan carries.
+    ///
+    /// Physical planning has an [`AccumulatorArgs`] to ask with; an optimizer
+    /// rule does not. This is how a logical caller learns whether a call would
+    /// get a specialized [`GroupsAccumulator`] or fall back to one boxed
+    /// [`Accumulator`] per group in `GroupsAccumulatorAdapter`, whose per-group
+    /// state can be orders of magnitude larger.
+    ///
+    /// An implementation whose answer is decided by the argument types and
+    /// `DISTINCT` alone should override this and have
+    /// [`Self::groups_accumulator_supported`] call it, so the two cannot
+    /// disagree. One whose answer needs more than that should leave the `None`
+    /// default.
+    ///
+    /// `None` means unanswered, not "no": a caller must not read it as either
+    /// `Some(true)` or `Some(false)`, since both readings are wrong for some
+    /// implementation that returns it.
+    fn groups_accumulator_supported_for_types(
+        &self,
+        _arg_types: &[DataType],
+        _is_distinct: bool,
+    ) -> Option<bool> {
+        None
     }
 
     /// Return a specialized [`GroupsAccumulator`] that manages state
@@ -902,6 +943,20 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// kind of sort into the plan for these functions with this syntax.
     fn supports_within_group_clause(&self) -> bool {
         false
+    }
+
+    /// How this function treats the `DISTINCT` modifier.
+    ///
+    /// Return [`DistinctHandling::Insensitive`] for duplicate-insensitive
+    /// functions so that `f(DISTINCT x)` is planned as `f(x)`.
+    ///
+    /// Return [`DistinctHandling::Unsupported`] if the accumulator does not
+    /// implement `DISTINCT`, that is, it does not read `is_distinct`, or it
+    /// rejects `DISTINCT` with an error. The planner then has to deduplicate
+    /// the input or reject the query. Nothing reads this variant yet:
+    /// rejecting such queries at planning time is a follow-up change.
+    fn distinct_handling(&self) -> DistinctHandling {
+        DistinctHandling::Sensitive
     }
 
     /// Returns the documentation for this Aggregate UDF.
@@ -1552,6 +1607,15 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self.inner.groups_accumulator_supported(args)
     }
 
+    fn groups_accumulator_supported_for_types(
+        &self,
+        arg_types: &[DataType],
+        is_distinct: bool,
+    ) -> Option<bool> {
+        self.inner
+            .groups_accumulator_supported_for_types(arg_types, is_distinct)
+    }
+
     fn create_groups_accumulator(
         &self,
         args: AccumulatorArgs,
@@ -1642,6 +1706,10 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self.inner.set_monotonicity(data_type)
     }
 
+    fn distinct_handling(&self) -> DistinctHandling {
+        self.inner.distinct_handling()
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.inner.documentation()
     }
@@ -1666,6 +1734,29 @@ pub enum SetMonotonicity {
     /// Aggregate value may increase, decrease, or stay the same as the input
     /// set grows.
     NotMonotonic,
+}
+
+/// How an aggregate function treats the `DISTINCT` modifier.
+///
+/// Mathematically, `Insensitive` means the function's merge operation is
+/// idempotent (its state forms a semilattice): f(S ⊎ S) = f(S), so
+/// removing duplicates from the input cannot change the result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DistinctHandling {
+    /// The result is the same with or without `DISTINCT`, so the planner
+    /// is free to drop it. `min`, `max`, `bool_and`, `bit_or`, ...
+    Insensitive,
+    /// The accumulator reads `AccumulatorArgs::is_distinct` and deduplicates
+    /// its input, so the planner must leave the flag alone. `count`, `sum`,
+    /// `avg`, `var_samp`, `array_agg`, ... This is the default.
+    Sensitive,
+    /// The accumulator does not implement `DISTINCT`: it does not read
+    /// `is_distinct`, or it rejects `DISTINCT` with an error. The planner has
+    /// to deduplicate the input first (today `SingleDistinctToGroupBy` does
+    /// that for single-argument functions) or reject the query. `stddev`,
+    /// `approx_median`, `corr`, `regr_*`, `nth_value`, ...
+    Unsupported,
 }
 
 #[cfg(test)]
