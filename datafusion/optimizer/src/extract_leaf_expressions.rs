@@ -3631,4 +3631,51 @@ mod tests {
         let not_a_column = lit(1).alias("a");
         assert_eq!(passthrough_column(&not_a_column), None);
     }
+
+    /// `is_pure_extraction_projection` decides if a merged projection can go
+    /// down one more level. It must accept only `__datafusion_extracted`
+    /// aliases and plain columns, and only with at least one extraction. An
+    /// alias with a different prefix must not count: a second push would
+    /// re-extract the expression under a new alias that the parent cannot
+    /// resolve.
+    #[test]
+    fn test_is_pure_extraction_projection() -> Result<()> {
+        let scan = test_table_scan_with_struct()?;
+
+        // Not a projection.
+        assert!(!is_pure_extraction_projection(&scan));
+
+        // Columns only: nothing was extracted.
+        let columns_only = LogicalPlanBuilder::from(scan.clone())
+            .project(vec![col("id"), col("user")])?
+            .build()?;
+        assert!(!is_pure_extraction_projection(&columns_only));
+
+        // One extraction alias and one pass-through column.
+        let pure = LogicalPlanBuilder::from(scan.clone())
+            .project(vec![
+                leaf_udf(col("user"), "status").alias("__datafusion_extracted_1"),
+                col("id"),
+            ])?
+            .build()?;
+        assert!(is_pure_extraction_projection(&pure));
+
+        // The same shape under a `CommonSubexprEliminate` alias is not an
+        // extraction projection.
+        let common_expr = LogicalPlanBuilder::from(scan.clone())
+            .project(vec![
+                leaf_udf(col("user"), "status").alias("__common_expr_1"),
+                col("id"),
+            ])?
+            .build()?;
+        assert!(!is_pure_extraction_projection(&common_expr));
+
+        // A bare expression is never allowed.
+        let bare_expr = LogicalPlanBuilder::from(scan)
+            .project(vec![leaf_udf(col("user"), "status"), col("id")])?
+            .build()?;
+        assert!(!is_pure_extraction_projection(&bare_expr));
+
+        Ok(())
+    }
 }
