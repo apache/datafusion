@@ -63,6 +63,11 @@ use tempfile::TempDir;
 /// <https://github.com/apache/datafusion/issues/25414>
 const INCLUDE_SAME_NAME_ALIAS_SHAPES: bool = false;
 
+/// A sub-query projection that swaps two column names (`b AS a, a AS b`) under
+/// a struct field read gives an "ambiguous" planning error.
+/// <https://github.com/apache/datafusion/issues/25446>
+const INCLUDE_SWAP_ALIAS_SHAPES: bool = false;
+
 /// A `UNION ALL` branch with a provably false predicate over a CTE gives an
 /// "ambiguous" planning error.
 /// <https://github.com/apache/datafusion/pull/25412>
@@ -258,7 +263,10 @@ fn all_columns(rng: &mut SmallRng, q: &str) -> String {
 fn gen_source(rng: &mut SmallRng) -> (String, String) {
     let mut kinds = vec![0, 1, 2, 3, 4];
     if INCLUDE_SAME_NAME_ALIAS_SHAPES {
-        kinds.extend([5, 6]);
+        kinds.push(5);
+    }
+    if INCLUDE_SWAP_ALIAS_SHAPES {
+        kinds.push(6);
     }
     if INCLUDE_FALSE_BRANCH_UNION_SHAPES {
         kinds.push(7);
@@ -326,7 +334,7 @@ fn gen_source(rng: &mut SmallRng) -> (String, String) {
             )
         }
         // A swap of two column names.
-        // https://github.com/apache/datafusion/issues/25414
+        // https://github.com/apache/datafusion/issues/25446
         6 => (
             String::new(),
             format!("(SELECT b AS a, a AS b, c, s, t FROM {table}) AS src"),
@@ -502,7 +510,10 @@ fn gen_struct_function(rng: &mut SmallRng) -> Case {
 fn gen_same_name_alias(rng: &mut SmallRng) -> Case {
     let expr = pick(rng, &["-a", "a * 10", "a + 1"]);
     // Every table holds 8 rows, so this limit keeps all of them.
-    let sql = match rng.random_range(0..6) {
+    // The last arm is the swap shape of
+    // <https://github.com/apache/datafusion/issues/25446>.
+    let arms = if INCLUDE_SWAP_ALIAS_SHAPES { 6 } else { 5 };
+    let sql = match rng.random_range(0..arms) {
         0 => format!(
             "SELECT a, s['b'] FROM (SELECT {expr} AS a, s FROM {NARROW} WHERE a > -3)"
         ),
