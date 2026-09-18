@@ -625,7 +625,15 @@ fn build_join(
     if let Some((value, right_col, mut value_name)) = in_value_expr
         && value.column_refs().is_empty()
         && matches!(join_type, JoinType::LeftAnti | JoinType::LeftMark)
-        && join_keys_may_be_null(&join_filter, left.schema(), sub_query_alias.schema())?
+        // The value expression holds no column, so the `IN` equality is not an
+        // equi-join key. There is thus no key expression to ask, and the column
+        // test on the whole filter is the only test available here.
+        && join_keys_may_be_null(
+            &[],
+            Some(&join_filter),
+            left.schema(),
+            sub_query_alias.schema(),
+        )?
     {
         // The projected column is unqualified, so a left field that already has
         // this name — however unlikely — would make the reference ambiguous.
