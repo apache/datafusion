@@ -30,6 +30,7 @@ use datafusion_common::config::{ConfigOptions, OptimizerOptions};
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_physical_expr::intervals::utils::{check_support, is_datatype_supported};
+use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::execution_plan::{
     Boundedness, EmissionType, InvariantLevel,
 };
@@ -167,14 +168,17 @@ pub fn check_plan_sanity(
             }
         }
 
-        if !input_distributions
-            .child_satisfaction(
-                idx,
-                child.as_ref(),
-                ChildSatisfactionOptions::new().with_allow_subset(true),
-            )?
-            .is_satisfied()
-        {
+        let distribution_satisfaction = input_distributions.child_satisfaction(
+            idx,
+            child.as_ref(),
+            ChildSatisfactionOptions::new().with_allow_subset(true),
+        )?;
+        let accepts_partition_local_groups = plan
+            .downcast_ref::<AggregateExec>()
+            .is_some_and(|aggregate| {
+                aggregate.groups_are_partition_local(child.as_ref(), true)
+            });
+        if !distribution_satisfaction.is_satisfied() && !accepts_partition_local_groups {
             let plan_str = get_plan_string(plan);
             return plan_err!(
                 "Plan: {:?} does not satisfy distribution requirements: {}. Child-{} output partitioning: {}",
