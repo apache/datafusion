@@ -26,7 +26,8 @@ use arrow::error::ArrowError;
 use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_common::{DataFusionError, Result, exec_err};
 use datafusion_execution::memory_pool::proxy::HashTableAllocExt;
-use hashbrown::hash_table::HashTable;
+use datafusion_expr::GroupSelection;
+use hashbrown::{HashMap, hash_table::HashTable};
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::sync::Arc;
@@ -53,12 +54,18 @@ pub struct DictionaryGroupValuesColumn<K: ArrowDictionaryKeyType + Send + Sync> 
     null_inner_slot: Option<usize>,
     /// Hash seed — must match `create_hashes` so hashes are consistent across calls.
     random_state: RandomState,
-    /// Reusable scratch buffer mapping `val_idx → inner_slot` across batches.
+    /// Maps `val_idx → inner_slot` for the values array in `cached_values`.
+    ///
+    /// Valid only while `cached_values` is `Some` and matches the incoming
+    /// values array; `usize::MAX` means "not yet resolved". Entries are only
+    /// ever filled in, never invalidated, because `inner` slots are stable
+    /// under append. `take_n` remaps `inner` and therefore drops the cache.
     val_to_inner: Vec<usize>,
-    /// Reusable hash buffer for the dictionary values array.
+    /// Hashes of the values array in `cached_values`, one per `val_idx`.
     val_hashes: Vec<u64>,
-    /// The last `dict.values()` Arc hashed in `append_val`. When the incoming
-    /// values array is `ptr_eq` to this, `val_hashes` can be reused directly.
+    /// The values array that `val_hashes` and `val_to_inner` were built for.
+    /// When an incoming `dict.values()` is `Arc::ptr_eq` to this, both caches
+    /// are reused instead of being rebuilt. See [`Self::sync_value_cache`].
     cached_values: Option<ArrayRef>,
     _phantom: PhantomData<K>,
 }
@@ -172,6 +179,28 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
             &mut self.val_hashes,
         )
         .unwrap();
+    }
+
+    /// Makes `val_hashes` and `val_to_inner` correspond to `dict_values`,
+    /// reusing them when they were already built for this same values array.
+    ///
+    /// `take`, `filter` and repartitioning clone the values `Arc` and rewrite
+    /// only the keys, so batches in a partition usually share one values
+    /// array; without this the per-batch cost is O(dictionary cardinality)
+    /// rather than O(rows). `take_n` remaps `inner` and clears
+    /// `cached_values`, forcing a rebuild.
+    fn sync_value_cache(&mut self, dict_values: &ArrayRef) {
+        if self
+            .cached_values
+            .as_ref()
+            .is_some_and(|c| Arc::ptr_eq(c, dict_values))
+        {
+            return;
+        }
+        self.hash_values(dict_values);
+        self.val_to_inner.clear();
+        self.val_to_inner.resize(dict_values.len(), usize::MAX);
+        self.cached_values = Some(Arc::clone(dict_values));
     }
 
     fn find_or_insert_value(
@@ -301,24 +330,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
             }
             Some(val_idx) => {
                 let dict_values = dict.values();
-                // check if the dictionary values array we are hashing was already seen.
-                // if its arc was already stored we dont need to rehash the entire array again
-                // if its new hash the entire array and store an arc ptr for future use
-                let cache_hit = self
-                    .cached_values
-                    .as_ref()
-                    .is_some_and(|c| Arc::ptr_eq(c, dict_values));
-                if !cache_hit {
-                    self.val_hashes.clear();
-                    self.val_hashes.resize(dict_values.len(), 0);
-                    create_hashes(
-                        std::slice::from_ref(dict_values),
-                        &self.random_state,
-                        &mut self.val_hashes,
-                    )
-                    .unwrap();
-                    self.cached_values = Some(Arc::clone(dict_values));
-                }
+                self.sync_value_cache(dict_values);
                 self.find_or_insert_value(dict_values, val_idx, self.val_hashes[val_idx])?
             }
         };
@@ -327,7 +339,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
     }
 
     fn vectorized_equal_to(
-        &self,
+        &mut self,
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
@@ -400,11 +412,12 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
         let dict = array.as_dictionary::<K>();
         let dict_keys = dict.keys();
         let dict_values = dict.values();
-        let num_distinct = dict_values.len();
 
-        self.hash_values(dict_values);
-        self.val_to_inner.clear();
-        self.val_to_inner.resize(num_distinct, usize::MAX);
+        // Reuses `val_hashes`/`val_to_inner` when this batch carries the same
+        // values array as the last one, which is the common case downstream of
+        // a repartition or filter. Previously this unconditionally re-hashed
+        // and re-initialised both buffers, costing O(D) per batch.
+        self.sync_value_cache(dict_values);
 
         self.group_to_inner.try_reserve(rows.len()).map_err(|e| {
             DataFusionError::ArrowError(
@@ -476,6 +489,34 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
         let null_inner_slot = self.null_inner_slot;
         let values = self.inner.build();
         Self::into_dict(values, &self.group_to_inner, null_inner_slot)
+    }
+
+    fn values_preserving(&self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.group_to_inner.len())?;
+
+        let mut old_to_new = HashMap::with_capacity(selection.len());
+        let mut selected_inner = Vec::with_capacity(selection.len());
+        let mut selected_groups = Vec::with_capacity(selection.len());
+        for group_index in selection.iter() {
+            let old_slot = self.group_to_inner[group_index];
+            let new_slot = if let Some(&new_slot) = old_to_new.get(&old_slot) {
+                new_slot
+            } else {
+                let new_slot = selected_inner.len();
+                selected_inner.push(old_slot);
+                old_to_new.insert(old_slot, new_slot);
+                new_slot
+            };
+            selected_groups.push(new_slot);
+        }
+
+        let inner_selection =
+            GroupSelection::try_from_indices(&selected_inner, self.inner.len())?;
+        let values = self.inner.values_preserving(inner_selection)?;
+        let null_inner_slot = self
+            .null_inner_slot
+            .and_then(|slot| old_to_new.get(&slot).copied());
+        Ok(Self::into_dict(values, &selected_groups, null_inner_slot))
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
@@ -690,6 +731,37 @@ mod tests {
     }
 
     #[test]
+    fn values_preserving_reorders_and_reuses_dictionary_values() {
+        let mut col = utf8_col();
+        let input = i32_dict(&[Some(0), None, Some(1), Some(0)], &[Some("a"), Some("b")]);
+        col.vectorized_append(&input, &[0, 1, 2, 3]).unwrap();
+
+        let selection = GroupSelection::try_from_indices(&[2, 1, 0, 2], 4).unwrap();
+        for _ in 0..2 {
+            let selected = col.values_preserving(selection).unwrap();
+            assert_eq!(
+                str_values(&selected),
+                vec![Some("b".into()), None, Some("a".into()), Some("b".into())]
+            );
+            assert_eq!(selected.as_dictionary::<Int32Type>().values().len(), 2);
+        }
+
+        col.append_val(&i32_dict(&[Some(0)], &[Some("c")]), 0)
+            .unwrap();
+        let out = Box::new(col).build();
+        assert_eq!(
+            str_values(&out),
+            vec![
+                Some("a".into()),
+                None,
+                Some("b".into()),
+                Some("a".into()),
+                Some("c".into()),
+            ]
+        );
+    }
+
+    #[test]
     fn null_key_and_null_valued_entry_both_map_to_null_group() {
         let mut col = utf8_col();
         let input = i32_dict(&[None, Some(0), Some(1)], &[None, Some("b")]);
@@ -857,5 +929,135 @@ mod tests {
         assert_eq!(str_values(&out)[0], Some("v0".into()));
         assert_eq!(str_values(&out)[127], Some("v127".into()));
         assert_eq!(out.as_dictionary::<Int8Type>().values().len(), 128);
+    }
+
+    fn dict_with_values(keys: &[Option<i32>], values: &ArrayRef) -> ArrayRef {
+        Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from(keys.to_vec()),
+            Arc::clone(values),
+        ))
+    }
+
+    /// A cache rebuild resets every `val_to_inner` entry to `usize::MAX`, so
+    /// an entry resolved by an earlier batch surviving a later one proves the
+    /// dictionary was not re-hashed in between.
+    #[test]
+    fn cache_survives_batches_sharing_a_values_array() {
+        let values: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")]));
+        let mut col = utf8_col();
+
+        col.vectorized_append(&dict_with_values(&[Some(0)], &values), &[0])
+            .unwrap();
+        let slot_a = col.val_to_inner[0];
+        assert_ne!(slot_a, usize::MAX);
+
+        col.vectorized_append(&dict_with_values(&[Some(1)], &values), &[0])
+            .unwrap();
+
+        assert_eq!(col.val_to_inner[0], slot_a, "cache was rebuilt");
+        assert_ne!(col.val_to_inner[1], usize::MAX);
+        assert_eq!(
+            col.val_to_inner[2],
+            usize::MAX,
+            "unreferenced value resolved"
+        );
+        assert!(
+            col.cached_values
+                .as_ref()
+                .is_some_and(|c| Arc::ptr_eq(c, &values))
+        );
+        assert_eq!(col.inner.len(), 2);
+    }
+
+    /// `take` clones the values `Arc` and rewrites only the keys, which is the
+    /// property the `ptr_eq` check relies on. Pin that arrow behaviour.
+    #[test]
+    fn take_preserves_values_arc_so_cache_hits() {
+        let values: ArrayRef = Arc::new(StringArray::from(vec![Some("a"), Some("b")]));
+        let batch = dict_with_values(&[Some(0), Some(1), Some(0)], &values);
+        let taken = take(&*batch, &Int32Array::from(vec![2, 0]), None).unwrap();
+        assert!(
+            Arc::ptr_eq(taken.as_dictionary::<Int32Type>().values(), &values),
+            "take must not copy the values array"
+        );
+
+        let mut col = utf8_col();
+        col.vectorized_append(&batch, &[0, 1, 2]).unwrap();
+        let slot_b = col.val_to_inner[1];
+        col.vectorized_append(&taken, &[0, 1]).unwrap();
+
+        assert_eq!(col.val_to_inner[1], slot_b, "cache was rebuilt");
+        assert_eq!(col.inner.len(), 2);
+    }
+
+    /// A genuinely different values array must rebuild the cache, and equal
+    /// values across the two arrays must still dedup to one inner slot.
+    #[test]
+    fn distinct_values_arcs_rebuild_cache_but_still_dedup() {
+        let mut col = utf8_col();
+        let first = i32_dict(&[Some(0)], &[Some("a")]);
+        let second = i32_dict(&[Some(0)], &[Some("a")]);
+        col.vectorized_append(&first, &[0]).unwrap();
+        col.vectorized_append(&second, &[0]).unwrap();
+
+        assert!(
+            col.cached_values.as_ref().is_some_and(|c| Arc::ptr_eq(
+                c,
+                second.as_dictionary::<Int32Type>().values()
+            )),
+            "cache should track the most recent values array"
+        );
+        assert_eq!(col.inner.len(), 1, "'a' must dedup across both arrays");
+        assert_eq!(col.len(), 2);
+    }
+
+    /// `take_n` remaps inner slots, so the cached `val_idx → inner_slot` map
+    /// must not survive it.
+    #[test]
+    fn take_n_invalidates_value_cache() {
+        let values: ArrayRef = Arc::new(StringArray::from(vec![Some("a"), Some("b")]));
+        let mut col = utf8_col();
+        col.vectorized_append(&dict_with_values(&[Some(0), Some(1)], &values), &[0, 1])
+            .unwrap();
+
+        let _emitted = col.take_n(1);
+        assert!(
+            col.cached_values.is_none(),
+            "take_n remaps inner slots and must drop the cache"
+        );
+
+        col.vectorized_append(&dict_with_values(&[Some(0), Some(1)], &values), &[0, 1])
+            .unwrap();
+
+        let out = Box::new(col).build();
+        let d = out.as_dictionary::<Int32Type>();
+        let vals = d.values().as_string::<i32>();
+        let got: Vec<&str> = d
+            .keys()
+            .iter()
+            .map(|k| vals.value(k.unwrap() as usize))
+            .collect();
+        assert_eq!(got, vec!["b", "a", "b"]);
+    }
+
+    /// `append_val` fills `val_hashes` but not `val_to_inner`; mixing it with
+    /// `vectorized_append` must not duplicate a value or reuse a stale slot.
+    #[test]
+    fn scalar_and_vectorized_append_share_cache_consistently() {
+        let values: ArrayRef = Arc::new(StringArray::from(vec![Some("a"), Some("b")]));
+        let batch = dict_with_values(&[Some(0), Some(1)], &values);
+        let mut col = utf8_col();
+
+        col.append_val(&batch, 0).unwrap();
+        assert!(
+            col.cached_values
+                .as_ref()
+                .is_some_and(|c| Arc::ptr_eq(c, &values))
+        );
+
+        col.vectorized_append(&batch, &[0, 1]).unwrap();
+        assert_eq!(col.inner.len(), 2, "'a' must not be duplicated");
+        assert_eq!(col.len(), 3);
     }
 }

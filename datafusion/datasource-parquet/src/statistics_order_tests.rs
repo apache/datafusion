@@ -414,7 +414,7 @@ fn large_string_in_list_preserves_rows_with_untrusted_page_order() {
             },
             "order={order:?}",
         );
-        assert_eq!(file.matching_rows(&physical, pages), 1, "order={order:?}",);
+        assert_eq!(file.matching_rows(&physical, pages), 1, "order={order:?}");
         assert_eq!(
             file_metrics.page_index_rows_pruned.pruned(),
             if order == StatisticsOrder::Modern {
@@ -520,7 +520,6 @@ fn byte_array_order_guard_follows_parquet_type_not_arrow_representation() {
             column_orders: metadata.column_orders().map(Vec::as_slice),
             row_group_metadatas: file.metadata.row_groups().iter().collect(),
             arrow_schema: &schema,
-            missing_null_counts_as_zero: true,
         };
         for values in [stats.min_values(&column), stats.max_values(&column)] {
             let values = values.unwrap();

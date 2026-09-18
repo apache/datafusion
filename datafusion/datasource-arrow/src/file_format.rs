@@ -350,7 +350,7 @@ impl DisplayAs for ArrowFileSink {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "ArrowFileSink(file_groups=",)?;
+                write!(f, "ArrowFileSink(file_groups=")?;
                 FileGroupDisplay(&self.config.file_group).fmt_as(t, f)?;
                 write!(f, ")")
             }

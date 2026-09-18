@@ -74,7 +74,7 @@ impl GroupedTopKAggregateStream {
         let group_by = Arc::clone(&aggr.group_by);
         let input = aggr.input.execute(partition, Arc::clone(context))?;
         let baseline_metrics = BaselineMetrics::new(&aggr.metrics, partition);
-        let group_by_metrics = GroupByMetrics::new(&aggr.metrics, partition);
+        let group_by_metrics = GroupByMetrics::new_topk(&aggr.metrics, partition);
         let aggregate_argument_metrics = AggregateArgumentMetrics::new(
             &aggr.metrics,
             partition,
@@ -151,38 +151,40 @@ impl GroupedTopKAggregateStream {
     }
 
     fn intern(&mut self, ids: &ArrayRef, vals: &ArrayRef) -> Result<()> {
-        let _timer = self.group_by_metrics.time_calculating_group_ids.timer();
+        let group_by_metrics = self.group_by_metrics.clone();
+        group_by_metrics.time_topk_maintenance(|| {
+            let len = ids.len();
+            self.priority_map
+                .set_batch(Arc::clone(ids), Arc::clone(vals));
 
-        let len = ids.len();
-        self.priority_map
-            .set_batch(Arc::clone(ids), Arc::clone(vals));
-
-        let has_nulls = vals.null_count() > 0;
-        if has_nulls && self.is_group_by_only() {
-            self.null_group_seen = true;
-        }
-        // Keep the common no-NULL path free of NULL bookkeeping. Once a NULL
-        // group exists, use the NULL-aware path until it has been resolved.
-        let track_null_groups = !self.is_group_by_only()
-            && (has_nulls || self.priority_map.has_null_groups());
-        for row_idx in 0..len {
-            if has_nulls && vals.is_null(row_idx) {
-                // MIN/MAX ignore NULL inputs, but a group whose values are all
-                // NULL must still be emitted with a NULL aggregate value, so
-                // track it. (GROUP BY-only aggregations handle NULL group keys
-                // via `null_group_seen` instead.)
-                if !self.is_group_by_only() {
-                    self.priority_map.insert_null(row_idx);
+            let has_nulls = vals.null_count() > 0;
+            let is_group_by_only = self.is_group_by_only();
+            if has_nulls && is_group_by_only {
+                self.null_group_seen = true;
+            }
+            // Keep the common no-NULL path free of NULL bookkeeping. Once a NULL
+            // group exists, use the NULL-aware path until it has been resolved.
+            let track_null_groups =
+                !is_group_by_only && (has_nulls || self.priority_map.has_null_groups());
+            for row_idx in 0..len {
+                if has_nulls && vals.is_null(row_idx) {
+                    // MIN/MAX ignore NULL inputs, but a group whose values are all
+                    // NULL must still be emitted with a NULL aggregate value, so
+                    // track it. (GROUP BY-only aggregations handle NULL group keys
+                    // via `null_group_seen` instead.)
+                    if !is_group_by_only {
+                        self.priority_map.insert_null(row_idx);
+                    }
+                    continue;
                 }
-                continue;
+                if track_null_groups {
+                    self.priority_map.insert_with_null_groups(row_idx)?;
+                } else {
+                    self.priority_map.insert(row_idx)?;
+                }
             }
-            if track_null_groups {
-                self.priority_map.insert_with_null_groups(row_idx)?;
-            } else {
-                self.priority_map.insert(row_idx)?;
-            }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     fn emit_columns(&mut self) -> Result<Vec<ArrayRef>> {
@@ -230,7 +232,6 @@ impl Stream for GroupedTopKAggregateStream {
             return Poll::Ready(None);
         }
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-        let emitting_time = self.group_by_metrics.emitting_time.clone();
         while let Poll::Ready(res) = self.input.poll_next_unpin(cx) {
             let _timer = elapsed_compute.timer();
             match res {
@@ -247,7 +248,10 @@ impl Stream for GroupedTopKAggregateStream {
                         print_batches(std::slice::from_ref(&batch))?;
                     }
                     self.row_count += batch.num_rows();
-                    let group_by_values = evaluate_group_by(&self.group_by, &batch)?;
+                    let group_by_values =
+                        self.group_by_metrics.time_group_key_preparation(|| {
+                            evaluate_group_by(&self.group_by, &batch)
+                        })?;
                     assert_eq!(
                         group_by_values.len(),
                         1,
@@ -264,18 +268,18 @@ impl Stream for GroupedTopKAggregateStream {
                         Arc::clone(&group_by_values)
                     } else {
                         // MIN/MAX case: evaluate aggregate expressions
-                        let _timer =
-                            self.group_by_metrics.aggregate_arguments_time.timer();
-                        let input_values = self
-                            .aggregate_arguments
-                            .iter()
-                            .enumerate()
-                            .map(|(idx, expr)| {
-                                self.aggregate_argument_metrics.time(idx, || {
-                                    evaluate_expressions_to_arrays(expr, &batch)
-                                })
-                            })
-                            .collect::<Result<Vec<_>>>()?;
+                        let input_values =
+                            self.group_by_metrics.time_aggregate_arguments(|| {
+                                self.aggregate_arguments
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(idx, expr)| {
+                                        self.aggregate_argument_metrics.time(idx, || {
+                                            evaluate_expressions_to_arrays(expr, &batch)
+                                        })
+                                    })
+                                    .collect::<Result<Vec<_>>>()
+                            })?;
                         assert_eq!(input_values.len(), 1, "Exactly 1 input required");
                         assert_eq!(input_values[0].len(), 1, "Exactly 1 input required");
                         Arc::clone(&input_values[0][0])
@@ -294,11 +298,11 @@ impl Stream for GroupedTopKAggregateStream {
                         self.done = true;
                         return Poll::Ready(None);
                     }
-                    let batch = {
-                        let _timer = emitting_time.timer();
+                    let group_by_metrics = self.group_by_metrics.clone();
+                    let batch = group_by_metrics.time_emitting(|| {
                         let cols = self.emit_columns()?;
-                        RecordBatch::try_new(Arc::clone(&self.schema), cols)?
-                    };
+                        RecordBatch::try_new(Arc::clone(&self.schema), cols)
+                    })?;
                     let batch = batch.record_output(&self.baseline_metrics);
                     trace!(
                         "partition {} emit batch with {} rows",
@@ -397,6 +401,15 @@ mod tests {
         });
         assert!(argument_metric.is_some());
         assert!(argument_metric.unwrap().value().as_usize() > 0);
+
+        let topk_maintenance_time = metrics.sum_by_name("topk_maintenance_time");
+        assert!(topk_maintenance_time.is_some());
+        assert!(topk_maintenance_time.unwrap().as_usize() > 0);
+
+        let group_id_time = metrics.sum_by_name("time_calculating_group_ids");
+        assert!(group_id_time.is_some());
+        assert!(group_id_time.unwrap().as_usize() > 0);
+        assert!(metrics.sum_by_name("aggregation_time").is_none());
 
         Ok(())
     }

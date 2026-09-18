@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -240,6 +240,18 @@ when not matched then insert (id) values (source.id) where source.is_active;
 statement error DataFusion error: This feature is not implemented: MERGE INSERT ROW is not supported
 merge into target using source on target.id = source.id
 when not matched then insert row;
+
+statement error DataFusion error: This feature is not implemented: MERGE UPDATE SET \* is not supported
+merge into target using source on target.id = source.id
+when matched then update set *;
+
+statement error DataFusion error: This feature is not implemented: MERGE INSERT \* is not supported
+merge into target using source on target.id = source.id
+when not matched then insert *;
+
+statement error DataFusion error: This feature is not implemented: MERGE WHEN ... THEN DO NOTHING action is not supported
+merge into target using source on target.id = source.id
+when matched then do nothing;
 
 statement ok
 drop table target;

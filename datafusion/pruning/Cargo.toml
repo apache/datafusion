@@ -35,3 +35,7 @@ itertools = { workspace = true }
 [[bench]]
 harness = false
 name = "string_in_list_pruning"
+
+[[bench]]
+harness = false
+name = "primitive_in_list_pruning"

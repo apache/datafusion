@@ -91,7 +91,7 @@ pub(crate) mod test_util {
                     write_in_chunks(&mut writer, &batch, ROWS_PER_PAGE);
                 } else {
                     writer.write(&batch).expect("Writing batch");
-                };
+                }
                 writer.close().unwrap();
                 output
             })

@@ -365,6 +365,21 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         }
     }
 
+    /// Returns the poll count of `partition_idx` for the current tie-breaker
+    /// round.
+    ///
+    /// Poll counts are reset lazily by bumping `current_reset_epoch` (see
+    /// [`Self::reset_poll_counts`]), so a count written in an older epoch is
+    /// stale and reads as 0.
+    #[inline]
+    fn poll_count(&self, partition_idx: usize) -> usize {
+        if self.poll_reset_epochs[partition_idx] == self.current_reset_epoch {
+            self.num_of_polled_with_same_value[partition_idx]
+        } else {
+            0
+        }
+    }
+
     /// For the given partition, updates the poll count. If the current value is the same
     /// of the previous value, it increases the count by 1; otherwise, it is reset as 0.
     fn update_poll_count_on_the_same_value(&mut self, partition_idx: usize) {
@@ -457,11 +472,18 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         }
     }
 
+    /// Returns `true` if partition `a` has been polled more often than `b` in
+    /// the current tie-breaker round, breaking equal counts by partition index.
+    ///
+    /// Both counts go through [`Self::poll_count`]: only the winner's count is
+    /// refreshed by [`Self::update_poll_count_on_the_same_value`] before this
+    /// is called, so the challenger's raw count may belong to an earlier round.
     #[inline]
     fn is_poll_count_gt(&self, a: usize, b: usize) -> bool {
-        let poll_a = self.num_of_polled_with_same_value[a];
-        let poll_b = self.num_of_polled_with_same_value[b];
-        poll_a.cmp(&poll_b).then_with(|| a.cmp(&b)).is_gt()
+        self.poll_count(a)
+            .cmp(&self.poll_count(b))
+            .then_with(|| a.cmp(&b))
+            .is_gt()
     }
 
     #[inline]

@@ -58,8 +58,9 @@ use datafusion_common::{
     ColumnStatistics, HashSet, Result, ScalarValue, Statistics, exec_err, internal_err,
 };
 use datafusion_datasource::{PartitionedFile, TableSchema};
-use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
+use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking, Literal};
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
+use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -257,6 +258,7 @@ pub(super) struct ParquetMorselizer {
     pub metrics: ExecutionPlanMetricsSet,
     /// Factory for instantiating parquet reader
     pub parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
+    pub schema_provider: Option<Arc<dyn crate::ParquetFileSchemaProvider>>,
     /// Should the filters be evaluated during the parquet scan using
     /// [`DatafusionArrowPredicate`](crate::row_filter::DatafusionArrowPredicate)?
     pub pushdown_filters: bool,
@@ -442,6 +444,7 @@ struct PreparedParquetOpen {
     metadata_size_hint: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
     parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
+    schema_provider: Option<Arc<dyn crate::ParquetFileSchemaProvider>>,
     async_file_reader: Box<dyn AsyncFileReader>,
     batch_size: usize,
     logical_file_schema: SchemaRef,
@@ -460,6 +463,27 @@ struct PreparedParquetOpen {
     enable_page_index: bool,
     enable_bloom_filter: bool,
     enable_row_group_stats_pruning: bool,
+    /// True when substituting the columns `constant_columns_from_stats`
+    /// proved constant for this file is on its own enough to collapse the
+    /// predicate to a constant no row can satisfy — see `prune_row_groups`.
+    ///
+    /// Provisional until `prepare_filters` has the physical file schema: see
+    /// `stats_constant_columns_in_predicate`.
+    stats_prove_unsatisfiable: bool,
+    /// The stats-derived constant columns the predicate actually references,
+    /// recorded only when `stats_prove_unsatisfiable` is set.
+    ///
+    /// Collected file statistics cannot distinguish a column that is
+    /// physically absent from the Parquet file from one that is present and
+    /// all NULL: `statistics_from_parquet_metadata` documents that a column
+    /// in the Arrow schema but not the Parquet schema gets
+    /// `Precision::Exact(null)` min/max and an `Exact(num_rows)` null count —
+    /// exactly what a present all-NULL column produces. So an absent column
+    /// can enter the constants as a NULL and collapse the predicate, which
+    /// would prune the very missing-column case this flag exists to leave
+    /// alone. `prepare_filters` clears the flag once the physical schema
+    /// shows whether these columns are really in the file.
+    stats_constant_columns_in_predicate: Vec<String>,
     limit: Option<usize>,
     coerce_int96: Option<TimeUnit>,
     coerce_int96_tz: Option<Arc<str>>,
@@ -794,10 +818,42 @@ impl ParquetMorselizer {
         // Note that if there are statistics for partition columns there will be overlap,
         // but since we use a HashMap, we'll just overwrite the partition values with the
         // constant values from statistics (which should be the same).
-        literal_columns.extend(constant_columns_from_stats(
+        let stats_constants = constant_columns_from_stats(
             partitioned_file.statistics.as_deref(),
             &logical_file_schema,
-        ));
+        );
+        // Whether the statistics substitution *itself* proves the predicate
+        // unsatisfiable has to be decided here, before the partition-value
+        // and missing-column rewriting below: a predicate can collapse to a
+        // constant through either of those too, and only a collapse the
+        // file's own statistics produced is proof for `prune_row_groups`.
+        // The referenced columns are recorded alongside the flag because this
+        // is also too early to know whether they exist in the file at all —
+        // `prepare_filters` re-checks them against the physical file schema.
+        let stats_referenced: Vec<String> =
+            match (&self.predicate, stats_constants.is_empty()) {
+                (Some(predicate), false) => collect_columns(predicate)
+                    .iter()
+                    .filter(|c| stats_constants.contains_key(c.name()))
+                    .map(|c| c.name().to_string())
+                    .collect(),
+                _ => Vec::new(),
+            };
+        // `stats_referenced` is the cheap short-circuit so the simplifier only
+        // runs when a stats-derived constant is actually referenced.
+        let stats_prove_unsatisfiable = !stats_referenced.is_empty()
+            && self.predicate.as_ref().is_some_and(|p| {
+                stats_alone_unsatisfiable(
+                    p,
+                    &stats_constants,
+                    self.table_schema.table_schema(),
+                )
+            });
+        let stats_constant_columns_in_predicate = match stats_prove_unsatisfiable {
+            true => stats_referenced,
+            false => Vec::new(),
+        };
+        literal_columns.extend(stats_constants);
 
         let mut projection = self.projection.clone();
         let mut predicate = self.predicate.clone();
@@ -853,6 +909,7 @@ impl ParquetMorselizer {
             metadata_size_hint,
             metrics: self.metrics.clone(),
             parquet_file_reader_factory: Arc::clone(&self.parquet_file_reader_factory),
+            schema_provider: self.schema_provider.clone(),
             async_file_reader,
             batch_size: self.batch_size,
             logical_file_schema: Arc::clone(&logical_file_schema),
@@ -867,6 +924,8 @@ impl ParquetMorselizer {
             enable_page_index: self.enable_page_index,
             enable_bloom_filter: self.enable_bloom_filter,
             enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
+            stats_prove_unsatisfiable,
+            stats_constant_columns_in_predicate,
             limit: self.limit,
             coerce_int96: self.coerce_int96,
             coerce_int96_tz: self.coerce_int96_tz.clone(),
@@ -945,9 +1004,14 @@ impl PreparedParquetOpen {
         // the returned metadata may actually include page indexes as some
         // readers may return page indexes even when not requested -- for
         // example when they are cached)
-        let reader_metadata =
-            ArrowReaderMetadata::load_async(&mut self.async_file_reader, options.clone())
-                .await?;
+        let metadata = self.async_file_reader.get_metadata(Some(&options)).await?;
+        if self.partitioned_file.arrow_schema.is_none()
+            && let Some(provider) = &self.schema_provider
+        {
+            let schema = provider.schema(metadata.file_metadata().schema_descr())?;
+            options = options.with_schema(schema);
+        }
+        let reader_metadata = ArrowReaderMetadata::try_new(metadata, options.clone())?;
         metadata_timer.stop();
         drop(metadata_timer);
 
@@ -1073,6 +1137,24 @@ impl MetadataLoadedParquetOpen {
         }
         prepared.physical_file_schema = Arc::clone(&physical_file_schema);
 
+        // The physical schema is only known here, so this is the first point
+        // that can tell a stats-derived NULL constant for a column genuinely
+        // present in the file from one synthesized for a column the file does
+        // not have (see `stats_constant_columns_in_predicate`). Withdraw the
+        // proof if any referenced column turns out to be absent: pruning on a
+        // synthesized NULL would skip the missing-column case this flag is
+        // meant to leave alone, and a custom `PhysicalExprAdapter` may fill a
+        // missing column with a non-NULL default, so the skip could drop rows
+        // that default would have matched.
+        if prepared.stats_prove_unsatisfiable
+            && prepared
+                .stats_constant_columns_in_predicate
+                .iter()
+                .any(|name| physical_file_schema.field_with_name(name).is_err())
+        {
+            prepared.stats_prove_unsatisfiable = false;
+        }
+
         // Build predicates for this specific file
         let pruning_predicate = build_pruning_predicates(
             prepared.predicate.as_ref(),
@@ -1126,6 +1208,37 @@ impl FiltersPreparedParquetOpen {
         // If there is a range restricting what parts of the file to read
         if let Some(range) = prepared.file_range.as_ref() {
             row_groups.prune_by_range(rg_metadata, range);
+        }
+
+        // Substituting the columns file statistics proved constant
+        // (`constant_columns_from_stats`) collapsed the predicate to a
+        // constant that can never be true (`false`, or NULL — filters treat
+        // NULL as false), so the file's own statistics have proven that no
+        // row can match: skip every remaining row group, credited to
+        // statistics pruning. Without this, the substitution is strictly
+        // counterproductive for such files: it *removes* the column
+        // references the pruning predicate would need
+        // (`build_pruning_predicates` returns `None` for a bare literal), so
+        // a file that was previously pruned via its `null_count` statistics
+        // is instead scanned in full.
+        //
+        // The flag is deliberately computed from the statistics substitution
+        // alone (see `ParquetMorselizer::prepare`). A predicate can also
+        // collapse via the missing-column adapter or partition-value
+        // folding, and those paths keep their existing behaviour (files
+        // pruned by partition values are `FilePruner`'s job); a mixed
+        // predicate that only collapses once one of them has run is not
+        // treated as proof here.
+        if prepared.enable_row_group_stats_pruning && prepared.stats_prove_unsatisfiable {
+            prepared
+                .file_metrics
+                .row_groups_pruned_statistics
+                .add_pruned(row_groups.remaining_row_group_count());
+            row_groups.skip_all();
+            return Ok(RowGroupsPrunedParquetOpen {
+                prepared: self,
+                row_groups,
+            });
         }
 
         // If there is a predicate that can be evaluated against the metadata
@@ -1401,6 +1514,11 @@ impl RowGroupsPrunedParquetOpen {
                     reader_metadata.parquet_schema(),
                     file_metadata.as_ref(),
                     &prepared.file_metrics,
+                    if prepared.preserve_order {
+                        None
+                    } else {
+                        prepared.limit
+                    },
                 );
             access_plan = page_pruning_result.access_plan;
             ParquetFileMetrics::add_page_index_pages_skipped_by_fully_matched(
@@ -1408,6 +1526,12 @@ impl RowGroupsPrunedParquetOpen {
                 prepared.partition_index,
                 &prepared.file_name,
                 page_pruning_result.pages_skipped_by_fully_matched,
+            );
+            ParquetFileMetrics::add_limit_pruned_rows(
+                &prepared.metrics,
+                prepared.partition_index,
+                &prepared.file_name,
+                page_pruning_result.limit_pruned_rows,
             );
         }
 
@@ -1709,6 +1833,38 @@ fn row_group_bytes(rg_meta: &RowGroupMetaData) -> u64 {
 
 type ConstantColumns = HashMap<String, ScalarValue>;
 
+/// True when substituting `stats_constants` — the columns this file's
+/// statistics prove constant — is on its own enough to collapse `predicate`
+/// to a constant no row can satisfy (`false`, or NULL, which filters treat
+/// as false).
+///
+/// Only the statistics substitution is applied, so a predicate that needs
+/// the missing-column adapter or partition-value folding to collapse does
+/// not qualify: those are separate proofs with their own pruning paths.
+///
+/// `schema` must resolve every column the predicate can reference — pass the
+/// full table schema, since the simplifier types each node as it walks and
+/// the substitution leaves non-constant columns in place. Substitution or
+/// simplification failing is not proof, so both answer `false` and leave the
+/// caller's normal pruning paths untouched.
+fn stats_alone_unsatisfiable(
+    predicate: &Arc<dyn PhysicalExpr>,
+    stats_constants: &ConstantColumns,
+    schema: &Schema,
+) -> bool {
+    let Ok(substituted) =
+        replace_columns_with_literals(Arc::clone(predicate), stats_constants)
+    else {
+        return false;
+    };
+    let Ok(simplified) = PhysicalExprSimplifier::new(schema).simplify(substituted) else {
+        return false;
+    };
+    simplified.downcast_ref::<Literal>().is_some_and(|l| {
+        l.value().is_null() || l.value() == &ScalarValue::Boolean(Some(false))
+    })
+}
+
 /// Extract constant column values from statistics, keyed by column name in the logical file schema.
 fn constant_columns_from_stats(
     statistics: Option<&Statistics>,
@@ -1875,11 +2031,13 @@ async fn load_page_index<T: AsyncFileReader>(
 mod test {
     use super::*;
     use super::{ConstantColumns, ParquetMorselizer, constant_columns_from_stats};
+    use crate::metadata::DFParquetMetadata;
     use crate::{
         CachedParquetFileReaderFactory, DefaultParquetFileReaderFactory,
-        ParquetFileReaderFactory, ParquetRowSelection, RowGroupAccess,
+        ParquetFileReaderFactory, ParquetFileSchemaProvider, ParquetRowSelection,
+        RowGroupAccess,
     };
-    use arrow::array::{RecordBatch, record_batch};
+    use arrow::array::{AsArray, RecordBatch, record_batch};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
@@ -1904,15 +2062,17 @@ mod test {
     };
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use datafusion_pruning::MAX_IN_LIST_SIZE;
-    use futures::StreamExt;
     use futures::stream::BoxStream;
+    use futures::{StreamExt, TryStreamExt};
     use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
-    use parquet::arrow::{ArrowSchemaConverter, ArrowWriter};
+    use parquet::arrow::{ArrowSchemaConverter, ArrowWriter, parquet_to_arrow_schema};
+    use parquet::basic::ConvertedType;
     use parquet::file::metadata::{ColumnChunkMetaData, FileMetaData, ParquetMetaData};
-    use parquet::file::properties::WriterProperties;
-    use parquet::schema::types::SchemaDescPtr;
+    use parquet::file::properties::{EnabledStatistics, WriterProperties};
+    use parquet::schema::types::{SchemaDescPtr, SchemaDescriptor};
     use std::collections::VecDeque;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Builder for creating [`ParquetMorselizer`] instances with sensible defaults for tests.
     /// This helps reduce code duplication and makes it clear what differs between test cases.
@@ -2088,8 +2248,6 @@ mod test {
         plan: ParquetAccessPlan,
     ) -> bool {
         use crate::RowGroupAccessPlanFilter;
-        use parquet::arrow::parquet_to_arrow_schema;
-
         let arrow_schema: SchemaRef = Arc::new(
             parquet_to_arrow_schema(metadata.file_metadata().schema_descr(), None)
                 .unwrap(),
@@ -2248,6 +2406,12 @@ mod test {
             self
         }
 
+        /// Set whether the scan must preserve file order.
+        fn with_preserve_order(mut self, enable: bool) -> Self {
+            self.preserve_order = enable;
+            self
+        }
+
         /// Build the ParquetMorselizer instance, unwrapping validation errors.
         ///
         /// # Panics
@@ -2308,6 +2472,7 @@ mod test {
                     .unwrap_or_else(|| {
                         Arc::new(DefaultParquetFileReaderFactory::new(store)) as _
                     }),
+                schema_provider: None,
                 pushdown_filters: self.pushdown_filters,
                 reorder_filters: self.reorder_filters,
                 force_filter_selections: self.force_filter_selections,
@@ -2340,7 +2505,7 @@ mod test {
     /// plans CPU work, awaits any discovered I/O futures, and feeds the planner
     /// back into the ready queue until a stream morsel is ready.
     async fn open_file(
-        morselizer: &ParquetMorselizer,
+        morselizer: &dyn Morselizer,
         file: PartitionedFile,
     ) -> Result<BoxStream<'static, Result<RecordBatch>>> {
         let mut planners = VecDeque::from([morselizer.plan_file(file)?]);
@@ -2493,6 +2658,43 @@ mod test {
         batch: RecordBatch,
     ) -> usize {
         write_parquet_batches(store, filename, vec![batch], None).await
+    }
+
+    /// Write `batch` and return the statistics a collecting `ListingTable`
+    /// would attach for `logical_file_schema`, produced by the same
+    /// `statistics_from_parquet_metadata` the read path uses.
+    ///
+    /// Tests about schema evolution have to go through this rather than
+    /// hand-build `Statistics`: the shape that function synthesizes for a
+    /// logical column the file does not physically contain is the whole
+    /// subject, so a hand-built approximation can silently stop matching it.
+    async fn write_parquet_with_collected_statistics(
+        store: Arc<dyn ObjectStore>,
+        filename: &str,
+        batch: RecordBatch,
+        logical_file_schema: &SchemaRef,
+    ) -> (usize, Statistics) {
+        use parquet::file::metadata::ParquetMetaDataReader;
+
+        let mut out = BytesMut::new().writer();
+        {
+            let mut writer =
+                ArrowWriter::try_new(&mut out, batch.schema(), None).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+        let data = out.into_inner().freeze();
+        let data_len = data.len();
+        let metadata = ParquetMetaDataReader::new()
+            .parse_and_finish(&data)
+            .unwrap();
+        let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
+            &metadata,
+            logical_file_schema,
+        )
+        .unwrap();
+        store.put(&Path::from(filename), data.into()).await.unwrap();
+        (data_len, statistics)
     }
 
     /// Write multiple batches to a parquet file with optional writer properties
@@ -3023,6 +3225,302 @@ mod test {
         assert_eq!(num_rows, 0);
     }
 
+    /// Row groups this scan skipped through statistics pruning.
+    ///
+    /// The row count alone cannot tell "pruned" from "scanned, then
+    /// row-filtered" — both yield zero rows — so the tests around
+    /// constant-column substitution assert on this metric instead.
+    fn pruned_row_groups_statistics(metrics: &ExecutionPlanMetricsSet) -> usize {
+        use datafusion_physical_plan::metrics::MetricValue;
+        metrics
+            .clone_inner()
+            .iter()
+            .find_map(|m| match m.value() {
+                MetricValue::PruningMetrics {
+                    name,
+                    pruning_metrics,
+                } if name == "row_groups_pruned_statistics" => {
+                    Some(pruning_metrics.pruned())
+                }
+                _ => None,
+            })
+            .expect("row_groups_pruned_statistics metric is emitted")
+    }
+
+    #[tokio::test]
+    async fn test_prune_all_null_column_equality_from_file_statistics() {
+        // Regression: a column whose file statistics say every value is
+        // NULL cannot satisfy `col = <literal>`, so the file's row groups
+        // must be pruned. Constant-column substitution folds the all-NULL
+        // column to a NULL literal, collapsing the predicate to a
+        // constant; the opener has to recognise that and skip the row
+        // groups, rather than lose the pruning because the substituted
+        // predicate no longer references any column.
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch = record_batch!(
+            ("a", Int32, vec![Some(1), Some(2), Some(3)]),
+            ("b", Utf8, vec![None::<&str>, None, None])
+        )
+        .unwrap();
+        let data_size =
+            write_parquet(Arc::clone(&store), "file.parquet", batch.clone()).await;
+        let file_schema = batch.schema();
+        let mut file = PartitionedFile::new(
+            "file.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+        // Statistics as a collecting `ListingTable` would supply them: the
+        // `b` column's null count equals the row count, i.e. every value is
+        // NULL. (`new_unknown` pre-fills one entry per field, so overwrite
+        // rather than append.)
+        let mut statistics = Statistics::new_unknown(&file_schema);
+        statistics.num_rows = Precision::Exact(3);
+        statistics.column_statistics[1].null_count = Precision::Exact(3);
+        file.statistics = Some(Arc::new(statistics));
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+        let table_schema_for_opener = TableSchemaBuilder::from(&file_schema).build();
+        let make_opener = |predicate, metrics: ExecutionPlanMetricsSet| {
+            ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_table_schema(table_schema_for_opener.clone())
+                .with_projection_indices(&[0])
+                .with_predicate(predicate)
+                .with_row_group_stats_pruning(true)
+                .with_metrics(metrics)
+                .build()
+        };
+
+        // `b = 'x'` cannot match: every `b` is NULL, so the file's one row
+        // group is pruned from statistics rather than read and filtered.
+        let metrics = ExecutionPlanMetricsSet::new();
+        let expr = col("b").eq(lit("x"));
+        let predicate = logical2physical(&expr, &table_schema);
+        let opener = make_opener(predicate, metrics.clone());
+        let stream = open_file(&opener, file.clone()).await.unwrap();
+        let (_, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_rows, 0);
+        assert_eq!(
+            pruned_row_groups_statistics(&metrics),
+            1,
+            "an all-NULL column cannot satisfy equality: the row group must be pruned"
+        );
+
+        // A predicate the statistics cannot disprove still reads the file,
+        // so the skip above is not simply "prune everything".
+        let metrics = ExecutionPlanMetricsSet::new();
+        let expr = col("a").eq(lit(2));
+        let predicate = logical2physical(&expr, &table_schema);
+        let opener = make_opener(predicate, metrics.clone());
+        let stream = open_file(&opener, file).await.unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_batches, 1);
+        assert_eq!(num_rows, 3);
+        assert_eq!(pruned_row_groups_statistics(&metrics), 0);
+    }
+
+    #[tokio::test]
+    async fn test_prune_exact_constant_column_false_predicate_from_file_statistics() {
+        // The `false` half of the branch above, which the all-NULL case
+        // only covers for NULL: exact min == max statistics prove `a`
+        // constant, so `a = <other literal>` folds to `false` and the row
+        // group is pruned on that proof.
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch = record_batch!(("a", Int32, vec![Some(7), Some(7), Some(7)])).unwrap();
+        let data_size =
+            write_parquet(Arc::clone(&store), "file.parquet", batch.clone()).await;
+        let file_schema = batch.schema();
+        let mut file = PartitionedFile::new(
+            "file.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+        let mut statistics = Statistics::new_unknown(&file_schema);
+        statistics.num_rows = Precision::Exact(3);
+        statistics.column_statistics[0].null_count = Precision::Exact(0);
+        statistics.column_statistics[0].min_value =
+            Precision::Exact(ScalarValue::Int32(Some(7)));
+        statistics.column_statistics[0].max_value =
+            Precision::Exact(ScalarValue::Int32(Some(7)));
+        file.statistics = Some(Arc::new(statistics));
+        let table_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let table_schema_for_opener = TableSchemaBuilder::from(&file_schema).build();
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let expr = col("a").eq(lit(8));
+        let predicate = logical2physical(&expr, &table_schema);
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_table_schema(table_schema_for_opener)
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_row_group_stats_pruning(true)
+            .with_metrics(metrics.clone())
+            .build();
+        let stream = open_file(&opener, file).await.unwrap();
+        let (_, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_rows, 0);
+        assert_eq!(
+            pruned_row_groups_statistics(&metrics),
+            1,
+            "a column statistics prove constant cannot equal a different literal: \
+             the row group must be pruned"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_no_prune_when_missing_column_collapses_mixed_predicate() {
+        // A stats-derived constant appearing in the predicate is not proof
+        // that the statistics are what made it unsatisfiable. Here `a = 1`
+        // is proven true by statistics and folds away, and the collapse to
+        // NULL comes from `b = 2` — a column this file does not have. That
+        // is the schema-evolution path, which deliberately scans and
+        // row-filters rather than pruning, so the statistics branch must not
+        // fire.
+        //
+        // The statistics come from `statistics_from_parquet_metadata` rather
+        // than being hand-built, because the shape that matters is the one it
+        // synthesizes for a missing column: `Exact(null)` min/max and an
+        // `Exact(num_rows)` null count, indistinguishable from a present
+        // all-NULL column. Hand-building anything weaker (leaving `b`
+        // unknown, say) stops `b` from ever becoming a constant, and the test
+        // then passes without exercising this path at all.
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        // The file has only `a`; `b` is in the table schema but missing
+        // from this file.
+        let batch = record_batch!(("a", Int32, vec![Some(1), Some(1), Some(1)])).unwrap();
+        let physical_schema = batch.schema();
+        let logical_file_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let (data_size, statistics) = write_parquet_with_collected_statistics(
+            Arc::clone(&store),
+            "file.parquet",
+            batch,
+            &logical_file_schema,
+        )
+        .await;
+        let mut file = PartitionedFile::new(
+            "file.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+        // Assert the premise instead of trusting it: if collection ever stops
+        // representing the absent `b` as an all-NULL column, this test is no
+        // longer covering the case it is named for and should say so loudly.
+        assert_eq!(
+            statistics.column_statistics[1].null_count,
+            Precision::Exact(3),
+            "collection must still report the absent column as all NULL for \
+             this test to exercise the missing-column path"
+        );
+        file.statistics = Some(Arc::new(statistics));
+        let table_schema_for_opener =
+            TableSchemaBuilder::from(&logical_file_schema).build();
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let expr = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
+        let predicate = logical2physical(&expr, &logical_file_schema);
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_table_schema(table_schema_for_opener)
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_row_group_stats_pruning(true)
+            .with_metrics(metrics.clone())
+            .build();
+        let stream = open_file(&opener, file).await.unwrap();
+        let (_, num_rows) = count_batches_and_rows(stream).await;
+        // The row group is read and its rows handed up for the filter above
+        // to apply, which is the missing-column path this test protects.
+        assert_eq!(
+            num_rows, 3,
+            "the file must be scanned, not pruned, on the missing-column path"
+        );
+        assert_eq!(
+            pruned_row_groups_statistics(&metrics),
+            0,
+            "the collapse came from the missing column, not from file \
+             statistics: the statistics branch must not claim the prune"
+        );
+        // Guard against the file schema drifting: `b` really is absent.
+        assert!(physical_schema.field_with_name("b").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_prune_when_present_all_null_column_collapses_mixed_predicate() {
+        // The mirror of the test above, and the reason its fix cannot simply
+        // be "never trust a NULL constant". Identical predicate, identical
+        // statistics source, one difference: `b` is physically in the file
+        // and genuinely all NULL. The collapse is then real proof about this
+        // file's contents, so the row group must still be pruned.
+        //
+        // Collected statistics describe these two files identically — an
+        // `Exact(null)` min/max and an `Exact(num_rows)` null count for `b`
+        // either way — which is exactly why the decision has to wait for the
+        // physical file schema.
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        let batch = record_batch!(
+            ("a", Int32, vec![Some(1), Some(1), Some(1)]),
+            ("b", Int32, vec![None::<i32>, None, None])
+        )
+        .unwrap();
+        let physical_schema = batch.schema();
+        let logical_file_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let (data_size, statistics) = write_parquet_with_collected_statistics(
+            Arc::clone(&store),
+            "file.parquet",
+            batch,
+            &logical_file_schema,
+        )
+        .await;
+        let mut file = PartitionedFile::new(
+            "file.parquet".to_string(),
+            u64::try_from(data_size).unwrap(),
+        );
+        assert_eq!(
+            statistics.column_statistics[1].null_count,
+            Precision::Exact(3),
+            "the present `b` must collect as all NULL, so that it is \
+             indistinguishable from the absent `b` in the test above"
+        );
+        file.statistics = Some(Arc::new(statistics));
+        let table_schema_for_opener =
+            TableSchemaBuilder::from(&logical_file_schema).build();
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let expr = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
+        let predicate = logical2physical(&expr, &logical_file_schema);
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_table_schema(table_schema_for_opener)
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_row_group_stats_pruning(true)
+            .with_metrics(metrics.clone())
+            .build();
+        let stream = open_file(&opener, file).await.unwrap();
+        let (_, num_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(num_rows, 0);
+        assert_eq!(
+            pruned_row_groups_statistics(&metrics),
+            1,
+            "the all-NULL column is really in the file: the statistics do \
+             prove the predicate unsatisfiable and must prune"
+        );
+        // Guard against the file schema drifting: `b` really is present.
+        assert!(physical_schema.field_with_name("b").is_ok());
+    }
+
     #[tokio::test]
     async fn test_prune_on_partition_value_and_data_value() {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
@@ -3230,6 +3728,381 @@ mod test {
                 .message(),
             "Arrow: Incompatible supplied Arrow schema: data type mismatch for field b: requested Float64 but found Float32"
         );
+    }
+
+    #[derive(Debug, Default)]
+    struct EnumSchemaProvider(AtomicUsize);
+
+    impl ParquetFileSchemaProvider for EnumSchemaProvider {
+        fn schema(&self, parquet_schema: &SchemaDescriptor) -> Result<SchemaRef> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            let schema = parquet_to_arrow_schema(parquet_schema, None)?;
+            let DataType::Struct(fields) = schema.field(1).data_type() else {
+                return internal_err!("expected a nested test schema");
+            };
+            let fields = fields
+                .iter()
+                .zip(parquet_schema.columns().iter().skip(1))
+                .map(|(field, column)| {
+                    if column.converted_type() == ConvertedType::ENUM {
+                        Arc::new(field.as_ref().clone().with_data_type(DataType::Utf8))
+                    } else {
+                        Arc::clone(field)
+                    }
+                })
+                .collect::<arrow::datatypes::Fields>();
+            Ok(Arc::new(Schema::new(vec![
+                schema.field(0).clone(),
+                schema
+                    .field(1)
+                    .clone()
+                    .with_data_type(DataType::Struct(fields)),
+            ])))
+        }
+    }
+
+    /// Write an ENUM beside raw bytes that are deliberately invalid UTF-8.
+    async fn write_enum_file(
+        store: &dyn ObjectStore,
+        name: &str,
+        extra_field: bool,
+        props: WriterProperties,
+    ) -> (PartitionedFile, SchemaRef) {
+        use parquet::data_type::{ByteArray, ByteArrayType, Int32Type};
+        use parquet::file::writer::SerializedFileWriter;
+        use parquet::schema::parser::parse_message_type;
+
+        let extra = if extra_field {
+            "required int32 extra;"
+        } else {
+            ""
+        };
+        let schema = Arc::new(
+            parse_message_type(&format!(
+                "message test {{ required int32 id; required group nested {{
+                required binary e (ENUM); required binary b; {extra}
+            }} }}"
+            ))
+            .unwrap(),
+        );
+        let arrow_schema = EnumSchemaProvider::default()
+            .schema(&SchemaDescriptor::new(Arc::clone(&schema)))
+            .unwrap();
+        let mut bytes = Vec::new();
+        let mut writer =
+            SerializedFileWriter::new(&mut bytes, schema, Arc::new(props)).unwrap();
+        let mut row_group = writer.next_row_group().unwrap();
+        let mut column = row_group.next_column().unwrap().unwrap();
+        column
+            .typed::<Int32Type>()
+            .write_batch(&[1, 2, 3], None, None)
+            .unwrap();
+        column.close().unwrap();
+        for values in [
+            vec![
+                ByteArray::from("a"),
+                ByteArray::from("b"),
+                ByteArray::from("c"),
+            ],
+            vec![ByteArray::from(vec![0xff, 0x00]); 3],
+        ] {
+            let mut column = row_group.next_column().unwrap().unwrap();
+            column
+                .typed::<ByteArrayType>()
+                .write_batch(&values, None, None)
+                .unwrap();
+            column.close().unwrap();
+        }
+        if extra_field {
+            let mut column = row_group.next_column().unwrap().unwrap();
+            column
+                .typed::<Int32Type>()
+                .write_batch(&[10, 20, 30], None, None)
+                .unwrap();
+            column.close().unwrap();
+        }
+        row_group.close().unwrap();
+        writer.close().unwrap();
+        let path = Path::from(name);
+        store.put(&path, bytes.into()).await.unwrap();
+        (
+            PartitionedFile::from(store.head(&path).await.unwrap()),
+            arrow_schema,
+        )
+    }
+
+    fn invalid_arrow_hint() -> parquet::file::properties::WriterPropertiesBuilder {
+        use parquet::file::metadata::KeyValue;
+        WriterProperties::builder()
+            .set_key_value_metadata(Some(vec![KeyValue::new(
+                "ARROW:schema".to_string(),
+                "invalid schema".to_string(),
+            )]))
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .set_data_page_row_count_limit(1)
+            .set_write_batch_size(1)
+    }
+
+    #[tokio::test]
+    async fn test_schema_provider_lazy_nested_scans() {
+        use crate::source::ParquetSource;
+        use datafusion_datasource::file::FileSource;
+        use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+        use datafusion_execution::object_store::ObjectStoreUrl;
+        use datafusion_functions::core::expr_fn::get_field;
+
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let (file1, schema) = write_enum_file(
+            store.as_ref(),
+            "one.parquet",
+            false,
+            invalid_arrow_hint().build(),
+        )
+        .await;
+        let (file2, _) = write_enum_file(
+            store.as_ref(),
+            "two.parquet",
+            true,
+            invalid_arrow_hint().build(),
+        )
+        .await;
+        let cache: Arc<FileMetadataCache> = Arc::new(DefaultCache::new(1024 * 1024));
+        let provider = Arc::new(EnumSchemaProvider::default());
+        let source = ParquetSource::new(Arc::clone(&schema))
+            .with_schema_provider(provider.clone())
+            .with_parquet_file_reader_factory(Arc::new(
+                CachedParquetFileReaderFactory::new(
+                    Arc::clone(&store),
+                    Arc::clone(&cache),
+                ),
+            ))
+            .with_predicate(logical2physical(
+                &get_field(col("nested"), "e").eq(lit("b")),
+                &schema,
+            ))
+            .with_pushdown_filters(true)
+            .with_enable_page_index(true)
+            .with_batch_size(1024);
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            Arc::clone(&source),
+        )
+        .build();
+        let morselizer = source
+            .create_morselizer(Arc::clone(&store), &config, 0)
+            .unwrap();
+        assert_eq!(provider.0.load(Ordering::Relaxed), 0);
+        for pass in 0..2 {
+            for file in [&file1, &file2] {
+                let batches = open_file(morselizer.as_ref(), file.clone())
+                    .await
+                    .unwrap()
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .unwrap();
+                let batch = arrow::compute::concat_batches(&schema, &batches).unwrap();
+                assert_eq!(batch.num_rows(), 1);
+                assert_eq!(batch.schema(), schema);
+                let nested = batch.column(1).as_struct();
+                let e = nested.column(0).as_string::<i32>();
+                let b = nested.column(1).as_binary::<i32>();
+                assert_eq!(e.value(0), "b");
+                assert_eq!(b.value(0), &[0xff, 0x00]);
+            }
+            assert_eq!(provider.0.load(Ordering::Relaxed), (pass + 1) * 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_schema_provider_preserves_metadata_and_precedence() {
+        use crate::metadata::{CachedParquetMetaData, DFParquetMetadata};
+
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let (file, schema) = write_enum_file(
+            store.as_ref(),
+            "test.parquet",
+            false,
+            invalid_arrow_hint().build(),
+        )
+        .await;
+        let cache: Arc<FileMetadataCache> = Arc::new(DefaultCache::new(1024 * 1024));
+        let original = DFParquetMetadata::new(store.as_ref(), &file.object_meta)
+            .with_file_metadata_cache(Some(Arc::clone(&cache)))
+            .with_page_index_policy(Some(PageIndexPolicy::Optional))
+            .fetch_metadata()
+            .await
+            .unwrap();
+        assert!(original.column_index().is_some());
+        assert!(original.offset_index().is_some());
+        let mut opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_parquet_file_reader_factory(Arc::new(
+                CachedParquetFileReaderFactory::new(
+                    Arc::clone(&store),
+                    Arc::clone(&cache),
+                ),
+            ))
+            .build();
+        // The default scan still rejects an invalid advisory Arrow hint.
+        assert!(
+            opener
+                .prepare_open_file(file.clone())
+                .unwrap()
+                .load()
+                .await
+                .is_err()
+        );
+        opener.schema_provider = Some(Arc::new(EnumSchemaProvider::default()));
+        for _ in 0..2 {
+            let loaded = opener
+                .prepare_open_file(file.clone())
+                .unwrap()
+                .load()
+                .await
+                .unwrap();
+            assert!(Arc::ptr_eq(&original, loaded.reader_metadata.metadata()));
+            assert_eq!(loaded.reader_metadata.schema(), &schema);
+            let prepared = loaded.prepare_filters().unwrap();
+            assert!(Arc::ptr_eq(
+                &original,
+                prepared.loaded.reader_metadata.metadata()
+            ));
+        }
+        let cached = cache.get(&file.object_meta.location).unwrap();
+        let cached = cached
+            .file_metadata
+            .as_any()
+            .downcast_ref::<CachedParquetMetaData>()
+            .unwrap();
+        assert!(Arc::ptr_eq(&original, cached.parquet_metadata()));
+
+        #[derive(Debug)]
+        struct RejectSchema;
+        impl ParquetFileSchemaProvider for RejectSchema {
+            fn schema(&self, _: &SchemaDescriptor) -> Result<SchemaRef> {
+                exec_err!("schema policy rejected file")
+            }
+        }
+        opener.schema_provider = Some(Arc::new(RejectSchema));
+        let err = opener
+            .prepare_open_file(file.clone())
+            .unwrap()
+            .load()
+            .await
+            .err()
+            .unwrap();
+        assert_contains!(err.to_string(), "schema policy rejected file");
+        // Explicit schemas skip the provider, but still undergo Arrow validation.
+        let loaded = opener
+            .prepare_open_file(file.clone().with_arrow_schema(Arc::clone(&schema)))
+            .unwrap()
+            .load()
+            .await
+            .unwrap();
+        assert_eq!(loaded.reader_metadata.schema(), &schema);
+        let incompatible = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Float64, false),
+            schema.field(1).clone(),
+        ]));
+        let err = opener
+            .prepare_open_file(file.clone().with_arrow_schema(Arc::clone(&incompatible)))
+            .unwrap()
+            .load()
+            .await
+            .err()
+            .unwrap();
+        assert_contains!(err.to_string(), "Incompatible supplied Arrow schema");
+
+        #[derive(Debug)]
+        struct FixedSchema(SchemaRef);
+        impl ParquetFileSchemaProvider for FixedSchema {
+            fn schema(&self, _: &SchemaDescriptor) -> Result<SchemaRef> {
+                Ok(Arc::clone(&self.0))
+            }
+        }
+        opener.schema_provider = Some(Arc::new(FixedSchema(incompatible)));
+        let err = opener
+            .prepare_open_file(file)
+            .unwrap()
+            .load()
+            .await
+            .err()
+            .unwrap();
+        assert_contains!(err.to_string(), "Incompatible supplied Arrow schema");
+    }
+
+    #[cfg(feature = "parquet_encryption")]
+    #[tokio::test]
+    async fn test_schema_provider_encrypted_scan() {
+        use datafusion_physical_plan::metrics::MetricValue;
+        use parquet::encryption::encrypt::FileEncryptionProperties;
+
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let footer_key = b"0123456789012345".to_vec();
+        let column_key = b"1234567890123450".to_vec();
+        for plaintext_footer in [false, true] {
+            let encrypt = FileEncryptionProperties::builder(footer_key.clone())
+                .with_plaintext_footer(plaintext_footer)
+                .with_column_key("nested.e", column_key.clone())
+                .build()
+                .unwrap();
+            let decrypt = FileDecryptionProperties::builder(footer_key.clone())
+                .with_column_key("nested.e", column_key.clone())
+                .build()
+                .unwrap();
+            let (file, schema) = write_enum_file(
+                store.as_ref(),
+                "encrypted.parquet",
+                false,
+                invalid_arrow_hint()
+                    .with_file_encryption_properties(encrypt)
+                    .build(),
+            )
+            .await;
+            let cache: Arc<FileMetadataCache> = Arc::new(DefaultCache::new(1024 * 1024));
+            let mut opener = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_predicate(logical2physical(&col("id").eq(lit(2i32)), &schema))
+                .with_pushdown_filters(true)
+                .with_enable_page_index(true)
+                .with_parquet_file_reader_factory(Arc::new(
+                    CachedParquetFileReaderFactory::new(
+                        Arc::clone(&store),
+                        Arc::clone(&cache),
+                    ),
+                ))
+                .build();
+            opener.file_decryption_properties = Some(decrypt);
+            opener.schema_provider = Some(Arc::new(EnumSchemaProvider::default()));
+            let batches = open_file(&opener, file.clone())
+                .await
+                .unwrap()
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap();
+            let batch = arrow::compute::concat_batches(&schema, &batches).unwrap();
+            assert_eq!(batch.num_rows(), 1);
+            let nested = batch.column(1).as_struct();
+            assert_eq!(nested.column(0).as_string::<i32>().value(0), "b");
+            let page_pruning = opener
+                .metrics
+                .clone_inner()
+                .sum_by_name("page_index_rows_pruned")
+                .unwrap();
+            let MetricValue::PruningMetrics {
+                pruning_metrics, ..
+            } = page_pruning
+            else {
+                panic!("expected page pruning metrics");
+            };
+            assert_eq!(pruning_metrics.pruned(), 2);
+            assert!(
+                cache.get(&file.object_meta.location).is_none(),
+                "encrypted metadata must not enter the shared cache"
+            );
+        }
     }
 
     #[tokio::test]
@@ -3831,6 +4704,46 @@ mod test {
 
         let values = collect_int32_values(open_file(&opener, file).await.unwrap()).await;
         assert_eq!(values, vec![3, 4, 5, 6]);
+    }
+
+    #[tokio::test]
+    async fn test_page_limit_pruning_preserves_order() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let batch =
+            record_batch!(("a", Int32, vec![0, 10, 0, 5, 6, 7, 0, 8, 0])).unwrap();
+        let schema = batch.schema();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(9))
+            .set_data_page_row_count_limit(3)
+            .set_write_batch_size(3)
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .build();
+        let data_len = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            vec![batch],
+            Some(props),
+        )
+        .await;
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_len).unwrap(),
+        );
+        let predicate = logical2physical(&col("a").gt_eq(lit(5)), &schema);
+
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(schema)
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_row_group_stats_pruning(true)
+            .with_enable_page_index(true)
+            .with_preserve_order(true)
+            .with_limit(3)
+            .build();
+
+        let values = collect_int32_values(open_file(&opener, file).await.unwrap()).await;
+        assert_eq!(values, vec![10, 5, 6]);
     }
 
     #[tokio::test]
