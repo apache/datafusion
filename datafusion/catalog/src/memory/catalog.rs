@@ -20,7 +20,7 @@
 
 use crate::{CatalogProvider, CatalogProviderList, SchemaProvider};
 use dashmap::DashMap;
-use datafusion_common::exec_err;
+use datafusion_common::{Result, exec_err};
 use std::sync::Arc;
 
 /// Simple in-memory list of catalogs
@@ -52,6 +52,10 @@ impl CatalogProviderList for MemoryCatalogProviderList {
         catalog: Arc<dyn CatalogProvider>,
     ) -> Option<Arc<dyn CatalogProvider>> {
         self.catalogs.insert(name, catalog)
+    }
+
+    fn deregister_catalog(&self, name: &str) -> Result<Option<Arc<dyn CatalogProvider>>> {
+        Ok(self.catalogs.remove(name).map(|(_, catalog)| catalog))
     }
 
     fn catalog_names(&self) -> Vec<String> {
@@ -97,7 +101,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         &self,
         name: &str,
         schema: Arc<dyn SchemaProvider>,
-    ) -> datafusion_common::Result<Option<Arc<dyn SchemaProvider>>> {
+    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
         Ok(self.schemas.insert(name.into(), schema))
     }
 
@@ -105,7 +109,7 @@ impl CatalogProvider for MemoryCatalogProvider {
         &self,
         name: &str,
         cascade: bool,
-    ) -> datafusion_common::Result<Option<Arc<dyn SchemaProvider>>> {
+    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
         if let Some(schema) = self.schema(name) {
             let table_names = schema.table_names();
             match (table_names.is_empty(), cascade) {
