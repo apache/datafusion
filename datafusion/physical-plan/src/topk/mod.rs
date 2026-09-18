@@ -1952,29 +1952,73 @@ struct DenseRankPartitionState {
     /// INVARIANT: `keys` and `groups.keys()` hold the same set. Every
     /// insertion into / removal from `groups` must mirror into `keys`.
     keys: BinaryHeap<Vec<u8>>,
+    /// Running total of the heap allocations owned by the *contents* of
+    /// `groups` and `keys`: the key bytes, the per-key `Vec<GroupEntry>`
+    /// buffers, and each entry's `row_indices`. Excludes the two
+    /// containers' own tables, which `capacity()` reports in O(1).
+    ///
+    /// INVARIANT: equals `recompute_contents_bytes` (test-only, so not
+    /// linkable from rustdoc). Every mutation of `groups` or `keys` must
+    /// adjust it; the `dense_rank_contents_bytes_tracks_recompute` test
+    /// checks this against a full recompute after a randomized workload.
+    contents_bytes: usize,
 }
 
 impl DenseRankPartitionState {
     fn size(&self) -> usize {
         let table_overhead = self.groups.capacity()
             * (size_of::<Vec<u8>>() + size_of::<Vec<GroupEntry>>());
-        let contents: usize = self
+        // The heap's backing Vec: one `Vec<u8>` slot per reserved element.
+        let keys_overhead = self.keys.capacity() * size_of::<Vec<u8>>();
+        table_overhead + self.contents_bytes + keys_overhead
+    }
+
+    /// Bytes owned by one entry's `row_indices` buffer.
+    fn entry_bytes(entry: &GroupEntry) -> usize {
+        entry.row_indices.capacity() * size_of::<u32>()
+    }
+
+    /// Track a previously unseen ob value, holding `run_indices` as its
+    /// first (and so far only) entry, and charge everything it allocates.
+    ///
+    /// `keys` and `groups` each own a copy of the key bytes; the clone's
+    /// capacity is read after the fact rather than assumed equal to the
+    /// original's, so the charge matches what was really allocated.
+    fn insert_new_group(
+        &mut self,
+        ob_key: Vec<u8>,
+        run_indices: Vec<u32>,
+        batch_id: u32,
+    ) {
+        let key_copy = ob_key.clone();
+        self.contents_bytes += key_copy.capacity() + ob_key.capacity();
+        self.keys.push(key_copy);
+
+        let entry = GroupEntry {
+            row_indices: run_indices,
+            batch_id,
+        };
+        self.contents_bytes += Self::entry_bytes(&entry);
+        let entries = vec![entry];
+        self.contents_bytes += entries.capacity() * size_of::<GroupEntry>();
+        self.groups.insert(ob_key, entries);
+    }
+
+    /// The value [`Self::contents_bytes`] must hold, computed the slow
+    /// way. Used to assert the incremental accounting in tests.
+    #[cfg(test)]
+    fn recompute_contents_bytes(&self) -> usize {
+        let groups: usize = self
             .groups
             .iter()
             .map(|(key, entries)| {
                 key.capacity()
                     + entries.capacity() * size_of::<GroupEntry>()
-                    + entries
-                        .iter()
-                        .map(|e| e.row_indices.capacity() * size_of::<u32>())
-                        .sum::<usize>()
+                    + entries.iter().map(Self::entry_bytes).sum::<usize>()
             })
             .sum();
-        // `keys` duplicates every key's bytes; charge for them plus the
-        // heap's backing Vec (one `Vec<u8>` slot per reserved element).
-        let keys_overhead: usize = self.keys.capacity() * size_of::<Vec<u8>>()
-            + self.keys.iter().map(|k| k.capacity()).sum::<usize>();
-        table_overhead + contents + keys_overhead
+        // `keys` duplicates every key's bytes.
+        groups + self.keys.iter().map(|k| k.capacity()).sum::<usize>()
     }
 }
 
@@ -2208,24 +2252,23 @@ impl PartitionedTopKDenseRank {
                 // new `GroupEntry` (one entry per contributing batch).
                 if let Some(entries) = state.groups.get_mut(&ob_key) {
                     batch_entry.uses += 1;
-                    entries.push(GroupEntry {
+                    let before = entries.capacity() * size_of::<GroupEntry>();
+                    let entry = GroupEntry {
                         row_indices: run_indices,
                         batch_id,
-                    });
+                    };
+                    state.contents_bytes += DenseRankPartitionState::entry_bytes(&entry);
+                    entries.push(entry);
+                    // The push may have grown the buffer.
+                    state.contents_bytes +=
+                        entries.capacity() * size_of::<GroupEntry>() - before;
                     continue;
                 }
 
                 // Case B: new ob, room available.
                 if state.groups.len() < k {
                     batch_entry.uses += 1;
-                    state.keys.push(ob_key.clone());
-                    state.groups.insert(
-                        ob_key,
-                        vec![GroupEntry {
-                            row_indices: run_indices,
-                            batch_id,
-                        }],
-                    );
+                    state.insert_new_group(ob_key, run_indices, batch_id);
                     continue;
                 }
 
@@ -2234,12 +2277,23 @@ impl PartitionedTopKDenseRank {
                 let max_key = state.keys.peek().expect("state.groups has k >= 1 keys");
                 if ob_key.as_slice() < max_key.as_slice() {
                     // Evict the entire max-key group, from both the map
-                    // and its ordered mirror.
+                    // and its ordered mirror. `keys` and `groups` own
+                    // separate copies of the key bytes, so both are
+                    // uncharged — with their own capacities, which is why
+                    // `remove_entry` is used to recover the map's copy
+                    // rather than assuming it matches the popped one.
                     let evicted_key = state.keys.pop().expect("max key present");
-                    let evicted = state
+                    let (map_key, evicted) = state
                         .groups
-                        .remove(&evicted_key)
+                        .remove_entry(&evicted_key)
                         .expect("keys mirrors groups");
+                    state.contents_bytes -= evicted_key.capacity()
+                        + map_key.capacity()
+                        + evicted.capacity() * size_of::<GroupEntry>()
+                        + evicted
+                            .iter()
+                            .map(DenseRankPartitionState::entry_bytes)
+                            .sum::<usize>();
                     for e in &evicted {
                         replacements += e.row_indices.len();
                         if e.batch_id == batch_id {
@@ -2253,14 +2307,7 @@ impl PartitionedTopKDenseRank {
                         }
                     }
                     batch_entry.uses += 1;
-                    state.keys.push(ob_key.clone());
-                    state.groups.insert(
-                        ob_key,
-                        vec![GroupEntry {
-                            row_indices: run_indices,
-                            batch_id,
-                        }],
-                    );
+                    state.insert_new_group(ob_key, run_indices, batch_id);
                 }
                 // else: ob >= max — drop the whole run.
             }
@@ -2314,9 +2361,36 @@ impl PartitionedTopKDenseRank {
 
         let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), batch_size);
 
+        // Gather every retained row with a single `interleave_record_batch`
+        // per output batch rather than one `take_record_batch` per
+        // `GroupEntry`. A group entry holds only the rows one source batch
+        // contributed at one ob value, so entries are numerous and tiny —
+        // with P partitions, K distinct ob values and B contributing
+        // batches there are up to P × K × B of them, and gathering each
+        // one separately builds and tears down that many `RecordBatch`es.
+        // `interleave` takes `(batch_pos, row)` pairs across *different*
+        // source batches in one call, which is exactly the shape here.
+        //
+        // The pairs are pushed in emit order — partitions in sorted key
+        // order, ob values ascending within a partition, entries in
+        // insertion order within an ob value — so the interleaved output
+        // is already ordered and needs no post-sort.
+        let mut batch_refs = Vec::with_capacity(store.len());
+        let mut batch_id_pos = HashMap::with_capacity(store.len());
+        for (array_pos, (batch_id, entry)) in store.batches.iter().enumerate() {
+            batch_refs.push(&entry.batch);
+            batch_id_pos.insert(*batch_id, array_pos);
+        }
+
+        // Chunk at `batch_size` so the operator emits the same batch sizes
+        // as before and never materializes all retained rows at once.
+        let mut indices: Vec<(usize, usize)> = Vec::with_capacity(batch_size);
         for pk in sorted_pks {
-            let DenseRankPartitionState { groups, keys: _ } =
-                states.remove(&pk).expect("key from states.keys()");
+            let DenseRankPartitionState {
+                groups,
+                keys: _,
+                contents_bytes: _,
+            } = states.remove(&pk).expect("key from states.keys()");
             // Sort the <= K distinct ob keys so rows emit ascending
             // (byte-comparable encoding == sort order).
             let mut sorted_obs: Vec<(Vec<u8>, Vec<GroupEntry>)> =
@@ -2324,15 +2398,22 @@ impl PartitionedTopKDenseRank {
             sorted_obs.sort_by(|a, b| a.0.cmp(&b.0));
             for (_ob, entries) in sorted_obs {
                 for entry in entries {
-                    let batch = &store
-                        .get(entry.batch_id)
-                        .expect("retained batch_id present in store")
-                        .batch;
-                    let indices = UInt32Array::from(entry.row_indices);
-                    let sub = take_record_batch(batch, &indices)?;
-                    coalescer.push_batch(sub)?;
+                    let array_pos = batch_id_pos[&entry.batch_id];
+                    for row in entry.row_indices {
+                        indices.push((array_pos, row as usize));
+                        if indices.len() == batch_size {
+                            coalescer.push_batch(interleave_record_batch(
+                                &batch_refs,
+                                &indices,
+                            )?)?;
+                            indices.clear();
+                        }
+                    }
                 }
             }
+        }
+        if !indices.is_empty() {
+            coalescer.push_batch(interleave_record_batch(&batch_refs, &indices)?)?;
         }
         coalescer.finish_buffered_batch()?;
 
@@ -3393,6 +3474,12 @@ mod tests {
 
     /// Drain an operator's output into sorted `(pk, val)` pairs, ready to
     /// compare against [`DiffShape::expected`].
+    ///
+    /// Asserts the rows arrived already in `(pk ASC, val ASC)` order before
+    /// sorting them. That order is load-bearing rather than cosmetic — it is
+    /// what `PartitionedTopKExec::compute_properties` advertises, and so what
+    /// lets the window above it run `mode=Sorted` with no `SortExec` — and
+    /// the content comparison this feeds would otherwise sort it away.
     async fn sorted_pk_val(stream: SendableRecordBatchStream) -> Result<Vec<(i32, i32)>> {
         let batches: Vec<RecordBatch> = stream.try_collect().await?;
         let mut rows: Vec<(i32, i32)> = Vec::new();
@@ -3403,6 +3490,10 @@ mod tests {
                 rows.push((pk.value(i), val.value(i)));
             }
         }
+        assert!(
+            rows.windows(2).all(|w| w[0] <= w[1]),
+            "emitted rows are not in (pk, val) order: {rows:?}"
+        );
         rows.sort_unstable();
         Ok(rows)
     }
@@ -3462,6 +3553,42 @@ mod tests {
 
             assert_eq!(sorted_pk_val(state.emit()?).await?, expected, "{shape}");
         }
+        Ok(())
+    }
+
+    /// `DenseRankPartitionState::contents_bytes` is maintained
+    /// incrementally at four mutation sites (append to an existing ob
+    /// group, insert a new one with room, evict-then-insert, and the
+    /// key/entry buffer growth each can trigger). Drift there would
+    /// silently give the reservation a wrong total, so check it against a
+    /// recompute over the same randomized workload the correctness
+    /// differential test uses — its shapes are tuned to exercise
+    /// eviction, which is the case with the most bookkeeping.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_contents_bytes_tracks_recompute()
+    -> Result<()> {
+        let mut saw_eviction = false;
+        for seed in 0..64u64 {
+            let shape = DiffShape::new(seed, 8);
+            let (schema, mut state) = build_partitioned_topk_dense_rank(shape.k)?;
+            for (pks, vals) in &shape.batches {
+                state.insert_batch(&pk_val_batch(&schema, pks.clone(), vals.clone())?)?;
+                // Check after every batch, not just at the end: a
+                // compensating pair of errors within one batch would
+                // survive an end-only assertion.
+                for (pk, partition) in &state.states {
+                    assert_eq!(
+                        partition.contents_bytes,
+                        partition.recompute_contents_bytes(),
+                        "seed {seed}, partition {pk:?}: {shape}"
+                    );
+                }
+            }
+            saw_eviction |= state.metrics.row_replacements.value() > 0;
+        }
+        // Guards the guard: if the shapes stopped evicting, case C would
+        // go unchecked and this test would still pass.
+        assert!(saw_eviction, "workload never evicted a group");
         Ok(())
     }
 
