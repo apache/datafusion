@@ -2095,7 +2095,7 @@ mod tests {
         acc2.update_batch(&[string_list_data([vec!["e", "f", "g"]])])?;
         acc1 = merge(acc1, acc2)?;
 
-        assert_eq!(acc1.size(), 2290);
+        assert_eq!(acc1.size(), 2210);
 
         Ok(())
     }
@@ -2115,7 +2115,7 @@ mod tests {
         ]);
         acc.update_batch(&[Arc::clone(&input), input])?;
 
-        assert_eq!(acc.size(), 2295);
+        assert_eq!(acc.size(), 2135);
 
         Ok(())
     }

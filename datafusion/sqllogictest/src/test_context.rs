@@ -29,7 +29,7 @@ use arrow::array::{
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, Schema, SchemaRef, TimeUnit, UInt32Type,
+    DataType, Field, FieldRef, Fields, Metadata, Schema, SchemaRef, TimeUnit, UInt32Type,
     UnionFields,
 };
 use arrow::record_batch::RecordBatch;
@@ -85,8 +85,7 @@ impl TypePlanner for SqlLogicTestTypePlanner {
         match sql_type {
             ast::DataType::Uuid => Ok(Some(Arc::new(
                 Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
-                    [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())]
-                        .into(),
+                    Metadata::new().with("ARROW:extension:name", "arrow.uuid"),
                 ),
             ))),
             _ => Ok(None),
