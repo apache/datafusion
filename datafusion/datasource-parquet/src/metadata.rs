@@ -82,6 +82,7 @@ pub(crate) fn has_untrusted_min_max_order(
     let column = parquet_schema.column(parquet_column_index);
     // As of arrow 60, INT96 columns report `SortOrder::INT96_TIMESTAMP`
     // rather than `UNDEFINED`; keep treating their min/max as untrusted.
+    // until <https://github.com/apache/datafusion/issues/25484>
     if matches!(
         column.sort_order(),
         SortOrder::UNDEFINED | SortOrder::INT96_TIMESTAMP
