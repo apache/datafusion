@@ -19,6 +19,10 @@ name: Dev
 on:
   push:
     branches-ignore:
+      # Commits reach main through the merge queue, which runs this workflow at
+      # the same SHA, so do not repeat the jobs after the merge. Release
+      # branches and every other branch keep their post-push runs.
+      - 'main'
       - 'gh-readonly-queue/**'
       - 'dependabot/**'
   pull_request:

@@ -144,3 +144,18 @@ select list_normalize(column1) from (values
 ----
 [0.6, 0.8]
 NULL
+
+# array_normalize scales the values before squaring them, so finite inputs
+# whose squares overflow or underflow still normalize correctly
+query ??
+select
+  array_normalize([3 * power(2.0, 700), 4 * power(2.0, 700)]),
+  array_normalize([3 * power(2.0, -700), -4 * power(2.0, -700)]);
+----
+[0.6, 0.8] [0.6, -0.8]
+
+# non-finite inputs propagate as before
+query ?
+select array_normalize([CAST('Infinity' AS DOUBLE), 1.0]);
+----
+[NaN, 0.0]
