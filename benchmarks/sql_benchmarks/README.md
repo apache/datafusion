@@ -328,7 +328,9 @@ DROP TABLE test;
 <td>
 
 The expect_plan directive will check the physical plan for the string provided on the same line. This
-can be used to validate that a particular join was used. <br/> <br/> Example:<br/>
+can be used to validate that a particular join was used. The plan is rendered as <code>EXPLAIN</code>
+displays it, and the check runs once per benchmark, not once per iteration, so it adds no cost to the
+measured region. <br/> <br/> Example:<br/>
 <blockquote>expect_plan NestedLoopJoinExec</blockquote>
 
 </td>
