@@ -1751,9 +1751,12 @@ impl ExecutionPlan for RepartitionExec {
         let name = self.name().to_owned();
         let schema = self.schema();
         let schema_captured = Arc::clone(&schema);
+        // Cap at 4096: each output partition holds its own coalescer, so
+        // total footprint scales with num_output_partitions × batch_size.
+        // Larger values cause cache pressure that outweighs flush savings.
         let coalescer_batch_size = self
             .batch_size
-            .unwrap_or_else(|| context.session_config().batch_size());
+            .unwrap_or_else(|| context.session_config().batch_size().min(4096));
 
         let spill_manager = SpillManager::new(
             Arc::clone(&context.runtime_env()),
