@@ -75,10 +75,13 @@ impl DuplicationCost {
     /// Returns the cost of one more evaluation of `expr`.
     fn of(expr: &Expr) -> Self {
         let expr = unalias(expr);
-        if expr.placement().should_push_to_leaves() {
-            return Self::Free;
-        }
 
+        // Volatility and subqueries are asked about first, before placement.
+        // A volatile function is free to report
+        // `ExpressionPlacement::MoveTowardsLeafNodes`, and `file_row_index()`
+        // does. Such a call is cheap to evaluate and still must never be
+        // evaluated at two sites, because the two sites give two different
+        // answers.
         let mut cost = Self::Cheap;
         expr.apply(|e| {
             let node_cost = match e {
@@ -117,6 +120,13 @@ impl DuplicationCost {
             })
         })
         .expect("traversal is infallible");
+
+        if cost == Self::Forbidden {
+            return Self::Forbidden;
+        }
+        if expr.placement().should_push_to_leaves() {
+            return Self::Free;
+        }
         cost
     }
 }
@@ -349,6 +359,17 @@ mod tests {
         udf(ExpressionPlacement::KeepInPlace, Volatility::Volatile).call(vec![arg])
     }
 
+    /// A volatile function that reports
+    /// [`ExpressionPlacement::MoveTowardsLeafNodes`], as `file_row_index()`
+    /// does.
+    fn volatile_leaf(arg: Expr) -> Expr {
+        udf(
+            ExpressionPlacement::MoveTowardsLeafNodes,
+            Volatility::Volatile,
+        )
+        .call(vec![arg])
+    }
+
     fn projection(exprs: Vec<Expr>) -> Projection {
         let plan = LogicalPlanBuilder::from(test_table_scan().unwrap())
             .project(exprs)
@@ -389,6 +410,34 @@ mod tests {
         assert_eq!(
             DuplicationCost::of(&(volatile(col("a")) + lit(1))),
             Forbidden
+        );
+    }
+
+    /// Volatility beats placement. A volatile function that reports
+    /// `MoveTowardsLeafNodes` is cheap to evaluate, and two evaluations still
+    /// give two different answers.
+    #[test]
+    fn a_volatile_leaf_function_is_forbidden() {
+        use DuplicationCost::*;
+        assert_eq!(DuplicationCost::of(&volatile_leaf(col("a"))), Forbidden);
+        assert_eq!(
+            DuplicationCost::of(&volatile_leaf(col("a")).alias("x")),
+            Forbidden
+        );
+        assert_eq!(
+            DuplicationCost::of(&get_field_like(volatile_leaf(col("a")), "x")),
+            Forbidden
+        );
+        // The same function, not volatile, is free.
+        assert_eq!(
+            DuplicationCost::of(
+                &udf(
+                    ExpressionPlacement::MoveTowardsLeafNodes,
+                    Volatility::Immutable
+                )
+                .call(vec![col("a")])
+            ),
+            Free
         );
     }
 
