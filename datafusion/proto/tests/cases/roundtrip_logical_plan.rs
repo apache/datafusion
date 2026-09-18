@@ -642,7 +642,8 @@ async fn roundtrip_logical_plan_limit_offset() -> Result<()> {
     // trivially passing because nothing needed to round-trip.
     let plan_str = plan.to_string();
     assert_eq!(
-        plan_str, "Limit: skip=0, fetch=5\n  TableScan: t1 projection=[a, b], fetch=5, offset=3",
+        plan_str,
+        "Limit: skip=0, fetch=5\n  TableScan: t1 projection=[a, b], fetch=5, offset=3",
         "expected 'fetch=5' and 'offset=3' to be pushed into the scan, got: {plan_str}"
     );
 

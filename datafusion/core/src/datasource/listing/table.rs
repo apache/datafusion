@@ -320,8 +320,7 @@ mod tests {
     async fn scan_with_args_offset_skips_correct_rows() -> Result<()> {
         for target_partition in [1_usize, 8, 16] {
             let ctx = SessionContext::new_with_config(
-                SessionConfig::new()
-                    .with_target_partitions(target_partition),
+                SessionConfig::new().with_target_partitions(target_partition),
             );
 
             let table = load_table(&ctx, "alltypes_plain.parquet").await?;
@@ -347,8 +346,10 @@ mod tests {
                 .await?
                 .into_inner();
             let offset_batches = collect(offset_exec, ctx.task_ctx()).await?;
-            let actual =
-                arrow::compute::concat_batches(&offset_batches[0].schema(), &offset_batches)?;
+            let actual = arrow::compute::concat_batches(
+                &offset_batches[0].schema(),
+                &offset_batches,
+            )?;
 
             assert_eq!(actual.num_rows(), 3);
             assert_eq!(batches_to_string(&[expected]), batches_to_string(&[actual]));
