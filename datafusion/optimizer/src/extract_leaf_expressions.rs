@@ -3601,4 +3601,34 @@ mod tests {
 
         Ok(())
     }
+
+    /// `passthrough_column` tells `split_and_push_projection` which projection
+    /// expressions the input already produces. A renaming alias (`test.a AS b`)
+    /// does not qualify: it is a new output column. If the function accepted
+    /// it, the rename would count as captured, and the recovery projection
+    /// that restores the name would be dropped.
+    #[test]
+    fn test_passthrough_column_rejects_renaming_alias() {
+        // A bare column is a pass-through.
+        let bare = Expr::Column(Column::new(Some("test"), "a"));
+        assert_eq!(
+            passthrough_column(&bare).map(|c| c.flat_name()),
+            Some("test.a".to_string())
+        );
+
+        // `test.a AS a` keeps the name, so it is a pass-through.
+        let trivial_rename = Expr::Column(Column::new(Some("test"), "a")).alias("a");
+        assert_eq!(
+            passthrough_column(&trivial_rename).map(|c| c.flat_name()),
+            Some("test.a".to_string())
+        );
+
+        // `test.a AS b` changes the name, so it is not a pass-through.
+        let renaming = Expr::Column(Column::new(Some("test"), "a")).alias("b");
+        assert_eq!(passthrough_column(&renaming), None);
+
+        // An alias over anything other than a column is not a pass-through.
+        let not_a_column = lit(1).alias("a");
+        assert_eq!(passthrough_column(&not_a_column), None);
+    }
 }
