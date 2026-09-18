@@ -229,10 +229,10 @@ query TT
 EXPLAIN SELECT * FROM t_int WHERE column1 IN ('5', '325');
 ----
 logical_plan
-01)Filter: t_int.column1 = Int64(5) OR t_int.column1 = Int64(325)
+01)Filter: t_int.column1 IN ([Int64(5), Int64(325)])
 02)--TableScan: t_int projection=[column1]
 physical_plan
-01)FilterExec: column1@0 = 5 OR column1@0 = 325
+01)FilterExec: column1@0 IN (SET) ([5, 325])
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Error on invalid string in IN list
