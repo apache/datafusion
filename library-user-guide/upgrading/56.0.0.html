@@ -851,6 +851,48 @@ ancestor.</p>
 <p>Callers that only need the previous behaviour can keep using the deprecated
 form, or pass a freshly constructed <code class="docutils literal notranslate"><span class="pre">StatisticsContext</span></code> per call.</p>
 </section>
+<section id="mergeintoop-requires-the-sql-visible-target-qualifier">
+<h3><code class="docutils literal notranslate"><span class="pre">MergeIntoOp</span></code> requires the SQL-visible target qualifier<a class="headerlink" href="#mergeintoop-requires-the-sql-visible-target-qualifier" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">MergeIntoOp</span></code> now stores the SQL-visible target qualifier separately from the
+target provider identity. This prevents an aliased target from being confused
+with a source relation that uses the target table’s name.</p>
+<p>The struct is now non-exhaustive. Replace 55.0 struct literals with
+<code class="docutils literal notranslate"><span class="pre">MergeIntoOp::new</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// DataFusion 55.0</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">op</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">MergeIntoOp</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">on</span><span class="p">,</span><span class="w"> </span><span class="n">clauses</span><span class="w"> </span><span class="p">};</span>
+
+<span class="c1">// DataFusion 56.0</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">op</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">MergeIntoOp</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">target_qualifier</span><span class="p">,</span><span class="w"> </span><span class="n">on</span><span class="p">,</span><span class="w"> </span><span class="n">clauses</span><span class="p">);</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">target_qualifier</span></code> must be the relation name referenced by the MERGE expressions:
+the target alias when one is present, otherwise the target table reference.
+<code class="docutils literal notranslate"><span class="pre">DmlStatement::table_name</span></code> remains the provider/catalog identity.</p>
+</section>
+<section id="mergeintoopnode-protobuf-literals-require-target-qualifier">
+<h3><code class="docutils literal notranslate"><span class="pre">MergeIntoOpNode</span></code> protobuf literals require <code class="docutils literal notranslate"><span class="pre">target_qualifier</span></code><a class="headerlink" href="#mergeintoopnode-protobuf-literals-require-target-qualifier" title="Link to this heading">#</a></h3>
+<p>The generated <code class="docutils literal notranslate"><span class="pre">MergeIntoOpNode</span></code> type has a new optional field. Code constructing
+the generated type with a struct literal must provide it:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// DataFusion 55.0</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">node</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">protobuf</span><span class="p">::</span><span class="n">MergeIntoOpNode</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">on</span><span class="p">,</span><span class="w"> </span><span class="n">clauses</span><span class="w"> </span><span class="p">};</span>
+
+<span class="c1">// DataFusion 56.0</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">node</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">protobuf</span><span class="p">::</span><span class="n">MergeIntoOpNode</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">on</span><span class="p">,</span>
+<span class="w">    </span><span class="n">clauses</span><span class="p">,</span>
+<span class="w">    </span><span class="n">target_qualifier</span><span class="p">:</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">protobuf</span><span class="p">::</span><span class="n">TableReference</span><span class="p">::</span><span class="n">from</span><span class="p">(</span><span class="n">target_qualifier</span><span class="p">)),</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>Wire compatibility is directional:</p>
+<ul class="simple">
+<li><p>A 56.0 reader accepts a 55.0 payload. When <code class="docutils literal notranslate"><span class="pre">target_qualifier</span></code> is absent, it
+falls back to <code class="docutils literal notranslate"><span class="pre">DmlNode.table_name</span></code>, matching the 55.0 representation.</p></li>
+<li><p>A 55.0 reader must not consume an alias-preserving 56.0 MERGE payload. It
+ignores the unknown field but cannot preserve the qualifier required by the
+expressions, which can cause resolution failure or incorrect rebinding.</p></li>
+</ul>
+</section>
 </section>
 </section>
 
@@ -919,6 +961,8 @@ form, or pass a freshly constructed <code class="docutils literal notranslate"><
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physical-filter-pushdown-resolves-columns-by-position">Physical filter pushdown resolves columns by position</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#default-datafusion-sql-parser-recursion-limit-raised-from-50-to-51">Default <code class="docutils literal notranslate"><span class="pre">datafusion.sql_parser.recursion_limit</span></code> raised from 50 to 51</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ensure-distribution-is-deprecated-in-favour-of-ensure-distribution-with-stats"><code class="docutils literal notranslate"><span class="pre">ensure_distribution</span></code> is deprecated in favour of <code class="docutils literal notranslate"><span class="pre">ensure_distribution_with_stats</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#mergeintoop-requires-the-sql-visible-target-qualifier"><code class="docutils literal notranslate"><span class="pre">MergeIntoOp</span></code> requires the SQL-visible target qualifier</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#mergeintoopnode-protobuf-literals-require-target-qualifier"><code class="docutils literal notranslate"><span class="pre">MergeIntoOpNode</span></code> protobuf literals require <code class="docutils literal notranslate"><span class="pre">target_qualifier</span></code></a></li>
 </ul>
 </li>
 </ul>
