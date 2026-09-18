@@ -611,10 +611,15 @@ fn evaluate_with_range_value(
 /// f(predecessor(xᵢ)) < f(xᵢ)
 /// ```
 ///
-/// at every split proves all partition images are disjoint. Descending ranges
-/// use the mirrored check with `successor(xᵢ)`, because their open side lies
-/// above the split. Null preservation is also required so the transform cannot
-/// introduce a null group outside the source partition selected by null order.
+/// at every split proves all partition images are disjoint. The successor of
+/// an ascending split is already in the same partition as `xᵢ`, so checking it
+/// would not say anything about groups crossing that split.
+///
+/// Descending ranges use the mirrored check with `successor(xᵢ)`, because their
+/// open side lies above the split; there, the predecessor is already in the
+/// same partition as `xᵢ`. Null preservation is also required so the transform
+/// cannot introduce a null group outside the source partition selected by null
+/// order.
 fn range_transform_keeps_groups_local(
     function: &Arc<dyn PhysicalExpr>,
     range_key: &Arc<dyn PhysicalExpr>,
