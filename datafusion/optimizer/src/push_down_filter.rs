@@ -56,6 +56,7 @@ use datafusion_expr::{
 
 use crate::extract_leaf_expressions::is_pure_extraction_projection;
 use crate::optimizer::ApplyOrder;
+use crate::projection_inliner::{DuplicationCost, ProjectionInliner};
 use crate::simplify_expressions::{reorder_predicates, simplify_predicates};
 use crate::utils::{
     ColumnReference, has_all_column_refs, is_restrict_null_predicate, schema_columns,
@@ -1544,33 +1545,36 @@ fn rewrite_projection(
         ));
     }
 
-    // Partition projection expressions into non-pushable vs pushable.
-    // Non-pushable expressions are volatile (must not be duplicated) or
-    // MoveTowardsLeafNodes (cheap expressions like get_field where re-inlining
-    // into a filter causes optimizer instability — ExtractLeafExpressions will
-    // undo the push-down, creating an infinite loop that runs until the
-    // iteration limit is hit).
-    //
-    // Keyed by the output column rather than its flat name, for the reason
-    // given on `replace_cols_by_column`. `EliminateGroupByConstant` can leave a
-    // projection that outputs both `t.a` and `CAST(t.a AS ...)` under that one
-    // name.
-    let (non_pushable_map, pushable_map): (HashMap<_, _>, HashMap<_, _>) = projection
-        .schema
-        .iter()
-        .zip(projection.expr.iter())
-        .map(|((qualifier, field), expr)| {
-            (Column::new(qualifier.cloned(), field.name()), unalias(expr))
-        })
-        .partition(|(_, value)| {
-            value.is_volatile()
-                || value.placement() == ExpressionPlacement::MoveTowardsLeafNodes
-        });
+    let inliner = ProjectionInliner::new(&projection);
 
+    // A predicate is kept above the projection when it references:
+    // - a volatile definition. The projection still computes it, so a second
+    //   evaluation below would see a different value.
+    // - an expensive definition that the predicates reference more than one
+    //   time. Pushing would evaluate it more than one time, and
+    //   `CommonSubexprEliminate` would create a projection for it again below
+    //   the filter, so the two rules would never converge (issue #25329). A
+    //   single reference is pushed: if the columns above still use the
+    //   definition, that is the usual cost of a filter push-down.
+    // - a `MoveTowardsLeafNodes` definition (a cheap expression like
+    //   `get_field`). Re-inlining such an expression into a filter causes
+    //   optimizer instability: `ExtractLeafExpressions` undoes the push-down,
+    //   which creates a loop that runs until the iteration limit is hit.
+    let no_other_consumers: [&Expr; 0] = [];
+    let pinned = inliner.pinned_for_known_consumers(
+        &predicates,
+        no_other_consumers,
+        DuplicationCost::Cheap,
+    );
     let mut push_predicates = vec![];
     let mut keep_predicates = vec![];
     for expr in predicates {
-        if contains_column(&expr, &non_pushable_map) {
+        let references_leaf_expr = expr.column_refs().into_iter().any(|col| {
+            inliner.definition(col).is_some_and(|definition| {
+                definition.placement() == ExpressionPlacement::MoveTowardsLeafNodes
+            })
+        });
+        if references_leaf_expr || inliner.references_pinned(&expr, &pinned) {
             keep_predicates.push(expr);
         } else {
             push_predicates.push(expr);
@@ -1581,7 +1585,7 @@ fn rewrite_projection(
         // re-write all filters based on this projection
         // E.g. in `Filter: b\n  Projection: a > 1 as b`, we can swap them, but the filter must be "a > 1"
         projection.input = Arc::new(LogicalPlan::Filter(Filter::new(
-            replace_cols_by_column(expr, &pushable_map)?,
+            inliner.substitute(expr)?,
             projection.input,
         )));
 
@@ -1670,12 +1674,6 @@ fn unalias(expr: &Expr) -> &Expr {
     } else {
         expr
     }
-}
-
-/// check whether the expression uses the columns in `check_map`.
-fn contains_column<T>(e: &Expr, check_map: &HashMap<Column, T>) -> bool {
-    e.exists(|expr| Ok(matches!(expr, Expr::Column(c) if check_map.contains_key(c))))
-        .unwrap()
 }
 
 fn with_filters(predicates: Vec<Expr>, plan: LogicalPlan) -> LogicalPlan {
@@ -1767,7 +1765,7 @@ mod tests {
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::optimizer::Optimizer;
     use crate::simplify_expressions::SimplifyExpressions;
-    use crate::test::udfs::leaf_udf_expr;
+    use crate::test::udfs::{PlacementTestUDF, get_field_like, leaf_udf_expr};
     use crate::test::*;
     use datafusion_expr::test::function_stub::{count, sum};
     use insta::assert_snapshot;
@@ -4956,6 +4954,90 @@ mod tests {
         Projection: leaf_udf(test.a) AS __datafusion_extracted_1, test.b + Int64(1) AS b_plus, test.c
           TableScan: test, full_filters=[test.c > Int64(5)]
         "
+        )
+    }
+
+    fn keep_in_place_udf(arg: Expr) -> Expr {
+        ScalarUDF::new_from_impl(
+            PlacementTestUDF::new().with_placement(ExpressionPlacement::KeepInPlace),
+        )
+        .call(vec![arg])
+    }
+
+    /// Issue #25329: `CommonSubexprEliminate` computes `c1` one time for
+    /// predicates that reference it twice. Pushing the predicates would compute
+    /// it twice, and CSE would then create the projection again below the
+    /// filter, so the two rules never converge.
+    #[test]
+    fn filter_with_repeated_expensive_reference_not_pushed_through_projection()
+    -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![keep_in_place_udf(col("a")).alias("c1"), col("b")])?
+            .filter(
+                col("c1")
+                    .is_not_null()
+                    .and(get_field_like(col("c1"), "x").is_null())
+                    .and(col("b").gt(lit(1))),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r#"
+        Filter: c1 IS NOT NULL AND get_field_like(c1, Utf8("x")) IS NULL
+          Projection: keep_in_place_udf(test.a) AS c1, test.b
+            TableScan: test, full_filters=[test.b > Int32(1)]
+        "#
+        )
+    }
+
+    /// A single reference to an expensive definition is pushed, like any
+    /// other computed column of a projection.
+    #[test]
+    fn filter_with_single_expensive_reference_pushed_through_projection() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![keep_in_place_udf(col("a")).alias("c1"), col("b")])?
+            .filter(col("c1").is_not_null())?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: keep_in_place_udf(test.a) AS c1, test.b
+          TableScan: test, full_filters=[keep_in_place_udf(test.a) IS NOT NULL]
+        "
+        )
+    }
+
+    /// The shape of draft https://github.com/apache/datafusion/pull/25388:
+    /// a filter over a projection that reads an expensive column of the
+    /// projection below it. The narrow policy pushes `c1 IS NOT NULL`,
+    /// because the predicates reference `c1` one time. `c2 IS NULL` stays
+    /// above, because `c2` is a `MoveTowardsLeafNodes` definition.
+    #[test]
+    fn filter_not_pushed_through_nested_computed_projection() -> Result<()> {
+        let inner = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![keep_in_place_udf(col("a")).alias("c1"), col("b")])?
+            .build()?;
+        let outer = LogicalPlanBuilder::from(inner)
+            .project(vec![
+                get_field_like(col("c1"), "x").alias("c2"),
+                col("c1"),
+                col("b"),
+            ])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(outer)
+            .filter(col("c1").is_not_null().and(col("c2").is_null()))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r#"
+        Filter: c2 IS NULL
+          Projection: get_field_like(c1, Utf8("x")) AS c2, c1, test.b
+            Projection: keep_in_place_udf(test.a) AS c1, test.b
+              TableScan: test, full_filters=[keep_in_place_udf(test.a) IS NOT NULL]
+        "#
         )
     }
 
