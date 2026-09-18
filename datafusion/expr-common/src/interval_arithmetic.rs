@@ -1261,9 +1261,11 @@ pub fn checked_successor(value: &ScalarValue) -> Option<ScalarValue> {
 }
 
 fn is_finite_non_null(value: &ScalarValue) -> bool {
-    !value.is_null()
-        && !matches!(value, ScalarValue::Float32(Some(v)) if !v.is_finite())
-        && !matches!(value, ScalarValue::Float64(Some(v)) if !v.is_finite())
+    match value {
+        ScalarValue::Float32(Some(value)) => value.is_finite(),
+        ScalarValue::Float64(Some(value)) => value.is_finite(),
+        _ => !value.is_null(),
+    }
 }
 
 trait OneTrait: Sized + std::ops::Add + std::ops::Sub {
