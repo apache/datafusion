@@ -16,6 +16,28 @@
 // under the License.
 
 //! [`PushDownFilter`] applies filters as early as possible
+//!
+//! # Precedence: pure extraction projections win
+//!
+//! [`PushDownLeafProjections`] moves a *pure extraction projection* towards the
+//! leaves. Such a projection has only `__datafusion_extracted_N` aliases and
+//! pass-through columns. [`PushDownFilter`] moves filters towards the leaves
+//! too. For an adjacent filter and pure extraction projection the two rules
+//! want the opposite order, so they undo each other on every optimizer pass.
+//!
+//! **Invariant: `PushDownFilter` yields to a pure extraction projection.** A
+//! filter is never moved below such a projection. The extraction projection
+//! stays at the bottom of the plan, next to the scan, and the filter stays
+//! above it.
+//!
+//! The reason is that the extraction projection is the node a source absorbs.
+//! A Parquet scan merges it into the file projection and reads only the struct
+//! leaf, which is what the rule exists for. Keeping the filter one node higher
+//! costs nothing at the scan, because `PushDownFilter` records the predicate in
+//! [`TableScan::filters`](datafusion_expr::logical_plan::TableScan) in the pass
+//! that runs before the extraction projection exists.
+//!
+//! [`PushDownLeafProjections`]: crate::extract_leaf_expressions::PushDownLeafProjections
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -44,6 +66,7 @@ use datafusion_expr::{
     TableProviderFilterPushDown, and, or,
 };
 
+use crate::extract_leaf_expressions::is_pure_extraction_projection;
 use crate::optimizer::ApplyOrder;
 use crate::simplify_expressions::{reorder_predicates, simplify_predicates};
 use crate::utils::{
@@ -1322,6 +1345,27 @@ fn rewrite_projection(
     predicates: Vec<Expr>,
     mut projection: Projection,
 ) -> Result<(Transformed<LogicalPlan>, Vec<Expr>)> {
+    // Precedence rule: a filter never moves below a pure extraction projection.
+    //
+    // `PushDownLeafProjections` moves such a projection below an adjacent
+    // filter, so a filter that moved below it is put back above it in the same
+    // optimizer pass. The two rules then undo each other on every pass until
+    // the pass limit stops them, and the surviving plan is decided by rule
+    // order alone. `PushDownFilter` yields here, because the extraction
+    // projection is the node the source absorbs: leaving it at the bottom keeps
+    // Parquet struct field pruning, and a filter kept one node higher still
+    // reaches the scan through `TableScan::filters`, which the pass that
+    // created the extraction projection has already set.
+    //
+    // See the module documentation of `extract_leaf_expressions` for the
+    // full statement of the invariant.
+    if is_pure_extraction_projection(&projection.expr) {
+        return Ok((
+            Transformed::no(LogicalPlan::Projection(projection)),
+            predicates,
+        ));
+    }
+
     // Partition projection expressions into non-pushable vs pushable.
     // Non-pushable expressions are volatile (must not be duplicated) or
     // MoveTowardsLeafNodes (cheap expressions like get_field where re-inlining
