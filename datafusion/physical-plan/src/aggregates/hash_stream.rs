@@ -609,7 +609,7 @@ impl PartialHashAggregateStream {
             .reservation
             .try_resize(hash_table_mem_size + remaining_groups_memory)
         {
-            Ok(_) => {
+            Ok(()) => {
                 // Continue with slicing
             }
             Err(DataFusionError::ResourcesExhausted(_)) => {
