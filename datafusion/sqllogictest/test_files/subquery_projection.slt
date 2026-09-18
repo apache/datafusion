@@ -141,7 +141,7 @@ query TT
 EXPLAIN SELECT id, id IN (SELECT n2.id FROM n2 WHERE n2.z < n1.z) AS m FROM n1;
 ----
 logical_plan
-01)Projection: n1.id, __correlated_sq_1.mark IS NOT DISTINCT FROM Boolean(true) OR (__correlated_sq_2.mark OR n1.id IS NULL AND __correlated_sq_3.mark) IS NOT DISTINCT FROM Boolean(true) AND __correlated_sq_1.mark IS DISTINCT FROM Boolean(true) AND Boolean(NULL) AS m
+01)Projection: n1.id, CASE WHEN __correlated_sq_1.mark THEN Boolean(true) WHEN __correlated_sq_2.mark OR n1.id IS NULL AND __correlated_sq_3.mark THEN Boolean(NULL) ELSE Boolean(false) END AS m
 02)--LeftMark Join:  Filter: __correlated_sq_3.z < n1.z
 03)----LeftMark Join:  Filter: __correlated_sq_2.z < n1.z
 04)------LeftMark Join: n1.id = __correlated_sq_1.id Filter: __correlated_sq_1.z < n1.z
@@ -155,7 +155,7 @@ logical_plan
 12)----SubqueryAlias: __correlated_sq_3
 13)------TableScan: n2 projection=[z]
 physical_plan
-01)ProjectionExec: expr=[id@0 as id, mark@1 IS NOT DISTINCT FROM true OR (mark@2 OR id@0 IS NULL AND mark@3) IS NOT DISTINCT FROM true AND mark@1 IS DISTINCT FROM true AND NULL as m]
+01)ProjectionExec: expr=[id@0 as id, CASE WHEN mark@1 THEN true WHEN mark@2 OR id@0 IS NULL AND mark@3 THEN NULL ELSE false END as m]
 02)--NestedLoopJoinExec: join_type=RightMark, filter=z@1 < z@0, projection=[id@0, mark@2, mark@3, mark@4]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 04)----NestedLoopJoinExec: join_type=RightMark, filter=z@1 < z@0
