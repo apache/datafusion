@@ -1223,8 +1223,8 @@ mod tests {
     use arrow::datatypes::Int32Type;
     use arrow::{
         array::{
-            Array, ArrayRef, AsArray, FixedSizeListArray, Int32Array, ListArray,
-            create_array,
+            Array, ArrayRef, AsArray, FixedSizeListArray, Int32Array, LargeListArray,
+            ListArray, create_array,
         },
         buffer::OffsetBuffer,
         datatypes::{DataType, Field, Schema},
@@ -1760,6 +1760,20 @@ mod tests {
         let fsl: ArrayRef =
             Arc::new(FixedSizeListArray::new(field, 2, fsl_values, None).slice(1, 2));
         let result = invoke_array_has_any_scalar(fsl, vec![1, 22, 31]);
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(false), Some(true)]
+        );
+
+        // Sliced LargeList; 1 and 70 appear only in sliced-away rows.
+        let large = LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(10), None, Some(30)]),
+            Some(vec![Some(50), Some(60)]),
+            Some(vec![Some(70)]),
+        ]);
+        let large: ArrayRef = Arc::new(large.slice(1, 2));
+        let result = invoke_array_has_any_scalar(large, vec![1, 70, 60]);
         assert_eq!(
             result.as_boolean().iter().collect::<Vec<_>>(),
             vec![Some(false), Some(true)]
