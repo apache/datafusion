@@ -1241,29 +1241,29 @@ fn prev_value(value: ScalarValue) -> ScalarValue {
 /// Returns the previous distinct value, or `None` for nulls, non-finite
 /// floats, type minima, and types without a discrete predecessor.
 pub fn checked_predecessor(value: &ScalarValue) -> Option<ScalarValue> {
-    checked_adjacent(value, false)
+    if !is_finite_non_null(value) {
+        return None;
+    }
+
+    let predecessor = prev_value(value.clone());
+    (!predecessor.is_null() && predecessor != *value).then_some(predecessor)
 }
 
 /// Returns the next distinct value, or `None` for nulls, non-finite floats,
 /// type maxima, and types without a discrete successor.
 pub fn checked_successor(value: &ScalarValue) -> Option<ScalarValue> {
-    checked_adjacent(value, true)
-}
-
-fn checked_adjacent(value: &ScalarValue, successor: bool) -> Option<ScalarValue> {
-    if value.is_null()
-        || matches!(value, ScalarValue::Float32(Some(v)) if !v.is_finite())
-        || matches!(value, ScalarValue::Float64(Some(v)) if !v.is_finite())
-    {
+    if !is_finite_non_null(value) {
         return None;
     }
 
-    let adjacent = if successor {
-        next_value(value.clone())
-    } else {
-        prev_value(value.clone())
-    };
-    (!adjacent.is_null() && adjacent != *value).then_some(adjacent)
+    let successor = next_value(value.clone());
+    (!successor.is_null() && successor != *value).then_some(successor)
+}
+
+fn is_finite_non_null(value: &ScalarValue) -> bool {
+    !value.is_null()
+        && !matches!(value, ScalarValue::Float32(Some(v)) if !v.is_finite())
+        && !matches!(value, ScalarValue::Float64(Some(v)) if !v.is_finite())
 }
 
 trait OneTrait: Sized + std::ops::Add + std::ops::Sub {
