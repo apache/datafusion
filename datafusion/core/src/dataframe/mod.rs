@@ -51,12 +51,15 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::util::display::{ArrayFormatter, FormatOptions};
 use arrow_schema::FieldRef;
 use datafusion_common::config::{CsvOptions, JsonOptions};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     Column, DFSchema, DataFusionError, ParamValues, ScalarValue, SchemaError,
     TableReference, UnnestOptions, exec_err, internal_datafusion_err, not_impl_err,
     plan_datafusion_err, plan_err, unqualified_field_not_found,
 };
+use datafusion_expr::expr_rewriter::{normalize_col, normalize_cols};
 use datafusion_expr::select_expr::SelectExpr;
+use datafusion_expr::utils::{columnize_expr, find_aggregate_exprs};
 use datafusion_expr::{
     ExplainOption, ScalarUDF, SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE, case,
     dml::InsertOp, is_null, lit, utils::COUNT_STAR_EXPANSION,
@@ -249,6 +252,133 @@ pub struct DataFrame {
     projection_requires_validation: bool,
 }
 
+/// True when `select()` should insert a global `Aggregate` before projecting.
+///
+/// Requires a pure aggregate list (no wildcards or input columns outside
+/// aggregate calls). Aggregates that already columnize onto `plan` (for
+/// example after [`DataFrame::aggregate`]) stay on the projection path.
+fn should_apply_global_aggregate(
+    expr_list: &[SelectExpr],
+    plan: &LogicalPlan,
+) -> Result<bool> {
+    let mut remaining_aggs = false;
+    for expr in expr_list {
+        match expr {
+            SelectExpr::Wildcard(_) | SelectExpr::QualifiedWildcard(_, _) => {
+                return Ok(false);
+            }
+            SelectExpr::Expression(expr) => {
+                if has_column_outside_aggregate(expr) {
+                    return Ok(false);
+                }
+                let columnized =
+                    columnize_expr(normalize_col(expr.clone(), plan)?, plan)?;
+                if !find_aggregate_exprs([&columnized]).is_empty() {
+                    remaining_aggs = true;
+                }
+            }
+        }
+    }
+    // False when every aggregate already columnizes onto `plan`.
+    Ok(remaining_aggs)
+}
+
+/// Alias each aggregate uniquely so the Aggregate schema has distinct names.
+///
+/// Returns the aliased aggregates and a map from the normalized original
+/// expression to the output column.
+fn alias_aggregate_exprs(
+    exprs: Vec<Expr>,
+    plan: &LogicalPlan,
+) -> Result<(Vec<Expr>, HashMap<Expr, Expr>)> {
+    let exprs = normalize_cols(exprs, plan)?;
+    let mut used = HashSet::new();
+    let mut rewrite_map = HashMap::new();
+    let mut aliased = Vec::with_capacity(exprs.len());
+    for expr in exprs {
+        if rewrite_map.contains_key(&expr) {
+            continue;
+        }
+        let base = expr.name_for_alias()?;
+        let mut name = base.clone();
+        let mut i = 1;
+        while !used.insert(name.clone()) {
+            name = format!("{base}_{i}");
+            i += 1;
+        }
+        rewrite_map.insert(expr.clone(), Expr::Column(Column::from_name(&name)));
+        aliased.push(expr.alias(name));
+    }
+    Ok((aliased, rewrite_map))
+}
+
+/// Replace aggregate subexpressions with columns produced by the Aggregate node.
+fn rewrite_select_aggs(
+    expr_list: Vec<SelectExpr>,
+    input: &LogicalPlan,
+    rewrite_map: &HashMap<Expr, Expr>,
+) -> Result<Vec<SelectExpr>> {
+    expr_list
+        .into_iter()
+        .map(|select_expr| match select_expr {
+            SelectExpr::Expression(expr) => {
+                let expr = normalize_col(expr, input)?;
+                let expr = expr
+                    .transform(|node| {
+                        Ok(match rewrite_map.get(&node) {
+                            Some(col) => Transformed::yes(col.clone()),
+                            None => Transformed::no(node),
+                        })
+                    })?
+                    .data;
+                Ok(SelectExpr::Expression(expr))
+            }
+            other => Ok(other),
+        })
+        .collect()
+}
+
+/// Give colliding select names a _1, _2, ... suffix so the projection is valid.
+fn uniquify_select_expr_names(expr_list: Vec<SelectExpr>) -> Result<Vec<SelectExpr>> {
+    let mut used = HashSet::new();
+    expr_list
+        .into_iter()
+        .map(|select_expr| match select_expr {
+            SelectExpr::Expression(expr) => {
+                let base = expr.name_for_alias()?;
+                let mut name = base.clone();
+                let mut i = 1;
+                while !used.insert(name.clone()) {
+                    name = format!("{base}_{i}");
+                    i += 1;
+                }
+                Ok(SelectExpr::Expression(if name == base {
+                    expr
+                } else {
+                    expr.alias(name)
+                }))
+            }
+            other => Ok(other),
+        })
+        .collect()
+}
+
+/// True if expr references an input column that is not inside an aggregate.
+fn has_column_outside_aggregate(expr: &Expr) -> bool {
+    let mut found = false;
+    let _ = expr.apply(|e| {
+        if matches!(e, Expr::AggregateFunction(_)) {
+            return Ok(TreeNodeRecursion::Jump);
+        }
+        if matches!(e, Expr::Column(_)) {
+            found = true;
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    });
+    found
+}
+
 impl DataFrame {
     /// Create a new `DataFrame ` based on an existing `LogicalPlan`
     ///
@@ -380,15 +510,19 @@ impl DataFrame {
         self.select(expr_list)
     }
 
-    /// Project arbitrary expressions (like SQL SELECT expressions) into a new
-    /// `DataFrame`.
+    /// Project expressions into a new [`DataFrame`], like SQL SELECT.
     ///
-    /// The output `DataFrame` has one column for each element in `expr_list`.
+    /// The output has one column for each element in expr_list.
+    ///
+    /// A list of only aggregates is treated as a global aggregation
+    /// ([`Self::aggregate`] with no group columns). To group, use
+    /// [`Self::aggregate`].
     ///
     /// # Example
     /// ```
     /// # use datafusion::prelude::*;
     /// # use datafusion::error::Result;
+    /// # use datafusion::functions_aggregate::expr_fn::{count, sum};
     /// # use datafusion_common::assert_batches_sorted_eq;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
@@ -396,7 +530,9 @@ impl DataFrame {
     /// let df = ctx
     ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
     ///     .await?;
-    /// let df = df.select(vec![col("a"), col("b") * col("c")])?;
+    ///
+    /// // Per-row projection
+    /// let res = df.clone().select(vec![col("a"), col("b") * col("c")])?;
     /// let expected = vec![
     ///     "+---+-----------------------+",
     ///     "| a | ?table?.b * ?table?.c |",
@@ -404,7 +540,21 @@ impl DataFrame {
     ///     "| 1 | 6                     |",
     ///     "+---+-----------------------+",
     /// ];
-    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # assert_batches_sorted_eq!(expected, &res.collect().await?);
+    ///
+    /// // Global aggregation (no GROUP BY) — same as aggregate(vec![], ...)
+    /// let res = df.select(vec![
+    ///     count(col("a")).alias("cnt"),
+    ///     sum(col("b")).alias("sum_b"),
+    /// ])?;
+    /// let expected = vec![
+    ///     "+-----+-------+",
+    ///     "| cnt | sum_b |",
+    ///     "+-----+-------+",
+    ///     "| 1   | 2     |",
+    ///     "+-----+-------+",
+    /// ];
+    /// # assert_batches_sorted_eq!(expected, &res.collect().await?);
     /// # Ok(())
     /// # }
     /// ```
@@ -412,21 +562,44 @@ impl DataFrame {
         self,
         expr_list: impl IntoIterator<Item = impl Into<SelectExpr>>,
     ) -> Result<DataFrame> {
-        let expr_list: Vec<SelectExpr> =
+        let mut expr_list: Vec<SelectExpr> =
             expr_list.into_iter().map(|e| e.into()).collect::<Vec<_>>();
 
-        let expressions = expr_list.iter().filter_map(|e| match e {
-            SelectExpr::Expression(expr) => Some(expr),
-            _ => None,
-        });
+        let expressions: Vec<&Expr> = expr_list
+            .iter()
+            .filter_map(|e| match e {
+                SelectExpr::Expression(expr) => Some(expr),
+                _ => None,
+            })
+            .collect();
 
-        let window_func_exprs = find_window_exprs(expressions);
-        let plan = if window_func_exprs.is_empty() {
-            self.plan
-        } else {
+        // 1. Windows (row-preserving)
+        let window_func_exprs = find_window_exprs(expressions.iter().copied());
+        let has_windows = !window_func_exprs.is_empty();
+        let mut plan = if has_windows {
             LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?
+        } else {
+            self.plan
         };
 
+        // 2. Global aggregate only (no GROUP BY). Mixed lists and
+        //    aggregate().select() reshapes stay on the projection path.
+        let aggr_exprs = find_aggregate_exprs(expressions.iter().copied());
+        if !aggr_exprs.is_empty()
+            && !has_windows
+            && should_apply_global_aggregate(&expr_list, &plan)?
+        {
+            let input = plan;
+            let (aggr_with_alias, rewrite_map) =
+                alias_aggregate_exprs(aggr_exprs, &input)?;
+            plan = LogicalPlanBuilder::from(input.clone())
+                .aggregate(Vec::<Expr>::new(), aggr_with_alias)?
+                .build()?;
+            expr_list = rewrite_select_aggs(expr_list, &input, &rewrite_map)?;
+            expr_list = uniquify_select_expr_names(expr_list)?;
+        }
+
+        // 3. Project — columnize_expr maps window/aggregate exprs to columns
         let project_plan = LogicalPlanBuilder::from(plan).project(expr_list)?.build()?;
 
         Ok(DataFrame {
