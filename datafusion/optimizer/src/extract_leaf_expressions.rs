@@ -1111,6 +1111,18 @@ fn split_and_push_projection(
     // `SubqueryAlias` re-qualification (`sub.__datafusion_extracted_1` vs
     // `__datafusion_extracted_1`) that a qualified/ordered comparison would
     // spuriously treat as drift, stacking redundant recovery projections.
+    //
+    // A name comparison alone is not sufficient. A name says nothing about the
+    // *value* behind it. Take the projection
+    // `(- t.a) AS a, t.s, get_field(t.s, "b") AS __datafusion_extracted_1`. When
+    // the extraction goes below it, the pushed plan keeps every name, but it
+    // exposes the table column `t.a` where the projection computed `- t.a`. If
+    // the recovery projection goes away, the computed column becomes its own
+    // input column and the query gives wrong results. See
+    // <https://github.com/apache/datafusion/issues/25414>.
+    //
+    // So the recovery projection also stays when a recovery expression computes
+    // a value, that is, when it is not a pass-through of a column.
     let base_names: BTreeSet<&str> = base_plan
         .schema()
         .fields()
@@ -1122,7 +1134,10 @@ fn split_and_push_projection(
         .iter()
         .map(|f| f.name().as_str())
         .collect();
-    let needs_recovery = base_names != original_names;
+    let computes_a_value = recovery_exprs
+        .iter()
+        .any(|expr| passthrough_column(expr).is_none());
+    let needs_recovery = base_names != original_names || computes_a_value;
 
     // Wrap with recovery projection if the output schema changed
     if needs_recovery {
@@ -3599,6 +3614,45 @@ mod tests {
             TableScan: test projection=[c]
         "#);
 
+        Ok(())
+    }
+
+    /// Regression test for <https://github.com/apache/datafusion/issues/25414>.
+    ///
+    /// `(- test.id) AS id` computes a new value under the same name as its input
+    /// column `test.id`. Pushing the extraction below that projection makes
+    /// `test.id` visible again under the name `id`. The recovery projection must
+    /// stay, or the computed column is silently replaced by the table column.
+    ///
+    /// The two leaf rules run alone here, in their production order.
+    /// `optimize_projections` merges the two projections into one and hides the
+    /// shape, and it only runs after both leaf rules.
+    #[test]
+    fn test_recovery_kept_for_same_name_computed_column() -> Result<()> {
+        let table_scan = test_table_scan_with_struct()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("id").gt(lit(0u32)))?
+            .project(vec![
+                Expr::Negative(Box::new(col("id"))).alias("id"),
+                col("user"),
+            ])?
+            .project(vec![col("id"), leaf_udf(col("user"), "name")])?
+            .build()?;
+
+        let ctx = OptimizerContext::new().with_max_passes(1);
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(ExtractLeafExpressions::new()),
+            Arc::new(PushDownLeafProjections::new()),
+        ]);
+        let optimized = optimizer.optimize(plan, &ctx, |_, _| {})?;
+
+        insta::assert_snapshot!(format!("{optimized}"), @r#"
+        Projection: id, __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("name"))
+          Projection: (- test.id) AS id, test.user, __datafusion_extracted_1
+            Filter: test.id > UInt32(0)
+              Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.id, test.user
+                TableScan: test
+        "#);
         Ok(())
     }
 }
