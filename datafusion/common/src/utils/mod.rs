@@ -1422,7 +1422,7 @@ fn fsl_values_row_number(list_size: i32, array_len: usize) -> Result<Int32Array>
 /// OR-reduction) decides whether to fall through to the rewriting path.
 /// Only arrays that actually contain `-0.0` pay for a new buffer.
 pub fn normalize_float_zero(array: &ArrayRef) -> ArrayRef {
-    use arrow::array::{Float16Array, Float32Array, Float64Array};
+    use arrow::array::{Float16Array, Float32Array, Float64Array, make_array};
     use arrow::datatypes::{Float16Type, Float32Type, Float64Type};
     // -0.0 has only the sign bit set; no other finite or NaN value shares
     // this bit pattern, so a strict-equality scan reliably gates the rewrite.
@@ -1474,7 +1474,47 @@ pub fn normalize_float_zero(array: &ArrayRef) -> ArrayRef {
             });
             Arc::new(normalized)
         }
+        dt if has_float_leaf(dt) => {
+            let data = array.to_data();
+            let children = data
+                .child_data()
+                .iter()
+                .map(|child| normalize_float_zero(&make_array(child.clone())).to_data())
+                .collect::<Vec<_>>();
+            if children
+                .iter()
+                .zip(data.child_data())
+                .all(|(new, old)| new.ptr_eq(old))
+            {
+                return Arc::clone(array);
+            }
+            make_array(
+                data.into_builder()
+                    .child_data(children)
+                    .build()
+                    .expect("rewriting float leaves preserves the array layout"),
+            )
+        }
         _ => Arc::clone(array),
+    }
+}
+
+pub fn has_float_leaf(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Float16 | DataType::Float32 | DataType::Float64 => true,
+        DataType::List(f)
+        | DataType::LargeList(f)
+        | DataType::ListView(f)
+        | DataType::LargeListView(f)
+        | DataType::FixedSizeList(f, _)
+        | DataType::Map(f, _)
+        | DataType::RunEndEncoded(_, f) => has_float_leaf(f.data_type()),
+        DataType::Struct(fields) => fields.iter().any(|f| has_float_leaf(f.data_type())),
+        DataType::Union(fields, _) => {
+            fields.iter().any(|(_, f)| has_float_leaf(f.data_type()))
+        }
+        DataType::Dictionary(_, values) => has_float_leaf(values),
+        _ => false,
     }
 }
 
