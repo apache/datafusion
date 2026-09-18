@@ -52,6 +52,7 @@ use crate::eliminate_group_by_constant::EliminateGroupByConstant;
 use crate::eliminate_join::EliminateJoin;
 use crate::eliminate_limit::EliminateLimit;
 use crate::eliminate_outer_join::EliminateOuterJoin;
+use crate::evaluation_sites::EvaluationSites;
 use crate::extract_equijoin_predicate::ExtractEquijoinPredicate;
 use crate::extract_leaf_expressions::{ExtractLeafExpressions, PushDownLeafProjections};
 use crate::filter_null_join_keys::FilterNullJoinKeys;
@@ -639,6 +640,8 @@ impl Optimizer {
                     .then(|| new_plan.clone());
 
                 let starting_schema = Arc::clone(new_plan.schema());
+                // Empty, and free, while `EvaluationSites` is switched off.
+                let starting_evaluation_sites = EvaluationSites::of(&new_plan);
 
                 let result = match rule.apply_order() {
                     // optimizer handles recursion
@@ -692,6 +695,11 @@ impl Optimizer {
                     #[cfg(debug_assertions)]
                     tnr.data.check_invariants(InvariantLevel::Executable)
                         .map_err(|e| e.context(format!("Invalid (non-executable) plan after Optimizer rule: {}", rule.name())))?;
+
+                    // verify invariant: a rule must not add evaluation sites of
+                    // volatile or expensive expressions. See `EvaluationSites`.
+                    starting_evaluation_sites.check_no_new_evaluations(&tnr.data)
+                        .map_err(|e| e.context(format!("Check optimizer-specific invariants after optimizer rule: {}", rule.name())))?;
 
                     Ok(tnr)
                 });
