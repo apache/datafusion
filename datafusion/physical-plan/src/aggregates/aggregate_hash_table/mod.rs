@@ -29,9 +29,10 @@ use std::sync::Arc;
 
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
-    GroupByMetrics,
+    GroupByMetrics, aggregate_sub_metrics,
 };
 use crate::aggregates::{AggregateExec, AggregateMode, aggregate_metric_label};
+use datafusion_expr::AggregateMetrics;
 
 pub(super) fn accumulator_phases(mode: &AggregateMode) -> &'static [AccumulatorPhase] {
     match mode {
@@ -63,6 +64,7 @@ pub(super) struct AggregateTableMetrics {
     pub(super) group_by: GroupByMetrics,
     pub(super) aggregate_arguments: AggregateArgumentMetrics,
     pub(super) accumulator: Arc<AggregateAccumulatorMetrics>,
+    pub(super) submetrics: Vec<Arc<dyn AggregateMetrics>>,
 }
 
 impl AggregateTableMetrics {
@@ -75,6 +77,11 @@ impl AggregateTableMetrics {
 
         Self {
             group_by: GroupByMetrics::new(&agg.metrics, partition),
+            submetrics: aggregate_sub_metrics(
+                &agg.metrics,
+                partition,
+                aggregate_labels.iter().cloned(),
+            ),
             aggregate_arguments: AggregateArgumentMetrics::new(
                 &agg.metrics,
                 partition,

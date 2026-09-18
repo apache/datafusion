@@ -112,6 +112,9 @@ parquet_row_filter_skip: Per-RG fully-matched RowFilter skip on Parquet (apache/
                           range filter + pushdown, so most row groups are fully matched and the per-row RowFilter is skipped on them
                           (subgroups via BENCH_SUBGROUP: skip = clustered key so the skip fires, control = scrambled key so it never fires)
                           (data generated inline by the suite's load SQL; knobs: PRED_ROWS, RG_SIZE)
+null_aware_join:        Null-aware (NOT IN) hash join micro-benchmarks: uncorrelated, non-equality-correlated and equality-correlated
+                          NOT IN across NULL fractions, to measure the per-pair join-filter work the correlated cases do
+                          (data generated inline by the suite's load SQL from range(); knobs: NAJ_ROWS, NAJ_LARGE_ROWS)
 
 # ClickBench Benchmarks
 clickbench_1:           ClickBench queries against a single parquet file
@@ -165,6 +168,7 @@ nlj:                    Benchmark for simple nested loop joins, testing various 
 hj:                     Benchmark for simple hash joins, testing various join scenarios
 smj:                    Benchmark for simple sort merge joins, testing various join scenarios
 dict:                   Benchmark for dictionary-encoded group-by scenarios
+array_agg_distinct:     1000K-group, two-row-per-group array_agg(DISTINCT) benchmark
 compile_profile:        Compile and execute TPC-H across selected Cargo profiles, reporting timing and binary size
 
 
@@ -270,6 +274,10 @@ main() {
                 parquet_row_filter_skip)
                     # Data is generated inline by the suite's load SQL (COPY).
                     echo "parquet_row_filter_skip: no external data to generate"
+                    ;;
+                null_aware_join)
+                    # Data is generated inline by the suite's load SQL from range().
+                    echo "null_aware_join: no external data to generate"
                     ;;
                 asof_join)
                     data_asof_join
@@ -490,6 +498,7 @@ main() {
                     run_tpcds
                     run_smj
                     run_dict 
+                    run_null_aware_join
                     ;;
                 tpch)
                     run_tpch "1" "parquet"
@@ -517,6 +526,9 @@ main() {
                     ;;
                 parquet_row_filter_skip)
                     run_parquet_row_filter_skip
+                    ;;
+                null_aware_join)
+                    run_null_aware_join
                     ;;
                 asof_join)
                     run_asof_join
@@ -659,6 +671,9 @@ main() {
                     ;;
                 dict)
                     run_dict
+                    ;;
+                array_agg_distinct)
+                    run_array_agg_distinct
                     ;;
                 compile_profile)
                     run_compile_profile "${PROFILE_ARGS[@]}"
@@ -929,6 +944,27 @@ run_parquet_row_filter_skip() {
       ${BENCH_SUBGROUP:+BENCH_SUBGROUP="${BENCH_SUBGROUP}"} \
       PRED_ROWS="${PRED_ROWS:-10000000}" \
       RG_SIZE="${RG_SIZE:-1000000}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Runs the null_aware_join suite: NOT IN (null-aware) hash joins. The load SQL
+# builds every table inline from range(), so there is no data step.
+#
+# Q01-Q03 are uncorrelated NOT IN and are linear in the table size; they are the
+# regression guard for the plain null-aware path. Q04-Q08 are correlated, where
+# the correlation predicate stays behind as a join filter that the join applies
+# per candidate (build row x probe row) pair while deciding which rows are
+# UNKNOWN; with no equality correlation there are no scope keys to narrow those
+# pairs, so Q05-Q07 scale with the NULL count times the opposite table's size.
+#
+#   NAJ_ROWS         rows per table for the correlated queries (default 10_000)
+#   NAJ_LARGE_ROWS   rows per table for the uncorrelated queries (default 1_000_000)
+run_null_aware_join() {
+    echo "Running null_aware_join benchmark (rows=${NAJ_ROWS:-10000}, large_rows=${NAJ_LARGE_ROWS:-1000000})..."
+    debug_run env BENCH_NAME=null_aware_join \
+      NAJ_ROWS="${NAJ_ROWS:-10000}" \
+      NAJ_LARGE_ROWS="${NAJ_LARGE_ROWS:-1000000}" \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
       bash -c "$SQL_CARGO_COMMAND"
 }
@@ -1717,6 +1753,14 @@ run_dict() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running dict benchmark..."
     debug_run $CARGO_COMMAND --bin dfbench -- dict --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the data-free high-cardinality array_agg(DISTINCT) SQL benchmark.
+run_array_agg_distinct() {
+    echo "Running array_agg_distinct benchmark..."
+    debug_run env BENCH_NAME=array_agg_distinct \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 
