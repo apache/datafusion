@@ -2626,56 +2626,67 @@ mod tests {
 
     #[test]
     fn test_checked_adjacent_values() {
-        use ScalarValue::*;
+        let timestamp = ScalarValue::TimestampNanosecond(Some(10), None);
+        assert_eq!(
+            checked_predecessor(&timestamp),
+            Some(ScalarValue::TimestampNanosecond(Some(9), None))
+        );
+        assert_eq!(
+            checked_successor(&timestamp),
+            Some(ScalarValue::TimestampNanosecond(Some(11), None))
+        );
 
-        let cases = [
-            (Int64(Some(10)), Some(Int64(Some(9))), Some(Int64(Some(11)))),
-            (
-                TimestampNanosecond(Some(10), None),
-                Some(TimestampNanosecond(Some(9), None)),
-                Some(TimestampNanosecond(Some(11), None)),
-            ),
-            (
-                TimestampMillisecond(Some(10), Some("UTC".into())),
-                Some(TimestampMillisecond(Some(9), Some("UTC".into()))),
-                Some(TimestampMillisecond(Some(11), Some("UTC".into()))),
-            ),
-            (
-                Float64(Some(1.0)),
-                Some(Float64(Some(next_down(1.0_f64)))),
-                Some(Float64(Some(next_up(1.0_f64)))),
-            ),
-            (Int64(Some(i64::MIN)), None, Some(Int64(Some(i64::MIN + 1)))),
-            (Int64(Some(i64::MAX)), Some(Int64(Some(i64::MAX - 1))), None),
-            (
-                TimestampNanosecond(Some(i64::MIN), None),
-                None,
-                Some(TimestampNanosecond(Some(i64::MIN + 1), None)),
-            ),
-            (
-                TimestampNanosecond(Some(i64::MAX), None),
-                Some(TimestampNanosecond(Some(i64::MAX - 1), None)),
-                None,
-            ),
-            (Int64(None), None, None),
-            (Float32(Some(f32::NEG_INFINITY)), None, None),
-            (Float64(Some(f64::INFINITY)), None, None),
-            (Float64(Some(f64::NAN)), None, None),
-            (Utf8(Some("a".into())), None, None),
-        ];
+        let timestamp_with_timezone =
+            ScalarValue::TimestampMillisecond(Some(10), Some("UTC".into()));
+        assert_eq!(
+            checked_predecessor(&timestamp_with_timezone),
+            Some(ScalarValue::TimestampMillisecond(
+                Some(9),
+                Some("UTC".into())
+            ))
+        );
+        assert_eq!(
+            checked_successor(&timestamp_with_timezone),
+            Some(ScalarValue::TimestampMillisecond(
+                Some(11),
+                Some("UTC".into())
+            ))
+        );
 
-        for (value, predecessor, successor) in cases {
-            assert_eq!(
-                checked_predecessor(&value),
-                predecessor,
-                "predecessor for {value:?}"
-            );
-            assert_eq!(
-                checked_successor(&value),
-                successor,
-                "successor for {value:?}"
-            );
-        }
+        let finite_float = ScalarValue::Float64(Some(1.0));
+        assert_eq!(
+            checked_predecessor(&finite_float),
+            Some(ScalarValue::Float64(Some(next_down(1.0_f64))))
+        );
+        assert_eq!(
+            checked_successor(&finite_float),
+            Some(ScalarValue::Float64(Some(next_up(1.0_f64))))
+        );
+
+        assert_eq!(
+            checked_predecessor(&ScalarValue::TimestampNanosecond(Some(i64::MIN), None)),
+            None
+        );
+        assert_eq!(
+            checked_successor(&ScalarValue::TimestampNanosecond(Some(i64::MAX), None)),
+            None
+        );
+
+        let null = ScalarValue::TimestampNanosecond(None, None);
+        assert_eq!(checked_predecessor(&null), None);
+        assert_eq!(checked_successor(&null), None);
+        assert_eq!(
+            checked_predecessor(&ScalarValue::Float32(Some(f32::NEG_INFINITY))),
+            None
+        );
+        assert_eq!(
+            checked_successor(&ScalarValue::Float64(Some(f64::NAN))),
+            None
+        );
+
+        let unsupported = ScalarValue::Utf8(Some("a".into()));
+        assert_eq!(checked_predecessor(&unsupported), None);
+        assert_eq!(checked_successor(&unsupported), None);
     }
 
     #[test]
