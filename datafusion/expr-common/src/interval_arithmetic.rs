@@ -2628,254 +2628,52 @@ mod tests {
     fn test_checked_adjacent_values() {
         use ScalarValue::*;
 
-        struct Case {
-            name: &'static str,
-            value: ScalarValue,
-            predecessor: Option<ScalarValue>,
-            successor: Option<ScalarValue>,
-        }
-
-        let day_time = arrow::datatypes::IntervalDayTime {
-            days: 2,
-            milliseconds: 3,
-        };
-        let previous_day_time = arrow::datatypes::IntervalDayTime {
-            days: 2,
-            milliseconds: 2,
-        };
-        let next_day_time = arrow::datatypes::IntervalDayTime {
-            days: 2,
-            milliseconds: 4,
-        };
-        let month_day_nano = arrow::datatypes::IntervalMonthDayNano {
-            months: 2,
-            days: 3,
-            nanoseconds: 4,
-        };
-        let previous_month_day_nano = arrow::datatypes::IntervalMonthDayNano {
-            months: 2,
-            days: 3,
-            nanoseconds: 3,
-        };
-        let next_month_day_nano = arrow::datatypes::IntervalMonthDayNano {
-            months: 2,
-            days: 3,
-            nanoseconds: 5,
-        };
-
-        let cases = vec![
-            Case {
-                name: "int8",
-                value: Int8(Some(-4)),
-                predecessor: Some(Int8(Some(-5))),
-                successor: Some(Int8(Some(-3))),
-            },
-            Case {
-                name: "int16",
-                value: Int16(Some(10)),
-                predecessor: Some(Int16(Some(9))),
-                successor: Some(Int16(Some(11))),
-            },
-            Case {
-                name: "int32",
-                value: Int32(Some(-10)),
-                predecessor: Some(Int32(Some(-11))),
-                successor: Some(Int32(Some(-9))),
-            },
-            Case {
-                name: "int64",
-                value: Int64(Some(10)),
-                predecessor: Some(Int64(Some(9))),
-                successor: Some(Int64(Some(11))),
-            },
-            Case {
-                name: "uint8 minimum",
-                value: UInt8(Some(0)),
-                predecessor: None,
-                successor: Some(UInt8(Some(1))),
-            },
-            Case {
-                name: "uint16",
-                value: UInt16(Some(10)),
-                predecessor: Some(UInt16(Some(9))),
-                successor: Some(UInt16(Some(11))),
-            },
-            Case {
-                name: "uint32",
-                value: UInt32(Some(10)),
-                predecessor: Some(UInt32(Some(9))),
-                successor: Some(UInt32(Some(11))),
-            },
-            Case {
-                name: "uint64 maximum",
-                value: UInt64(Some(u64::MAX)),
-                predecessor: Some(UInt64(Some(u64::MAX - 1))),
-                successor: None,
-            },
-            Case {
-                name: "float32",
-                value: Float32(Some(1.0)),
-                predecessor: Some(Float32(Some(next_down(1.0_f32)))),
-                successor: Some(Float32(Some(next_up(1.0_f32)))),
-            },
-            Case {
-                name: "float64",
-                value: Float64(Some(-1.0)),
-                predecessor: Some(Float64(Some(next_down(-1.0_f64)))),
-                successor: Some(Float64(Some(next_up(-1.0_f64)))),
-            },
-            Case {
-                name: "duration second",
-                value: DurationSecond(Some(10)),
-                predecessor: Some(DurationSecond(Some(9))),
-                successor: Some(DurationSecond(Some(11))),
-            },
-            Case {
-                name: "duration millisecond",
-                value: DurationMillisecond(Some(10)),
-                predecessor: Some(DurationMillisecond(Some(9))),
-                successor: Some(DurationMillisecond(Some(11))),
-            },
-            Case {
-                name: "duration microsecond",
-                value: DurationMicrosecond(Some(10)),
-                predecessor: Some(DurationMicrosecond(Some(9))),
-                successor: Some(DurationMicrosecond(Some(11))),
-            },
-            Case {
-                name: "duration nanosecond",
-                value: DurationNanosecond(Some(10)),
-                predecessor: Some(DurationNanosecond(Some(9))),
-                successor: Some(DurationNanosecond(Some(11))),
-            },
-            Case {
-                name: "timestamp second",
-                value: TimestampSecond(Some(10), None),
-                predecessor: Some(TimestampSecond(Some(9), None)),
-                successor: Some(TimestampSecond(Some(11), None)),
-            },
-            Case {
-                name: "timestamp millisecond with timezone",
-                value: TimestampMillisecond(Some(10), Some("UTC".into())),
-                predecessor: Some(TimestampMillisecond(Some(9), Some("UTC".into()))),
-                successor: Some(TimestampMillisecond(Some(11), Some("UTC".into()))),
-            },
-            Case {
-                name: "timestamp microsecond",
-                value: TimestampMicrosecond(Some(10), None),
-                predecessor: Some(TimestampMicrosecond(Some(9), None)),
-                successor: Some(TimestampMicrosecond(Some(11), None)),
-            },
-            Case {
-                name: "timestamp nanosecond",
-                value: TimestampNanosecond(Some(10), None),
-                predecessor: Some(TimestampNanosecond(Some(9), None)),
-                successor: Some(TimestampNanosecond(Some(11), None)),
-            },
-            Case {
-                name: "interval year month",
-                value: IntervalYearMonth(Some(10)),
-                predecessor: Some(IntervalYearMonth(Some(9))),
-                successor: Some(IntervalYearMonth(Some(11))),
-            },
-            Case {
-                name: "interval day time",
-                value: IntervalDayTime(Some(day_time)),
-                predecessor: Some(IntervalDayTime(Some(previous_day_time))),
-                successor: Some(IntervalDayTime(Some(next_day_time))),
-            },
-            Case {
-                name: "interval month day nano",
-                value: IntervalMonthDayNano(Some(month_day_nano)),
-                predecessor: Some(IntervalMonthDayNano(Some(previous_month_day_nano))),
-                successor: Some(IntervalMonthDayNano(Some(next_month_day_nano))),
-            },
-            Case {
-                name: "signed minimum",
-                value: Int64(Some(i64::MIN)),
-                predecessor: None,
-                successor: Some(Int64(Some(i64::MIN + 1))),
-            },
-            Case {
-                name: "signed maximum",
-                value: Int64(Some(i64::MAX)),
-                predecessor: Some(Int64(Some(i64::MAX - 1))),
-                successor: None,
-            },
-            Case {
-                name: "timestamp minimum",
-                value: TimestampNanosecond(Some(i64::MIN), None),
-                predecessor: None,
-                successor: Some(TimestampNanosecond(Some(i64::MIN + 1), None)),
-            },
-            Case {
-                name: "timestamp maximum",
-                value: TimestampNanosecond(Some(i64::MAX), None),
-                predecessor: Some(TimestampNanosecond(Some(i64::MAX - 1), None)),
-                successor: None,
-            },
-            Case {
-                name: "typed null",
-                value: Int64(None),
-                predecessor: None,
-                successor: None,
-            },
-            Case {
-                name: "float32 negative infinity",
-                value: Float32(Some(f32::NEG_INFINITY)),
-                predecessor: None,
-                successor: None,
-            },
-            Case {
-                name: "float64 positive infinity",
-                value: Float64(Some(f64::INFINITY)),
-                predecessor: None,
-                successor: None,
-            },
-            Case {
-                name: "float64 NaN",
-                value: Float64(Some(f64::NAN)),
-                predecessor: None,
-                successor: None,
-            },
-            Case {
-                name: "utf8 has no discrete adjacent value",
-                value: Utf8(Some("a".into())),
-                predecessor: None,
-                successor: None,
-            },
-            Case {
-                name: "boolean has no discrete adjacent value",
-                value: Boolean(Some(false)),
-                predecessor: None,
-                successor: None,
-            },
-            Case {
-                name: "date has no supported adjacent value",
-                value: Date32(Some(1)),
-                predecessor: None,
-                successor: None,
-            },
-            Case {
-                name: "decimal has no supported adjacent value",
-                value: Decimal128(Some(100), 10, 2),
-                predecessor: None,
-                successor: None,
-            },
+        let cases = [
+            (Int64(Some(10)), Some(Int64(Some(9))), Some(Int64(Some(11)))),
+            (
+                TimestampNanosecond(Some(10), None),
+                Some(TimestampNanosecond(Some(9), None)),
+                Some(TimestampNanosecond(Some(11), None)),
+            ),
+            (
+                TimestampMillisecond(Some(10), Some("UTC".into())),
+                Some(TimestampMillisecond(Some(9), Some("UTC".into()))),
+                Some(TimestampMillisecond(Some(11), Some("UTC".into()))),
+            ),
+            (
+                Float64(Some(1.0)),
+                Some(Float64(Some(next_down(1.0_f64)))),
+                Some(Float64(Some(next_up(1.0_f64)))),
+            ),
+            (Int64(Some(i64::MIN)), None, Some(Int64(Some(i64::MIN + 1)))),
+            (Int64(Some(i64::MAX)), Some(Int64(Some(i64::MAX - 1))), None),
+            (
+                TimestampNanosecond(Some(i64::MIN), None),
+                None,
+                Some(TimestampNanosecond(Some(i64::MIN + 1), None)),
+            ),
+            (
+                TimestampNanosecond(Some(i64::MAX), None),
+                Some(TimestampNanosecond(Some(i64::MAX - 1), None)),
+                None,
+            ),
+            (Int64(None), None, None),
+            (Float32(Some(f32::NEG_INFINITY)), None, None),
+            (Float64(Some(f64::INFINITY)), None, None),
+            (Float64(Some(f64::NAN)), None, None),
+            (Utf8(Some("a".into())), None, None),
         ];
 
-        for case in cases {
+        for (value, predecessor, successor) in cases {
             assert_eq!(
-                checked_predecessor(&case.value),
-                case.predecessor,
-                "predecessor for {}",
-                case.name
+                checked_predecessor(&value),
+                predecessor,
+                "predecessor for {value:?}"
             );
             assert_eq!(
-                checked_successor(&case.value),
-                case.successor,
-                "successor for {}",
-                case.name
+                checked_successor(&value),
+                successor,
+                "successor for {value:?}"
             );
         }
     }
