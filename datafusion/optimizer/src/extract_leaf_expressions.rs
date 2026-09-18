@@ -3617,4 +3617,42 @@ mod tests {
         Ok(())
     }
 
+    /// Regression test for <https://github.com/apache/datafusion/issues/25414>.
+    ///
+    /// `(- test.id) AS id` computes a new value under the same name as its input
+    /// column `test.id`. Pushing the extraction below that projection makes
+    /// `test.id` visible again under the name `id`. The recovery projection must
+    /// stay, or the computed column is silently replaced by the table column.
+    ///
+    /// The two leaf rules run alone here, in their production order.
+    /// `optimize_projections` merges the two projections into one and hides the
+    /// shape, and it only runs after both leaf rules.
+    #[test]
+    fn test_recovery_kept_for_same_name_computed_column() -> Result<()> {
+        let table_scan = test_table_scan_with_struct()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("id").gt(lit(0u32)))?
+            .project(vec![
+                Expr::Negative(Box::new(col("id"))).alias("id"),
+                col("user"),
+            ])?
+            .project(vec![col("id"), leaf_udf(col("user"), "name")])?
+            .build()?;
+
+        let ctx = OptimizerContext::new().with_max_passes(1);
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(ExtractLeafExpressions::new()),
+            Arc::new(PushDownLeafProjections::new()),
+        ]);
+        let optimized = optimizer.optimize(plan, &ctx, |_, _| {})?;
+
+        insta::assert_snapshot!(format!("{optimized}"), @r#"
+        Projection: id, __datafusion_extracted_1 AS leaf_udf(test.user,Utf8("name"))
+          Projection: (- test.id) AS id, test.user, __datafusion_extracted_1
+            Filter: test.id > UInt32(0)
+              Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.id, test.user
+                TableScan: test
+        "#);
+        Ok(())
+    }
 }
