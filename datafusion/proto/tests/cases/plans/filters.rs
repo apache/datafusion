@@ -22,7 +22,9 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::logical_expr::Operator;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::empty::EmptyExec;
-use datafusion::physical_plan::expressions::{NotExpr, binary, col, in_list, lit};
+use datafusion::physical_plan::expressions::{
+    NotExpr, between, binary, col, in_list, lit,
+};
 use datafusion::physical_plan::filter::{FilterExec, FilterExecBuilder};
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
@@ -54,6 +56,24 @@ fn roundtrip_filter_with_not_and_in_list() -> Result<()> {
         and,
         Arc::new(EmptyExec::new(schema.clone())),
     )?))
+}
+
+#[test]
+fn roundtrip_filter_with_between() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    for negated in [false, true] {
+        let predicate = between(
+            col("a", &schema)?,
+            negated,
+            lit(ScalarValue::Int64(Some(1))),
+            lit(ScalarValue::Int64(Some(5))),
+        );
+        roundtrip_test(Arc::new(FilterExec::try_new(
+            predicate,
+            Arc::new(EmptyExec::new(schema.clone())),
+        )?))?;
+    }
+    Ok(())
 }
 
 #[test]
