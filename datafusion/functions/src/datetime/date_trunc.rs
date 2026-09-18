@@ -907,7 +907,10 @@ mod tests {
     };
 
     use arrow::array::cast::as_primitive_array;
-    use arrow::array::types::{ArrowTimestampType, TimestampNanosecondType};
+    use arrow::array::types::{
+        ArrowTimestampType, TimestampMicrosecondType, TimestampMillisecondType,
+        TimestampNanosecondType, TimestampSecondType,
+    };
     use arrow::array::{
         Array, PrimitiveArray, TimestampMicrosecondArray, TimestampMillisecondArray,
         TimestampNanosecondArray, TimestampSecondArray,
@@ -915,9 +918,9 @@ mod tests {
     use arrow::buffer::NullBuffer;
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::compute::{DatePart, SortOptions};
-    use arrow::datatypes::{DataType, Field, TimeUnit};
-    use datafusion_common::ScalarValue;
+    use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
     use datafusion_common::config::ConfigOptions;
+    use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::interval_arithmetic::Interval;
     use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
@@ -960,6 +963,192 @@ mod tests {
             function.output_ordering(&[precision, unknown]).unwrap(),
             SortProperties::Unordered
         );
+    }
+
+    #[test]
+    fn supports_range_partitioning_analysis_for_timezone_less_timestamps() {
+        let function = DateTruncFunc::new();
+
+        for unit in [
+            TimeUnit::Second,
+            TimeUnit::Millisecond,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ] {
+            for string_type in [DataType::Utf8, DataType::Utf8View, DataType::LargeUtf8] {
+                assert!(function.supports_range_partitioning_analysis(&[
+                    string_type,
+                    DataType::Timestamp(unit, None),
+                ]));
+            }
+
+            for timezone in ["UTC", "+05:30", "America/Goose_Bay"] {
+                assert!(!function.supports_range_partitioning_analysis(&[
+                    DataType::Utf8,
+                    DataType::Timestamp(unit, Some(timezone.into())),
+                ]));
+            }
+        }
+
+        assert!(!function.supports_range_partitioning_analysis(&[
+            DataType::Utf8,
+            DataType::Time32(TimeUnit::Second),
+        ]));
+        assert!(!function.supports_range_partitioning_analysis(&[
+            DataType::Utf8,
+            DataType::Time64(TimeUnit::Nanosecond),
+        ]));
+        assert!(!function.supports_range_partitioning_analysis(&[DataType::Utf8,]));
+        assert!(!function.supports_range_partitioning_analysis(&[
+            DataType::Int64,
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        ]));
+    }
+
+    #[test]
+    fn date_bin_does_not_support_range_partitioning_analysis() {
+        assert!(
+            !crate::datetime::date_bin::DateBinFunc::new()
+                .supports_range_partitioning_analysis(&[
+                    DataType::Interval(IntervalUnit::MonthDayNano),
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                ])
+        );
+    }
+
+    fn invoke_date_trunc(
+        granularity: &str,
+        timestamp: ColumnarValue,
+        timestamp_type: DataType,
+        number_rows: usize,
+    ) -> Result<ColumnarValue> {
+        DateTruncFunc::new().invoke_with_args(ScalarFunctionArgs {
+            args: vec![ScalarValue::from(granularity).into(), timestamp],
+            arg_fields: vec![
+                Field::new("granularity", DataType::Utf8, false).into(),
+                Field::new("timestamp", timestamp_type.clone(), true).into(),
+            ],
+            number_rows,
+            return_field: Field::new("date_trunc", timestamp_type, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        })
+    }
+
+    fn assert_timezone_less_range_analysis_contract<T: ArrowTimestampType>() {
+        let scale = match T::UNIT {
+            TimeUnit::Second => 1_000_000_000,
+            TimeUnit::Millisecond => 1_000_000,
+            TimeUnit::Microsecond => 1_000,
+            TimeUnit::Nanosecond => 1,
+        };
+        // Probe both sides of calendar and fixed-width boundaries at the
+        // input's own resolution, including negative fractional timestamps.
+        let mut timestamps = [
+            "1900-03-01T00:00:00Z", // Non-leap century.
+            "1969-12-29T00:00:00Z", // Monday before the epoch.
+            "1970-01-01T00:00:00Z",
+            "1970-01-01T00:00:00.000001Z",
+            "1970-01-01T00:00:00.001Z",
+            "1970-01-01T00:00:01Z",
+            "1970-01-01T00:01:00Z",
+            "1970-01-01T01:00:00Z",
+            "2000-01-01T00:00:00Z",
+            "2000-02-29T00:00:00Z", // Leap century.
+            "2000-03-01T00:00:00Z",
+            "2000-04-01T00:00:00Z", // Quarter boundary.
+            "2024-01-01T00:00:00Z", // Monday and year boundary.
+        ]
+        .into_iter()
+        .flat_map(|value| {
+            let boundary = string_to_timestamp_nanos(value).unwrap() / scale;
+            [boundary - 1, boundary, boundary + 1]
+        })
+        .collect::<Vec<_>>();
+        // Stay inside the scalar nanosecond domain with room to truncate a
+        // full year at its lower edge; the upper edge needs no such margin.
+        timestamps.extend([
+            i64::MIN / scale + 366 * 86_400 * (1_000_000_000 / scale),
+            i64::MAX / scale,
+        ]);
+        timestamps.sort_unstable();
+        timestamps.dedup();
+        let values = timestamps
+            .into_iter()
+            .flat_map(|value| [Some(value), None])
+            .collect::<Vec<_>>();
+        let timestamp_type = DataType::Timestamp(T::UNIT, None);
+
+        for granularity in [
+            "microsecond",
+            "millisecond",
+            "second",
+            "minute",
+            "hour",
+            "day",
+            "week",
+            "month",
+            "quarter",
+            "year",
+        ] {
+            let input = PrimitiveArray::<T>::from_iter(values.iter().copied());
+            let output = invoke_date_trunc(
+                granularity,
+                ColumnarValue::Array(Arc::new(input.clone())),
+                timestamp_type.clone(),
+                input.len(),
+            )
+            .unwrap();
+            let ColumnarValue::Array(output) = output else {
+                panic!("expected array output")
+            };
+            let output = as_primitive_array::<T>(&output);
+
+            assert_eq!(
+                input.nulls(),
+                output.nulls(),
+                "{granularity} must preserve nullness for {:?}",
+                T::UNIT
+            );
+
+            let mut previous = None;
+            for value in output.iter().flatten() {
+                if let Some(previous) = previous {
+                    assert!(
+                        previous <= value,
+                        "{granularity} must be nondecreasing for {:?}",
+                        T::UNIT
+                    );
+                }
+                previous = Some(value);
+            }
+
+            for (index, value) in values.iter().enumerate() {
+                let scalar_output = invoke_date_trunc(
+                    granularity,
+                    ColumnarValue::Scalar(ScalarValue::new_timestamp::<T>(*value, None)),
+                    timestamp_type.clone(),
+                    1,
+                )
+                .unwrap();
+                let ColumnarValue::Scalar(scalar_output) = scalar_output else {
+                    panic!("expected scalar output")
+                };
+                assert_eq!(
+                    scalar_output,
+                    ScalarValue::try_from_array(output, index).unwrap(),
+                    "scalar and array evaluation must agree for {granularity} {:?}",
+                    T::UNIT
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn timezone_less_timestamps_satisfy_range_analysis_contract() {
+        assert_timezone_less_range_analysis_contract::<TimestampSecondType>();
+        assert_timezone_less_range_analysis_contract::<TimestampMillisecondType>();
+        assert_timezone_less_range_analysis_contract::<TimestampMicrosecondType>();
+        assert_timezone_less_range_analysis_contract::<TimestampNanosecondType>();
     }
 
     #[test]

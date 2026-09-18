@@ -1238,6 +1238,34 @@ fn prev_value(value: ScalarValue) -> ScalarValue {
     value_transition!(MIN, false, value)
 }
 
+/// Returns the previous distinct value, or `None` for nulls, non-finite
+/// floats, type minima, and types without a discrete predecessor.
+pub fn checked_predecessor(value: &ScalarValue) -> Option<ScalarValue> {
+    checked_adjacent(value, false)
+}
+
+/// Returns the next distinct value, or `None` for nulls, non-finite floats,
+/// type maxima, and types without a discrete successor.
+pub fn checked_successor(value: &ScalarValue) -> Option<ScalarValue> {
+    checked_adjacent(value, true)
+}
+
+fn checked_adjacent(value: &ScalarValue, successor: bool) -> Option<ScalarValue> {
+    if value.is_null()
+        || matches!(value, ScalarValue::Float32(Some(v)) if !v.is_finite())
+        || matches!(value, ScalarValue::Float64(Some(v)) if !v.is_finite())
+    {
+        return None;
+    }
+
+    let adjacent = if successor {
+        next_value(value.clone())
+    } else {
+        prev_value(value.clone())
+    };
+    (!adjacent.is_null() && adjacent != *value).then_some(adjacent)
+}
+
 trait OneTrait: Sized + std::ops::Add + std::ops::Sub {
     fn one() -> Self;
 }
@@ -2273,8 +2301,8 @@ impl NullableInterval {
 mod tests {
     use crate::{
         interval_arithmetic::{
-            Interval, cast_scalar_value, handle_overflow, next_value, prev_value,
-            satisfy_greater,
+            Interval, cast_scalar_value, checked_predecessor, checked_successor,
+            handle_overflow, next_value, prev_value, satisfy_greater,
         },
         operator::Operator,
     };
@@ -2592,6 +2620,36 @@ mod tests {
         });
 
         Ok(())
+    }
+
+    #[test]
+    fn test_checked_adjacent_values() {
+        assert_eq!(
+            checked_predecessor(&ScalarValue::Int64(Some(10))),
+            Some(ScalarValue::Int64(Some(9)))
+        );
+        assert_eq!(
+            checked_successor(&ScalarValue::Int64(Some(10))),
+            Some(ScalarValue::Int64(Some(11)))
+        );
+        assert_eq!(checked_predecessor(&ScalarValue::Int64(None)), None);
+        assert_eq!(
+            checked_predecessor(&ScalarValue::Int64(Some(i64::MIN))),
+            None
+        );
+        assert_eq!(checked_successor(&ScalarValue::Int64(Some(i64::MAX))), None);
+        assert_eq!(
+            checked_predecessor(&ScalarValue::Utf8(Some("a".into()))),
+            None
+        );
+        assert_eq!(
+            checked_successor(&ScalarValue::Float64(Some(f64::NAN))),
+            None
+        );
+        assert_eq!(
+            checked_predecessor(&ScalarValue::Float32(Some(f32::NEG_INFINITY))),
+            None
+        );
     }
 
     #[test]

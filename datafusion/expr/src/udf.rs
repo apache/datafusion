@@ -364,6 +364,15 @@ impl ScalarUDF {
         self.inner.output_ordering(inputs)
     }
 
+    /// See [`ScalarUDFImpl::supports_range_partitioning_analysis`] for more details.
+    pub fn supports_range_partitioning_analysis(
+        &self,
+        argument_types: &[DataType],
+    ) -> bool {
+        self.inner
+            .supports_range_partitioning_analysis(argument_types)
+    }
+
     pub fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
         self.inner.preserves_lex_ordering(inputs)
     }
@@ -983,6 +992,38 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         Ok(inner(inputs))
     }
 
+    /// Returns whether this function and argument-type combination may
+    /// participate in range-partitioning transformation analysis.
+    ///
+    /// Ordinary [`SortProperties::Ordered`] metadata is not sufficient for this
+    /// analysis. A non-strictly ordered function can map values from opposite
+    /// sides of a range split to the same output, and successful evaluation of
+    /// some functions can produce null from non-null input. Either behavior can
+    /// place one transformed equality group in multiple partitions.
+    ///
+    /// Returning `true` asserts that this argument-type combination has been
+    /// audited with the following contract:
+    ///
+    /// - whenever the concrete expression reports same-direction ordering with
+    ///   all non-range inputs singleton, it is globally nondecreasing over the
+    ///   admitted non-null input domain;
+    /// - successful evaluation preserves nullness: null range inputs remain
+    ///   null and non-null range inputs do not produce null; and
+    /// - successful scalar evaluation at a split boundary is consistent with
+    ///   array evaluation of that value.
+    ///
+    /// This method does not assert that a concrete range partitioning is
+    /// preserved. Callers must still identify the range input, establish
+    /// same-direction ordering and singleton arguments, verify exact split
+    /// types, and prove at every split that the images of adjacent partitions
+    /// do not overlap. Evaluation errors must fail closed.
+    ///
+    /// The default is `false`. This capability is not currently transported
+    /// across FFI, so foreign UDFs also remain denied by default.
+    fn supports_range_partitioning_analysis(&self, _argument_types: &[DataType]) -> bool {
+        false
+    }
+
     /// Returns true if the function preserves lexicographical ordering based on
     /// the input ordering.
     ///
@@ -1205,6 +1246,11 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.output_ordering(inputs)
     }
 
+    fn supports_range_partitioning_analysis(&self, argument_types: &[DataType]) -> bool {
+        self.inner
+            .supports_range_partitioning_analysis(argument_types)
+    }
+
     fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
         self.inner.preserves_lex_ordering(inputs)
     }
@@ -1237,6 +1283,7 @@ mod tests {
         name: &'static str,
         field: &'static str,
         signature: Signature,
+        supports_range_partitioning_analysis: bool,
     }
     impl ScalarUDFImpl for TestScalarUDFImpl {
         fn name(&self) -> &str {
@@ -1253,6 +1300,14 @@ mod tests {
 
         fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
             unimplemented!()
+        }
+
+        fn supports_range_partitioning_analysis(
+            &self,
+            argument_types: &[DataType],
+        ) -> bool {
+            self.supports_range_partitioning_analysis
+                && argument_types == [DataType::Int64]
         }
     }
 
@@ -1287,11 +1342,26 @@ mod tests {
         assert_eq!(b.partial_cmp(&o), Some(Ordering::Less));
     }
 
+    #[test]
+    fn aliases_preserve_range_partitioning_analysis_support() {
+        let function = ScalarUDF::from(TestScalarUDFImpl {
+            name: "range_function",
+            field: "a",
+            signature: Signature::any(1, Volatility::Immutable),
+            supports_range_partitioning_analysis: true,
+        })
+        .with_aliases(["range_function_alias"]);
+
+        assert!(function.supports_range_partitioning_analysis(&[DataType::Int64]));
+        assert!(!function.supports_range_partitioning_analysis(&[DataType::Utf8]));
+    }
+
     fn test_func(name: &'static str, parameter: &'static str) -> ScalarUDF {
         ScalarUDF::from(TestScalarUDFImpl {
             name,
             field: parameter,
             signature: Signature::any(1, Volatility::Immutable),
+            supports_range_partitioning_analysis: false,
         })
     }
 

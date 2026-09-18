@@ -17,13 +17,20 @@
 
 //! [`Partitioning`] and [`Distribution`] for `ExecutionPlans`
 
+use crate::expressions::{Literal, UnKnownColumn};
+use crate::simplifier::const_evaluator::create_dummy_batch;
 use crate::{
-    EquivalenceProperties, PhysicalExpr, equivalence::ProjectionMapping,
-    expressions::UnKnownColumn, physical_exprs_contains, physical_exprs_equal,
+    EquivalenceProperties, PhysicalExpr, ScalarFunctionExpr,
+    equivalence::ProjectionMapping, physical_exprs_contains, physical_exprs_equal,
 };
 use arrow::datatypes::Schema;
 pub use datafusion_common::SplitPoint;
-use datafusion_common::{Result, plan_err, validate_range_split_points};
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{
+    Result, ScalarValue, plan_err, validate_range_split_points,
+};
+use datafusion_expr::ColumnarValue;
+use datafusion_expr::interval_arithmetic::{checked_predecessor, checked_successor};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 #[cfg(feature = "proto")]
@@ -532,6 +539,165 @@ fn normalize_exprs(
         .collect()
 }
 
+fn equivalent_expr(
+    left: &Arc<dyn PhysicalExpr>,
+    right: &Arc<dyn PhysicalExpr>,
+    eq_properties: &EquivalenceProperties,
+) -> bool {
+    equivalent_exprs(
+        std::slice::from_ref(left),
+        std::slice::from_ref(right),
+        eq_properties,
+    )
+}
+
+fn evaluate_with_range_value(
+    expr: &Arc<dyn PhysicalExpr>,
+    range_key: &Arc<dyn PhysicalExpr>,
+    value: &ScalarValue,
+) -> Option<ScalarValue> {
+    let literal: Arc<dyn PhysicalExpr> = Arc::new(Literal::new(value.clone()));
+    let rewritten = Arc::clone(expr)
+        .transform(|node| {
+            if node.eq(range_key) {
+                Ok(Transformed::yes(Arc::clone(&literal)))
+            } else {
+                Ok(Transformed::no(node))
+            }
+        })
+        .ok()?;
+    if !rewritten.transformed {
+        return None;
+    }
+
+    match rewritten.data.evaluate(create_dummy_batch().ok()?).ok()? {
+        ColumnarValue::Scalar(value) => Some(value),
+        ColumnarValue::Array(array) => ScalarValue::try_from_array(&array, 0).ok(),
+    }
+}
+
+/// For a nondecreasing, null-preserving transform, adjacent partition images
+/// are disjoint when the values immediately across each split remain distinct.
+/// The open side is below an ASC split and above a DESC split.
+fn range_transform_keeps_groups_local(
+    function: &Arc<dyn PhysicalExpr>,
+    range_key: &Arc<dyn PhysicalExpr>,
+    range: &RangePartitioning,
+    key_index: usize,
+    schema: &Schema,
+) -> Option<()> {
+    let range_type = range_key.data_type(schema).ok()?;
+    range.split_points().iter().try_for_each(|split_point| {
+        let split_value = split_point.values().get(key_index)?;
+        if split_value.data_type() != range_type {
+            return None;
+        }
+        let adjacent = if range.ordering()[key_index].options.descending {
+            checked_successor(split_value)
+        } else {
+            checked_predecessor(split_value)
+        }?;
+        let at_split = evaluate_with_range_value(function, range_key, split_value)?;
+        let across_split = evaluate_with_range_value(function, range_key, &adjacent)?;
+        if at_split.is_null()
+            || across_split.is_null()
+            || at_split.data_type() != across_split.data_type()
+            || at_split == across_split
+        {
+            return None;
+        }
+
+        Some(())
+    })
+}
+
+fn is_audited_range_transform(
+    candidate: &Arc<dyn PhysicalExpr>,
+    range_key: &Arc<dyn PhysicalExpr>,
+    range: &RangePartitioning,
+    key_index: usize,
+    eq_properties: &EquivalenceProperties,
+) -> bool {
+    let Some(function) = candidate.downcast_ref::<ScalarFunctionExpr>() else {
+        return false;
+    };
+    let schema = eq_properties.schema();
+    if datafusion_physical_expr_common::physical_expr::is_volatile(candidate)
+        || !function
+            .supports_range_partitioning_analysis(schema)
+            .unwrap_or(false)
+        || !eq_properties.is_same_direction_ordered_transform(candidate, range_key)
+    {
+        return false;
+    }
+
+    let mut range_argument_count = 0;
+    for argument in function.args() {
+        if equivalent_expr(argument, range_key, eq_properties) {
+            range_argument_count += 1;
+        } else if !argument.is::<Literal>() {
+            return false;
+        }
+    }
+
+    range_argument_count == 1
+        && range_transform_keeps_groups_local(
+            candidate, range_key, range, key_index, schema,
+        )
+        .is_some()
+}
+
+fn range_transform_satisfaction(
+    range: &RangePartitioning,
+    required_exprs: &[Arc<dyn PhysicalExpr>],
+    eq_properties: &EquivalenceProperties,
+    allow_subset: bool,
+) -> PartitioningSatisfaction {
+    if required_exprs.is_empty() || range.ordering().len() > required_exprs.len() {
+        return PartitioningSatisfaction::NotSatisfied;
+    }
+
+    let mut unmatched_required = (0..required_exprs.len()).collect::<Vec<_>>();
+    let last_range_key = range.ordering().len() - 1;
+    let mut used_transform = false;
+
+    for (key_index, range_sort) in range.ordering().iter().enumerate() {
+        let mut match_position = unmatched_required.iter().position(|required_index| {
+            equivalent_expr(
+                &range_sort.expr,
+                &required_exprs[*required_index],
+                eq_properties,
+            )
+        });
+        if match_position.is_none() && key_index == last_range_key {
+            match_position = unmatched_required.iter().position(|required_index| {
+                is_audited_range_transform(
+                    &required_exprs[*required_index],
+                    &range_sort.expr,
+                    range,
+                    key_index,
+                    eq_properties,
+                )
+            });
+        }
+        let Some(match_position) = match_position else {
+            return PartitioningSatisfaction::NotSatisfied;
+        };
+        used_transform |= !equivalent_expr(
+            &range_sort.expr,
+            &required_exprs[unmatched_required[match_position]],
+            eq_properties,
+        );
+        unmatched_required.swap_remove(match_position);
+    }
+
+    if used_transform && (unmatched_required.is_empty() || allow_subset) {
+        PartitioningSatisfaction::KeyLocal
+    } else {
+        PartitioningSatisfaction::NotSatisfied
+    }
+}
+
 /// Represents how a [`Partitioning`] satisfies a [`Distribution`] requirement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PartitioningSatisfaction {
@@ -541,11 +707,22 @@ pub enum PartitioningSatisfaction {
     Exact,
     /// The partitioning satisfies the distribution requirement via subset logic
     Subset,
+    /// Equal values of the required keys are partition-local, but the concrete
+    /// partition layout is not claimed to match the requested distribution.
+    ///
+    /// This is sufficient for independent keyed aggregation. It is not general
+    /// distribution satisfaction and must not be used for co-partitioned joins.
+    KeyLocal,
 }
 
 impl PartitioningSatisfaction {
     pub fn is_satisfied(&self) -> bool {
         matches!(self, Self::Exact | Self::Subset)
+    }
+
+    /// Returns whether equal required-key tuples cannot occur in two partitions.
+    pub fn is_key_local(&self) -> bool {
+        !matches!(self, Self::NotSatisfied)
     }
 
     pub fn is_subset(&self) -> bool {
@@ -590,8 +767,15 @@ impl Partitioning {
             == PartitioningSatisfaction::Exact
     }
 
-    /// Returns how this [`Partitioning`] satisfies the partitioning scheme mandated
-    /// by the `required` [`Distribution`].
+    /// Returns the relationship between this [`Partitioning`] and the
+    /// `required` [`Distribution`].
+    ///
+    /// [`PartitioningSatisfaction::KeyLocal`] is deliberately weaker than
+    /// distribution satisfaction: it only proves that equal required-key tuples
+    /// cannot occur in different partitions. Callers that require a concrete
+    /// partition layout must use [`PartitioningSatisfaction::is_satisfied`].
+    /// Operators that only require independent processing of each key may use
+    /// [`PartitioningSatisfaction::is_key_local`].
     #[expect(
         deprecated,
         reason = "HashPartitioned is accepted during the KeyPartitioned migration"
@@ -630,12 +814,22 @@ impl Partitioning {
                         .iter()
                         .map(|sort_expr| Arc::clone(&sort_expr.expr))
                         .collect::<Vec<_>>();
-                    Self::key_satisfaction(
+                    let satisfaction = Self::key_satisfaction(
                         &partition_exprs,
                         required_exprs,
                         eq_properties,
                         allow_subset,
-                    )
+                    );
+                    if satisfaction.is_satisfied() {
+                        satisfaction
+                    } else {
+                        range_transform_satisfaction(
+                            range,
+                            required_exprs,
+                            eq_properties,
+                            allow_subset,
+                        )
+                    }
                 }
                 Partitioning::RoundRobinBatch(_)
                 | Partitioning::UnknownPartitioning(_) => {
@@ -991,7 +1185,8 @@ mod tests {
     use crate::projection::ProjectionTargets;
 
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Result, ScalarValue};
 
     struct PartitioningTestFixture {
@@ -1110,6 +1305,459 @@ mod tests {
             expected_without_subset,
             "Failed for {desc} with subset disabled"
         );
+    }
+
+    fn date_trunc_of(
+        timestamp: Arc<dyn PhysicalExpr>,
+        precision: &str,
+        timezone: Option<&str>,
+    ) -> Arc<dyn PhysicalExpr> {
+        let timezone = timezone.map(Into::into);
+        Arc::new(ScalarFunctionExpr::new(
+            "date_trunc",
+            datafusion_functions::datetime::date_trunc(),
+            vec![
+                Arc::new(Literal::new(ScalarValue::Utf8(Some(precision.into())))),
+                timestamp,
+            ],
+            Field::new(
+                "date_trunc",
+                DataType::Timestamp(TimeUnit::Nanosecond, timezone),
+                true,
+            )
+            .into(),
+            Arc::new(ConfigOptions::default()),
+        ))
+    }
+
+    fn date_bin_of(timestamp: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
+        Arc::new(ScalarFunctionExpr::new(
+            "date_bin",
+            datafusion_functions::datetime::date_bin(),
+            vec![
+                Arc::new(Literal::new(ScalarValue::new_interval_mdn(
+                    0,
+                    0,
+                    60_000_000_000,
+                ))),
+                timestamp,
+            ],
+            Field::new(
+                "date_bin",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                true,
+            )
+            .into(),
+            Arc::new(ConfigOptions::default()),
+        ))
+    }
+
+    fn timestamp_split(value: Option<i64>, timezone: Option<&str>) -> SplitPoint {
+        SplitPoint::new(vec![ScalarValue::TimestampNanosecond(
+            value,
+            timezone.map(Into::into),
+        )])
+    }
+
+    fn assert_date_trunc_partition_images<T: arrow::array::types::ArrowTimestampType>()
+    -> Result<()> {
+        use arrow::array::{PrimitiveArray, RecordBatch};
+        use datafusion_common::HashSet;
+
+        let ticks_per_second = match T::UNIT {
+            TimeUnit::Second => 1,
+            TimeUnit::Millisecond => 1_000,
+            TimeUnit::Microsecond => 1_000_000,
+            TimeUnit::Nanosecond => 1_000_000_000,
+        };
+        let hour = 3600 * ticks_per_second;
+        let data_type = DataType::Timestamp(T::UNIT, None);
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("ts", data_type.clone(), true)]));
+        let timestamp: Arc<dyn PhysicalExpr> = Arc::new(Column::new("ts", 0));
+        let properties = EquivalenceProperties::new(Arc::clone(&schema));
+
+        let mut cases = vec![
+            ("hour", false, vec![-hour, 0, hour], true),
+            ("hour", false, vec![-hour + 1, 1, hour + 1], false),
+            ("day", false, vec![-hour, 0, hour], false),
+            ("hour", true, vec![-hour, 0, hour], false),
+            ("hour", true, vec![-hour - 1, -1, hour - 1], true),
+        ];
+        for (precision, divisor) in [("millisecond", 1_000), ("microsecond", 1_000_000)] {
+            let width = (ticks_per_second / divisor).max(1);
+            cases.extend([
+                (precision, false, vec![-width, 0, width], true),
+                // In particular, microsecond input with millisecond precision
+                // must reject split -999: both adjacent array values map to -1000.
+                (precision, false, vec![-width + 1], width == 1),
+                (precision, true, vec![-width, 0, width], width == 1),
+                (precision, true, vec![-width - 1, -1, width - 1], true),
+            ]);
+        }
+        for (precision, descending, source_splits, expect_disjoint) in cases {
+            for nulls_first in [false, true] {
+                let options = SortOptions::new(descending, nulls_first);
+                let mut splits = source_splits.clone();
+                if descending {
+                    splits.reverse();
+                }
+                let range = Partitioning::Range(RangePartitioning::try_new(
+                    [PhysicalSortExpr::new(Arc::clone(&timestamp), options)].into(),
+                    splits
+                        .iter()
+                        .map(|value| {
+                            SplitPoint::new(vec![ScalarValue::new_timestamp::<T>(
+                                Some(*value),
+                                None,
+                            )])
+                        })
+                        .collect(),
+                )?);
+                let function: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::new(
+                    "date_trunc",
+                    datafusion_functions::datetime::date_trunc(),
+                    vec![
+                        Arc::new(Literal::new(ScalarValue::from(precision))),
+                        Arc::clone(&timestamp),
+                    ],
+                    Field::new("bucket", data_type.clone(), true).into(),
+                    Arc::new(ConfigOptions::default()),
+                ));
+                let required = Distribution::KeyPartitioned(vec![Arc::clone(&function)]);
+                assert_eq!(
+                    range
+                        .satisfaction(&required, &properties, false)
+                        .is_key_local(),
+                    expect_disjoint
+                );
+
+                // Assign rows by source-domain comparisons, independently of
+                // the optimizer's adjacency check, then evaluate whole arrays.
+                let mut partitions = vec![vec![]; splits.len() + 1];
+                let rows = splits
+                    .iter()
+                    .flat_map(|split| [Some(split - 1), Some(*split), Some(split + 1)])
+                    .chain([None, None]);
+                for value in rows {
+                    let index = match value {
+                        None if nulls_first => 0,
+                        None => splits.len(),
+                        Some(value) => splits
+                            .iter()
+                            .filter(|split| {
+                                if descending {
+                                    value <= **split
+                                } else {
+                                    value >= **split
+                                }
+                            })
+                            .count(),
+                    };
+                    partitions[index].push(value);
+                }
+                let images = partitions
+                    .into_iter()
+                    .map(|values| {
+                        let input = Arc::new(PrimitiveArray::<T>::from_iter(values));
+                        let batch =
+                            RecordBatch::try_new(Arc::clone(&schema), vec![input])?;
+                        let output =
+                            function.evaluate(&batch)?.into_array(batch.num_rows())?;
+                        (0..output.len())
+                            .map(|i| ScalarValue::try_from_array(&output, i))
+                            .collect::<Result<HashSet<_>>>()
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let disjoint = images.iter().enumerate().all(|(i, left)| {
+                    images
+                        .iter()
+                        .skip(i + 1)
+                        .all(|right| left.is_disjoint(right))
+                });
+                assert_eq!(
+                    disjoint,
+                    expect_disjoint,
+                    "{precision}, {:?}, {options:?}, splits={splits:?}",
+                    T::UNIT
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn date_trunc_partition_images_are_disjoint_only_for_safe_splits() -> Result<()> {
+        use arrow::array::types::{
+            TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+            TimestampSecondType,
+        };
+        assert_date_trunc_partition_images::<TimestampSecondType>()?;
+        assert_date_trunc_partition_images::<TimestampMillisecondType>()?;
+        assert_date_trunc_partition_images::<TimestampMicrosecondType>()?;
+        assert_date_trunc_partition_images::<TimestampNanosecondType>()
+    }
+
+    #[test]
+    fn range_transform_requires_literal_parameters() -> Result<()> {
+        use crate::expressions::CastExpr;
+        let fixture = PartitioningTestFixture::new(vec![(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )])?;
+        let function = date_trunc_of(fixture.col(0), "hour", None);
+        let scalar_but_not_literal: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
+            Arc::new(Literal::new(ScalarValue::from("hour"))),
+            DataType::Utf8View,
+            None,
+        ));
+        let function =
+            function.with_new_children(vec![scalar_but_not_literal, fixture.col(0)])?;
+        let range = fixture.range_partitioning([0], vec![timestamp_split(Some(0), None)]);
+        assert_eq!(
+            range.satisfaction(
+                &Distribution::KeyPartitioned(vec![function]),
+                &fixture.eq_properties,
+                false,
+            ),
+            PartitioningSatisfaction::NotSatisfied
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn range_transform_satisfaction_is_key_local_only() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![
+            ("timestamp", DataType::Timestamp(TimeUnit::Nanosecond, None)),
+            ("tag", DataType::Utf8),
+        ])?;
+        let hour = 1_704_070_800_000_000_000;
+        let aligned =
+            fixture.range_partitioning([0], vec![timestamp_split(Some(hour), None)]);
+        let trunc_hour = date_trunc_of(fixture.col(0), "hour", None);
+
+        let exact_keys = Distribution::KeyPartitioned(vec![Arc::clone(&trunc_hour)]);
+        let satisfaction =
+            aligned.satisfaction(&exact_keys, &fixture.eq_properties, false);
+        assert_eq!(satisfaction, PartitioningSatisfaction::KeyLocal);
+        assert!(satisfaction.is_key_local());
+        assert!(!satisfaction.is_satisfied());
+
+        assert_satisfaction(
+            "additional grouping keys require subset permission",
+            &aligned,
+            &Distribution::KeyPartitioned(vec![trunc_hour, fixture.col(1)]),
+            &fixture.eq_properties,
+            PartitioningSatisfaction::KeyLocal,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+
+        assert_satisfaction(
+            "date_bin remains default-denied",
+            &aligned,
+            &Distribution::KeyPartitioned(vec![date_bin_of(fixture.col(0))]),
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+
+        let trunc_day = date_trunc_of(fixture.col(0), "day", None);
+        assert_satisfaction(
+            "an hour split straddles a day bucket",
+            &aligned,
+            &Distribution::KeyPartitioned(vec![trunc_day]),
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+
+        let two_aligned = fixture.range_partitioning(
+            [0],
+            vec![
+                timestamp_split(Some(hour), None),
+                timestamp_split(Some(hour + 3_600_000_000_000), None),
+            ],
+        );
+        assert_satisfaction(
+            "every split must be aligned",
+            &two_aligned,
+            &exact_keys,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::KeyLocal,
+            PartitioningSatisfaction::KeyLocal,
+        );
+
+        let unaligned =
+            fixture.range_partitioning([0], vec![timestamp_split(Some(hour + 1), None)]);
+        assert_satisfaction(
+            "an unaligned split straddles an hour bucket",
+            &unaligned,
+            &exact_keys,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn range_transform_supports_only_the_final_compound_key() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![
+            ("key", DataType::Utf8),
+            ("timestamp", DataType::Timestamp(TimeUnit::Nanosecond, None)),
+        ])?;
+        let hour = 1_704_070_800_000_000_000;
+        let split = SplitPoint::new(vec![
+            ScalarValue::Utf8(Some("m".into())),
+            ScalarValue::TimestampNanosecond(Some(hour), None),
+        ]);
+        let range = fixture.range_partitioning([0, 1], vec![split]);
+        assert_satisfaction(
+            "the final compound key can be transformed",
+            &range,
+            &Distribution::KeyPartitioned(vec![
+                fixture.col(0),
+                date_trunc_of(fixture.col(1), "hour", None),
+            ]),
+            &fixture.eq_properties,
+            PartitioningSatisfaction::KeyLocal,
+            PartitioningSatisfaction::KeyLocal,
+        );
+
+        let split = SplitPoint::new(vec![
+            ScalarValue::TimestampNanosecond(Some(hour), None),
+            ScalarValue::Utf8(Some("m".into())),
+        ]);
+        let range = fixture.range_partitioning([1, 0], vec![split]);
+        assert_satisfaction(
+            "a non-final compound key cannot be transformed",
+            &range,
+            &Distribution::KeyPartitioned(vec![
+                date_trunc_of(fixture.col(1), "hour", None),
+                fixture.col(0),
+            ]),
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn range_transform_satisfaction_fails_closed() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )])?;
+        let trunc_hour = date_trunc_of(fixture.col(0), "hour", None);
+        let required = Distribution::KeyPartitioned(vec![trunc_hour]);
+
+        for (description, split) in [
+            ("null", timestamp_split(None, None)),
+            ("minimum", timestamp_split(Some(i64::MIN), None)),
+        ] {
+            assert_satisfaction(
+                description,
+                &fixture.range_partitioning([0], vec![split]),
+                &required,
+                &fixture.eq_properties,
+                PartitioningSatisfaction::NotSatisfied,
+                PartitioningSatisfaction::NotSatisfied,
+            );
+        }
+
+        let mismatched_split = Partitioning::Range(RangePartitioning::new(
+            fixture.range_ordering([0]),
+            vec![SplitPoint::new(vec![ScalarValue::Int64(Some(10))])],
+        ));
+        assert_satisfaction(
+            "split scalar type must match the range key",
+            &mismatched_split,
+            &required,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+
+        let invalid_precision = Distribution::KeyPartitioned(vec![date_trunc_of(
+            fixture.col(0),
+            "not-a-precision",
+            None,
+        )]);
+        let aligned = fixture.range_partitioning(
+            [0],
+            vec![timestamp_split(Some(1_704_070_800_000_000_000), None)],
+        );
+        assert_satisfaction(
+            "split evaluation errors fail closed",
+            &aligned,
+            &invalid_precision,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+
+        let timezone_fixture = PartitioningTestFixture::new(vec![(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+        )])?;
+        let timezone_trunc = date_trunc_of(timezone_fixture.col(0), "hour", Some("UTC"));
+        let timezone_range = timezone_fixture.range_partitioning(
+            [0],
+            vec![timestamp_split(
+                Some(1_704_070_800_000_000_000),
+                Some("UTC"),
+            )],
+        );
+        assert_satisfaction(
+            "timezone-aware date_trunc is not audited",
+            &timezone_range,
+            &Distribution::KeyPartitioned(vec![timezone_trunc]),
+            &timezone_fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn descending_range_uses_the_open_side_successor() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )])?;
+        let hour = 1_704_070_800_000_000_000;
+        let ordering: LexOrdering =
+            [fixture.range_sort_expr(0, SortOptions::new(true, false))].into();
+        let required = Distribution::KeyPartitioned(vec![date_trunc_of(
+            fixture.col(0),
+            "hour",
+            None,
+        )]);
+
+        assert_satisfaction(
+            "the successor of an hour boundary is in the same bucket",
+            &fixture.range_partitioning_with_ordering(
+                ordering.clone(),
+                vec![timestamp_split(Some(hour), None)],
+            ),
+            &required,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::NotSatisfied,
+            PartitioningSatisfaction::NotSatisfied,
+        );
+        assert_satisfaction(
+            "the successor of the final nanosecond starts a new bucket",
+            &fixture.range_partitioning_with_ordering(
+                ordering,
+                vec![timestamp_split(Some(hour + 3_600_000_000_000 - 1), None)],
+            ),
+            &required,
+            &fixture.eq_properties,
+            PartitioningSatisfaction::KeyLocal,
+            PartitioningSatisfaction::KeyLocal,
+        );
+        Ok(())
     }
 
     #[test]

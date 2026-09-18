@@ -158,6 +158,22 @@ impl ScalarFunctionExpr {
         &self.config_options
     }
 
+    /// Returns whether this function expression's argument types have been
+    /// explicitly audited as candidates for range-partitioning analysis.
+    pub fn supports_range_partitioning_analysis(
+        &self,
+        input_schema: &Schema,
+    ) -> Result<bool> {
+        let argument_types = self
+            .args
+            .iter()
+            .map(|argument| argument.data_type(input_schema))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(self
+            .fun
+            .supports_range_partitioning_analysis(&argument_types))
+    }
+
     /// Given an arbitrary PhysicalExpr attempt to downcast it to a ScalarFunctionExpr
     /// and verify that its inner function is of type T.
     /// If the downcast fails, or the function is not of type T, returns `None`.
@@ -640,6 +656,40 @@ mod tests {
             let child = ExprProperties::new_unknown().with_range(bounds.clone());
             assert_eq!(expr.get_properties(&[child]).unwrap().range, bounds);
             assert_eq!(expr.evaluate_bounds(&[&bounds]).unwrap(), bounds);
+        }
+
+        fn supports_range_partitioning_analysis(
+            &self,
+            argument_types: &[DataType],
+        ) -> bool {
+            argument_types == [DataType::Float32]
+        }
+    }
+
+    #[test]
+    fn test_range_partitioning_analysis_support_uses_argument_types() {
+        let function = Arc::new(ScalarUDF::from(MockScalarUDF {
+            signature: Signature::any(1, Volatility::Immutable),
+        }));
+        let config_options = Arc::new(ConfigOptions::new());
+
+        for (data_type, expected) in [(DataType::Float32, true), (DataType::Int32, false)]
+        {
+            let schema = Schema::new(vec![Field::new("a", data_type, false)]);
+            let expression = ScalarFunctionExpr::try_new(
+                Arc::clone(&function),
+                vec![Arc::new(Column::new("a", 0))],
+                &schema,
+                Arc::clone(&config_options),
+            )
+            .unwrap();
+
+            assert_eq!(
+                expression
+                    .supports_range_partitioning_analysis(&schema)
+                    .unwrap(),
+                expected
+            );
         }
     }
 
