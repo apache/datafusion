@@ -276,6 +276,8 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
     } else {
         // Handle batches with no growth or with different fill values per row.
         // Growing rows repeat the fill value from their corresponding input slot.
+        // Growth without a fill argument always takes the bulk path above, so
+        // `default_element` is present whenever a row grows here.
         let default_value_data = if max_extra > 0 {
             default_element.map(|fill_values| fill_values.to_data())
         } else {
@@ -298,6 +300,10 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
     }
 }
 
+/// Copies the retained prefix of each row from `original_data` (source 0) and
+/// calls `append_fill_values(mutable, row_index, extra_count)` for each row
+/// that grows. `default_value_data` is registered as source 1 for that
+/// callback to read; it may be `None` only when no row grows.
 fn build_resized_list<O, F>(
     array: &GenericListArray<O>,
     count_array: &Int64Array,
@@ -383,52 +389,55 @@ mod tests {
 
     #[test]
     fn test_array_resize_sliced_no_growth() -> Result<()> {
-        test_sliced_no_growth::<i32>()?;
-        test_sliced_no_growth::<i64>()
-    }
-
-    fn test_sliced_no_growth<O: OffsetSizeTrait>() -> Result<()> {
-        let array = GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>(vec![
-            Some(vec![Some(90), Some(91), Some(92)]),
-            Some(vec![Some(1), None, Some(3)]),
-            Some(vec![Some(4), Some(5)]),
-            Some(vec![Some(6)]),
-            Some(vec![]),
-            None,
-            Some(vec![Some(7), Some(8)]),
-            Some(vec![Some(93), Some(94), Some(95)]),
-        ]);
-        // Retain the full child array, with unused values before and after
-        // the visible rows. None of the valid rows needs a fill value.
-        let array: ArrayRef = Arc::new(array.slice(1, 6));
-        let size: ArrayRef = Arc::new(Int64Array::from(vec![
-            Some(2),
-            Some(2),
-            Some(0),
-            Some(0),
-            Some(20),
-            None,
-        ]));
-
-        let expected =
-            GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>(vec![
-                Some(vec![Some(1), None]),
-                Some(vec![Some(4), Some(5)]),
-                Some(vec![]),
-                Some(vec![]),
+        fn check<O: OffsetSizeTrait>() -> Result<()> {
+            let array =
+                GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>(vec![
+                    Some(vec![Some(90), Some(91), Some(92)]),
+                    Some(vec![Some(1), None, Some(3)]),
+                    Some(vec![Some(4), Some(5)]),
+                    Some(vec![Some(6)]),
+                    Some(vec![]),
+                    None,
+                    Some(vec![Some(7), Some(8)]),
+                    Some(vec![Some(93), Some(94), Some(95)]),
+                ]);
+            // Retain the full child array, with unused values before and after
+            // the visible rows. None of the valid rows needs a fill value.
+            let array: ArrayRef = Arc::new(array.slice(1, 6));
+            let size: ArrayRef = Arc::new(Int64Array::from(vec![
+                Some(2),
+                Some(2),
+                Some(0),
+                Some(0),
+                // The list in this row is NULL, so the size is ignored.
+                Some(20),
                 None,
-                None,
-            ]);
-        let fill: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60]));
-        for args in [
-            vec![Arc::clone(&array), Arc::clone(&size)],
-            vec![array, size, fill],
-        ] {
-            let result = array_resize_inner(&args)?;
-            assert_eq!(result.as_list::<O>(), &expected);
+            ]));
+
+            let expected =
+                GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>(vec![
+                    Some(vec![Some(1), None]),
+                    Some(vec![Some(4), Some(5)]),
+                    Some(vec![]),
+                    Some(vec![]),
+                    None,
+                    None,
+                ]);
+            // The result is the same with or without a fill argument, because
+            // no row reads a fill value.
+            let fill: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60]));
+            for args in [
+                vec![Arc::clone(&array), Arc::clone(&size)],
+                vec![array, size, fill],
+            ] {
+                let result = array_resize_inner(&args)?;
+                assert_eq!(result.as_list::<O>(), &expected);
+            }
+
+            Ok(())
         }
-
-        Ok(())
+        check::<i32>()?;
+        check::<i64>()
     }
 
     #[test]
