@@ -1233,6 +1233,7 @@ pub fn take_function_args<const N: usize, T>(
 /// values buffer. Use this span to size output buffers: it counts child elements
 /// for lists and bytes for strings/binary arrays, including values in null rows.
 /// An empty array still has one offset and therefore a span of zero.
+#[inline]
 pub fn offsets_span_len<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> usize {
     offsets_span(offsets).1
 }
@@ -1250,6 +1251,7 @@ pub fn offsets_span_len<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> usize 
 /// let offsets = OffsetBuffer::new(vec![100_i32, 103, 108].into());
 /// assert_eq!(offsets_span(&offsets), (100, 8));
 /// ```
+#[inline]
 pub fn offsets_span<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> (usize, usize) {
     let start = offsets[0].as_usize();
     (start, offsets.last().unwrap().as_usize() - start)
