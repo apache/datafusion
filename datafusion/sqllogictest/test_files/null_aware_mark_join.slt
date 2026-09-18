@@ -741,6 +741,51 @@ FROM nam_res_outer;
 NULL 1 true
 NULL 30 NULL
 
+# A non-negated `IN` under `OR` does not need the null-aware join. A `Filter`
+# drops the row whether the mark is NULL or FALSE, and the null-aware join costs
+# more, because it pins the outer table as the build side and cannot be swapped.
+query TT
+EXPLAIN SELECT id FROM nam_res_outer o
+WHERE o.z > 35 OR o.id IN (SELECT i.id FROM nam_res_inner i WHERE i.z < o.z);
+----
+logical_plan
+01)Projection: o.id
+02)--Filter: o.z > Int32(35) OR __correlated_sq_1.mark
+03)----LeftMark Join: o.id = __correlated_sq_1.id Filter: __correlated_sq_1.z < o.z
+04)------SubqueryAlias: o
+05)--------TableScan: nam_res_outer projection=[id, z]
+06)------SubqueryAlias: __correlated_sq_1
+07)--------SubqueryAlias: i
+08)----------TableScan: nam_res_inner projection=[id, z]
+physical_plan
+01)FilterExec: z@1 > 35 OR mark@2, projection=[id@0]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(id@0, id@0)], filter=z@1 < z@0
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The negated form of the same query stays null-aware, because `NOT mark` tells
+# NULL from FALSE.
+query TT
+EXPLAIN SELECT id FROM nam_res_outer o
+WHERE o.z > 35 OR o.id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < o.z);
+----
+logical_plan
+01)Projection: o.id
+02)--Filter: o.z > Int32(35) OR NOT __correlated_sq_1.mark
+03)----LeftMark Join: o.id = __correlated_sq_1.id Filter: __correlated_sq_1.z < o.z null_aware
+04)------SubqueryAlias: o
+05)--------TableScan: nam_res_outer projection=[id, z]
+06)------SubqueryAlias: __correlated_sq_1
+07)--------SubqueryAlias: i
+08)----------TableScan: nam_res_inner projection=[id, z]
+physical_plan
+01)FilterExec: z@1 > 35 OR NOT mark@2, projection=[id@0]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], filter=z@1 < z@0, null_aware
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
 # Output batches of one row split the candidate pairs checked against the
 # residual filter into many chunks.
 statement ok

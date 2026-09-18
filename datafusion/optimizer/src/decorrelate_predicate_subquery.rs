@@ -80,7 +80,7 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
             for expr in projection.expr {
                 let original_name = expr.schema_name().to_string();
                 let (new_input, mut rewritten_expr) =
-                    rewrite_inner_subqueries(cur_input, expr, config, true)?;
+                    rewrite_inner_subqueries(cur_input, expr, config, true, true)?;
                 if has_subquery(&rewritten_expr) {
                     return Ok(Transformed::no(LogicalPlan::Projection(
                         original_projection,
@@ -134,8 +134,18 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
                 }
                 // The subquery expression is embedded within another expression
                 SubqueryPredicate::Embedded(expr) => {
-                    let (plan, expr_without_subqueries) =
-                        rewrite_inner_subqueries(cur_input, expr, config, false)?;
+                    // A `Filter` keeps a row only when the predicate is TRUE, and
+                    // `AND`/`OR` make TRUE only out of TRUE. A mark that is NULL
+                    // thus acts exactly like a mark that is FALSE here, and the
+                    // subquery does not need the more expensive null-aware join.
+                    let needs_null_aware_mark = !subqueries_only_positive(&expr);
+                    let (plan, expr_without_subqueries) = rewrite_inner_subqueries(
+                        cur_input,
+                        expr,
+                        config,
+                        false,
+                        needs_null_aware_mark,
+                    )?;
                     cur_input = plan;
                     other_exprs.push(expr_without_subqueries);
                 }
@@ -166,11 +176,14 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
     }
 }
 
+/// `needs_null_aware_mark` is `false` only when the caller can prove that a NULL
+/// mark and a FALSE mark give the same answer. See [`subqueries_only_positive`].
 fn rewrite_inner_subqueries(
     outer: LogicalPlan,
     expr: Expr,
     config: &dyn OptimizerConfig,
     materialize_in_value: bool,
+    needs_null_aware_mark: bool,
 ) -> Result<(LogicalPlan, Expr)> {
     let mut cur_input = outer;
     let alias = config.alias_generator();
@@ -178,7 +191,14 @@ fn rewrite_inner_subqueries(
         Expr::Exists(Exists {
             subquery: Subquery { subquery, .. },
             negated,
-        }) => match mark_join(&cur_input, &subquery, None, negated, alias)? {
+        }) => match mark_join(
+            &cur_input,
+            &subquery,
+            None,
+            negated,
+            alias,
+            needs_null_aware_mark,
+        )? {
             Some((plan, exists_expr)) => {
                 cur_input = plan;
                 Ok(Transformed::yes(exists_expr))
@@ -205,7 +225,14 @@ fn rewrite_inner_subqueries(
                     .map_or(plan_err!("single expression required."), |output_expr| {
                         Ok(Expr::eq(*expr.clone(), output_expr))
                     })?;
-                mark_join(&cur_input, &subquery, Some(&in_predicate), negated, alias)?
+                mark_join(
+                    &cur_input,
+                    &subquery,
+                    Some(&in_predicate),
+                    negated,
+                    alias,
+                    needs_null_aware_mark,
+                )?
             };
             match rewritten {
                 Some((plan, exists_expr)) => {
@@ -233,7 +260,7 @@ fn in_subquery_value_mark_join(
         .map_or(plan_err!("single expression required."), Ok)?;
     let in_predicate = Expr::eq(expr.clone(), output_expr.clone());
     let Some((matched_plan, matched)) =
-        mark_join(left, subquery, Some(&in_predicate), false, alias)?
+        mark_join(left, subquery, Some(&in_predicate), false, alias, true)?
     else {
         return Ok(None);
     };
@@ -243,12 +270,12 @@ fn in_subquery_value_mark_join(
         .filter(output_expr.is_null())?
         .build()?;
     let Some((null_plan, subquery_has_null)) =
-        mark_join(&matched_plan, &null_subquery, None, false, alias)?
+        mark_join(&matched_plan, &null_subquery, None, false, alias, true)?
     else {
         return Ok(None);
     };
     let Some((final_plan, subquery_non_empty)) =
-        mark_join(&null_plan, subquery, None, false, alias)?
+        mark_join(&null_plan, subquery, None, false, alias, true)?
     else {
         return Ok(None);
     };
@@ -307,6 +334,26 @@ fn has_subquery(expr: &Expr) -> bool {
         _ => Ok(false),
     })
     .unwrap()
+}
+
+/// True when every subquery in `expr` is a non-negated `IN`/`EXISTS` reached only
+/// through `AND`/`OR`.
+///
+/// `AND` and `OR` give TRUE only when an operand is TRUE, so a `Filter` on such an
+/// expression keeps the same rows whether a mark is NULL or FALSE. The mark join
+/// then does not need to be null-aware. `NOT`, `IS NULL`, `CASE` and a mark that
+/// goes into a projection can tell NULL from FALSE, so they give `false` here.
+fn subqueries_only_positive(expr: &Expr) -> bool {
+    match expr {
+        Expr::BinaryExpr(BinaryExpr {
+            left,
+            op: Operator::And | Operator::Or,
+            right,
+        }) => subqueries_only_positive(left) && subqueries_only_positive(right),
+        Expr::InSubquery(InSubquery { negated, .. }) => !negated,
+        Expr::Exists(Exists { negated, .. }) => !negated,
+        other => !has_subquery(other),
+    }
 }
 
 /// Optimize the subquery to left-anti/left-semi join.
@@ -370,6 +417,7 @@ fn build_join_top(
         in_predicate_opt.as_ref(),
         join_type,
         subquery_alias,
+        true,
     )
 }
 
@@ -394,16 +442,22 @@ fn mark_join(
     in_predicate_opt: Option<&Expr>,
     negated: bool,
     alias_generator: &Arc<AliasGenerator>,
+    needs_null_aware_mark: bool,
 ) -> Result<Option<(LogicalPlan, Expr)>> {
     let alias = alias_generator.next("__correlated_sq");
 
     let exists_col = Expr::Column(Column::new(Some(alias.clone()), "mark"));
     let exists_expr = if negated { !exists_col } else { exists_col };
 
-    Ok(
-        build_join(left, subquery, in_predicate_opt, JoinType::LeftMark, alias)?
-            .map(|plan| (plan, exists_expr)),
-    )
+    Ok(build_join(
+        left,
+        subquery,
+        in_predicate_opt,
+        JoinType::LeftMark,
+        alias,
+        needs_null_aware_mark,
+    )?
+    .map(|plan| (plan, exists_expr)))
 }
 
 /// Check if join keys in the join filter may contain NULL values
@@ -445,6 +499,7 @@ fn build_join(
     in_predicate_opt: Option<&Expr>,
     join_type: JoinType,
     alias: String,
+    needs_null_aware_mark: bool,
 ) -> Result<Option<LogicalPlan>> {
     let mut pull_up = PullUpCorrelatedExpr::new()
         .with_in_predicate_opt(in_predicate_opt.cloned())
@@ -589,6 +644,7 @@ fn build_join(
         // whether a NULL makes the mark UNKNOWN.
         let null_aware = join_type == JoinType::LeftMark
             && in_predicate_opt.is_some()
+            && needs_null_aware_mark
             && join_keys_may_be_null(
                 &join_filter,
                 left.schema(),
@@ -740,6 +796,18 @@ mod tests {
         }
 
         plan.inputs().into_iter().any(has_null_aware_left_mark_join)
+    }
+
+    fn has_non_null_aware_left_mark_join(plan: &LogicalPlan) -> bool {
+        if let LogicalPlan::Join(join) = plan
+            && join.join_type == JoinType::LeftMark
+        {
+            return !join.null_aware;
+        }
+
+        plan.inputs()
+            .into_iter()
+            .any(has_non_null_aware_left_mark_join)
     }
 
     fn optimize_with_decorrelate(plan: LogicalPlan) -> Result<LogicalPlan> {
@@ -1548,6 +1616,76 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(outer_scan)
             .filter(not_in_subquery(col("outer_t.id"), subquery).is_null())?
+            .build()?;
+
+        let optimized = optimize_with_decorrelate(plan)?;
+        assert!(
+            has_null_aware_left_mark_join(&optimized),
+            "{}",
+            optimized.display_indent_schema()
+        );
+
+        Ok(())
+    }
+
+    /// A `Filter` drops a row whose predicate is NULL and a row whose predicate is
+    /// FALSE, and `OR` gives TRUE only when an operand is TRUE. A non-negated `IN`
+    /// under `OR` thus gives the same rows without the null-aware join, which costs
+    /// more because it pins the build side and cannot be swapped.
+    #[test]
+    fn correlated_in_mark_join_under_or_is_not_null_aware() -> Result<()> {
+        let outer_scan = nullable_scalar_mark_scan("outer_t")?;
+        let inner_scan = nullable_scalar_mark_scan("inner_t")?;
+
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(inner_scan)
+                .filter(
+                    out_ref_col(DataType::Int32, "outer_t.grp").lt(col("inner_t.grp")),
+                )?
+                .project(vec![col("inner_t.id")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(
+                col("outer_t.grp")
+                    .gt(lit(0i32))
+                    .or(in_subquery(col("outer_t.id"), subquery)),
+            )?
+            .build()?;
+
+        let optimized = optimize_with_decorrelate(plan)?;
+        assert!(
+            has_non_null_aware_left_mark_join(&optimized),
+            "{}",
+            optimized.display_indent_schema()
+        );
+
+        Ok(())
+    }
+
+    /// The negated form of [`correlated_in_mark_join_under_or_is_not_null_aware`]:
+    /// `NOT mark` tells NULL from FALSE, so this one stays null-aware.
+    #[test]
+    fn correlated_not_in_mark_join_under_or_is_null_aware() -> Result<()> {
+        let outer_scan = nullable_scalar_mark_scan("outer_t")?;
+        let inner_scan = nullable_scalar_mark_scan("inner_t")?;
+
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(inner_scan)
+                .filter(
+                    out_ref_col(DataType::Int32, "outer_t.grp").lt(col("inner_t.grp")),
+                )?
+                .project(vec![col("inner_t.id")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(
+                col("outer_t.grp")
+                    .gt(lit(0i32))
+                    .or(not_in_subquery(col("outer_t.id"), subquery)),
+            )?
             .build()?;
 
         let optimized = optimize_with_decorrelate(plan)?;
