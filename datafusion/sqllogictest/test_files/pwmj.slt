@@ -504,6 +504,148 @@ NULL
 1
 
 # ------------------------------------------------------------------
+# LeftMark via PiecewiseMergeJoin
+# ------------------------------------------------------------------
+
+# `LeftMark` has no SQL syntax of its own -- it is produced by decorrelating an EXISTS/IN
+# subquery that appears inside a disjunction, since the outer filter then needs the
+# subquery's match result (the `mark`) as a value rather than as a row filter. Same data and
+# correlation as the plain-EXISTS `LeftSemi` case above: no `t1.t1_id` is over 100, so the
+# `OR` degenerates to the mark alone and the result is identical -- 11 is the one row whose
+# mark is `false` and is correctly excluded.
+query I
+SELECT t1.t1_id
+FROM join_t1 t1
+WHERE t1.t1_id > 100 OR EXISTS (SELECT 1 FROM join_t2 t2 WHERE t1.t1_id > t2.t2_id)
+ORDER BY 1;
+----
+22
+33
+44
+
+query TT
+EXPLAIN
+SELECT t1.t1_id
+FROM join_t1 t1
+WHERE t1.t1_id > 100 OR EXISTS (SELECT 1 FROM join_t2 t2 WHERE t1.t1_id > t2.t2_id)
+ORDER BY 1;
+----
+logical_plan
+01)Sort: t1.t1_id ASC NULLS LAST
+02)--Projection: t1.t1_id
+03)----Filter: t1.t1_id > Int32(100) OR __correlated_sq_1.mark
+04)------LeftMark Join:  Filter: t1.t1_id > __correlated_sq_1.t2_id
+05)--------SubqueryAlias: t1
+06)----------TableScan: join_t1 projection=[t1_id]
+07)--------SubqueryAlias: __correlated_sq_1
+08)----------SubqueryAlias: t2
+09)------------TableScan: join_t2 projection=[t2_id]
+physical_plan
+01)SortPreservingMergeExec: [t1_id@0 ASC NULLS LAST]
+02)--SortExec: expr=[t1_id@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----FilterExec: t1_id@0 > 100 OR mark@1, projection=[t1_id@0]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------PiecewiseMergeJoin: operator=Gt, join_type=LeftMark, on=(t1_id > t2_id)
+06)----------SortExec: expr=[t1_id@0 ASC], preserve_partitioning=[false]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+08)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# `PiecewiseMergeJoinExec::swap_inputs` is unimplemented (`todo!()`), and the physical
+# optimizer's statistics-driven swap subrule (`join_selection.rs`) only ever downcasts to
+# `HashJoinExec`/`CrossJoinExec`/`NestedLoopJoinExec` -- it does not consider
+# `PiecewiseMergeJoinExec` at all. So unlike the equijoin case in `mark_join_matrix.slt`
+# (where a size-skewed `LeftMark` on `HashJoinExec` gets swapped to `RightMark` with inputs
+# flipped), a size-skewed range mark join through PWMJ has nothing to trigger that swap and
+# must stay `LeftMark` regardless of which side is bigger. This pins that: if
+# `swap_inputs` is ever implemented and wired in, this plan changing to `RightMark` is the
+# signal to add real `RightMark` coverage here rather than an accidental behavior change.
+statement ok
+CREATE TABLE pwmj_mark_swap_l(k INT) AS VALUES (1);
+
+statement ok
+CREATE TABLE pwmj_mark_swap_r(k INT) AS SELECT * FROM generate_series(1, 1000);
+
+query TT
+EXPLAIN
+SELECT l.k
+FROM pwmj_mark_swap_l l
+WHERE l.k > 100000 OR EXISTS (SELECT 1 FROM pwmj_mark_swap_r r WHERE l.k > r.k)
+ORDER BY 1;
+----
+logical_plan
+01)Sort: l.k ASC NULLS LAST
+02)--Projection: l.k
+03)----Filter: l.k > Int32(100000) OR __correlated_sq_1.mark
+04)------LeftMark Join:  Filter: l.k > __correlated_sq_1.k
+05)--------SubqueryAlias: l
+06)----------TableScan: pwmj_mark_swap_l projection=[k]
+07)--------SubqueryAlias: __correlated_sq_1
+08)----------SubqueryAlias: r
+09)------------TableScan: pwmj_mark_swap_r projection=[k]
+physical_plan
+01)SortPreservingMergeExec: [k@0 ASC NULLS LAST]
+02)--SortExec: expr=[k@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----FilterExec: k@0 > 100000 OR mark@1, projection=[k@0]
+04)------PiecewiseMergeJoin: operator=Gt, join_type=LeftMark, on=(k > k)
+05)--------SortExec: expr=[k@0 ASC], preserve_partitioning=[false]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--------DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0]
+
+# `PiecewiseMergeJoinExec::try_new` has no `null_aware` parameter and always builds a
+# non-nullable `mark` column, which is only sound because a null-aware `LeftMark` join (the
+# one scalar `NOT IN` plans, per `JoinType::LeftMark`'s doc) can never reach the PWMJ branch:
+# `decorrelate_predicate_subquery` only sets `null_aware` for a pure hash-equality predicate,
+# which always has a non-empty `join_on`, while PWMJ only activates when `join_on` is empty.
+# This pins the query that null-aware coverage in `null_aware_mark_join.slt` already uses
+# (with `enable_piecewise_merge_join` on, unlike that file) and asserts it still plans to
+# `HashJoinExec ... null_aware`, not `PiecewiseMergeJoin`: if that invariant is ever broken
+# (the PWMJ gate loosened to accept a residual equijoin condition, or decorrelation start
+# setting `null_aware` for something other than a pure-equality predicate), this is the
+# query that should end up on PWMJ and lose its nullable `mark` -- so this plan changing is
+# the signal, not a query that never had a chance to reach PWMJ in the first place.
+statement ok
+CREATE TABLE pwmj_null_aware_l(id INT) AS VALUES (1), (2), (NULL);
+
+statement ok
+CREATE TABLE pwmj_null_aware_r(id INT) AS VALUES (2), (NULL);
+
+query TT
+EXPLAIN SELECT id
+FROM pwmj_null_aware_l
+WHERE (id NOT IN (SELECT id FROM pwmj_null_aware_r)) IS NULL
+ORDER BY 1;
+----
+logical_plan
+01)Sort: pwmj_null_aware_l.id ASC NULLS LAST
+02)--Projection: pwmj_null_aware_l.id
+03)----Filter: NOT __correlated_sq_1.mark IS NULL
+04)------LeftMark Join: pwmj_null_aware_l.id = __correlated_sq_1.id null_aware
+05)--------TableScan: pwmj_null_aware_l projection=[id]
+06)--------SubqueryAlias: __correlated_sq_1
+07)----------TableScan: pwmj_null_aware_r projection=[id]
+physical_plan
+01)SortPreservingMergeExec: [id@0 ASC NULLS LAST]
+02)--SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----FilterExec: NOT mark@1 IS NULL, projection=[id@0]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], null_aware
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The EXPLAIN above only pins the plan shape. This pins the actual three-valued result too:
+# `r` has a NULL, so `id` is `UNKNOWN` unless it literally matches `r`'s non-null value (2).
+# id 1 and the outer NULL row have nothing to match and a NULL in `r` to blame it on, so
+# `NOT IN` is `UNKNOWN` for both; id 2 matches outright, so it's a definite `FALSE`.
+query I
+SELECT id
+FROM pwmj_null_aware_l
+WHERE (id NOT IN (SELECT id FROM pwmj_null_aware_r)) IS NULL
+ORDER BY 1 NULLS FIRST;
+----
+NULL
+1
+
+# ------------------------------------------------------------------
 # Existence joins: operator, NULL, empty-side and type coverage
 # ------------------------------------------------------------------
 
@@ -1079,6 +1221,51 @@ SELECT l.id FROM ex_multinull_l l WHERE NOT EXISTS (SELECT 1 FROM ex_multinull_r
 3
 4
 
+# Same multi-NULL buffered side, but through `LeftMark` instead of `LeftSemi`/`LeftAnti`: the
+# `id > 100 OR EXISTS(...)` disjunction forces the decorrelation to produce a `mark` value the
+# outer `Filter` reads, rather than filtering rows directly off the join. Both NULL-keyed rows
+# (ids 1, 3) must still mark `false` under either operator -- a NULL buffered key can never
+# land in the matched suffix `min_marked` starts at, the same watermark mechanism `LeftSemi`
+# already relies on -- so these pin the same two outcomes the `EXISTS`/`NOT EXISTS` queries
+# above already covered, just observed through `LeftMark`.
+query I
+SELECT l.id FROM ex_multinull_l l
+WHERE l.id > 100 OR EXISTS (SELECT 1 FROM ex_multinull_r r WHERE l.v < r.v) ORDER BY 1;
+----
+4
+
+query I
+SELECT l.id FROM ex_multinull_l l
+WHERE l.id > 100 OR EXISTS (SELECT 1 FROM ex_multinull_r r WHERE l.v > r.v) ORDER BY 1;
+----
+2
+
+query TT
+EXPLAIN SELECT l.id FROM ex_multinull_l l
+WHERE l.id > 100 OR EXISTS (SELECT 1 FROM ex_multinull_r r WHERE l.v < r.v) ORDER BY 1;
+----
+logical_plan
+01)Sort: l.id ASC NULLS LAST
+02)--Projection: l.id
+03)----Filter: l.id > Int32(100) OR __correlated_sq_1.mark
+04)------Projection: l.id, __correlated_sq_1.mark
+05)--------LeftMark Join:  Filter: l.v < __correlated_sq_1.v
+06)----------SubqueryAlias: l
+07)------------TableScan: ex_multinull_l projection=[id, v]
+08)----------SubqueryAlias: __correlated_sq_1
+09)------------SubqueryAlias: r
+10)--------------TableScan: ex_multinull_r projection=[v]
+physical_plan
+01)SortPreservingMergeExec: [id@0 ASC NULLS LAST]
+02)--SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----FilterExec: id@0 > 100 OR mark@1, projection=[id@0]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------ProjectionExec: expr=[id@0 as id, mark@2 as mark]
+06)----------PiecewiseMergeJoin: operator=Lt, join_type=LeftMark, on=(v < v)
+07)------------SortExec: expr=[v@1 DESC], preserve_partitioning=[false]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
 # ------------------------------------------------------------------
 # Existence joins: float keys and negative zero
 # ------------------------------------------------------------------
@@ -1117,6 +1304,49 @@ query I
 SELECT l.id FROM ex_fl l WHERE NOT EXISTS (SELECT 1 FROM ex_fr r WHERE l.v <= r.v) ORDER BY 1;
 ----
 2
+
+# Same `-0.0` normalization, but through `LeftMark` instead of `LeftSemi`/`LeftAnti`: putting
+# the `EXISTS` in a disjunction with an always-false outer predicate (no `id` is over 100)
+# forces the decorrelation to produce a `mark` value the outer `Filter` then reads, rather
+# than filtering rows directly off the join. `<` must still mark id 1 (`v = -0.0`) false --
+# `-0.0 < 0.0` is false under SQL equality -- and `<=` must still mark it true, the same pair
+# of outcomes the `EXISTS`/`NOT EXISTS` queries above already pinned for `LeftSemi`/`LeftAnti`.
+query I
+SELECT l.id FROM ex_fl l
+WHERE l.id > 100 OR EXISTS (SELECT 1 FROM ex_fr r WHERE l.v < r.v) ORDER BY 1;
+----
+
+query I
+SELECT l.id FROM ex_fl l
+WHERE l.id > 100 OR EXISTS (SELECT 1 FROM ex_fr r WHERE l.v <= r.v) ORDER BY 1;
+----
+1
+
+query TT
+EXPLAIN SELECT l.id FROM ex_fl l
+WHERE l.id > 100 OR EXISTS (SELECT 1 FROM ex_fr r WHERE l.v <= r.v) ORDER BY 1;
+----
+logical_plan
+01)Sort: l.id ASC NULLS LAST
+02)--Projection: l.id
+03)----Filter: l.id > Int32(100) OR __correlated_sq_1.mark
+04)------Projection: l.id, __correlated_sq_1.mark
+05)--------LeftMark Join:  Filter: l.v <= __correlated_sq_1.v
+06)----------SubqueryAlias: l
+07)------------TableScan: ex_fl projection=[id, v]
+08)----------SubqueryAlias: __correlated_sq_1
+09)------------SubqueryAlias: r
+10)--------------TableScan: ex_fr projection=[v]
+physical_plan
+01)SortPreservingMergeExec: [id@0 ASC NULLS LAST]
+02)--SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----FilterExec: id@0 > 100 OR mark@1, projection=[id@0]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------ProjectionExec: expr=[id@0 as id, mark@2 as mark]
+06)----------PiecewiseMergeJoin: operator=LtEq, join_type=LeftMark, on=(v <= v)
+07)------------SortExec: expr=[v@1 DESC], preserve_partitioning=[false]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # ------------------------------------------------------------------
 # Classic joins: final pass when the streamed side has fewer partitions than
@@ -1235,6 +1465,130 @@ physical_plan
 04)------SortExec: expr=[v@1 ASC], preserve_partitioning=[false]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 06)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# `LeftMark` shares the exact same buffered-side comparator (`JoinKeyComparator`, sorted by
+# `required_input_ordering`) as `LeftSemi`/`LeftAnti` above -- only `emit_matched`'s final step
+# differs (slice vs. `mark` column) -- so this pins that a dictionary key marks correctly
+# through that shared path too. `>` : only 'e' (id 3) is above 'c', same outcome the `EXISTS`
+# query above already pinned for `LeftSemi`.
+query I
+SELECT l.id FROM ex_dict_l l
+WHERE l.id > 100 OR EXISTS (SELECT 1 FROM ex_dict_r r WHERE l.v > r.v) ORDER BY 1;
+----
+3
+
+# ------------------------------------------------------------------
+# Existence joins: LeftMark with List/LargeList/FixedSizeList keys
+# ------------------------------------------------------------------
+
+statement ok
+CREATE TABLE ex_list_l(id INT, v INT[]);
+
+statement ok
+INSERT INTO ex_list_l VALUES (1, [1]), (2, [2]), (3, [4]), (4, [5]);
+
+statement ok
+CREATE TABLE ex_list_r(v INT[]);
+
+statement ok
+INSERT INTO ex_list_r VALUES ([2]), ([4]);
+
+# `>` : `EXISTS r WHERE l.v > r.v` holds iff `l.v` beats the smallest `r.v` ([2]), which only
+# [4] (id 3) and [5] (id 4) do.
+query I
+SELECT l.id FROM ex_list_l l
+WHERE l.id > 100 OR EXISTS (SELECT 1 FROM ex_list_r r WHERE l.v > r.v) ORDER BY 1;
+----
+3
+4
+
+# `LargeList`/`FixedSizeList` go through the same generic comparator as `List` above
+# (`make_comparator` is not keyed on any one nested layout), so this pins the dispatch isn't
+# accidentally `List`-specific, the same concern the right existence `LargeList` case above
+# addresses for that side.
+statement ok
+CREATE TABLE ex_largelist_l AS SELECT id, arrow_cast(v, 'LargeList(Int32)') AS v FROM ex_list_l;
+
+statement ok
+CREATE TABLE ex_largelist_r AS SELECT arrow_cast(v, 'LargeList(Int32)') AS v FROM ex_list_r;
+
+query TT
+EXPLAIN SELECT l.id FROM ex_largelist_l l
+WHERE l.id > 100 OR EXISTS (SELECT 1 FROM ex_largelist_r r WHERE l.v > r.v) ORDER BY 1;
+----
+logical_plan
+01)Sort: l.id ASC NULLS LAST
+02)--Projection: l.id
+03)----Filter: l.id > Int32(100) OR __correlated_sq_1.mark
+04)------Projection: l.id, __correlated_sq_1.mark
+05)--------LeftMark Join:  Filter: l.v > __correlated_sq_1.v
+06)----------SubqueryAlias: l
+07)------------TableScan: ex_largelist_l projection=[id, v]
+08)----------SubqueryAlias: __correlated_sq_1
+09)------------SubqueryAlias: r
+10)--------------TableScan: ex_largelist_r projection=[v]
+physical_plan
+01)SortPreservingMergeExec: [id@0 ASC NULLS LAST]
+02)--SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----FilterExec: id@0 > 100 OR mark@1, projection=[id@0]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------ProjectionExec: expr=[id@0 as id, mark@2 as mark]
+06)----------PiecewiseMergeJoin: operator=Gt, join_type=LeftMark, on=(v > v)
+07)------------SortExec: expr=[v@1 ASC], preserve_partitioning=[false]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+SELECT l.id FROM ex_largelist_l l
+WHERE l.id > 100 OR EXISTS (SELECT 1 FROM ex_largelist_r r WHERE l.v > r.v) ORDER BY 1;
+----
+3
+4
+
+# `FixedSizeList` additionally has a statically known width, a different arrow layout from
+# `List`/`LargeList`'s offsets buffer -- same reason the right existence case builds this from
+# literal `VALUES` rather than a cast.
+statement ok
+CREATE TABLE ex_fsl_l AS
+  SELECT column1 AS id, arrow_cast(column2, 'FixedSizeList(1, Int32)') AS v
+  FROM (VALUES (1, [1]), (2, [2]), (3, [4]), (4, [5]));
+
+statement ok
+CREATE TABLE ex_fsl_r AS
+  SELECT arrow_cast(column1, 'FixedSizeList(1, Int32)') AS v FROM (VALUES ([2]), ([4]));
+
+query TT
+EXPLAIN SELECT l.id FROM ex_fsl_l l
+WHERE l.id > 100 OR EXISTS (SELECT 1 FROM ex_fsl_r r WHERE l.v > r.v) ORDER BY 1;
+----
+logical_plan
+01)Sort: l.id ASC NULLS LAST
+02)--Projection: l.id
+03)----Filter: l.id > Int64(100) OR __correlated_sq_1.mark
+04)------Projection: l.id, __correlated_sq_1.mark
+05)--------LeftMark Join:  Filter: l.v > __correlated_sq_1.v
+06)----------SubqueryAlias: l
+07)------------TableScan: ex_fsl_l projection=[id, v]
+08)----------SubqueryAlias: __correlated_sq_1
+09)------------SubqueryAlias: r
+10)--------------TableScan: ex_fsl_r projection=[v]
+physical_plan
+01)SortPreservingMergeExec: [id@0 ASC NULLS LAST]
+02)--SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[true]
+03)----FilterExec: id@0 > 100 OR mark@1, projection=[id@0]
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------ProjectionExec: expr=[id@0 as id, mark@2 as mark]
+06)----------PiecewiseMergeJoin: operator=Gt, join_type=LeftMark, on=(v > v)
+07)------------SortExec: expr=[v@1 ASC], preserve_partitioning=[false]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+SELECT l.id FROM ex_fsl_l l
+WHERE l.id > 100 OR EXISTS (SELECT 1 FROM ex_fsl_r r WHERE l.v > r.v) ORDER BY 1;
+----
+3
+4
 
 # ------------------------------------------------------------------
 # Right existence joins (RightSemi / RightAnti) via PiecewiseMergeJoin

@@ -18,8 +18,11 @@
 //! The join execs.
 
 use super::{roundtrip_test, roundtrip_test_and_return};
+use datafusion::arrow::array::Int64Array;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::logical_expr::{JoinType, Operator};
 use datafusion::physical_expr::LexOrdering;
 use datafusion::physical_plan::ExecutionPlan;
@@ -607,11 +610,8 @@ fn piecewise_join(
 /// `PiecewiseMergeJoinExec` derives its schema, sort options, required input
 /// orderings and plan properties inside `try_new`, so only the six constructor
 /// arguments travel on the wire. Cover the full cartesian product of the two
-/// enum-valued ones: every range operator against every supported join type --
-/// the four classic ones plus the four existence joins, whose output schema is
-/// one side alone (buffered for `LeftSemi`/`LeftAnti`, streamed for
-/// `RightSemi`/`RightAnti`). Mark joins are rejected by `try_new`, so this is
-/// the complete set.
+/// enum-valued ones: every range operator against every join type the operator
+/// supports.
 #[test]
 fn roundtrip_piecewise_merge_join() -> Result<()> {
     let (schema_buffered, schema_streamed) = piecewise_schemas();
@@ -630,6 +630,8 @@ fn roundtrip_piecewise_merge_join() -> Result<()> {
             JoinType::LeftAnti,
             JoinType::RightSemi,
             JoinType::RightAnti,
+            JoinType::LeftMark,
+            JoinType::RightMark,
         ] {
             let result = roundtrip_test_and_return(
                 Arc::new(PiecewiseMergeJoinExec::try_new(
@@ -654,15 +656,17 @@ fn roundtrip_piecewise_merge_join() -> Result<()> {
             // Both the name and the index have to survive on the correct side.
             assert_eq!(result.on.0.to_string(), "a@2");
             assert_eq!(result.on.1.to_string(), "b@0");
-            // The left existence joins output the buffered side alone (3 fields),
-            // the right existence joins the streamed side alone (2 fields), and the
-            // classic joins output both sides (3 + 2). The before/after comparison
-            // inside the helper already covers the schema; this pins the expected
-            // width absolutely, so each existence output contract is stated rather
-            // than merely preserved.
+            // The classic joins output both sides (3 + 2); the existence joins
+            // output only the side they mark (buffered's 3 fields for Left*, streamed's
+            // 2 for Right*), plus one more for a Mark join's `mark` column. The
+            // before/after comparison inside the helper already covers the schema;
+            // this pins the expected width absolutely, so the existence output
+            // contract is stated rather than merely preserved.
             let expected_fields = match join_type {
                 JoinType::LeftSemi | JoinType::LeftAnti => 3,
                 JoinType::RightSemi | JoinType::RightAnti => 2,
+                JoinType::LeftMark => 4,
+                JoinType::RightMark => 3,
                 _ => 5,
             };
             assert_eq!(
@@ -881,13 +885,10 @@ fn piecewise_merge_join_rejects_bad_operator_on_the_wire() -> Result<()> {
     Ok(())
 }
 
-/// `join_type` is a proto3 enum, so any `i32` is representable on the wire -- including
-/// the existence joins `try_new` still rejects (right-sided and mark) and values that
-/// map to no `JoinType` at all. `try_to_proto` can emit none of these, but a payload
-/// from a newer peer or a hand-built one can, and each must surface as an error
-/// rather than a panic or a silently different operator. The right-sided cases matter
-/// most: `try_new` derives *reversed* sort options for them, so accepting one would
-/// build a plan whose buffered side is sorted the wrong way.
+/// `join_type` is a proto3 enum, so any `i32` is representable on the wire, including values
+/// that map to no `JoinType` at all. `try_to_proto` can emit none of these, but a payload
+/// from a newer peer or a hand-built one can, and that must surface as an error rather than a
+/// panic or a silently different operator.
 #[test]
 fn piecewise_merge_join_rejects_unsupported_join_type_on_the_wire() -> Result<()> {
     let schemas = piecewise_schemas();
@@ -904,46 +905,28 @@ fn piecewise_merge_join_rejects_unsupported_join_type_on_the_wire() -> Result<()
     let mut node = protobuf::PhysicalPlanNode::decode(valid.as_ref())
         .expect("a plan just encoded by try_to_proto must decode as a PhysicalPlanNode");
 
-    // (wire value, description, expected error fragment)
-    // RightSemi/RightAnti are supported (see `piecewise_merge_join_existence_wire_layout`
-    // and `right_existence_join.rs`); only the Mark joins and unknown variants remain
-    // unsupported on the wire.
-    let cases: [(i32, &str, &str); 3] = [
-        (
-            protobuf::JoinType::Leftmark as i32,
-            "LeftMark",
-            "Existence join LeftMark is currently not supported",
-        ),
-        (
-            protobuf::JoinType::Rightmark as i32,
-            "RightMark",
-            "Existence join RightMark is currently not supported",
-        ),
-        // Past the last tag, so it maps to no variant.
-        (i32::MAX, "no variant", "unknown JoinType"),
-    ];
+    // Past the last tag, so it maps to no variant.
+    let wire_value = i32::MAX;
 
-    for (wire_value, description, expected) in cases {
-        let Some(PhysicalPlanType::PiecewiseMergeJoin(join)) =
-            node.physical_plan_type.as_mut()
-        else {
-            panic!("expected a PiecewiseMergeJoin node");
-        };
-        join.join_type = wire_value;
+    let Some(PhysicalPlanType::PiecewiseMergeJoin(join)) =
+        node.physical_plan_type.as_mut()
+    else {
+        panic!("expected a PiecewiseMergeJoin node");
+    };
+    join.join_type = wire_value;
 
-        let Err(err) = physical_plan_from_bytes_with_proto_converter(
-            &node.encode_to_vec(),
-            ctx.task_ctx().as_ref(),
-            &codec,
-            &proto_converter,
-        ) else {
-            panic!("decoding must fail for join_type {description}");
-        };
-        assert!(
-            err.to_string().contains(expected),
-            "join_type {description}: expected an error containing {expected:?}, got: {err}"
-        );
-    }
+    let Err(err) = physical_plan_from_bytes_with_proto_converter(
+        &node.encode_to_vec(),
+        ctx.task_ctx().as_ref(),
+        &codec,
+        &proto_converter,
+    ) else {
+        panic!("decoding must fail for an out-of-range join_type");
+    };
+    assert!(
+        err.to_string().contains("unknown JoinType"),
+        "expected an error containing \"unknown JoinType\", got: {err}"
+    );
     Ok(())
 }
 
@@ -1076,6 +1059,92 @@ async fn roundtrip_planned_piecewise_merge_join() -> Result<()> {
         assert!(found, "expected a PiecewiseMergeJoinExec for: {query}");
 
         roundtrip_test(plan)?;
+    }
+    Ok(())
+}
+
+/// `roundtrip_test`/`roundtrip_test_and_return` only compare the `Debug` string of the
+/// before/after plans -- which, per their own doc comment, "often isn't sufficient to
+/// guarantee that no information is lost during serde because the string representation of
+/// a plan often only shows a subset of state". `LeftMark`/`RightMark` add no new field to
+/// encode (`join_type` already selects them from the shared proto enum, see
+/// `join_type_to_proto`/`join_type_from_proto`), so the real risk is not a missing wire field
+/// but a decoded plan that behaves differently at execution time. This actually executes both
+/// the original and the roundtripped plan over real data and compares their output batches
+/// row for row, including the `mark` column.
+#[tokio::test]
+async fn roundtrip_piecewise_merge_join_mark_executes_correctly() -> Result<()> {
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+
+    let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, true)]));
+
+    // `Operator::Gt` needs the buffered side ascending with NULLs first -- `LeftMark` reads
+    // it in that order directly, with no `SortExec` in this hand-built plan to enforce it.
+    let buffered_batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int64Array::from(vec![None, Some(1), Some(5)]))],
+    )?;
+    let streamed_batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int64Array::from(vec![
+            Some(4),
+            Some(5),
+            Some(6),
+            None,
+        ]))],
+    )?;
+
+    for join_type in [JoinType::LeftMark, JoinType::RightMark] {
+        let buffered = MemorySourceConfig::try_new_exec(
+            &[vec![buffered_batch.clone()]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let streamed = MemorySourceConfig::try_new_exec(
+            &[vec![streamed_batch.clone()]],
+            Arc::clone(&schema),
+            None,
+        )?;
+
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(PiecewiseMergeJoinExec::try_new(
+            buffered,
+            streamed,
+            (
+                Arc::new(Column::new("k", 0)) as _,
+                Arc::new(Column::new("k", 0)) as _,
+            ),
+            Operator::Gt,
+            join_type,
+            1,
+        )?);
+
+        let before =
+            datafusion::physical_plan::collect(Arc::clone(&plan), ctx.task_ctx()).await?;
+        assert!(
+            before.iter().any(|b| b.num_rows() > 0),
+            "{join_type}: expected at least one output row from the original plan"
+        );
+
+        let bytes = physical_plan_to_bytes_with_proto_converter(
+            Arc::clone(&plan),
+            &codec,
+            &proto_converter,
+        )?;
+        let decoded = physical_plan_from_bytes_with_proto_converter(
+            bytes.as_ref(),
+            ctx.task_ctx().as_ref(),
+            &codec,
+            &proto_converter,
+        )?;
+        let after = datafusion::physical_plan::collect(decoded, ctx.task_ctx()).await?;
+
+        pretty_assertions::assert_eq!(
+            arrow::util::pretty::pretty_format_batches(&before)?.to_string(),
+            arrow::util::pretty::pretty_format_batches(&after)?.to_string(),
+            "{join_type}: roundtripped plan produced different output"
+        );
     }
     Ok(())
 }

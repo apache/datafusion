@@ -17,11 +17,9 @@
 
 //! PiecewiseMergeJoin stream specialized for existence joins.
 //!
-//! Instantiated by [`PiecewiseMergeJoinExec`] when the join type is `LeftSemi` or `LeftAnti`.
-//! `RightSemi`/`RightAnti` mark the streamed side instead and are served by
-//! `RightExistencePWMJStream` (see `right_existence_join.rs`); the Mark joins are rejected in
-//! `PiecewiseMergeJoinExec::try_new`, as they need an extra boolean column rather than a
-//! subset of one side's rows.
+//! Instantiated by [`PiecewiseMergeJoinExec`] when the join type is `LeftSemi`, `LeftAnti`, or
+//! `LeftMark`. `RightSemi`/`RightAnti`/`RightMark` mark the streamed side instead and are
+//! served by `RightExistencePWMJStream` (see `right_existence_join.rs`).
 //!
 //! # Motivation
 //!
@@ -80,8 +78,11 @@
 //!
 //! Once every streamed partition has been consumed, the last one to finish slices the
 //! buffered batch: `LeftSemi` takes `[min_marked, len)`, `LeftAnti` the complementary
-//! prefix `[0, min_marked)`, which is where the null-keyed rows live. Only the buffered
-//! (left) columns are produced.
+//! prefix `[0, min_marked)`, which is where the null-keyed rows live. `LeftMark` takes
+//! neither slice: every buffered row is preserved, with a `mark` column built from the same
+//! watermark (`true` from `min_marked` on, `false` before it) appended instead of any row
+//! being dropped. Only the buffered (left) columns, plus that `mark` column for `LeftMark`,
+//! are produced.
 //!
 //! [`PiecewiseMergeJoinExec`]: super::PiecewiseMergeJoinExec
 
@@ -90,7 +91,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering as AtomicOrdering;
 use std::task::{Poll, ready};
 
-use arrow::array::{Array, ArrayRef, RecordBatch};
+use arrow::array::{Array, ArrayRef, BooleanArray, RecordBatch};
 use arrow::compute::BatchCoalescer;
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::{NullEquality, Result, internal_err};
@@ -118,12 +119,13 @@ pub(super) enum ExistencePWMJStreamState {
 }
 
 pub(super) struct ExistencePWMJStream {
-    /// Output schema, which for `LeftSemi`/`LeftAnti` is the buffered side's schema
+    /// Output schema, which for `LeftSemi`/`LeftAnti` is the buffered side's schema, and for
+    /// `LeftMark` is that schema plus a trailing `mark` column
     schema: SchemaRef,
     /// Physical expression evaluated on the streamed side. The buffered side's
     /// equivalent is already evaluated when the buffered side is collected.
     on_streamed: PhysicalExprRef,
-    /// `LeftSemi` or `LeftAnti`
+    /// `LeftSemi`, `LeftAnti`, or `LeftMark`
     join_type: JoinType,
     /// Comparison operator
     operator: Operator,
@@ -389,7 +391,8 @@ impl ExistencePWMJStream {
     }
 
     /// Emits the existence result by slicing at the watermark: the marked buffered rows for
-    /// `LeftSemi`, the unmarked ones for `LeftAnti`.
+    /// `LeftSemi`, the unmarked ones for `LeftAnti`, or -- for `LeftMark` -- every buffered row
+    /// with a `mark` column built from the same watermark.
     fn emit_matched(&mut self) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
         let _join_timer = self.join_metrics.join_time.timer();
         if !self.emitted {
@@ -409,22 +412,33 @@ impl ExistencePWMJStream {
                 .load(AtomicOrdering::SeqCst)
                 .min(buffered_len);
 
-            let sliced = match self.join_type {
+            let (num_rows, columns) = match self.join_type {
                 JoinType::LeftSemi => {
-                    buffered_batch.slice(min_marked, buffered_len - min_marked)
+                    let sliced =
+                        buffered_batch.slice(min_marked, buffered_len - min_marked);
+                    (sliced.num_rows(), sliced.columns().to_vec())
                 }
-                // The unmarked prefix, which includes every null-keyed row: nulls sort
-                // first and the watermark never drops below the buffered null count.
-                _ => buffered_batch.slice(0, min_marked),
+                // `LeftMark` keeps every buffered row -- nothing to slice -- and appends
+                // the watermark as a `mark` column instead of using it to drop rows.
+                JoinType::LeftMark => {
+                    let mut columns = buffered_batch.columns().to_vec();
+                    columns.push(mark_column(buffered_len, min_marked));
+                    (buffered_len, columns)
+                }
+                // `LeftAnti`: the unmarked prefix, which includes every null-keyed row --
+                // nulls sort first and the watermark never drops below the buffered null
+                // count.
+                _ => {
+                    let sliced = buffered_batch.slice(0, min_marked);
+                    (sliced.num_rows(), sliced.columns().to_vec())
+                }
             };
 
-            if sliced.num_rows() > 0 {
-                // Existence joins output the buffered (left) columns only; rebuild against
-                // the join's own schema, which keeps the slice zero-copy.
-                let batch = RecordBatch::try_new(
-                    Arc::clone(&self.schema),
-                    sliced.columns().to_vec(),
-                )?;
+            if num_rows > 0 {
+                // Existence joins output the buffered (left) columns only (plus `mark` for
+                // `LeftMark`); rebuild against the join's own schema, which keeps a slice
+                // zero-copy.
+                let batch = RecordBatch::try_new(Arc::clone(&self.schema), columns)?;
                 self.output_batches.push_batch(batch)?;
                 self.output_batches.finish_buffered_batch()?;
             }
@@ -460,6 +474,16 @@ pub(super) fn extreme_key(values: &ArrayRef, descending: bool) -> Result<ArrayRe
         min_batch(values)?
     };
     extreme.to_array_of_size(1)
+}
+
+/// Builds the `LeftMark` `mark` column from the watermark: `false` for the unmatched prefix
+/// `[0, min_marked)`, `true` for the matched suffix `[min_marked, len)` -- the same split
+/// `LeftSemi`/`LeftAnti` slice the buffered batch on, just kept as one column instead of used
+/// to drop rows.
+fn mark_column(len: usize, min_marked: usize) -> ArrayRef {
+    let mut mark = vec![false; len];
+    mark[min_marked..].fill(true);
+    Arc::new(BooleanArray::from(mark))
 }
 
 impl RecordBatchStream for ExistencePWMJStream {
@@ -565,6 +589,25 @@ mod tests {
         | 1  | 1  | 7  |
         | 2  | 2  | 8  |
         +----+----+----+
+        ");
+        Ok(())
+    }
+
+    /// `LeftMark` keeps every buffered row -- unlike `LeftSemi`/`LeftAnti`, neither is
+    /// dropped -- and appends a `mark` column: `true` for exactly the rows `LeftSemi` would
+    /// have kept.
+    #[tokio::test]
+    async fn join_left_mark() -> Result<()> {
+        let batches = join_collect(JoinType::LeftMark).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+-------+
+        | a1 | b1 | c1 | mark  |
+        +----+----+----+-------+
+        | 1  | 1  | 7  | false |
+        | 2  | 2  | 8  | false |
+        | 3  | 5  | 9  | true  |
+        +----+----+----+-------+
         ");
         Ok(())
     }
@@ -775,44 +818,6 @@ mod tests {
             .expect("input_batches metric")
             .as_usize();
         assert_eq!(consumed, 1, "partition 1 should not have read any batch");
-        Ok(())
-    }
-
-    /// The Mark joins must be rejected at construction, not deeper in: `execute` has no way
-    /// to fall back, and the planner has already committed to this operator by then.
-    #[test]
-    fn try_new_rejects_unsupported_existence_joins() -> Result<()> {
-        let left = build_table(
-            ("a1", &vec![1, 2, 3]),
-            ("b1", &vec![1, 2, 5]),
-            ("c1", &vec![7, 8, 9]),
-        );
-        let right = build_table(
-            ("a2", &vec![10, 20, 30]),
-            ("b1", &vec![2, 3, 4]),
-            ("c2", &vec![70, 80, 90]),
-        );
-        let on = (
-            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
-            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
-        );
-
-        for join_type in [JoinType::LeftMark, JoinType::RightMark] {
-            let err = PiecewiseMergeJoinExec::try_new(
-                Arc::clone(&left),
-                Arc::clone(&right),
-                on.clone(),
-                Operator::Gt,
-                join_type,
-                1,
-            )
-            .expect_err(&format!("{join_type} should be rejected"))
-            .to_string();
-            assert!(
-                err.contains("not supported for PiecewiseMergeJoin"),
-                "unexpected error for {join_type}: {err}"
-            );
-        }
         Ok(())
     }
 }
