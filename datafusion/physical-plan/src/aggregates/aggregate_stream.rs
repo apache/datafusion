@@ -30,7 +30,7 @@ use crate::stream::EmptyRecordBatchStream;
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::{Result, ScalarValue, internal_datafusion_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
@@ -414,8 +414,18 @@ impl AggregateStream {
                         )
                         .and_then(|columns| prepend_grouping_id_column(columns, None))
                         .and_then(|columns| {
-                            RecordBatch::try_new(Arc::clone(&this.schema), columns)
-                                .map_err(Into::into)
+                            // A no-grouping aggregate emits exactly one row, and every column
+                            // finalizes to a length-1 array. With no aggregate expressions there
+                            // is no column left to carry that row count, so state it explicitly
+                            // rather than letting Arrow infer it -- see `PlaceholderRowExec::data`
+                            // for the same pattern. When columns are present this also asserts
+                            // the one-row invariant, since Arrow rejects a mismatched count.
+                            RecordBatch::try_new_with_options(
+                                Arc::clone(&this.schema),
+                                columns,
+                                &RecordBatchOptions::new().with_row_count(Some(1)),
+                            )
+                            .map_err(Into::into)
                         })
                         .record_output(&this.baseline_metrics);
 
@@ -760,6 +770,51 @@ mod tests {
         assert_eq!(aggregate_metrics(&final_metrics, "arguments").len(), 2);
         assert!(aggregate_metrics(&final_metrics, "update").is_empty());
         assert!(aggregate_metrics(&final_metrics, "state").is_empty());
+
+        Ok(())
+    }
+
+    /// A global aggregate with no grouping keys and no aggregate functions produces one row and
+    /// no columns
+    #[tokio::test]
+    async fn no_grouping_no_aggregates_emits_one_empty_row() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0]))],
+        )?;
+
+        // An empty input must still produce the row: a global aggregate always emits one,
+        // it does not merely collapse existing rows.
+        for (label, partitions) in [
+            ("non-empty input", vec![vec![batch]]),
+            ("empty input", vec![vec![]]),
+        ] {
+            let input =
+                TestMemoryExec::try_new_exec(&partitions, Arc::clone(&schema), None)?;
+            let aggregate = Arc::new(AggregateExec::try_new(
+                AggregateMode::Single,
+                PhysicalGroupBy::default(),
+                vec![],
+                vec![],
+                input,
+                Arc::clone(&schema),
+            )?);
+            assert_eq!(aggregate.schema().fields().len(), 0, "{label}");
+
+            let batches = collect(
+                Arc::clone(&aggregate) as Arc<dyn ExecutionPlan>,
+                Arc::new(TaskContext::default()),
+            )
+            .await?;
+
+            let rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+            assert_eq!(rows, 1, "{label}: expected exactly one output row");
+            for batch in &batches {
+                assert_eq!(batch.num_columns(), 0, "{label}");
+            }
+        }
 
         Ok(())
     }
