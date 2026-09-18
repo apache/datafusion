@@ -1111,6 +1111,18 @@ fn split_and_push_projection(
     // `SubqueryAlias` re-qualification (`sub.__datafusion_extracted_1` vs
     // `__datafusion_extracted_1`) that a qualified/ordered comparison would
     // spuriously treat as drift, stacking redundant recovery projections.
+    //
+    // A name comparison alone is not sufficient. A name says nothing about the
+    // *value* behind it. Take the projection
+    // `(- t.a) AS a, t.s, get_field(t.s, "b") AS __datafusion_extracted_1`. When
+    // the extraction goes below it, the pushed plan keeps every name, but it
+    // exposes the table column `t.a` where the projection computed `- t.a`. If
+    // the recovery projection goes away, the computed column becomes its own
+    // input column and the query gives wrong results. See
+    // <https://github.com/apache/datafusion/issues/25414>.
+    //
+    // So the recovery projection also stays when a recovery expression computes
+    // a value, that is, when it is not a pass-through of a column.
     let base_names: BTreeSet<&str> = base_plan
         .schema()
         .fields()
@@ -1122,7 +1134,10 @@ fn split_and_push_projection(
         .iter()
         .map(|f| f.name().as_str())
         .collect();
-    let needs_recovery = base_names != original_names;
+    let computes_a_value = recovery_exprs
+        .iter()
+        .any(|expr| passthrough_column(expr).is_none());
+    let needs_recovery = base_names != original_names || computes_a_value;
 
     // Wrap with recovery projection if the output schema changed
     if needs_recovery {
@@ -3601,4 +3616,5 @@ mod tests {
 
         Ok(())
     }
+
 }
