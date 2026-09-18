@@ -24,7 +24,7 @@ use datafusion_common::DataFusionError;
 use datafusion_common::config::{ConfigNonZeroUsize, SqlParserOptions};
 use datafusion_common::format::{ExplainFormat, ExplainStatementOptions};
 use datafusion_common::{Diagnostic, Span, sql_err};
-use sqlparser::ast::{ExprWithAlias, Ident, OrderByOptions};
+use sqlparser::ast::{ExprWithAlias, Ident, OrderByOptions, OrderBySort};
 use sqlparser::tokenizer::TokenWithSpan;
 use sqlparser::{
     ast::{
@@ -381,8 +381,12 @@ pub struct DFParser<'a> {
     supports_explain_with_utility_options: bool,
 }
 
-/// Same as `sqlparser`
-const DEFAULT_RECURSION_LIMIT: usize = 50;
+/// Default recursion limit for SQL parsing. Higher than the `sqlparser` default
+/// (50) for backwards compatibility with older versions.
+///
+/// Newer `sqlparser` versions added recursion guards to more parse functions, so
+/// the same query consumes more depth than it used to.
+const DEFAULT_RECURSION_LIMIT: usize = 51;
 const DEFAULT_DIALECT: GenericDialect = GenericDialect {};
 
 /// Builder for [`DFParser`]
@@ -464,7 +468,7 @@ impl<'a, 'b> DFParserBuilder<'a, 'b> {
         self
     }
 
-    /// Adjust the recursion limit of sql parsing.  Defaults to 50
+    /// Adjust the recursion limit of sql parsing.  Defaults to 51
     pub fn with_recursion_limit(mut self, recursion_limit: usize) -> Self {
         self.recursion_limit = recursion_limit;
         self
@@ -998,10 +1002,10 @@ impl<'a> DFParser<'a> {
     pub fn parse_order_by_expr(&mut self) -> Result<OrderByExpr, DataFusionError> {
         let expr = self.parser.parse_expr()?;
 
-        let asc = if self.parser.parse_keyword(Keyword::ASC) {
-            Some(true)
+        let sort = if self.parser.parse_keyword(Keyword::ASC) {
+            Some(OrderBySort::Asc)
         } else if self.parser.parse_keyword(Keyword::DESC) {
-            Some(false)
+            Some(OrderBySort::Desc)
         } else {
             None
         };
@@ -1019,7 +1023,7 @@ impl<'a> DFParser<'a> {
 
         Ok(OrderByExpr {
             expr,
-            options: OrderByOptions { asc, nulls_first },
+            options: OrderByOptions { sort, nulls_first },
             with_fill: None,
         })
     }
@@ -1619,7 +1623,16 @@ mod tests {
                         quote_style: None,
                         span: Span::empty(),
                     }),
-                    options: OrderByOptions { asc, nulls_first },
+                    options: OrderByOptions {
+                        sort: asc.map(|asc| {
+                            if asc {
+                                OrderBySort::Asc
+                            } else {
+                                OrderBySort::Desc
+                            }
+                        }),
+                        nulls_first,
+                    },
                     with_fill: None,
                 }]],
                 ..make_create_external_table("foo.csv")
@@ -1643,7 +1656,7 @@ mod tests {
                         span: Span::empty(),
                     }),
                     options: OrderByOptions {
-                        asc: Some(true),
+                        sort: Some(OrderBySort::Asc),
                         nulls_first: None,
                     },
                     with_fill: None,
@@ -1655,7 +1668,7 @@ mod tests {
                         span: Span::empty(),
                     }),
                     options: OrderByOptions {
-                        asc: Some(false),
+                        sort: Some(OrderBySort::Desc),
                         nulls_first: Some(true),
                     },
                     with_fill: None,
@@ -1688,7 +1701,7 @@ mod tests {
                     })),
                 },
                 options: OrderByOptions {
-                    asc: Some(true),
+                    sort: Some(OrderBySort::Asc),
                     nulls_first: None,
                 },
                 with_fill: None,
@@ -1731,7 +1744,7 @@ mod tests {
                     })),
                 },
                 options: OrderByOptions {
-                    asc: Some(true),
+                    sort: Some(OrderBySort::Asc),
                     nulls_first: None,
                 },
                 with_fill: None,
@@ -1795,7 +1808,7 @@ mod tests {
                     })),
                 },
                 options: OrderByOptions {
-                    asc: Some(true),
+                    sort: Some(OrderBySort::Asc),
                     nulls_first: None,
                 },
                 with_fill: None,
