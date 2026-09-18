@@ -2630,6 +2630,56 @@ query T
 select 'A' where null between 2 and null;
 ----
 
+# A volatile value must be evaluated one time per row.
+# https://github.com/apache/datafusion/issues/25457
+statement ok
+create table between_volatile as select value as a from generate_series(1, 100000);
+
+# One draw of random() keeps about 20000 of the 100000 rows. Two draws keep
+# about 36000, which is 0.6 * 0.6.
+query B
+select count(*) between 18000 and 22000 from between_volatile where random() between 0.4 and 0.6;
+----
+true
+
+# One draw keeps about 80000 rows. Two draws keep about 64000.
+query B
+select count(*) between 78000 and 82000 from between_volatile where random() not between 0.4 and 0.6;
+----
+true
+
+statement ok
+drop table between_volatile;
+
+statement ok
+create table between_plan(a int) as values (1), (3), (5);
+
+# The plan keeps BETWEEN together, so random() is named one time.
+query TT
+explain select a from between_plan where random() between 0.4 and 0.6;
+----
+logical_plan
+01)Filter: random() BETWEEN Float64(0.4) AND Float64(0.6)
+02)--TableScan: between_plan projection=[a]
+physical_plan
+01)FilterExec: random() BETWEEN 0.4 AND 0.6
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A value that is not volatile keeps the expansion into two comparisons, which
+# the optimizer and the pruning predicates understand.
+query TT
+explain select a from between_plan where a between 3 and 5;
+----
+logical_plan
+01)Filter: between_plan.a >= Int32(3) AND between_plan.a <= Int32(5)
+02)--TableScan: between_plan projection=[a]
+physical_plan
+01)FilterExec: a@0 >= 3 AND a@0 <= 5
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table between_plan;
+
 ### Demonstrate use of E literals for escaping
 # should not have literal tab
 query T
