@@ -1136,15 +1136,14 @@ fn split_and_push_projection(
     }
 }
 
-/// Returns true if the plan is a Projection where ALL expressions are either
-/// `Alias(EXTRACTED_EXPR_PREFIX, ...)` or `Column`, with at least one extraction.
+/// Returns true if `exprs` are the expressions of a *pure extraction
+/// projection*: every expression is either `Alias(EXTRACTED_EXPR_PREFIX, ...)`
+/// or a bare `Column`, and there is at least one extraction alias.
+///
 /// Such projections can safely be pushed further without re-extraction.
-fn is_pure_extraction_projection(plan: &LogicalPlan) -> bool {
-    let LogicalPlan::Projection(proj) = plan else {
-        return false;
-    };
+pub(crate) fn is_pure_extraction_projection(exprs: &[Expr]) -> bool {
     let mut has_extraction = false;
-    for expr in &proj.expr {
+    for expr in exprs {
         match expr {
             Expr::Alias(alias) if alias.name.starts_with(EXTRACTED_EXPR_PREFIX) => {
                 has_extraction = true;
@@ -1181,6 +1180,7 @@ fn push_extraction_pairs(
                 proj_input,
                 target_schema.as_ref(),
             )?;
+            let merged_is_pure = is_pure_extraction_projection(&merged.expr);
             let merged_plan = LogicalPlan::Projection(merged);
 
             // After merging, try to push the result further down, but ONLY
@@ -1191,7 +1191,7 @@ fn push_extraction_pairs(
             // the (None, true) fallback can't find the original aliases.
             // This handles: Extraction → Recovery(cols) → Filter → ... → TableScan
             // by pushing through the recovery projection AND the filter in one pass.
-            if is_pure_extraction_projection(&merged_plan)
+            if merged_is_pure
                 && let Some(pushed) = try_push_input(&merged_plan, alias_generator)?
             {
                 return Ok(Some(pushed));
