@@ -26,6 +26,7 @@ use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeList, List, Null};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
+use datafusion_common::utils::offset_span;
 use datafusion_common::{Result, exec_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -136,8 +137,7 @@ fn compact_list<O: OffsetSizeTrait>(
         // Fast path: no validity buffer, no nulls to remove
         return Ok(Arc::new(list_array.clone()));
     };
-    let values_null_count = values_nulls.null_count();
-    if values_null_count == 0 {
+    if values_nulls.null_count() == 0 {
         // Fast path: validity buffer present but no nulls set
         return Ok(Arc::new(list_array.clone()));
     }
@@ -145,7 +145,9 @@ fn compact_list<O: OffsetSizeTrait>(
     let list_nulls = list_array.nulls();
     let list_offsets = list_array.offsets();
     let original_data = values.to_data();
-    let capacity = original_data.len() - values_null_count;
+    let (first_offset, visible_len) = offset_span(list_offsets);
+    let capacity =
+        visible_len - values_nulls.slice(first_offset, visible_len).null_count();
     let mut offsets = Vec::<O>::with_capacity(list_array.len() + 1);
     offsets.push(O::zero());
     let mut mutable = MutableArrayData::with_capacities(
@@ -195,4 +197,16 @@ fn compact_list<O: OffsetSizeTrait>(
         new_values,
         list_nulls.cloned(),
     )?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sliced_capacity() -> Result<()> {
+        crate::utils::tests::check_sliced_list_capacity(|input| {
+            array_compact_inner(std::slice::from_ref(input))
+        })
+    }
 }

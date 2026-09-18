@@ -33,6 +33,7 @@ use datafusion_common::cast::{
 };
 use datafusion_common::internal_err;
 use datafusion_common::utils::ListCoercion;
+use datafusion_common::utils::offset_span_len;
 use datafusion_common::{
     Result, exec_datafusion_err, exec_err, internal_datafusion_err, plan_err,
     utils::take_function_args,
@@ -213,7 +214,7 @@ where
     }
 
     let original_data = values.to_data();
-    let capacity = Capacities::Array(original_data.len());
+    let capacity = Capacities::Array(array.len());
 
     // use_nulls: true, we don't construct List for array_element, so we need explicit nulls.
     let mut mutable =
@@ -602,7 +603,7 @@ where
 {
     let values = array.values();
     let original_data = values.to_data();
-    let capacity = Capacities::Array(original_data.len());
+    let capacity = Capacities::Array(offset_span_len(array.offsets()));
     // Carry the input's list field through to the output so that the returned
     // type matches the one promised by `return_type` / `return_field_from_args`,
     // including the field name, nullability and metadata.
@@ -1395,5 +1396,26 @@ mod tests {
         assert_eq!(first_row, vec![Some(1), None]);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_element_sliced_capacity() -> Result<()> {
+        crate::utils::tests::check_sliced_list_capacity(|input| {
+            super::array_element_inner(&[
+                Arc::clone(input),
+                Arc::new(Int64Array::from(vec![1; input.len()])),
+            ])
+        })
+    }
+
+    #[test]
+    fn test_slice_sliced_capacity() -> Result<()> {
+        crate::utils::tests::check_sliced_list_capacity(|input| {
+            super::array_slice_inner(&[
+                Arc::clone(input),
+                Arc::new(Int64Array::from(vec![1; input.len()])),
+                Arc::new(Int64Array::from(vec![3; input.len()])),
+            ])
+        })
     }
 }

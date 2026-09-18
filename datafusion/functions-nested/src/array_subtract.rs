@@ -128,3 +128,16 @@ fn array_subtract_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         ),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_sliced_capacity() -> Result<()> {
+        crate::utils::tests::check_sliced_list_capacity(|input| {
+            array_subtract_inner(&[Arc::clone(input), Arc::clone(input)])
+        })
+    }
+}
