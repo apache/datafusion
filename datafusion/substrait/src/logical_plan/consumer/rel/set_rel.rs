@@ -16,9 +16,10 @@
 // under the License.
 
 use crate::logical_plan::consumer::SubstraitConsumer;
-use datafusion::common::{DFSchema, not_impl_err, substrait_err};
-use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Projection};
-use std::sync::Arc;
+use datafusion::common::{JoinType, NullEquality, not_impl_err, substrait_err};
+use datafusion::logical_expr::{
+    Expr, LogicalPlan, LogicalPlanBuilder, requalify_sides_if_needed,
+};
 use substrait::proto::set_rel::SetOp;
 use substrait::proto::{Rel, SetRel};
 
@@ -100,63 +101,77 @@ async fn intersect_rels(
 /// so the same rule yields "nullable in the primary input and in at least one
 /// secondary input".
 ///
+/// When the right input requires a field the left input leaves nullable, the
+/// intersection is built as an inner join against the distinct right rows
+/// instead, and that field is read from the right side. Matched rows hold equal
+/// values, so the result is unchanged, and the field is non-nullable because
+/// its source is: the logical and the physical planner both derive that from
+/// the input schema, so the plan, the physical plan and the batches agree.
+/// Joining against distinct right rows keeps each left row at most once, as the
+/// semi join does.
+///
 /// [Set Operation rules]: https://substrait.io/relations/logical_relations/#set-operation
 fn intersect_rel(
     left: LogicalPlan,
     right: LogicalPlan,
     is_all: bool,
 ) -> datafusion::common::Result<LogicalPlan> {
-    let right_nullability: Vec<bool> = right
-        .schema()
-        .fields()
+    let left_fields = left.schema().fields();
+    let right_fields = right.schema().fields();
+    // Only a field that differs from its right counterpart in nullability alone
+    // is read from the right side, so every other attribute stays the left's.
+    let from_right: Vec<bool> = left_fields
         .iter()
-        .map(|field| field.is_nullable())
-        .collect();
-
-    let plan = LogicalPlanBuilder::intersect(left, right, is_all)?;
-
-    // `intersect` has already checked that both sides have the same width.
-    let narrowed: Vec<bool> = plan
-        .schema()
-        .fields()
-        .iter()
-        .zip(&right_nullability)
-        .map(|(field, right_nullable)| field.is_nullable() && !right_nullable)
-        .collect();
-
-    if !narrowed.contains(&true) {
-        return Ok(plan);
-    }
-
-    let qualified_fields = plan
-        .schema()
-        .iter()
-        .zip(&narrowed)
-        .map(|((qualifier, field), narrow)| {
-            let field = if *narrow {
-                Arc::new(field.as_ref().clone().with_nullable(false))
-            } else {
-                Arc::clone(field)
-            };
-            (qualifier.cloned(), field)
+        .zip(right_fields.iter())
+        .map(|(left, right)| {
+            left.is_nullable()
+                && !right.is_nullable()
+                && left.data_type() == right.data_type()
+                && left.metadata() == right.metadata()
         })
         .collect();
-    let schema = Arc::new(DFSchema::new_with_metadata(
-        qualified_fields,
-        plan.schema().metadata().clone(),
-    )?);
 
-    let exprs = plan
-        .schema()
-        .columns()
-        .into_iter()
-        .map(Expr::Column)
-        .collect();
-    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-        exprs,
-        Arc::new(plan),
-        schema,
-    )?))
+    // `intersect` also reports inputs of different widths. The join would merge
+    // the right input's schema metadata into the result, so that must match too.
+    if left_fields.len() != right_fields.len()
+        || left.schema().metadata() != right.schema().metadata()
+        || !from_right.contains(&true)
+    {
+        return LogicalPlanBuilder::intersect(left, right, is_all);
+    }
+
+    let (left, right, _) = requalify_sides_if_needed(
+        LogicalPlanBuilder::from(left),
+        LogicalPlanBuilder::from(right),
+    )?;
+    let left = if is_all { left } else { left.distinct()? };
+    let right = right.distinct()?.build()?;
+
+    let left_columns = left.schema().columns();
+    let right_columns = right.schema().columns();
+    let exprs = left_columns
+        .iter()
+        .zip(&right_columns)
+        .zip(&from_right)
+        .map(|((left, right), from_right)| {
+            if *from_right {
+                Expr::Column(right.clone())
+                    .alias_qualified(left.relation.clone(), &left.name)
+            } else {
+                Expr::Column(left.clone())
+            }
+        })
+        .collect::<Vec<_>>();
+
+    left.join_detailed(
+        right,
+        JoinType::Inner,
+        (left_columns, right_columns),
+        None,
+        NullEquality::NullEqualsNull,
+    )?
+    .project(exprs)?
+    .build()
 }
 
 async fn except_rels(

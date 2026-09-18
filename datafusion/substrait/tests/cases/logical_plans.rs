@@ -21,8 +21,12 @@
 mod tests {
     use crate::cases::roundtrip_logical_plan::higher_order_function_ctx;
     use crate::utils::test::{add_plan_schemas_to_ctx, read_json};
+    use datafusion::arrow::array::{ArrayRef, Int64Array, RecordBatch};
+    use datafusion::assert_batches_sorted_eq;
     use datafusion::common::test_util::format_batches;
+    use datafusion::datasource::MemTable;
     use std::collections::HashSet;
+    use std::sync::Arc;
 
     use datafusion::common::Result;
     use datafusion::dataframe::DataFrame;
@@ -233,22 +237,97 @@ mod tests {
     async fn intersect_nullability() -> Result<()> {
         // Substrait's set operation rules derive an intersection's nullability from
         // every input, not only the primary one. Each plan below intersects three
-        // tables carrying the same four columns, with these nullabilities
-        // (`?` marks a nullable column):
+        // tables carrying the same six columns, with these nullabilities (`?` marks
+        // a nullable column, `~` a column with unspecified nullability, which the
+        // consumer reads as nullable):
         //
-        //   primary     a? b? c? d?
-        //   secondary   a  b  c? d?
-        //   secondary   a  b? c  d?
-        for (file, expected) in [
+        //   primary     a? b? c? d? e? f?
+        //   secondary   a  b  c? d? e~ f~
+        //   secondary   a  b? c  d? e? f
+        let rows: [(&str, &[[Option<i64>; 6]]); 3] = [
+            (
+                "data",
+                &[
+                    [Some(1), Some(1), Some(1), None, None, Some(1)],
+                    [Some(2), None, Some(2), Some(2), Some(2), Some(2)],
+                    [Some(3), Some(3), None, Some(3), Some(3), Some(3)],
+                    [None, Some(4), Some(4), Some(4), Some(4), Some(4)],
+                ],
+            ),
+            (
+                "data2",
+                &[
+                    [Some(1), Some(1), Some(1), None, None, Some(1)],
+                    [Some(3), Some(3), None, Some(3), Some(3), Some(3)],
+                ],
+            ),
+            (
+                "data3",
+                &[
+                    [Some(1), Some(1), Some(1), None, None, Some(1)],
+                    [Some(2), None, Some(2), Some(2), Some(2), Some(2)],
+                ],
+            ),
+        ];
+
+        for (file, expected_nullability, expected_rows) in [
             // Nullable in the primary input and in at least one secondary input.
-            ("intersect_primary_mixed_nullability", "a, b?, c?, d?"),
+            (
+                "intersect_primary_mixed_nullability",
+                "a, b?, c?, d?, e?, f?",
+                &[
+                    "+---+---+---+---+---+---+",
+                    "| a | b | c | d | e | f |",
+                    "+---+---+---+---+---+---+",
+                    "| 1 | 1 | 1 |   |   | 1 |",
+                    "| 2 |   | 2 | 2 | 2 | 2 |",
+                    "| 3 | 3 |   | 3 | 3 | 3 |",
+                    "+---+---+---+---+---+---+",
+                ][..],
+            ),
             // Required as soon as any input requires it.
-            ("intersect_multiset_mixed_nullability", "a, b, c, d?"),
-            ("intersect_multiset_all_mixed_nullability", "a, b, c, d?"),
+            (
+                "intersect_multiset_mixed_nullability",
+                "a, b, c, d?, e?, f",
+                &[
+                    "+---+---+---+---+---+---+",
+                    "| a | b | c | d | e | f |",
+                    "+---+---+---+---+---+---+",
+                    "| 1 | 1 | 1 |   |   | 1 |",
+                    "+---+---+---+---+---+---+",
+                ][..],
+            ),
+            (
+                "intersect_multiset_all_mixed_nullability",
+                "a, b, c, d?, e?, f",
+                &[
+                    "+---+---+---+---+---+---+",
+                    "| a | b | c | d | e | f |",
+                    "+---+---+---+---+---+---+",
+                    "| 1 | 1 | 1 |   |   | 1 |",
+                    "+---+---+---+---+---+---+",
+                ][..],
+            ),
         ] {
             let proto_plan =
                 read_json(&format!("tests/testdata/test_plans/{file}.substrait.json"));
             let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+            // Give each table rows, so the batch schemas below come from real batches
+            for (table, rows) in rows {
+                let schema = ctx.table_provider(table).await?.schema();
+                let columns = (0..schema.fields().len())
+                    .map(|i| {
+                        Arc::new(rows.iter().map(|row| row[i]).collect::<Int64Array>())
+                            as ArrayRef
+                    })
+                    .collect();
+                let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
+                ctx.deregister_table(table)?;
+                ctx.register_table(
+                    table,
+                    Arc::new(MemTable::try_new(schema, vec![vec![batch]])?),
+                )?;
+            }
             let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
 
             let nullability = plan
@@ -264,10 +343,24 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            assert_eq!(nullability, expected, "nullability of {file}");
+            assert_eq!(nullability, expected_nullability, "nullability of {file}");
 
-            // Trigger execution to ensure plan validity
-            DataFrame::new(ctx.state(), plan).show().await?;
+            // The physical plan and the batches it produces must carry the same
+            // schema as the logical plan, not the left input's nullability
+            let logical_schema = Arc::clone(plan.schema().inner());
+            let df = DataFrame::new(ctx.state(), plan);
+            let physical_plan = df.clone().create_physical_plan().await?;
+            assert_eq!(
+                physical_plan.schema(),
+                logical_schema,
+                "physical schema of {file}"
+            );
+            let batches = df.collect().await?;
+            assert!(!batches.is_empty(), "no batches for {file}");
+            for batch in &batches {
+                assert_eq!(batch.schema(), logical_schema, "batch schema of {file}");
+            }
+            assert_batches_sorted_eq!(expected_rows, &batches);
         }
 
         Ok(())
