@@ -17,9 +17,9 @@
 
 use crate::logical_plan::producer::SubstraitProducer;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion::common::{DFSchemaRef, not_impl_err};
+use datafusion::common::{DFSchemaRef, ScalarValue, not_impl_err};
 use datafusion::logical_expr::expr::{Exists, InSubquery, SetComparison};
-use datafusion::logical_expr::{Case, Expr, LogicalPlan};
+use datafusion::logical_expr::{Case, Expr, ExprSchemable, LogicalPlan};
 use substrait::proto::Expression;
 use substrait::proto::expression::if_then::IfClause;
 use substrait::proto::expression::{IfThen, RexType};
@@ -54,7 +54,54 @@ pub fn from_case(
         );
     }
 
-    let mut ifs: Vec<IfClause> = Vec::with_capacity(when_then_expr.len());
+    // A NULL base answers from ELSE without any WHEN being evaluated:
+    // `CaseExpr::case_when_with_expr` fills those rows in and drops them from
+    // the batch before it evaluates the first WHEN. The desugaring below would
+    // evaluate them, because `<base> = <when>` evaluates both of its operands,
+    // so a WHEN that errors or has a side effect would reach rows the plan
+    // never ran it on. Emitting that skip as a leading clause restores it.
+    //
+    // It is only needed when a WHEN operand can do something on those rows.
+    // Reading a literal or a column cannot fail and has no side effect, so the
+    // common `CASE <base> WHEN <literal> ...` keeps the encoding it had.
+    let when_operand_is_inert = |(when, _): &(Box<Expr>, Box<Expr>)| {
+        matches!(when.as_ref(), Expr::Literal(..) | Expr::Column(_))
+    };
+    let null_base_guard = match expr {
+        Some(base)
+            if !when_then_expr.iter().all(when_operand_is_inert)
+                && base.nullable(schema.as_ref())? =>
+        {
+            Some(base)
+        }
+        _ => None,
+    };
+
+    let mut ifs: Vec<IfClause> =
+        Vec::with_capacity(when_then_expr.len() + usize::from(null_base_guard.is_some()));
+
+    if let Some(base) = null_base_guard {
+        let condition = producer.handle_expr(&base.clone().is_null(), schema)?;
+        // The value a NULL base yields: ELSE, or a NULL of the result type when
+        // the CASE has none.
+        let then = match else_expr {
+            Some(e) => producer.handle_expr(e, schema)?,
+            None => {
+                let result_type = match when_then_expr.first() {
+                    Some((_, then)) => then.get_type(schema.as_ref())?,
+                    None => {
+                        return not_impl_err!("CASE with no WHEN clause");
+                    }
+                };
+                let null = Expr::Literal(ScalarValue::try_from(&result_type)?, None);
+                producer.handle_expr(&null, schema)?
+            }
+        };
+        ifs.push(IfClause {
+            r#if: Some(condition),
+            then: Some(then),
+        });
+    }
     for (when, then) in when_then_expr {
         let condition = match expr {
             Some(base) => {
