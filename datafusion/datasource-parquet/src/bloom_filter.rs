@@ -271,6 +271,102 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_tuple_in_bloom_pruning_preserves_correlation() -> Result<()> {
+        use arrow::array::{Int32Array, RecordBatch, StructArray, as_boolean_array};
+        use datafusion_physical_expr::PhysicalExpr;
+        use datafusion_physical_expr::expressions::{
+            DynamicFilterPhysicalExpr, InListExpr,
+        };
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        // Row groups contain exact matches, impossible values, and crossed pairs.
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 99, 98, 1, 2])),
+                Arc::new(Int32Array::from(vec![10, 20, 99, 98, 20, 10])),
+            ],
+        )?;
+        let tuple = logical2physical(
+            &datafusion_functions::core::r#struct().call(vec![col("a"), col("b")]),
+            &schema,
+        );
+        let columns = tuple.children().into_iter().cloned().collect();
+        let DataType::Struct(fields) = tuple.data_type(&schema)? else {
+            unreachable!()
+        };
+        let values = Arc::new(StructArray::new(
+            fields,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(Int32Array::from(vec![10, 20])),
+            ],
+            None,
+        ));
+        let exact: Arc<dyn PhysicalExpr> = Arc::new(InListExpr::try_new_from_array(
+            tuple, values, false, &schema,
+        )?);
+        let live = Arc::new(DynamicFilterPhysicalExpr::new(
+            columns,
+            datafusion_physical_expr::expressions::lit(true),
+        ));
+        assert!(
+            build_test_pruning_predicate(live.clone(), schema.as_ref().clone())
+                .literal_guarantees()
+                .is_empty()
+        );
+        live.update(Arc::clone(&exact))?;
+
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(2))
+            .set_bloom_filter_fpp(0.000001)
+            .set_bloom_filter_enabled(true)
+            .build();
+        let mut writer =
+            ArrowWriter::try_new(Vec::new(), Arc::clone(&schema), Some(props))?;
+        writer.write(&batch)?;
+        let data = bytes::Bytes::from(writer.into_inner()?);
+        let predicate =
+            build_test_pruning_predicate(live.clone(), schema.as_ref().clone());
+        let pruned = test_row_group_bloom_filter_pruning_predicate(
+            "tuple-in.parquet",
+            data.clone(),
+            &predicate,
+        )
+        .await?;
+        let selected = pruned.access_plan().row_group_indexes();
+        assert_eq!(selected, vec![0, 2]);
+        let reader = ParquetRecordBatchReaderBuilder::try_new(data)?
+            .with_row_groups(selected)
+            .build()?;
+        let mut actual = Vec::new();
+        for batch in reader {
+            let batch = batch?;
+            let mask = exact.evaluate(&batch)?.into_array(batch.num_rows())?;
+            actual.push(arrow::compute::filter_record_batch(
+                &batch,
+                as_boolean_array(&mask),
+            )?);
+        }
+        datafusion_common::assert_batches_eq!(
+            [
+                "+---+----+",
+                "| a | b  |",
+                "+---+----+",
+                "| 1 | 10 |",
+                "| 2 | 20 |",
+                "+---+----+"
+            ],
+            &actual
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_row_group_bloom_filter_pruning_predicate_simple_expr() {
         BloomFilterTest::new_data_index_bloom_encoding_stats()
             .with_expect_all_pruned()

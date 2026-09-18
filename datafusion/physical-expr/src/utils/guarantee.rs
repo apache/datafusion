@@ -20,8 +20,9 @@
 
 use crate::utils::split_disjunction;
 use crate::{PhysicalExpr, split_conjunction};
+use arrow::array::{Array, RecordBatch};
 use datafusion_common::{Column, HashMap, ScalarValue};
-use datafusion_expr::Operator;
+use datafusion_expr::{Operator, Volatility};
 use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
@@ -135,6 +136,16 @@ impl LiteralGuarantee {
                             inlist.guarantee,
                             inlist.list.iter().map(|lit| lit.value()),
                         )
+                    } else if let Some(projected) = project_struct_in_list(inlist) {
+                        projected
+                            .into_iter()
+                            .fold(builder, |builder, (col, values)| {
+                                builder.aggregate_multi_conjunct(
+                                    col,
+                                    Guarantee::In,
+                                    &values,
+                                )
+                            })
                     } else {
                         builder
                     }
@@ -310,11 +321,11 @@ impl<'a> GuaranteeBuilder<'a> {
     /// * `AND (a != 1 OR a != 2 OR a != 3)`: a is not in (1, 2, or 3)
     /// * `AND (a NOT IN (1,2,3))`: a is not in (1, 2, or 3)
     #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
-    fn aggregate_multi_conjunct(
+    fn aggregate_multi_conjunct<'b>(
         mut self,
         col: &'a crate::expressions::Column,
         guarantee: Guarantee,
-        new_values: impl IntoIterator<Item = &'a ScalarValue>,
+        new_values: impl IntoIterator<Item = &'b ScalarValue>,
     ) -> Self {
         let key = (col, guarantee);
         if let Some(index) = self.map.get(&key) {
@@ -375,6 +386,85 @@ impl<'a> GuaranteeBuilder<'a> {
         // filter out any guarantees that have been invalidated
         self.guarantees.into_iter().flatten().collect()
     }
+}
+
+/// Project necessary per-column guarantees; the original predicate retains tuple correlation.
+fn project_struct_in_list(
+    inlist: &crate::expressions::InListExpr,
+) -> Option<Vec<(&crate::expressions::Column, Vec<ScalarValue>)>> {
+    if inlist.negated() || inlist.is_empty() {
+        return None;
+    }
+    let expr = inlist.expr().downcast_ref::<crate::ScalarFunctionExpr>()?;
+    let literal_args = expr
+        .args()
+        .iter()
+        .map(|arg| {
+            arg.downcast_ref::<crate::expressions::Literal>()
+                .map(|lit| lit.value().clone())
+        })
+        .collect::<Vec<_>>();
+    let mapping = expr.fun().struct_field_mapping(&literal_args)?;
+    if mapping.field_accessor.signature().volatility != Volatility::Immutable {
+        return None;
+    }
+    let tuples = inlist
+        .list()
+        .iter()
+        .map(|value| {
+            let literal = value.downcast_ref::<crate::expressions::Literal>()?;
+            let ScalarValue::Struct(array) = literal.value() else {
+                return None;
+            };
+            (array.len() == 1).then_some(literal.value())
+        })
+        .collect::<Option<Vec<_>>>()?;
+    // Null tuples cannot make a positive IN predicate true.
+    let tuples = ScalarValue::iter_to_array(
+        tuples.into_iter().filter(|tuple| !tuple.is_null()).cloned(),
+    )
+    .ok()?;
+    let batch = RecordBatch::try_from_iter([("tuple", tuples)]).ok()?;
+
+    let mut projected = Vec::new();
+    for (accessor_args, source_index) in mapping.fields {
+        let column = expr
+            .args()
+            .get(source_index)?
+            .downcast_ref::<crate::expressions::Column>()?;
+        let mut args: Vec<Arc<dyn PhysicalExpr>> =
+            vec![Arc::new(crate::expressions::Column::new("tuple", 0))];
+        args.extend(accessor_args.into_iter().map(crate::expressions::lit));
+        let accessor = crate::ScalarFunctionExpr::try_new(
+            Arc::clone(&mapping.field_accessor),
+            args,
+            batch.schema_ref(),
+            Arc::new(expr.config_options().clone()),
+        )
+        .ok()?;
+        let array = accessor
+            .evaluate(&batch)
+            .ok()?
+            .into_array_of_size(batch.num_rows())
+            .ok()?;
+        let mut values = Vec::new();
+        for index in 0..array.len() {
+            let value = ScalarValue::try_from_array(array.as_ref(), index).ok()?;
+            let value = match value {
+                ScalarValue::Dictionary(_, value) => *value,
+                value => value,
+            };
+            if value.is_null() {
+                values.clear();
+                break;
+            }
+            values.push(value);
+        }
+        if !values.is_empty() {
+            projected.push((column, values));
+        }
+    }
+    Some(projected)
 }
 
 /// Represents a single `col [not]in literal` expression
@@ -442,7 +532,6 @@ impl<'a> ColInList<'a> {
     ///
     /// Returns None otherwise
     fn try_new(inlist: &'a crate::expressions::InListExpr) -> Option<Self> {
-        // Only support single-column inlist currently, multi-column inlist is not supported
         let col = inlist.expr().downcast_ref::<crate::expressions::Column>()?;
 
         let literals = inlist
@@ -839,6 +928,98 @@ mod test {
         test_analyze(
             col("b").in_list((1..25).map(lit).collect_vec(), false),
             vec![in_guarantee("b", 1..25)],
+        );
+    }
+
+    #[test]
+    fn test_struct_inlist_guarantees() {
+        use crate::expressions::InListExpr;
+        use arrow::array::{ArrayRef, Int32Array, StringArray, StructArray};
+        use arrow::buffer::NullBuffer;
+
+        let make_expr = |strings: ArrayRef, nulls: Option<NullBuffer>, negated| {
+            let schema = Schema::new(vec![
+                Field::new("a", strings.data_type().clone(), true),
+                Field::new("b", DataType::Int32, true),
+            ]);
+            let expr = logical2physical(
+                &datafusion_functions::core::r#struct().call(vec![col("a"), col("b")]),
+                &schema,
+            );
+            let DataType::Struct(fields) = expr.data_type(&schema).unwrap() else {
+                unreachable!()
+            };
+            let values = Arc::new(StructArray::new(
+                fields,
+                vec![strings, Arc::new(Int32Array::from(vec![1, 2, 3]))],
+                nulls,
+            ));
+            Arc::new(
+                InListExpr::try_new_from_array(expr, values, negated, &schema).unwrap(),
+            ) as Arc<dyn PhysicalExpr>
+        };
+        let strings: ArrayRef = Arc::new(StringArray::from(vec!["foo", "foo", "bar"]));
+        assert_eq!(
+            LiteralGuarantee::analyze(&make_expr(Arc::clone(&strings), None, false)),
+            vec![
+                in_guarantee("a", ["foo", "bar"]),
+                in_guarantee("b", [1, 2, 3])
+            ]
+        );
+        assert!(
+            LiteralGuarantee::analyze(&make_expr(Arc::clone(&strings), None, true))
+                .is_empty()
+        );
+        assert_eq!(
+            LiteralGuarantee::analyze(&make_expr(
+                strings,
+                Some(vec![false, true, true].into()),
+                false
+            )),
+            vec![in_guarantee("a", ["foo", "bar"]), in_guarantee("b", [2, 3])]
+        );
+
+        let strings = StringArray::from(vec![Some("foo"), None, Some("bar")]);
+        let dictionary =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        for data_type in [DataType::Utf8, dictionary] {
+            let strings = arrow::compute::cast(&strings, &data_type).unwrap();
+            assert_eq!(
+                LiteralGuarantee::analyze(&make_expr(strings, None, false)),
+                vec![in_guarantee("b", [1, 2, 3])]
+            );
+        }
+        let strings = arrow::compute::cast(
+            &StringArray::from(vec!["foo", "foo", "bar"]),
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        )
+        .unwrap();
+        assert_eq!(
+            LiteralGuarantee::analyze(&make_expr(strings, None, false)),
+            vec![
+                in_guarantee("a", ["foo", "bar"]),
+                in_guarantee("b", [1, 2, 3])
+            ]
+        );
+
+        // Named fields map to nonconsecutive arguments, in a different column order.
+        let tuple = RecordBatch::try_from_iter([
+            ("right", Arc::new(Int32Array::from(vec![1])) as ArrayRef),
+            ("left", Arc::new(StringArray::from(vec!["foo"])) as ArrayRef),
+        ])
+        .unwrap();
+        let expr = datafusion_functions::core::named_struct().call(vec![
+            lit("right"),
+            col("b"),
+            lit("left"),
+            col("a"),
+        ]);
+        test_analyze(
+            expr.in_list(
+                vec![lit(ScalarValue::Struct(Arc::new(StructArray::from(tuple))))],
+                false,
+            ),
+            vec![in_guarantee("a", ["foo"]), in_guarantee("b", [1])],
         );
     }
 
