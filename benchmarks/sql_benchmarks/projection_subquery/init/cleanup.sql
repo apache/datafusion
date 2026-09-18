@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS outer_t;
+DROP TABLE IF EXISTS inner_t;
