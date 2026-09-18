@@ -26,11 +26,12 @@ use std::sync::Arc;
 
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema, Result, qualified_name};
+use datafusion_common::{Column, DFSchema, Result, internal_err, qualified_name};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{Expr, ExpressionPlacement, Projection};
 
 use crate::optimizer::ApplyOrder;
+use crate::projection_inliner::{DuplicationCost, PinnedDefinitions, ProjectionInliner};
 use crate::push_down_filter::replace_cols_by_name;
 use crate::utils::{ColumnReference, has_all_column_refs, schema_columns};
 use crate::{OptimizerConfig, OptimizerRule};
@@ -57,56 +58,41 @@ fn has_extractable_expr(exprs: &[Expr]) -> bool {
     })
 }
 
-/// Returns the flat names of `plan`'s output columns whose defining expression
-/// is volatile (e.g. `random()`).
+/// Returns the definitions of an input projection that must not be merged.
 ///
-/// Only a [`LogicalPlan::Projection`] can define such a column: anywhere else
-/// the value has already been materialized by the projection that produced it,
-/// so referencing the column again does not re-evaluate anything.
-fn volatile_output_columns(plan: &LogicalPlan) -> BTreeSet<String> {
-    let LogicalPlan::Projection(projection) = plan else {
-        return BTreeSet::new();
-    };
-    projection
-        .schema
-        .iter()
-        .zip(projection.expr.iter())
-        .filter(|(_, expr)| expr.is_volatile())
-        .map(|((qualifier, field), _)| Column::from((qualifier, field)).flat_name())
-        .collect()
-}
-
-/// Returns `true` if building an extraction projection for `exprs` on top of
-/// `input` would duplicate a volatile computation.
-///
-/// When `input` is already a projection, [`build_extraction_projection_impl`]
-/// *merges* into it: every column reference in an extracted expression is
-/// replaced by that column's defining expression (see
-/// [`build_projection_replace_map`]). Inlining a volatile definition makes the
-/// merged projection evaluate it a second, independent time, so the extracted
-/// value no longer matches the column it was derived from:
+/// An extraction projection is *merged* into an input that is already a
+/// projection. The merge keeps every expression of the input and resolves the
+/// column references of the extracted expressions to their definitions (see
+/// [`build_extraction_projection_impl`]). The inliner decides if that is
+/// allowed: after the merge, a definition that is not free to copy must be
+/// evaluated one time only. For example:
 ///
 /// ```text
-/// Projection: s, get_field(s, 'a') AS field
-///   Projection: named_struct('a', random()) AS s
+/// Filter: __common_expr_1 IS NOT NULL AND get_field(__common_expr_1, 'a') = 1
+///   Projection: f(c) AS __common_expr_1, c
 /// ```
 ///
-/// would merge into a single projection computing `random()` twice, and
-/// `field` would then differ from `s['a']` on every row. Callers skip the
-/// extraction instead.
-fn would_duplicate_volatile<'a>(
-    exprs: impl IntoIterator<Item = &'a Expr>,
-    input: &LogicalPlan,
-) -> bool {
-    let volatile = volatile_output_columns(input);
-    if volatile.is_empty() {
-        return false;
-    }
-    exprs.into_iter().any(|expr| {
-        expr.column_refs()
-            .iter()
-            .any(|col| volatile.contains(&col.flat_name()))
-    })
+/// `CommonSubexprEliminate` computes `f(c)` one time on purpose. Extracting
+/// `get_field(__common_expr_1, 'a')` into the projection would make it
+/// `get_field(f(c), 'a')`, while the filter still reads `__common_expr_1`, so
+/// `f(c)` is computed twice. For a volatile `f` (for example `random()`) this
+/// also changes the result.
+///
+/// The count uses the consumers that the rule can see: the extracted
+/// expressions and the columns that the nodes above reference directly. A
+/// definition that nothing references after the merge is removed by
+/// `OptimizeProjections`. A volatile definition is never merged, because a
+/// consumer further up can still reference it.
+///
+/// `inlined` are the expressions that the merge resolves, and
+/// `direct_columns` the columns that the nodes above reference directly.
+fn pinned_for_merge<'a>(
+    inliner: &ProjectionInliner<'_>,
+    inlined: impl IntoIterator<Item = &'a Expr>,
+    direct_columns: &IndexSet<Column>,
+) -> PinnedDefinitions {
+    let direct: Vec<Expr> = direct_columns.iter().cloned().map(Expr::Column).collect();
+    inliner.pinned_for_known_consumers(inlined, &direct, DuplicationCost::Free)
 }
 
 /// Extracts `MoveTowardsLeafNodes` sub-expressions from non-projection nodes
@@ -252,15 +238,15 @@ fn extract_from_plan(
         return Ok(Transformed::no(plan));
     }
 
-    // The extraction projection is merged into an input that is already a
-    // projection, which inlines the referenced columns' definitions. Skip the
-    // extraction when that would duplicate a volatile computation.
-    if inputs
+    // Clone the input projections, so that the extractors can check which
+    // expressions can be merged into them while `plan` is rewritten.
+    let input_projections: Vec<Option<Projection>> = inputs
         .iter()
-        .any(|input| would_duplicate_volatile(node_exprs.iter(), input))
-    {
-        return Ok(Transformed::no(plan));
-    }
+        .map(|input| match input {
+            LogicalPlan::Projection(projection) => Some(projection.clone()),
+            _ => None,
+        })
+        .collect();
 
     // Save original output schema before any transformation
     let original_schema = Arc::clone(plan.schema());
@@ -274,7 +260,11 @@ fn extract_from_plan(
     // Build per-input extractors
     let mut extractors: Vec<LeafExpressionExtractor> = input_schemas
         .iter()
-        .map(|schema| LeafExpressionExtractor::new(schema.as_ref(), alias_generator))
+        .zip(&input_projections)
+        .map(|(schema, projection)| {
+            LeafExpressionExtractor::new(schema.as_ref(), alias_generator)
+                .with_input_projection(projection.as_ref(), &node_exprs, &IndexSet::new())
+        })
         .collect();
 
     // Build per-input column sets for routing expressions to the correct input
@@ -378,12 +368,15 @@ fn routing_extract(
 
         match e.placement() {
             ExpressionPlacement::MoveTowardsLeafNodes => {
-                if let Some(idx) = find_owning_input(&e, input_column_sets) {
-                    let col_ref = extractors[idx].add_extracted(e)?;
-                    Ok(Transformed::yes(col_ref))
-                } else {
-                    // References columns from multiple inputs — cannot extract
-                    Ok(Transformed::no(e))
+                match find_owning_input(&e, input_column_sets) {
+                    Some(idx) if extractors[idx].can_extract(&e) => {
+                        let col_ref = extractors[idx].add_extracted(e)?;
+                        Ok(Transformed::yes(col_ref))
+                    }
+                    // References columns from multiple inputs, or would
+                    // evaluate a definition of the input projection again —
+                    // cannot extract
+                    _ => Ok(Transformed::no(e)),
                 }
             }
             ExpressionPlacement::Column => {
@@ -396,6 +389,7 @@ fn routing_extract(
                     && let Some(idx) = find_owning_input(&e, input_column_sets)
                 {
                     extractors[idx].columns_needed.insert(col.clone());
+                    extractors[idx].direct_columns.insert(col.clone());
                 }
                 Ok(Transformed::no(e))
             }
@@ -414,8 +408,7 @@ fn routing_extract(
 /// Used for SubqueryAlias (alias-space -> input-space) and Union
 /// (union output-space -> per-branch input-space).
 fn remap_pairs_and_columns(
-    pairs: &[(Expr, String)],
-    columns: &IndexSet<Column>,
+    target: &ExtractionTarget,
     from_schema: &DFSchema,
     to_schema: &DFSchema,
 ) -> Result<ExtractionTarget> {
@@ -426,7 +419,8 @@ fn remap_pairs_and_columns(
             Expr::Column(Column::new(to_q.cloned(), to_f.name())),
         );
     }
-    let remapped_pairs: Vec<(Expr, String)> = pairs
+    let remapped_pairs: Vec<(Expr, String)> = target
+        .pairs
         .iter()
         .map(|(expr, alias)| {
             Ok((
@@ -435,21 +429,24 @@ fn remap_pairs_and_columns(
             ))
         })
         .collect::<Result<_>>()?;
-    let remapped_columns: IndexSet<Column> = columns
-        .iter()
-        .filter_map(|col| {
-            let rewritten =
-                replace_cols_by_name(Expr::Column(col.clone()), &replace_map).ok()?;
-            if let Expr::Column(c) = rewritten {
-                Some(c)
-            } else {
-                Some(col.clone())
-            }
-        })
-        .collect();
+    let remap_columns = |columns: &IndexSet<Column>| -> IndexSet<Column> {
+        columns
+            .iter()
+            .filter_map(|col| {
+                let rewritten =
+                    replace_cols_by_name(Expr::Column(col.clone()), &replace_map).ok()?;
+                if let Expr::Column(c) = rewritten {
+                    Some(c)
+                } else {
+                    Some(col.clone())
+                }
+            })
+            .collect()
+    };
     Ok(ExtractionTarget {
         pairs: remapped_pairs,
-        columns: remapped_columns,
+        columns: remap_columns(&target.columns),
+        direct_columns: remap_columns(&target.direct_columns),
     })
 }
 
@@ -464,22 +461,10 @@ struct ExtractionTarget {
     pairs: Vec<(Expr, String)>,
     /// Standalone column references needed by the parent node.
     columns: IndexSet<Column>,
-}
-
-/// Build a replacement map from a projection: output_column_name -> underlying_expr.
-///
-/// This is used to resolve column references through a renaming projection.
-/// For example, if a projection has `user AS x`, this maps `x` -> `col("user")`.
-fn build_projection_replace_map(projection: &Projection) -> HashMap<String, Expr> {
-    projection
-        .schema
-        .iter()
-        .zip(projection.expr.iter())
-        .map(|((qualifier, field), expr)| {
-            let key = Column::from((qualifier, field)).flat_name();
-            (key, expr.clone().unalias())
-        })
-        .collect()
+    /// The columns that the nodes above reference directly, outside of the
+    /// extracted expressions. A merge keeps computing their definitions. See
+    /// [`pinned_for_merge`].
+    direct_columns: IndexSet<Column>,
 }
 
 /// Build a recovery projection to restore the original output schema.
@@ -579,6 +564,14 @@ struct LeafExpressionExtractor<'a> {
     input_schema: &'a DFSchema,
     /// Alias generator
     alias_generator: &'a Arc<AliasGenerator>,
+    /// Columns that the parent node references directly, outside of the
+    /// extracted expressions.
+    direct_columns: IndexSet<Column>,
+    /// Set when the input is a projection that the extraction projection will
+    /// be merged into. See [`pinned_for_merge`].
+    input_inliner: Option<ProjectionInliner<'a>>,
+    /// The definitions of the input projection that must not be extracted.
+    pinned: PinnedDefinitions,
 }
 
 impl<'a> LeafExpressionExtractor<'a> {
@@ -588,7 +581,36 @@ impl<'a> LeafExpressionExtractor<'a> {
             columns_needed: IndexSet::new(),
             input_schema,
             alias_generator,
+            direct_columns: IndexSet::new(),
+            input_inliner: None,
+            pinned: PinnedDefinitions::default(),
         }
+    }
+
+    /// Sets the input projection that the extractions will be merged into.
+    /// `consumers` are all the expressions of the parent node that reference
+    /// the input, and `direct_columns` the input columns that the nodes above
+    /// the parent reference. See [`pinned_for_merge`].
+    fn with_input_projection<'e>(
+        mut self,
+        projection: Option<&'a Projection>,
+        consumers: impl IntoIterator<Item = &'e Expr>,
+        direct_columns: &IndexSet<Column>,
+    ) -> Self {
+        if let Some(projection) = projection {
+            let inliner = ProjectionInliner::new(projection);
+            self.pinned = pinned_for_merge(&inliner, consumers, direct_columns);
+            self.input_inliner = Some(inliner);
+        }
+        self
+    }
+
+    /// Returns `true` if `expr` can be extracted into the input. See
+    /// [`pinned_for_merge`].
+    fn can_extract(&self, expr: &Expr) -> bool {
+        self.input_inliner
+            .as_ref()
+            .is_none_or(|inliner| !inliner.references_pinned(expr, &self.pinned))
     }
 
     /// Adds an expression to extracted set, returns column reference.
@@ -627,12 +649,19 @@ impl<'a> LeafExpressionExtractor<'a> {
             .iter()
             .map(|(e, a)| (e.clone(), a.clone()))
             .collect();
-        let proj = build_extraction_projection_impl(
+        let Some(proj) = build_extraction_projection_impl(
             &pairs,
             &self.columns_needed,
+            &self.direct_columns,
             input,
             self.input_schema,
-        )?;
+        )?
+        else {
+            // `routing_extract` only extracts what `can_extract` accepts.
+            return internal_err!(
+                "extracted expressions can not be merged into the input projection"
+            );
+        };
         Ok(Some(LogicalPlan::Projection(proj)))
     }
 }
@@ -648,13 +677,25 @@ impl<'a> LeafExpressionExtractor<'a> {
 /// Deduplicates by resolved expression equality and adds pass-through
 /// columns as needed. Otherwise builds a fresh projection with extracted
 /// expressions + ALL input schema columns.
+///
+/// Returns `None` if the merge would evaluate a definition of the existing
+/// projection again, given that the nodes above also reference
+/// `direct_columns` (see [`pinned_for_merge`]).
 fn build_extraction_projection_impl(
     extracted_exprs: &[(Expr, String)],
     columns_needed: &IndexSet<Column>,
+    direct_columns: &IndexSet<Column>,
     target: &Arc<LogicalPlan>,
     target_schema: &DFSchema,
-) -> Result<Projection> {
+) -> Result<Option<Projection>> {
     if let LogicalPlan::Projection(existing) = target.as_ref() {
+        // Resolves column references through the existing projection
+        let inliner = ProjectionInliner::new(existing);
+        let extracted = extracted_exprs.iter().map(|(e, _)| e);
+        if !pinned_for_merge(&inliner, extracted, direct_columns).is_empty() {
+            return Ok(None);
+        }
+
         // Merge into existing projection
         let mut proj_exprs = existing.expr.clone();
 
@@ -672,12 +713,9 @@ fn build_extraction_projection_impl(
             })
             .collect();
 
-        // Resolve column references through the projection's rename mapping
-        let replace_map = build_projection_replace_map(existing);
-
         // Add new extracted expressions, resolving column refs through the projection
         for (expr, alias) in extracted_exprs {
-            let resolved = replace_cols_by_name(expr.clone().alias(alias), &replace_map)?;
+            let resolved = inliner.substitute(expr.clone().alias(alias))?;
             let resolved_inner = if let Expr::Alias(a) = &resolved {
                 a.expr.as_ref()
             } else {
@@ -716,8 +754,10 @@ fn build_extraction_projection_impl(
 
         let input_schema = existing.input.schema();
         for col in columns_needed {
-            let col_expr = Expr::Column(col.clone());
-            let resolved = replace_cols_by_name(col_expr, &replace_map)?;
+            let resolved = inliner
+                .definition(col)
+                .cloned()
+                .unwrap_or_else(|| Expr::Column(col.clone()));
             if let Expr::Column(resolved_col) = &resolved
                 && !existing_cols.contains(resolved_col)
                 && input_schema.has_column(resolved_col)
@@ -727,7 +767,7 @@ fn build_extraction_projection_impl(
             // If resolved to non-column expr, it's already computed by existing projection
         }
 
-        Projection::try_new(proj_exprs, Arc::clone(&existing.input))
+        Projection::try_new(proj_exprs, Arc::clone(&existing.input)).map(Some)
     } else {
         // Build new projection with extracted expressions + all input columns
         let mut proj_exprs = Vec::new();
@@ -737,7 +777,7 @@ fn build_extraction_projection_impl(
         for (qualifier, field) in target_schema.iter() {
             proj_exprs.push(Expr::from((qualifier, field)));
         }
-        Projection::try_new(proj_exprs, Arc::clone(target))
+        Projection::try_new(proj_exprs, Arc::clone(target)).map(Some)
     }
 }
 
@@ -801,7 +841,7 @@ impl OptimizerRule for PushDownLeafProjections {
             return Ok(Transformed::no(plan));
         }
         let alias_generator = config.alias_generator();
-        match try_push_input(&plan, alias_generator)? {
+        match try_push_input(&plan, None, alias_generator)? {
             Some(new_plan) => Ok(Transformed::yes(new_plan)),
             None => Ok(Transformed::no(plan)),
         }
@@ -812,14 +852,19 @@ impl OptimizerRule for PushDownLeafProjections {
 ///
 /// Returns `Some(new_subtree)` if the projection was pushed down or merged,
 /// `None` if there is nothing to push or the projection sits above a barrier.
+///
+/// `known_direct_columns` is set when the rule built `input` itself: then
+/// the pass-through columns of `input` only keep the schema, and the nodes
+/// above reference only these columns directly (see [`pinned_for_merge`]).
 fn try_push_input(
     input: &LogicalPlan,
+    known_direct_columns: Option<&IndexSet<Column>>,
     alias_generator: &Arc<AliasGenerator>,
 ) -> Result<Option<LogicalPlan>> {
     let LogicalPlan::Projection(proj) = input else {
         return Ok(None);
     };
-    split_and_push_projection(proj, alias_generator)
+    split_and_push_projection(proj, known_direct_columns, alias_generator)
 }
 
 /// If this is a passthrough column.  I.e,
@@ -835,66 +880,6 @@ fn passthrough_column(expr: &Expr) -> Option<&Column> {
         },
         _ => None,
     }
-}
-
-/// Returns `true` if merging the extracted `pairs` (and the pass-through
-/// `columns_needed`) into `child` would inline a `KeepInPlace` definition into
-/// more than one reference site — e.g. a struct-returning UDF `f(c)` behind both
-/// `f(c)['a']` and `f(c)['b']`, or behind `f(c)['a']` and a bare `f(c)`.
-///
-/// `CommonSubexprEliminate` hoists such an expression into a shared column so it
-/// runs once; [`build_extraction_projection_impl`] then resolves that column
-/// back to its definition and re-duplicates it. Mirrors the
-/// `optimize_projections` merge guard (#8296): a compute-once expression used
-/// more than once stays in place.
-fn merge_would_duplicate_kept_expr(
-    pairs: &[(Expr, String)],
-    columns_needed: &IndexSet<Column>,
-    child: &Projection,
-) -> bool {
-    // Columns whose `KeepInPlace` definition must stay put; inlining one would
-    // duplicate a compute-once expression. Plain columns, pushable exprs, and
-    // literals are all cheap to duplicate, so only `KeepInPlace` counts.
-    let kept_columns: std::collections::HashSet<String> = child
-        .schema
-        .iter()
-        .zip(child.expr.iter())
-        .filter_map(|((qualifier, field), expr)| {
-            if matches!(expr.placement(), ExpressionPlacement::KeepInPlace) {
-                Some(Column::from((qualifier, field)).flat_name())
-            } else {
-                None
-            }
-        })
-        .collect();
-    if kept_columns.is_empty() {
-        return false;
-    }
-
-    // Count every site that references a kept column. A pair that references the
-    // same kept column twice still inlines one copy, so count each pair at most
-    // once per column.
-    let mut usage: HashMap<String, usize> = HashMap::new();
-    for (expr, _alias) in pairs {
-        let mut seen: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
-        for col in expr.column_refs() {
-            let name = col.flat_name();
-            if kept_columns.contains(&name) && seen.insert(name.clone()) {
-                *usage.entry(name).or_insert(0) += 1;
-            }
-        }
-    }
-    // Pass-through / pre-existing-alias inputs are additional reference sites:
-    // a bare `f(c)` alongside `f(c)['a']` also pins the compute-once column, so
-    // counting only `pairs` under-counted and re-duplicated it (#23655).
-    for col in columns_needed {
-        let name = col.flat_name();
-        if kept_columns.contains(&name) {
-            *usage.entry(name).or_insert(0) += 1;
-        }
-    }
-    usage.values().any(|&count| count > 1)
 }
 
 /// Splits a projection into extractable pieces, pushes them towards leaf
@@ -930,6 +915,7 @@ fn merge_would_duplicate_kept_expr(
 /// ```
 fn split_and_push_projection(
     proj: &Projection,
+    known_direct_columns: Option<&IndexSet<Column>>,
     alias_generator: &Arc<AliasGenerator>,
 ) -> Result<Option<LogicalPlan>> {
     // Fast pre-check: skip if there are no pre-existing extracted aliases
@@ -959,10 +945,23 @@ fn split_and_push_projection(
     // When building the final `extraction_pairs`, the Alias wrapper is
     // stripped so consumers see the usual `(inner_expr, alias_name)` tuples.
 
-    let mut extractors = vec![LeafExpressionExtractor::new(
-        input_schema.as_ref(),
-        alias_generator,
-    )];
+    // The consumers of the input: every expression of this projection, or
+    // only the non-pass-through ones when the direct columns are known.
+    let no_direct_columns = IndexSet::new();
+    let consumers = proj.expr.iter().filter(|expr| {
+        known_direct_columns.is_none() || passthrough_column(expr).is_none()
+    });
+    let input_projection = match input.as_ref() {
+        LogicalPlan::Projection(projection) => Some(projection),
+        _ => None,
+    };
+    let extractor = LeafExpressionExtractor::new(input_schema.as_ref(), alias_generator)
+        .with_input_projection(
+            input_projection,
+            consumers,
+            known_direct_columns.unwrap_or(&no_direct_columns),
+        );
+    let mut extractors = vec![extractor];
     let input_column_sets = vec![schema_columns(input_schema.as_ref())];
 
     let original_schema = proj.schema.as_ref();
@@ -975,6 +974,9 @@ fn split_and_push_projection(
             // Pass-through — the input already produces this column, so
             // there is nothing to extract; just track it in the extractor.
             extractors[0].columns_needed.insert(col.clone());
+            if known_direct_columns.is_none() {
+                extractors[0].direct_columns.insert(col.clone());
+            }
             recovery_exprs.push(expr.clone());
             proj_exprs_captured += 1;
         } else if let Expr::Alias(alias) = expr
@@ -1034,26 +1036,27 @@ fn split_and_push_projection(
         })
         .collect();
     let columns_needed = &extractor.columns_needed;
+    let mut direct_columns = extractor.direct_columns.clone();
+    if let Some(known) = known_direct_columns {
+        direct_columns.extend(known.iter().cloned());
+    }
 
     // If no extractions found, nothing to do
     if extraction_pairs.is_empty() {
         return Ok(None);
     }
 
-    // Pushing into an input that is already a projection merges into it and
-    // inlines the referenced columns' definitions. Leave the projection alone
-    // when that would duplicate a volatile computation.
-    if would_duplicate_volatile(
-        extraction_pairs.iter().map(|(expr, _)| expr),
-        input.as_ref(),
-    ) {
-        return Ok(None);
-    }
-
-    // Merging here would re-inline an expression `CommonSubexprEliminate` hoisted
-    // to run once, undoing it (issue #23655); leave the projection in place.
-    if let LogicalPlan::Projection(child) = input.as_ref()
-        && merge_would_duplicate_kept_expr(&extraction_pairs, columns_needed, child)
+    // `routing_extract` only extracts what can be merged into an input
+    // projection, but the pre-existing `__datafusion_extracted` aliases were
+    // not checked. Leave the projection in place if merging them would
+    // evaluate a definition of the input again (issue #23655).
+    if let Some(inliner) = &extractor.input_inliner
+        && !pinned_for_merge(
+            inliner,
+            extraction_pairs.iter().map(|(expr, _)| expr),
+            &direct_columns,
+        )
+        .is_empty()
     {
         return Ok(None);
     }
@@ -1061,8 +1064,11 @@ fn split_and_push_projection(
     // ── Phase 2: Push down ──────────────────────────────────────────────
     let proj_input = Arc::clone(&proj.input);
     let pushed = push_extraction_pairs(
-        &extraction_pairs,
-        columns_needed,
+        &ExtractionTarget {
+            pairs: extraction_pairs.clone(),
+            columns: columns_needed.clone(),
+            direct_columns: direct_columns.clone(),
+        },
         proj,
         &proj_input,
         alias_generator,
@@ -1083,12 +1089,16 @@ fn split_and_push_projection(
             }
             // Build extraction projection in-place (couldn't push down)
             let input_arc = Arc::clone(input);
-            let extraction = build_extraction_projection_impl(
+            let Some(extraction) = build_extraction_projection_impl(
                 &extraction_pairs,
                 columns_needed,
+                &direct_columns,
                 &input_arc,
                 input_schema.as_ref(),
-            )?;
+            )?
+            else {
+                return Ok(None);
+            };
             LogicalPlan::Projection(extraction)
         }
     };
@@ -1159,8 +1169,7 @@ fn is_pure_extraction_projection(plan: &LogicalPlan) -> bool {
 /// Pushes extraction pairs down through the projection's input node,
 /// dispatching to the appropriate handler based on the input node type.
 fn push_extraction_pairs(
-    pairs: &[(Expr, String)],
-    columns_needed: &IndexSet<Column>,
+    target: &ExtractionTarget,
     proj: &Projection,
     proj_input: &Arc<LogicalPlan>,
     alias_generator: &Arc<AliasGenerator>,
@@ -1175,12 +1184,16 @@ fn push_extraction_pairs(
         // extracted sub-parts) would be lost during the merge.
         LogicalPlan::Projection(_) if proj_exprs_captured == proj.expr.len() => {
             let target_schema = Arc::clone(proj_input.schema());
-            let merged = build_extraction_projection_impl(
-                pairs,
-                columns_needed,
+            let Some(merged) = build_extraction_projection_impl(
+                &target.pairs,
+                &target.columns,
+                &target.direct_columns,
                 proj_input,
                 target_schema.as_ref(),
-            )?;
+            )?
+            else {
+                return Ok(None);
+            };
             let merged_plan = LogicalPlan::Projection(merged);
 
             // After merging, try to push the result further down, but ONLY
@@ -1192,7 +1205,11 @@ fn push_extraction_pairs(
             // This handles: Extraction → Recovery(cols) → Filter → ... → TableScan
             // by pushing through the recovery projection AND the filter in one pass.
             if is_pure_extraction_projection(&merged_plan)
-                && let Some(pushed) = try_push_input(&merged_plan, alias_generator)?
+                && let Some(pushed) = try_push_input(
+                    &merged_plan,
+                    Some(&target.direct_columns),
+                    alias_generator,
+                )?
             {
                 return Ok(Some(pushed));
             }
@@ -1203,12 +1220,7 @@ fn push_extraction_pairs(
         // Join, and anything else.
         // Safely bails out for nodes that don't pass through extracted
         // columns (Aggregate, Window) via the output schema check.
-        _ => try_push_into_inputs(
-            pairs,
-            columns_needed,
-            proj_input.as_ref(),
-            alias_generator,
-        ),
+        _ => try_push_into_inputs(target, proj_input.as_ref(), alias_generator),
     }
 }
 
@@ -1220,8 +1232,7 @@ fn push_extraction_pairs(
 ///
 /// Returns `None` if any expression can't be routed or no input has pairs.
 fn route_to_inputs(
-    pairs: &[(Expr, String)],
-    columns: &IndexSet<Column>,
+    target: &ExtractionTarget,
     node: &LogicalPlan,
     input_column_sets: &[std::collections::HashSet<ColumnReference>],
     input_schemas: &[Arc<DFSchema>],
@@ -1231,6 +1242,7 @@ fn route_to_inputs(
         .map(|_| ExtractionTarget {
             pairs: vec![],
             columns: IndexSet::new(),
+            direct_columns: IndexSet::new(),
         })
         .collect();
 
@@ -1240,23 +1252,31 @@ fn route_to_inputs(
         // `simple_struct.s`). Remap pairs/columns to each input's space.
         let union_schema = node.schema();
         for (idx, input_schema) in input_schemas.iter().enumerate() {
-            per_input[idx] =
-                remap_pairs_and_columns(pairs, columns, union_schema, input_schema)?;
+            per_input[idx] = remap_pairs_and_columns(target, union_schema, input_schema)?;
         }
     } else {
-        for (expr, alias) in pairs {
+        for (expr, alias) in &target.pairs {
             match find_owning_input(expr, input_column_sets) {
                 Some(idx) => per_input[idx].pairs.push((expr.clone(), alias.clone())),
                 None => return Ok(None), // Cross-input expression — bail out
             }
         }
-        for col in columns {
+        for col in &target.columns {
             let col_expr = Expr::Column(col.clone());
             match find_owning_input(&col_expr, input_column_sets) {
                 Some(idx) => {
                     per_input[idx].columns.insert(col.clone());
                 }
                 None => return Ok(None), // Ambiguous column — bail out
+            }
+        }
+        // A direct reference counts for every input that can own it.
+        for col in &target.direct_columns {
+            let col_ref = ColumnReference::new(col.relation.as_ref(), col.name());
+            for (idx, cols) in input_column_sets.iter().enumerate() {
+                if cols.contains(&col_ref) {
+                    per_input[idx].direct_columns.insert(col.clone());
+                }
             }
         }
     }
@@ -1298,8 +1318,7 @@ fn route_to_inputs(
 ///       TableScan: right [user_id, order]
 /// ```
 fn try_push_into_inputs(
-    pairs: &[(Expr, String)],
-    columns_needed: &IndexSet<Column>,
+    target: &ExtractionTarget,
     node: &LogicalPlan,
     alias_generator: &Arc<AliasGenerator>,
 ) -> Result<Option<LogicalPlan>> {
@@ -1316,16 +1335,22 @@ fn try_push_into_inputs(
 
     // SubqueryAlias remaps qualifiers between input and output.
     // Rewrite pairs/columns from alias-space to input-space before routing.
+    // The node itself also references its inputs directly.
+    let mut direct_columns = target.direct_columns.clone();
+    for expr in node.expressions() {
+        direct_columns.extend(expr.column_refs().into_iter().cloned());
+    }
+    let target = ExtractionTarget {
+        pairs: target.pairs.clone(),
+        columns: target.columns.clone(),
+        direct_columns,
+    };
     let remapped = if let LogicalPlan::SubqueryAlias(sa) = node {
-        remap_pairs_and_columns(pairs, columns_needed, &sa.schema, sa.input.schema())?
+        remap_pairs_and_columns(&target, &sa.schema, sa.input.schema())?
     } else {
-        ExtractionTarget {
-            pairs: pairs.to_vec(),
-            columns: columns_needed.clone(),
-        }
+        target
     };
     let pairs = &remapped.pairs[..];
-    let columns_needed = &remapped.columns;
 
     // Build per-input schemas and column sets for routing
     let input_schemas: Vec<Arc<DFSchema>> =
@@ -1334,13 +1359,8 @@ fn try_push_into_inputs(
         input_schemas.iter().map(|s| schema_columns(s)).collect();
 
     // Route pairs and columns to the appropriate inputs
-    let Some(per_input) = route_to_inputs(
-        pairs,
-        columns_needed,
-        node,
-        &input_column_sets,
-        &input_schemas,
-    )?
+    let Some(per_input) =
+        route_to_inputs(&remapped, node, &input_column_sets, &input_schemas)?
     else {
         return Ok(None);
     };
@@ -1356,23 +1376,20 @@ fn try_push_into_inputs(
         if per_input[idx].pairs.is_empty() {
             new_inputs.push(input.clone());
         } else {
-            // Merging into an input projection inlines the referenced columns'
-            // definitions; bail out when that would duplicate a volatile
-            // computation.
-            if would_duplicate_volatile(
-                per_input[idx].pairs.iter().map(|(expr, _)| expr),
-                input,
-            ) {
-                return Ok(None);
-            }
             let input_arc = Arc::new(input.clone());
             let target_schema = Arc::clone(input.schema());
-            let proj = build_extraction_projection_impl(
+            // Bail out when merging into an input projection would evaluate
+            // one of its definitions again (see `pinned_for_merge`).
+            let Some(proj) = build_extraction_projection_impl(
                 &per_input[idx].pairs,
                 &per_input[idx].columns,
+                &per_input[idx].direct_columns,
                 &input_arc,
                 target_schema.as_ref(),
-            )?;
+            )?
+            else {
+                return Ok(None);
+            };
             // Verify all requested aliases appear in the projection's output.
             // A merge may deduplicate if the same expression already exists
             // under a different alias, leaving the requested alias missing.
@@ -1387,7 +1404,11 @@ fn try_push_into_inputs(
             // this input (e.g., through Filter → existing extraction projection).
             // This ensures the input's output schema is stable and won't change
             // when the TopDown pass later visits children.
-            match try_push_input(&proj_plan, alias_generator)? {
+            match try_push_input(
+                &proj_plan,
+                Some(&per_input[idx].direct_columns),
+                alias_generator,
+            )? {
                 Some(pushed) => new_inputs.push(pushed),
                 None => new_inputs.push(proj_plan),
             }
@@ -3597,6 +3618,51 @@ mod tests {
         Projection: get_field_like(__common_expr_1 AS keep_in_place_udf(test.c), Utf8("a")), __common_expr_1 AS keep_in_place_udf(test.c)
           Projection: keep_in_place_udf(test.c) AS __common_expr_1
             TableScan: test projection=[c]
+        "#);
+
+        Ok(())
+    }
+
+    /// Regression test for issue #25329: the #23655 shape inside a `Filter`.
+    /// `CommonSubexprEliminate` puts `f(c)` into a projection below the filter;
+    /// `ExtractLeafExpressions` must not merge `f(c)['a']` into that
+    /// projection, because that evaluates `f(c)` a second time.
+    #[test]
+    fn test_struct_returning_udf_in_filter_evaluated_once() -> Result<()> {
+        let udf = ScalarUDF::new_from_impl(
+            PlacementTestUDF::new().with_placement(ExpressionPlacement::KeepInPlace),
+        );
+        let f_c = udf.call(vec![col("c")]);
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(
+                f_c.clone()
+                    .is_not_null()
+                    .and(get_field_like(f_c, "a").is_null()),
+            )?
+            .project(vec![col("a")])?
+            .build()?;
+
+        let ctx = OptimizerContext::new();
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(CommonSubexprEliminate::new()),
+            Arc::new(ExtractLeafExpressions::new()),
+            Arc::new(PushDownLeafProjections::new()),
+            Arc::new(OptimizeProjections::new()),
+        ]);
+        let optimized = optimizer.optimize(plan, &ctx, |_, _| {})?;
+
+        let formatted = format!("{optimized}");
+        assert_eq!(
+            formatted.matches("keep_in_place_udf(test.c)").count(),
+            1,
+            "struct-returning UDF must be evaluated once; got:\n{formatted}"
+        );
+
+        insta::assert_snapshot!(formatted, @r#"
+        Projection: test.a
+          Filter: __common_expr_1 IS NOT NULL AND get_field_like(__common_expr_1, Utf8("a")) IS NULL
+            Projection: keep_in_place_udf(test.c) AS __common_expr_1, test.a
+              TableScan: test projection=[a, c]
         "#);
 
         Ok(())
