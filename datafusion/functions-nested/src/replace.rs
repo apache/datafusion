@@ -24,7 +24,7 @@ use arrow::array::{
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::utils::ListCoercion;
+use datafusion_common::utils::{ListCoercion, offsets_span};
 use datafusion_common::{
     Result, ScalarValue, exec_err, internal_err, utils::take_function_args,
 };
@@ -582,11 +582,8 @@ fn general_replace_with_scalar<O: OffsetSizeTrait>(
         )?));
     }
 
-    let first_offset = list_array.offsets()[0].to_usize().unwrap();
-    let last_offset = list_array.offsets()[list_array.len()].to_usize().unwrap();
-    let visible_values = list_array
-        .values()
-        .slice(first_offset, last_offset - first_offset);
+    let (first_offset, values_len) = offsets_span(list_array.offsets());
+    let visible_values = list_array.values().slice(first_offset, values_len);
 
     let to_array = scalar_to.to_array_of_size(1)?;
     let original_data = visible_values.to_data();

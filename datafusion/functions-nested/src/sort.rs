@@ -28,7 +28,7 @@ use arrow::datatypes::{ArrowNativeTypeOp, DataType, FieldRef};
 use arrow::row::{RowConverter, Rows, SortField};
 use arrow::{compute, compute::SortOptions, downcast_primitive_array};
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_string_array};
-use datafusion_common::utils::ListCoercion;
+use datafusion_common::utils::{ListCoercion, offsets_span};
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
@@ -385,8 +385,7 @@ fn array_sort_non_primitive<OffsetSize: OffsetSizeTrait>(
     let row_count = list_array.len();
     let values = list_array.values();
     let offsets = list_array.offsets();
-    let values_start = offsets[0].as_usize();
-    let total_values = offsets[row_count].as_usize() - values_start;
+    let (values_start, total_values) = offsets_span(offsets);
 
     let converter = RowConverter::new(vec![SortField::new_with_options(
         values.data_type().clone(),

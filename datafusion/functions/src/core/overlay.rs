@@ -16,8 +16,7 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayRef, GenericStringArray, Int64Array, OffsetSizeTrait, StringArrayType,
-    StringViewArray,
+    Array, ArrayRef, Int64Array, OffsetSizeTrait, StringArrayType, StringViewArray,
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::DataType;
@@ -29,6 +28,7 @@ use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
 };
+use datafusion_common::utils::offsets_span_len;
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
@@ -236,8 +236,8 @@ fn overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     } else {
         let string_array = as_generic_string_array::<T>(&args[0])?;
         let characters_array = as_generic_string_array::<T>(&args[1])?;
-        let data_capacity = visible_offset_bytes(string_array)
-            .saturating_add(visible_offset_bytes(characters_array));
+        let data_capacity = offsets_span_len(string_array.offsets())
+            .saturating_add(offsets_span_len(characters_array.offsets()));
         let builder = GenericStringArrayBuilder::<T>::with_capacity(
             string_array.len(),
             data_capacity,
@@ -309,16 +309,6 @@ where
 /// per-view lengths.
 fn visible_view_bytes(array: &StringViewArray) -> usize {
     array.lengths().map(|l| l as usize).sum()
-}
-
-/// Bytes referenced by the visible window of `array`, derived from the offset
-/// buffer.
-fn visible_offset_bytes<T: OffsetSizeTrait>(array: &GenericStringArray<T>) -> usize {
-    let offsets = array.value_offsets();
-    // `value_offsets()` always has `array.len() + 1` entries (≥1).
-    let first = offsets.first().copied().unwrap_or_default();
-    let last = offsets.last().copied().unwrap_or_default();
-    last.as_usize() - first.as_usize()
 }
 
 #[cfg(test)]

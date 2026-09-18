@@ -40,6 +40,7 @@ use arrow::array::{
 use datafusion_common::cast::{
     as_generic_list_array, as_int64_array, as_large_list_array, as_list_array,
 };
+use datafusion_common::utils::offsets_span;
 use datafusion_common::{
     Result, exec_datafusion_err, exec_err, utils::take_function_args,
 };
@@ -255,11 +256,8 @@ fn array_position_scalar<O: OffsetSizeTrait>(
     // ListArrays, values() returns the full underlying array but only
     // elements between the first and last offset are referenced.
     let offsets = haystack.offsets();
-    let first_offset = offsets[0].as_usize();
-    let last_offset = offsets[haystack.len()].as_usize();
-    let visible_values = haystack
-        .values()
-        .slice(first_offset, last_offset - first_offset);
+    let (first_offset, values_len) = offsets_span(offsets);
+    let visible_values = haystack.values().slice(first_offset, values_len);
 
     // `not_distinct` treats NULL=NULL as true, matching the semantics of
     // `array_position`.
@@ -554,11 +552,8 @@ fn array_positions_scalar<O: OffsetSizeTrait>(
     // ListArrays, values() returns the full underlying array but only
     // elements between the first and last offset are referenced.
     let offsets = haystack.offsets();
-    let first_offset = offsets[0].as_usize();
-    let last_offset = offsets[num_rows].as_usize();
-    let visible_values = haystack
-        .values()
-        .slice(first_offset, last_offset - first_offset);
+    let (first_offset, values_len) = offsets_span(offsets);
+    let visible_values = haystack.values().slice(first_offset, values_len);
 
     // `not_distinct` treats NULL=NULL as true, matching the semantics of
     // `array_positions`.
@@ -573,9 +568,9 @@ fn array_positions_scalar<O: OffsetSizeTrait>(
 
     // Match positions are relative to visible_values (0-based), so
     // subtract first_offset from each offset when comparing.
-    for i in 0..num_rows {
-        let start = offsets[i].as_usize() - first_offset;
-        let end = offsets[i + 1].as_usize() - first_offset;
+    for (i, window) in offsets.windows(2).enumerate() {
+        let start = window[0].as_usize() - first_offset;
+        let end = window[1].as_usize() - first_offset;
 
         if validity.is_some_and(|v| v.is_null(i)) {
             // Null row -> null output; advance past matches in range.

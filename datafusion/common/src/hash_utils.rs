@@ -89,6 +89,8 @@ use crate::cast::{
 };
 use crate::error::Result;
 use crate::error::{_internal_datafusion_err, _internal_err};
+#[cfg(not(feature = "force_hash_collisions"))]
+use crate::utils::offsets_span;
 use std::cell::RefCell;
 
 mod build_hasher;
@@ -689,9 +691,7 @@ fn hash_map_array(
     let offsets = array.offsets();
 
     // Create hashes for each entry in each row
-    let first_offset = offsets.first().copied().unwrap_or_default() as usize;
-    let last_offset = offsets.last().copied().unwrap_or_default() as usize;
-    let entries_len = last_offset - first_offset;
+    let (first_offset, entries_len) = offsets_span(offsets);
 
     // Only hash the entries that are actually referenced
     let mut values_hashes = vec![0u64; entries_len];
@@ -739,15 +739,11 @@ fn hash_list_array<OffsetSize>(
 where
     OffsetSize: OffsetSizeTrait,
 {
-    // In case values is sliced, hash only the bytes used by the offsets of this ListArray
-    let first_offset = array.value_offsets().first().copied().unwrap_or_default();
-    let last_offset = array.value_offsets().last().copied().unwrap_or_default();
-    let value_bytes_len = (last_offset - first_offset).as_usize();
-    let mut values_hashes = vec![0u64; value_bytes_len];
+    // Hash only the child values referenced by this ListArray's offsets.
+    let (first_offset, values_len) = offsets_span(array.offsets());
+    let mut values_hashes = vec![0u64; values_len];
     child_hashing.create_hashes(
-        [array
-            .values()
-            .slice(first_offset.as_usize(), value_bytes_len)],
+        [array.values().slice(first_offset, values_len)],
         &mut values_hashes,
     )?;
 
@@ -756,8 +752,8 @@ where
         {
             if array.is_valid(i) {
                 let hash = &mut hashes_buffer[i];
-                for values_hash in &values_hashes[(*start - first_offset).as_usize()
-                    ..(*stop - first_offset).as_usize()]
+                for values_hash in &values_hashes
+                    [start.as_usize() - first_offset..stop.as_usize() - first_offset]
                 {
                     *hash = combine_hashes(*hash, *values_hash);
                 }
@@ -771,7 +767,7 @@ where
             .zip(hashes_buffer.iter_mut())
         {
             for values_hash in &values_hashes
-                [(*start - first_offset).as_usize()..(*stop - first_offset).as_usize()]
+                [start.as_usize() - first_offset..stop.as_usize() - first_offset]
             {
                 *hash = combine_hashes(*hash, *values_hash);
             }

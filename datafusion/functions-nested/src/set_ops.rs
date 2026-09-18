@@ -28,7 +28,7 @@ use arrow::datatypes::DataType::{LargeList, List, Null};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::utils::{ListCoercion, normalize_float_zero};
+use datafusion_common::utils::{ListCoercion, normalize_float_zero, offsets_span};
 use datafusion_common::{
     Result, assert_eq_or_internal_err, exec_err, internal_err, utils::take_function_args,
 };
@@ -332,8 +332,7 @@ impl Display for SetOp {
 pub(crate) fn normalize_visible_values<OffsetSize: OffsetSizeTrait>(
     array: &GenericListArray<OffsetSize>,
 ) -> ArrayRef {
-    let first = array.offsets()[0].as_usize();
-    let len = array.offsets()[array.len()].as_usize() - first;
+    let (first, len) = offsets_span(array.offsets());
     if first == 0 && len == array.values().len() {
         normalize_float_zero(array.values())
     } else {

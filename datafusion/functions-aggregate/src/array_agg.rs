@@ -35,8 +35,8 @@ use arrow_select::dictionary::garbage_collect_any_dictionary;
 use datafusion_common::cast::as_list_array;
 use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_common::scalar::copy_array_data;
-use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::utils::proxy::HashTableAllocExt;
+use datafusion_common::utils::{SingleRowListArrayBuilder, offsets_span};
 use datafusion_common::{
     Result, ScalarValue, assert_eq_or_internal_err, exec_err, internal_err,
 };
@@ -285,18 +285,14 @@ impl ArrayAggAccumulator {
     /// If there are gaps but only in the end of the list array, the function will return the values without the null values in the end
     fn get_optional_values_to_merge_as_is(list_array: &ListArray) -> Option<ArrayRef> {
         let offsets = list_array.value_offsets();
-        // Offsets always have at least 1 value
-        let initial_offset = offsets[0];
         let null_count = list_array.null_count();
 
         // If no nulls than just use the fast path
         // This is ok as the state is a ListArray rather than a ListViewArray so all the values are consecutive
         if null_count == 0 {
             // According to Arrow specification, the first offset can be non-zero
-            let list_values = list_array.values().slice(
-                initial_offset as usize,
-                (offsets[offsets.len() - 1] - initial_offset) as usize,
-            );
+            let (start, len) = offsets_span(list_array.offsets());
+            let list_values = list_array.values().slice(start, len);
             return Some(list_values);
         }
 

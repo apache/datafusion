@@ -35,7 +35,7 @@ use datafusion_common::{
     types::{NativeType, logical_string},
     utils::{
         hex::{HexCase, encode_bytes, encode_bytes_to_slice},
-        take_function_args,
+        offsets_span_len, take_function_args,
     },
 };
 use datafusion_expr::{
@@ -272,19 +272,13 @@ fn decode_scalar(value: &ScalarValue, encoding: Encoding) -> Result<ColumnarValu
     }
 }
 
-/// Estimate how many bytes are actually represented by the array; in case the
-/// the array slices it's internal buffer, this returns the byte size of that slice
-/// but not the byte size of the entire buffer.
+/// Estimates the number of input bytes covered by the array's visible rows.
 ///
-/// This is an estimation only as it can estimate higher if null slots are non-zero
-/// sized.
+/// Sliced arrays exclude bytes outside their visible offset span. This can
+/// overestimate the bytes processed because null rows may cover nonempty byte
+/// ranges.
 fn estimate_byte_data_size<O: OffsetSizeTrait>(array: &GenericBinaryArray<O>) -> usize {
-    let offsets = array.value_offsets();
-    // Unwraps are safe as should always have 1 element in offset buffer
-    let start = *offsets.first().unwrap();
-    let end = *offsets.last().unwrap();
-    let data_size = end - start;
-    data_size.as_usize()
+    offsets_span_len(array.offsets())
 }
 
 fn decode_array(array: &ArrayRef, encoding: Encoding) -> Result<ColumnarValue> {
@@ -544,7 +538,7 @@ mod tests {
         let size = estimate_byte_data_size(&array);
         assert_eq!(size, 15);
 
-        // Offsets starting at 0, but don't count entire data buffer size
+        // Nonzero starting offset, including bytes covered by null slots
         let array = BinaryArray::new(
             OffsetBuffer::new(vec![50, 51, 51, 60, 80, 81].into()),
             vec![0; 100].into(),
