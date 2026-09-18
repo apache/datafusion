@@ -231,7 +231,7 @@ impl<'a> ProjectionInliner<'a> {
     /// the caller can not see. A copy of a forbidden definition would then
     /// be evaluated independently of the original, and change the query
     /// result.
-    pub(crate) fn pinned_for_known_consumers<'i, 'o>(
+    pub(crate) fn pinned_with_unknown_consumers<'i, 'o>(
         &self,
         inlined: impl IntoIterator<Item = &'i Expr>,
         others: impl IntoIterator<Item = &'o Expr>,
@@ -506,7 +506,7 @@ mod tests {
         // Without all the consumers, a single reference is pinned as well.
         assert!(
             !inliner
-                .pinned_for_known_consumers([&col("r")], no_others, max)
+                .pinned_with_unknown_consumers([&col("r")], no_others, max)
                 .is_empty()
         );
     }
@@ -525,7 +525,7 @@ mod tests {
             .is_not_null()
             .and(get_field_like(col("exp"), "x"));
         let other = col("cheap").gt(col("a"));
-        let pinned = inliner.pinned_for_known_consumers(
+        let pinned = inliner.pinned_with_unknown_consumers(
             [&twice, &other],
             no_others,
             DuplicationCost::Cheap,

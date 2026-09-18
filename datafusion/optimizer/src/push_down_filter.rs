@@ -1339,7 +1339,7 @@ fn rewrite_projection(
     //   optimizer instability: `ExtractLeafExpressions` undoes the push-down,
     //   which creates a loop that runs until the iteration limit is hit.
     let no_other_consumers: [&Expr; 0] = [];
-    let pinned = inliner.pinned_for_known_consumers(
+    let pinned = inliner.pinned_with_unknown_consumers(
         &predicates,
         no_other_consumers,
         DuplicationCost::Cheap,

@@ -92,7 +92,7 @@ fn pinned_for_merge<'a>(
     direct_columns: &IndexSet<Column>,
 ) -> PinnedDefinitions {
     let direct: Vec<Expr> = direct_columns.iter().cloned().map(Expr::Column).collect();
-    inliner.pinned_for_known_consumers(inlined, &direct, DuplicationCost::Free)
+    inliner.pinned_with_unknown_consumers(inlined, &direct, DuplicationCost::Free)
 }
 
 /// Extracts `MoveTowardsLeafNodes` sub-expressions from non-projection nodes
