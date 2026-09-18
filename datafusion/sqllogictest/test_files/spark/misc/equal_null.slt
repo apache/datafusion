@@ -211,4 +211,20 @@ statement ok
 DROP TABLE equal_null_physical;
 
 statement ok
+set datafusion.explain.show_schema = true;
+
+query TT
+EXPLAIN SELECT equal_null(NULL::int, NULL::int);
+----
+logical_plan
+01)Projection: equal_null(CAST(NULL AS Int32), CAST(NULL AS Int32))
+02)--EmptyRelation: rows=1
+physical_plan
+01)ProjectionExec: expr=[equal_null(CAST(NULL AS Int32), CAST(NULL AS Int32)) as equal_null(NULL,NULL)], schema=[equal_null(NULL,NULL):Boolean]
+02)--PlaceholderRowExec, schema=[]
+
+statement ok
+reset datafusion.explain.show_schema;
+
+statement ok
 reset datafusion.optimizer.max_passes;

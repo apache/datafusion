@@ -15,16 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, plan_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{
-    ColumnarValue, Expr, Operator, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility, binary_expr,
+    ColumnarValue, Expr, Operator, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility, binary_expr,
 };
 use datafusion_physical_expr_common::datum::apply_cmp;
+use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkEqualNull {
@@ -72,6 +73,10 @@ impl ScalarUDFImpl for SparkEqualNull {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Boolean)
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Boolean, false)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
