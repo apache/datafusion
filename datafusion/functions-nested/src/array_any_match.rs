@@ -193,7 +193,7 @@ mod tests {
     use arrow::{
         array::{
             ArrayRef, BooleanArray, DictionaryArray, Int32Array, ListArray, RecordBatch,
-            StringArray, StringViewArray,
+            StringViewArray,
         },
         buffer::{NullBuffer, OffsetBuffer},
         datatypes::{DataType, Field, UInt32Type},
@@ -206,7 +206,7 @@ mod tests {
         lambda, lit,
         physical_planning_context::PhysicalPlanningContext,
     };
-    use datafusion_physical_expr::{PhysicalExpr, create_physical_expr};
+    use datafusion_physical_expr::create_physical_expr;
 
     use crate::array_any_match::{ArrayAnyMatch, array_any_match_higher_order_function};
     use crate::lambda_utils::test_utils::{
