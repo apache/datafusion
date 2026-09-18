@@ -38,13 +38,13 @@ use crate::aggregates::group_values::multi_group_by::{
 };
 use arrow::array::{Array, ArrayRef, BooleanBufferBuilder, new_empty_array};
 use arrow::datatypes::{
-    BinaryViewType, DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type,
-    DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-    DurationSecondType, Field, Float16Type, Float32Type, Float64Type, Int8Type,
-    Int16Type, Int32Type, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType,
-    IntervalUnit, IntervalYearMonthType, Schema, SchemaRef, StringViewType,
-    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
-    TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    BinaryViewType, DataType, Date32Type, Date64Type, Decimal32Type, Decimal64Type,
+    Decimal128Type, Decimal256Type, DurationMicrosecondType, DurationMillisecondType,
+    DurationNanosecondType, DurationSecondType, Field, Float16Type, Float32Type,
+    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, IntervalDayTimeType,
+    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, Schema, SchemaRef,
+    StringViewType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
+    Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type,
     UInt64Type,
 };
@@ -951,6 +951,8 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
             | DataType::Float16
             | DataType::Float32
             | DataType::Float64
+            | DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _)
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _)
             | DataType::Utf8
@@ -1089,6 +1091,12 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
                 instantiate_primitive!(nullable, IntervalMonthDayNanoType, data_type)
             }
         },
+        DataType::Decimal32(_, _) => {
+            instantiate_primitive!(nullable, Decimal32Type, data_type)
+        }
+        DataType::Decimal64(_, _) => {
+            instantiate_primitive!(nullable, Decimal64Type, data_type)
+        }
         DataType::Decimal128(_, _) => {
             instantiate_primitive!(nullable, Decimal128Type, data_type)
         }
@@ -1380,7 +1388,9 @@ mod tests {
         Int32Array, Int64Array, PrimitiveArray, RecordBatch, StringArray,
         StringViewArray, UInt32Array,
     };
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use arrow::datatypes::{
+        DataType, Decimal32Type, Decimal64Type, Field, Schema, SchemaRef,
+    };
     use arrow::{
         compute::{concat_batches, take},
         util::pretty::pretty_format_batches,
@@ -1685,6 +1695,8 @@ mod tests {
             DataType::Float32,
             DataType::Float64,
             DataType::Float16,
+            DataType::Decimal32(9, 2),
+            DataType::Decimal64(18, 2),
             DataType::Decimal128(38, 10),
             DataType::Decimal256(76, 10),
             DataType::Utf8,
@@ -1736,6 +1748,16 @@ mod tests {
                 )),
             ),
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Float16)),
+            // The narrow decimals are reachable through the dictionary
+            // recursion too, not just as top-level keys.
+            DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Decimal32(9, 2)),
+            ),
+            DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Decimal64(18, 2)),
+            ),
         ];
 
         for dt in &supported_cases {
@@ -1840,6 +1862,82 @@ mod tests {
         assert_eq!(actual.value(0), 10);
         assert!(actual.is_null(1));
         assert_eq!(actual.value(2), 20);
+    }
+
+    // `Decimal32` / `Decimal64` group keys stay on the `GroupValuesColumn` fast
+    // path, dedup (including nulls), and round-trip with their declared
+    // precision and scale preserved -- not widened to `Decimal128`, and not
+    // emitted as the bare i32 / i64 storage type.
+    #[test]
+    fn test_group_values_column_narrow_decimals() {
+        // Both narrow widths go through the same primitive builder, so drive
+        // them from one body rather than testing only the first.
+        fn check<T>(data_type: DataType, values: [T::Native; 3])
+        where
+            T: arrow::datatypes::DecimalType + arrow::datatypes::ArrowPrimitiveType,
+        {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("d", data_type.clone(), true),
+                Field::new("i", DataType::Int64, true),
+            ]));
+            assert!(supported_schema(&schema), "{data_type} not on column path");
+            let mut group_values =
+                GroupValuesColumn::<false>::try_new(Arc::clone(&schema)).unwrap();
+
+            let (DataType::Decimal32(p, s) | DataType::Decimal64(p, s)) = data_type
+            else {
+                unreachable!("this test only covers the narrow decimals")
+            };
+            // Row 3 repeats row 0 and row 4 repeats the null pair. Row 5 carries
+            // a value at the storage type's full width.
+            let d: ArrayRef = Arc::new(
+                [
+                    Some(values[0]),
+                    None,
+                    Some(values[1]),
+                    Some(values[0]),
+                    None,
+                    Some(values[2]),
+                ]
+                .into_iter()
+                .collect::<PrimitiveArray<T>>()
+                .with_precision_and_scale(p, s)
+                .unwrap(),
+            );
+            let i: ArrayRef = Arc::new(Int64Array::from(vec![
+                Some(1),
+                None,
+                Some(2),
+                Some(1),
+                None,
+                Some(3),
+            ]));
+            let mut groups = Vec::new();
+            group_values.intern(&[d, i], &mut groups).unwrap();
+            assert_eq!(groups, vec![0, 1, 2, 0, 1, 3]);
+
+            let emitted = group_values.emit(EmitTo::All).unwrap();
+            assert_eq!(emitted.len(), 2);
+            // Precision and scale survive the round trip.
+            assert_eq!(emitted[0].data_type(), &data_type);
+            let actual = emitted[0]
+                .as_any()
+                .downcast_ref::<PrimitiveArray<T>>()
+                .expect("emitted column should keep its decimal type");
+            // Four groups in first-seen order.
+            assert_eq!(actual.len(), 4);
+            assert_eq!(actual.value(0), values[0]);
+            assert!(actual.is_null(1));
+            assert_eq!(actual.value(2), values[1]);
+            // The full-width value is not truncated by the narrower storage.
+            assert_eq!(actual.value(3), values[2]);
+        }
+
+        check::<Decimal32Type>(DataType::Decimal32(9, 2), [1000, 2000, 999_999_999]);
+        check::<Decimal64Type>(
+            DataType::Decimal64(18, 2),
+            [1000, 2000, 999_999_999_999_999_999],
+        );
     }
 
     // `(Float16, Int32)` keys: ±0.0 collapse (stored as +0.0), NaNs collapse, and
