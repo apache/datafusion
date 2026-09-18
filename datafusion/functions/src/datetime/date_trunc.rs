@@ -431,11 +431,15 @@ impl ScalarUDFImpl for DateTruncFunc {
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
-        // The DATE_TRUNC function preserves the order of its second argument.
         let precision = &input[0];
         let date_value = &input[1];
 
-        if precision.sort_properties.eq(&SortProperties::Singleton) {
+        let order_safe_input = matches!(
+            date_value.range.data_type(),
+            Timestamp(_, None) | Time32(_) | Time64(_)
+        );
+
+        if precision.sort_properties == SortProperties::Singleton && order_safe_input {
             Ok(date_value.sort_properties)
         } else {
             Ok(SortProperties::Unordered)
@@ -889,12 +893,54 @@ mod tests {
         TimestampNanosecondArray, TimestampSecondArray,
     };
     use arrow::buffer::NullBuffer;
-    use arrow::compute::DatePart;
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
+    use arrow::compute::{DatePart, SortOptions};
     use arrow::datatypes::{DataType, Field, TimeUnit};
     use datafusion_common::ScalarValue;
     use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::interval_arithmetic::Interval;
+    use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
+
+    #[test]
+    fn output_ordering_respects_timestamp_timezone() {
+        let precision_value = ScalarValue::Utf8(Some("hour".into()));
+        let precision = ExprProperties::new_unknown()
+            .with_order(SortProperties::Singleton)
+            .with_range(
+                Interval::try_new(precision_value.clone(), precision_value).unwrap(),
+            );
+        let ordered = SortProperties::Ordered(SortOptions::default());
+        let date_value = |data_type| {
+            ExprProperties::new_unknown()
+                .with_order(ordered)
+                .with_range(Interval::make_unbounded(&data_type).unwrap())
+        };
+        let function = DateTruncFunc::new();
+
+        let timestamp = date_value(DataType::Timestamp(TimeUnit::Second, None));
+        assert_eq!(
+            function
+                .output_ordering(&[precision.clone(), timestamp])
+                .unwrap(),
+            ordered
+        );
+        let timestamp_with_timezone = date_value(DataType::Timestamp(
+            TimeUnit::Second,
+            Some("America/Goose_Bay".into()),
+        ));
+        assert_eq!(
+            function
+                .output_ordering(&[precision.clone(), timestamp_with_timezone])
+                .unwrap(),
+            SortProperties::Unordered
+        );
+        let unknown = ExprProperties::new_unknown().with_order(ordered);
+        assert_eq!(
+            function.output_ordering(&[precision, unknown]).unwrap(),
+            SortProperties::Unordered
+        );
+    }
 
     #[test]
     fn date_trunc_test() {
