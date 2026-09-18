@@ -329,6 +329,18 @@ impl Display for SetOp {
     }
 }
 
+pub(crate) fn normalize_visible_values<OffsetSize: OffsetSizeTrait>(
+    array: &GenericListArray<OffsetSize>,
+) -> ArrayRef {
+    let first = array.offsets()[0].as_usize();
+    let len = array.offsets()[array.len()].as_usize() - first;
+    if first == 0 && len == array.values().len() {
+        normalize_float_zero(array.values())
+    } else {
+        normalize_float_zero(&array.values().slice(first, len))
+    }
+}
+
 fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     l: &GenericListArray<OffsetSize>,
     r: &GenericListArray<OffsetSize>,
@@ -354,27 +366,17 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     // Normalize -0.0 → +0.0 so RowConverter (which uses IEEE 754 totalOrder
     // and treats ±0 as distinct) groups them together. Use the normalized
     // arrays for both row conversion and the final output values.
-    let l_values_norm = normalize_float_zero(l.values());
-    let r_values_norm = normalize_float_zero(r.values());
+    let l_values_norm = normalize_visible_values(l);
+    let r_values_norm = normalize_visible_values(r);
 
-    // Only convert the visible portion of the values array. For sliced
-    // ListArrays, values() returns the full underlying array but only
-    // elements between the first and last offset are referenced.
-    let l_first = l.offsets()[0].as_usize();
-    let l_len = l.offsets()[l.len()].as_usize() - l_first;
-    let l_values = l_values_norm.slice(l_first, l_len);
-    let rows_l = converter.convert_columns(&[Arc::clone(&l_values)])?;
-
-    let r_first = r.offsets()[0].as_usize();
-    let r_len = r.offsets()[r.len()].as_usize() - r_first;
-    let r_values = r_values_norm.slice(r_first, r_len);
-    let rows_r = converter.convert_columns(&[Arc::clone(&r_values)])?;
+    let rows_l = converter.convert_columns(&[Arc::clone(&l_values_norm)])?;
+    let rows_r = converter.convert_columns(&[Arc::clone(&r_values_norm)])?;
 
     // Indices from the row converter are 0-based in the per-side slice;
     // concatenating those same slices lets indices map directly into the
     // combined values array.
-    let combined_values = concat(&[l_values.as_ref(), r_values.as_ref()])?;
-    let r_offset = l_len;
+    let combined_values = concat(&[l_values_norm.as_ref(), r_values_norm.as_ref()])?;
+    let r_offset = l_values_norm.len();
 
     match set_op {
         SetOp::Union => generic_set_loop::<OffsetSize, true>(
@@ -568,15 +570,9 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
     // Normalize -0.0 → +0.0 so RowConverter (which uses IEEE 754 totalOrder
     // and treats ±0 as distinct) groups them together, and so the output
     // carries the canonical sign.
-    let values_norm = normalize_float_zero(array.values());
-
-    // Only convert the visible portion of the values array. For sliced
-    // ListArrays, values() returns the full underlying array but only
-    // elements between the first and last offset are referenced.
     let first_offset = value_offsets[0].as_usize();
-    let visible_len = value_offsets[array.len()].as_usize() - first_offset;
-    let rows =
-        converter.convert_columns(&[values_norm.slice(first_offset, visible_len)])?;
+    let values_norm = normalize_visible_values(array);
+    let rows = converter.convert_columns(&[Arc::clone(&values_norm)])?;
 
     let mut indices: Vec<usize> = Vec::with_capacity(rows.num_rows());
     let mut seen = HashSet::new();
@@ -598,15 +594,14 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
         for idx in start..end {
             let row = rows.row(idx);
             if seen.insert(row) {
-                indices.push(idx + first_offset);
+                indices.push(idx);
             }
         }
         offsets.push(last_offset + OffsetSize::usize_as(seen.len()));
     }
 
     // Gather distinct values in a single pass, using the computed `indices`.
-    // Indices are absolute positions in the (normalized) values array, so we
-    // can take directly from the full values.
+    // Indices are relative to the visible, normalized values array.
     // Use UInt64Array for LargeList to support values arrays exceeding u32::MAX.
     let final_values = if indices.is_empty() {
         new_empty_array(&dt)
@@ -634,14 +629,17 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::{
-        array::{Array, AsArray, Int32Array, ListArray},
+        array::{Array, AsArray, Int32Array, LargeListArray, ListArray},
         buffer::OffsetBuffer,
-        datatypes::{DataType, Field, Int32Type},
+        datatypes::{DataType, Field, Float64Type, Int32Type},
     };
     use datafusion_common::{DataFusionError, Result, config::ConfigOptions};
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
-    use crate::set_ops::{ArrayDistinct, ArrayIntersect, ArrayUnion, array_distinct_udf};
+    use crate::set_ops::{
+        ArrayDistinct, ArrayIntersect, ArrayUnion, SetOp, array_distinct_udf,
+        general_array_distinct, generic_set_lists,
+    };
 
     /// Build two sliced ListArrays and return them along with the shared list
     /// field.
@@ -675,6 +673,17 @@ mod tests {
                     .values()
                     .to_vec()
             })
+            .collect()
+    }
+
+    fn collect_f64_bits<OffsetSize: arrow::array::OffsetSizeTrait>(
+        list: &arrow::array::GenericListArray<OffsetSize>,
+        row: usize,
+    ) -> Vec<Option<u64>> {
+        list.value(row)
+            .as_primitive::<Float64Type>()
+            .iter()
+            .map(|value| value.map(f64::to_bits))
             .collect()
     }
 
@@ -758,6 +767,113 @@ mod tests {
         assert_eq!(rows[0], vec![3, 4]);
         // Row 1: distinct([5,5,6]) = [5,6]
         assert_eq!(rows[1], vec![5, 6]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_sliced_float_set_ops_preserve_semantics() -> Result<()> {
+        let nan = f64::from_bits(0x7ff8_0000_0000_0042);
+        let l = ListArray::from_iter_primitive::<Float64Type, _, _>(vec![
+            Some(vec![Some(99.0)]),
+            Some(vec![
+                Some(-0.0),
+                Some(0.0),
+                Some(1.0),
+                Some(nan),
+                Some(nan),
+                None,
+                None,
+            ]),
+            None,
+            Some(vec![Some(-99.0)]),
+        ])
+        .slice(1, 2);
+        let r = ListArray::from_iter_primitive::<Float64Type, _, _>(vec![
+            Some(vec![Some(98.0)]),
+            Some(vec![Some(0.0), Some(2.0), Some(nan), None]),
+            Some(vec![Some(1.0)]),
+            Some(vec![Some(-98.0)]),
+        ])
+        .slice(1, 2);
+        let DataType::List(field) = l.data_type() else {
+            unreachable!()
+        };
+
+        let distinct = general_array_distinct::<i32>(&l, field)?;
+        let distinct = distinct.as_list::<i32>();
+        assert_eq!(
+            collect_f64_bits(distinct, 0),
+            vec![
+                Some(0.0_f64.to_bits()),
+                Some(1.0_f64.to_bits()),
+                Some(nan.to_bits()),
+                None,
+            ]
+        );
+        assert!(distinct.is_null(1));
+
+        let union = generic_set_lists::<i32>(&l, &r, Arc::clone(field), SetOp::Union)?;
+        let union = union.as_list::<i32>();
+        assert_eq!(
+            collect_f64_bits(union, 0),
+            vec![
+                Some(0.0_f64.to_bits()),
+                Some(1.0_f64.to_bits()),
+                Some(nan.to_bits()),
+                None,
+                Some(2.0_f64.to_bits()),
+            ]
+        );
+        assert!(union.is_null(1));
+
+        let intersect =
+            generic_set_lists::<i32>(&l, &r, Arc::clone(field), SetOp::Intersect)?;
+        let intersect = intersect.as_list::<i32>();
+        assert_eq!(
+            collect_f64_bits(intersect, 0),
+            vec![Some(0.0_f64.to_bits()), Some(nan.to_bits()), None]
+        );
+        assert!(intersect.is_null(1));
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_distinct_sliced_float_large_list() -> Result<()> {
+        let list = LargeListArray::from_iter_primitive::<Float64Type, _, _>(vec![
+            Some(vec![Some(99.0)]),
+            Some(vec![Some(-0.0), Some(0.0), Some(1.0), None, None]),
+            Some(vec![Some(-99.0)]),
+        ]);
+        let sliced = list.slice(1, 1);
+        let DataType::LargeList(field) = sliced.data_type() else {
+            unreachable!()
+        };
+
+        let result = general_array_distinct::<i64>(&sliced, field)?;
+        let result = result.as_list::<i64>();
+        assert_eq!(
+            collect_f64_bits(result, 0),
+            vec![Some(0.0_f64.to_bits()), Some(1.0_f64.to_bits()), None]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_array_distinct_sliced_empty_float_list() -> Result<()> {
+        let list = ListArray::from_iter_primitive::<Float64Type, _, _>(vec![
+            Some(vec![Some(-0.0), Some(99.0)]),
+            Some(Vec::<Option<f64>>::new()),
+            Some(vec![Some(-0.0), Some(0.0)]),
+        ]);
+        let sliced = list.slice(1, 1);
+        let DataType::List(field) = sliced.data_type() else {
+            unreachable!()
+        };
+
+        let result = general_array_distinct::<i32>(&sliced, field)?;
+        let result = result.as_list::<i32>();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.value_length(0), 0);
         Ok(())
     }
 
