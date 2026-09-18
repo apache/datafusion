@@ -19,8 +19,8 @@
 
 use crate::{FileRange, PartitionedFile};
 use arrow::compute::SortOptions;
-use datafusion_common::Statistics;
 use datafusion_common::utils::compare_rows;
+use datafusion_common::{ScalarValue, SplitPoint, Statistics};
 use itertools::Itertools;
 use std::cmp::{Ordering, min};
 use std::collections::{BinaryHeap, HashMap};
@@ -488,19 +488,33 @@ impl FileGroup {
     ///
     /// Note: May return fewer groups than `max_target_partitions` when the
     /// number of unique partition values is less than the target.
-    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
+    ///
+    /// Wrapper around [`Self::group_by_partition_values_with_split_points`] that discards
+    /// the split points.
     pub fn group_by_partition_values(
         self,
         max_target_partitions: usize,
     ) -> Vec<FileGroup> {
+        self.group_by_partition_values_with_split_points(max_target_partitions)
+            .0
+    }
+
+    /// Groups files by partition value and returns the [`SplitPoint`]s between groups.
+    ///
+    /// Values are sorted with [`SortOptions::default()`] and cut into at most
+    /// `max_target_partitions` contiguous chunks so routing a file's `partition_values`
+    /// through the split points yields the group it was placed in.
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+    pub fn group_by_partition_values_with_split_points(
+        self,
+        max_target_partitions: usize,
+    ) -> (Vec<FileGroup>, Vec<SplitPoint>) {
         if self.is_empty() || max_target_partitions == 0 {
-            return vec![];
+            return (vec![], vec![]);
         }
 
-        let mut partition_groups: HashMap<
-            Vec<datafusion_common::ScalarValue>,
-            Vec<PartitionedFile>,
-        > = HashMap::new();
+        let mut partition_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> =
+            HashMap::new();
 
         for file in self.files {
             partition_groups
@@ -512,6 +526,8 @@ impl FileGroup {
         let num_unique_partitions = partition_groups.len();
 
         // Sort for deterministic bucket assignment across query executions.
+        // Must match the ordering declared by `range_partitioning_from_partition_fields`,
+        // otherwise the split points would not describe the groups.
         let mut sorted_partitions: Vec<_> = partition_groups.into_iter().collect();
         let sort_options =
             vec![
@@ -522,24 +538,31 @@ impl FileGroup {
             compare_rows(&a.0, &b.0, &sort_options).unwrap_or(Ordering::Equal)
         });
 
-        if num_unique_partitions <= max_target_partitions {
-            sorted_partitions
-                .into_iter()
-                .map(|(_, files)| FileGroup::new(files))
-                .collect()
-        } else {
-            // Merge into max_target_partitions buckets using round-robin.
-            // This maintains grouping by partition value as we are merging groups which already
-            // contain all values for a partition key.
-            let mut target_groups = vec![vec![]; max_target_partitions];
+        let bucket_count = min(num_unique_partitions, max_target_partitions);
+        let mut groups = Vec::with_capacity(bucket_count);
+        let mut split_points = Vec::with_capacity(bucket_count.saturating_sub(1));
 
-            for (idx, (_, files)) in sorted_partitions.into_iter().enumerate() {
-                let bucket = idx % max_target_partitions;
-                target_groups[bucket].extend(files);
+        // Every chunk is non-empty because `bucket_count <= num_unique_partitions`, so
+        // its first tuple is a well defined lower bound.
+        let mut iter = sorted_partitions.into_iter();
+        for bucket in 0..bucket_count {
+            let start = bucket * num_unique_partitions / bucket_count;
+            let end = (bucket + 1) * num_unique_partitions / bucket_count;
+            let mut files = Vec::new();
+            for offset in start..end {
+                let (values, group_files) = iter
+                    .next()
+                    .expect("contiguous chunking never runs past the sorted partitions");
+                if offset == start && bucket > 0 {
+                    split_points.push(SplitPoint::new(values));
+                }
+                files.extend(group_files);
             }
-
-            target_groups.into_iter().map(FileGroup::new).collect()
+            groups.push(FileGroup::new(files));
         }
+        debug_assert_eq!(split_points.len() + 1, groups.len());
+
+        (groups, split_points)
     }
 }
 
@@ -632,7 +655,9 @@ impl DerefMut for CompareByRangeSize {
 #[cfg(test)]
 mod test {
     use super::*;
-    use datafusion_common::ScalarValue;
+    use datafusion_physical_expr::RangePartitioning;
+    use datafusion_physical_expr::expressions::Column;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
     /// Empty file won't get partitioned
     #[test]
@@ -1276,8 +1301,8 @@ mod test {
 
     #[test]
     fn test_group_by_partition_values_more_groups_than_target() {
-        // Each file has a single partition value. The number of partition values > max_target_partitions, so
-        // they should be round-robin distributed into groups.
+        // More values than `max_target_partitions`, so they are cut into contiguous
+        // chunks whose sizes differ by at most one.
         let fg = FileGroup::new(vec![
             pfile_with_pv("a", "p1"),
             pfile_with_pv("b", "p2"),
@@ -1287,8 +1312,153 @@ mod test {
         ]);
         let groups = fg.group_by_partition_values(3);
         assert_eq!(groups.len(), 3);
-        assert_eq!(groups[0].len(), 2);
+        assert_eq!(groups[0].len(), 1);
         assert_eq!(groups[1].len(), 2);
-        assert_eq!(groups[2].len(), 1);
+        assert_eq!(groups[2].len(), 2);
+        // Groups must be contiguous key intervals in sorted order.
+        assert_eq!(group_pvs(&groups[0]), vec!["p1"]);
+        assert_eq!(group_pvs(&groups[1]), vec!["p2", "p3"]);
+        assert_eq!(group_pvs(&groups[2]), vec!["p4", "p5"]);
+    }
+
+    fn group_pvs(group: &FileGroup) -> Vec<String> {
+        group
+            .iter()
+            .map(|f| f.partition_values[0].to_string())
+            .collect()
+    }
+
+    /// Mirrors `RangeRouter` semantics: the partition index is the number of split points
+    /// that are `<=` the key under the given sort options.
+    fn range_route(key: &[ScalarValue], split_points: &[SplitPoint]) -> usize {
+        let sort_options = vec![SortOptions::default(); key.len()];
+        split_points
+            .iter()
+            .take_while(|sp| {
+                compare_rows(sp.values(), key, &sort_options).unwrap()
+                    != Ordering::Greater
+            })
+            .count()
+    }
+
+    #[test]
+    fn test_group_by_partition_values_split_points_describe_groups() {
+        let fg = FileGroup::new(vec![
+            pfile_with_pv("a", "p1"),
+            pfile_with_pv("b", "p2"),
+            pfile_with_pv("c", "p3"),
+            pfile_with_pv("d", "p4"),
+            pfile_with_pv("e", "p5"),
+            pfile_with_pv("f", "p5"),
+        ]);
+        let (groups, split_points) = fg.group_by_partition_values_with_split_points(3);
+        assert_eq!(groups.len(), 3);
+        assert_eq!(split_points.len(), 2);
+        assert_eq!(split_points[0].values(), &[ScalarValue::from("p2")]);
+        assert_eq!(split_points[1].values(), &[ScalarValue::from("p4")]);
+
+        // Every file routes (RangeRouter semantics) to the group it was placed in.
+        for (idx, group) in groups.iter().enumerate() {
+            for file in group.iter() {
+                assert_eq!(range_route(&file.partition_values, &split_points), idx);
+            }
+        }
+    }
+
+    #[test]
+    fn test_group_by_partition_values_split_points_fewer_values_than_target() {
+        let fg = FileGroup::new(vec![
+            pfile_with_pv("a", "p1"),
+            pfile_with_pv("b", "p1"),
+            pfile_with_pv("c", "p2"),
+        ]);
+        let (groups, split_points) = fg.group_by_partition_values_with_split_points(4);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(split_points.len(), 1);
+        assert_eq!(split_points[0].values(), &[ScalarValue::from("p2")]);
+        for (idx, group) in groups.iter().enumerate() {
+            for file in group.iter() {
+                assert_eq!(range_route(&file.partition_values, &split_points), idx);
+            }
+        }
+    }
+
+    #[test]
+    fn test_group_by_partition_values_split_points_single_target_partition() {
+        // One partition holds every value, so there is no boundary to describe.
+        let fg = FileGroup::new(vec![
+            pfile_with_pv("a", "p1"),
+            pfile_with_pv("b", "p2"),
+            pfile_with_pv("c", "p3"),
+            pfile_with_pv("d", "p3"),
+        ]);
+        let (groups, split_points) = fg.group_by_partition_values_with_split_points(1);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].len(), 4);
+        assert!(split_points.is_empty());
+    }
+
+    fn pfile_with_pvs(path: &str, pvs: &[Option<&str>]) -> PartitionedFile {
+        let mut file = pfile(path, 10);
+        file.partition_values = pvs
+            .iter()
+            .map(|v| ScalarValue::Utf8(v.map(str::to_string)))
+            .collect();
+        file
+    }
+
+    /// Two partition columns with NULLs in either position.
+    fn compound_key_file_group() -> FileGroup {
+        FileGroup::new(vec![
+            pfile_with_pvs("a", &[Some("2026"), Some("09")]),
+            pfile_with_pvs("b", &[Some("2026"), Some("10")]),
+            pfile_with_pvs("c", &[None, Some("09")]),
+            pfile_with_pvs("d", &[Some("2025"), None]),
+            pfile_with_pvs("e", &[Some("2025"), Some("12")]),
+        ])
+    }
+
+    #[test]
+    fn test_group_by_partition_values_split_points_null_and_compound_keys() {
+        let fg = compound_key_file_group();
+        let (groups, split_points) = fg.group_by_partition_values_with_split_points(2);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(split_points.len(), 1);
+        assert_eq!(
+            split_points[0].values(),
+            &[ScalarValue::from("2025"), ScalarValue::from("12")]
+        );
+        for (idx, group) in groups.iter().enumerate() {
+            for file in group.iter() {
+                assert_eq!(range_route(&file.partition_values, &split_points), idx);
+            }
+        }
+    }
+
+    #[test]
+    fn test_group_by_partition_values_split_point_containing_null() {
+        let fg = compound_key_file_group();
+        let (groups, split_points) = fg.group_by_partition_values_with_split_points(3);
+        assert_eq!(groups.len(), 3);
+        assert_eq!(
+            split_points[0].values(),
+            &[ScalarValue::from("2025"), ScalarValue::Utf8(None)]
+        );
+        assert_eq!(
+            split_points[1].values(),
+            &[ScalarValue::from("2026"), ScalarValue::from("09")]
+        );
+        for (idx, group) in groups.iter().enumerate() {
+            for file in group.iter() {
+                assert_eq!(range_route(&file.partition_values, &split_points), idx);
+            }
+        }
+        let ordering = LexOrdering::new(vec![
+            PhysicalSortExpr::new_default(Arc::new(Column::new("year", 0))),
+            PhysicalSortExpr::new_default(Arc::new(Column::new("month", 1))),
+        ])
+        .unwrap();
+        let range = RangePartitioning::try_new(ordering, split_points).unwrap();
+        assert_eq!(range.partition_count(), 3);
     }
 }
