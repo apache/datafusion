@@ -576,9 +576,45 @@ fn evaluate_with_range_value(
     }
 }
 
-/// For a nondecreasing, null-preserving transform, adjacent partition images
-/// are disjoint when the values immediately across each split remain distinct.
-/// The open side is below an ASC split and above a DESC split.
+/// Determines whether a nondecreasing transform keeps equal output keys local.
+///
+/// For one ascending range key, split points `x₁, ..., xₙ` define:
+///
+/// ```text
+/// P₀           P₁                Pₙ
+/// (-∞, x₁)     [x₁, x₂)   ...   [xₙ, +∞)
+///        │      │          │      │
+///        └─ x₁ ─┘          └─ xₙ ─┘
+/// ```
+///
+/// Aggregation can reuse these partitions after applying `f` only if no output
+/// key occurs in two partitions. In other words, the partition images must be
+/// disjoint: `f(Pᵢ) ∩ f(Pⱼ) = ∅` for `i ≠ j`.
+///
+/// Monotonicity alone is insufficient. It guarantees only that values do not
+/// reverse order across a split:
+///
+/// ```text
+/// f(predecessor(xᵢ)) ≤ f(xᵢ)
+/// ```
+///
+/// Equality means a group crosses the split. For example, an hourly truncation
+/// maps timestamps immediately before and at a `01:30` split to the same
+/// `01:00` bucket. A split at `01:00` is safe because its predecessor maps to
+/// `00:00`, while the split itself maps to `01:00`.
+///
+/// Timestamp values form a discrete domain. For every `x < xᵢ`, monotonicity
+/// gives `f(x) ≤ f(predecessor(xᵢ))`; for every `y ≥ xᵢ`, it gives
+/// `f(xᵢ) ≤ f(y)`. Therefore checking
+///
+/// ```text
+/// f(predecessor(xᵢ)) < f(xᵢ)
+/// ```
+///
+/// at every split proves all partition images are disjoint. Descending ranges
+/// use the mirrored check with `successor(xᵢ)`, because their open side lies
+/// above the split. Null preservation is also required so the transform cannot
+/// introduce a null group outside the source partition selected by null order.
 fn range_transform_keeps_groups_local(
     function: &Arc<dyn PhysicalExpr>,
     range_key: &Arc<dyn PhysicalExpr>,
