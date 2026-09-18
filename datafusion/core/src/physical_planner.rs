@@ -19,6 +19,7 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use crate::datasource::file_format::file_type_to_format;
@@ -215,7 +216,9 @@ fn plan_fingerprint(plan: &dyn ExecutionPlan) -> String {
     // no structural comparison for `ExecutionPlan` to use instead today.
     fn append_properties(plan: &dyn ExecutionPlan, depth: usize, out: &mut String) {
         let props = plan.properties();
-        out.push_str(&format!(
+        // Writing to a `String` cannot fail, so the result is discarded.
+        let _ = write!(
+            out,
             "\n{:indent$}props[{}]: partitioning={:?} ordering={:?} emission={:?} boundedness={:?}",
             "",
             plan.name(),
@@ -224,7 +227,7 @@ fn plan_fingerprint(plan: &dyn ExecutionPlan) -> String {
             props.emission_type,
             props.boundedness,
             indent = depth * 2,
-        ));
+        );
         for child in plan.children() {
             append_properties(child.as_ref(), depth + 1, out);
         }
