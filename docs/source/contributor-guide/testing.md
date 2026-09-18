@@ -188,7 +188,12 @@ tested in the same way using the [doc_comment] crate. See the end of
 
 ## Documentation Link Checks
 
-Run the internal markdown link check locally:
+`./dev/rust_lint.sh` runs the internal markdown link check. If `lychee` is
+missing, the script installs the version pinned in
+`ci/scripts/utils/tool_versions.sh`. It uses an existing installation as is,
+even if the version differs from the pin.
+
+To run the check on its own:
 
 ```shell
 source ci/scripts/utils/tool_versions.sh
@@ -200,6 +205,7 @@ Notes:
 
 - The script is run with `bash` and is compatible with the default Bash on macOS (no `mapfile` dependency).
 - The CI configuration currently checks internal markdown links only. External `http(s)` and `mailto` links are excluded to avoid flaky failures.
+- The check only reports broken links. `./dev/rust_lint.sh --write` does not change them.
 
 When a link is broken, lychee prints the file and URL/path that failed. For example:
 
@@ -213,6 +219,61 @@ Rust doc comments are validated by rustdoc in CI and can be checked locally with
 ```shell
 bash ci/scripts/rust_docs.sh
 ```
+
+## ASF Status Check Validation
+
+`ci/scripts/check_asf_yaml_status_checks.py` checks that every required status
+check in `.asf.yaml` matches a job in `.github/workflows`, and that `rust.yml`
+skips only its listed jobs on pushes to `main`. `./dev/rust_lint.sh` runs it
+and needs `python3` with [PyYAML]. The [uv] workspace provides both:
+
+```shell
+uv run ./dev/rust_lint.sh
+```
+
+To run the check on its own:
+
+```shell
+uv run python3 ci/scripts/check_asf_yaml_status_checks.py
+```
+
+[pyyaml]: https://pypi.org/project/PyYAML/
+[uv]: https://docs.astral.sh/uv/
+
+## Security Audit
+
+`ci/scripts/security_audit.sh` runs `cargo audit` on the root `Cargo.lock` with
+the advisory exceptions that CI uses. `./dev/rust_lint.sh` runs it and installs
+[cargo-audit] if it is missing. To run the audit on its own:
+
+```shell
+./ci/scripts/security_audit.sh
+```
+
+The audit fetches the RustSec advisory database. A new advisory or a different
+`cargo-audit` version can change the result without any change to the repository.
+
+[cargo-audit]: https://github.com/rustsec/rustsec/blob/main/cargo-audit/README.md
+
+## Dependency Checks
+
+CI runs two dependency checks, and `./dev/rust_lint.sh` runs both:
+
+- `ci/scripts/check_circular_dependencies.sh` builds and runs [`dev/depcheck`],
+  which fails on dependency cycles between DataFusion crates.
+- `ci/scripts/check_unused_dependencies.sh` runs `cargo machete --with-metadata`
+  from the repository root. The lint suite installs [cargo-machete] with the
+  version in `ci/scripts/utils/tool_versions.sh` if it is missing.
+
+To run either check on its own:
+
+```shell
+./ci/scripts/check_circular_dependencies.sh
+./ci/scripts/check_unused_dependencies.sh
+```
+
+[`dev/depcheck`]: https://github.com/apache/datafusion/tree/main/dev/depcheck
+[cargo-machete]: https://github.com/bnjbvr/cargo-machete
 
 ## Benchmarks
 

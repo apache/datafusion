@@ -490,7 +490,7 @@ async fn asof_join_broadcasts_multi_partition_right_input() -> Result<()> {
     register_asof_test_tables(&ctx)?;
     let df = ctx
         .sql(
-            "SELECT t.trade_id, p.price FROM trades t ASOF JOIN \
+            "SELECT t.trade_id, t.ts, p.price FROM trades t ASOF JOIN \
              (SELECT ts, price FROM prices WHERE symbol = 'A') p \
              MATCH_CONDITION (t.ts >= p.ts)",
         )
@@ -519,6 +519,7 @@ async fn asof_join_broadcasts_multi_partition_right_input() -> Result<()> {
         .to_string();
     assert_contains!(right_plan.as_str(), "SortPreservingMergeExec");
     assert_contains!(right_plan.as_str(), "DataSourceExec: partitions=2");
+    // Keep the left sort key in the embedded projection so the join can expose it.
     assert!(asof.output_ordering().is_some());
     assert!(matches!(
         &asof.input_distribution_requirements().into_per_child()[..],
@@ -530,19 +531,46 @@ async fn asof_join_broadcasts_multi_partition_right_input() -> Result<()> {
     let batches = collect(plan, ctx.task_ctx()).await?;
     assert_batches_sorted_eq!(
         [
-            "+----------+-------+",
-            "| trade_id | price |",
-            "+----------+-------+",
-            "| 1        |       |",
-            "| 2        | 40    |",
-            "| 3        | 60    |",
-            "| 4        | 20    |",
-            "| 5        | 60    |",
-            "| 6        | 20    |",
-            "+----------+-------+",
+            "+----------+----+-------+",
+            "| trade_id | ts | price |",
+            "+----------+----+-------+",
+            "| 1        | 1  |       |",
+            "| 2        | 4  | 40    |",
+            "| 3        | 7  | 60    |",
+            "| 4        | 2  | 20    |",
+            "| 5        | 8  | 60    |",
+            "| 6        | 3  | 20    |",
+            "+----------+----+-------+",
         ],
         &batches
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn asof_join_projection_drops_output_ordering() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_asof_test_tables(&ctx)?;
+    let plan = ctx
+        .sql(
+            "SELECT t.trade_id, p.price FROM trades t ASOF JOIN \
+             (SELECT ts, price FROM prices WHERE symbol = 'A') p \
+             MATCH_CONDITION (t.ts >= p.ts)",
+        )
+        .await?
+        .create_physical_plan()
+        .await?;
+    let asof = find_asof_exec(&plan).expect("physical ASOF join must be present");
+
+    assert_eq!(
+        asof.schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>(),
+        vec!["trade_id", "price"]
+    );
+    assert!(asof.output_ordering().is_none());
     Ok(())
 }
 

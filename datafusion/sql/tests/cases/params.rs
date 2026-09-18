@@ -171,7 +171,7 @@ fn test_non_prepare_statement_should_infer_types() {
 
 #[test]
 #[should_panic(
-    expected = "Expected: [NOT] NULL | TRUE | FALSE | DISTINCT | [form] NORMALIZED FROM after IS, found: $1"
+    expected = "Expected: [NOT] NULL | TRUE | FALSE | DISTINCT | [NOT] JSON [VALUE | SCALAR | ARRAY | OBJECT] [WITH | WITHOUT UNIQUE [KEYS]] | [form] NORMALIZED FROM after IS, found: $1"
 )]
 fn test_prepare_statement_to_plan_panic_is_param() {
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age is $1";
@@ -837,11 +837,11 @@ fn test_insert_infer_with_metadata() {
         @r#"
     ** Initial Plan:
     Dml: op=[Insert Into] table=[person_with_uuid_extension]
-      Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+      Projection: CAST(column1 AS FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>) AS id, column2 AS first_name, column3 AS last_name
         Values: ($1, $2, $3)
     ** Final Plan:
     Dml: op=[Insert Into] table=[person_with_uuid_extension]
-      Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+      Projection: CAST(column1 AS FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>) AS id, column2 AS first_name, column3 AS last_name
         Values: (FixedSizeBinary(16, "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16") FieldMetadata { inner: {"ARROW:extension:name": "arrow.uuid"} } AS $1, Utf8("Alan") AS $2, Utf8("Turing") AS $3)
     "#
     );
@@ -859,11 +859,11 @@ fn test_insert_infer_with_metadata() {
     ** Initial Plan:
     Prepare: "my_plan" [FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>, Utf8, Utf8]
       Dml: op=[Insert Into] table=[person_with_uuid_extension]
-        Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+        Projection: CAST(column1 AS FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>) AS id, column2 AS first_name, column3 AS last_name
           Values: ($1, $2, $3)
     ** Final Plan:
     Dml: op=[Insert Into] table=[person_with_uuid_extension]
-      Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+      Projection: CAST(column1 AS FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>) AS id, column2 AS first_name, column3 AS last_name
         Values: (FixedSizeBinary(16, "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16") FieldMetadata { inner: {"ARROW:extension:name": "arrow.uuid"} } AS $1, Utf8("Alan") AS $2, Utf8("Turing") AS $3)
     "#
     );

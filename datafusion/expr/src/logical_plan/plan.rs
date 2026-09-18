@@ -131,7 +131,7 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// # fn main() -> Result<()> {
 /// let plan = table_scan(Some("employee"), &employee_schema(), None)?
 ///  .filter(col("salary").gt(lit(1000)))?
-///  .project(vec![col("name")])?
+///  .project(vec![col("name"), col("salary")])?
 ///  .build()?;
 ///
 /// // use apply to walk the plan and collect all expressions
@@ -146,14 +146,16 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// }).unwrap();
 ///
 /// // we found the expression in projection and filter
-/// assert_eq!(expressions.len(), 2);
+/// assert_eq!(expressions.len(), 3);
 /// println!("Found expressions: {:?}", expressions);
 /// // found predicate in the Filter: employee.salary > 1000
 /// let salary = Expr::Column(Column::new(Some("employee"), "salary"));
 /// assert!(expressions.contains(&salary.gt(lit(1000))));
-/// // found projection in the Projection: employee.name
+/// // found projection in the Projection: employee.name, employee.salary
 /// let name = Expr::Column(Column::new(Some("employee"), "name"));
+/// let salary = Expr::Column(Column::new(Some("employee"), "salary"));
 /// assert!(expressions.contains(&name));
+/// assert!(expressions.contains(&salary));
 /// # Ok(())
 /// # }
 /// ```
@@ -180,7 +182,7 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// use datafusion_common::tree_node::Transformed;
 /// let plan = table_scan(Some("employee"), &employee_schema(), None)?
 ///  .filter(col("salary").gt(lit(1000)))?
-///  .project(vec![col("name")])?
+///  .project(vec![col("name"), col("salary")])?
 ///  .build()?;
 ///
 /// // use transform to rewrite the plan
@@ -203,7 +205,7 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 ///
 /// // we found the filter
 /// assert_eq!(rewritten_plan.display_indent().to_string(),
-/// "Projection: employee.name\
+/// "Projection: employee.name, employee.salary\
 /// \n  Filter: employee.salary < Int32(2000)\
 /// \n    TableScan: employee");
 /// # Ok(())
