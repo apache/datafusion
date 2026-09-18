@@ -992,8 +992,16 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         Ok(inner(inputs))
     }
 
-    /// Returns whether this function and argument-type combination may
-    /// participate in range-partitioning transformation analysis.
+    /// Returns whether this function and argument-type combination may be
+    /// analyzed to determine if transforming a range partition key keeps every
+    /// equal output key within one existing partition.
+    ///
+    /// This property allows keyed operators such as grouped aggregation to
+    /// reuse range-partitioned input after transforming the key, provided the
+    /// concrete split points prove that no output group crosses a partition
+    /// boundary. It does not claim that the transformed keys have a particular
+    /// partition layout or that two inputs are compatibly partitioned for a
+    /// join.
     ///
     /// Ordinary [`SortProperties::Ordered`] metadata is not sufficient for this
     /// analysis. A non-strictly ordered function can map values from opposite
