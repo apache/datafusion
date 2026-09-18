@@ -206,12 +206,13 @@ impl RowValues {
     /// Create a new [`RowValues`] from `rows` and a `reservation`
     /// that tracks its memory. There must be at least one row
     ///
-    /// Panics if the reservation is not for exactly `rows.size()`
-    /// bytes or if `rows` is empty.
+    /// The reservation must cover exactly `rows.size()` bytes, or be empty when
+    /// the caller accounts for `rows` elsewhere for its whole lifetime.
+    ///
+    /// Panics if the reservation is neither of those, or if `rows` is empty.
     pub fn new(rows: Arc<Rows>, reservation: MemoryReservation) -> Self {
-        assert_eq!(
-            rows.size(),
-            reservation.size(),
+        assert!(
+            reservation.size() == 0 || reservation.size() == rows.size(),
             "memory reservation mismatch"
         );
         let len = rows.num_rows();
