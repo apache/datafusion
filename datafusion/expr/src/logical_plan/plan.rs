@@ -3142,9 +3142,9 @@ pub struct TableScan {
     ///
     /// A [`BTreeSet`], not a `Vec` to keep the resulting plan deterministic.
     ///
-    /// Boxed to keep this rarely-populated field from growing every
-    /// `TableScan` (and thus `LogicalPlan`) by its own size; see
-    /// `test_size_of_logical_plan`.
+    // Boxed to keep this rarely-populated field from growing every
+    // `TableScan` (and thus `LogicalPlan`) by its own size;
+    // see `test_size_of_logical_plan`.
     pub statistics_requests: Box<BTreeSet<StatisticsRequest>>,
 }
 
@@ -3251,7 +3251,7 @@ pub struct TableScanBuilder {
     filters: Vec<Expr>,
     fetch: Option<usize>,
     offset: Option<usize>,
-    #[expect(clippy::box_collection)]
+    #[expect(clippy::box_collection)] // additional indirection for smaller size_of()
     statistics_requests: Box<BTreeSet<StatisticsRequest>>,
 }
 
