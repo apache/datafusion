@@ -50,6 +50,7 @@ use arrow::datatypes::{
 };
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
+use datafusion_common::utils::{has_float_leaf, normalize_float_zero};
 use datafusion_common::{Result, not_impl_err};
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
 use datafusion_expr::{EmitTo, GroupSelection};
@@ -1185,6 +1186,12 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
 
 impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
     fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<usize>) -> Result<()> {
+        let normalized: Option<Vec<ArrayRef>> = cols
+            .iter()
+            .any(|col| col.data_type().is_nested() && has_float_leaf(col.data_type()))
+            .then(|| cols.iter().map(normalize_float_zero).collect());
+        let cols = normalized.as_deref().unwrap_or(cols);
+
         // `try_new` and the reset points in `emit` / `clear_shrink` keep
         // `self.group_values` populated with one builder per schema field,
         // so no lazy initialization is needed here.
