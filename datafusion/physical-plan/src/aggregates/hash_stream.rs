@@ -736,8 +736,18 @@ impl FinalHashAggregateStream {
         ));
         debug_assert_eq!(agg.input_order_mode, InputOrderMode::Linear);
 
-        let schema = Arc::clone(&agg.schema);
         let input = agg.input.execute(partition, Arc::clone(context))?;
+        Self::new_with_input(agg, context, partition, input)
+    }
+
+    /// Builds the stream over `input` instead of executing the plan's input.
+    pub(in crate::aggregates) fn new_with_input(
+        agg: &AggregateExec,
+        context: &Arc<TaskContext>,
+        partition: usize,
+        input: SendableRecordBatchStream,
+    ) -> Result<Self> {
+        let schema = Arc::clone(&agg.schema);
         let input_schema = input.schema();
         let batch_size = context.session_config().batch_size();
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
@@ -1022,18 +1032,24 @@ mod tests {
 
     use super::*;
     use crate::aggregates::{AggregateMode, PhysicalGroupBy};
+    use crate::common::collect;
     use crate::execution_plan::ExecutionPlan;
     use crate::test::TestMemoryExec;
     use crate::test::exec::BarrierExec;
 
-    use arrow::array::{AsArray, Int32Array, Int64Array};
+    use arrow::array::{AsArray, Int32Array, Int64Array, StringViewArray};
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use datafusion_common::Result;
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::memory_pool::{GreedyMemoryPool, MemoryPool};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::count::count_udaf;
+    use datafusion_functions_aggregate::{min_max::min_udaf, sum::sum_udaf};
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
-    use futures::StreamExt;
+    use futures::channel::mpsc;
+    use futures::{FutureExt, StreamExt};
+    use std::collections::BTreeMap;
 
     #[tokio::test]
     async fn test_partial_hash_stream_double_emission_race_condition_bug() -> Result<()> {
@@ -1605,6 +1621,249 @@ mod tests {
         }
         assert_eq!(total_rows, num_groups);
 
+        Ok(())
+    }
+
+    #[derive(Clone, Copy)]
+    enum Finish {
+        Collect,
+        DropDuringReplay,
+        InputError,
+    }
+
+    #[tokio::test]
+    async fn final_hash_spill_replay_with_other_partitions_holding_state() -> Result<()> {
+        for input_batches in [40, 55, 70] {
+            run_shared_pool_case(input_batches, 1024 * 1024, Finish::Collect).await?;
+        }
+        // The same input also produces the reference results without spilling.
+        run_shared_pool_case(70, 10 * 1024 * 1024, Finish::Collect).await
+    }
+
+    #[tokio::test]
+    async fn final_hash_spill_replay_releases_memory_on_drop() -> Result<()> {
+        run_shared_pool_case(55, 1024 * 1024, Finish::DropDuringReplay).await
+    }
+
+    #[tokio::test]
+    async fn final_hash_spill_releases_memory_on_input_error() -> Result<()> {
+        run_shared_pool_case(55, 1024 * 1024, Finish::InputError).await
+    }
+
+    /// Partition 0 spills and replays while partitions 1..3 keep their
+    /// aggregate state in the same greedy pool.
+    async fn run_shared_pool_case(
+        input_batches: i64,
+        limit: usize,
+        finish: Finish,
+    ) -> Result<()> {
+        const PARTITIONS: usize = 4;
+        const HELD_BATCHES: i64 = 20;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+            Field::new("v", DataType::Int64, false),
+            Field::new("s", DataType::Utf8View, false),
+        ]));
+        let groups = PhysicalGroupBy::new_single(vec![
+            (col("a", &schema)?, "a".into()),
+            (col("b", &schema)?, "b".into()),
+        ]);
+        let expressions = vec![
+            Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("sum")
+                    .build()?,
+            ),
+            Arc::new(
+                AggregateExprBuilder::new(min_udaf(), vec![col("s", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("min")
+                    .build()?,
+            ),
+        ];
+        let empty = TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let partial = AggregateExec::try_new(
+            AggregateMode::Partial,
+            groups.clone(),
+            expressions.clone(),
+            vec![None; 2],
+            empty,
+            Arc::clone(&schema),
+        )?;
+        let partial_schema = partial.schema();
+        let input = TestMemoryExec::try_new_exec(
+            &vec![vec![]; PARTITIONS],
+            Arc::clone(&partial_schema),
+            None,
+        )?;
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::FinalPartitioned,
+            groups.as_final(),
+            expressions,
+            vec![None; 2],
+            input,
+            schema,
+        )?;
+        assert_eq!(aggregate.input_order_mode(), &InputOrderMode::Linear);
+
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(limit));
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(128))
+                .with_runtime(
+                    RuntimeEnvBuilder::new()
+                        .with_max_spill_merge_fan_in(2)
+                        .with_memory_pool(Arc::clone(&pool))
+                        .build_arc()?,
+                ),
+        );
+        let mut streams = vec![];
+        let mut senders = vec![];
+        for partition in 0..PARTITIONS {
+            let (sender, receiver) = mpsc::unbounded();
+            let input = Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&partial_schema),
+                receiver,
+            ));
+            let stream = FinalHashAggregateStream::new_with_input(
+                &aggregate, &context, partition, input,
+            )?
+            .into_stream();
+            senders.push(sender);
+            streams.push(stream);
+        }
+        let mut expected = BTreeMap::new();
+        let mut make_batch = |partition: i64, start: i64| {
+            for value in start..start + 128 {
+                let entry = expected
+                    .entry((
+                        partition,
+                        if partition == 0 && value % 128 == 0 {
+                            0
+                        } else {
+                            value
+                        },
+                    ))
+                    .or_insert_with(|| (0, (value % 2).to_string()));
+                entry.0 += value * 2;
+            }
+            RecordBatch::try_new(
+                Arc::clone(&partial_schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![partition; 128])),
+                    Arc::new(Int64Array::from_iter_values((start..start + 128).map(
+                        |value| {
+                            if partition == 0 && value % 128 == 0 {
+                                0
+                            } else {
+                                value
+                            }
+                        },
+                    ))),
+                    Arc::new(Int64Array::from_iter_values(
+                        (start..start + 128).map(|v| v * 2),
+                    )),
+                    Arc::new(StringViewArray::from_iter_values(
+                        (start..start + 128).map(|v| if v % 2 == 0 { "0" } else { "1" }),
+                    )),
+                ],
+            )
+            .unwrap()
+        };
+        // Keep the state of partitions 1..3 live while partition 0 spills and
+        // replays. Channel inputs return Pending after each supplied batch, so
+        // this interleaving does not depend on task scheduling.
+        for partition in 1..PARTITIONS {
+            for batch in 0..HELD_BATCHES {
+                senders[partition]
+                    .unbounded_send(Ok(make_batch(partition as i64, batch * 128)))
+                    .unwrap();
+                assert!(streams[partition].next().now_or_never().is_none());
+            }
+        }
+        let held = pool.reserved();
+        assert!(held > 512 * 1024, "held {held} bytes");
+        for batch in 0..input_batches {
+            // Repeated keys cross spill runs, so replay must merge their sums.
+            senders[0]
+                .unbounded_send(Ok(make_batch(0, batch * 128)))
+                .unwrap();
+            assert!(streams[0].next().now_or_never().is_none());
+        }
+        let spill_count = || aggregate.metrics().unwrap().spill_count().unwrap();
+        assert_eq!(spill_count() > 0, limit == 1024 * 1024);
+        let mut first = streams.remove(0);
+        match finish {
+            Finish::Collect => {
+                senders[0].close_channel();
+                let mut output = collect(first).await?;
+                assert_eq!(pool.reserved(), held);
+                for sender in &senders[1..] {
+                    sender.close_channel();
+                }
+                for stream in streams.drain(..) {
+                    output.extend(collect(stream).await?);
+                }
+                let mut actual = BTreeMap::new();
+                for batch in output {
+                    let a = batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap();
+                    let b = batch
+                        .column(1)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap();
+                    let sum = batch
+                        .column(2)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap();
+                    let min = batch
+                        .column(3)
+                        .as_any()
+                        .downcast_ref::<StringViewArray>()
+                        .unwrap();
+                    for row in 0..batch.num_rows() {
+                        assert!(
+                            actual
+                                .insert(
+                                    (a.value(row), b.value(row)),
+                                    (sum.value(row), min.value(row).to_string())
+                                )
+                                .is_none()
+                        );
+                    }
+                }
+                assert_eq!(actual, expected);
+                assert_eq!(spill_count() > 0, limit == 1024 * 1024);
+            }
+            Finish::DropDuringReplay => {
+                senders[0].close_channel();
+                first.next().await.unwrap()?;
+                assert!(pool.reserved() > held);
+                drop(first);
+                assert_eq!(pool.reserved(), held);
+            }
+            Finish::InputError => {
+                senders[0]
+                    .unbounded_send(datafusion_common::exec_err!(
+                        "injected input failure"
+                    ))
+                    .unwrap();
+                let error = first.next().await.unwrap().unwrap_err();
+                assert!(error.to_string().contains("injected input failure"));
+                assert_eq!(pool.reserved(), held);
+                drop(first);
+            }
+        }
+        drop(streams);
+        assert_eq!(pool.reserved(), 0);
         Ok(())
     }
 }
