@@ -399,6 +399,39 @@ DROP TABLE t1;
 statement ok
 DROP TABLE t2;
 
+# A non-equality correlation leaves one key and a residual join filter. The
+# null-aware `LeftAnti` executor does not apply the residual when it decides
+# whether a NULL makes the result UNKNOWN, so a function key over non-nullable
+# columns must not make this join null-aware either. For `k = 1` the key is
+# NULL and the correlated subquery result is empty, and
+# `NULL NOT IN (<empty set>)` is TRUE. Both rows are correct.
+statement ok
+CREATE TABLE ra(k INT NOT NULL, z INT NOT NULL) AS VALUES (1, 10), (2, 20);
+
+statement ok
+CREATE TABLE rb(k INT NOT NULL, z INT NOT NULL) AS VALUES (5, 50);
+
+query I rowsort
+SELECT k FROM ra WHERE NULLIF(ra.k, 1) NOT IN (SELECT rb.k FROM rb WHERE rb.z < ra.z);
+----
+1
+2
+
+# The same shape where the correlated subquery result is not empty for the NULL
+# key. The correct result is `2` only. The plain anti join also gives `1`, which
+# is the gap that https://github.com/apache/datafusion/issues/25336 closes.
+query I rowsort
+SELECT k FROM ra WHERE NULLIF(ra.k, 1) NOT IN (SELECT rb.k FROM rb WHERE rb.z > ra.z);
+----
+1
+2
+
+statement ok
+DROP TABLE ra;
+
+statement ok
+DROP TABLE rb;
+
 statement ok
 DROP TABLE nn;
 
