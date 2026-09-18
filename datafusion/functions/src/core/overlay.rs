@@ -28,7 +28,7 @@ use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
 };
-use datafusion_common::utils::offsets_span_len;
+use datafusion_common::utils::offset_span_len;
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
 use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
@@ -236,8 +236,8 @@ fn overlay<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     } else {
         let string_array = as_generic_string_array::<T>(&args[0])?;
         let characters_array = as_generic_string_array::<T>(&args[1])?;
-        let data_capacity = offsets_span_len(string_array.offsets())
-            .saturating_add(offsets_span_len(characters_array.offsets()));
+        let data_capacity = offset_span_len(string_array.offsets())
+            .saturating_add(offset_span_len(characters_array.offsets()));
         let builder = GenericStringArrayBuilder::<T>::with_capacity(
             string_array.len(),
             data_capacity,

@@ -25,7 +25,7 @@ use arrow::array::{
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::utils::{ListCoercion, offsets_span};
+use datafusion_common::utils::{ListCoercion, offset_span};
 use datafusion_common::{
     Result, ScalarValue, exec_err, internal_err, utils::take_function_args,
 };
@@ -576,7 +576,7 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
     };
 
     let list_offsets = list_array.offsets();
-    let (first_offset, values_range_len) = offsets_span(list_offsets);
+    let (first_offset, values_range_len) = offset_span(list_offsets);
     let values_slice = list_array.values().slice(first_offset, values_range_len);
     let original_data = values_slice.to_data();
     let mut offsets = Vec::<OffsetSize>::with_capacity(list_array.len() + 1);

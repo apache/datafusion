@@ -31,7 +31,7 @@ use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
-use datafusion_common::utils::offsets_span_len;
+use datafusion_common::utils::offset_span_len;
 use datafusion_common::{ScalarValue, exec_err};
 use datafusion_expr::ColumnarValue;
 
@@ -283,8 +283,7 @@ where
     F: for<'a> FnMut(usize, &'a str) -> &'a str,
 {
     let len = string_array.len();
-    let mut values: Vec<u8> =
-        Vec::with_capacity(offsets_span_len(string_array.offsets()));
+    let mut values: Vec<u8> = Vec::with_capacity(offset_span_len(string_array.offsets()));
     let mut offsets: Vec<T> = Vec::with_capacity(len + 1);
     offsets.push(T::usize_as(0));
 
@@ -538,7 +537,7 @@ fn case_conversion_array<O: OffsetSizeTrait>(
 
     // Values contain non-ASCII.
     let item_len = string_array.len();
-    let capacity = offsets_span_len(string_array.offsets()) + PRE_ALLOC_BYTES;
+    let capacity = offset_span_len(string_array.offsets()) + PRE_ALLOC_BYTES;
     // Null-preserving: reuse the input null buffer as the output null buffer.
     let nulls = string_array.nulls().cloned();
     let mut builder = GenericStringArrayBuilder::<O>::with_capacity(item_len, capacity);

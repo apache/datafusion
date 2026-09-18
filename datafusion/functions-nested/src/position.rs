@@ -40,7 +40,7 @@ use arrow::array::{
 use datafusion_common::cast::{
     as_generic_list_array, as_int64_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::utils::offsets_span;
+use datafusion_common::utils::offset_span;
 use datafusion_common::{
     Result, exec_datafusion_err, exec_err, utils::take_function_args,
 };
@@ -256,7 +256,7 @@ fn array_position_scalar<O: OffsetSizeTrait>(
     // ListArrays, values() returns the full underlying array but only
     // elements between the first and last offset are referenced.
     let offsets = haystack.offsets();
-    let (first_offset, values_len) = offsets_span(offsets);
+    let (first_offset, values_len) = offset_span(offsets);
     let visible_values = haystack.values().slice(first_offset, values_len);
 
     // `not_distinct` treats NULL=NULL as true, matching the semantics of
@@ -552,7 +552,7 @@ fn array_positions_scalar<O: OffsetSizeTrait>(
     // ListArrays, values() returns the full underlying array but only
     // elements between the first and last offset are referenced.
     let offsets = haystack.offsets();
-    let (first_offset, values_len) = offsets_span(offsets);
+    let (first_offset, values_len) = offset_span(offsets);
     let visible_values = haystack.values().slice(first_offset, values_len);
 
     // `not_distinct` treats NULL=NULL as true, matching the semantics of

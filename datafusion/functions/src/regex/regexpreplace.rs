@@ -32,7 +32,7 @@ use datafusion_common::cast::{
 };
 use datafusion_common::exec_err;
 use datafusion_common::plan_err;
-use datafusion_common::utils::offsets_span_len;
+use datafusion_common::utils::offset_span_len;
 use datafusion_common::{Result, cast::as_generic_string_array, internal_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::TypeSignature;
@@ -556,7 +556,7 @@ fn regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
             // We are going to create the underlying string buffer from its parts
             // to be able to re-use the existing null buffer for sparse arrays.
             let mut vals =
-                BufferBuilder::<u8>::new(offsets_span_len(string_array.offsets()));
+                BufferBuilder::<u8>::new(offset_span_len(string_array.offsets()));
             let mut new_offsets = BufferBuilder::<T>::new(string_array.len() + 1);
             new_offsets.append(T::zero());
 

@@ -90,7 +90,7 @@ use crate::cast::{
 use crate::error::Result;
 use crate::error::{_internal_datafusion_err, _internal_err};
 #[cfg(not(feature = "force_hash_collisions"))]
-use crate::utils::offsets_span;
+use crate::utils::offset_span;
 use std::cell::RefCell;
 
 mod build_hasher;
@@ -691,7 +691,7 @@ fn hash_map_array(
     let offsets = array.offsets();
 
     // Create hashes for each entry in each row
-    let (first_offset, entries_len) = offsets_span(offsets);
+    let (first_offset, entries_len) = offset_span(offsets);
 
     // Only hash the entries that are actually referenced
     let mut values_hashes = vec![0u64; entries_len];
@@ -740,7 +740,7 @@ where
     OffsetSize: OffsetSizeTrait,
 {
     // Hash only the child values referenced by this ListArray's offsets.
-    let (first_offset, values_len) = offsets_span(array.offsets());
+    let (first_offset, values_len) = offset_span(array.offsets());
     let mut values_hashes = vec![0u64; values_len];
     child_hashing.create_hashes(
         [array.values().slice(first_offset, values_len)],

@@ -36,7 +36,7 @@ use datafusion_common::cast::as_list_array;
 use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_common::scalar::copy_array_data;
 use datafusion_common::utils::proxy::HashTableAllocExt;
-use datafusion_common::utils::{SingleRowListArrayBuilder, offsets_span};
+use datafusion_common::utils::{SingleRowListArrayBuilder, offset_span};
 use datafusion_common::{
     Result, ScalarValue, assert_eq_or_internal_err, exec_err, internal_err,
 };
@@ -291,7 +291,7 @@ impl ArrayAggAccumulator {
         // This is ok as the state is a ListArray rather than a ListViewArray so all the values are consecutive
         if null_count == 0 {
             // According to Arrow specification, the first offset can be non-zero
-            let (start, len) = offsets_span(list_array.offsets());
+            let (start, len) = offset_span(list_array.offsets());
             let list_values = list_array.values().slice(start, len);
             return Some(list_values);
         }

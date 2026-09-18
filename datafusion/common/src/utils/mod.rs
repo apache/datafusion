@@ -1234,8 +1234,8 @@ pub fn take_function_args<const N: usize, T>(
 /// for lists and bytes for strings/binary arrays, including values in null rows.
 /// An empty array still has one offset and therefore a span of zero.
 #[inline]
-pub fn offsets_span_len<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> usize {
-    offsets_span(offsets).1
+pub fn offset_span_len<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> usize {
+    offset_span(offsets).1
 }
 
 /// Returns the start and length of the values covered by an offset buffer.
@@ -1247,12 +1247,12 @@ pub fn offsets_span_len<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> usize 
 ///
 /// ```
 /// # use arrow::buffer::OffsetBuffer;
-/// # use datafusion_common::utils::offsets_span;
+/// # use datafusion_common::utils::offset_span;
 /// let offsets = OffsetBuffer::new(vec![100_i32, 103, 108].into());
-/// assert_eq!(offsets_span(&offsets), (100, 8));
+/// assert_eq!(offset_span(&offsets), (100, 8));
 /// ```
 #[inline]
-pub fn offsets_span<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> (usize, usize) {
+pub fn offset_span<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> (usize, usize) {
     let start = offsets[0].as_usize();
     (start, offsets.last().unwrap().as_usize() - start)
 }
@@ -1274,7 +1274,7 @@ pub fn list_values(array: &dyn Array) -> Result<ArrayRef> {
 
 fn sliced_list_values<O: OffsetSizeTrait>(list: &GenericListArray<O>) -> ArrayRef {
     let values = list.values();
-    let (start, len) = offsets_span(list.offsets());
+    let (start, len) = offset_span(list.offsets());
 
     if start != 0 || len != values.len() {
         return values.slice(start, len);
@@ -1327,7 +1327,7 @@ fn truncate_list_nulls<O: OffsetSizeTrait>(
         if valid_or_empty.has_false() {
             let array_data = list.values().to_data();
             let offsets = list.offsets();
-            let capacity = offsets_span_len(offsets);
+            let capacity = offset_span_len(offsets);
             let mut mutable_array_data =
                 MutableArrayData::new(vec![&array_data], false, capacity);
 
@@ -1536,26 +1536,26 @@ mod tests {
     use sqlparser::ast::Ident;
 
     #[test]
-    fn test_offsets_span_len() {
+    fn test_offset_span_len() {
         let offsets = OffsetBuffer::new(vec![5_i32, 8, 8, 12].into());
-        assert_eq!(offsets_span_len(&offsets), 7);
-        assert_eq!(offsets_span_len(&offsets.slice(1, 1)), 0);
-        assert_eq!(offsets_span_len(&offsets.slice(2, 0)), 0);
-        assert_eq!(offsets_span_len(&OffsetBuffer::<i64>::new_empty()), 0);
+        assert_eq!(offset_span_len(&offsets), 7);
+        assert_eq!(offset_span_len(&offsets.slice(1, 1)), 0);
+        assert_eq!(offset_span_len(&offsets.slice(2, 0)), 0);
+        assert_eq!(offset_span_len(&OffsetBuffer::<i64>::new_empty()), 0);
         let large = OffsetBuffer::new(vec![i64::MAX - 10, i64::MAX].into());
-        assert_eq!(offsets_span_len(&large), 10);
+        assert_eq!(offset_span_len(&large), 10);
     }
 
     #[test]
-    fn test_offsets_span() {
+    fn test_offset_span() {
         let offsets = OffsetBuffer::new(vec![0_i32, 5, 8, 8, 12].into());
-        assert_eq!(offsets_span(&offsets), (0, 12));
-        assert_eq!(offsets_span(&offsets.slice(1, 2)), (5, 3));
-        assert_eq!(offsets_span(&offsets.slice(2, 1)), (8, 0));
-        assert_eq!(offsets_span(&offsets.slice(4, 0)), (12, 0));
-        assert_eq!(offsets_span(&OffsetBuffer::<i64>::new_empty()), (0, 0));
+        assert_eq!(offset_span(&offsets), (0, 12));
+        assert_eq!(offset_span(&offsets.slice(1, 2)), (5, 3));
+        assert_eq!(offset_span(&offsets.slice(2, 1)), (8, 0));
+        assert_eq!(offset_span(&offsets.slice(4, 0)), (12, 0));
+        assert_eq!(offset_span(&OffsetBuffer::<i64>::new_empty()), (0, 0));
         let large = OffsetBuffer::new(vec![i64::MAX - 10, i64::MAX].into());
-        assert_eq!(offsets_span(&large), ((i64::MAX - 10) as usize, 10));
+        assert_eq!(offset_span(&large), ((i64::MAX - 10) as usize, 10));
     }
 
     #[test]

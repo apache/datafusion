@@ -19,7 +19,7 @@ use arrow::array::{ArrayRef, GenericStringBuilder, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::types::{NativeType, logical_string};
-use datafusion_common::utils::{offsets_span_len, take_function_args};
+use datafusion_common::utils::{offset_span_len, take_function_args};
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -91,7 +91,7 @@ fn spark_quote_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
 
 fn quote_array<T: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
     let str_array = as_generic_string_array::<T>(array)?;
-    let data_len = offsets_span_len(str_array.offsets());
+    let data_len = offset_span_len(str_array.offsets());
     Ok(quote_impl::<T, _>(str_array.iter(), data_len))
 }
 

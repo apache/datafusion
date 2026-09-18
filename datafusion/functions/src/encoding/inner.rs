@@ -35,7 +35,7 @@ use datafusion_common::{
     types::{NativeType, logical_string},
     utils::{
         hex::{HexCase, encode_bytes, encode_bytes_to_slice},
-        offsets_span_len, take_function_args,
+        offset_span_len, take_function_args,
     },
 };
 use datafusion_expr::{
@@ -278,7 +278,7 @@ fn decode_scalar(value: &ScalarValue, encoding: Encoding) -> Result<ColumnarValu
 /// overestimate the bytes processed because null rows may cover nonempty byte
 /// ranges.
 fn estimate_byte_data_size<O: OffsetSizeTrait>(array: &GenericBinaryArray<O>) -> usize {
-    offsets_span_len(array.offsets())
+    offset_span_len(array.offsets())
 }
 
 fn decode_array(array: &ArrayRef, encoding: Encoding) -> Result<ColumnarValue> {

@@ -27,7 +27,7 @@ use arrow_buffer::NullBuffer;
 
 use crate::strings::GenericStringArrayBuilder;
 use crate::utils::make_scalar_function;
-use datafusion_common::utils::offsets_span_len;
+use datafusion_common::utils::offset_span_len;
 use datafusion_common::{
     Result, ScalarValue, exec_datafusion_err, exec_err, utils::take_function_args,
 };
@@ -154,7 +154,7 @@ fn substr_index(args: &[ArrayRef]) -> Result<ArrayRef> {
                 count_array,
                 GenericStringArrayBuilder::<i32>::with_capacity(
                     string_array.len(),
-                    offsets_span_len(string_array.offsets()),
+                    offset_span_len(string_array.offsets()),
                 ),
             )
         }
@@ -168,7 +168,7 @@ fn substr_index(args: &[ArrayRef]) -> Result<ArrayRef> {
                 count_array,
                 GenericStringArrayBuilder::<i64>::with_capacity(
                     string_array.len(),
-                    offsets_span_len(string_array.offsets()),
+                    offset_span_len(string_array.offsets()),
                 ),
             )
         }
@@ -232,7 +232,7 @@ fn substr_index_scalar(
                 count,
                 GenericStringArrayBuilder::<i32>::with_capacity(
                     arr.len(),
-                    offsets_span_len(arr.offsets()),
+                    offset_span_len(arr.offsets()),
                 ),
             )
         }
@@ -244,7 +244,7 @@ fn substr_index_scalar(
                 count,
                 GenericStringArrayBuilder::<i64>::with_capacity(
                     arr.len(),
-                    offsets_span_len(arr.offsets()),
+                    offset_span_len(arr.offsets()),
                 ),
             )
         }
