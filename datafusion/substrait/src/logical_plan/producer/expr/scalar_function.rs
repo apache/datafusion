@@ -239,14 +239,6 @@ pub fn from_like(
     like: &Like,
     schema: &DFSchemaRef,
 ) -> datafusion::common::Result<Expression> {
-    make_substrait_like_expr(producer, like, schema)
-}
-
-fn make_substrait_like_expr(
-    producer: &mut impl SubstraitProducer,
-    like: &Like,
-    schema: &DFSchemaRef,
-) -> datafusion::common::Result<Expression> {
     let Like {
         negated,
         expr,
@@ -315,6 +307,8 @@ fn make_substrait_like_expr(
         Ok(substrait_like)
     }
 }
+
+/// Util to generate substrait [RexType::ScalarFunction] with one argument
 fn to_substrait_unary_scalar_fn(
     producer: &mut impl SubstraitProducer,
     fn_name: &str,
