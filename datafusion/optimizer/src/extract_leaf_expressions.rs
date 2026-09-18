@@ -714,13 +714,33 @@ fn build_extraction_projection_impl(
             })
             .collect();
 
+        // The names the merged projection already produces. The merge keeps
+        // every expression of `existing`, so the parent can still read each of
+        // these names, and a pass-through column that carries one of them makes
+        // the output schema ambiguous.
+        let output_names: std::collections::HashSet<&str> = existing
+            .schema
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect();
+
         let input_schema = existing.input.schema();
         for col in columns_needed {
+            // The projection produces this name, so the parent reads it from the
+            // projection's own output. Do not resolve the name through the rename
+            // map: a rename such as `t.a AS b` is a computed output, and its
+            // input column `t.a` beside the output field `a` of a second rename
+            // gives an ambiguous schema (issue #25446).
+            if output_names.contains(col.name.as_str()) {
+                continue;
+            }
             let col_expr = Expr::Column(col.clone());
             let resolved = replace_cols_by_name(col_expr, &replace_map)?;
             if let Expr::Column(resolved_col) = &resolved
                 && !existing_cols.contains(resolved_col)
                 && input_schema.has_column(resolved_col)
+                && !output_names.contains(resolved_col.name.as_str())
             {
                 proj_exprs.push(Expr::Column(resolved_col.clone()));
             }
@@ -1111,6 +1131,18 @@ fn split_and_push_projection(
     // `SubqueryAlias` re-qualification (`sub.__datafusion_extracted_1` vs
     // `__datafusion_extracted_1`) that a qualified/ordered comparison would
     // spuriously treat as drift, stacking redundant recovery projections.
+    //
+    // A name comparison alone is not sufficient. A name says nothing about the
+    // *value* behind it. Take the projection
+    // `(- t.a) AS a, t.s, get_field(t.s, "b") AS __datafusion_extracted_1`. When
+    // the extraction goes below it, the pushed plan keeps every name, but it
+    // exposes the table column `t.a` where the projection computed `- t.a`. If
+    // the recovery projection goes away, the computed column becomes its own
+    // input column and the query gives wrong results. See
+    // <https://github.com/apache/datafusion/issues/25414>.
+    //
+    // So the recovery projection also stays when a recovery expression computes
+    // a value, that is, when it is not a pass-through of a column.
     let base_names: BTreeSet<&str> = base_plan
         .schema()
         .fields()
@@ -1122,7 +1154,10 @@ fn split_and_push_projection(
         .iter()
         .map(|f| f.name().as_str())
         .collect();
-    let needs_recovery = base_names != original_names;
+    let computes_a_value = recovery_exprs
+        .iter()
+        .any(|expr| passthrough_column(expr).is_none());
+    let needs_recovery = base_names != original_names || computes_a_value;
 
     // Wrap with recovery projection if the output schema changed
     if needs_recovery {
@@ -2777,14 +2812,11 @@ mod tests {
         ## After Pushdown
         Projection: __datafusion_extracted_1 AS leaf_udf(x,Utf8("a"))
           Filter: x IS NOT NULL
-            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1, test.user
+            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1
               TableScan: test projection=[user]
 
         ## Optimized
-        Projection: __datafusion_extracted_1 AS leaf_udf(x,Utf8("a"))
-          Filter: x IS NOT NULL
-            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1
-              TableScan: test projection=[user]
+        (same as after pushdown)
         "#)
     }
 
@@ -2811,14 +2843,11 @@ mod tests {
         ## After Pushdown
         Projection: __datafusion_extracted_1 IS NOT NULL AS leaf_udf(x,Utf8("a")) IS NOT NULL
           Filter: x IS NOT NULL
-            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1, test.user
+            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1
               TableScan: test projection=[user]
 
         ## Optimized
-        Projection: __datafusion_extracted_1 IS NOT NULL AS leaf_udf(x,Utf8("a")) IS NOT NULL
-          Filter: x IS NOT NULL
-            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1
-              TableScan: test projection=[user]
+        (same as after pushdown)
         "#)
     }
 
@@ -2840,17 +2869,14 @@ mod tests {
         ## After Extraction
         Projection: x
           Filter: __datafusion_extracted_1 = Utf8("active")
-            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1, test.user
+            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1
               TableScan: test projection=[user]
 
         ## After Pushdown
         (same as after extraction)
 
         ## Optimized
-        Projection: x
-          Filter: __datafusion_extracted_1 = Utf8("active")
-            Projection: test.user AS x, leaf_udf(test.user, Utf8("a")) AS __datafusion_extracted_1
-              TableScan: test projection=[user]
+        (same as after pushdown)
         "#)
     }
 
