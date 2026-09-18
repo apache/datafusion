@@ -57,7 +57,7 @@ pub use crate::ordering::InputOrderMode;
 pub use crate::sort_pushdown::SortOrderPushdownResult;
 pub use crate::statistics::{ChildStats, StatisticsArgs, StatisticsContext};
 pub use crate::stream::EmptyRecordBatchStream;
-pub use crate::topk::TopK;
+pub use crate::topk::{TopK, TopKDynamicFilters};
 pub use crate::visitor::{ExecutionPlanVisitor, accept, visit_execution_plan};
 pub use crate::work_table::WorkTable;
 pub use spill::spill_manager::SpillManager;
