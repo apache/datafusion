@@ -269,27 +269,24 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
             count_array,
             field,
             &original_data,
-            &default_value_data,
+            Some(&default_value_data),
             output_values_len,
             |mutable, _, extra_count| Ok(mutable.try_extend(1, 0, extra_count)?),
         )
     } else {
-        // Slow path: rows may need different fill values, so append from the
-        // corresponding slot in the input fill array for each grown element.
-        let fill_values = match default_element {
-            Some(fill_values) => fill_values,
-            None => {
-                let null_scalar = ScalarValue::try_from(&data_type)?;
-                null_scalar.to_array_of_size(original_data.len())?
-            }
+        // Handle batches with no growth or with different fill values per row.
+        // Growing rows repeat the fill value from their corresponding input slot.
+        let default_value_data = if max_extra > 0 {
+            default_element.map(|fill_values| fill_values.to_data())
+        } else {
+            None
         };
-        let default_value_data = fill_values.to_data();
         build_resized_list(
             array,
             count_array,
             field,
             &original_data,
-            &default_value_data,
+            default_value_data.as_ref(),
             output_values_len,
             |mutable, row_index, extra_count| {
                 for _ in 0..extra_count {
@@ -306,7 +303,7 @@ fn build_resized_list<O, F>(
     count_array: &Int64Array,
     field: &FieldRef,
     original_data: &arrow::array::ArrayData,
-    default_value_data: &arrow::array::ArrayData,
+    default_value_data: Option<&arrow::array::ArrayData>,
     output_values_len: usize,
     mut append_fill_values: F,
 ) -> Result<ArrayRef>
@@ -316,11 +313,11 @@ where
 {
     let capacity = Capacities::Array(output_values_len);
     let mut offsets = vec![O::usize_as(0)];
-    let mut mutable = MutableArrayData::with_capacities(
-        vec![original_data, default_value_data],
-        false,
-        capacity,
-    );
+    let sources = match default_value_data {
+        Some(default_value_data) => vec![original_data, default_value_data],
+        None => vec![original_data],
+    };
+    let mut mutable = MutableArrayData::with_capacities(sources, false, capacity);
     let mut null_builder = NullBufferBuilder::new(array.len());
 
     for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
@@ -335,6 +332,10 @@ where
         let count = O::usize_as(count);
         let start = offset_window[0];
         if start + count > offset_window[1] {
+            debug_assert!(
+                default_value_data.is_some(),
+                "fill values are required when growing a list"
+            );
             let extra_count = (start + count - offset_window[1]).to_usize().unwrap();
             let end = offset_window[1];
             mutable.try_extend(0, start.to_usize().unwrap(), end.to_usize().unwrap())?;
@@ -372,12 +373,63 @@ fn max_resize_values(value_type: &DataType) -> usize {
 mod tests {
     use super::array_resize_inner;
     use arrow::array::{
-        ArrayRef, AsArray, FixedSizeBinaryArray, Int64Array, LargeListArray, ListArray,
+        ArrayRef, AsArray, FixedSizeBinaryArray, GenericListArray, Int32Array,
+        Int64Array, LargeListArray, ListArray, OffsetSizeTrait,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{DataType, Field, Int32Type, Int64Type};
     use datafusion_common::Result;
     use std::sync::Arc;
+
+    #[test]
+    fn test_array_resize_sliced_no_growth() -> Result<()> {
+        test_sliced_no_growth::<i32>()?;
+        test_sliced_no_growth::<i64>()
+    }
+
+    fn test_sliced_no_growth<O: OffsetSizeTrait>() -> Result<()> {
+        let array = GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(90), Some(91), Some(92)]),
+            Some(vec![Some(1), None, Some(3)]),
+            Some(vec![Some(4), Some(5)]),
+            Some(vec![Some(6)]),
+            Some(vec![]),
+            None,
+            Some(vec![Some(7), Some(8)]),
+            Some(vec![Some(93), Some(94), Some(95)]),
+        ]);
+        // Retain the full child array, with unused values before and after
+        // the visible rows. None of the valid rows needs a fill value.
+        let array: ArrayRef = Arc::new(array.slice(1, 6));
+        let size: ArrayRef = Arc::new(Int64Array::from(vec![
+            Some(2),
+            Some(2),
+            Some(0),
+            Some(0),
+            Some(20),
+            None,
+        ]));
+
+        let expected =
+            GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>(vec![
+                Some(vec![Some(1), None]),
+                Some(vec![Some(4), Some(5)]),
+                Some(vec![]),
+                Some(vec![]),
+                None,
+                None,
+            ]);
+        let fill: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60]));
+        for args in [
+            vec![Arc::clone(&array), Arc::clone(&size)],
+            vec![array, size, fill],
+        ] {
+            let result = array_resize_inner(&args)?;
+            assert_eq!(result.as_list::<O>(), &expected);
+        }
+
+        Ok(())
+    }
 
     #[test]
     fn test_array_resize_null_size_returns_null() -> Result<()> {
