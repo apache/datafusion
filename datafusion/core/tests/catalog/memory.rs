@@ -100,7 +100,7 @@ fn default_register_schema_not_supported() {
             e.strip_backtrace(),
             "This feature is not implemented: Registering new schemas is not supported"
         ),
-    };
+    }
 }
 
 #[tokio::test]

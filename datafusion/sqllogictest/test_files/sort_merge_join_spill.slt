@@ -140,7 +140,7 @@ EXPLAIN ANALYZE
 SELECT p.k, w.v, length(w.p) FROM probe p JOIN wide w ON p.k = w.k
 ----
 Plan with Metrics
-<slt:ignore>SortMergeJoinExec: join_type=Inner, on=[(k@0, k@0)], metrics=[output_rows=2.00 K,<slt:ignore>spill_count=10, spilled_bytes=<slt:ignore>spilled_rows=2.00 K, peak_mem_used=<slt:ignore>
+<slt:ignore>SortMergeJoinExec: join_type=Inner, on=[(k@0, k@0)], projection=[k@0, v@2, p@3], metrics=[output_rows=2.00 K,<slt:ignore>spill_count=10, spilled_bytes=<slt:ignore>spilled_rows=2.00 K, peak_mem_used=<slt:ignore>
 
 query III rowsort
 SELECT p.k, w.v, length(w.p) FROM probe p JOIN wide w ON p.k = w.k
@@ -152,7 +152,7 @@ EXPLAIN ANALYZE
 SELECT p.k, w.v, length(w.p) FROM probe p LEFT JOIN wide w ON p.k = w.k
 ----
 Plan with Metrics
-<slt:ignore>SortMergeJoinExec: join_type=Left, on=[(k@0, k@0)], metrics=[output_rows=2.00 K,<slt:ignore>spill_count=10, spilled_bytes=<slt:ignore>spilled_rows=2.00 K, peak_mem_used=<slt:ignore>
+<slt:ignore>SortMergeJoinExec: join_type=Left, on=[(k@0, k@0)], projection=[k@0, v@2, p@3], metrics=[output_rows=2.00 K,<slt:ignore>spill_count=10, spilled_bytes=<slt:ignore>spilled_rows=2.00 K, peak_mem_used=<slt:ignore>
 
 query III rowsort
 SELECT p.k, w.v, length(w.p) FROM probe p LEFT JOIN wide w ON p.k = w.k
@@ -164,7 +164,7 @@ EXPLAIN ANALYZE
 SELECT p.k, w.v, length(w.p) FROM wide w RIGHT JOIN probe p ON p.k = w.k
 ----
 Plan with Metrics
-<slt:ignore>SortMergeJoinExec: join_type=Right, on=[(k@0, k@0)], metrics=[output_rows=2.00 K,<slt:ignore>spill_count=10, spilled_bytes=<slt:ignore>spilled_rows=2.00 K, peak_mem_used=<slt:ignore>
+<slt:ignore>SortMergeJoinExec: join_type=Right, on=[(k@0, k@0)], projection=[k@3, v@1, p@2], metrics=[output_rows=2.00 K,<slt:ignore>spill_count=10, spilled_bytes=<slt:ignore>spilled_rows=2.00 K, peak_mem_used=<slt:ignore>
 
 query III rowsort
 SELECT p.k, w.v, length(w.p) FROM wide w RIGHT JOIN probe p ON p.k = w.k
@@ -176,7 +176,7 @@ EXPLAIN ANALYZE
 SELECT p.k, w.v, length(w.p) FROM probe p FULL JOIN wide w ON p.k = w.k
 ----
 Plan with Metrics
-<slt:ignore>SortMergeJoinExec: join_type=Full, on=[(k@0, k@0)], metrics=[output_rows=2.00 K,<slt:ignore>spill_count=10, spilled_bytes=<slt:ignore>spilled_rows=2.00 K, peak_mem_used=<slt:ignore>
+<slt:ignore>SortMergeJoinExec: join_type=Full, on=[(k@0, k@0)], projection=[k@0, v@2, p@3], metrics=[output_rows=2.00 K,<slt:ignore>spill_count=10, spilled_bytes=<slt:ignore>spilled_rows=2.00 K, peak_mem_used=<slt:ignore>
 
 query III rowsort
 SELECT p.k, w.v, length(w.p) FROM probe p FULL JOIN wide w ON p.k = w.k
@@ -192,7 +192,7 @@ SELECT p.k, w.v, length(w.p) FROM probe p
 JOIN wide w ON p.k = w.k AND p.x < w.x
 ----
 Plan with Metrics
-<slt:ignore>SortMergeJoinExec: join_type=Inner, on=[(k@0, k@0)], filter=x@0 < x@1, metrics=[output_rows=900,<slt:ignore>spill_count=10, spilled_bytes=<slt:ignore>spilled_rows=2.00 K, peak_mem_used=<slt:ignore>
+<slt:ignore>SortMergeJoinExec: join_type=Inner, on=[(k@0, k@0)], filter=x@0 < x@1, projection=[k@0, v@3, p@5], metrics=[output_rows=900,<slt:ignore>spill_count=10, spilled_bytes=<slt:ignore>spilled_rows=2.00 K, peak_mem_used=<slt:ignore>
 
 query III rowsort
 SELECT p.k, w.v, length(w.p) FROM probe p
@@ -206,7 +206,7 @@ SELECT p.k, w.v, length(w.p) FROM probe p
 LEFT JOIN wide w ON p.k = w.k AND p.x < w.x
 ----
 Plan with Metrics
-<slt:ignore>SortMergeJoinExec: join_type=Left, on=[(k@0, k@0)], filter=x@0 < x@1, metrics=[output_rows=902,<slt:ignore>spill_count=10, spilled_bytes=<slt:ignore>spilled_rows=2.00 K, peak_mem_used=<slt:ignore>
+<slt:ignore>SortMergeJoinExec: join_type=Left, on=[(k@0, k@0)], filter=x@0 < x@1, projection=[k@0, v@3, p@5], metrics=[output_rows=902,<slt:ignore>spill_count=10, spilled_bytes=<slt:ignore>spilled_rows=2.00 K, peak_mem_used=<slt:ignore>
 
 query III rowsort
 SELECT p.k, w.v, length(w.p) FROM probe p
@@ -220,7 +220,7 @@ SELECT p.k, w.v, length(w.p) FROM wide w
 RIGHT JOIN probe p ON p.k = w.k AND p.x < w.x
 ----
 Plan with Metrics
-<slt:ignore>SortMergeJoinExec: join_type=Right, on=[(k@0, k@0)], filter=x@1 < x@0, metrics=[output_rows=902,<slt:ignore>spill_count=10, spilled_bytes=<slt:ignore>spilled_rows=2.00 K, peak_mem_used=<slt:ignore>
+<slt:ignore>SortMergeJoinExec: join_type=Right, on=[(k@0, k@0)], filter=x@1 < x@0, projection=[k@4, v@1, p@3], metrics=[output_rows=902,<slt:ignore>spill_count=10, spilled_bytes=<slt:ignore>spilled_rows=2.00 K, peak_mem_used=<slt:ignore>
 
 query III rowsort
 SELECT p.k, w.v, length(w.p) FROM wide w
@@ -234,7 +234,7 @@ SELECT p.k, w.v, length(w.p) FROM probe p
 FULL JOIN wide w ON p.k = w.k AND p.x < w.x
 ----
 Plan with Metrics
-<slt:ignore>SortMergeJoinExec: join_type=Full, on=[(k@0, k@0)], filter=x@0 < x@1, metrics=[output_rows=2.00 K,<slt:ignore>spill_count=10, spilled_bytes=<slt:ignore>spilled_rows=2.00 K, peak_mem_used=<slt:ignore>
+<slt:ignore>SortMergeJoinExec: join_type=Full, on=[(k@0, k@0)], filter=x@0 < x@1, projection=[k@0, v@3, p@5], metrics=[output_rows=2.00 K,<slt:ignore>spill_count=10, spilled_bytes=<slt:ignore>spilled_rows=2.00 K, peak_mem_used=<slt:ignore>
 
 query III rowsort
 SELECT p.k, w.v, length(w.p) FROM probe p
@@ -249,7 +249,7 @@ EXPLAIN ANALYZE
 SELECT p.k, w.v, length(w.p) FROM probe_nomatch p FULL JOIN wide w ON p.k = w.k
 ----
 Plan with Metrics
-<slt:ignore>SortMergeJoinExec: join_type=Full, on=[(k@0, k@0)], metrics=[output_rows=2.00 K,<slt:ignore>spill_count=10, spilled_bytes=<slt:ignore>spilled_rows=2.00 K, peak_mem_used=<slt:ignore>
+<slt:ignore>SortMergeJoinExec: join_type=Full, on=[(k@0, k@0)], projection=[k@0, v@2, p@3], metrics=[output_rows=2.00 K,<slt:ignore>spill_count=10, spilled_bytes=<slt:ignore>spilled_rows=2.00 K, peak_mem_used=<slt:ignore>
 
 query III rowsort
 SELECT p.k, w.v, length(w.p) FROM probe_nomatch p FULL JOIN wide w ON p.k = w.k
@@ -274,7 +274,7 @@ WHERE EXISTS (
 )
 ----
 Plan with Metrics
-<slt:ignore>SortMergeJoinExec: join_type=LeftSemi, on=[(k@0, k@0)], filter=v@1 <= x@0 - 300, metrics=[output_rows=1,<slt:ignore>spill_count=1, spilled_bytes=<slt:ignore> KB, spilled_rows=<slt:ignore> K, peak_mem_used=<slt:ignore>
+<slt:ignore>SortMergeJoinExec: join_type=LeftSemi, on=[(k@0, k@0)], filter=v@1 <= x@0 - 300, projection=[k@0], metrics=[output_rows=1,<slt:ignore>spill_count=1, spilled_bytes=<slt:ignore> KB, spilled_rows=<slt:ignore> K, peak_mem_used=<slt:ignore>
 
 # The same query must retain the matching first slice after later overflows.
 query I

@@ -107,7 +107,7 @@ impl SortedData {
             })
             .collect();
 
-        let batches = stagger_batch(int32_batch(data.iter().cloned()));
+        let batches = stagger_batch(int32_batch(data.iter().copied()));
 
         let mut sorted = data;
         sorted.sort_unstable();
@@ -131,7 +131,7 @@ impl SortedData {
             data.push(data[rng.random_range(0..data.len())]);
         }
 
-        let batches = stagger_batch(f64_batch(data.iter().cloned()));
+        let batches = stagger_batch(f64_batch(data.iter().copied()));
 
         let mut sorted = data;
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -197,8 +197,8 @@ impl SortedData {
     /// Return top top `limit` values as a RecordBatch
     fn topk_values(&self, limit: usize) -> RecordBatch {
         match self {
-            Self::I32 { sorted, .. } => int32_batch(sorted.iter().take(limit).cloned()),
-            Self::F64 { sorted, .. } => f64_batch(sorted.iter().take(limit).cloned()),
+            Self::I32 { sorted, .. } => int32_batch(sorted.iter().take(limit).copied()),
+            Self::F64 { sorted, .. } => f64_batch(sorted.iter().take(limit).copied()),
             Self::Str { sorted, .. } => string_batch(sorted.iter().take(limit)),
             Self::I64Str { sorted, .. } => i64string_batch(sorted.iter().take(limit)),
         }

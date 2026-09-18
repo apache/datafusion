@@ -22,6 +22,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 
 use crate::aggregates::AggregateExec;
+use crate::aggregates::group_values::AccumulatorPhase;
 
 use super::common::{AggregateHashTable, HashAggregateAccumulator, PartialReduceMarker};
 
@@ -52,7 +53,10 @@ impl AggregateHashTable<PartialReduceMarker> {
     pub(in crate::aggregates) fn next_output_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
-        self.next_output_batch_inner(HashAggregateAccumulator::state)
+        self.next_output_batch_inner(
+            HashAggregateAccumulator::state,
+            AccumulatorPhase::State,
+        )
     }
 
     /// Partial-reduce aggregation consumes partial aggregate states and merges
@@ -61,7 +65,11 @@ impl AggregateHashTable<PartialReduceMarker> {
         &mut self,
         batch: &RecordBatch,
     ) -> Result<()> {
-        self.aggregate_batch_inner(batch, HashAggregateAccumulator::merge_batch)
+        self.aggregate_batch_inner(
+            batch,
+            HashAggregateAccumulator::merge_batch,
+            AccumulatorPhase::Merge,
+        )
     }
 
     pub(in crate::aggregates) fn start_output(&mut self) -> Result<()> {

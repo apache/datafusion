@@ -41,17 +41,17 @@ Note: `to_date` returns Date32, which represents its values as the number of day
     syntax_example = "to_date(expression[, format1, ..., format_n])",
     sql_example = r#"```sql
 > select to_date('2023-01-31');
-+-------------------------------+
++-----------------------------+
 | to_date(Utf8("2023-01-31")) |
-+-------------------------------+
-| 2023-01-31                    |
-+-------------------------------+
++-----------------------------+
+| 2023-01-31                  |
++-----------------------------+
 > select to_date('2023/01/31', '%Y-%m-%d', '%Y/%m/%d');
-+---------------------------------------------------------------------+
++---------------------------------------------------------------+
 | to_date(Utf8("2023/01/31"),Utf8("%Y-%m-%d"),Utf8("%Y/%m/%d")) |
-+---------------------------------------------------------------------+
-| 2023-01-31                                                          |
-+---------------------------------------------------------------------+
++---------------------------------------------------------------+
+| 2023-01-31                                                    |
++---------------------------------------------------------------+
 ```
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
@@ -458,7 +458,7 @@ mod tests {
                     "to_date created wrong value for date with 2 format strings"
                 );
             }
-            _ => panic!("Conversion failed",),
+            _ => panic!("Conversion failed"),
         }
     }
 

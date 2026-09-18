@@ -889,6 +889,7 @@ async fn parquet_explain_analyze() {
     );
     assert_contains!(&formatted, "output_rows_skew=0%");
     assert_contains!(&formatted, "scan_efficiency_ratio=13.99%");
+    assert_contains!(&formatted, "bytes_processed=");
 
     // The order of metrics is expected to be the same as the actual pruning order
     // (file-> row-group -> page)
@@ -1061,6 +1062,47 @@ async fn csv_explain_analyze_verbose() {
 
     let verbose_needle = "Output Rows";
     assert_contains!(formatted, verbose_needle);
+}
+
+#[tokio::test]
+#[cfg_attr(coverage, ignore)]
+async fn explain_analyze_aggregate_metrics_map_indices_to_expressions() {
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
+    register_aggregate_csv_by_sql(&ctx).await;
+
+    let query =
+        "SELECT c1, SUM(c5), SUM(c6), COUNT(c7) FROM aggregate_test_100 GROUP BY c1";
+    let normal = execute_to_batches(&ctx, &format!("EXPLAIN ANALYZE {query}")).await;
+    let normal = arrow::util::pretty::pretty_format_batches(&normal)
+        .unwrap()
+        .to_string();
+    assert_contains!(
+        normal.as_str(),
+        "aggr=[sum(aggregate_test_100.c5), sum(aggregate_test_100.c6), count(aggregate_test_100.c7)]"
+    );
+    assert_contains!(normal.as_str(), "agg_expr_0_arguments_time");
+    assert_contains!(normal.as_str(), "agg_expr_1_arguments_time");
+    assert_contains!(normal.as_str(), "agg_expr_2_arguments_time");
+    assert!(!normal.contains("aggregate="));
+
+    let verbose =
+        execute_to_batches(&ctx, &format!("EXPLAIN ANALYZE VERBOSE {query}")).await;
+    let verbose = arrow::util::pretty::pretty_format_batches(&verbose)
+        .unwrap()
+        .to_string();
+    assert_contains!(
+        verbose.as_str(),
+        "agg_expr_0_arguments_time{partition=0, aggregate=sum(aggregate_test_100.c5)}"
+    );
+    assert_contains!(
+        verbose.as_str(),
+        "agg_expr_1_arguments_time{partition=0, aggregate=sum(aggregate_test_100.c6)}"
+    );
+    assert_contains!(
+        verbose.as_str(),
+        "agg_expr_2_arguments_time{partition=0, aggregate=count(aggregate_test_100.c7)}"
+    );
 }
 
 #[tokio::test]

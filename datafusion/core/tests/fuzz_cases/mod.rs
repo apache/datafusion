@@ -41,4 +41,5 @@ mod window_fuzz;
 // Utility modules
 mod once_exec;
 mod record_batch_generator;
+mod scalar_value_fuzz;
 mod spilling_fuzz_in_memory_constrained_env;

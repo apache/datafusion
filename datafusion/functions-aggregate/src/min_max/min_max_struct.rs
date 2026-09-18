@@ -20,6 +20,7 @@ use std::{cmp::Ordering, sync::Arc};
 use arrow::{
     array::{
         Array, ArrayData, ArrayRef, AsArray, BooleanArray, MutableArrayData, StructArray,
+        new_empty_array,
     },
     datatypes::DataType,
 };
@@ -27,7 +28,7 @@ use datafusion_common::{
     Result, internal_err,
     scalar::{copy_array_data, partial_cmp_struct},
 };
-use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_expr::{EmitTo, GroupSelection, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
 
 use datafusion_common::utils::split_vec_min_alloc;
@@ -58,6 +59,35 @@ impl MinMaxStructAccumulator {
             inner: MinMaxStructState::new(data_type),
             is_min: false,
         }
+    }
+
+    fn build_array<'a>(
+        &self,
+        min_maxes: impl Iterator<Item = Option<&'a StructArray>>,
+        num_values: usize,
+    ) -> Result<ArrayRef> {
+        let DataType::Struct(fields) = &self.inner.data_type else {
+            return internal_err!("Data type is not a struct");
+        };
+        if num_values == 0 {
+            return Ok(new_empty_array(&self.inner.data_type));
+        }
+        let null_array = StructArray::new_null(fields.clone(), 1);
+        let min_maxes_data: Vec<ArrayData> = min_maxes
+            .map(|value| match value {
+                Some(value) => value.to_data(),
+                None => null_array.to_data(),
+            })
+            .collect();
+        let min_maxes_refs: Vec<&ArrayData> = min_maxes_data.iter().collect();
+        let mut copy = MutableArrayData::new(min_maxes_refs, true, num_values);
+
+        for (index, item) in min_maxes_data.iter().enumerate() {
+            copy.try_extend(index, 0, item.len())?;
+        }
+        let result = copy.freeze();
+        assert_eq!(&self.inner.data_type, result.data_type());
+        Ok(Arc::new(StructArray::from(result)))
     }
 }
 
@@ -102,32 +132,40 @@ impl GroupsAccumulator for MinMaxStructAccumulator {
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
         let (_, min_maxes) = self.inner.emit_to(emit_to);
-        let fields = match &self.inner.data_type {
-            DataType::Struct(fields) => fields,
-            _ => return internal_err!("Data type is not a struct"),
-        };
-        let null_array = StructArray::new_null(fields.clone(), 1);
-        let min_maxes_data: Vec<ArrayData> = min_maxes
-            .iter()
-            .map(|v| match v {
-                Some(v) => v.to_data(),
-                None => null_array.to_data(),
-            })
-            .collect();
-        let min_maxes_refs: Vec<&ArrayData> = min_maxes_data.iter().collect();
-        let mut copy = MutableArrayData::new(min_maxes_refs, true, min_maxes_data.len());
+        self.build_array(
+            min_maxes.iter().map(|value| value.as_ref()),
+            min_maxes.len(),
+        )
+    }
 
-        for (i, item) in min_maxes_data.iter().enumerate() {
-            copy.try_extend(i, 0, item.len())?;
-        }
-        let result = copy.freeze();
-        assert_eq!(&self.inner.data_type, result.data_type());
-        Ok(Arc::new(StructArray::from(result)))
+    fn evaluate_preserving(&mut self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        let num_groups = self.inner.min_max.len();
+        selection.validate_num_groups(num_groups)?;
+        let num_values = selection.len();
+        let min_maxes = selection
+            .iter()
+            .map(|index| self.inner.min_max[index].as_ref());
+        self.build_array(min_maxes, num_values)
+    }
+
+    fn supports_evaluate_preserving(&self) -> bool {
+        true
     }
 
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         // min/max are their own states (no transition needed)
         self.evaluate(emit_to).map(|arr| vec![arr])
+    }
+
+    fn state_preserving(
+        &mut self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        self.evaluate_preserving(selection).map(|array| vec![array])
+    }
+
+    fn supports_state_preserving(&self) -> bool {
+        true
     }
 
     fn merge_batch(
@@ -494,6 +532,70 @@ mod tests {
         assert_eq!(str_array.value(0), "c");
         assert_eq!(int_array.value(1), 4);
         assert_eq!(str_array.value(1), "d");
+    }
+
+    #[test]
+    fn test_min_struct_preserving_reads_and_empty_selection() -> Result<()> {
+        let array = create_test_struct_array(
+            vec![Some(3), Some(2), Some(1)],
+            vec![Some("c"), Some("b"), Some("a")],
+        );
+        let data_type = array.data_type().clone();
+        let mut accumulator = MinMaxStructAccumulator::new_min(data_type.clone());
+        accumulator.update_batch(&[Arc::new(array)], &[0, 1, 0], None, 3)?;
+
+        let selection = GroupSelection::try_from_indices(&[1, 0, 2, 1], 3)?;
+        for _ in 0..2 {
+            let actual = accumulator.evaluate_preserving(selection)?;
+            let actual = actual.as_struct();
+            assert_eq!(actual.len(), 4);
+            assert_eq!(
+                actual
+                    .column(0)
+                    .as_primitive::<Int32Type>()
+                    .iter()
+                    .collect::<Vec<_>>(),
+                vec![Some(2), Some(1), None, Some(2)]
+            );
+            assert_eq!(
+                actual
+                    .column(1)
+                    .as_string::<i32>()
+                    .iter()
+                    .collect::<Vec<_>>(),
+                vec![Some("b"), Some("a"), None, Some("b")]
+            );
+            assert!(actual.is_null(2));
+        }
+
+        let empty_selection = GroupSelection::try_from_indices(&[], 3)?;
+        let actual = accumulator.evaluate_preserving(empty_selection)?;
+        assert_eq!(actual.data_type(), &data_type);
+        assert!(actual.is_empty());
+        let state = accumulator.state_preserving(empty_selection)?;
+        assert_eq!(state.len(), 1);
+        assert_eq!(state[0].data_type(), &data_type);
+        assert!(state[0].is_empty());
+
+        let update = create_test_struct_array(vec![Some(0)], vec![Some("z")]);
+        accumulator.update_batch(&[Arc::new(update)], &[2], None, 3)?;
+        let actual = accumulator.evaluate_preserving(GroupSelection::all(3))?;
+        assert_eq!(
+            actual
+                .as_struct()
+                .column(0)
+                .as_primitive::<Int32Type>()
+                .values(),
+            &[1, 2, 0]
+        );
+
+        let mut empty_accumulator = MinMaxStructAccumulator::new_min(data_type);
+        assert!(
+            empty_accumulator
+                .evaluate_preserving(GroupSelection::all(0))?
+                .is_empty()
+        );
+        Ok(())
     }
 
     #[test]

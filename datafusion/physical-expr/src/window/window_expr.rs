@@ -254,13 +254,12 @@ pub trait AggregateWindowExpr: WindowExpr {
                         published: false,
                     },
                 );
-            };
+            }
             let window_state = window_agg_state
                 .get_mut(partition_row)
                 .ok_or_else(|| exec_datafusion_err!("Cannot find state"))?;
-            let accumulator = match &mut window_state.window_fn {
-                WindowFn::Aggregate(accumulator) => accumulator,
-                _ => unreachable!(),
+            let WindowFn::Aggregate(accumulator) = &mut window_state.window_fn else {
+                unreachable!()
             };
             let state = &mut window_state.state;
             let record_batch = &partition_batch_state.record_batch;
@@ -436,7 +435,7 @@ pub(crate) fn is_end_bound_safe(
     if sort_exprs.is_empty() {
         // Early return if no sort expressions are present:
         return Ok(false);
-    };
+    }
 
     match window_frame_ctx {
         WindowFrameContext::Rows(window_frame) => {

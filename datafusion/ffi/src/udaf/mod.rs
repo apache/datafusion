@@ -364,7 +364,7 @@ unsafe extern "C" fn release_fn_wrapper(udaf: &mut FFI_AggregateUDF) {
     unsafe {
         debug_assert!(!udaf.private_data.is_null());
         let private_data =
-            Box::from_raw(udaf.private_data as *mut AggregateUDFPrivateData);
+            Box::from_raw(udaf.private_data.cast::<AggregateUDFPrivateData>());
         drop(private_data);
         udaf.private_data = std::ptr::null_mut();
     }
@@ -409,7 +409,7 @@ impl From<Arc<AggregateUDF>> for FFI_AggregateUDF {
             coerce_types: coerce_types_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
             supports_null_handling_clause: supports_null_handling_clause_fn_wrapper,
         }
@@ -777,9 +777,7 @@ mod tests {
         let foreign_udaf = AggregateUDF::new_from_shared_impl(foreign_udaf);
 
         let metadata: HashMap<String, String> =
-            [("a_key".to_string(), "a_value".to_string())]
-                .into_iter()
-                .collect();
+            std::iter::once(("a_key".to_string(), "a_value".to_string())).collect();
         let input_field = Arc::new(
             Field::new("a", DataType::Float64, false).with_metadata(metadata.clone()),
         );

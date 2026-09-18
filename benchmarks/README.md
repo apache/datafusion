@@ -294,7 +294,7 @@ $ mkdir -p /tmp/output_branch
 $ git checkout my_branch
 $ cargo run --release --bin tpch -- benchmark datafusion --iterations 5 --path ./data --format parquet -o /tmp/output_branch/tpch.json
 # compare the results:
-./compare.py /tmp/output_main/tpch.json  /tmp/output_branch/tpch.json
+uv run ./compare.py /tmp/output_main/tpch.json  /tmp/output_branch/tpch.json
 ```
 
 This will produce output like:
@@ -923,6 +923,21 @@ cargo run --release --bin dfbench -- h2o --join-paths ./benchmarks/data/h2o/J1_1
 
 # Micro-Benchmarks
 
+## ASOF Join
+
+This benchmark exercises ASOF joins across relative input sizes, available
+input ordering, equality-group cardinality and skew, match direction, and
+payload width. One keyed workload reads pre-sorted Parquet inputs from
+`benchmarks/data/asof_join` with declared ordering so it measures the join
+without including an input sort.
+
+### Example Run
+
+```bash
+./bench.sh data asof_join
+./bench.sh run asof_join
+```
+
 ## Nested Loop Join
 
 This benchmark focuses on the performance of queries with nested loop joins, minimizing other overheads such as scanning data sources or evaluating predicates.
@@ -949,6 +964,36 @@ Several queries are included to test hash joins under various workloads.
 # No need to generate data: this benchmark uses table function `range()` as the data source
 
 ./bench.sh run hj
+```
+
+## Null-Aware Join
+
+This benchmark focuses on `NOT IN` subqueries, which plan as null-aware joins: an
+outer row that finds no match is TRUE only if neither side has a NULL in scope,
+and UNKNOWN otherwise.
+
+Deciding which outer rows are UNKNOWN is cheap when the `NOT IN` is uncorrelated
+(Q01-Q03) and is linear in the table sizes. When the subquery is correlated, the
+correlation predicate stays behind as a join filter, and the join has to evaluate
+that filter per candidate (build row x probe row) pair to decide which rows the
+NULLs actually reach. A non-equality correlation leaves no equality key to narrow
+those pairs, so Q04-Q07 measure how that cost grows with the NULL fraction, while
+Q08 adds an equality correlation that turns the candidate pairs into a hash
+lookup.
+
+Both table sizes are knobs: `NAJ_ROWS` (default `10000`) sizes the correlated
+queries, whose cost grows with its square, and `NAJ_LARGE_ROWS` (default
+`1000000`) sizes the uncorrelated ones.
+
+### Example Run
+
+```bash
+# No need to generate data: this benchmark uses table function `range()` as the data source
+
+./bench.sh run null_aware_join
+
+# Or, with more rows for the correlated queries (~4x the per-pair filter work)
+NAJ_ROWS=20000 ./bench.sh run null_aware_join
 ```
 
 ## Sort Merge Join

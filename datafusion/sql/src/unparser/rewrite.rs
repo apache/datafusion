@@ -377,7 +377,7 @@ pub(super) fn subquery_alias_inner_query_and_columns(
 
         if outer_alias.expr.to_string() != inner_expr_string {
             return (plan, vec![]);
-        };
+        }
 
         columns.push(outer_alias.name.as_str().into());
     }

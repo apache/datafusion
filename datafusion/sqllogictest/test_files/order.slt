@@ -15,7 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-
 statement ok
 CREATE EXTERNAL TABLE alltypes_plain STORED AS PARQUET LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
 
@@ -635,6 +634,16 @@ ORDER BY sum(value) + sum(value);
 statement error DataFusion error: This feature is not implemented: SORT BY
 select * from t SORT BY time;
 
+## ORDER BY USING <operator> (PostgreSQL) is not supported
+statement ok
+set datafusion.sql_parser.dialect = 'PostgreSQL';
+
+statement error DataFusion error: This feature is not implemented: ORDER BY USING is not supported: <
+select * from t ORDER BY time USING <;
+
+statement ok
+reset datafusion.sql_parser.dialect;
+
 
 # distinct on a column not in the select list should not work
 statement error DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions t\.time must appear in select list
@@ -799,6 +808,36 @@ logical_plan
 02)--Projection: floor(CAST(multiple_ordered_table.a AS Float64)) AS a_
 03)----TableScan: multiple_ordered_table projection=[a]
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[floor(CAST(a@1 AS Float64)) as a_], file_type=csv, has_header=true
+
+# A merely monotone (`preserves_lex_ordering`, but not strictly order-preserving) function such as factorial()
+# does NOT justify the suffix keys:
+# factorial(0) == factorial(1) which means that it collapses distinct inputs into one output value, and `b`
+# is not sorted within such a run, so a SortExec must remain.
+query TT
+EXPLAIN SELECT factorial(a) AS a_, b
+FROM multiple_ordered_table
+ORDER BY a_, b;
+----
+logical_plan
+01)Sort: a_ ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+02)--Projection: factorial(CAST(multiple_ordered_table.a AS Int64)) AS a_, multiple_ordered_table.b
+03)----TableScan: multiple_ordered_table projection=[a, b]
+physical_plan
+01)SortExec: expr=[a_@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[factorial(CAST(a@1 AS Int64)) as a_, b], file_type=csv, has_header=true
+
+# Monotonicity alone is still enough when the expression is the *only* sort
+# key, so here the SortExec is removed even though factorial() is not strict:
+query TT
+EXPLAIN SELECT factorial(a) AS a_
+FROM multiple_ordered_table
+ORDER BY a_;
+----
+logical_plan
+01)Sort: a_ ASC NULLS LAST
+02)--Projection: factorial(CAST(multiple_ordered_table.a AS Int64)) AS a_
+03)----TableScan: multiple_ordered_table projection=[a]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[factorial(CAST(a@1 AS Int64)) as a_], file_type=csv, has_header=true
 
 # The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.
@@ -1590,6 +1629,77 @@ physical_plan
 
 statement ok
 DROP TABLE mixed_null_placement;
+
+# ASC NULLS FIRST survives OR but not AND. The per-operator rules are
+# unit-tested in sort_properties.rs; this checks the planner uses them.
+query I
+COPY (VALUES
+  (CAST(NULL AS BOOLEAN), false),
+  (CAST(NULL AS BOOLEAN), true),
+  (false,                 true),
+  (true,                  true))
+TO 'test_files/scratch/order/kleene_nulls_first.csv'
+OPTIONS ('format.has_header' 'true');
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE kleene_nulls_first (a BOOLEAN, b BOOLEAN)
+STORED AS CSV
+WITH ORDER (a ASC NULLS FIRST)
+WITH ORDER (b ASC NULLS FIRST)
+LOCATION 'test_files/scratch/order/kleene_nulls_first.csv'
+OPTIONS ('format.has_header' 'true');
+
+# a AND b is (false, NULL, false, true) in scan order, so it needs sorting.
+query B
+SELECT a AND b AS c FROM kleene_nulls_first ORDER BY c ASC NULLS FIRST;
+----
+NULL
+false
+false
+true
+
+# AND must not claim ASC NULLS FIRST.
+query TT
+EXPLAIN SELECT a AND b AS c FROM kleene_nulls_first ORDER BY c ASC NULLS FIRST;
+----
+logical_plan
+01)Sort: c ASC NULLS FIRST
+02)--Projection: kleene_nulls_first.a AND kleene_nulls_first.b AS c
+03)----TableScan: kleene_nulls_first projection=[a, b]
+physical_plan
+01)SortPreservingMergeExec: [c@0 ASC]
+02)--SortExec: expr=[c@0 ASC], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[a@0 AND b@1 as c]
+04)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/order/kleene_nulls_first.csv]]}, projection=[a, b], output_orderings=[[a@0 ASC], [b@1 ASC]], file_type=csv, has_header=true
+
+# a OR b is (NULL, true, true, true) in scan order, already ASC NULLS FIRST,
+# so no SortExec.
+query B
+SELECT a OR b AS c FROM kleene_nulls_first ORDER BY c ASC NULLS FIRST;
+----
+NULL
+true
+true
+true
+
+query TT
+EXPLAIN SELECT a OR b AS c FROM kleene_nulls_first ORDER BY c ASC NULLS FIRST;
+----
+logical_plan
+01)Sort: c ASC NULLS FIRST
+02)--Projection: kleene_nulls_first.a OR kleene_nulls_first.b AS c
+03)----TableScan: kleene_nulls_first projection=[a, b]
+physical_plan
+01)SortPreservingMergeExec: [c@0 ASC]
+02)--ProjectionExec: expr=[a@0 OR b@1 as c]
+03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1, maintains_sort_order=true
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/order/kleene_nulls_first.csv]]}, projection=[a, b], output_orderings=[[a@0 ASC], [b@1 ASC]], file_type=csv, has_header=true
+
+statement ok
+DROP TABLE kleene_nulls_first;
 
 # Union a query with the actual data and one with a constant
 query I

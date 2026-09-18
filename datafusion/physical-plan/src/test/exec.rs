@@ -817,7 +817,7 @@ impl DisplayAs for BlockingExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "BlockingExec",)
+                write!(f, "BlockingExec")
             }
             DisplayFormatType::TreeRender => {
                 // TODO: collect info
@@ -977,7 +977,7 @@ impl DisplayAs for PanicExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "PanicExec",)
+                write!(f, "PanicExec")
             }
             DisplayFormatType::TreeRender => {
                 // TODO: collect info

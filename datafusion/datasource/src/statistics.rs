@@ -29,15 +29,13 @@ use arrow::array::RecordBatch;
 use arrow::compute::SortColumn;
 use arrow::datatypes::SchemaRef;
 use arrow::row::{Row, Rows};
-use datafusion_common::stats::{NdvFallback, Precision};
+use datafusion_common::stats::NdvFallback;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, plan_datafusion_err, plan_err,
 };
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_plan::{ColumnStatistics, Statistics};
-
-use futures::{Stream, StreamExt};
+use datafusion_physical_plan::Statistics;
 
 /// A normalized representation of file min/max statistics that allows for efficient sorting & comparison.
 /// The min/max values are ordered by [`Self::sort_order`].
@@ -96,17 +94,15 @@ impl MinMaxStatistics {
                             .cloned()
                             .zip(s.column_statistics[i].max_value.get_value().cloned())
                             .ok_or_else(|| plan_datafusion_err!("statistics not found"))
+                    } else if let Some(partition_value) =
+                        pv.get(i - s.column_statistics.len())
+                    {
+                        Ok((partition_value.clone(), partition_value.clone()))
                     } else {
-                        if let Some(partition_value) =
-                            pv.get(i - s.column_statistics.len())
-                        {
-                            Ok((partition_value.clone(), partition_value.clone()))
-                        } else {
-                            Err(plan_datafusion_err!(
-                                "statistics not found for partition, expected at most {}",
-                                s.column_statistics.len()
-                            ))
-                        }
+                        Err(plan_datafusion_err!(
+                            "statistics not found for partition, expected at most {}",
+                            s.column_statistics.len()
+                        ))
                     }
                 })
                 .collect::<Result<Vec<_>>>()?
@@ -292,172 +288,6 @@ fn sort_columns_from_physical_sort_exprs(
         .collect()
 }
 
-fn seed_summary_statistics(summary_statistics: &mut Statistics, file_stats: &Statistics) {
-    summary_statistics.num_rows = file_stats.num_rows;
-    summary_statistics.total_byte_size = file_stats.total_byte_size;
-
-    for (summary_col_stats, file_col_stats) in summary_statistics
-        .column_statistics
-        .iter_mut()
-        .zip(file_stats.column_statistics.iter())
-    {
-        summary_col_stats.null_count = file_col_stats.null_count;
-        summary_col_stats.max_value = file_col_stats.max_value.clone();
-        summary_col_stats.min_value = file_col_stats.min_value.clone();
-        summary_col_stats.sum_value = file_col_stats.sum_value.cast_to_sum_type();
-        summary_col_stats.byte_size = file_col_stats.byte_size;
-    }
-}
-
-fn merge_summary_statistics(
-    summary_statistics: &mut Statistics,
-    file_stats: &Statistics,
-) {
-    summary_statistics.num_rows = summary_statistics.num_rows.add(&file_stats.num_rows);
-    summary_statistics.total_byte_size = summary_statistics
-        .total_byte_size
-        .add(&file_stats.total_byte_size);
-
-    for (summary_col_stats, file_col_stats) in summary_statistics
-        .column_statistics
-        .iter_mut()
-        .zip(file_stats.column_statistics.iter())
-    {
-        let ColumnStatistics {
-            null_count: file_nc,
-            max_value: file_max,
-            min_value: file_min,
-            sum_value: file_sum,
-            distinct_count: _,
-            byte_size: file_sbs,
-        } = file_col_stats;
-
-        summary_col_stats.null_count = summary_col_stats.null_count.add(file_nc);
-        summary_col_stats.max_value = summary_col_stats.max_value.max(file_max);
-        summary_col_stats.min_value = summary_col_stats.min_value.min(file_min);
-        summary_col_stats.sum_value = summary_col_stats.sum_value.add_for_sum(file_sum);
-        summary_col_stats.byte_size = summary_col_stats.byte_size.add(file_sbs);
-    }
-}
-
-fn seed_first_file_statistics(
-    limit_num_rows: &mut Precision<usize>,
-    summary_statistics: &mut Statistics,
-    file_stats: &Statistics,
-    collect_stats: bool,
-) {
-    *limit_num_rows = file_stats.num_rows;
-
-    if collect_stats {
-        seed_summary_statistics(summary_statistics, file_stats);
-    }
-}
-
-fn merge_file_statistics(
-    limit_num_rows: &mut Precision<usize>,
-    summary_statistics: &mut Statistics,
-    file_stats: &Statistics,
-    collect_stats: bool,
-) {
-    *limit_num_rows = limit_num_rows.add(&file_stats.num_rows);
-
-    if collect_stats {
-        merge_summary_statistics(summary_statistics, file_stats);
-    }
-}
-
-/// Get all files as well as the file level summary statistics (no statistic for partition columns).
-/// If the optional `limit` is provided, includes only sufficient files. Needed to read up to
-/// `limit` number of rows. `collect_stats` is passed down from the configuration parameter on
-/// `ListingTable`. If it is false we only construct bare statistics and skip a potentially expensive
-///  call to `multiunzip` for constructing file level summary statistics.
-#[deprecated(
-    since = "47.0.0",
-    note = "Please use `get_files_with_limit` and  `compute_all_files_statistics` instead"
-)]
-#[cfg_attr(not(test), expect(unused))]
-pub async fn get_statistics_with_limit(
-    all_files: impl Stream<Item = Result<(PartitionedFile, Arc<Statistics>)>>,
-    file_schema: SchemaRef,
-    limit: Option<usize>,
-    collect_stats: bool,
-) -> Result<(FileGroup, Statistics)> {
-    let mut result_files = FileGroup::default();
-    // These statistics can be calculated as long as at least one file provides
-    // useful information. If none of the files provides any information, then
-    // they will end up having `Precision::Absent` values. Throughout calculations,
-    // missing values will be imputed as:
-    // - zero for summations, and
-    // - neutral element for extreme points.
-    let size = file_schema.fields().len();
-    let mut summary_statistics = Statistics {
-        num_rows: Precision::Absent,
-        total_byte_size: Precision::Absent,
-        column_statistics: vec![ColumnStatistics::default(); size],
-    };
-    // Keep limit pruning separate from the returned summary so `collect_stats=false`
-    // can still stop early using known file row counts.
-    let mut limit_num_rows = Precision::<usize>::Absent;
-
-    // Fusing the stream allows us to call next safely even once it is finished.
-    let mut all_files = Box::pin(all_files.fuse());
-
-    if let Some(first_file) = all_files.next().await {
-        let (mut file, file_stats) = first_file?;
-        file.statistics = Some(Arc::clone(&file_stats));
-        result_files.push(file);
-
-        seed_first_file_statistics(
-            &mut limit_num_rows,
-            &mut summary_statistics,
-            &file_stats,
-            collect_stats,
-        );
-
-        // If the number of rows exceeds the limit, we can stop processing
-        // files. This only applies when we know the number of rows. It also
-        // currently ignores tables that have no statistics regarding the
-        // number of rows.
-        let conservative_num_rows = match limit_num_rows {
-            Precision::Exact(nr) => nr,
-            _ => usize::MIN,
-        };
-        if conservative_num_rows <= limit.unwrap_or(usize::MAX) {
-            while let Some(current) = all_files.next().await {
-                let (mut file, file_stats) = current?;
-                file.statistics = Some(Arc::clone(&file_stats));
-                result_files.push(file);
-                merge_file_statistics(
-                    &mut limit_num_rows,
-                    &mut summary_statistics,
-                    &file_stats,
-                    collect_stats,
-                );
-
-                // If the number of rows exceeds the limit, we can stop processing
-                // files. This only applies when we know the number of rows. It also
-                // currently ignores tables that have no statistics regarding the
-                // number of rows.
-                if limit_num_rows.get_value().unwrap_or(&usize::MIN)
-                    > &limit.unwrap_or(usize::MAX)
-                {
-                    break;
-                }
-            }
-        }
-    };
-
-    let mut statistics = summary_statistics;
-    if all_files.next().await.is_some() {
-        // If we still have files in the stream, it means that the limit kicked
-        // in, and the statistic could have been different had we processed the
-        // files in a different order.
-        statistics = statistics.to_inexact()
-    }
-
-    Ok((result_files, statistics))
-}
-
 /// Computes the summary statistics for a group of files(`FileGroup` level's statistics).
 ///
 /// This function combines statistics from all files in the file group to create
@@ -555,54 +385,11 @@ mod tests {
     use crate::PartitionedFile;
     use crate::file_groups::FileGroup;
     use arrow::datatypes::{DataType, Field, Schema};
-    use futures::stream;
-
-    fn file_stats(sum: u32) -> Statistics {
-        Statistics {
-            num_rows: Precision::Exact(1),
-            total_byte_size: Precision::Exact(4),
-            column_statistics: vec![ColumnStatistics {
-                null_count: Precision::Exact(0),
-                max_value: Precision::Exact(ScalarValue::UInt32(Some(sum))),
-                min_value: Precision::Exact(ScalarValue::UInt32(Some(sum))),
-                sum_value: Precision::Exact(ScalarValue::UInt32(Some(sum))),
-                distinct_count: Precision::Exact(1),
-                byte_size: Precision::Exact(4),
-            }],
-        }
-    }
+    use datafusion_common::stats::Precision;
+    use datafusion_physical_plan::ColumnStatistics;
 
     fn test_schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]))
-    }
-
-    fn make_file_stats(
-        num_rows: usize,
-        total_byte_size: usize,
-        col_stats: ColumnStatistics,
-    ) -> Arc<Statistics> {
-        Arc::new(Statistics {
-            num_rows: Precision::Exact(num_rows),
-            total_byte_size: Precision::Exact(total_byte_size),
-            column_statistics: vec![col_stats],
-        })
-    }
-
-    fn rich_col_stats(
-        null_count: usize,
-        min: i64,
-        max: i64,
-        sum: i64,
-        byte_size: usize,
-    ) -> ColumnStatistics {
-        ColumnStatistics {
-            null_count: Precision::Exact(null_count),
-            max_value: Precision::Exact(ScalarValue::Int64(Some(max))),
-            min_value: Precision::Exact(ScalarValue::Int64(Some(min))),
-            distinct_count: Precision::Absent,
-            sum_value: Precision::Exact(ScalarValue::Int64(Some(sum))),
-            byte_size: Precision::Exact(byte_size),
-        }
     }
 
     fn utf8_file_stats(ndv: usize, min: &str, max: &str) -> Statistics {
@@ -622,204 +409,6 @@ mod tests {
 
     fn file_with_stats(path: &str, stats: Statistics) -> PartitionedFile {
         PartitionedFile::new(path, 1).with_statistics(Arc::new(stats))
-    }
-    #[tokio::test]
-    #[expect(deprecated)]
-    async fn test_get_statistics_with_limit_casts_first_file_sum_to_sum_type()
-    -> Result<()> {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("c1", DataType::UInt32, true)]));
-
-        let files = stream::iter(vec![Ok((
-            PartitionedFile::new("f1.parquet", 1),
-            Arc::new(file_stats(100)),
-        ))]);
-
-        let (_group, stats) =
-            get_statistics_with_limit(files, schema, None, true).await?;
-
-        assert_eq!(
-            stats.column_statistics[0].sum_value,
-            Precision::Exact(ScalarValue::UInt64(Some(100)))
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[expect(deprecated)]
-    async fn test_get_statistics_with_limit_merges_sum_with_unsigned_widening()
-    -> Result<()> {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("c1", DataType::UInt32, true)]));
-
-        let files = stream::iter(vec![
-            Ok((
-                PartitionedFile::new("f1.parquet", 1),
-                Arc::new(file_stats(100)),
-            )),
-            Ok((
-                PartitionedFile::new("f2.parquet", 1),
-                Arc::new(file_stats(200)),
-            )),
-        ]);
-
-        let (_group, stats) =
-            get_statistics_with_limit(files, schema, None, true).await?;
-
-        assert_eq!(
-            stats.column_statistics[0].sum_value,
-            Precision::Exact(ScalarValue::UInt64(Some(300)))
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[expect(deprecated)]
-    async fn get_statistics_with_limit_collect_stats_false_returns_bare_statistics() {
-        let all_files = stream::iter(vec![
-            Ok((
-                PartitionedFile::new("first.parquet", 10),
-                make_file_stats(0, 0, rich_col_stats(1, 1, 9, 15, 64)),
-            )),
-            Ok((
-                PartitionedFile::new("second.parquet", 20),
-                make_file_stats(10, 100, rich_col_stats(2, 10, 99, 300, 128)),
-            )),
-        ]);
-
-        let (_files, statistics) =
-            get_statistics_with_limit(all_files, test_schema(), None, false)
-                .await
-                .unwrap();
-
-        assert_eq!(statistics.num_rows, Precision::Absent);
-        assert_eq!(statistics.total_byte_size, Precision::Absent);
-        assert_eq!(statistics.column_statistics.len(), 1);
-        assert_eq!(
-            statistics.column_statistics[0].null_count,
-            Precision::Absent
-        );
-        assert_eq!(statistics.column_statistics[0].max_value, Precision::Absent);
-        assert_eq!(statistics.column_statistics[0].min_value, Precision::Absent);
-        assert_eq!(statistics.column_statistics[0].sum_value, Precision::Absent);
-        assert_eq!(statistics.column_statistics[0].byte_size, Precision::Absent);
-    }
-
-    #[tokio::test]
-    #[expect(deprecated)]
-    async fn get_statistics_with_limit_collect_stats_false_uses_row_counts_for_limit() {
-        let all_files = stream::iter(vec![
-            Ok((
-                PartitionedFile::new("first.parquet", 10),
-                make_file_stats(3, 30, rich_col_stats(1, 1, 9, 15, 64)),
-            )),
-            Ok((
-                PartitionedFile::new("second.parquet", 20),
-                make_file_stats(3, 30, rich_col_stats(2, 10, 99, 300, 128)),
-            )),
-            Ok((
-                PartitionedFile::new("third.parquet", 30),
-                make_file_stats(3, 30, rich_col_stats(0, 100, 199, 450, 256)),
-            )),
-        ]);
-
-        let (files, statistics) =
-            get_statistics_with_limit(all_files, test_schema(), Some(4), false)
-                .await
-                .unwrap();
-
-        assert_eq!(files.len(), 2);
-        assert_eq!(statistics.num_rows, Precision::Absent);
-        assert_eq!(statistics.total_byte_size, Precision::Absent);
-    }
-
-    #[tokio::test]
-    #[expect(deprecated)]
-    async fn get_statistics_with_limit_collect_stats_true_aggregates_statistics() {
-        let all_files = stream::iter(vec![
-            Ok((
-                PartitionedFile::new("first.parquet", 10),
-                make_file_stats(5, 50, rich_col_stats(1, 1, 9, 15, 64)),
-            )),
-            Ok((
-                PartitionedFile::new("second.parquet", 20),
-                make_file_stats(10, 100, rich_col_stats(2, 10, 99, 300, 128)),
-            )),
-        ]);
-
-        let (_files, statistics) =
-            get_statistics_with_limit(all_files, test_schema(), None, true)
-                .await
-                .unwrap();
-
-        assert_eq!(statistics.num_rows, Precision::Exact(15));
-        assert_eq!(statistics.total_byte_size, Precision::Exact(150));
-        assert_eq!(
-            statistics.column_statistics[0].null_count,
-            Precision::Exact(3)
-        );
-        assert_eq!(
-            statistics.column_statistics[0].min_value,
-            Precision::Exact(ScalarValue::Int64(Some(1)))
-        );
-        assert_eq!(
-            statistics.column_statistics[0].max_value,
-            Precision::Exact(ScalarValue::Int64(Some(99)))
-        );
-        assert_eq!(
-            statistics.column_statistics[0].sum_value,
-            Precision::Exact(ScalarValue::Int64(Some(315)))
-        );
-        assert_eq!(
-            statistics.column_statistics[0].byte_size,
-            Precision::Exact(192)
-        );
-    }
-
-    #[tokio::test]
-    #[expect(deprecated)]
-    async fn get_statistics_with_limit_collect_stats_true_limit_marks_inexact() {
-        let all_files = stream::iter(vec![
-            Ok((
-                PartitionedFile::new("first.parquet", 10),
-                make_file_stats(5, 50, rich_col_stats(0, 1, 5, 15, 64)),
-            )),
-            Ok((
-                PartitionedFile::new("second.parquet", 20),
-                make_file_stats(5, 50, rich_col_stats(1, 6, 10, 40, 64)),
-            )),
-            Ok((
-                PartitionedFile::new("third.parquet", 20),
-                make_file_stats(5, 50, rich_col_stats(2, 11, 15, 65, 64)),
-            )),
-        ]);
-
-        let (files, statistics) =
-            get_statistics_with_limit(all_files, test_schema(), Some(8), true)
-                .await
-                .unwrap();
-
-        assert_eq!(files.len(), 2);
-        assert_eq!(statistics.num_rows, Precision::Inexact(10));
-        assert_eq!(statistics.total_byte_size, Precision::Inexact(100));
-        assert_eq!(
-            statistics.column_statistics[0].min_value,
-            Precision::Inexact(ScalarValue::Int64(Some(1)))
-        );
-        assert_eq!(
-            statistics.column_statistics[0].max_value,
-            Precision::Inexact(ScalarValue::Int64(Some(10)))
-        );
-        assert_eq!(
-            statistics.column_statistics[0].sum_value,
-            Precision::Inexact(ScalarValue::Int64(Some(55)))
-        );
-        assert_eq!(
-            statistics.column_statistics[0].byte_size,
-            Precision::Inexact(128)
-        );
     }
 
     #[test]
@@ -901,14 +490,10 @@ mod tests {
             file_with_stats("f2.parquet", Statistics::default()),
         ];
 
-        let err = match MinMaxStatistics::new_from_files(
-            &sort_order,
-            &schema,
-            None,
-            files.iter(),
-        ) {
-            Ok(_) => panic!("expected missing statistics error"),
-            Err(err) => err,
+        let Err(err) =
+            MinMaxStatistics::new_from_files(&sort_order, &schema, None, files.iter())
+        else {
+            panic!("expected missing statistics error")
         };
 
         assert!(

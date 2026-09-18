@@ -163,7 +163,7 @@ async fn sort_with_mem_limit_2_cols_1() {
 
 // TODO: Query fails, fix it
 // Issue: https://github.com/apache/datafusion/issues/14143
-#[ignore]
+#[ignore = "Query fails, see the issue above"]
 #[tokio::test]
 async fn sort_with_mem_limit_2_cols_2() {
     let memory_usage_in_theory = 80_000_000 * 2; // 2 columns

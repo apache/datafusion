@@ -80,11 +80,11 @@ make_udf_expr_and_func!(
 range(start, stop[, step])",
     sql_example = r#"```sql
 > select range(2, 10, 3);
-+-----------------------------------+
-| range(Int64(2),Int64(10),Int64(3))|
-+-----------------------------------+
-| [2, 5, 8]                         |
-+-----------------------------------+
++------------------------------------+
+| range(Int64(2),Int64(10),Int64(3)) |
++------------------------------------+
+| [2, 5, 8]                          |
++------------------------------------+
 
 > select range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH);
 +--------------------------------------------------------------------------+
@@ -338,7 +338,7 @@ impl Range {
                     offsets.push(values.len() as i32);
                     valid.append_null();
                 }
-            };
+            }
         }
         let arr = Arc::new(ListArray::try_new(
             Arc::new(Field::new_list_field(DataType::Int64, true)),
@@ -461,28 +461,34 @@ impl Range {
             }
 
             let neg = TimestampNanosecondType::add_month_day_nano(start, step, start_tz)
-                .ok_or(exec_datafusion_err!(
-                    "Cannot generate timestamp range where start + step overflows"
-                ))?
+                .ok_or_else(|| {
+                    exec_datafusion_err!(
+                        "Cannot generate timestamp range where start + step overflows"
+                    )
+                })?
                 .cmp(&start)
                 == Ordering::Less;
 
             let stop_dt =
                 as_datetime_with_timezone::<TimestampNanosecondType>(stop, stop_tz)
-                    .ok_or(exec_datafusion_err!(
-                        "Cannot generate timestamp for stop: {}: {:?}",
-                        stop,
-                        stop_tz
-                    ))?;
+                    .ok_or_else(|| {
+                        exec_datafusion_err!(
+                            "Cannot generate timestamp for stop: {}: {:?}",
+                            stop,
+                            stop_tz
+                        )
+                    })?;
 
             let mut current = start;
             let mut current_dt =
                 as_datetime_with_timezone::<TimestampNanosecondType>(current, start_tz)
-                    .ok_or(exec_datafusion_err!(
-                    "Cannot generate timestamp for start: {}: {:?}",
-                    current,
-                    start_tz
-                ))?;
+                    .ok_or_else(|| {
+                    exec_datafusion_err!(
+                        "Cannot generate timestamp for start: {}: {:?}",
+                        current,
+                        start_tz
+                    )
+                })?;
 
             let values = from_fn(|| {
                 let generate_series_should_end = self.include_upper_bound

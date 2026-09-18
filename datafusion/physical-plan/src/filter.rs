@@ -33,7 +33,7 @@ use crate::common::can_project;
 use crate::execution_plan::{CardinalityEffect, replace_children_if_necessary};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation, PushedDown,
+    FilterPushdownPropagation, FilterRemapper, PushedDown,
 };
 use crate::limit::LocalLimitExec;
 use crate::metrics::{MetricBuilder, MetricType};
@@ -57,16 +57,17 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    DataFusionError, Result, ScalarValue, internal_err, plan_err, project_schema,
+    DataFusionError, Result, ScalarValue, internal_datafusion_err, internal_err,
+    plan_err, project_schema,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{
-    BinaryExpr, Column, IsNotNullExpr, Literal, lit,
+    BinaryExpr, Column, InListExpr, IsNotNullExpr, Literal, lit,
 };
 use datafusion_physical_expr::intervals::utils::check_support;
-use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
+use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
     AcrossPartitions, AnalysisContext, ConstExpr, ExprBoundaries, PhysicalExpr, analyze,
     conjunction, split_conjunction,
@@ -181,6 +182,10 @@ impl FilterExecBuilder {
 
     /// Build the FilterExec, computing properties once with all configured parameters
     pub fn build(self) -> Result<FilterExec> {
+        if self.batch_size == 0 {
+            return plan_err!("FilterExec: batch_size must be greater than 0");
+        }
+
         // Validate predicate type
         match self.predicate.data_type(self.input.schema().as_ref())? {
             DataType::Boolean => {}
@@ -282,6 +287,9 @@ impl FilterExec {
 
     /// Set the batch size
     pub fn with_batch_size(&self, batch_size: usize) -> Result<Self> {
+        if batch_size == 0 {
+            return plan_err!("FilterExec: batch_size must be greater than 0");
+        }
         Ok(Self {
             predicate: Arc::clone(&self.predicate),
             input: Arc::clone(&self.input),
@@ -307,6 +315,29 @@ impl FilterExec {
     /// The default selectivity
     pub fn default_selectivity(&self) -> u8 {
         self.default_selectivity
+    }
+
+    /// Describe which parent filters (in this node's output coordinates) can
+    /// be forwarded to the input, remapped into input coordinates.
+    ///
+    /// With an embedded projection the output position `i` reads input column
+    /// `projection[i]`; without one the positions are identical. Mapping by
+    /// position keeps same-named input columns distinct.
+    fn parent_filters_for_input(
+        &self,
+        parent_filters: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<ChildFilterDescription> {
+        if parent_filters.is_empty() {
+            return Ok(ChildFilterDescription::empty());
+        }
+        match self.projection.as_ref() {
+            Some(projection) => ChildFilterDescription::from_child_with_column_mapping(
+                parent_filters,
+                projection.iter().copied().enumerate().collect(),
+                self.input(),
+            ),
+            None => ChildFilterDescription::from_child(parent_filters, self.input()),
+        }
     }
 
     /// Projection
@@ -342,6 +373,11 @@ impl FilterExec {
 
         let input_num_rows = input_stats.num_rows;
         let input_total_byte_size = input_stats.total_byte_size;
+
+        // A column holding each of its values once, as a primary key or unique
+        // constraint says, matches one row per value asked for. No selectivity
+        // expresses that.
+        let match_limit = unique_match_limit(predicate, &input_stats);
 
         let (selectivity, num_rows, column_statistics) = if is_infeasible {
             // Contradictory predicate: no rows survive. Row-bounded counts are
@@ -406,6 +442,10 @@ impl FilterExec {
             }
         };
 
+        let num_rows = match (match_limit, num_rows.get_value()) {
+            (Some(limit), Some(rows)) if *rows > limit => Precision::Inexact(limit),
+            _ => num_rows,
+        };
         let total_byte_size =
             scale_byte_size_at_rows(input_total_byte_size, selectivity, num_rows);
 
@@ -681,21 +721,18 @@ impl ExecutionPlan for FilterExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        if phase != FilterPushdownPhase::Pre {
-            let child =
-                ChildFilterDescription::from_child(&parent_filters, self.input())?;
-            return Ok(FilterDescription::new().with_child(child));
+        let mut child = self.parent_filters_for_input(&parent_filters);
+        if phase == FilterPushdownPhase::Pre {
+            child = child.map(|child| {
+                child.with_self_filters(
+                    split_conjunction(&self.predicate)
+                        .into_iter()
+                        .cloned()
+                        .collect(),
+                )
+            });
         }
-
-        let child = ChildFilterDescription::from_child(&parent_filters, self.input())?
-            .with_self_filters(
-                split_conjunction(&self.predicate)
-                    .into_iter()
-                    .cloned()
-                    .collect(),
-            );
-
-        Ok(FilterDescription::new().with_child(child))
+        child.map(|child| FilterDescription::new().with_child(child))
     }
 
     fn handle_child_pushdown_result(
@@ -719,12 +756,25 @@ impl ExecutionPlan for FilterExec {
 
         // If this FilterExec has a projection, the unsupported parent filters
         // are in the output schema (after projection) coordinates. We need to
-        // remap them to the input schema coordinates before combining with self filters.
-        if self.projection.is_some() {
-            let input_schema = self.input().schema();
+        // remap them to the input schema coordinates before combining with self
+        // filters. Map by position through the projection: the input may
+        // contain several columns with the same name.
+        if let Some(projection) = self.projection.as_ref()
+            && !unsupported_parent_filters.is_empty()
+        {
+            let remapper = FilterRemapper::with_column_mapping(
+                self.input().schema(),
+                projection.iter().copied().enumerate().collect(),
+            );
             unsupported_parent_filters = unsupported_parent_filters
                 .into_iter()
-                .map(|expr| reassign_expr_columns(expr, &input_schema))
+                .map(|expr| {
+                    remapper.try_remap(&expr)?.ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "Parent filter {expr} references a column that is not in the FilterExec projection {projection:?}"
+                        )
+                    })
+                })
                 .collect::<Result<Vec<_>>>()?;
         }
 
@@ -849,16 +899,39 @@ impl ExecutionPlan for FilterExec {
         &self,
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
-        let expr = ctx.encode_expr(self.predicate())?;
-        // Preserve the exact wire format: `None` (full projection) is serialized
-        // as the identity projection `[0, 1, ..., num_fields - 1]` so that it is
-        // distinguishable from an explicit projection on decode.
-        let projection = if let Some(v) = self.projection() {
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `FilterExec` is a compile error here until it is either serialized or
+        // explicitly documented as not needing to be.
+        let Self {
+            predicate,
+            input,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            default_selectivity,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+            projection,
+            batch_size,
+            fetch,
+        } = self;
+        let input_node = ctx.encode_child(input)?;
+        let expr = ctx.encode_expr(predicate)?;
+        if *batch_size == 0 {
+            return plan_err!("FilterExec: batch_size must be greater than 0");
+        }
+        let batch_size = usize_to_wire(*batch_size, "FilterExec", "batch_size")?;
+        let fetch = fetch
+            .map(|fetch| usize_to_wire(fetch, "FilterExec", "fetch"))
+            .transpose()?;
+        // The identity projection `[0, 1, ..., num_fields - 1]` is the
+        // canonical wire representation of a full projection, so `None` is
+        // encoded that way (and decodes back to `None`).
+        let projection = if let Some(v) = projection {
             v.iter().map(|x| *x as u32).collect()
         } else {
-            (0..self.input().schema().fields().len())
+            (0..input.schema().fields().len())
                 .map(|i| i as u32)
                 .collect()
         };
@@ -866,12 +939,12 @@ impl ExecutionPlan for FilterExec {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Filter(Box::new(
                     protobuf::FilterExecNode {
-                        input: Some(Box::new(input)),
+                        input: Some(Box::new(input_node)),
                         expr: Some(expr),
-                        default_filter_selectivity: self.default_selectivity() as u32,
+                        default_filter_selectivity: *default_selectivity as u32,
                         projection,
-                        batch_size: self.batch_size() as u32,
-                        fetch: self.fetch().map(|f| f as u32),
+                        batch_size,
+                        fetch,
                     },
                 )),
             ),
@@ -892,29 +965,39 @@ impl FilterExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_proto_models::protobuf;
-        let filter = crate::expect_plan_variant!(
+        let filter_node = crate::expect_plan_variant!(
             node,
             protobuf::physical_plan_node::PhysicalPlanType::Filter,
             "FilterExec",
         );
-        let input =
-            ctx.decode_required_child(filter.input.as_deref(), "FilterExec", "input")?;
+        // Destructure exhaustively so that a new field on `FilterExecNode` is a
+        // compile error here rather than a silently dropped field.
+        let protobuf::FilterExecNode {
+            input,
+            expr,
+            default_filter_selectivity,
+            projection,
+            batch_size,
+            fetch,
+        } = &**filter_node;
+        let input = ctx.decode_required_child(input.as_deref(), "FilterExec", "input")?;
         let predicate = ctx.decode_required_expr(
-            filter.expr.as_ref(),
+            expr.as_ref(),
             input.schema().as_ref(),
             "FilterExec",
             "expr",
         )?;
-        let filter_selectivity = filter.default_filter_selectivity.try_into();
+        let filter_selectivity = (*default_filter_selectivity).try_into();
 
         // `None` is encoded as the full identity projection. Reconstruct it only
         // when all input columns are present in order, leaving an empty list as
         // `Some(vec![])`.
         let num_fields = input.schema().fields().len();
-        let mut is_full_projection = filter.projection.len() == num_fields;
-        let mut projection_vec: Vec<usize> = Vec::with_capacity(filter.projection.len());
-        for (i, idx) in filter.projection.iter().enumerate() {
+        let mut is_full_projection = projection.len() == num_fields;
+        let mut projection_vec: Vec<usize> = Vec::with_capacity(projection.len());
+        for (i, idx) in projection.iter().enumerate() {
             let idx = *idx as usize;
             is_full_projection &= idx == i;
             projection_vec.push(idx);
@@ -924,10 +1007,18 @@ impl FilterExec {
         } else {
             Some(projection_vec)
         };
+        // Proto3's zero default means "use the builder default."
+        let batch_size = match *batch_size {
+            0 => FILTER_EXEC_DEFAULT_BATCH_SIZE,
+            batch_size => usize_from_wire(batch_size, "FilterExec", "batch_size")?,
+        };
+        let fetch = fetch
+            .map(|f| usize_from_wire(f, "FilterExec", "fetch"))
+            .transpose()?;
         let filter = FilterExecBuilder::new(predicate, input)
             .apply_projection(projection)?
-            .with_batch_size(filter.batch_size as usize)
-            .with_fetch(filter.fetch.map(|f| f as usize))
+            .with_batch_size(batch_size)
+            .with_fetch(fetch)
             .build()?;
         match filter_selectivity {
             Ok(filter_selectivity) => Ok(Arc::new(
@@ -946,6 +1037,76 @@ impl EmbeddedProjection for FilterExec {
             .apply_projection(projection)?
             .build()
     }
+}
+
+/// The most rows a filter can match, when it restricts a column holding each value
+/// once to a fixed set of values: one row per value.
+fn unique_match_limit(
+    predicate: &Arc<dyn PhysicalExpr>,
+    statistics: &Statistics,
+) -> Option<usize> {
+    let mut limit: Option<usize> = None;
+    for expr in split_conjunction(predicate) {
+        let Some((index, values)) = restricted_column(expr) else {
+            continue;
+        };
+        let holds_once = statistics
+            .column_statistics
+            .get(index)
+            .is_some_and(|column| holds_each_value_once(column, &statistics.num_rows));
+        if !holds_once {
+            continue;
+        }
+        limit = Some(limit.map_or(values, |limit: usize| limit.min(values)));
+    }
+    limit
+}
+
+/// The column an expression restricts to a fixed set of values, and how many values
+/// that is. NULL is never one of them: it matches nothing.
+fn restricted_column(expr: &Arc<dyn PhysicalExpr>) -> Option<(usize, usize)> {
+    if let Some(in_list) = expr.downcast_ref::<InListExpr>() {
+        if in_list.negated() {
+            return None;
+        }
+        let column = in_list.expr().downcast_ref::<Column>()?;
+        let mut values: Vec<&ScalarValue> = vec![];
+        for expr in in_list.list() {
+            let value = expr.downcast_ref::<Literal>()?.value();
+            if !value.is_null() && !values.contains(&value) {
+                values.push(value);
+            }
+        }
+        return Some((column.index(), values.len()));
+    }
+
+    let binary = expr.downcast_ref::<BinaryExpr>()?;
+    if *binary.op() != Operator::Eq {
+        return None;
+    }
+    let (column, literal) = match (
+        binary.left().downcast_ref::<Column>(),
+        binary.right().downcast_ref::<Column>(),
+    ) {
+        (Some(column), None) => (column, binary.right()),
+        (None, Some(column)) => (column, binary.left()),
+        _ => return None,
+    };
+    let value = literal.downcast_ref::<Literal>()?.value();
+    (!value.is_null()).then_some((column.index(), 1))
+}
+
+/// Whether the column has as many distinct values as it has non-null rows, so each
+/// value appears once.
+fn holds_each_value_once(column: &ColumnStatistics, num_rows: &Precision<usize>) -> bool {
+    let (Some(rows), Some(distinct), Some(nulls)) = (
+        num_rows.get_value(),
+        column.distinct_count.get_value(),
+        column.null_count.get_value(),
+    ) else {
+        return false;
+    };
+    distinct.saturating_add(*nulls) >= *rows
 }
 
 /// Collects column equality information from `col = literal` predicates in a
@@ -1370,7 +1531,7 @@ fn collect_columns_from_predicate_inner(
     let mut ne_predicate_columns = Vec::<PhysicalExprPairRef>::new();
 
     let predicates = split_conjunction(predicate);
-    predicates.into_iter().for_each(|p| {
+    for p in predicates {
         if let Some(binary) = p.downcast_ref::<BinaryExpr>() {
             // Only extract pairs where at least one side is a Column reference.
             // Pairs like `complex_expr = literal` should not create equivalence
@@ -1383,7 +1544,7 @@ fn collect_columns_from_predicate_inner(
                 binary.left().downcast_ref::<Column>().is_some()
                     || binary.right().downcast_ref::<Column>().is_some();
             if !has_direct_column_operand {
-                return;
+                continue;
             }
             match binary.op() {
                 Operator::Eq => {
@@ -1395,7 +1556,7 @@ fn collect_columns_from_predicate_inner(
                 _ => {}
             }
         }
-    });
+    }
 
     (eq_predicate_columns, ne_predicate_columns)
 }
@@ -1416,6 +1577,22 @@ mod tests {
     use crate::test;
     use crate::test::exec::StatisticsExec;
     use arrow::datatypes::{Field, Schema, UnionFields, UnionMode};
+
+    #[test]
+    fn filter_rejects_zero_batch_size() -> Result<()> {
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+        assert!(
+            FilterExecBuilder::new(lit(true), Arc::clone(&input))
+                .with_batch_size(0)
+                .build()
+                .is_err()
+        );
+
+        let filter = FilterExec::try_new(lit(true), input)?;
+        assert!(filter.with_batch_size(0).is_err());
+        Ok(())
+    }
 
     #[tokio::test]
     async fn collect_columns_predicates() -> Result<()> {
@@ -1458,6 +1635,100 @@ mod tests {
         assert_eq!(1, ne_pairs.len());
         assert!(ne_pairs[0].0.eq(&col("c1", &schema)?));
         assert!(ne_pairs[0].1.eq(&col("c13", &schema)?));
+
+        Ok(())
+    }
+
+    /// An equality on a column that holds each value once matches one row at most,
+    /// including on a type interval analysis cannot read, where the default
+    /// selectivity would otherwise apply.
+    #[tokio::test]
+    async fn test_filter_statistics_equality_on_a_unique_column() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("id", DataType::Utf8, true)]);
+        let unique = ColumnStatistics {
+            null_count: Precision::Exact(0),
+            distinct_count: Precision::Exact(100),
+            ..Default::default()
+        };
+        let rows = |column: ColumnStatistics| -> Result<Precision<usize>> {
+            let input = Arc::new(StatisticsExec::new(
+                Statistics {
+                    num_rows: Precision::Exact(100),
+                    total_byte_size: Precision::Exact(800),
+                    column_statistics: vec![column],
+                },
+                schema.clone(),
+            ));
+            let predicate =
+                binary(col("id", &schema)?, Operator::Eq, lit("seven"), &schema)?;
+            let filter: Arc<dyn ExecutionPlan> =
+                Arc::new(FilterExec::try_new(predicate, input)?);
+            Ok(StatisticsContext::new()
+                .compute(filter.as_ref(), &StatisticsArgs::new())?
+                .num_rows)
+        };
+
+        assert_eq!(rows(unique.clone())?, Precision::Inexact(1));
+
+        // The nulls a unique column may repeat do not make it hold a value twice.
+        assert_eq!(
+            rows(ColumnStatistics {
+                null_count: Precision::Exact(10),
+                distinct_count: Precision::Exact(90),
+                ..unique.clone()
+            })?,
+            Precision::Inexact(1)
+        );
+
+        // Without a distinct count, the default selectivity applies as before.
+        assert_eq!(
+            rows(ColumnStatistics {
+                distinct_count: Precision::Absent,
+                ..unique
+            })?,
+            Precision::Inexact(20)
+        );
+
+        Ok(())
+    }
+
+    /// Asking a unique column for three values matches three rows at most.
+    #[tokio::test]
+    async fn test_filter_statistics_in_list_on_a_unique_column() -> Result<()> {
+        use datafusion_physical_expr::expressions::in_list;
+
+        let schema = Schema::new(vec![Field::new("id", DataType::Utf8, true)]);
+        let rows = |list: Vec<&str>, negated: bool| -> Result<Precision<usize>> {
+            let input = Arc::new(StatisticsExec::new(
+                Statistics {
+                    num_rows: Precision::Exact(100),
+                    total_byte_size: Precision::Exact(800),
+                    column_statistics: vec![ColumnStatistics {
+                        null_count: Precision::Exact(0),
+                        distinct_count: Precision::Exact(100),
+                        ..Default::default()
+                    }],
+                },
+                schema.clone(),
+            ));
+            let predicate = in_list(
+                col("id", &schema)?,
+                list.into_iter().map(|value| lit(value) as _).collect(),
+                &negated,
+                &schema,
+            )?;
+            let filter: Arc<dyn ExecutionPlan> =
+                Arc::new(FilterExec::try_new(predicate, input)?);
+            Ok(StatisticsContext::new()
+                .compute(filter.as_ref(), &StatisticsArgs::new())?
+                .num_rows)
+        };
+
+        assert_eq!(rows(vec!["a", "b", "c"], false)?, Precision::Inexact(3));
+        // Repeats ask for the same row twice.
+        assert_eq!(rows(vec!["a", "b", "a"], false)?, Precision::Inexact(2));
+        // `NOT IN` selects nearly everything, so the default applies.
+        assert_eq!(rows(vec!["a", "b", "c"], true)?, Precision::Inexact(20));
 
         Ok(())
     }
@@ -2073,6 +2344,18 @@ mod tests {
                 )),
             )),
         ));
+        // i32::MIN also satisfies this predicate because subtracting 5 wraps.
+        // A mathematical lower bound of 5 would exclude a valid input value.
+        let batch = RecordBatch::try_new(
+            input.schema(),
+            vec![Arc::new(arrow::array::Int32Array::from(vec![i32::MIN]))],
+        )
+        .unwrap();
+        let result = predicate.evaluate(&batch).unwrap().into_array(1).unwrap();
+        assert_eq!(
+            result.as_ref(),
+            &arrow::array::BooleanArray::from(vec![true])
+        );
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
         let filter_statistics =
@@ -2085,7 +2368,7 @@ mod tests {
                 // `a <= 10` rejects nulls, so `a` has no surviving nulls even
                 // though the input statistics are entirely unknown.
                 null_count: Precision::Exact(0),
-                min_value: Precision::Inexact(ScalarValue::Int32(Some(5))),
+                min_value: Precision::Absent,
                 max_value: Precision::Inexact(ScalarValue::Int32(Some(10))),
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
@@ -2148,9 +2431,7 @@ mod tests {
             Statistics {
                 num_rows: Precision::Inexact(1000),
                 total_byte_size: Precision::Inexact(4000),
-                column_statistics: vec![ColumnStatistics {
-                    ..Default::default()
-                }],
+                column_statistics: vec![ColumnStatistics::default()],
             },
             schema,
         ));
@@ -2320,15 +2601,9 @@ mod tests {
                         max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
                         ..Default::default()
                     },
-                    ColumnStatistics {
-                        ..Default::default()
-                    },
-                    ColumnStatistics {
-                        ..Default::default()
-                    },
-                    ColumnStatistics {
-                        ..Default::default()
-                    },
+                    ColumnStatistics::default(),
+                    ColumnStatistics::default(),
+                    ColumnStatistics::default(),
                 ],
             },
             schema,

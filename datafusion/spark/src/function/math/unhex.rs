@@ -147,7 +147,7 @@ where
 }
 
 /// Convert a single hex string to binary
-fn unhex_scalar(s: &str) -> Option<Vec<u8>> {
+pub(crate) fn unhex_scalar(s: &str) -> Option<Vec<u8>> {
     let mut buffer = Vec::with_capacity(s.len().div_ceil(2));
     if unhex_common(s.as_bytes(), &mut buffer) {
         Some(buffer)

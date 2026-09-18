@@ -70,7 +70,7 @@ impl FFI_PhysicalOptimizerContext {
     }
 
     fn inner(&self) -> &OptimizerContextPrivateData {
-        unsafe { &*(self.private_data as *const OptimizerContextPrivateData) }
+        unsafe { &*self.private_data.cast::<OptimizerContextPrivateData>() }
     }
 }
 
@@ -211,7 +211,7 @@ unsafe extern "C" fn schema_check_fn_wrapper(rule: &FFI_PhysicalOptimizerRule) -
 unsafe extern "C" fn release_fn_wrapper(rule: &mut FFI_PhysicalOptimizerRule) {
     unsafe {
         debug_assert!(!rule.private_data.is_null());
-        let private_data = Box::from_raw(rule.private_data as *mut RulePrivateData);
+        let private_data = Box::from_raw(rule.private_data.cast::<RulePrivateData>());
         drop(private_data);
         rule.private_data = std::ptr::null_mut();
     }
@@ -224,7 +224,7 @@ unsafe extern "C" fn clone_fn_wrapper(
     let rule = Arc::clone(rule.inner());
 
     let private_data =
-        Box::into_raw(Box::new(RulePrivateData { rule, runtime })) as *mut c_void;
+        Box::into_raw(Box::new(RulePrivateData { rule, runtime })).cast::<c_void>();
 
     FFI_PhysicalOptimizerRule {
         optimize: optimize_fn_wrapper,
@@ -258,7 +258,7 @@ impl FFI_PhysicalOptimizerRule {
         }
 
         let private_data = Box::new(RulePrivateData { rule, runtime });
-        let private_data = Box::into_raw(private_data) as *mut c_void;
+        let private_data = Box::into_raw(private_data).cast::<c_void>();
 
         Self {
             optimize: optimize_fn_wrapper,

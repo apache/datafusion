@@ -23,7 +23,6 @@ use arrow::datatypes::{DataType, Int64Type};
 use arrow::datatypes::{
     DataType::Int64, DataType::LargeUtf8, DataType::Utf8, DataType::Utf8View,
 };
-use arrow::error::ArrowError;
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -175,7 +174,6 @@ pub fn regexp_instr_func(args: &[ArrayRef]) -> Result<ArrayRef> {
         if args_len > 4 { Some(&args[4]) } else { None },
         if args_len > 5 { Some(&args[5]) } else { None },
     )
-    .map_err(|e| e.into())
 }
 
 /// `arrow-rs` style implementation of `regexp_instr` function.
@@ -203,7 +201,7 @@ fn regexp_instr(
     nth_array: Option<&dyn Datum>,
     flags_array: Option<&dyn Datum>,
     subexpr_array: Option<&dyn Datum>,
-) -> Result<ArrayRef, ArrowError> {
+) -> Result<ArrayRef> {
     let (regex_array, _) = regex_array.get();
     let start_array = start_array.map(|start| {
         let (start, _) = start.get();
@@ -231,14 +229,16 @@ fn regexp_instr(
             None,
             subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
         ),
-        (Utf8, Utf8, Some(flags_array)) if *flags_array.data_type() == Utf8 => regexp_instr_inner(
-            &values.as_string::<i32>(),
-            &regex_array.as_string::<i32>(),
-            start_array.map(|start| start.as_primitive::<Int64Type>()),
-            nth_array.map(|nth| nth.as_primitive::<Int64Type>()),
-            Some(&flags_array.as_string::<i32>()),
-            subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
-        ),
+        (Utf8, Utf8, Some(flags_array)) if *flags_array.data_type() == Utf8 => {
+            regexp_instr_inner(
+                &values.as_string::<i32>(),
+                &regex_array.as_string::<i32>(),
+                start_array.map(|start| start.as_primitive::<Int64Type>()),
+                nth_array.map(|nth| nth.as_primitive::<Int64Type>()),
+                Some(&flags_array.as_string::<i32>()),
+                subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
+            )
+        }
         (LargeUtf8, LargeUtf8, None) => regexp_instr_inner(
             &values.as_string::<i64>(),
             &regex_array.as_string::<i64>(),
@@ -247,14 +247,18 @@ fn regexp_instr(
             None,
             subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
         ),
-        (LargeUtf8, LargeUtf8, Some(flags_array)) if *flags_array.data_type() == LargeUtf8 => regexp_instr_inner(
-            &values.as_string::<i64>(),
-            &regex_array.as_string::<i64>(),
-            start_array.map(|start| start.as_primitive::<Int64Type>()),
-            nth_array.map(|nth| nth.as_primitive::<Int64Type>()),
-            Some(&flags_array.as_string::<i64>()),
-            subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
-        ),
+        (LargeUtf8, LargeUtf8, Some(flags_array))
+            if *flags_array.data_type() == LargeUtf8 =>
+        {
+            regexp_instr_inner(
+                &values.as_string::<i64>(),
+                &regex_array.as_string::<i64>(),
+                start_array.map(|start| start.as_primitive::<Int64Type>()),
+                nth_array.map(|nth| nth.as_primitive::<Int64Type>()),
+                Some(&flags_array.as_string::<i64>()),
+                subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
+            )
+        }
         (Utf8View, Utf8View, None) => regexp_instr_inner(
             &values.as_string_view(),
             &regex_array.as_string_view(),
@@ -263,17 +267,21 @@ fn regexp_instr(
             None,
             subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
         ),
-        (Utf8View, Utf8View, Some(flags_array)) if *flags_array.data_type() == Utf8View => regexp_instr_inner(
-            &values.as_string_view(),
-            &regex_array.as_string_view(),
-            start_array.map(|start| start.as_primitive::<Int64Type>()),
-            nth_array.map(|nth| nth.as_primitive::<Int64Type>()),
-            Some(&flags_array.as_string_view()),
-            subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
+        (Utf8View, Utf8View, Some(flags_array))
+            if *flags_array.data_type() == Utf8View =>
+        {
+            regexp_instr_inner(
+                &values.as_string_view(),
+                &regex_array.as_string_view(),
+                start_array.map(|start| start.as_primitive::<Int64Type>()),
+                nth_array.map(|nth| nth.as_primitive::<Int64Type>()),
+                Some(&flags_array.as_string_view()),
+                subexpr_array.map(|subexpr| subexpr.as_primitive::<Int64Type>()),
+            )
+        }
+        _ => internal_err!(
+            "regexp_instr() expected the input arrays to be of type Utf8, LargeUtf8, or Utf8View and the data types of the values, regex_array, and flags_array to match"
         ),
-        _ => Err(ArrowError::ComputeError(
-            "regexp_instr() expected the input arrays to be of type Utf8, LargeUtf8, or Utf8View and the data types of the values, regex_array, and flags_array to match".to_string(),
-        )),
     }
 }
 
@@ -284,7 +292,7 @@ fn regexp_instr_inner<'a, S>(
     nth_array: Option<&Int64Array>,
     flags_array: Option<&S>,
     subexp_array: Option<&Int64Array>,
-) -> Result<ArrayRef, ArrowError>
+) -> Result<ArrayRef>
 where
     S: StringArrayType<'a>,
 {
@@ -342,7 +350,7 @@ impl<'a> RegexCache<'a> {
         &mut self,
         regex: &'a str,
         flags: Option<&'a str>,
-    ) -> Result<&Regex, ArrowError> {
+    ) -> Result<&Regex> {
         let key = (regex, flags);
         let index = match self.last {
             Some((last_key, index)) if last_key == key => index,
@@ -350,7 +358,8 @@ impl<'a> RegexCache<'a> {
                 let index = match self.indices.entry(key) {
                     Entry::Occupied(entry) => *entry.get(),
                     Entry::Vacant(entry) => {
-                        self.compiled.push(compile_regex(regex, flags)?);
+                        self.compiled
+                            .push(compile_regex("regexp_instr", regex, flags)?);
                         *entry.insert(self.compiled.len() - 1)
                     }
                 };
@@ -372,17 +381,13 @@ fn get_index(
     start: i64,
     n: i64,
     subexpr: i64,
-) -> Result<i64, ArrowError> {
+) -> Result<i64> {
     if start < 1 {
-        return Err(ArrowError::ComputeError(
-            "regexp_instr() requires start to be 1-based".to_string(),
-        ));
+        return exec_err!("regexp_instr() requires start to be 1-based");
     }
 
     if n < 1 {
-        return Err(ArrowError::ComputeError(
-            "N must be 1 or greater".to_string(),
-        ));
+        return exec_err!("N must be 1 or greater");
     }
 
     let Some(byte_start_offset) = start_to_byte_offset(value, start) else {
@@ -532,7 +537,7 @@ mod tests {
                 // utf8
                 let v_sv = ScalarValue::Utf8(Some(v.to_string()));
                 let regex_sv = ScalarValue::Utf8(Some(r.to_string()));
-                let expected = expected.get(pos).cloned();
+                let expected = expected.get(pos).copied();
                 let re = regexp_instr_with_scalar_values(&[v_sv, regex_sv]);
                 // let res_exp = re.unwrap();
                 match re {
@@ -579,7 +584,7 @@ mod tests {
                 let v_sv = ScalarValue::Utf8(Some(v.to_string()));
                 let regex_sv = ScalarValue::Utf8(Some(r.to_string()));
                 let start_sv = ScalarValue::Int64(Some(s));
-                let expected = expected.get(pos).cloned();
+                let expected = expected.get(pos).copied();
                 let re =
                     regexp_instr_with_scalar_values(&[v_sv, regex_sv, start_sv.clone()]);
                 match re {
@@ -632,7 +637,7 @@ mod tests {
                 let regex_sv = ScalarValue::Utf8(Some(r.to_string()));
                 let start_sv = ScalarValue::Int64(Some(s));
                 let nth_sv = ScalarValue::Int64(Some(n));
-                let expected = expected.get(pos).cloned();
+                let expected = expected.get(pos).copied();
                 let re = regexp_instr_with_scalar_values(&[
                     v_sv,
                     regex_sv,
@@ -710,7 +715,7 @@ mod tests {
             let nth_sv = ScalarValue::Int64(Some(n));
             let flags_sv = ScalarValue::Utf8(Some(flag.to_string()));
             let subexp_sv = ScalarValue::Int64(Some(subexp));
-            let expected = expected.get(pos).cloned();
+            let expected = expected.get(pos).copied();
             let re = regexp_instr_with_scalar_values(&[
                 v_sv,
                 regex_sv,

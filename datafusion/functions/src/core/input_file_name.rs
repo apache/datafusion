@@ -38,7 +38,16 @@ evaluated outside a file scan, or was not pushed down into one), direct evaluati
 "#,
     syntax_example = "input_file_name()",
     sql_example = r#"```sql
-SELECT input_file_name() FROM t;
+> COPY (SELECT * from values (100), (200), (300)) to '/tmp/foo.parquet';
+
+> select *, input_file_name(), file_row_index() from '/tmp/foo.parquet';
++---------+-------------------+------------------+
+| column1 | input_file_name() | file_row_index() |
++---------+-------------------+------------------+
+| 100     | tmp/foo.parquet   | 0                |
+| 200     | tmp/foo.parquet   | 1                |
+| 300     | tmp/foo.parquet   | 2                |
++---------+-------------------+------------------+
 ```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]

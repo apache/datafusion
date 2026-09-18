@@ -246,12 +246,8 @@ impl SqlBenchmark {
 
                         let result_schema = Arc::new(df.schema().as_arrow().clone());
                         let mut batches = df.collect().await?;
-                        let trimmed = query.trim_start();
-
                         // save the output for select/with queries
-                        if starts_with_ignore_ascii_case(trimmed, "select")
-                            || starts_with_ignore_ascii_case(trimmed, "with")
-                        {
+                        if is_result_statement(query) {
                             if batches.is_empty() {
                                 batches.push(RecordBatch::new_empty(result_schema));
                             }
@@ -273,9 +269,13 @@ impl SqlBenchmark {
                             self.group, self.subgroup
                         );
 
-                        result_count = self
+                        let row_count = self
                             .execute_sql_without_result_buffering(query, ctx)
                             .await?;
+
+                        if is_result_statement(query) {
+                            result_count = row_count;
+                        }
                     }
                 }
             }
@@ -1309,6 +1309,12 @@ fn starts_with_ignore_ascii_case(input: &str, prefix: &str) -> bool {
         .is_some_and(|value| value.eq_ignore_ascii_case(prefix))
 }
 
+fn is_result_statement(statement: &str) -> bool {
+    let statement = statement.trim_start();
+    starts_with_ignore_ascii_case(statement, "select")
+        || starts_with_ignore_ascii_case(statement, "with")
+}
+
 fn split_query_statements(sql: &str) -> impl Iterator<Item = &str> {
     sql.split("\n\n")
         .flat_map(|query| {
@@ -1689,6 +1695,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn streaming_run_reports_last_select_row_count_after_ddl() {
+        let contents = "name Q15\n\nrun\nCREATE VIEW v AS SELECT 1 AS value;\nSELECT * FROM v;\nDROP VIEW v;\n";
+        let mut benchmark = parse_benchmark(contents).await.unwrap();
+        let ctx = SessionContext::new();
+
+        benchmark.initialize(&ctx).await.unwrap();
+        let row_count = benchmark.run(&ctx, false).await.unwrap();
+
+        assert_eq!(row_count, 1);
+        assert!(ctx.table("v").await.is_err(), "trailing DDL should execute");
+    }
+
+    #[tokio::test]
     async fn run_returns_row_count_when_saving_results() {
         let contents = "name Q01\n\nrun\nSELECT * FROM (VALUES (1), (2)) AS t(v)\n";
         let mut benchmark = parse_benchmark(contents).await.unwrap();
@@ -1761,6 +1780,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::literal_string_with_formatting_args,
+        reason = "The `${VAR:-default}` braces are shell-style placeholders, not format args"
+    )]
     fn process_replacements_uses_default_for_missing_variable() {
         let replacements = HashMap::new();
 
@@ -2300,6 +2323,10 @@ NULL|(empty)
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::literal_string_with_formatting_args,
+        reason = "The `${VAR:-default}` braces are shell-style placeholders, not format args"
+    )]
     async fn parser_applies_data_dir_replacement_in_load_query_file() {
         let temp_dir = tempdir().expect("failed to create benchmark test directory");
         let data_dir = temp_dir.path().join("non_default_data");
