@@ -612,6 +612,10 @@ impl Optimizer {
         plan.check_invariants(InvariantLevel::Executable)
             .map_err(|e| e.context("Invalid input plan before LP Optimizers"))?;
 
+        // The evaluation sites of the plan the optimizer was given. Empty, and
+        // free, while the check is off. See `EvaluationSites`.
+        let starting_evaluation_sites = EvaluationSites::of(&plan);
+
         let start_time = Instant::now();
         let options = config.options();
         let mut new_plan = plan;
@@ -640,8 +644,6 @@ impl Optimizer {
                     .then(|| new_plan.clone());
 
                 let starting_schema = Arc::clone(new_plan.schema());
-                // Empty, and free, while `EvaluationSites` is switched off.
-                let starting_evaluation_sites = EvaluationSites::of(&new_plan);
 
                 let result = match rule.apply_order() {
                     // optimizer handles recursion
@@ -695,11 +697,6 @@ impl Optimizer {
                     #[cfg(debug_assertions)]
                     tnr.data.check_invariants(InvariantLevel::Executable)
                         .map_err(|e| e.context(format!("Invalid (non-executable) plan after Optimizer rule: {}", rule.name())))?;
-
-                    // verify invariant: a rule must not add evaluation sites of
-                    // volatile or expensive expressions. See `EvaluationSites`.
-                    starting_evaluation_sites.check_no_new_evaluations(&tnr.data)
-                        .map_err(|e| e.context(format!("Check optimizer-specific invariants after optimizer rule: {}", rule.name())))?;
 
                     Ok(tnr)
                 });
@@ -765,6 +762,15 @@ impl Optimizer {
         assert_valid_optimization(&new_plan, &starting_schema).map_err(|e| {
             e.context("Check optimizer-specific invariants after all passes")
         })?;
+
+        // verify invariant: the optimized plan must not evaluate a volatile
+        // expression at more sites than the input plan does. Checked one time,
+        // over the whole run, because rules cooperate. See `EvaluationSites`.
+        starting_evaluation_sites
+            .check_no_new_evaluations(&new_plan)
+            .map_err(|e| {
+                e.context("Check optimizer-specific invariants after all passes")
+            })?;
 
         // verify LP is valid, after the last optimizer pass.
         new_plan
