@@ -364,8 +364,9 @@ impl<'a> RegexCache<'a> {
 
 /// Returns the 1-based character position of the `n`-th match of `pattern` in
 /// `value`, or 0 if there is no such match. The search begins at the 1-based
-/// character position `start`. A positive `subexpr` selects that capture group
-/// of the first match instead of the `n`-th match.
+/// character position `start`. A positive `subexpr` returns the position of
+/// that capture group within the `n`-th match, or 0 if the match has no such
+/// group.
 fn get_index(
     value: &str,
     pattern: &Regex,
