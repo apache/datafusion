@@ -129,6 +129,7 @@ declare -a WRITE_STEPS=(
   "ci/scripts/license_header.sh|true"
   "ci/scripts/typos_check.sh|true"
   "ci/scripts/doc_prettier_check.sh|true"
+  "ci/scripts/check_examples_docs.sh|true"
 )
 
 declare -a READONLY_STEPS=(
