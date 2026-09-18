@@ -239,9 +239,133 @@ WHERE NOT EXISTS (
 ----
 4950
 
+# --- RIGHT SEMI / RIGHT ANTI candidate pruning across spilled left chunks ---
+statement ok
+SET datafusion.execution.target_partitions = 1
+
+statement ok
+SET datafusion.optimizer.join_reordering = false
+
+statement ok
+CREATE VIEW existence_spill_right AS
+SELECT 1000 + value AS payload,
+       CASE WHEN (value * 2) % 129 = 128 THEN NULL ELSE (value * 2) % 129 END AS k,
+       'payload-' || value AS label
+FROM range(129)
+
+# Key 127 matches only in a later left chunk, after earlier compactions.
+statement ok
+CREATE VIEW existence_spill_left AS
+SELECT CASE WHEN value = 4097 THEN 130
+            WHEN value % 65 = 0 THEN 65
+            WHEN value % 65 = 1 THEN 97 ELSE 114 END AS threshold
+FROM range(5000)
+
+# Force multiple left chunks and multiple right batches.
+statement ok
+SET datafusion.runtime.memory_limit = '16K'
+
+statement ok
+SET datafusion.execution.batch_size = 65
+
+query III
+SELECT count(*), sum(r.payload), max(r.k)
+FROM existence_spill_left l
+RIGHT SEMI JOIN existence_spill_right r ON l.threshold > r.k
+----
+128 136192 127
+
+query IIT
+SELECT r.payload, r.k, r.label
+FROM existence_spill_left l
+RIGHT ANTI JOIN existence_spill_right r ON l.threshold > r.k
+----
+1064 NULL payload-64
+
+query TT
+EXPLAIN ANALYZE SELECT count(*)
+FROM existence_spill_left l
+RIGHT SEMI JOIN existence_spill_right r ON l.threshold > r.k
+----
+Plan with Metrics
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)], metrics=[<slt:ignore>]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))], metrics=[<slt:ignore>]
+03)----NestedLoopJoinExec: join_type=RightSemi, filter=threshold@0 > k@1, projection=[], metrics=[output_rows=128, <slt:ignore> spill_count=2, <slt:ignore> input_batches=8, input_rows=516, <slt:ignore>]
+04)------ProjectionExec: expr=[CASE WHEN value@0 = 4097 THEN 130 WHEN value@0 % 65 = 0 THEN 65 WHEN value@0 % 65 = 1 THEN 97 ELSE 114 END as threshold], metrics=[<slt:ignore>]
+05)--------LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=5000, batch_size=65], metrics=[<slt:ignore>]
+06)------ProjectionExec: expr=[CASE WHEN __common_expr_1@0 = 128 THEN NULL ELSE __common_expr_1@0 END as k], metrics=[<slt:ignore>]
+07)--------ProjectionExec: expr=[value@0 * 2 % 129 as __common_expr_1], metrics=[<slt:ignore>]
+08)----------LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=129, batch_size=65], metrics=[<slt:ignore>]
+
+query TT
+EXPLAIN ANALYZE SELECT count(*)
+FROM existence_spill_left l
+RIGHT ANTI JOIN existence_spill_right r ON l.threshold > r.k
+----
+Plan with Metrics
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)], metrics=[<slt:ignore>]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))], metrics=[<slt:ignore>]
+03)----NestedLoopJoinExec: join_type=RightAnti, filter=threshold@0 > k@1, projection=[], metrics=[output_rows=1, <slt:ignore> spill_count=2, <slt:ignore> input_batches=8, input_rows=516, <slt:ignore>]
+04)------ProjectionExec: expr=[CASE WHEN value@0 = 4097 THEN 130 WHEN value@0 % 65 = 0 THEN 65 WHEN value@0 % 65 = 1 THEN 97 ELSE 114 END as threshold], metrics=[<slt:ignore>]
+05)--------LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=5000, batch_size=65], metrics=[<slt:ignore>]
+06)------ProjectionExec: expr=[CASE WHEN __common_expr_1@0 = 128 THEN NULL ELSE __common_expr_1@0 END as k], metrics=[<slt:ignore>]
+07)--------ProjectionExec: expr=[value@0 * 2 % 129 as __common_expr_1], metrics=[<slt:ignore>]
+08)----------LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=129, batch_size=65], metrics=[<slt:ignore>]
+
+# Every row in both right batches matches the first left row. Later left chunks
+# contain only zero thresholds, so none of those rows match again. Early stopping
+# in the first chunk must preserve the global right bitmap through every replay.
+statement ok
+CREATE VIEW existence_spill_early_left AS
+SELECT CASE WHEN value = 0 THEN 129 ELSE 0 END AS threshold
+FROM range(5000)
+
+query IIII
+SELECT count(*), sum(r.value), min(r.value), max(r.value)
+FROM existence_spill_early_left l
+RIGHT SEMI JOIN range(129) r ON l.threshold > r.value
+----
+129 8256 0 128
+
+# Both joins must spill and replay the two right batches across four left chunks.
+query TT
+EXPLAIN ANALYZE SELECT count(*)
+FROM existence_spill_early_left l
+RIGHT SEMI JOIN range(129) r ON l.threshold > r.value
+----
+Plan with Metrics
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)], metrics=[<slt:ignore>]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))], metrics=[<slt:ignore>]
+03)----NestedLoopJoinExec: join_type=RightSemi, filter=threshold@0 > value@1, projection=[], metrics=[output_rows=129, <slt:ignore> spill_count=2, <slt:ignore> input_batches=8, input_rows=516, <slt:ignore>]
+04)------ProjectionExec: expr=[CASE WHEN value@0 = 0 THEN 129 ELSE 0 END as threshold], metrics=[<slt:ignore>]
+05)--------LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=5000, batch_size=65], metrics=[<slt:ignore>]
+06)------LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=129, batch_size=65], metrics=[<slt:ignore>]
+
+query TT
+EXPLAIN ANALYZE SELECT count(*)
+FROM existence_spill_early_left l
+RIGHT ANTI JOIN range(129) r ON l.threshold > r.value
+----
+Plan with Metrics
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)], metrics=[<slt:ignore>]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))], metrics=[<slt:ignore>]
+03)----NestedLoopJoinExec: join_type=RightAnti, filter=threshold@0 > value@1, projection=[], metrics=[output_rows=0, <slt:ignore> spill_count=2, <slt:ignore> input_batches=8, input_rows=516, <slt:ignore>]
+04)------ProjectionExec: expr=[CASE WHEN value@0 = 0 THEN 129 ELSE 0 END as threshold], metrics=[<slt:ignore>]
+05)--------LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=5000, batch_size=65], metrics=[<slt:ignore>]
+06)------LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=129, batch_size=65], metrics=[<slt:ignore>]
+
 # Restore settings to slt runner defaults
 statement ok
 RESET datafusion.runtime.memory_limit
 
 statement ok
 RESET datafusion.catalog.create_default_catalog_and_schema
+
+statement ok
+RESET datafusion.execution.batch_size
+
+statement ok
+SET datafusion.execution.target_partitions = 4
+
+statement ok
+RESET datafusion.optimizer.join_reordering
