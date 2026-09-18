@@ -361,8 +361,49 @@ mod tests {
         "#
         );
 
-        // Trigger execution to ensure plan validity
-        DataFrame::new(ctx.state(), plan).show().await?;
+        let df = DataFrame::new(ctx.state(), plan);
+
+        // Without resolution this fails in physical planning, where the field recorded
+        // on the parameter does not match the one the schema carries.
+        df.clone().show().await?;
+
+        // The lambda parameter is resolved to the encoding the list actually carries, so
+        // the comparison coerces the literal rather than decoding every element.
+        assert_snapshot!(
+        df.into_optimized_plan()?,
+        @r#"
+        Projection: array_any_match(t.tags, (p0) -> p0 = Dictionary(UInt32, Utf8("c"))) AS matched
+          TableScan: t projection=[tags]
+        "#
+        );
+        Ok(())
+    }
+
+    // Substrait has no string view type, so a producer records a plain parameter for a
+    // lambda over a column the plan itself declares as a view.
+    #[tokio::test]
+    async fn higher_order_function_with_string_view_lambda_parameter() -> Result<()> {
+        let proto_plan = read_json(
+            "tests/testdata/test_plans/any_match_string_view_list_element.substrait.json",
+        );
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        let df = DataFrame::new(ctx.state(), plan);
+
+        // Without resolution this fails in physical planning, where the field recorded
+        // on the parameter does not match the one the schema carries.
+        df.clone().show().await?;
+
+        // The lambda parameter is resolved to the view the list actually carries, so the
+        // comparison coerces the literal rather than materializing every element.
+        assert_snapshot!(
+        df.into_optimized_plan()?,
+        @r#"
+        Projection: array_any_match(t.tags, (p0) -> p0 = Utf8View("c")) AS matched
+          TableScan: t projection=[tags]
+        "#
+        );
         Ok(())
     }
 }
