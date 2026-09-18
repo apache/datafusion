@@ -456,6 +456,37 @@
 <p><strong>Note:</strong> DataFusion <code class="docutils literal notranslate"><span class="pre">56.0.0</span></code> has not been released yet. The information provided
 in this section pertains to features and changes that have already been merged
 to the main branch and are awaiting release in this version.</p>
+<section id="upgrade-arrow-parquet-to-60-0-0-and-object-store-to-0-14-2">
+<h3>Upgrade arrow/parquet to 60.0.0 and object_store to 0.14.2<a class="headerlink" href="#upgrade-arrow-parquet-to-60-0-0-and-object-store-to-0-14-2" title="Link to this heading">#</a></h3>
+<p>DataFusion 56.0.0 uses <code class="docutils literal notranslate"><span class="pre">arrow</span></code> and <code class="docutils literal notranslate"><span class="pre">parquet</span></code> 60.0.0, and <code class="docutils literal notranslate"><span class="pre">object_store</span></code> 0.14.2.
+This may require updates to your Cargo.toml if you have direct dependencies on
+these crates.</p>
+<p>See the <a class="reference external" href="https://github.com/apache/arrow-rs/releases/tag/60.0.0">Arrow 60.0.0 release notes</a> and the <a class="reference external" href="https://github.com/apache/arrow-rs-object-store/blob/v0.14.2/CHANGELOG.md">object_store 0.14.2 upgrade guide</a> for details on breaking changes in those versions.</p>
+<section id="field-and-schema-metadata-now-use-arrow-s-metadata-type">
+<h4>Field and schema metadata now use arrow’s <code class="docutils literal notranslate"><span class="pre">Metadata</span></code> type<a class="headerlink" href="#field-and-schema-metadata-now-use-arrow-s-metadata-type" title="Link to this heading">#</a></h4>
+<p>Arrow 60 introduced a dedicated <a class="reference external" href="https://docs.rs/arrow/60.0.0/arrow/datatypes/struct.Metadata.html"><code class="docutils literal notranslate"><span class="pre">Metadata</span></code></a> type for field and schema metadata
+in place of <code class="docutils literal notranslate"><span class="pre">HashMap&lt;String,</span> <span class="pre">String&gt;</span></code>. Following that change, several DataFusion
+APIs now use <code class="docutils literal notranslate"><span class="pre">Metadata</span></code> as well, such as <code class="docutils literal notranslate"><span class="pre">DFSchema::metadata</span></code> and
+<code class="docutils literal notranslate"><span class="pre">ExprSchema::metadata</span></code> return <code class="docutils literal notranslate"><span class="pre">&amp;Metadata</span></code>. <code class="docutils literal notranslate"><span class="pre">CastExpr::target_metadata</span></code> and
+<code class="docutils literal notranslate"><span class="pre">TryCastExpr::target_metadata</span></code> return <code class="docutils literal notranslate"><span class="pre">Option&lt;&amp;Metadata&gt;</span></code>.</p>
+<p><strong>Migration guide:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">meta</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">HashMap</span><span class="o">&lt;</span><span class="nb">String</span><span class="p">,</span><span class="w"> </span><span class="nb">String</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">schema</span><span class="p">.</span><span class="n">metadata</span><span class="p">();</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">field</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Field</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;a&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Int64</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_metadata</span><span class="p">([(</span><span class="s">&quot;k&quot;</span><span class="p">.</span><span class="n">to_string</span><span class="p">(),</span><span class="w"> </span><span class="s">&quot;v&quot;</span><span class="p">.</span><span class="n">to_string</span><span class="p">())].</span><span class="n">into</span><span class="p">());</span>
+
+<span class="c1">// After</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">meta</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Metadata</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">schema</span><span class="p">.</span><span class="n">metadata</span><span class="p">();</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">field</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Field</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;a&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Int64</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">)</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_metadata</span><span class="p">(</span><span class="n">Metadata</span><span class="p">::</span><span class="n">new</span><span class="p">().</span><span class="n">with</span><span class="p">(</span><span class="s">&quot;k&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;v&quot;</span><span class="p">));</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">Metadata</span></code> supports <code class="docutils literal notranslate"><span class="pre">.get()</span></code>, <code class="docutils literal notranslate"><span class="pre">.iter()</span></code>, <code class="docutils literal notranslate"><span class="pre">.is_empty()</span></code> and <code class="docutils literal notranslate"><span class="pre">.extend()</span></code> like
+<code class="docutils literal notranslate"><span class="pre">HashMap</span></code>, and converts to and from <code class="docutils literal notranslate"><span class="pre">HashMap&lt;String,</span> <span class="pre">String&gt;</span></code> and
+<code class="docutils literal notranslate"><span class="pre">BTreeMap&lt;String,</span> <span class="pre">String&gt;</span></code> via <code class="docutils literal notranslate"><span class="pre">From</span></code>, so most call sites need only a type
+change. Use <code class="docutils literal notranslate"><span class="pre">FieldMetadata::to_hashmap</span></code> where a <code class="docutils literal notranslate"><span class="pre">HashMap</span></code> is still required.</p>
+</section>
+</section>
 <section id="missing-parquet-null-counts-are-treated-as-unknown">
 <h3>Missing Parquet null counts are treated as unknown<a class="headerlink" href="#missing-parquet-null-counts-are-treated-as-unknown" title="Link to this heading">#</a></h3>
 <p>DataFusion now preserves an omitted Parquet <code class="docutils literal notranslate"><span class="pre">null_count</span></code> statistic as unknown.
@@ -944,6 +975,10 @@ expressions, which can cause resolution failure or incorrect rebinding.</p></li>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-56-0-0">DataFusion 56.0.0</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#upgrade-arrow-parquet-to-60-0-0-and-object-store-to-0-14-2">Upgrade arrow/parquet to 60.0.0 and object_store to 0.14.2</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#field-and-schema-metadata-now-use-arrow-s-metadata-type">Field and schema metadata now use arrow’s <code class="docutils literal notranslate"><span class="pre">Metadata</span></code> type</a></li>
+</ul>
+</li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#missing-parquet-null-counts-are-treated-as-unknown">Missing Parquet null counts are treated as unknown</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#foreignsession-create-physical-plan-is-unsupported"><code class="docutils literal notranslate"><span class="pre">ForeignSession::create_physical_plan</span></code> is unsupported</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupcolumn-now-requires-values-preserving"><code class="docutils literal notranslate"><span class="pre">GroupColumn</span></code> now requires <code class="docutils literal notranslate"><span class="pre">values_preserving</span></code></a></li>
