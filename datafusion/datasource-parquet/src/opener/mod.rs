@@ -27,6 +27,7 @@ use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
 use crate::page_filter::PagePruningAccessPlanFilter;
+use crate::projection_read_plan::build_projection_read_plan;
 use crate::push_decoder::{
     DecoderBuilderConfig, InitialDecoderState, PushDecoderStreamState, RgPlanEntry,
     RowGroupPruner,
@@ -592,7 +593,7 @@ impl ParquetOpenState {
             }
             ParquetOpenState::PruneWithStatistics(prepared) => {
                 let prepared_row_groups = (*prepared).prune_row_groups()?;
-                if prepared_row_groups.should_load_page_index() {
+                if prepared_row_groups.should_load_page_index()? {
                     Ok(ParquetOpenState::LoadPageIndex(
                         prepared_row_groups.load_page_index().boxed(),
                     ))
@@ -1302,43 +1303,67 @@ impl RowGroupsPrunedParquetOpen {
     ///
     /// 2. There is a page index for at least one predicate column (some
     ///    parquet writers do not write the page index).
-    fn should_load_page_index(&self) -> bool {
+    fn should_load_page_index(&self) -> Result<bool> {
         if !self.prepared.loaded.prepared.enable_page_index {
-            return false;
+            return Ok(false);
         }
         let row_groups = &self.row_groups;
         let parquet_metadata = self.prepared.loaded.reader_metadata.metadata();
         // External row selections need offset indexes to skip pages without
         // decoding them. They do not require column statistics or a predicate.
-        if row_groups.row_group_indexes().any(|idx| {
-            let RowGroupAccess::Selection(selection) =
-                &row_groups.access_plan().inner()[idx]
-            else {
-                return false;
+        let mut selected_row_groups = row_groups
+            .row_group_indexes()
+            .filter(|&idx| {
+                let RowGroupAccess::Selection(selection) =
+                    &row_groups.access_plan().inner()[idx]
+                else {
+                    return false;
+                };
+                // Runs alternate between selected and skipped rows, so two runs
+                // suffice. Stream bitmap runs without materializing all selectors.
+                match selection.as_mask() {
+                    Some(mask) => MaskRunIter::new(mask).nth(1).is_some(),
+                    None => selection.iter().nth(1).is_some(),
+                }
+            })
+            .peekable();
+        if selected_row_groups.peek().is_some() {
+            let prepared = &self.prepared.loaded.prepared;
+            // Resolve the same file-column projection as the decoder, excluding
+            // virtual columns and respecting nested field projections.
+            let projection = match prepared.virtual_state.as_deref() {
+                None => prepared.projection.clone(),
+                Some(state) => prepared.projection.clone().try_map_exprs(|expr| {
+                    replace_columns_with_literals(expr, state.null_replacements())
+                })?,
             };
-            // Runs alternate between selected and skipped rows, so two runs
-            // suffice. Stream bitmap runs without materializing all selectors.
-            let has_selected_and_skipped_rows = match selection.as_mask() {
-                Some(mask) => MaskRunIter::new(mask).nth(1).is_some(),
-                None => selection.iter().nth(1).is_some(),
-            };
-            has_selected_and_skipped_rows
-                && parquet_metadata
+            let read_plan = build_projection_read_plan(
+                projection.expr_iter(),
+                &prepared.physical_file_schema,
+                parquet_metadata.file_metadata().schema_descr(),
+            );
+            if selected_row_groups.any(|idx| {
+                parquet_metadata
                     .row_group(idx)
                     .columns()
                     .iter()
-                    .any(|column| column.offset_index_offset().is_some())
-        }) {
-            return true;
+                    .enumerate()
+                    .any(|(leaf_idx, column)| {
+                        read_plan.projection_mask.leaf_included(leaf_idx)
+                            && column.offset_index_offset().is_some()
+                    })
+            }) {
+                return Ok(true);
+            }
         }
         let Some(page_pruning_predicate) = self.prepared.page_pruning_predicate.as_ref()
         else {
-            return false;
+            return Ok(false);
         };
         let fully_matched = row_groups.is_fully_matched();
         // if all row groups are fully matched, nothing can be pruned
         if row_groups.row_group_indexes().all(|idx| fully_matched[idx]) {
-            return false;
+            return Ok(false);
         }
 
         // Check the file's footer metadata to see if a page index was written
@@ -1348,7 +1373,7 @@ impl RowGroupsPrunedParquetOpen {
         // page index exists before attempting to read it.
         let arrow_schema = &self.prepared.loaded.prepared.physical_file_schema;
         let parquet_schema = parquet_metadata.file_metadata().schema_descr();
-        page_pruning_predicate.predicate_column_names().any(|name| {
+        Ok(page_pruning_predicate.predicate_column_names().any(|name| {
             let Some((leaf_idx, _)) = parquet_column(parquet_schema, arrow_schema, name)
             else {
                 return false;
@@ -1358,7 +1383,7 @@ impl RowGroupsPrunedParquetOpen {
                 column.column_index_offset().is_some()
                     && column.offset_index_offset().is_some()
             })
-        })
+        }))
     }
 
     /// Load the page index if pruning requires it and metadata did not include it.
@@ -2276,6 +2301,15 @@ mod test {
         predicate: Option<Expr>,
         plan: ParquetAccessPlan,
     ) -> bool {
+        should_load_page_index_with_projection(metadata, predicate, plan, None)
+    }
+
+    fn should_load_page_index_with_projection(
+        metadata: ParquetMetaData,
+        predicate: Option<Expr>,
+        plan: ParquetAccessPlan,
+        projection: Option<&[usize]>,
+    ) -> bool {
         use crate::RowGroupAccessPlanFilter;
         let arrow_schema: SchemaRef = Arc::new(
             parquet_to_arrow_schema(metadata.file_metadata().schema_descr(), None)
@@ -2287,11 +2321,14 @@ mod test {
         });
 
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let morselizer = ParquetMorselizerBuilder::new()
+        let mut builder = ParquetMorselizerBuilder::new()
             .with_store(store)
             .with_schema(Arc::clone(&arrow_schema))
-            .with_enable_page_index(true)
-            .build();
+            .with_enable_page_index(true);
+        if let Some(projection) = projection {
+            builder = builder.with_projection_indices(projection);
+        }
+        let morselizer = builder.build();
         let file = PartitionedFile::new("test.parquet".to_string(), 100);
         let prepared = morselizer.prepare_open_file(file).unwrap();
         let options = ArrowReaderOptions::new();
@@ -2309,7 +2346,7 @@ mod test {
             },
             row_groups: RowGroupAccessPlanFilter::new(plan),
         };
-        open.should_load_page_index()
+        open.should_load_page_index().unwrap()
     }
 
     impl ParquetMorselizerBuilder {
@@ -4580,6 +4617,39 @@ mod test {
                 );
             }
         }
+    }
+
+    #[test]
+    fn should_load_page_index_with_row_selection_checks_projection() {
+        use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
+
+        let metadata = page_index_metadata(&[("a", false), ("b", true)], 1);
+        let plan = ParquetAccessPlan::new(vec![RowGroupAccess::Selection(
+            RowSelection::from(vec![RowSelector::skip(9), RowSelector::select(1)]),
+        )]);
+        for (projection, expected) in [
+            (vec![0], false),
+            (vec![1], true),
+            (vec![0, 1], true),
+            (vec![], false),
+        ] {
+            assert_eq!(
+                should_load_page_index_with_projection(
+                    metadata.clone(),
+                    None,
+                    plan.clone(),
+                    Some(&projection),
+                ),
+                expected,
+            );
+        }
+        // Projection restriction applies only to the external-selection path.
+        assert!(should_load_page_index_with_projection(
+            metadata,
+            Some(col("b").gt(lit(5i32))),
+            plan,
+            Some(&[0]),
+        ));
     }
 
     #[tokio::test]
