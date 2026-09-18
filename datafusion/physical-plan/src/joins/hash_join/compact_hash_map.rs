@@ -188,6 +188,17 @@ where
     }
     drop(hashes);
     drop(scratch);
+    // Row-count preallocation can leave many unused buckets. Compact only when
+    // both allocations fit, so reducing retained memory cannot fail the build.
+    if table.capacity() / 4 > table.len() {
+        let bytes = estimate_memory_size::<(u64, T)>(table.len().max(8), fixed_bytes)?;
+        if reservation.try_grow(bytes).is_ok() {
+            *peak = (*peak).max(reservation.size() - initial_reserved);
+            let old_bytes = table.allocation_size();
+            table.shrink_to_fit(|&(hash, _)| hash);
+            reservation.shrink(old_bytes + bytes - table.allocation_size());
+        }
+    }
     Ok((table, next))
 }
 

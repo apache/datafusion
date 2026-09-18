@@ -26,7 +26,9 @@ use arrow::datatypes::{Field, Int32Type, Schema};
 use datafusion_common::cast::as_int32_array;
 use datafusion_common::{DataFusionError, JoinType};
 use datafusion_execution::TaskContext;
-use datafusion_execution::memory_pool::{GreedyMemoryPool, MemoryConsumer, MemoryPool};
+use datafusion_execution::memory_pool::{
+    GreedyMemoryPool, MemoryConsumer, MemoryPool, PeakRecordingPool,
+};
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_expr::{Volatility, create_udf};
 use datafusion_physical_expr::ScalarFunctionExpr;
@@ -298,7 +300,12 @@ fn compact_hash_build_preserves_fifo_across_batches() -> Result<()> {
 #[test]
 fn compact_hash_build_growth_and_chain_accounting() -> Result<()> {
     let rows = 8 * HASH_BUILD_CHUNK_ROWS;
-    for distinct_keys in [rows, HASH_BUILD_CHUNK_ROWS, 2 * HASH_BUILD_CHUNK_ROWS] {
+    for (rows, distinct_keys) in [
+        (rows, rows),
+        (rows, HASH_BUILD_CHUNK_ROWS),
+        (rows, 2 * HASH_BUILD_CHUNK_ROWS),
+        (1_000_000, 100_000),
+    ] {
         let batch = RecordBatch::try_from_iter([(
             "key",
             Arc::new(Int32Array::from_iter_values(
@@ -309,15 +316,30 @@ fn compact_hash_build_growth_and_chain_accounting() -> Result<()> {
         let fixed_and_chain = size_of::<JoinHashMapU32>() + rows * size_of::<u32>();
         // The replacement fits, but old and new tables cannot coexist.
         // Both budgets must produce identical index heads and duplicate chains.
-        let compact_limit = fixed_and_chain
+        let mut compact_limit = fixed_and_chain
             + HASH_BUILD_CHUNK_ROWS * size_of::<u64>()
             + estimate_memory_size::<(u64, u32)>(
                 (distinct_keys + HASH_BUILD_CHUNK_ROWS).min(rows),
                 size_of::<JoinHashMapU32>(),
             )?;
+        let deny_final_compaction = rows == 1_000_000;
+        if deny_final_compaction {
+            // Admit the row-count preallocation alongside the first small table,
+            // but leave too little headroom for the final compact replacement.
+            compact_limit = fixed_and_chain
+                + HASH_BUILD_CHUNK_ROWS * size_of::<u64>()
+                + estimate_memory_size::<(u64, u32)>(
+                    HASH_BUILD_CHUNK_ROWS,
+                    size_of::<JoinHashMapU32>(),
+                )?
+                + estimate_memory_size::<(u64, u32)>(rows, size_of::<JoinHashMapU32>())?;
+        }
         let mut expected = None;
-        for limit in [4 * 1024 * 1024, compact_limit] {
-            let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(limit));
+        for limit in [128 * 1024 * 1024, compact_limit] {
+            let recording = Arc::new(PeakRecordingPool::new(Arc::new(
+                GreedyMemoryPool::new(limit),
+            )));
+            let pool: Arc<dyn MemoryPool> = Arc::clone(&recording) as _;
             let reservation = MemoryConsumer::new("compact growth test").register(&pool);
             let mut peak = 0;
             let (table, next) = build_compact_hash_map::<u32>(
@@ -334,6 +356,11 @@ fn compact_hash_build_growth_and_chain_accounting() -> Result<()> {
                 table.allocation_size() + fixed_and_chain
             );
             assert!(peak > reservation.size() && peak <= limit);
+            assert_eq!(peak, recording.peak_reserved());
+            // With forced hash collisions, no row-count preallocation occurs.
+            if deny_final_compaction && table.len() > HASH_BUILD_CHUNK_ROWS {
+                assert_eq!(table.capacity() / 4 > table.len(), limit == compact_limit);
+            }
             let mut entries = table.iter().copied().collect::<Vec<_>>();
             entries.sort_unstable();
             if let Some(expected) = &expected {
@@ -346,6 +373,81 @@ fn compact_hash_build_growth_and_chain_accounting() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[test]
+fn compact_hash_build_compacts_speculative_capacity() -> Result<()> {
+    fn check<T>() -> Result<()>
+    where
+        T: Copy + Default + TryFrom<usize> + PartialOrd + Into<u64>,
+        <T as TryFrom<usize>>::Error: fmt::Debug,
+    {
+        let rows = 1_000_000;
+        let distinct_keys = 10_000;
+        let batch = RecordBatch::try_from_iter([(
+            "key",
+            Arc::new(Int32Array::from_iter_values(
+                (0..rows).map(|i| (i % distinct_keys) as i32),
+            )) as ArrayRef,
+        )])?;
+        let on = vec![Arc::new(Column::new("key", 0)) as PhysicalExprRef];
+        let pool: Arc<dyn MemoryPool> =
+            Arc::new(GreedyMemoryPool::new(128 * 1024 * 1024));
+        let reservation =
+            MemoryConsumer::new("compact speculative capacity").register(&pool);
+        let mut peak = 0;
+        let (table, next) = build_compact_hash_map::<T>(
+            std::slice::from_ref(&batch),
+            &on,
+            rows,
+            HASH_JOIN_SEED.random_state(),
+            NullEquality::NullEqualsNothing,
+            &reservation,
+            &mut peak,
+        )?;
+        let fixed_bytes = size_of::<HashTable<(u64, T)>>() + size_of::<Vec<T>>();
+        // Crossing the first chunk's capacity can speculate on all build rows.
+        // The retained table should instead reflect the distinct build hashes.
+        assert!(
+            table.allocation_size()
+                <= estimate_memory_size::<(u64, T)>(4 * distinct_keys, fixed_bytes)?
+        );
+        assert_eq!(
+            reservation.size(),
+            fixed_bytes + rows * size_of::<T>() + table.allocation_size()
+        );
+        assert_eq!(pool.reserved(), reservation.size());
+        assert!(peak > reservation.size());
+
+        let mut hashes = vec![0; distinct_keys];
+        create_hashes(
+            batch.slice(0, distinct_keys).columns(),
+            HASH_JOIN_SEED.random_state(),
+            &mut hashes,
+        )?;
+        // Traverse each chain once, including when hashes deliberately collide.
+        // This checks that compaction preserves every row and its FIFO order.
+        let mut seen = vec![false; rows];
+        for &(hash, head) in table.iter() {
+            let mut row = head.into() as usize;
+            while row != 0 {
+                let index = row - 1;
+                assert!(!seen[index]);
+                seen[index] = true;
+                assert_eq!(hash, hashes[index % distinct_keys]);
+                let next_row = next[index].into() as usize;
+                assert!(next_row == 0 || next_row > row);
+                row = next_row;
+            }
+        }
+        assert!(seen.into_iter().all(|visited| visited));
+        drop((table, reservation));
+        assert_eq!(pool.reserved(), 0);
+        Ok(())
+    }
+
+    check::<u32>()?;
+    check::<u64>()
 }
 
 #[test]
