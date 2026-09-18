@@ -697,6 +697,7 @@ impl LogicalPlan {
                 projected_schema,
                 filters,
                 fetch,
+                offset,
                 statistics_requests,
             }) => filters.map_elements(f)?.update_data(|filters| {
                 LogicalPlan::TableScan(TableScan {
@@ -706,6 +707,7 @@ impl LogicalPlan {
                     projected_schema,
                     filters,
                     fetch,
+                    offset,
                     statistics_requests,
                 })
             }),

@@ -116,6 +116,13 @@ pub trait TableSource: Any + Sync + Send {
             .collect())
     }
 
+    /// Tests whether the underlying table provider can guarantee that a scan
+    /// omits *exactly* the first `offset` rows it would otherwise have
+    /// produced.
+    fn supports_offset_pushdown(&self) -> bool {
+        false
+    }
+
     /// Get the Logical plan of this table provider, if available.
     ///
     /// For example, a view may have a logical plan, but a CSV file does not.

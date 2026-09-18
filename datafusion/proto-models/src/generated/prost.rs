@@ -123,6 +123,12 @@ pub struct ListingTableScanNode {
     pub table_partition_cols: ::prost::alloc::vec::Vec<PartitionColumn>,
     #[prost(message, repeated, tag = "13")]
     pub file_sort_order: ::prost::alloc::vec::Vec<SortExprNodeCollection>,
+    /// Optional number of rows to read.
+    #[prost(uint64, optional, tag = "17")]
+    pub fetch: ::core::option::Option<u64>,
+    /// Optional number of rows to skip.
+    #[prost(uint64, optional, tag = "18")]
+    pub offset: ::core::option::Option<u64>,
     #[prost(
         oneof = "listing_table_scan_node::FileFormatType",
         tags = "10, 11, 12, 15, 16"
@@ -159,6 +165,12 @@ pub struct ViewTableScanNode {
     pub projection: ::core::option::Option<ProjectionColumns>,
     #[prost(string, tag = "5")]
     pub definition: ::prost::alloc::string::String,
+    /// Optional number of rows to read.
+    #[prost(uint64, optional, tag = "7")]
+    pub fetch: ::core::option::Option<u64>,
+    /// Optional number of rows to skip.
+    #[prost(uint64, optional, tag = "8")]
+    pub offset: ::core::option::Option<u64>,
 }
 /// Logical Plan to Scan a CustomTableProvider registered at runtime
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -173,6 +185,12 @@ pub struct CustomTableScanNode {
     pub filters: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(bytes = "vec", tag = "5")]
     pub custom_table_data: ::prost::alloc::vec::Vec<u8>,
+    /// Optional number of rows to read.
+    #[prost(uint64, optional, tag = "7")]
+    pub fetch: ::core::option::Option<u64>,
+    /// Optional number of rows to skip.
+    #[prost(uint64, optional, tag = "8")]
+    pub offset: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProjectionNode {

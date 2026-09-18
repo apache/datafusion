@@ -125,6 +125,23 @@ fn rewrite_limit(mut limit: Limit) -> Result<Transformed<LogicalPlan>> {
     };
 
     match Arc::unwrap_or_clone(limit.input) {
+        LogicalPlan::TableScan(mut scan)
+            if skip > 0 && scan.source.supports_offset_pushdown() =>
+        {
+            // The source guarantees it will omit exactly the first `skip`
+            // rows itself, so the remaining `Limit` only needs to trim to
+            // `fetch` — its skip becomes 0.
+            scan.offset = Some(scan.offset.unwrap_or(0).saturating_add(skip));
+            let new_fetch = if fetch != 0 {
+                scan.fetch
+                    .map(|existing_fetch| min(existing_fetch.saturating_sub(skip), fetch))
+                    .or(Some(fetch))
+            } else {
+                Some(0)
+            };
+            scan.fetch = new_fetch;
+            transformed_limit(0, fetch, LogicalPlan::TableScan(scan))
+        }
         LogicalPlan::TableScan(mut scan) => {
             let rows_needed = if fetch != 0 { fetch + skip } else { 0 };
             let new_fetch = scan
@@ -305,10 +322,11 @@ mod test {
     use crate::test::*;
 
     use crate::OptimizerContext;
+    use arrow::datatypes::{Schema, SchemaRef};
     use datafusion_common::DFSchemaRef;
     use datafusion_expr::{
-        Expr, Extension, UserDefinedLogicalNodeCore, col, exists,
-        logical_plan::builder::LogicalPlanBuilder,
+        Expr, Extension, TableScanBuilder, TableSource, UserDefinedLogicalNodeCore, col,
+        exists, logical_plan::builder::LogicalPlanBuilder,
     };
     use datafusion_functions_aggregate::expr_fn::max;
 
@@ -485,6 +503,49 @@ mod test {
           NoopPlan
             Limit: skip=0, fetch=1010
               TableScan: test, fetch=1010
+        "
+        )
+    }
+
+    /// A `TableSource` that declares it will honor `offset` exactly, so
+    /// `push_down_limit` is allowed to push `skip` into `TableScan::offset`
+    /// and elide the outer `Limit`'s skip.
+    #[derive(Debug)]
+    struct OffsetPushdownTableSource {
+        schema: SchemaRef,
+    }
+
+    impl TableSource for OffsetPushdownTableSource {
+        fn schema(&self) -> SchemaRef {
+            Arc::clone(&self.schema)
+        }
+
+        fn supports_offset_pushdown(&self) -> bool {
+            true
+        }
+    }
+
+    fn offset_pushdown_table_scan() -> Result<LogicalPlan> {
+        let schema = Arc::new(Schema::new(test_table_scan_fields()));
+        let source = Arc::new(OffsetPushdownTableSource { schema });
+        Ok(LogicalPlan::TableScan(
+            TableScanBuilder::new("test", source).build()?,
+        ))
+    }
+
+    #[test]
+    fn limit_pushdown_offset_supported() -> Result<()> {
+        let table_scan = offset_pushdown_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .limit(10, Some(1000))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Limit: skip=0, fetch=1000
+          TableScan: test, fetch=1000, offset=10
         "
         )
     }

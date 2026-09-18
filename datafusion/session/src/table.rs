@@ -184,6 +184,11 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     ///
     /// As noted above, columns referenced only by pushed-down filters may be
     /// absent from `projection`.
+    ///
+    /// # Note
+    ///
+    /// Overriding [`TableProvider::scan_with_args`] will give you access to more arguments,
+    /// e.g. [`ScanArgs::offset`]
     async fn scan(
         &self,
         state: &dyn Session,
@@ -229,6 +234,17 @@ pub trait TableProvider: Any + Debug + Sync + Send {
             args.limit(),
         );
         Box::pin(async move { Ok(plan.await?.into()) })
+    }
+
+    /// Specify if DataFusion should provide the offset to the
+    /// TableProvider to apply *during* the scan.
+    ///
+    /// # Note
+    ///
+    /// Make sure [`TableProvider::scan_with_args`] is overridden too
+    /// and [`ScanArgs::offset`] is used!
+    fn supports_offset_pushdown(&self) -> bool {
+        false
     }
 
     /// Specify if DataFusion should provide filter expressions to the
@@ -473,6 +489,7 @@ pub struct ScanArgs<'a> {
     filters: Option<&'a [Expr]>,
     projection: Option<&'a [usize]>,
     limit: Option<usize>,
+    offset: Option<usize>,
     statistics_requests: &'a [StatisticsRequest],
 }
 
@@ -534,6 +551,25 @@ impl<'a> ScanArgs<'a> {
     /// Returns the row limit, or `None` if no limit was specified.
     pub fn limit(&self) -> Option<usize> {
         self.limit
+    }
+
+    /// Set the number of rows to skip from the scan.
+    ///
+    /// If specified, the scan should skip this many rows. This is typically
+    /// used to optimize queries with `OFFSET` clauses.
+    ///
+    /// # Arguments
+    /// * `offset` - Optional number of rows to skip
+    pub fn with_offset(mut self, offset: Option<usize>) -> Self {
+        self.offset = offset;
+        self
+    }
+
+    /// Get the number of rows to skip from the scan.
+    ///
+    /// Returns the row offset, or `None` if no offset was specified.
+    pub fn offset(&self) -> Option<usize> {
+        self.offset
     }
 
     /// Specifies the statistics the caller may use when optimizing the query.

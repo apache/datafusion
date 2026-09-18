@@ -65,7 +65,7 @@
 //! # use datafusion_expr::{col, lit, Expr};
 //! # use datafusion_proto::bytes::Serializeable;
 //! # fn main() -> Result<()>{
-//! // Create a new `Expr` a < 32
+//! // Create a new `Expr` a < 5
 //! let expr = col("a").lt(lit(5i32));
 //!
 //! // Convert it to bytes (for sending over the network, etc.)

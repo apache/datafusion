@@ -618,6 +618,43 @@ async fn roundtrip_logical_plan_sort() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_logical_plan_limit_offset() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int64, true),
+        Field::new("b", DataType::Decimal128(15, 2), true),
+    ]);
+
+    ctx.register_csv(
+        "t1",
+        "tests/testdata/test.csv",
+        CsvReadOptions::default().schema(&schema),
+    )
+    .await?;
+
+    let query = "SELECT a, b FROM t1 LIMIT 5 OFFSET 3";
+    let plan = ctx.sql(query).await?.into_optimized_plan()?;
+
+    // Sanity check that the offset was actually pushed into the `TableScan`
+    // (ListingTable opts into `supports_offset_pushdown`), so this test
+    // exercises the new `ListingTableScanNode.offset` wire field rather than
+    // trivially passing because nothing needed to round-trip.
+    let plan_str = plan.to_string();
+    assert_eq!(
+        plan_str,
+        "Limit: skip=0, fetch=5\n  TableScan: t1 projection=[a, b], fetch=5, offset=3",
+        "expected 'fetch=5' and 'offset=3' to be pushed into the scan, got: {plan_str}"
+    );
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(plan_str, logical_round_trip.to_string());
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_logical_plan_dml() -> Result<()> {
     let ctx = SessionContext::new();
     let schema = Schema::new(vec![

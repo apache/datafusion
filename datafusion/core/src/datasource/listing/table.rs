@@ -158,7 +158,7 @@ mod tests {
     };
     use arrow::{compute::SortOptions, record_batch::RecordBatch};
     use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
-    use datafusion_catalog::TableProvider;
+    use datafusion_catalog::{ScanArgs, TableProvider};
     use datafusion_catalog_listing::{
         ListingOptions, ListingTable, ListingTableConfig, SchemaSource,
     };
@@ -312,6 +312,48 @@ mod tests {
             Precision::Absent,
         );
 
+        Ok(())
+    }
+
+    #[cfg(feature = "parquet")]
+    #[tokio::test]
+    async fn scan_with_args_offset_skips_correct_rows() -> Result<()> {
+        for target_partition in [1_usize, 8, 16] {
+            let ctx = SessionContext::new_with_config(
+                SessionConfig::new().with_target_partitions(target_partition),
+            );
+
+            let table = load_table(&ctx, "alltypes_plain.parquet").await?;
+
+            // Full scan (no offset) establishes the expected row order.
+            let full_exec = table
+                .scan_with_args(&ctx.state(), ScanArgs::default())
+                .await?
+                .into_inner();
+            let full_batches = collect(full_exec, ctx.task_ctx()).await?;
+            let full =
+                arrow::compute::concat_batches(&full_batches[0].schema(), &full_batches)?;
+            assert_eq!(full.num_rows(), 8);
+            let expected = full.slice(2, 3);
+
+            // `LIMIT 3 OFFSET 2` should return exactly rows [2, 5), in order —
+            // not just the first 3 rows.
+            let offset_exec = table
+                .scan_with_args(
+                    &ctx.state(),
+                    ScanArgs::default().with_limit(Some(3)).with_offset(Some(2)),
+                )
+                .await?
+                .into_inner();
+            let offset_batches = collect(offset_exec, ctx.task_ctx()).await?;
+            let actual = arrow::compute::concat_batches(
+                &offset_batches[0].schema(),
+                &offset_batches,
+            )?;
+
+            assert_eq!(actual.num_rows(), 3);
+            assert_eq!(batches_to_string(&[expected]), batches_to_string(&[actual]));
+        }
         Ok(())
     }
 
