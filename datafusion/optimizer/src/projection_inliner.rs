@@ -32,14 +32,17 @@
 //! column that [`CommonSubexprEliminate`] created on purpose, so that an
 //! expensive expression is computed one time only.
 //!
-//! [`ProjectionInliner`] is the one place that makes this decision.
+//! [`ProjectionInliner`] is the one place that makes this decision. Rules call
+//! it instead of doing the substitution themselves.
 //!
 //! [`CommonSubexprEliminate`]: crate::common_subexpr_eliminate::CommonSubexprEliminate
 
 use std::collections::{HashMap, HashSet};
 
-use datafusion_common::Column;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
+use datafusion_common::{Column, Result};
 use datafusion_expr::{Expr, ExpressionPlacement, Projection};
 
 /// The cost of one more evaluation of an expression.
@@ -128,9 +131,9 @@ impl PinnedDefinitions {
     }
 }
 
-/// Decides if the column references of expressions over the output of a
-/// projection can be replaced with their definitions, without evaluating a
-/// definition too many times.
+/// Rewrites expressions over the output of a projection into expressions over
+/// its input, and decides if that is possible without evaluating a definition
+/// too many times.
 ///
 /// The rule is: after the rewrite, a definition that is evaluated more than
 /// one time must have a [`DuplicationCost`] of at most the `max_cost` that the
@@ -208,6 +211,32 @@ impl<'a> ProjectionInliner<'a> {
         others: impl IntoIterator<Item = &'o Expr>,
         max_cost: DuplicationCost,
     ) -> PinnedDefinitions {
+        self.pinned_impl(inlined, others, max_cost, false)
+    }
+
+    /// Returns [`Self::pinned`], and also pins every
+    /// [`DuplicationCost::Forbidden`] definition that `inlined` references.
+    ///
+    /// Use this when the projection can stay in the plan for consumers that
+    /// the caller can not see. A copy of a forbidden definition would then
+    /// be evaluated independently of the original, and change the query
+    /// result.
+    pub(crate) fn pinned_for_known_consumers<'i, 'o>(
+        &self,
+        inlined: impl IntoIterator<Item = &'i Expr>,
+        others: impl IntoIterator<Item = &'o Expr>,
+        max_cost: DuplicationCost,
+    ) -> PinnedDefinitions {
+        self.pinned_impl(inlined, others, max_cost, true)
+    }
+
+    fn pinned_impl<'i, 'o>(
+        &self,
+        inlined: impl IntoIterator<Item = &'i Expr>,
+        others: impl IntoIterator<Item = &'o Expr>,
+        max_cost: DuplicationCost,
+        pin_forbidden: bool,
+    ) -> PinnedDefinitions {
         debug_assert!(
             max_cost < DuplicationCost::Forbidden,
             "a forbidden definition must never be duplicated"
@@ -220,12 +249,49 @@ impl<'a> ProjectionInliner<'a> {
         let pinned = inlined_references
             .into_iter()
             .filter(|(idx, count)| {
+                let cost = self.definitions[*idx].1;
                 let evaluations = count + usize::from(other_references.contains_key(idx));
-                evaluations > 1 && self.definitions[*idx].1 > max_cost
+                (pin_forbidden && cost == DuplicationCost::Forbidden)
+                    || (evaluations > 1 && cost > max_cost)
             })
             .map(|(idx, _)| idx)
             .collect();
         PinnedDefinitions(pinned)
+    }
+
+    /// Returns `true` if `expr` references a definition in `pinned`.
+    pub(crate) fn references_pinned(
+        &self,
+        expr: &Expr,
+        pinned: &PinnedDefinitions,
+    ) -> bool {
+        !pinned.is_empty()
+            && expr
+                .exists(|e| {
+                    Ok(matches!(e, Expr::Column(col)
+                        if self.index_of(col).is_some_and(|idx| pinned.0.contains(&idx))))
+                })
+                .expect("exists closure is infallible")
+    }
+
+    /// Returns the definition of `column`, without its top-level alias.
+    pub(crate) fn definition(&self, column: &Column) -> Option<&'a Expr> {
+        self.index_of(column).map(|idx| self.definitions[idx].0)
+    }
+
+    /// Replaces each column reference in `expr` with its definition, without a
+    /// cost check. Callers must check [`Self::pinned`] first.
+    pub(crate) fn substitute(&self, expr: Expr) -> Result<Expr> {
+        expr.transform_up(|e| {
+            if let Expr::Column(col) = &e
+                && let Some(definition) = self.definition(col)
+            {
+                Ok(Transformed::yes(definition.clone()))
+            } else {
+                Ok(Transformed::no(e))
+            }
+        })
+        .data()
     }
 
     /// Counts the references to each definition in `exprs`.
@@ -388,5 +454,44 @@ mod tests {
                 .is_empty()
         );
         assert!(!inliner.pinned([&col("r")], [&col("r")], max).is_empty());
+        // Without all the consumers, a single reference is pinned as well.
+        assert!(
+            !inliner
+                .pinned_for_known_consumers([&col("r")], no_others, max)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn substitute_and_references_pinned() -> Result<()> {
+        let p = projection(vec![
+            col("a"),
+            expensive(col("c")).alias("exp"),
+            (col("b") + lit(1)).alias("cheap"),
+        ]);
+        let inliner = ProjectionInliner::new(&p);
+        let no_others: [&Expr; 0] = [];
+
+        let twice = col("exp")
+            .is_not_null()
+            .and(get_field_like(col("exp"), "x"));
+        let other = col("cheap").gt(col("a"));
+        let pinned = inliner.pinned_for_known_consumers(
+            [&twice, &other],
+            no_others,
+            DuplicationCost::Cheap,
+        );
+        assert!(inliner.references_pinned(&twice, &pinned));
+        assert!(!inliner.references_pinned(&other, &pinned));
+
+        assert_eq!(
+            inliner.definition(&Column::from_name("exp")),
+            Some(&expensive(col("test.c")))
+        );
+        assert_eq!(
+            inliner.substitute(other)?,
+            (col("test.b") + lit(1)).gt(col("test.a"))
+        );
+        Ok(())
     }
 }
