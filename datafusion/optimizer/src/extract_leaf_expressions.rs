@@ -2880,6 +2880,84 @@ mod tests {
         "#)
     }
 
+    /// A projection that swaps two column names, below a filter and a struct
+    /// field read. The merge must not resolve the parent's column references
+    /// through the rename map: the input column `test.user` beside the output
+    /// field `user` of the other rename gives an ambiguous schema (#25446).
+    #[test]
+    fn test_extract_above_projection_that_swaps_column_names() -> Result<()> {
+        let table_scan = test_table_scan_with_struct()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("user").alias("id"), col("id").alias("user")])?
+            .filter(col("user").gt(lit(0u32)))?
+            .project(vec![col("id"), col("user"), leaf_udf(col("id"), "name")])?
+            .build()?;
+
+        assert_stages!(plan, @r#"
+        ## Original Plan
+        Projection: id, user, leaf_udf(id, Utf8("name"))
+          Filter: user > UInt32(0)
+            Projection: test.user AS id, test.id AS user
+              TableScan: test projection=[id, user]
+
+        ## After Extraction
+        (same as original)
+
+        ## After Pushdown
+        Projection: id, user, __datafusion_extracted_1 AS leaf_udf(id,Utf8("name"))
+          Filter: user > UInt32(0)
+            Projection: test.user AS id, test.id AS user, leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1
+              TableScan: test projection=[id, user]
+
+        ## Optimized
+        (same as after pushdown)
+        "#)
+    }
+
+    /// A projection that gives a computed column the name of its own input
+    /// column. The extraction projection goes below the filter, which puts a
+    /// column named `id` under the rename, so the two plans have the same set
+    /// of field names. The recovery projection must stay, or the rename is lost
+    /// and the query gives wrong results.
+    #[test]
+    fn test_extract_above_projection_that_redefines_column_name() -> Result<()> {
+        let table_scan = test_table_scan_with_struct()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(col("id").gt(lit(0u32)))?
+            .project(vec![(col("id") * lit(10u32)).alias("id"), col("user")])?
+            .alias("sub")?
+            .project(vec![col("sub.id"), leaf_udf(col("sub.user"), "name")])?
+            .build()?;
+
+        assert_stages!(plan, @r#"
+        ## Original Plan
+        Projection: sub.id, leaf_udf(sub.user, Utf8("name"))
+          SubqueryAlias: sub
+            Projection: test.id * UInt32(10) AS id, test.user
+              Filter: test.id > UInt32(0)
+                TableScan: test projection=[id, user]
+
+        ## After Extraction
+        (same as original)
+
+        ## After Pushdown
+        Projection: sub.id, __datafusion_extracted_1 AS leaf_udf(sub.user,Utf8("name"))
+          SubqueryAlias: sub
+            Projection: test.id * UInt32(10) AS id, test.user, __datafusion_extracted_1
+              Filter: test.id > UInt32(0)
+                Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.id, test.user
+                  TableScan: test projection=[id, user]
+
+        ## Optimized
+        Projection: sub.id, __datafusion_extracted_1 AS leaf_udf(sub.user,Utf8("name"))
+          SubqueryAlias: sub
+            Projection: test.id * UInt32(10) AS id, __datafusion_extracted_1
+              Filter: test.id > UInt32(0)
+                Projection: leaf_udf(test.user, Utf8("name")) AS __datafusion_extracted_1, test.id
+                  TableScan: test projection=[id, user]
+        "#)
+    }
+
     // =========================================================================
     // SubqueryAlias extraction tests
     // =========================================================================
