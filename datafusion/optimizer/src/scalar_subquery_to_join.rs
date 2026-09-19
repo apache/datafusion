@@ -17,12 +17,14 @@
 
 //! [`ScalarSubqueryToJoin`] rewriting scalar subquery filters to `JOIN`s
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
+use crate::decorrelate::{
+    PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR, build_join_filter,
+};
 use crate::optimizer::ApplyOrder;
-use crate::utils::{evaluates_to_null, replace_qualified_name};
+use crate::utils::evaluates_to_null;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
@@ -33,7 +35,6 @@ use datafusion_common::tree_node::{
 use datafusion_common::{Column, Result, ScalarValue, assert_or_internal_err, plan_err};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
-use datafusion_expr::utils::conjunction;
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, lit, not, when};
 
 /// Optimizer rule that rewrites scalar subquery filters to joins and places an
@@ -365,19 +366,11 @@ fn build_join(
         .alias(subquery_alias.to_string())?
         .build()?;
 
-    let all_correlated_cols: BTreeSet<Column> = pull_up
-        .correlated_subquery_cols_map
-        .values()
-        .flatten()
-        .cloned()
-        .collect();
-
-    // Correlated columns now live in the decorrelated subquery's output,
-    // so re-qualify them with the subquery alias.
-    let join_filter_opt =
-        conjunction(pull_up.join_filters).map_or(Ok(None), |filter| {
-            replace_qualified_name(filter, &all_correlated_cols, subquery_alias).map(Some)
-        })?;
+    let join_filter_opt = build_join_filter(
+        pull_up.join_filters,
+        pull_up.correlated_subquery_cols_map.values().flatten(),
+        subquery_alias,
+    )?;
 
     // When pull-up did not extract any usable join keys (a correlated subquery
     // whose predicate references only outer columns), fall back to `ON true`:
