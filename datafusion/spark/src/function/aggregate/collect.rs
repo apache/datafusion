@@ -106,11 +106,11 @@ fn has_compactable_storage(value: &ArrayRef) -> bool {
                 || !has_exact_child_length
                 || has_compactable_storage(list.values())
         }
-        DataType::Struct(_) => value
-            .as_struct()
-            .columns()
-            .iter()
-            .any(has_compactable_storage),
+        DataType::Struct(_) => {
+            let structure = value.as_struct();
+            structure.null_count() != 0
+                || structure.columns().iter().any(has_compactable_storage)
+        }
         DataType::Map(_, _) => {
             let map = value.as_map();
             map.null_count() != 0
@@ -146,22 +146,24 @@ fn normalize_array(
     {
         return Ok(Arc::clone(value));
     }
-    match (value.data_type(), target_type) {
-        (DataType::List(_), DataType::List(field)) => normalize_list::<i32>(value, field),
+    let normalized = match (value.data_type(), target_type) {
+        (DataType::List(_), DataType::List(field)) => {
+            normalize_list::<i32>(value, field)?
+        }
         (DataType::LargeList(_), DataType::LargeList(field)) => {
-            normalize_list::<i64>(value, field)
+            normalize_list::<i64>(value, field)?
         }
         (DataType::ListView(_), DataType::ListView(field)) => {
-            normalize_list_view::<i32>(value, field)
+            normalize_list_view::<i32>(value, field)?
         }
         (DataType::LargeListView(_), DataType::LargeListView(field)) => {
-            normalize_list_view::<i64>(value, field)
+            normalize_list_view::<i64>(value, field)?
         }
         (
             DataType::FixedSizeList(_, source_size),
             DataType::FixedSizeList(field, target_size),
         ) if source_size == target_size => {
-            normalize_fixed_size_list(value, field, *target_size)
+            normalize_fixed_size_list(value, field, *target_size)?
         }
         (
             DataType::Dictionary(source_key, _),
@@ -174,9 +176,9 @@ fn normalize_array(
             let dictionary = dictionary.with_values(values);
             if dictionary.null_count() == 0 && dictionary.to_data().nulls().is_some() {
                 let data = dictionary.to_data().into_builder().nulls(None).build()?;
-                Ok(make_array(data))
+                make_array(data)
             } else {
-                Ok(dictionary)
+                dictionary
             }
         }
         (
@@ -194,7 +196,7 @@ fn normalize_array(
                     require_non_null,
                 ),
                 _ => internal_err!("collect_list/collect_set expected a run-end encoded array"),
-            }
+            }?
         }
         (DataType::Struct(_), DataType::Struct(fields)) => {
             let source = value.as_struct();
@@ -202,35 +204,32 @@ fn normalize_array(
                 .iter()
                 .zip(source.columns())
                 .map(|(field, column)| {
-                    let column = if !field.is_nullable() {
-                        materialize_masked_values(
-                            column,
-                            source.nulls(),
-                            field.data_type(),
-                        )?
-                    } else {
-                        Arc::clone(column)
-                    };
+                    let column = materialize_masked_values(
+                        column,
+                        source.nulls(),
+                        field.data_type(),
+                        !field.is_nullable(),
+                    )?;
                     normalize_array(&column, field.data_type(), !field.is_nullable())
                 })
                 .collect::<Result<Vec<_>>>()?;
-            Ok(Arc::new(StructArray::try_new(
+            Arc::new(StructArray::try_new(
                 fields.clone(),
                 columns,
                 source.nulls().cloned(),
-            )?))
+            )?) as ArrayRef
         }
         (DataType::Map(_, _), DataType::Map(field, ordered)) => {
-            normalize_map(value, field, *ordered)
+            normalize_map(value, field, *ordered)?
         }
         (
             DataType::Union(source_fields, UnionMode::Sparse),
             DataType::Union(fields, UnionMode::Sparse),
-        ) => normalize_sparse_union(value, source_fields, fields, require_non_null),
+        ) => normalize_sparse_union(value, source_fields, fields, require_non_null)?,
         (
             DataType::Union(source_fields, UnionMode::Dense),
             DataType::Union(fields, UnionMode::Dense),
-        ) => normalize_dense_union(value, source_fields, fields, require_non_null),
+        ) => normalize_dense_union(value, source_fields, fields, require_non_null)?,
         _ => {
             let value = if value.data_type() == target_type {
                 Arc::clone(value)
@@ -243,18 +242,20 @@ fn normalize_array(
                 && value.to_data().nulls().is_some()
             {
                 let data = value.to_data().into_builder().nulls(None).build()?;
-                Ok(make_array(data))
+                make_array(data)
             } else {
-                Ok(value)
+                value
             }
         }
-    }
+    };
+    Ok(normalized)
 }
 
 fn materialize_masked_values(
     value: &ArrayRef,
     parent_nulls: Option<&arrow::buffer::NullBuffer>,
     target_type: &DataType,
+    require_non_null: bool,
 ) -> Result<ArrayRef> {
     let Some(parent_nulls) = parent_nulls else {
         return Ok(Arc::clone(value));
@@ -263,9 +264,13 @@ fn materialize_masked_values(
     let Some(first_valid_parent) = valid_parent_indices.next() else {
         return ScalarValue::new_default(target_type)?.to_array_of_size(value.len());
     };
-    let fallback = std::iter::once(first_valid_parent)
-        .chain(valid_parent_indices)
-        .find(|index| value.is_valid(*index));
+    let fallback = if require_non_null {
+        std::iter::once(first_valid_parent)
+            .chain(valid_parent_indices)
+            .find(|index| value.is_valid(*index))
+    } else {
+        Some(first_valid_parent)
+    };
     let Some(fallback) = fallback else {
         // The nulls are logically visible because the parent rows are valid.
         // Preserve them so the declared non-null field validation rejects the
@@ -843,6 +848,11 @@ fn normalize_list_scalar(
     }
 
     let values = normalize_array(&array.value(0), field.data_type(), true)?;
+    if values.logical_null_count() != 0 {
+        return internal_err!(
+            "Found unmasked nulls for non-nullable collect_list/collect_set element"
+        );
+    }
     Ok(SingleRowListArrayBuilder::new(values)
         .with_field(field)
         .build_list_scalar())
@@ -992,7 +1002,7 @@ impl<T: Accumulator> NullToEmptyListAccumulator<T> {
                 self.list_type
             );
         };
-        if value.data_type() == field.data_type() {
+        if value.data_type() == field.data_type() && !has_compactable_storage(value) {
             Ok(Arc::clone(value))
         } else if matches!(
             (value.data_type(), field.data_type()),
@@ -1560,6 +1570,52 @@ mod tests {
     }
 
     #[test]
+    fn exact_type_input_discards_unreferenced_dictionary_values() -> Result<()> {
+        let values = Arc::new(DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![1]),
+            Arc::new(StringArray::from(vec![
+                "secret-before",
+                "visible",
+                "secret-after",
+            ])),
+        )?) as ArrayRef;
+        let element_type = values.data_type().clone();
+        let accumulator = NullToEmptyListAccumulator::new(
+            ArrayAggAccumulator::try_new(&element_type, true)?,
+            list_type(element_type.clone()),
+        );
+
+        let normalized = accumulator.normalize_input(&values)?;
+        assert_eq!(normalized.data_type(), &element_type);
+        let dictionary = normalized
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int8Type>>()
+            .expect("expected Int8 dictionary");
+        assert_eq!(dictionary.values().len(), 1);
+        assert_eq!(dictionary.values().as_string::<i32>().value(0), "visible");
+        Ok(())
+    }
+
+    #[test]
+    fn required_encoded_logical_null_returns_error() -> Result<()> {
+        let values = Arc::new(DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![0]),
+            Arc::new(StringArray::from(vec![None::<&str>])),
+        )?) as ArrayRef;
+        let element_type = values.data_type().clone();
+        let scalar = SingleRowListArrayBuilder::new(values).build_list_scalar();
+
+        let error = normalize_list_scalar(scalar, &list_type(element_type)).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Found unmasked nulls for non-nullable"),
+            "unexpected error: {error}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn nullable_nested_dictionary_preserves_logical_null_union_value() -> Result<()> {
         let runtime_union_fields = UnionFields::try_new(
             vec![4, 9],
@@ -2020,6 +2076,16 @@ mod tests {
         let normalized = normalized.as_run::<Int64Type>();
         assert_eq!(normalized.values().len(), 1);
         assert_eq!(normalized.values().data_type(), &DataType::LargeUtf8);
+
+        let exact_type = values.data_type().clone();
+        let accumulator = NullToEmptyListAccumulator::new(
+            ArrayAggAccumulator::try_new(&exact_type, true)?,
+            list_type(exact_type.clone()),
+        );
+        let normalized = accumulator.normalize_input(&values)?;
+        assert_eq!(normalized.data_type(), &exact_type);
+        assert_eq!(normalized.len(), logical_len as usize);
+        assert_eq!(normalized.as_run::<Int64Type>().values().len(), 1);
         Ok(())
     }
 
@@ -2186,6 +2252,36 @@ mod tests {
         assert_eq!(strings.value(0), "visible");
         assert_eq!(strings.value(1), "visible");
         assert_eq!(strings.value(2), "visible");
+        Ok(())
+    }
+
+    #[test]
+    fn nullable_struct_child_scrubs_parent_masked_payload() -> Result<()> {
+        let inner_fields =
+            Fields::from(vec![Field::new("optional_value", DataType::Utf8, true)]);
+        let inner = Arc::new(StructArray::try_new(
+            inner_fields,
+            vec![Arc::new(StringArray::from(vec![
+                "masked-secret",
+                "visible",
+            ]))],
+            Some(NullBuffer::from(vec![false, true])),
+        )?) as ArrayRef;
+        let outer_fields = Fields::from(vec![Field::new(
+            "optional_struct",
+            inner.data_type().clone(),
+            true,
+        )]);
+        let value =
+            Arc::new(StructArray::try_new(outer_fields, vec![inner], None)?) as ArrayRef;
+        let data_type = value.data_type().clone();
+
+        let normalized = normalize_array(&value, &data_type, true)?;
+        let structure = normalized.as_struct().column(0).as_struct();
+        assert!(structure.is_null(0));
+        let child = structure.column(0).as_string::<i32>();
+        assert_eq!(child.value(0), "visible");
+        assert_eq!(child.value(1), "visible");
         Ok(())
     }
 
