@@ -1756,7 +1756,7 @@ impl ExecutionPlan for RepartitionExec {
         // Larger values cause cache pressure that outweighs flush savings.
         let coalescer_batch_size = self
             .batch_size
-            .unwrap_or_else(|| context.session_config().batch_size() / 2);
+            .unwrap_or_else(|| context.session_config().batch_size() * 2);
 
         let spill_manager = SpillManager::new(
             Arc::clone(&context.runtime_env()),
