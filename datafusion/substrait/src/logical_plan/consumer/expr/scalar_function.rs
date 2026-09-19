@@ -187,6 +187,32 @@ fn arg_list_to_binary_op_tree_inner(
     }))
 }
 
+/// Reads the `case_sensitivity` option of a `like` call.
+///
+/// Substrait says a consumer must use the first value it supports, and must
+/// reject the call when it supports none of them.
+fn case_insensitive_option(f: &ScalarFunction) -> Result<bool> {
+    let Some(option) = f
+        .options
+        .iter()
+        .find(|option| option.name.eq_ignore_ascii_case("case_sensitivity"))
+    else {
+        return Ok(false);
+    };
+    for preference in &option.preference {
+        if preference.eq_ignore_ascii_case("CASE_SENSITIVE") {
+            return Ok(false);
+        }
+        if preference.eq_ignore_ascii_case("CASE_INSENSITIVE") {
+            return Ok(true);
+        }
+    }
+    not_impl_err!(
+        "Unsupported case_sensitivity for `like`: {:?}",
+        option.preference
+    )
+}
+
 /// Build [`Expr`] from its name and required inputs.
 struct BuiltinExprBuilder {
     expr_name: String,
@@ -213,7 +239,10 @@ impl BuiltinExprBuilder {
         args: Vec<Expr>,
     ) -> Result<Expr> {
         match self.expr_name.as_str() {
-            "like" => Self::build_like_expr(false, false, f, args),
+            // `like` carries case sensitivity as an option. `ilike` is not a
+            // Substrait function, but DataFusion used to emit it, so plans
+            // written by an older version are still read.
+            "like" => Self::build_like_expr(case_insensitive_option(f)?, false, f, args),
             "ilike" => Self::build_like_expr(true, false, f, args),
             "like_match" => Self::build_like_expr(false, false, f, args),
             "like_imatch" => Self::build_like_expr(true, false, f, args),
