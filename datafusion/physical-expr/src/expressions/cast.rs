@@ -254,7 +254,7 @@ impl CastExpr {
     /// conversions such as `Int32` to `Date32`, which interprets the same integer
     /// as days since the epoch, or `Int64` to `Date64`, which interprets the same
     /// integer as milliseconds since the epoch.
-    pub fn check_lossless_cast(cast_type: &DataType, src: &DataType) -> bool {
+    pub fn check_bigger_cast(cast_type: &DataType, src: &DataType) -> bool {
         if cast_type.eq(src) {
             return true;
         }
@@ -278,9 +278,9 @@ impl CastExpr {
     }
 
     /// Check if the cast is lossless and strictly order-preserving for all source
-    /// values, preserving nulls. See [`Self::check_lossless_cast`].
-    pub fn is_lossless_cast(&self, src: &DataType) -> bool {
-        Self::check_lossless_cast(self.cast_type(), src)
+    /// values, preserving nulls. See [`Self::check_bigger_cast`].
+    pub fn is_bigger_cast(&self, src: &DataType) -> bool {
+        Self::check_bigger_cast(self.cast_type(), src)
     }
 }
 
@@ -299,10 +299,10 @@ pub(crate) fn cast_expr_properties(
 ) -> Result<ExprProperties> {
     let unbounded = Interval::make_unbounded(target_type)?;
     let source_type = child.range.data_type();
-    // A lossless cast recognized by check_lossless_cast is one-to-one, so it is
+    // A lossless cast recognized by check_bigger_cast is one-to-one, so it is
     // strictly order-preserving; a narrowing cast may collapse distinct values,
     // breaking the ordering of subsequent sort keys.
-    let lossless_cast = CastExpr::check_lossless_cast(target_type, &source_type);
+    let lossless_cast = CastExpr::check_bigger_cast(target_type, &source_type);
     if is_order_preserving_cast_family(&source_type, target_type) || lossless_cast {
         Ok(child
             .clone()
@@ -1543,7 +1543,7 @@ mod tests {
                 expected.data_type().clone(),
                 None,
             );
-            assert!(expr.is_lossless_cast(input.data_type()));
+            assert!(expr.is_bigger_cast(input.data_type()));
             let child = ExprProperties::new_unknown()
                 .with_range(
                     Interval::make_unbounded(input.data_type())
@@ -1614,7 +1614,7 @@ mod tests {
             )]));
             let expr =
                 CastExpr::new(col("a", &schema)?, expected.data_type().clone(), None);
-            assert!(expr.is_lossless_cast(input.data_type()));
+            assert!(expr.is_bigger_cast(input.data_type()));
             for descending in [false, true] {
                 for nulls_first in [false, true] {
                     let child = ExprProperties::new_unknown()
@@ -1639,7 +1639,7 @@ mod tests {
             (LargeBinary, Binary),
             (BinaryView, Binary),
         ] {
-            assert!(!CastExpr::check_lossless_cast(&target, &source));
+            assert!(!CastExpr::check_bigger_cast(&target, &source));
         }
         Ok(())
     }
@@ -1740,33 +1740,33 @@ mod tests {
     }
 
     #[test]
-    fn test_check_lossless_cast_precision_loss() {
+    fn test_check_bigger_cast_precision_loss() {
         use DataType::*;
 
         // Exact conversions without precision loss
-        assert!(CastExpr::check_lossless_cast(&Int16, &Int8));
-        assert!(CastExpr::check_lossless_cast(&Int64, &Int32));
-        assert!(CastExpr::check_lossless_cast(&Float32, &Int16));
-        assert!(CastExpr::check_lossless_cast(&Float32, &UInt16));
-        assert!(CastExpr::check_lossless_cast(&Float64, &Int32));
-        assert!(CastExpr::check_lossless_cast(&Float64, &UInt32));
-        assert!(CastExpr::check_lossless_cast(&LargeUtf8, &Utf8));
+        assert!(CastExpr::check_bigger_cast(&Int16, &Int8));
+        assert!(CastExpr::check_bigger_cast(&Int64, &Int32));
+        assert!(CastExpr::check_bigger_cast(&Float32, &Int16));
+        assert!(CastExpr::check_bigger_cast(&Float32, &UInt16));
+        assert!(CastExpr::check_bigger_cast(&Float64, &Int32));
+        assert!(CastExpr::check_bigger_cast(&Float64, &UInt32));
+        assert!(CastExpr::check_bigger_cast(&LargeUtf8, &Utf8));
 
         // Precision-losing int-to-float conversions should return false
-        assert!(!CastExpr::check_lossless_cast(&Float32, &Int32));
-        assert!(!CastExpr::check_lossless_cast(&Float32, &UInt32));
-        assert!(!CastExpr::check_lossless_cast(&Float64, &Int64));
-        assert!(!CastExpr::check_lossless_cast(&Float64, &UInt64));
+        assert!(!CastExpr::check_bigger_cast(&Float32, &Int32));
+        assert!(!CastExpr::check_bigger_cast(&Float32, &UInt32));
+        assert!(!CastExpr::check_bigger_cast(&Float64, &Int64));
+        assert!(!CastExpr::check_bigger_cast(&Float64, &UInt64));
 
         // Signed-to-unsigned and unsigned-to-signed casts whose target cannot
         // represent the entire source range are not lossless for all values.
-        assert!(!CastExpr::check_lossless_cast(&UInt16, &Int8));
-        assert!(!CastExpr::check_lossless_cast(&UInt32, &Int16));
-        assert!(!CastExpr::check_lossless_cast(&Int8, &UInt8));
-        assert!(!CastExpr::check_lossless_cast(&Int16, &UInt16));
-        assert!(!CastExpr::check_lossless_cast(&Int32, &UInt32));
-        assert!(!CastExpr::check_lossless_cast(&Int64, &UInt64));
-        assert!(!CastExpr::check_lossless_cast(&Int8, &UInt16));
+        assert!(!CastExpr::check_bigger_cast(&UInt16, &Int8));
+        assert!(!CastExpr::check_bigger_cast(&UInt32, &Int16));
+        assert!(!CastExpr::check_bigger_cast(&Int8, &UInt8));
+        assert!(!CastExpr::check_bigger_cast(&Int16, &UInt16));
+        assert!(!CastExpr::check_bigger_cast(&Int32, &UInt32));
+        assert!(!CastExpr::check_bigger_cast(&Int64, &UInt64));
+        assert!(!CastExpr::check_bigger_cast(&Int8, &UInt16));
     }
 }
 

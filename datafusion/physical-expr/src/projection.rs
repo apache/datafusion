@@ -890,7 +890,7 @@ fn project_column_statistics_through_expr(
     // domain, for example, does not bound the converted column. Merely casting
     // a failing endpoint to NULL also cannot establish the remaining extrema.
     let preserves_values = source_type.is_some_and(|source_type| {
-        CastExpr::check_lossless_cast(target_type, &source_type)
+        CastExpr::check_bigger_cast(target_type, &source_type)
             || is_within_extrema(
                 &inner_stats.min_value,
                 &inner_stats.max_value,
