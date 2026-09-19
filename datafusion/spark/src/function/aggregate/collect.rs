@@ -15,9 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, ArrayRef, UInt64Array};
+use arrow::array::{
+    Array, ArrayRef, GenericListArray, GenericListViewArray, OffsetSizeTrait,
+    StructArray, UInt64Array, UnionArray, cast::AsArray, make_array,
+};
+use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::{cast, take};
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::{DataType, Field, FieldRef, UnionMode};
+use arrow_select::dictionary::garbage_collect_any_dictionary;
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -51,6 +56,238 @@ fn empty_list_scalar(list_type: &DataType) -> Result<ScalarValue> {
 
 fn collect_type(element_type: DataType) -> DataType {
     DataType::List(Arc::new(Field::new_list_field(element_type, false)))
+}
+
+fn identity_indices(len: usize) -> UInt64Array {
+    UInt64Array::from_iter_values(0..len as u64)
+}
+
+/// Materialize only logically reachable values and align their nested type with
+/// `target_type`.
+///
+/// Arrow container arrays may retain unreachable null payload in null lists,
+/// unused dictionary values, sparse-union children, and view backing buffers.
+/// That payload is valid, but it makes `Array::is_nullable` conservative and
+/// prevents the result from being embedded below Spark's non-null list field.
+fn normalize_array(
+    value: &ArrayRef,
+    target_type: &DataType,
+    require_non_null: bool,
+) -> Result<ArrayRef> {
+    match (value.data_type(), target_type) {
+        (DataType::List(_), DataType::List(field)) => normalize_list::<i32>(value, field),
+        (DataType::LargeList(_), DataType::LargeList(field)) => {
+            normalize_list::<i64>(value, field)
+        }
+        (DataType::ListView(_), DataType::ListView(field)) => {
+            normalize_list_view::<i32>(value, field)
+        }
+        (DataType::LargeListView(_), DataType::LargeListView(field)) => {
+            normalize_list_view::<i64>(value, field)
+        }
+        (
+            DataType::Dictionary(source_key, _),
+            DataType::Dictionary(target_key, target_value),
+        ) if source_key == target_key => {
+            let compact = garbage_collect_any_dictionary(value.as_any_dictionary())?;
+            let dictionary = compact.as_any_dictionary();
+            let values = normalize_array(dictionary.values(), target_value, true)?;
+            Ok(dictionary.with_values(values))
+        }
+        (
+            DataType::RunEndEncoded(source_run_ends, _),
+            DataType::RunEndEncoded(target_run_ends, target_value),
+        ) if source_run_ends.data_type() == target_run_ends.data_type() => {
+            // `take` rebuilds run ends from the selected logical rows and drops
+            // unused runs, including null runs outside a slice.
+            let compact = take(value.as_ref(), &identity_indices(value.len()), None)?;
+            let runs = compact.as_any_ree();
+            let values = normalize_array(runs.values(), target_value.data_type(), true)?;
+            Ok(runs.with_values(values))
+        }
+        (DataType::Struct(_), DataType::Struct(fields)) => {
+            let source = value.as_struct();
+            let columns = fields
+                .iter()
+                .zip(source.columns())
+                .map(|(field, column)| {
+                    let column = if !field.is_nullable() {
+                        materialize_masked_values(
+                            column,
+                            source.nulls(),
+                            field.data_type(),
+                        )?
+                    } else {
+                        Arc::clone(column)
+                    };
+                    normalize_array(&column, field.data_type(), !field.is_nullable())
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Arc::new(StructArray::try_new(
+                fields.clone(),
+                columns,
+                source.nulls().cloned(),
+            )?))
+        }
+        (
+            DataType::Union(_, UnionMode::Sparse),
+            DataType::Union(fields, UnionMode::Sparse),
+        ) => normalize_sparse_union(value, fields, require_non_null),
+        _ => {
+            let value = if value.data_type() == target_type {
+                Arc::clone(value)
+            } else {
+                cast(value.as_ref(), target_type)?
+            };
+            if require_non_null
+                && value.logical_null_count() == 0
+                && value.is_nullable()
+                && value.to_data().nulls().is_some()
+            {
+                let data = value.to_data().into_builder().nulls(None).build()?;
+                Ok(make_array(data))
+            } else {
+                Ok(value)
+            }
+        }
+    }
+}
+
+fn materialize_masked_values(
+    value: &ArrayRef,
+    parent_nulls: Option<&arrow::buffer::NullBuffer>,
+    target_type: &DataType,
+) -> Result<ArrayRef> {
+    let Some(parent_nulls) = parent_nulls else {
+        return Ok(Arc::clone(value));
+    };
+    let fallback = parent_nulls
+        .valid_indices()
+        .find(|index| value.is_valid(*index));
+    let Some(fallback) = fallback else {
+        return ScalarValue::new_default(target_type)?.to_array_of_size(value.len());
+    };
+    let indices = UInt64Array::from_iter_values((0..value.len()).map(|index| {
+        if parent_nulls.is_valid(index) {
+            index as u64
+        } else {
+            fallback as u64
+        }
+    }));
+    Ok(take(value.as_ref(), &indices, None)?)
+}
+
+fn normalize_list<Offset: OffsetSizeTrait>(
+    value: &ArrayRef,
+    field: &FieldRef,
+) -> Result<ArrayRef> {
+    let source = value.as_list::<Offset>();
+    let source_offsets = source.value_offsets();
+    let mut indices = Vec::new();
+    let mut offsets = Vec::with_capacity(source.len() + 1);
+    offsets.push(Offset::zero());
+    for index in 0..source.len() {
+        if source.is_valid(index) {
+            let start = source_offsets[index].as_usize();
+            let end = source_offsets[index + 1].as_usize();
+            indices.extend((start..end).map(|index| index as u64));
+        }
+        offsets.push(Offset::from_usize(indices.len()).expect("list offset overflow"));
+    }
+    let values = take(
+        source.values().as_ref(),
+        &UInt64Array::from_iter_values(indices),
+        None,
+    )?;
+    let values = normalize_array(&values, field.data_type(), !field.is_nullable())?;
+    Ok(Arc::new(GenericListArray::<Offset>::try_new(
+        Arc::clone(field),
+        OffsetBuffer::new(ScalarBuffer::from(offsets)),
+        values,
+        source.nulls().cloned(),
+    )?))
+}
+
+fn normalize_list_view<Offset: OffsetSizeTrait>(
+    value: &ArrayRef,
+    field: &FieldRef,
+) -> Result<ArrayRef> {
+    let source = value.as_list_view::<Offset>();
+    let mut indices = Vec::new();
+    let mut offsets = Vec::with_capacity(source.len());
+    let mut sizes = Vec::with_capacity(source.len());
+    for index in 0..source.len() {
+        offsets
+            .push(Offset::from_usize(indices.len()).expect("list view offset overflow"));
+        if source.is_valid(index) {
+            let start = source.value_offsets()[index].as_usize();
+            let size = source.value_sizes()[index].as_usize();
+            indices.extend((start..start + size).map(|index| index as u64));
+            sizes.push(Offset::from_usize(size).expect("list view size overflow"));
+        } else {
+            sizes.push(Offset::zero());
+        }
+    }
+    let values = take(
+        source.values().as_ref(),
+        &UInt64Array::from_iter_values(indices),
+        None,
+    )?;
+    let values = normalize_array(&values, field.data_type(), !field.is_nullable())?;
+    Ok(Arc::new(GenericListViewArray::<Offset>::try_new(
+        Arc::clone(field),
+        ScalarBuffer::from(offsets),
+        ScalarBuffer::from(sizes),
+        values,
+        source.nulls().cloned(),
+    )?))
+}
+
+fn normalize_sparse_union(
+    value: &ArrayRef,
+    fields: &arrow::datatypes::UnionFields,
+    require_non_null: bool,
+) -> Result<ArrayRef> {
+    let source = value
+        .as_any()
+        .downcast_ref::<UnionArray>()
+        .expect("union array");
+    let children = fields
+        .iter()
+        .map(|(type_id, field)| {
+            let child = source.child(type_id);
+            let child = if require_non_null {
+                let fallback = (0..source.len()).find(|index| {
+                    source.type_id(*index) == type_id && child.is_valid(*index)
+                });
+                match fallback {
+                    Some(fallback) => {
+                        let indices = UInt64Array::from_iter_values(
+                            (0..source.len()).map(|index| {
+                                if source.type_id(index) == type_id {
+                                    index as u64
+                                } else {
+                                    fallback as u64
+                                }
+                            }),
+                        );
+                        take(child.as_ref(), &indices, None)?
+                    }
+                    None => ScalarValue::new_default(field.data_type())?
+                        .to_array_of_size(source.len())?,
+                }
+            } else {
+                Arc::clone(child)
+            };
+            normalize_array(&child, field.data_type(), require_non_null)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Arc::new(UnionArray::try_new(
+        fields.clone(),
+        source.type_ids().clone(),
+        None,
+        children,
+    )?))
 }
 
 /// Rebuild an accumulator result with the aggregate's declared list field.
@@ -87,12 +324,7 @@ fn normalize_list_scalar(
         ));
     }
 
-    let values = array.value(0);
-    let values = if values.data_type() == field.data_type() {
-        values
-    } else {
-        cast(values.as_ref(), field.data_type())?
-    };
+    let values = normalize_array(&array.value(0), field.data_type(), true)?;
     Ok(SingleRowListArrayBuilder::new(values)
         .with_field(field)
         .build_list_scalar())
@@ -254,7 +486,7 @@ impl<T: Accumulator> NullToEmptyListAccumulator<T> {
                 None => UInt64Array::from_iter_values(0..value.len() as u64),
             };
             let value = take(value.as_ref(), &indices, None)?;
-            Ok(cast(value.as_ref(), field.data_type())?)
+            normalize_array(&value, field.data_type(), true)
         }
     }
 }
@@ -314,7 +546,7 @@ mod tests {
         StringArray, StructArray, UnionArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-    use arrow::datatypes::{Fields, Int8Type, Int16Type, Schema, UnionFields};
+    use arrow::datatypes::{Fields, Int8Type, Int16Type, Int32Type, Schema, UnionFields};
     use arrow::record_batch::RecordBatch;
     use arrow::util::display::array_value_to_string;
     use datafusion::prelude::SessionContext;
@@ -415,14 +647,19 @@ mod tests {
         partial.update_batch(std::slice::from_ref(&values))?;
         let state = partial.state()?;
         assert_list_values(&state[0], &element_type, expected)?;
+        assert_list_values(&state[0].clone().compacted(), &element_type, expected)?;
 
         let mut final_accumulator = accumulator(&element_type, distinct)?;
         final_accumulator.merge_batch(&[state[0].to_array()?])?;
-        assert_list_values(&final_accumulator.evaluate()?, &element_type, expected)?;
+        let merged = final_accumulator.evaluate()?;
+        assert_list_values(&merged, &element_type, expected)?;
+        assert_list_values(&merged.compacted(), &element_type, expected)?;
 
         let mut single = accumulator(&element_type, distinct)?;
         single.update_batch(&[values])?;
-        assert_list_values(&single.evaluate()?, &element_type, expected)
+        let value = single.evaluate()?;
+        assert_list_values(&value, &element_type, expected)?;
+        assert_list_values(&value.compacted(), &element_type, expected)
     }
 
     #[test]
@@ -666,6 +903,57 @@ mod tests {
     }
 
     #[test]
+    fn nested_null_lists_do_not_narrow_unreachable_payload() -> Result<()> {
+        let element_type = DataType::List(Arc::new(Field::new_list_field(
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false))),
+            true,
+        )));
+        let runtime_inner = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 1, 2])),
+            Arc::new(Int32Array::from(vec![None, Some(1)])),
+            Some(NullBuffer::from(vec![false, true])),
+        ));
+        let values = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(
+                runtime_inner.data_type().clone(),
+                true,
+            )),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 2])),
+            runtime_inner,
+            None,
+        )) as ArrayRef;
+        values.to_data().validate_full()?;
+
+        for distinct in [false, true] {
+            let mut partial = accumulator(&element_type, distinct)?;
+            partial.update_batch(std::slice::from_ref(&values))?;
+            let state = partial.state()?;
+            assert_eq!(state[0].data_type(), list_type(element_type.clone()));
+
+            let ScalarValue::List(array) = &state[0] else {
+                panic!("expected collect state")
+            };
+            let collected_values = array.value(0);
+            let collected = collected_values.as_list::<i32>();
+            let inner_values = collected.value(0);
+            let inner = inner_values.as_list::<i32>();
+            assert!(inner.is_null(0));
+            assert_eq!(inner.value(1).as_primitive::<Int32Type>().value(0), 1);
+
+            let mut merged = accumulator(&element_type, distinct)?;
+            merged.merge_batch(&[state[0].to_array()?])?;
+            assert_eq!(
+                merged.evaluate()?.data_type(),
+                list_type(element_type.clone())
+            );
+            partial.retract_batch(std::slice::from_ref(&values))?;
+            assert_empty_list(&partial.evaluate()?);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn normalization_reuses_matching_primitive_values() -> Result<()> {
         let values = Arc::new(Int32Array::from(vec![1, 2, 3]));
         let values_ptr = values.values().as_ptr();
@@ -783,6 +1071,70 @@ mod tests {
         assert_eq!(batches[0].num_rows(), 1);
         let value = ScalarValue::try_from_array(batches[0].column(0), 0)?;
         assert_list_values(&value, &element_type, &["a", "a"])?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn collect_list_dictionary_grouped_and_window_sql() -> Result<()> {
+        let keys = Int8Array::from(vec![0, 0, 1, 1]);
+        let dictionary_values =
+            Arc::new(StringArray::from(vec![Some("a"), Some("b"), None]));
+        let values = Arc::new(DictionaryArray::<Int8Type>::try_new(
+            keys,
+            dictionary_values,
+        )?) as ArrayRef;
+        let element_type = values.data_type().clone();
+
+        let ctx = SessionContext::new();
+        ctx.register_udaf(AggregateUDF::new_from_impl(SparkCollectList::new()));
+        ctx.register_batch(
+            "dictionary_input",
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![
+                    Field::new("g", DataType::Int32, false),
+                    Field::new("id", DataType::Int32, false),
+                    Field::new("x", element_type.clone(), false),
+                ])),
+                vec![
+                    Arc::new(Int32Array::from(vec![0, 0, 1, 1])),
+                    Arc::new(Int32Array::from(vec![0, 1, 2, 3])),
+                    values,
+                ],
+            )?,
+        )?;
+
+        let grouped = ctx
+            .sql(
+                "SELECT g, collect_list(x) AS values \
+                 FROM dictionary_input GROUP BY g ORDER BY g",
+            )
+            .await?
+            .collect()
+            .await?;
+        assert_eq!(grouped.iter().map(RecordBatch::num_rows).sum::<usize>(), 2);
+        let grouped =
+            arrow::compute::concat_batches(&grouped[0].schema(), grouped.iter())?;
+        for (row, expected) in [["a", "a"], ["b", "b"]].iter().enumerate() {
+            let value = ScalarValue::try_from_array(grouped.column(1), row)?;
+            assert_list_values(&value, &element_type, expected)?;
+        }
+
+        let window = ctx
+            .sql(
+                "SELECT id, collect_list(x) OVER (\
+                   ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW\
+                 ) AS values FROM dictionary_input ORDER BY id",
+            )
+            .await?
+            .collect()
+            .await?;
+        let window = arrow::compute::concat_batches(&window[0].schema(), window.iter())?;
+        let expected = [vec!["a"], vec!["a", "a"], vec!["a", "b"], vec!["b", "b"]];
+        for (row, expected) in expected.iter().enumerate() {
+            let value = ScalarValue::try_from_array(window.column(1), row)?;
+            assert_list_values(&value, &element_type, expected)?;
+        }
 
         Ok(())
     }
