@@ -2232,8 +2232,8 @@ pub struct ProjectionExecNode {
     #[prost(string, repeated, tag = "3")]
     pub expr_name: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     /// Only field and schema metadata are used; output types are derived from expr.
-    /// Present when the projection has field or schema metadata, or explicitly clears
-    /// input metadata. Absent for older plans and metadata-free projections.
+    /// Present only when the projection overrides metadata derived from its input,
+    /// including an explicit clear. Absent for older plans and inherited metadata.
     #[prost(message, optional, tag = "4")]
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
 }
