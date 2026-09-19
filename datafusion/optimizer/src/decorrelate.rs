@@ -34,8 +34,8 @@ use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
 };
 use datafusion_expr::{
-    BinaryExpr, Cast, EmptyRelation, Expr, ExprSchemable, FetchType, LogicalPlan,
-    LogicalPlanBuilder, Operator, expr, lit,
+    BinaryExpr, Cast, EmptyRelation, Expr, ExprSchemable, FetchType, JoinType,
+    LogicalPlan, LogicalPlanBuilder, Operator, expr, lit,
 };
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -74,6 +74,21 @@ pub struct PullUpCorrelatedExpr {
     /// whether we have converted a scalar aggregation into a group aggregation. When unnesting
     /// lateral joins, we need to produce a left outer join in such cases.
     pub pulled_up_scalar_agg: bool,
+    /// The subquery writes the `IN` predicate a second time, as a correlated
+    /// filter: `x IN (SELECT y FROM .. WHERE y = x)`.
+    ///
+    /// [`remove_duplicated_filter`] drops that filter, because the caller adds
+    /// the same equality back as the join filter. The `IN` is then never
+    /// UNKNOWN: every row in the scope of an outer row satisfies `y = x`, so
+    /// `y` is not NULL there and the subquery result is either empty or `{x}`.
+    /// A null-aware join reports UNKNOWN for a miss, so the caller must not
+    /// build one for this shape. See
+    /// <https://github.com/apache/datafusion/issues/25480>.
+    ///
+    /// A node above that filter can still put a NULL into the value column, so
+    /// the flag is cleared again when the pull up passes such a node. See
+    /// [`plan_may_add_null_rows`].
+    pub in_predicate_is_correlation: bool,
 }
 
 impl Default for PullUpCorrelatedExpr {
@@ -95,6 +110,7 @@ impl PullUpCorrelatedExpr {
             collected_count_expr_map: HashMap::new(),
             pull_up_having_expr: None,
             pulled_up_scalar_agg: false,
+            in_predicate_is_correlation: false,
         }
     }
 
@@ -173,6 +189,12 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
     }
 
     fn f_up(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+        // `f_up` walks the subquery bottom up, so a node that this reaches
+        // after the `Filter` sits above it and can undo what the filter
+        // promised about the value column.
+        if self.in_predicate_is_correlation && plan_may_add_null_rows(&plan) {
+            self.in_predicate_is_correlation = false;
+        }
         let subquery_schema = plan.schema();
         match &plan {
             LogicalPlan::Filter(plan_filter) => {
@@ -186,7 +208,9 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     find_join_exprs(subquery_filter_exprs)?;
                 if let Some(in_predicate) = &self.in_predicate_opt {
                     // in_predicate may be already included in the join filters, remove it from the join filters first.
+                    let filter_count = join_filters.len();
                     join_filters = remove_duplicated_filter(join_filters, in_predicate)?;
+                    self.in_predicate_is_correlation |= join_filters.len() < filter_count;
                 }
                 let correlated_subquery_cols =
                     collect_subquery_cols(&join_filters, subquery_schema)?;
@@ -477,6 +501,25 @@ fn collect_local_correlated_cols(
         if !matches!(child, LogicalPlan::SubqueryAlias(_)) {
             collect_local_correlated_cols(child, all_cols_map, local_cols);
         }
+    }
+}
+
+/// Can this plan node give a row whose value column is NULL although a filter
+/// below it kept only rows where that column equals the `IN` value?
+///
+/// See [`PullUpCorrelatedExpr::in_predicate_is_correlation`].
+fn plan_may_add_null_rows(plan: &LogicalPlan) -> bool {
+    match plan {
+        // An outer join gives a NULL for every column of an unmatched side.
+        LogicalPlan::Join(join) => join.join_type != JoinType::Inner,
+        // A filter in one branch of a union says nothing about the others.
+        LogicalPlan::Union(_) => true,
+        // A grouping set gives a NULL for each grouping column it rolls up.
+        LogicalPlan::Aggregate(aggregate) => aggregate
+            .group_expr
+            .iter()
+            .any(|expr| matches!(expr, Expr::GroupingSet(_))),
+        _ => false,
     }
 }
 
