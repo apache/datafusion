@@ -43,7 +43,7 @@ macro_rules! primitive_merge_helper {
 }
 
 macro_rules! merge_helper {
-    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $fetch:ident, $reservation:ident, $enable_round_robin_tie_breaker:ident) => {{
+    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $fetch:ident, $reservation:ident, $enable_round_robin_tie_breaker:ident, $flush_on_input_batch_boundary:ident) => {{
         let streams =
             FieldCursorStream::<$t>::new($sort, $streams, $reservation.new_empty());
         return Ok(SortPreservingMergeStream::new(
@@ -55,6 +55,7 @@ macro_rules! merge_helper {
             $reservation,
             $enable_round_robin_tie_breaker,
         )
+        .with_flush_on_input_batch_boundary($flush_on_input_batch_boundary)
         .into_stream());
     }};
 }
@@ -98,6 +99,7 @@ pub struct StreamingMergeBuilder<'a> {
     merge_pool: Option<Arc<MergeMemoryPool>>,
     /// Leave memory for the aggregate consuming the merged spill rows.
     reserve_replay_headroom: bool,
+    flush_on_input_batch_boundary: bool,
     enable_round_robin_tie_breaker: bool,
 }
 
@@ -170,6 +172,12 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
+    /// Bound intermediate output to rows from one batch of each input.
+    pub(super) fn with_flush_on_input_batch_boundary(mut self, flush: bool) -> Self {
+        self.flush_on_input_batch_boundary = flush;
+        self
+    }
+
     /// See [SortPreservingMergeExec::with_round_robin_repartition] for more
     /// information.
     ///
@@ -204,6 +212,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             reservation,
             merge_pool,
             reserve_replay_headroom,
+            flush_on_input_batch_boundary,
             fetch,
             expressions,
             enable_round_robin_tie_breaker,
@@ -265,12 +274,12 @@ impl<'a> StreamingMergeBuilder<'a> {
             let sort = expressions[0].clone();
             let data_type = sort.expr.data_type(schema.as_ref())?;
             downcast_primitive! {
-                data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker),
-                DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
-                DataType::Utf8View => merge_helper!(StringViewArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
-                DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
-                DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
-                DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
+                data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker, flush_on_input_batch_boundary),
+                DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker, flush_on_input_batch_boundary)
+                DataType::Utf8View => merge_helper!(StringViewArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker, flush_on_input_batch_boundary)
+                DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker, flush_on_input_batch_boundary)
+                DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker, flush_on_input_batch_boundary)
+                DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker, flush_on_input_batch_boundary)
                 _ => {}
             }
         }
@@ -290,18 +299,22 @@ impl<'a> StreamingMergeBuilder<'a> {
             reservation,
             enable_round_robin_tie_breaker,
         )
+        .with_flush_on_input_batch_boundary(flush_on_input_batch_boundary)
         .into_stream())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::spill::spill_manager::GetSlicedSize;
     use crate::{common::collect, stream::RecordBatchStreamAdapter};
     use std::sync::Arc;
 
     use super::*;
 
     use arrow::array::{ArrayRef, RecordBatch};
+    use arrow::compute::{cast, concat_batches};
+    use arrow::datatypes::{Field, Int32Type, Schema};
     use arrow_schema::SortOptions;
     use datafusion_common::Result;
     use datafusion_execution::TaskContext;
@@ -309,6 +322,181 @@ mod tests {
     use datafusion_physical_expr_common::metrics::{
         ExecutionPlanMetricsSet, SpillMetrics,
     };
+
+    #[rstest::rstest]
+    #[case::primitive(DataType::Int32)]
+    #[case::strings(DataType::Utf8)]
+    #[case::views(DataType::Utf8View)]
+    #[tokio::test]
+    async fn intermediate_merge_flushes_before_replacing_input_batch(
+        #[case] data_type: DataType,
+        #[values(false, true)] row_cursor: bool,
+        #[values(false, true)] round_robin: bool,
+        #[values(None, Some(7))] fetch: Option<usize>,
+    ) -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("x", data_type.clone(), false)]));
+        let sort = PhysicalSortExpr::new_default(col("x", &schema)?);
+        // Two keys exercise RowCursorStream as well as the specialized cursors.
+        let ordering = if row_cursor {
+            [sort.clone(), sort].into()
+        } else {
+            [sort].into()
+        };
+
+        for flush in [false, true] {
+            let streams = (0..2)
+                .map(|run| {
+                    let batches = (0..3)
+                        .map(|batch| {
+                            let values = [4 * batch + run, 4 * batch + run + 2];
+                            let array: ArrayRef = match data_type {
+                                DataType::Int32 => {
+                                    Arc::new(Int32Array::from_iter_values(values))
+                                }
+                                DataType::Utf8 => {
+                                    Arc::new(StringArray::from_iter_values(
+                                        values.map(|value| format!("{value:024}")),
+                                    ))
+                                }
+                                DataType::Utf8View => {
+                                    Arc::new(StringViewArray::from_iter_values(
+                                        values.map(|value| format!("{value:024}")),
+                                    ))
+                                }
+                                _ => unreachable!(),
+                            };
+                            Ok(RecordBatch::try_new(Arc::clone(&schema), vec![array])?)
+                        })
+                        .collect::<Vec<Result<RecordBatch>>>();
+                    Box::pin(RecordBatchStreamAdapter::new(
+                        Arc::clone(&schema),
+                        futures::stream::iter(batches),
+                    )) as SendableRecordBatchStream
+                })
+                .collect();
+            let stream = StreamingMergeBuilder::new()
+                .with_schema(Arc::clone(&schema))
+                .with_expressions(&ordering)
+                .with_metrics(BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0))
+                .with_streams(streams)
+                .with_batch_size(8192)
+                .with_fetch(fetch)
+                .with_round_robin_tie_breaker(round_robin)
+                .with_flush_on_input_batch_boundary(flush)
+                .with_bypass_mempool()
+                .build()?;
+            let batches = collect(stream).await?;
+            let merged = concat_batches(&schema, &batches)?;
+            let actual = cast(merged.column(0), &DataType::Int32)?;
+            let expected = Int32Array::from_iter_values(0..fetch.unwrap_or(12) as i32);
+            assert_eq!(actual.as_primitive::<Int32Type>(), &expected);
+
+            if flush {
+                // Each output must contain rows from at most one source batch
+                // of either input, even though the target is 8192 rows.
+                for batch in &batches {
+                    let values = cast(batch.column(0), &DataType::Int32)?;
+                    for run in 0..2 {
+                        let mut source_batches = values
+                            .as_primitive::<Int32Type>()
+                            .values()
+                            .iter()
+                            .filter(|&&value| value % 2 == run)
+                            .map(|value| value / 4);
+                        if let Some(first) = source_batches.next() {
+                            assert!(source_batches.all(|batch| batch == first));
+                        }
+                    }
+                }
+            } else {
+                assert_eq!(batches.len(), 1, "ordinary merges retain their batching");
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn intermediate_merge_releases_consumed_dictionary_batches() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new(
+                "payload",
+                DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::Utf8View),
+                ),
+                false,
+            ),
+        ]));
+        let mut max_input_bytes = 0;
+        let mut streams = Vec::new();
+        for run in 0..2 {
+            let mut batches = Vec::new();
+            for batch_index in 0..3 {
+                let keys = Int32Array::from(vec![
+                    4 * batch_index + run,
+                    4 * batch_index + run + 2,
+                ]);
+                let values = StringViewArray::from(vec![format!(
+                    "{run}:{batch_index}:{}",
+                    "x".repeat(1024),
+                )]);
+                let payload = DictionaryArray::<Int32Type>::try_new(
+                    Int32Array::from(vec![0, 0]),
+                    Arc::new(values),
+                )?;
+                let batch = RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(keys), Arc::new(payload)],
+                )?;
+                max_input_bytes = max_input_bytes.max(batch.get_sliced_size()?);
+                batches.push(Ok(batch));
+            }
+            streams.push(Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&schema),
+                futures::stream::iter(batches),
+            )) as SendableRecordBatchStream);
+        }
+        let ordering = [PhysicalSortExpr::new_default(col("x", &schema)?)].into();
+        let stream = StreamingMergeBuilder::new()
+            .with_schema(schema)
+            .with_expressions(&ordering)
+            .with_metrics(BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0))
+            .with_streams(streams)
+            .with_batch_size(8192)
+            .with_flush_on_input_batch_boundary(true)
+            .with_bypass_mempool()
+            .build()?;
+        let batches = collect(stream).await?;
+        let mut expected_key = 0;
+        for batch in batches {
+            // Arrow's dictionary interleave can concatenate values from all
+            // buffered batches, including ones with no selected rows. Fully
+            // consumed inputs must be removed before accepting replacements.
+            assert!(batch.get_sliced_size()? <= 2 * max_input_bytes);
+            assert!(batch.column(1).as_dictionary::<Int32Type>().values().len() <= 2);
+            let payload = cast(batch.column(1), &DataType::Utf8View)?;
+            for (key, value) in batch
+                .column(0)
+                .as_primitive::<Int32Type>()
+                .values()
+                .iter()
+                .zip(payload.as_string_view().iter())
+            {
+                assert_eq!(*key, expected_key);
+                assert_eq!(
+                    value,
+                    Some(
+                        format!("{}:{}:{}", key % 2, key / 4, "x".repeat(1024)).as_str()
+                    )
+                );
+                expected_key += 1;
+            }
+        }
+        assert_eq!(expected_key, 12);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_sort_merge_fetch_zero_with_only_1_stream() {

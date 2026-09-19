@@ -86,6 +86,11 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// Target batch size
     batch_size: usize,
 
+    /// Emit pending rows before replacing an exhausted input batch. Intermediate
+    /// spill merges use this to avoid collecting multiple short batches from an
+    /// input into an output batch larger than their reserved workspace.
+    flush_on_input_batch_boundary: bool,
+
     /// Cursors for each input partition. `None` means the input is exhausted
     cursors: Vec<Option<Cursor<C>>>,
 
@@ -146,9 +151,15 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             poll_reset_epochs: vec![0; stream_count],
             loser_tree: vec![],
             batch_size,
+            flush_on_input_batch_boundary: false,
             fetch,
             produced: 0,
         }
+    }
+
+    pub(super) fn with_flush_on_input_batch_boundary(mut self, flush: bool) -> Self {
+        self.flush_on_input_batch_boundary = flush;
+        self
     }
 
     pub(crate) fn into_stream(self) -> SendableRecordBatchStream
@@ -198,7 +209,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
     async fn flush_in_progress(
         &mut self,
-        mut emitter: TryEmitter<RecordBatch, DataFusionError>,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
         if self.in_progress.is_empty() {
             return Ok(());
@@ -284,6 +295,13 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                         );
 
                         drop(timer);
+                        if self.flush_on_input_batch_boundary {
+                            // Drain every pending row, including partial output
+                            // from offset-overflow recovery, before accepting a
+                            // replacement batch from this input.
+                            self.flush_in_progress(&mut emitter).await?;
+                            self.in_progress.discard_consumed_batches();
+                        }
                         poll_fn(|cx| self.maybe_poll_stream(cx, winner_stream)).await?;
                         timer = elapsed_compute.timer();
                     }
@@ -294,7 +312,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             }
 
             // 4. Flush any remaining rows in `self.in_progress`
-            self.flush_in_progress(emitter).await?;
+            self.flush_in_progress(&mut emitter).await?;
 
             Ok(())
         })
