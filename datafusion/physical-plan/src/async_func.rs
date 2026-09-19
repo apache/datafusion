@@ -27,6 +27,7 @@ use arrow::array::RecordBatch;
 use arrow_schema::{FieldRef, Fields, Schema, SchemaRef};
 use datafusion_common::Result;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::ScalarFunctionExpr;
 use datafusion_physical_expr::async_scalar_function::AsyncFuncExpr;
@@ -234,13 +235,16 @@ impl ExecutionPlan for AsyncFuncExec {
         let schema_captured = self.schema();
         let config_options_ref = Arc::clone(context.session_config().options());
 
+        let reservation = MemoryConsumer::new(format!("AsyncFuncInput[{partition}]"))
+            .register(context.memory_pool());
         let coalesced_input_stream = CoalesceInputStream {
             input_stream,
-            batch_coalescer: LimitedBatchCoalescer::new(
+            batch_coalescer: LimitedBatchCoalescer::new_with_reservation(
                 Arc::clone(&self.input.schema()),
                 config_options_ref.execution.batch_size.get(),
                 None,
-            ),
+                reservation,
+            )?,
         };
 
         let stream_with_async_functions = coalesced_input_stream.then(move |batch| {
@@ -252,14 +256,22 @@ impl ExecutionPlan for AsyncFuncExec {
             let baseline_metrics_captured = baseline_metrics.clone();
 
             async move {
-                let batch = batch?;
+                let CoalescedInputBatch { batch, reservation } = batch?;
                 // append the result of evaluating the async expressions to the output
                 let mut output_arrays = batch.columns().to_vec();
                 for async_expr in async_exprs_captured.iter() {
                     let output = async_expr
                         .invoke_with_args(&batch, Arc::clone(&config_options))
-                        .await?;
-                    output_arrays.push(output.to_array(batch.num_rows())?);
+                        .await?
+                        .to_array(batch.num_rows())?;
+                    let size = output.get_array_memory_size();
+                    if let Err(error) = reservation.try_grow(size) {
+                        // The array already exists, so keep it accounted while
+                        // the terminal error propagates.
+                        reservation.grow(size);
+                        return Err(error);
+                    }
+                    output_arrays.push(output);
                 }
                 let batch = RecordBatch::try_new(schema_captured, output_arrays)?;
 
@@ -368,13 +380,18 @@ impl AsyncFuncExec {
     }
 }
 
+struct CoalescedInputBatch {
+    batch: RecordBatch,
+    reservation: MemoryReservation,
+}
+
 struct CoalesceInputStream {
     input_stream: Pin<Box<dyn RecordBatchStream + Send>>,
     batch_coalescer: LimitedBatchCoalescer,
 }
 
 impl Stream for CoalesceInputStream {
-    type Item = Result<RecordBatch>;
+    type Item = Result<CoalescedInputBatch>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -383,8 +400,10 @@ impl Stream for CoalesceInputStream {
         let mut completed = false;
 
         loop {
-            if let Some(batch) = self.batch_coalescer.next_completed_batch() {
-                return Poll::Ready(Some(Ok(batch)));
+            if let Some((batch, reservation)) =
+                self.batch_coalescer.next_completed_batch_with_reservation()
+            {
+                return Poll::Ready(Some(Ok(CoalescedInputBatch { batch, reservation })));
             }
 
             if completed {
@@ -397,8 +416,8 @@ impl Stream for CoalesceInputStream {
                         return Poll::Ready(Some(Err(err)));
                     }
                 }
-                Some(err) => {
-                    return Poll::Ready(Some(err));
+                Some(Err(err)) => {
+                    return Poll::Ready(Some(Err(err)));
                 }
                 None => {
                     completed = true;
@@ -508,10 +527,13 @@ mod tests {
     use arrow::array::{RecordBatch, UInt32Array};
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::Result;
+    use datafusion_execution::memory_pool::MemoryConsumer;
     use datafusion_execution::{TaskContext, config::SessionConfig};
     use futures::StreamExt;
 
-    use crate::{ExecutionPlan, async_func::AsyncFuncExec, test::TestMemoryExec};
+    use super::{AsyncFuncExec, CoalesceInputStream};
+    use crate::coalesce::LimitedBatchCoalescer;
+    use crate::{ExecutionPlan, test::TestMemoryExec};
 
     #[tokio::test]
     async fn test_async_fn_with_coalescing() -> Result<()> {
@@ -545,6 +567,41 @@ mod tests {
             .expect("expected to get a record batch")?;
         assert_eq!(100, batch.num_rows());
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn coalesced_input_stays_reserved_until_async_stage_drops_it() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(UInt32Array::from(vec![1, 2, 3]))],
+        )?;
+        let task_ctx = Arc::new(TaskContext::default());
+        let pool = Arc::clone(task_ctx.memory_pool());
+        let input = TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)?
+            .execute(0, Arc::clone(&task_ctx))?;
+        let reservation = MemoryConsumer::new("AsyncFuncInputTest").register(&pool);
+        let coalescer = LimitedBatchCoalescer::new_with_reservation(
+            input.schema(),
+            8,
+            None,
+            reservation,
+        )?;
+        let baseline = pool.reserved();
+        let mut stream = CoalesceInputStream {
+            input_stream: input,
+            batch_coalescer: coalescer,
+        };
+
+        let batch = stream.next().await.expect("expected input batch")?;
+        assert_eq!(batch.batch.num_rows(), 3);
+        assert!(pool.reserved() > baseline);
+        drop(batch);
+        assert_eq!(pool.reserved(), baseline);
+        drop(stream);
+        assert_eq!(pool.reserved(), 0);
         Ok(())
     }
 }
