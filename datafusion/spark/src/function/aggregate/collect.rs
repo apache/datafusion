@@ -422,9 +422,12 @@ fn normalize_sparse_union(
         .iter()
         .map(|((source_type_id, _), (_, target_field))| {
             let child = source.child(*source_type_id);
+            let first_active = if require_non_null {
+                (0..source.len()).find(|index| source.type_id(*index) == *source_type_id)
+            } else {
+                None
+            };
             let child = if require_non_null {
-                let first_active =
-                    (0..source.len()).find(|index| source.type_id(*index) == *source_type_id);
                 match first_active {
                     None => ScalarValue::new_default(target_field.data_type())?
                         .to_array_of_size(source.len())?,
@@ -455,7 +458,10 @@ fn normalize_sparse_union(
             };
             let child =
                 normalize_array(&child, target_field.data_type(), require_non_null)?;
-            if require_non_null && child.logical_null_count() != 0 {
+            if require_non_null
+                && first_active.is_some()
+                && child.logical_null_count() != 0
+            {
                 return internal_err!(
                     "Found unmasked nulls for non-nullable sparse union field {}",
                     target_field.name()
@@ -852,7 +858,7 @@ mod tests {
     use super::*;
     use arrow::array::{
         DictionaryArray, Int8Array, Int16Array, Int32Array, Int64Array, ListArray,
-        ListViewArray, RunArray, StringArray, StructArray, UnionArray,
+        ListViewArray, NullArray, RunArray, StringArray, StructArray, UnionArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{
@@ -953,24 +959,32 @@ mod tests {
         expected: &[&str],
     ) -> Result<()> {
         let element_type = values.data_type().clone();
+        assert_accumulator_outputs_with_type(values, &element_type, distinct, expected)
+    }
 
-        let mut partial = accumulator(&element_type, distinct)?;
+    fn assert_accumulator_outputs_with_type(
+        values: ArrayRef,
+        element_type: &DataType,
+        distinct: bool,
+        expected: &[&str],
+    ) -> Result<()> {
+        let mut partial = accumulator(element_type, distinct)?;
         partial.update_batch(std::slice::from_ref(&values))?;
         let state = partial.state()?;
-        assert_list_values(&state[0], &element_type, expected)?;
-        assert_list_values(&state[0].clone().compacted(), &element_type, expected)?;
+        assert_list_values(&state[0], element_type, expected)?;
+        assert_list_values(&state[0].clone().compacted(), element_type, expected)?;
 
-        let mut final_accumulator = accumulator(&element_type, distinct)?;
+        let mut final_accumulator = accumulator(element_type, distinct)?;
         final_accumulator.merge_batch(&[state[0].to_array()?])?;
         let merged = final_accumulator.evaluate()?;
-        assert_list_values(&merged, &element_type, expected)?;
-        assert_list_values(&merged.compacted(), &element_type, expected)?;
+        assert_list_values(&merged, element_type, expected)?;
+        assert_list_values(&merged.compacted(), element_type, expected)?;
 
-        let mut single = accumulator(&element_type, distinct)?;
+        let mut single = accumulator(element_type, distinct)?;
         single.update_batch(&[values])?;
         let value = single.evaluate()?;
-        assert_list_values(&value, &element_type, expected)?;
-        assert_list_values(&value.compacted(), &element_type, expected)
+        assert_list_values(&value, element_type, expected)?;
+        assert_list_values(&value.compacted(), element_type, expected)
     }
 
     #[test]
@@ -1357,6 +1371,46 @@ mod tests {
         )?;
         assert_accumulator_outputs(values, true, &["{integer=1}", "{string=a}"])?;
 
+        Ok(())
+    }
+
+    #[test]
+    fn collect_aggregates_handle_inactive_sparse_union_null_variant() -> Result<()> {
+        let runtime_fields = UnionFields::try_new(
+            vec![4, 9],
+            vec![
+                Field::new("null", DataType::Null, true),
+                Field::new("integer", DataType::Int32, false),
+            ],
+        )?;
+        let declared_fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("null", DataType::Null, false),
+                Field::new("integer", DataType::Int32, false),
+            ],
+        )?;
+        let element_type = DataType::Union(declared_fields, UnionMode::Sparse);
+        let values = Arc::new(UnionArray::try_new(
+            runtime_fields,
+            ScalarBuffer::from(vec![9_i8, 9]),
+            None,
+            vec![
+                Arc::new(NullArray::new(2)),
+                Arc::new(Int32Array::from(vec![1, 2])),
+            ],
+        )?) as ArrayRef;
+
+        assert_eq!(values.logical_null_count(), 0);
+        assert!(values.is_nullable());
+        for distinct in [false, true] {
+            assert_accumulator_outputs_with_type(
+                Arc::clone(&values),
+                &element_type,
+                distinct,
+                &["{integer=1}", "{integer=2}"],
+            )?;
+        }
         Ok(())
     }
 

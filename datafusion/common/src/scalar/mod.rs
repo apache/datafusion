@@ -5008,12 +5008,32 @@ impl ScalarValue {
         macro_rules! gc_list {
             ($field:expr, $offset_type:ty, $array_type:ty) => {{
                 let list = array.as_list::<$offset_type>();
-                Arc::new(<$array_type>::new(
-                    Arc::clone($field),
-                    list.offsets().clone(),
-                    ScalarValue::compact_view_buffers(Arc::clone(list.values())),
-                    list.nulls().cloned(),
-                )) as ArrayRef
+                let offsets = list.offsets().clone();
+                let values = ScalarValue::compact_view_buffers(Arc::clone(list.values()));
+                if !$field.is_nullable()
+                    && values.is_nullable()
+                    && values.logical_null_count() == 0
+                {
+                    let data = ArrayData::builder(
+                        GenericListArray::<$offset_type>::DATA_TYPE_CONSTRUCTOR(
+                            Arc::clone($field),
+                        ),
+                    )
+                    .len(list.len())
+                    .nulls(list.nulls().cloned())
+                    .add_buffer(offsets.into_inner().into_inner())
+                    .add_child_data(values.to_data())
+                    .build()
+                    .expect("compacted list array should contain valid data");
+                    Arc::new(GenericListArray::<$offset_type>::from(data)) as ArrayRef
+                } else {
+                    Arc::new(<$array_type>::new(
+                        Arc::clone($field),
+                        offsets,
+                        values,
+                        list.nulls().cloned(),
+                    )) as ArrayRef
+                }
             }};
         }
         // Macro for the i32/i64-offset list-view pair (ListView / LargeListView).
