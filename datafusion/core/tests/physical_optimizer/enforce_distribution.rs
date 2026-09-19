@@ -18,6 +18,7 @@
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::physical_optimizer::test_utils::{
     RequirementsTestExec, bounded_window_exec_with_can_repartition, check_integrity,
@@ -56,6 +57,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, OrderingRequirements, PhysicalSortExpr,
 };
+use datafusion_physical_optimizer::PhysicalOptimizerContext;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::enforce_distribution::*;
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
@@ -64,6 +66,9 @@ use datafusion_physical_optimizer::output_requirements::OutputRequirements;
 use datafusion_physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
+};
+use datafusion_physical_plan::operator_statistics::{
+    ClosureStatisticsProvider, StatisticsRegistry, StatisticsResult,
 };
 
 use datafusion_physical_expr::{
@@ -643,7 +648,12 @@ fn ensure_distribution_helper(
     config.optimizer.repartition_file_scans = false;
     config.optimizer.repartition_file_min_size = 1024;
     config.optimizer.prefer_existing_sort = prefer_existing_sort;
-    ensure_distribution(distribution_context, &config).map(|item| item.data.plan)
+    ensure_distribution_with_stats(
+        distribution_context,
+        &config,
+        &datafusion_physical_plan::statistics::StatisticsContext::new(),
+    )
+    .map(|item| item.data.plan)
 }
 
 fn test_suite_default_config_options() -> ConfigOptions {
@@ -766,7 +776,11 @@ impl TestConfig {
             // Then run ensure_distribution rule
             DistributionContext::new_default(adjusted)
                 .transform_up(|distribution_context| {
-                    ensure_distribution(distribution_context, &self.config)
+                    ensure_distribution_with_stats(
+                        distribution_context,
+                        &self.config,
+                        &datafusion_physical_plan::statistics::StatisticsContext::new(),
+                    )
                 })
                 .data()
                 .and_then(check_integrity)?;
@@ -818,9 +832,9 @@ fn range_satisfaction_config_matrix() -> Result<()> {
     let config_cases = [
         // subset  preserve  target   exact  subset  incompatible
         (NOT_MET, DISABLED, EQUAL, [Reuse, Hash, Hash]),
-        (NOT_MET, DISABLED, GREATER, [Reuse, Hash, Hash]),
+        (NOT_MET, DISABLED, GREATER, [Hash, Hash, Hash]),
         (NOT_MET, NOT_MET, EQUAL, [Reuse, Hash, Hash]),
-        (NOT_MET, NOT_MET, GREATER, [Reuse, Hash, Hash]),
+        (NOT_MET, NOT_MET, GREATER, [Hash, Hash, Hash]),
         (NOT_MET, MET, EQUAL, [Reuse, Hash, Hash]),
         (NOT_MET, MET, GREATER, [Reuse, Reuse, Hash]),
         (MET, DISABLED, EQUAL, [Reuse, Reuse, Hash]),
@@ -1131,20 +1145,26 @@ fn range_requirement_scales_within_sample_resolution() -> Result<()> {
             .to_plan(requirement, &DISTRIB_DISTRIB_SORT);
         let rendered = displayable(plan.as_ref()).indent(true).to_string();
         let child = Arc::clone(plan.children()[0]);
-        let Partitioning::Range(actual) = child.output_partitioning() else {
-            panic!("range partitioning lost for target {target}: {rendered}");
-        };
-        let expected_count = if (4..=6).contains(&target) { target } else { 3 };
-        assert_eq!(actual.partition_count(), expected_count, "{rendered}");
-        assert_eq!(actual.samples(), range.samples());
-        assert_eq!(
-            actual.split_points(),
-            range.scale(expected_count)?.split_points()
-        );
+        if target <= range.max_partition_count() {
+            let Partitioning::Range(actual) = child.output_partitioning() else {
+                panic!("range partitioning lost for target {target}: {rendered}");
+            };
+            let expected_count = if (4..=6).contains(&target) { target } else { 3 };
+            assert_eq!(actual.partition_count(), expected_count, "{rendered}");
+            assert_eq!(actual.samples(), range.samples());
+            assert_eq!(
+                actual.split_points(),
+                range.scale(expected_count).unwrap().split_points()
+            );
+        } else {
+            let Partitioning::Hash(_, actual_count) = child.output_partitioning() else {
+                panic!("insufficient samples must fall back to hash: {rendered}");
+            };
+            assert_eq!(*actual_count, target, "{rendered}");
+        }
         assert_eq!(
             rendered.matches("RepartitionExec:").count(),
-            usize::from(expected_count != 3),
-            "{rendered}"
+            usize::from(target > 3)
         );
     }
     Ok(())
@@ -1180,6 +1200,58 @@ fn range_singleton_scaling_respects_required_keys() -> Result<()> {
             matches!(child.output_partitioning(), Partitioning::Range(_)),
             key == "a"
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn range_join_accepts_matching_layouts_with_different_sample_capacity() -> Result<()> {
+    let ordering = [PhysicalSortExpr::new_default(col("a", &schema())?)].into();
+    let sampled = RangePartitioning::try_new_with_samples(
+        ordering,
+        (10..=50)
+            .step_by(10)
+            .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
+            .collect(),
+        3,
+    )?;
+    let exact = RangePartitioning::try_new_with_samples(
+        sampled.ordering().clone(),
+        sampled.split_points().to_vec(),
+        3,
+    )?;
+
+    for swap in [false, true] {
+        let (left_range, right_range) = if swap {
+            (exact.clone(), sampled.clone())
+        } else {
+            (sampled.clone(), exact.clone())
+        };
+        let left = parquet_exec_with_output_partitioning(Partitioning::Range(left_range));
+        let right =
+            parquet_exec_with_output_partitioning(Partitioning::Range(right_range));
+        let join_on = vec![(col("a", &schema())?, col("a", &schema())?)];
+        let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+        let plan = TestConfig::default()
+            .with_query_execution_partitions(3)
+            .to_plan(join, &DISTRIB_DISTRIB_SORT);
+        let rendered = displayable(plan.as_ref()).indent(true).to_string();
+        assert_eq!(
+            rendered.matches("RepartitionExec:").count(),
+            0,
+            "{rendered}"
+        );
+        let capacities = plan
+            .children()
+            .into_iter()
+            .map(|child| {
+                let Partitioning::Range(range) = child.output_partitioning() else {
+                    panic!("expected range partitioning: {rendered}");
+                };
+                range.max_partition_count()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(capacities, if swap { vec![3, 6] } else { vec![6, 3] });
     }
     Ok(())
 }
@@ -1231,7 +1303,7 @@ fn range_preservation_keeps_existing_native_reference() -> Result<()> {
 }
 
 #[test]
-fn range_preservation_prefers_larger_unscalable_input() -> Result<()> {
+fn range_fallback_preserves_target_parallelism() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
     let input =
         |count: usize, rows_per_partition: usize| -> Result<Arc<dyn ExecutionPlan>> {
@@ -1274,14 +1346,14 @@ fn range_preservation_prefers_larger_unscalable_input() -> Result<()> {
             let Partitioning::Range(range) = child.output_partitioning() else {
                 panic!("{rendered}")
             };
-            assert_eq!(range.partition_count(), 3, "{rendered}");
+            assert_eq!(range.partition_count(), 4, "{rendered}");
         }
     }
     Ok(())
 }
 
 #[test]
-fn range_hash_join_preserves_satisfying_range_above_max_partitions() -> Result<()> {
+fn range_hash_join_falls_back_above_max_partitions() -> Result<()> {
     let left = parquet_exec();
     let right = parquet_exec_with_output_partitioning(range_partitioning(
         "a",
@@ -1294,13 +1366,16 @@ fn range_hash_join_preserves_satisfying_range_above_max_partitions() -> Result<(
         .with_query_execution_partitions(8)
         .to_plan(join, &DISTRIB_DISTRIB_SORT);
     let rendered = displayable(plan.as_ref()).indent(true).to_string();
-    assert!(!rendered.contains("partitioning=Hash"), "{rendered}");
     assert_eq!(
-        rendered.matches("RepartitionExec:").count(),
-        1,
+        rendered.matches("partitioning=Hash([a@0], 8)").count(),
+        2,
         "{rendered}"
     );
-    assert!(rendered.contains("partitioning=Range"), "{rendered}");
+    assert_eq!(
+        rendered.matches("RepartitionExec:").count(),
+        2,
+        "{rendered}"
+    );
     Ok(())
 }
 
@@ -1430,20 +1505,24 @@ async fn range_hash_join_scaling_preserves_rows() -> Result<()> {
                 .with_query_execution_partitions(target)
                 .to_plan(join, &DISTRIB_DISTRIB_SORT);
             let rendered = displayable(plan.as_ref()).indent(true).to_string();
-            assert!(
-                !rendered.contains("partitioning=Hash"),
-                "target {target}: {rendered}"
-            );
-            let expected_count = if target <= 6 { target } else { 3 };
+            let expected_count = target;
             for child in plan.children() {
-                let Partitioning::Range(actual) = child.output_partitioning() else {
-                    panic!("target {target}: {rendered}");
-                };
-                assert_eq!(actual.partition_count(), expected_count, "{rendered}");
-                assert_eq!(
-                    actual.split_points(),
-                    range.scale(expected_count)?.split_points()
-                );
+                if target <= range.max_partition_count() {
+                    let Partitioning::Range(actual) = child.output_partitioning() else {
+                        panic!("target {target}: {rendered}");
+                    };
+                    assert_eq!(actual.partition_count(), expected_count, "{rendered}");
+                    assert_eq!(
+                        actual.split_points(),
+                        range.scale(expected_count).unwrap().split_points()
+                    );
+                } else {
+                    let Partitioning::Hash(_, actual_count) = child.output_partitioning()
+                    else {
+                        panic!("target {target}: {rendered}");
+                    };
+                    assert_eq!(*actual_count, expected_count, "{rendered}");
+                }
             }
             let batches = collect(plan, SessionContext::new().task_ctx()).await?;
             let mut rows = vec![];
@@ -5427,7 +5506,13 @@ async fn assert_reoptimized_fetch_values(
             if iteration > 0 {
                 let distribution =
                     DistributionContext::new_default(Arc::clone(&optimized))
-                        .transform_up(|context| ensure_distribution(context, &config))?
+                        .transform_up(|context| {
+                            ensure_distribution_with_stats(
+                        context,
+                        &config,
+                        &datafusion_physical_plan::statistics::StatisticsContext::new(),
+                    )
+                        })?
                         .data;
                 check_integrity(distribution)?;
                 optimized = EnsureRequirements::new().optimize(optimized, &config)?;
@@ -5502,7 +5587,13 @@ async fn check_fetch_below_filter(
     for iteration in 0..3 {
         if iteration > 0 {
             let distribution = DistributionContext::new_default(Arc::clone(&plan))
-                .transform_up(|context| ensure_distribution(context, &config))?
+                .transform_up(|context| {
+                    ensure_distribution_with_stats(
+                        context,
+                        &config,
+                        &datafusion_physical_plan::statistics::StatisticsContext::new(),
+                    )
+                })?
                 .data;
             check_integrity(distribution)?;
             plan = EnsureRequirements::new().optimize(plan, &config)?;
@@ -5671,6 +5762,256 @@ fn ensure_distribution_reuses_plan_arc_when_no_redistribution_needed() -> Result
     assert!(
         Arc::ptr_eq(&result, &plan),
         "ensure_distribution must reuse the input Arc when no children require redistribution"
+    );
+    Ok(())
+}
+
+/// Single-child pass-through whose `statistics_from_inputs` increments a counter
+/// every time it is actually computed (i.e. on a statistics-cache miss). Used to
+/// observe how often `ensure_distribution` recomputes a node's statistics.
+#[derive(Debug)]
+struct CountingStatsExec {
+    input: Arc<dyn ExecutionPlan>,
+    cache: Arc<PlanProperties>,
+    calls: Arc<AtomicUsize>,
+}
+
+impl CountingStatsExec {
+    fn new(input: Arc<dyn ExecutionPlan>, calls: Arc<AtomicUsize>) -> Self {
+        let cache = PlanProperties::new(
+            input.equivalence_properties().clone(),
+            input.output_partitioning().clone(),
+            input.pipeline_behavior(),
+            input.boundedness(),
+        );
+        Self {
+            input,
+            cache: Arc::new(cache),
+            calls,
+        }
+    }
+}
+
+impl DisplayAs for CountingStatsExec {
+    fn fmt_as(
+        &self,
+        _t: DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        write!(f, "CountingStatsExec")
+    }
+}
+
+impl ExecutionPlan for CountingStatsExec {
+    fn name(&self) -> &'static str {
+        "CountingStatsExec"
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.cache
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![&self.input]
+    }
+
+    fn replace_children(
+        self: Arc<Self>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        assert_eq!(children.len(), 1);
+        Ok(Arc::new(Self::new(
+            children.pop().unwrap(),
+            Arc::clone(&self.calls),
+        )))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<datafusion::execution::context::TaskContext>,
+    ) -> Result<datafusion_physical_plan::SendableRecordBatchStream> {
+        unreachable!();
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        _args: &datafusion_physical_plan::statistics::StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        Ok(Arc::new(Statistics::new_unknown(
+            self.input.schema().as_ref(),
+        )))
+    }
+}
+
+/// Regression test for the shared statistics cache in `ensure_distribution`.
+///
+/// A deep stack of pass-through operators sits over a counting leaf. Each
+/// ancestor's distribution enforcement inspects its child's statistics, which
+/// recurse to the leaf. With one `StatisticsContext` shared across the pass the
+/// leaf is computed once; with a fresh context per node it is recomputed once
+/// per ancestor. This directly detects a regression where the cache is not
+/// actually shared (e.g. reset on every node), which no plan-output assertion
+/// can catch because the optimized plan is identical either way.
+#[test]
+fn ensure_distribution_shares_statistics_cache() -> Result<()> {
+    // Count how many times a leaf's statistics are computed over a stack of
+    // `depth` pass-through operators sitting on top of it. Each ancestor's
+    // distribution enforcement inspects its child's statistics, which recurse to
+    // the leaf.
+    //
+    // The measured arm drives the real `EnsureRequirements` rule, so the sharing
+    // and the cache-reset condition under test are the ones the rule actually
+    // uses — reimplementing them here would keep passing even if the rule
+    // stopped sharing. The baseline arm allocates a fresh `StatisticsContext`
+    // per node, reproducing the behavior before this change.
+    fn deep_plan(depth: usize, calls: &Arc<AtomicUsize>) -> Arc<dyn ExecutionPlan> {
+        let mut plan: Arc<dyn ExecutionPlan> =
+            Arc::new(CountingStatsExec::new(parquet_exec(), Arc::clone(calls)));
+        for _ in 0..depth {
+            plan = filter_exec(plan);
+        }
+        plan
+    }
+
+    fn config() -> ConfigOptions {
+        let mut config = ConfigOptions::new();
+        config.execution.target_partitions = 10;
+        // Keep the plan a fixpoint so no node is rebuilt and the shared cache is
+        // never reset; statistics are still computed for the round-robin decision.
+        config.optimizer.enable_round_robin_repartition = false;
+        config
+    }
+
+    /// Leaf statistics computations performed by the real rule.
+    fn via_rule(depth: usize) -> Result<usize> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        EnsureRequirements::new().optimize(deep_plan(depth, &calls), &config())?;
+        Ok(calls.load(Ordering::Relaxed))
+    }
+
+    /// Leaf statistics computations with a fresh context per node.
+    fn per_node_context(depth: usize) -> Result<usize> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let config = config();
+        DistributionContext::new_default(deep_plan(depth, &calls)).transform_up(
+            |ctx| {
+                ensure_distribution_with_stats(
+                    ctx,
+                    &config,
+                    &datafusion_physical_plan::statistics::StatisticsContext::new(),
+                )
+            },
+        )?;
+        Ok(calls.load(Ordering::Relaxed))
+    }
+
+    let (shared_shallow, fresh_shallow) = (via_rule(4)?, per_node_context(4)?);
+    let (shared_deep, fresh_deep) = (via_rule(12)?, per_node_context(12)?);
+
+    // Sharing strictly reduces statistics recomputation at any depth. A rule that
+    // stopped sharing (or reset the cache on every node) would make these equal.
+    assert!(
+        shared_shallow < fresh_shallow && shared_deep < fresh_deep,
+        "shared cache must recompute less: shallow {shared_shallow} vs {fresh_shallow}, \
+         deep {shared_deep} vs {fresh_deep}"
+    );
+
+    // Without sharing, each extra ancestor recomputes the leaf's subtree, so the
+    // gap widens as the plan gets deeper. That is the depth-scaling recomputation
+    // the shared cache removes.
+    let saved_shallow = fresh_shallow - shared_shallow;
+    let saved_deep = fresh_deep - shared_deep;
+    assert!(
+        saved_deep > saved_shallow,
+        "the shared cache should save more on deeper plans: \
+         saved {saved_shallow} at depth 4, {saved_deep} at depth 12"
+    );
+
+    Ok(())
+}
+
+/// `EnsureRequirements::optimize_with_context` must thread the session's
+/// statistics registry into the distribution pass, so registered providers can
+/// influence cost-based decisions (here, whether a round-robin repartition is
+/// worthwhile). A tiny single-partition scan does not warrant round-robin on its
+/// real statistics; a provider that reports it as large flips that decision, but
+/// only if the registry is actually threaded through.
+#[test]
+fn ensure_distribution_uses_context_statistics_registry() -> Result<()> {
+    let alias = vec![("a".to_string(), "a".to_string())];
+    let plan = aggregate_exec_with_alias(parquet_exec_with_size(1, 100), alias);
+
+    let mut config = ConfigOptions::new();
+    config.execution.target_partitions = 10;
+    // Make the round-robin decision actually depend on the estimated row count.
+    config
+        .execution
+        .use_row_number_estimates_to_optimize_partitioning = true;
+
+    // Default context: no registry, so the scan's real (tiny) statistics apply.
+    let plan_default = EnsureRequirements::new().optimize(plan.clone(), &config)?;
+
+    // A provider that reports the scan as large.
+    let mut registry = StatisticsRegistry::new();
+    registry.register(Arc::new(ClosureStatisticsProvider::with_matches(
+        |p| p.name() == "DataSourceExec",
+        |p, _child_stats| {
+            let mut stats = Statistics::new_unknown(&p.schema());
+            stats.num_rows = Precision::Inexact(10_000_000);
+            Ok(StatisticsResult::Computed(stats.into()))
+        },
+    )));
+
+    struct ContextWithRegistry {
+        config: ConfigOptions,
+        registry: StatisticsRegistry,
+    }
+    impl PhysicalOptimizerContext for ContextWithRegistry {
+        fn config_options(&self) -> &ConfigOptions {
+            &self.config
+        }
+        fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
+            Some(&self.registry)
+        }
+    }
+
+    let plan_registry = EnsureRequirements::new()
+        .optimize_with_context(plan, &ContextWithRegistry { config, registry })?;
+
+    let s_default = displayable(plan_default.as_ref()).indent(true).to_string();
+    let s_registry = displayable(plan_registry.as_ref()).indent(true).to_string();
+
+    // With the scan's tiny real stats, a round-robin repartition is not worth it.
+    assert!(
+        !s_default.contains("RoundRobinBatch"),
+        "default context (tiny stats) should not add a round-robin repartition:\n{s_default}"
+    );
+    // The registry reports the scan as large, so the same rule now parallelizes
+    // it — proving the registry was threaded through `optimize_with_context`.
+    assert!(
+        s_registry.contains("RoundRobinBatch"),
+        "registry-reported large stats should add a round-robin repartition:\n{s_registry}"
     );
     Ok(())
 }

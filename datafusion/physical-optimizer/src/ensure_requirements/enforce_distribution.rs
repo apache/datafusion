@@ -48,7 +48,7 @@ use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
     EquivalenceProperties, OrderingRequirements, PhysicalExpr, PhysicalExprRef,
-    RangePartitioningScaleError, physical_exprs_equal,
+    physical_exprs_equal,
 };
 use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::aggregates::{
@@ -955,9 +955,6 @@ struct DistributionChildState {
     /// Scaling a native range layout must not lose its preference over a newly
     /// introduced hash exchange when choosing a co-partitioning reference.
     scaled_native_range: bool,
-    /// This range would previously have been replaced to increase parallelism,
-    /// but its samples cannot support the preferred partition count.
-    preserved_unscalable_range: bool,
     context: DistributionContext,
     required_input_ordering: Option<OrderingRequirements>,
     maintains_input_order: bool,
@@ -1003,6 +1000,7 @@ fn get_repartition_requirement_status(
     plan: &Arc<dyn ExecutionPlan>,
     batch_size: usize,
     should_use_estimates: bool,
+    stats_ctx: &StatisticsContext,
 ) -> Result<Vec<RepartitionRequirementStatus>> {
     let mut needs_alignment = false;
     let children = plan.children();
@@ -1014,7 +1012,7 @@ fn get_repartition_requirement_status(
     {
         // Decide whether adding a round robin is beneficial depending on
         // the statistical information we have on the number of rows:
-        let roundrobin_beneficial_stats = match StatisticsContext::new()
+        let roundrobin_beneficial_stats = match stats_ctx
             .compute(child.as_ref(), &StatisticsArgs::new())?
             .num_rows
         {
@@ -1211,25 +1209,6 @@ fn enforce_distribution_relationships(
                                     idx_a == idx_b || size_a > size_b
                                 })
                         })
-                        .or_else(|| {
-                            // Keeping an unscalable range can introduce a new tie.
-                            // Preserve the previously sole native reference when
-                            // it already provides the requested parallelism.
-                            candidates.iter().find(|(_, idx, partitioning)| {
-                                matches!(partitioning, Partitioning::Range(_))
-                                    && (!children[*idx]
-                                        .context
-                                        .plan
-                                        .is::<RepartitionExec>()
-                                        || children[*idx].scaled_native_range)
-                                    && partitioning.partition_count() >= target_partitions
-                                    && candidates.iter().all(|(_, other_idx, _)| {
-                                        idx == other_idx
-                                            || children[*other_idx]
-                                                .preserved_unscalable_range
-                                    })
-                            })
-                        })
                         .map(|(_, idx, part)| (*idx, part.clone()))
                 }
             }
@@ -1338,7 +1317,6 @@ fn enforce_distribution_relationships(
             children[child_idx].context =
                 DistributionContext::new(plan, true, vec![original_child]);
             children[child_idx].scaled_native_range = false;
-            children[child_idx].preserved_unscalable_range = false;
             repartitioned_for_relationship[child_idx] = true;
             changed = true;
         }
@@ -1351,6 +1329,23 @@ fn enforce_distribution_relationships(
     }
 }
 
+/// Deprecated in favour of [`ensure_distribution_with_stats`].
+///
+/// This entry point allocates a fresh [`StatisticsContext`] per call, so a
+/// bottom-up traversal recomputes each shared subtree's statistics once per
+/// ancestor. Pass one context through the whole walk instead — see
+/// [`ensure_distribution_with_stats`].
+#[deprecated(
+    since = "56.0.0",
+    note = "use `ensure_distribution_with_stats` and share one `StatisticsContext` across the traversal"
+)]
+pub fn ensure_distribution(
+    dist_context: DistributionContext,
+    config: &ConfigOptions,
+) -> Result<Transformed<DistributionContext>> {
+    ensure_distribution_with_stats(dist_context, config, &StatisticsContext::new())
+}
+
 /// This function checks whether we need to add additional data exchange
 /// operators to satisfy distribution requirements. Since this function
 /// takes care of such requirements, we should avoid manually adding data
@@ -1359,13 +1354,21 @@ fn enforce_distribution_relationships(
 /// This function is intended to be used in a bottom up traversal, as it
 /// can first repartition (or newly partition) at the datasources -- these
 /// source partitions may be later repartitioned with additional data exchange operators.
+///
+/// `stats_ctx` carries the memoization cache used to answer the child
+/// statistics queries behind the repartition decisions. Share one context
+/// across the whole traversal so each subtree is computed once rather than
+/// once per ancestor. The cache is keyed by raw plan-node pointers, so reset
+/// it (via [`StatisticsContext::reset_cache`]) after any node whose plan
+/// pointer actually changed.
 #[expect(
     deprecated,
     reason = "HashPartitioned is accepted during the KeyPartitioned migration"
 )]
-pub fn ensure_distribution(
+pub fn ensure_distribution_with_stats(
     dist_context: DistributionContext,
     config: &ConfigOptions,
+    stats_ctx: &StatisticsContext,
 ) -> Result<Transformed<DistributionContext>> {
     let dist_context = update_children(dist_context)?;
 
@@ -1457,8 +1460,12 @@ pub fn ensure_distribution(
         || plan.is::<SortMergeJoinExec>();
 
     let input_distributions = plan.input_distribution_requirements();
-    let repartition_status_flags =
-        get_repartition_requirement_status(&plan, batch_size, should_use_estimates)?;
+    let repartition_status_flags = get_repartition_requirement_status(
+        &plan,
+        batch_size,
+        should_use_estimates,
+        stats_ctx,
+    )?;
     // This loop iterates over all the children to:
     // - Increase parallelism for every child if it is beneficial.
     // - Satisfy the distribution requirements of every child, if it is not
@@ -1553,7 +1560,6 @@ pub fn ensure_distribution(
             }
 
             let mut scaled_native_range = false;
-            let mut preserved_unscalable_range = false;
             // Satisfy the distribution requirement if it is unmet.
             match &requirement {
                 Distribution::SinglePartition => {
@@ -1597,7 +1603,7 @@ pub fn ensure_distribution(
                                 // co-partitioning pass even when its samples cannot
                                 // support the preferred degree of parallelism.
                                 match range.scale(target_partitions) {
-                                    Ok(range) => {
+                                    Some(range) => {
                                         let scaled = Partitioning::Range(range);
                                         // A single partition satisfies any key requirement,
                                         // but scaling it must still use compatible keys.
@@ -1614,17 +1620,20 @@ pub fn ensure_distribution(
                                             Some(scaled)
                                         } else {
                                             Some(
-                                                requirement
-                                                    .clone()
-                                                    .create_partitioning(target_partitions),
+                                                requirement.clone().create_partitioning(
+                                                    target_partitions,
+                                                ),
                                             )
                                         }
                                     }
-                                    Err(RangePartitioningScaleError::InsufficientSamples { .. }) => {
-                                        preserved_unscalable_range = true;
-                                        None
-                                    }
-                                    Err(error) => return Err(error.into()),
+                                    // Insufficient samples are expected. Preserve
+                                    // main's policy by falling back to key
+                                    // repartitioning at the requested parallelism.
+                                    None => Some(
+                                        requirement
+                                            .clone()
+                                            .create_partitioning(target_partitions),
+                                    ),
                                 }
                             }
                             _ => Some(
@@ -1662,7 +1671,6 @@ pub fn ensure_distribution(
 
             Ok(DistributionChildState {
                 scaled_native_range,
-                preserved_unscalable_range,
                 context: child,
                 required_input_ordering,
                 maintains_input_order: maintains,
@@ -1687,7 +1695,6 @@ pub fn ensure_distribution(
         .map(
             |DistributionChildState {
                  scaled_native_range: _,
-                 preserved_unscalable_range: _,
                  mut context,
                  required_input_ordering,
                  maintains_input_order,
@@ -1857,83 +1864,3 @@ fn update_children(mut dist_context: DistributionContext) -> Result<Distribution
 }
 
 // See tests in datafusion/core/tests/physical_optimizer
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::{ScalarValue, SplitPoint};
-    use datafusion_physical_expr::{PhysicalSortExpr, RangePartitioning};
-    use datafusion_physical_plan::empty::EmptyExec;
-
-    #[test]
-    fn compatible_range_samples_do_not_require_another_exchange() -> Result<()> {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("key", DataType::Int64, false)]));
-        let key = Arc::new(Column::new("key", 0)) as Arc<dyn PhysicalExpr>;
-        let ordering = [PhysicalSortExpr::new_default(Arc::clone(&key))].into();
-        let samples = (10..=50)
-            .step_by(10)
-            .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
-            .collect();
-        let sampled = RangePartitioning::try_new_with_samples(ordering, samples, 3)?;
-        let exact = RangePartitioning::try_new_with_samples(
-            sampled.ordering().clone(),
-            sampled.split_points().to_vec(),
-            3,
-        )?;
-        let requirement = Distribution::KeyPartitioned(vec![key]);
-        let requirements =
-            InputDistributionRequirements::co_partitioned(vec![requirement.clone(); 3]);
-        for reverse in [false, true] {
-            let ranges = if reverse {
-                [exact.clone(), sampled.clone()]
-            } else {
-                [sampled.clone(), exact.clone()]
-            };
-            let mut children = ranges
-                .into_iter()
-                .map(Partitioning::Range)
-                .chain([Partitioning::RoundRobinBatch(3)])
-                .enumerate()
-                .map(|(index, partitioning)| {
-                    let plan = Arc::new(RepartitionExec::try_new(
-                        Arc::new(EmptyExec::new(Arc::clone(&schema))),
-                        partitioning,
-                    )?) as Arc<dyn ExecutionPlan>;
-                    Ok(DistributionChildState {
-                        // The first input represents a native layout already scaled
-                        // earlier in EnsureRequirements, and is the reference.
-                        scaled_native_range: index == 0,
-                        preserved_unscalable_range: false,
-                        context: DistributionContext::new_default(plan),
-                        required_input_ordering: None,
-                        maintains_input_order: false,
-                        requirement: requirement.clone(),
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let original = children
-                .iter()
-                .map(|c| Arc::clone(&c.context.plan))
-                .collect::<Vec<_>>();
-            enforce_distribution_relationships("test", &requirements, &mut children, 3)?;
-            assert!(Arc::ptr_eq(&original[0], &children[0].context.plan));
-            assert!(
-                Arc::ptr_eq(&original[1], &children[1].context.plan),
-                "matching boundaries must not cause another exchange because samples differ"
-            );
-            assert!(!Arc::ptr_eq(&original[2], &children[2].context.plan));
-            let plans = children
-                .iter()
-                .map(|c| c.context.plan.as_ref())
-                .collect::<Vec<_>>();
-            assert!(
-                requirements
-                    .unsatisfied_co_partitioned_children("test", &plans)?
-                    .is_empty()
-            );
-        }
-        Ok(())
-    }
-}
