@@ -1959,8 +1959,10 @@ struct DenseRankPartitionState {
     ///
     /// INVARIANT: equals `recompute_contents_bytes` (test-only, so not
     /// linkable from rustdoc). Every mutation of `groups` or `keys` must
-    /// adjust it; the `dense_rank_contents_bytes_tracks_recompute` test
-    /// checks this against a full recompute after a randomized workload.
+    /// adjust it; the
+    /// `test_partitioned_topk_dense_rank_contents_bytes_tracks_recompute`
+    /// test checks this against a full recompute after a randomized
+    /// workload.
     contents_bytes: usize,
 }
 
@@ -2359,7 +2361,7 @@ impl PartitionedTopKDenseRank {
         let mut sorted_pks: Vec<Vec<u8>> = states.keys().cloned().collect();
         sorted_pks.sort();
 
-        let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), batch_size);
+        let mut out: Vec<Result<RecordBatch>> = Vec::new();
 
         // Gather every retained row with a single `interleave_record_batch`
         // per output batch rather than one `take_record_batch` per
@@ -2383,7 +2385,7 @@ impl PartitionedTopKDenseRank {
         }
 
         // Chunk at `batch_size` so the operator emits the same batch sizes
-        // as before and never materializes all retained rows at once.
+        // as before and no single `interleave` output exceeds `batch_size`.
         let mut indices: Vec<(usize, usize)> = Vec::with_capacity(batch_size);
         for pk in sorted_pks {
             let DenseRankPartitionState {
@@ -2402,10 +2404,9 @@ impl PartitionedTopKDenseRank {
                     for row in entry.row_indices {
                         indices.push((array_pos, row as usize));
                         if indices.len() == batch_size {
-                            coalescer.push_batch(interleave_record_batch(
-                                &batch_refs,
-                                &indices,
-                            )?)?;
+                            let b = interleave_record_batch(&batch_refs, &indices)?;
+                            (&b).record_output(&metrics.baseline);
+                            out.push(Ok(b));
                             indices.clear();
                         }
                     }
@@ -2413,12 +2414,7 @@ impl PartitionedTopKDenseRank {
             }
         }
         if !indices.is_empty() {
-            coalescer.push_batch(interleave_record_batch(&batch_refs, &indices)?)?;
-        }
-        coalescer.finish_buffered_batch()?;
-
-        let mut out: Vec<Result<RecordBatch>> = Vec::new();
-        while let Some(b) = coalescer.next_completed_batch() {
+            let b = interleave_record_batch(&batch_refs, &indices)?;
             (&b).record_output(&metrics.baseline);
             out.push(Ok(b));
         }
