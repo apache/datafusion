@@ -637,3 +637,172 @@ DROP TABLE nmconst_t1;
 
 statement ok
 DROP TABLE nmconst_t2;
+
+##########################################################
+## Correlated NOT IN mark join with a non-equality correlation
+## https://github.com/apache/datafusion/issues/25336
+##########################################################
+
+# The non-equality correlation stays behind as a residual join filter, so the
+# mark must be NULL (UNKNOWN) only when the residual keeps a NULL on either
+# side of the comparison. Expected results are verified with DuckDB.
+
+statement ok
+CREATE TABLE nam_res_outer(id INT, z INT, g INT) AS VALUES
+(1, 10, 1),
+(2, 20, 1),
+(NULL, 30, 1),
+(4, 40, 2),
+(NULL, 1, 2),
+(5, 1, 3);
+
+statement ok
+CREATE TABLE nam_res_inner(id INT, z INT, g INT) AS VALUES
+(1, 5, 1),
+(NULL, 50, 1),
+(4, 35, 2),
+(NULL, 2, 2);
+
+query II rowsort
+SELECT id, z FROM nam_res_outer
+WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < nam_res_outer.z)) IS NULL;
+----
+2 20
+NULL 30
+
+query II rowsort
+SELECT id, z FROM nam_res_outer
+WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < nam_res_outer.z)) IS TRUE;
+----
+5 1
+NULL 1
+
+query II rowsort
+SELECT id, z FROM nam_res_outer
+WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < nam_res_outer.z)) IS FALSE;
+----
+1 10
+4 40
+
+# `NOT mark` must stay NULL for UNKNOWN rows instead of turning into TRUE.
+query II rowsort
+SELECT id, z FROM nam_res_outer
+WHERE NOT (id IN (SELECT i.id FROM nam_res_inner i WHERE i.z < nam_res_outer.z)) OR id = 4;
+----
+4 40
+5 1
+NULL 1
+
+# Positive IN goes through the same mark.
+query II rowsort
+SELECT id, z FROM nam_res_outer
+WHERE (id IN (SELECT i.id FROM nam_res_inner i WHERE i.z > nam_res_outer.z)) IS NULL;
+----
+1 10
+2 20
+4 40
+5 1
+NULL 1
+NULL 30
+
+# Equality and non-equality correlation together.
+query II rowsort
+SELECT id, z FROM nam_res_outer
+WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.g = nam_res_outer.g AND i.z < nam_res_outer.z)) IS NULL;
+----
+NULL 30
+
+query II rowsort
+SELECT id, z FROM nam_res_outer
+WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.g = nam_res_outer.g AND i.z < nam_res_outer.z)) IS TRUE;
+----
+2 20
+5 1
+NULL 1
+
+# Equality correlation only (already null-aware; control).
+query II rowsort
+SELECT id, z FROM nam_res_outer
+WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.g = nam_res_outer.g)) IS NULL;
+----
+2 20
+NULL 1
+NULL 30
+
+# In a SELECT list, the mark column shows TRUE, FALSE and NULL directly.
+query IIB rowsort
+SELECT id, z, id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < nam_res_outer.z)
+FROM nam_res_outer;
+----
+1 10 false
+2 20 NULL
+4 40 false
+5 1 true
+NULL 1 true
+NULL 30 NULL
+
+# A non-negated `IN` under `OR` does not need the null-aware join. A `Filter`
+# drops the row whether the mark is NULL or FALSE, and the null-aware join costs
+# more, because it pins the outer table as the build side and cannot be swapped.
+query TT
+EXPLAIN SELECT id FROM nam_res_outer o
+WHERE o.z > 35 OR o.id IN (SELECT i.id FROM nam_res_inner i WHERE i.z < o.z);
+----
+logical_plan
+01)Projection: o.id
+02)--Filter: o.z > Int32(35) OR __correlated_sq_1.mark
+03)----LeftMark Join: o.id = __correlated_sq_1.id Filter: __correlated_sq_1.z < o.z
+04)------SubqueryAlias: o
+05)--------TableScan: nam_res_outer projection=[id, z]
+06)------SubqueryAlias: __correlated_sq_1
+07)--------SubqueryAlias: i
+08)----------TableScan: nam_res_inner projection=[id, z]
+physical_plan
+01)FilterExec: z@1 > 35 OR mark@2, projection=[id@0]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(id@0, id@0)], filter=z@1 < z@0
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The negated form of the same query stays null-aware, because `NOT mark` tells
+# NULL from FALSE.
+query TT
+EXPLAIN SELECT id FROM nam_res_outer o
+WHERE o.z > 35 OR o.id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < o.z);
+----
+logical_plan
+01)Projection: o.id
+02)--Filter: o.z > Int32(35) OR NOT __correlated_sq_1.mark
+03)----LeftMark Join: o.id = __correlated_sq_1.id Filter: __correlated_sq_1.z < o.z null_aware
+04)------SubqueryAlias: o
+05)--------TableScan: nam_res_outer projection=[id, z]
+06)------SubqueryAlias: __correlated_sq_1
+07)--------SubqueryAlias: i
+08)----------TableScan: nam_res_inner projection=[id, z]
+physical_plan
+01)FilterExec: z@1 > 35 OR NOT mark@2, projection=[id@0]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], filter=z@1 < z@0, null_aware
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Output batches of one row split the candidate pairs checked against the
+# residual filter into many chunks.
+statement ok
+SET datafusion.execution.batch_size = 1;
+
+query II rowsort
+SELECT id, z FROM nam_res_outer
+WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < nam_res_outer.z)) IS NULL;
+----
+2 20
+NULL 30
+
+statement ok
+RESET datafusion.execution.batch_size;
+
+statement ok
+DROP TABLE nam_res_outer;
+
+statement ok
+DROP TABLE nam_res_inner;

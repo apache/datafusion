@@ -666,3 +666,168 @@ DROP TABLE naconst_t1;
 
 statement ok
 DROP TABLE naconst_t2;
+
+## Correlated NOT IN with a non-equality correlation
+## https://github.com/apache/datafusion/issues/25336
+#############
+
+# The non-equality correlation stays behind as a residual join filter. A NULL
+# subquery value only makes NOT IN UNKNOWN for the outer rows where the
+# residual keeps that NULL row. Expected results are verified with DuckDB and
+# PostgreSQL.
+
+statement ok
+CREATE TABLE nai_res_t1(id INT, z INT) AS VALUES (1,10), (2,20), (NULL,30), (4,40);
+
+statement ok
+CREATE TABLE nai_res_t2(id INT, z INT) AS VALUES (1,5), (NULL,50);
+
+# The NULL row (z = 50) never passes `t2.z < t1.z`, so it does not affect the result.
+query I
+SELECT id FROM nai_res_t1 WHERE id NOT IN (SELECT nai_res_t2.id FROM nai_res_t2 WHERE nai_res_t2.z < nai_res_t1.z) ORDER BY id;
+----
+2
+4
+
+query I
+SELECT id FROM nai_res_t1 WHERE NOT (id IN (SELECT nai_res_t2.id FROM nai_res_t2 WHERE nai_res_t2.z < nai_res_t1.z)) ORDER BY id;
+----
+2
+4
+
+query I
+SELECT id FROM nai_res_t1 WHERE id IN (SELECT nai_res_t2.id FROM nai_res_t2 WHERE nai_res_t2.z < nai_res_t1.z) ORDER BY id;
+----
+1
+
+# Uncorrelated residuals are pushed into the subquery.
+query I
+SELECT id FROM nai_res_t1 WHERE id NOT IN (SELECT nai_res_t2.id FROM nai_res_t2 WHERE nai_res_t2.z < 40) ORDER BY id;
+----
+2
+4
+
+query I
+SELECT id FROM nai_res_t1 WHERE id NOT IN (SELECT nai_res_t2.id FROM nai_res_t2 WHERE nai_res_t2.z < 100) ORDER BY id;
+----
+
+# The NULL row passes `t2.z > t1.z` for every outer row, so every row is UNKNOWN.
+query I
+SELECT id FROM nai_res_t1 WHERE id NOT IN (SELECT nai_res_t2.id FROM nai_res_t2 WHERE nai_res_t2.z > nai_res_t1.z) ORDER BY id;
+----
+
+statement ok
+CREATE TABLE nai_res_outer(id INT, z INT, g INT) AS VALUES
+(1, 10, 1),
+(2, 20, 1),
+(NULL, 30, 1),
+(4, 40, 2),
+(NULL, 1, 2),
+(5, 1, 3);
+
+statement ok
+CREATE TABLE nai_res_inner(id INT, z INT, g INT) AS VALUES
+(1, 5, 1),
+(NULL, 50, 1),
+(4, 35, 2),
+(NULL, 2, 2);
+
+# Per outer row, the residual decides which inner rows (NULL or not) are in
+# the subquery. A NULL outer value is TRUE only when that set is empty.
+query II rowsort
+SELECT id, z FROM nai_res_outer
+WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.z < nai_res_outer.z);
+----
+5 1
+NULL 1
+
+query II rowsort
+SELECT id, z FROM nai_res_outer
+WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.z > nai_res_outer.z);
+----
+
+query II rowsort
+SELECT id, z FROM nai_res_outer
+WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.z < nai_res_outer.z AND i.z > 3);
+----
+2 20
+5 1
+NULL 1
+
+query II rowsort
+SELECT id, z FROM nai_res_outer
+WHERE id + 0 NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.z < nai_res_outer.z);
+----
+5 1
+NULL 1
+
+# The residual references the subquery value itself.
+query II rowsort
+SELECT id, z FROM nai_res_outer
+WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.id + i.z > nai_res_outer.z);
+----
+1 10
+2 20
+4 40
+5 1
+
+# Equality and non-equality correlation together.
+query II rowsort
+SELECT id, z FROM nai_res_outer
+WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.g = nai_res_outer.g AND i.z < nai_res_outer.z);
+----
+2 20
+5 1
+NULL 1
+
+# Equality correlation only.
+query II rowsort
+SELECT id, z FROM nai_res_outer
+WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.g = nai_res_outer.g);
+----
+5 1
+
+# NOT EXISTS uses two-valued logic and must not change.
+query II rowsort
+SELECT id, z FROM nai_res_outer
+WHERE NOT EXISTS (SELECT 1 FROM nai_res_inner i WHERE i.id = nai_res_outer.id AND i.z < nai_res_outer.z);
+----
+2 20
+5 1
+NULL 1
+NULL 30
+
+# Output batches of one row split the unmatched build rows and the candidate
+# pairs checked against the residual filter into many chunks.
+statement ok
+SET datafusion.execution.batch_size = 1;
+
+query II rowsort
+SELECT id, z FROM nai_res_outer
+WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.z < nai_res_outer.z);
+----
+5 1
+NULL 1
+
+query II rowsort
+SELECT id, z FROM nai_res_outer
+WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.g = nai_res_outer.g AND i.z < nai_res_outer.z);
+----
+2 20
+5 1
+NULL 1
+
+statement ok
+RESET datafusion.execution.batch_size;
+
+statement ok
+DROP TABLE nai_res_t1;
+
+statement ok
+DROP TABLE nai_res_t2;
+
+statement ok
+DROP TABLE nai_res_outer;
+
+statement ok
+DROP TABLE nai_res_inner;
