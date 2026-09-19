@@ -2156,8 +2156,24 @@ impl Expr {
     /// Note: unlike [`Self::is_volatile`], this function does not consider inputs:
     /// - `rand()` returns `true`,
     /// - `a + rand()` returns `false`
+    ///
+    /// Scalar, aggregate, window and higher-order function calls are volatile
+    /// when their function declares [`Volatility::Volatile`].
     pub fn is_volatile_node(&self) -> bool {
-        matches!(self, Expr::ScalarFunction(func) if func.func.signature().volatility == Volatility::Volatile)
+        let volatility = match self {
+            Expr::ScalarFunction(ScalarFunction { func, .. }) => {
+                func.signature().volatility
+            }
+            Expr::AggregateFunction(AggregateFunction { func, .. }) => {
+                func.signature().volatility
+            }
+            Expr::WindowFunction(window) => window.fun.signature().volatility,
+            Expr::HigherOrderFunction(HigherOrderFunction { func, .. }) => {
+                func.signature().volatility
+            }
+            _ => return false,
+        };
+        volatility == Volatility::Volatile
     }
 
     /// Returns true if the expression is volatile, i.e. whether it can return different
@@ -4324,6 +4340,171 @@ mod test {
             ),
         }));
         assert_eq!(udf.signature().volatility, Volatility::Volatile);
+    }
+
+    #[test]
+    fn test_is_volatile_aggregate_window_and_higher_order_funcs() {
+        use crate::function::{
+            AccumulatorArgs, PartitionEvaluatorArgs, WindowUDFFieldArgs,
+        };
+        use crate::higher_order_function::{
+            HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
+            HigherOrderTypeSignature, HigherOrderUDFImpl,
+        };
+        use crate::{
+            Accumulator, AggregateUDFImpl, PartitionEvaluator, WindowUDF, WindowUDFImpl,
+        };
+
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct TestAggregateUDF {
+            signature: Signature,
+        }
+        impl AggregateUDFImpl for TestAggregateUDF {
+            fn name(&self) -> &str {
+                "TestAggregateUDF"
+            }
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+            fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+                Ok(DataType::Float32)
+            }
+            fn accumulator(
+                &self,
+                _acc_args: AccumulatorArgs,
+            ) -> Result<Box<dyn Accumulator>> {
+                unimplemented!()
+            }
+        }
+
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct TestWindowUDF {
+            signature: Signature,
+        }
+        impl WindowUDFImpl for TestWindowUDF {
+            fn name(&self) -> &str {
+                "TestWindowUDF"
+            }
+            fn signature(&self) -> &Signature {
+                &self.signature
+            }
+            fn partition_evaluator(
+                &self,
+                _partition_evaluator_args: PartitionEvaluatorArgs,
+            ) -> Result<Box<dyn PartitionEvaluator>> {
+                unimplemented!()
+            }
+            fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<FieldRef> {
+                Ok(Arc::new(Field::new(
+                    "TestWindowUDF",
+                    DataType::Float32,
+                    true,
+                )))
+            }
+        }
+
+        #[derive(Debug, PartialEq, Eq, Hash)]
+        struct TestHigherOrderUDF {
+            signature: HigherOrderSignature,
+        }
+        impl HigherOrderUDFImpl for TestHigherOrderUDF {
+            fn name(&self) -> &str {
+                "TestHigherOrderUDF"
+            }
+            fn signature(&self) -> &HigherOrderSignature {
+                &self.signature
+            }
+            fn lambda_parameters(
+                &self,
+                _step: usize,
+                _fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
+            ) -> Result<LambdaParametersProgress> {
+                unimplemented!()
+            }
+            fn return_field_from_args(
+                &self,
+                _args: HigherOrderReturnFieldArgs,
+            ) -> Result<FieldRef> {
+                unimplemented!()
+            }
+            fn invoke_with_args(
+                &self,
+                _args: HigherOrderFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                unimplemented!()
+            }
+        }
+
+        for (volatility, expected) in [
+            (Volatility::Immutable, false),
+            (Volatility::Stable, false),
+            (Volatility::Volatile, true),
+        ] {
+            let signature = Signature::uniform(1, vec![DataType::Float32], volatility);
+
+            let udaf = Arc::new(AggregateUDF::from(TestAggregateUDF {
+                signature: signature.clone(),
+            }));
+            let aggregate = Expr::AggregateFunction(AggregateFunction::new_udf(
+                Arc::clone(&udaf),
+                vec![col("a")],
+                false,
+                None,
+                vec![],
+                None,
+            ));
+            assert_eq!(
+                aggregate.is_volatile_node(),
+                expected,
+                "{volatility:?} aggregate"
+            );
+            assert_eq!(
+                aggregate.is_volatile(),
+                expected,
+                "{volatility:?} aggregate"
+            );
+
+            // An aggregate function used as a window function keeps its volatility
+            let window_aggregate = Expr::from(WindowFunction::new(udaf, vec![col("a")]));
+            assert_eq!(
+                window_aggregate.is_volatile_node(),
+                expected,
+                "{volatility:?} window aggregate"
+            );
+
+            let udwf = Arc::new(WindowUDF::from(TestWindowUDF {
+                signature: signature.clone(),
+            }));
+            let window = Expr::from(WindowFunction::new(udwf, vec![col("a")]));
+            assert_eq!(window.is_volatile_node(), expected, "{volatility:?} window");
+            assert_eq!(window.is_volatile(), expected, "{volatility:?} window");
+
+            let udhof = Arc::new(HigherOrderUDF::from(TestHigherOrderUDF {
+                signature: HigherOrderSignature::new(
+                    HigherOrderTypeSignature::Any(1),
+                    volatility,
+                ),
+            }));
+            let higher_order = Expr::HigherOrderFunction(HigherOrderFunction::new(
+                udhof,
+                vec![col("a")],
+            ));
+            assert_eq!(
+                higher_order.is_volatile_node(),
+                expected,
+                "{volatility:?} higher-order"
+            );
+            assert_eq!(
+                higher_order.is_volatile(),
+                expected,
+                "{volatility:?} higher-order"
+            );
+
+            // The volatility is found through the argument of an ordinary expression too
+            let nested = lit(1.0f32) + aggregate;
+            assert!(!nested.is_volatile_node());
+            assert_eq!(nested.is_volatile(), expected, "{volatility:?} nested");
+        }
     }
 
     use super::*;
