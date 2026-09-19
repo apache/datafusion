@@ -891,12 +891,12 @@ fn project_column_statistics_through_expr(
     // a failing endpoint to NULL also cannot establish the remaining extrema.
     let preserves_values = source_type.is_some_and(|source_type| {
         CastExpr::check_bigger_cast(target_type, &source_type)
-            || (source_type.is_integer() && target_type.is_integer()
-                && matches!(
-                    (&inner_stats.min_value, &inner_stats.max_value, &min_value, &max_value),
-                    (Precision::Exact(lower), Precision::Exact(upper), Precision::Exact(min), Precision::Exact(max))
-                        if !lower.is_null() && !upper.is_null() && !min.is_null() && !max.is_null()
-                ))
+            || is_within_extrema(
+                &inner_stats.min_value,
+                &inner_stats.max_value,
+                &min_value,
+                &max_value,
+            )
     });
     if !preserves_values {
         return ColumnStatistics::new_unknown();
@@ -910,6 +910,23 @@ fn project_column_statistics_through_expr(
         sum_value: Precision::Absent,
         byte_size: Precision::Absent,
     }
+}
+
+/// Whether an integer cast preserves every value between the source extrema.
+/// The converted extrema must come from casting the corresponding source bounds.
+/// Exact, non-null integer bounds that both cast successfully prove the entire
+/// range fits in the target type. For example, Int64 [-128, 127] fits in Int8,
+/// whereas [-129, 127] does not. Inexact bounds cannot establish exact extrema.
+fn is_within_extrema(
+    lower: &Precision<ScalarValue>,
+    upper: &Precision<ScalarValue>,
+    min: &Precision<ScalarValue>,
+    max: &Precision<ScalarValue>,
+) -> bool {
+    [lower, upper, min, max].into_iter().all(|bound| {
+        matches!(bound, Precision::Exact(value)
+            if value.data_type().is_integer() && !value.is_null())
+    })
 }
 
 fn column_statistics_at(
@@ -2315,6 +2332,103 @@ pub(crate) mod tests {
             ScalarValue::try_from_array(&actual, 1).expect("valid scalar value"),
             ScalarValue::Int32(Some(100))
         );
+    }
+
+    #[test]
+    fn test_is_within_extrema() {
+        use Precision::{Absent, Exact, Inexact};
+        use ScalarValue::{Int8, Int64, UInt8};
+
+        for (lower, upper, target_type, expected) in [
+            (
+                Exact(Int64(Some(-128))),
+                Exact(Int64(Some(127))),
+                DataType::Int8,
+                true,
+            ),
+            (
+                Exact(Int64(Some(-129))),
+                Exact(Int64(Some(127))),
+                DataType::Int8,
+                false,
+            ),
+            (
+                Exact(Int64(Some(-128))),
+                Exact(Int64(Some(128))),
+                DataType::Int8,
+                false,
+            ),
+            (
+                Exact(Int64(Some(0))),
+                Exact(Int64(Some(255))),
+                DataType::UInt8,
+                true,
+            ),
+            (
+                Exact(Int64(Some(-1))),
+                Exact(Int64(Some(255))),
+                DataType::UInt8,
+                false,
+            ),
+            (
+                Exact(UInt8(Some(0))),
+                Exact(UInt8(Some(127))),
+                DataType::Int8,
+                true,
+            ),
+            (
+                Exact(UInt8(Some(0))),
+                Exact(UInt8(Some(128))),
+                DataType::Int8,
+                false,
+            ),
+            (
+                Exact(ScalarValue::from("1")),
+                Exact(ScalarValue::from("2")),
+                DataType::Int8,
+                false,
+            ),
+            (
+                Exact(Int64(Some(1))),
+                Exact(Int64(Some(2))),
+                DataType::Utf8,
+                false,
+            ),
+        ] {
+            let min = lower.cast_to(&target_type).unwrap_or(Absent);
+            let max = upper.cast_to(&target_type).unwrap_or(Absent);
+            assert_eq!(
+                is_within_extrema(&lower, &upper, &min, &max),
+                expected,
+                "{lower:?}..{upper:?} -> {target_type:?}",
+            );
+        }
+
+        // Every bound must be exact and non-null, including converted endpoints.
+        let bounds = [
+            Exact(Int64(Some(-128))),
+            Exact(Int64(Some(127))),
+            Exact(Int8(Some(-128))),
+            Exact(Int8(Some(127))),
+        ];
+        for index in 0..bounds.len() {
+            for invalid in [
+                Absent,
+                Inexact(bounds[index].get_value().unwrap().clone()),
+                Exact(
+                    ScalarValue::try_from(
+                        &bounds[index].get_value().unwrap().data_type(),
+                    )
+                    .unwrap(),
+                ),
+            ] {
+                let mut bounds = bounds.clone();
+                bounds[index] = invalid;
+                assert!(!is_within_extrema(
+                    &bounds[0], &bounds[1], &bounds[2], &bounds[3],
+                ));
+            }
+        }
     }
 
     #[test]

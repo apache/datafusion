@@ -253,7 +253,8 @@ impl CastExpr {
     /// lossless and strictly order-preserving for all source values, preserving nulls.
     /// This includes widening casts (e.g. `Int8` to `Int16`) and representation
     /// conversions such as `Int32` to `Date32`, which interprets the same integer
-    /// as days since the epoch.
+    /// as days since the epoch, or `Int64` to `Date64`, which interprets the same
+    /// integer as milliseconds since the epoch.
     pub fn check_bigger_cast(cast_type: &DataType, src: &DataType) -> bool {
         if cast_type.eq(src) {
             return true;
@@ -265,6 +266,8 @@ impl CastExpr {
                 | (Int32, Int64)
                 | (Int32, Date32)
                 | (Date32, Int32)
+                | (Int64, Date64)
+                | (Date64, Int64)
                 | (UInt8, UInt16 | UInt32 | UInt64)
                 | (UInt16, UInt32 | UInt64)
                 | (UInt32, UInt64)
@@ -1513,17 +1516,22 @@ mod tests {
     }
 
     #[test]
-    fn test_int32_date32_cast_preserves_values_and_ordering() {
-        use arrow::array::Date32Array;
+    fn test_integer_date_cast_preserves_values_and_ordering() {
+        use arrow::array::{Date32Array, Date64Array};
         use arrow::compute::SortOptions;
         use datafusion_expr_common::sort_properties::SortProperties;
 
         let values = vec![None, Some(i32::MIN), Some(-1), Some(0), Some(i32::MAX)];
         let integers: ArrayRef = Arc::new(Int32Array::from(values.clone()));
         let dates: ArrayRef = Arc::new(Date32Array::from(values));
+        let values = vec![None, Some(i64::MIN), Some(-1), Some(0), Some(i64::MAX)];
+        let integers64: ArrayRef = Arc::new(Int64Array::from(values.clone()));
+        let dates64: ArrayRef = Arc::new(Date64Array::from(values));
         for (input, expected) in [
             (Arc::clone(&integers), Arc::clone(&dates)),
             (dates, integers),
+            (Arc::clone(&integers64), Arc::clone(&dates64)),
+            (dates64, integers64),
         ] {
             let schema = Arc::new(Schema::new(vec![Field::new(
                 "a",
