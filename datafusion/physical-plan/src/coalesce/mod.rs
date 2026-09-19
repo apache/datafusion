@@ -135,25 +135,25 @@ impl LimitedBatchCoalescer {
             "LimitedBatchCoalescer: cannot push batch after finish"
         );
 
-        if let Some(fetch) = self.fetch {
-            if self.total_rows >= fetch {
-                return Ok(PushBatchStatus::LimitReached);
-            }
+        let Some(fetch) = self.fetch else {
+            self.inner.push_batch_with_filter(batch, filter)?;
+            return Ok(PushBatchStatus::Continue);
+        };
 
-            let selected_count = filter.true_count();
-            if self.total_rows + selected_count >= fetch {
-                let remaining = fetch - self.total_rows;
-                let truncated = first_n_true(filter, remaining);
-                self.total_rows += remaining;
-                self.inner.push_batch_with_filter(batch, &truncated)?;
-                return Ok(PushBatchStatus::LimitReached);
-            }
-
-            self.total_rows += selected_count;
-        } else {
-            self.total_rows += filter.true_count();
+        if self.total_rows >= fetch {
+            return Ok(PushBatchStatus::LimitReached);
         }
 
+        let selected_count = filter.true_count();
+        if self.total_rows + selected_count >= fetch {
+            let remaining = fetch - self.total_rows;
+            let truncated = first_n_true(filter, remaining);
+            self.total_rows += remaining;
+            self.inner.push_batch_with_filter(batch, &truncated)?;
+            return Ok(PushBatchStatus::LimitReached);
+        }
+
+        self.total_rows += selected_count;
         self.inner.push_batch_with_filter(batch, filter)?;
         Ok(PushBatchStatus::Continue)
     }
