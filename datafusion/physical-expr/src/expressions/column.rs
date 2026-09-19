@@ -153,9 +153,15 @@ impl PhysicalExpr for Column {
         _ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
+        let Self { name, index } = self;
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
-            expr_type: Some(protobuf::physical_expr_node::ExprType::Column(self.into())),
+            expr_type: Some(protobuf::physical_expr_node::ExprType::Column(
+                protobuf::PhysicalColumn {
+                    name: name.clone(),
+                    index: *index as u32,
+                },
+            )),
         }))
     }
 }
@@ -163,16 +169,18 @@ impl PhysicalExpr for Column {
 #[cfg(feature = "proto")]
 impl From<&datafusion_proto_models::protobuf::PhysicalColumn> for Column {
     fn from(c: &datafusion_proto_models::protobuf::PhysicalColumn) -> Self {
-        Column::new(&c.name, c.index as usize)
+        let datafusion_proto_models::protobuf::PhysicalColumn { name, index } = c;
+        Column::new(name, *index as usize)
     }
 }
 
 #[cfg(feature = "proto")]
 impl From<&Column> for datafusion_proto_models::protobuf::PhysicalColumn {
     fn from(c: &Column) -> Self {
+        let Column { name, index } = c;
         Self {
-            name: c.name.clone(),
-            index: c.index as u32,
+            name: name.clone(),
+            index: *index as u32,
         }
     }
 }
@@ -196,12 +204,12 @@ impl Column {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         use datafusion_physical_expr_common::expect_expr_variant;
         use datafusion_proto_models::protobuf;
-        let column = expect_expr_variant!(
+        let protobuf::PhysicalColumn { name, index } = expect_expr_variant!(
             node,
             protobuf::physical_expr_node::ExprType::Column,
             "Column",
         );
-        Ok(Arc::new(Column::from(column)))
+        Ok(Arc::new(Column::new(name, *index as usize)))
     }
 }
 
