@@ -271,14 +271,7 @@ impl ScalarUDFImpl for DateTruncFunc {
             let parsed_tz = parse_tz(tz_opt)?;
             let array = as_primitive_array::<T>(array)?;
 
-            // fast path for fine granularity
-            // For modern timezones, it's correct to truncate "minute" in this way.
-            // Both datafusion and arrow are ignoring historical timezone's non-minute granularity
-            // bias (e.g., Asia/Kathmandu before 1919 is UTC+05:41:16).
-            // In UTC, "hour" and "day" have uniform durations and can be truncated with simple arithmetic
-            if granularity.is_fine_granularity()
-                || (parsed_tz.is_none() && granularity.is_fine_granularity_utc())
-            {
+            if truncates_in_input_unit(granularity, parsed_tz.as_ref()) {
                 let result = general_date_trunc_array_fine_granularity(
                     T::UNIT,
                     array,
@@ -300,10 +293,16 @@ impl ScalarUDFImpl for DateTruncFunc {
             tz_opt: Option<&Arc<str>>,
         ) -> Result<ColumnarValue> {
             let parsed_tz = parse_tz(tz_opt)?;
-            let value = if let Some(v) = v {
-                Some(general_date_trunc(T::UNIT, *v, parsed_tz, granularity)?)
-            } else {
-                None
+            let value = match v {
+                // Truncate in the input's own unit, as `process_array` does, so a
+                // scalar accepts every timestamp a column accepts.
+                // `general_date_trunc` converts to nanoseconds first and so rejects
+                // values outside the nanosecond range.
+                Some(v) if truncates_in_input_unit(granularity, parsed_tz.as_ref()) => {
+                    Some(date_trunc_fine_granularity(T::UNIT, *v, granularity)?)
+                }
+                Some(v) => Some(general_date_trunc(T::UNIT, *v, parsed_tz, granularity)?),
+                None => None,
             };
             let value = ScalarValue::new_timestamp::<T>(value, tz_opt.cloned());
             Ok(ColumnarValue::Scalar(value))
@@ -755,7 +754,54 @@ fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
     granularity: DatePart,
     tz_opt: Option<Arc<str>>,
 ) -> Result<ArrayRef> {
-    let unit = match (tu, granularity) {
+    let unit = fine_granularity_unit(tu, granularity);
+
+    if let Some(unit) = unit {
+        let unit = unit.get();
+        // Truncation can only underflow within one `unit` of `i64::MIN`.
+        // Track that possibility while computing the common case so the loop
+        // remains infallible and can be vectorized.
+        let underflow_bound = i64::MIN + unit;
+        let mut maybe_underflow = false;
+        let values: Vec<i64> = array
+            .values()
+            .iter()
+            .map(|value| {
+                maybe_underflow |= *value < underflow_bound;
+                value.wrapping_sub(value.rem_euclid(unit))
+            })
+            .collect();
+        let array: PrimitiveArray<T> = if maybe_underflow {
+            array
+                .try_unary(|value| date_trunc_fine_granularity(tu, value, granularity))?
+        } else {
+            PrimitiveArray::new(values.into(), array.nulls().cloned())
+        }
+        .with_timezone_opt(tz_opt);
+        Ok(Arc::new(array))
+    } else {
+        // truncate to the same or smaller unit
+        Ok(Arc::new(array.clone()))
+    }
+}
+
+/// Whether truncating to `granularity` is plain arithmetic in the input's own
+/// time unit, which [`fine_granularity_unit`] and [`date_trunc_fine_granularity`]
+/// then perform.
+///
+/// For modern timezones, it's correct to truncate "minute" in this way.
+/// Both datafusion and arrow are ignoring historical timezone's non-minute granularity
+/// bias (e.g., Asia/Kathmandu before 1919 is UTC+05:41:16).
+/// In UTC, "hour" and "day" have uniform durations and can be truncated with simple arithmetic
+fn truncates_in_input_unit(granularity: DatePart, tz: Option<&Tz>) -> bool {
+    granularity.is_fine_granularity()
+        || (tz.is_none() && granularity.is_fine_granularity_utc())
+}
+
+/// The length of `granularity` in `tu`, or `None` when `granularity` is no
+/// coarser than `tu`, so a value in `tu` is already truncated to it.
+fn fine_granularity_unit(tu: TimeUnit, granularity: DatePart) -> Option<NonZeroI64> {
+    match (tu, granularity) {
         (Second, DatePart::Minute) => NonZeroI64::new(60),
         (Second, DatePart::Hour) => NonZeroI64::new(3600),
         (Second, DatePart::Day) => NonZeroI64::new(86400),
@@ -778,40 +824,25 @@ fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
         (Nanosecond, DatePart::Hour) => NonZeroI64::new(3_600_000_000_000),
         (Nanosecond, DatePart::Day) => NonZeroI64::new(86_400_000_000_000),
         _ => None,
-    };
-
-    if let Some(unit) = unit {
-        let unit = unit.get();
-        // Truncation can only underflow within one `unit` of `i64::MIN`.
-        // Track that possibility while computing the common case so the loop
-        // remains infallible and can be vectorized.
-        let underflow_bound = i64::MIN + unit;
-        let mut maybe_underflow = false;
-        let values: Vec<i64> = array
-            .values()
-            .iter()
-            .map(|value| {
-                maybe_underflow |= *value < underflow_bound;
-                value.wrapping_sub(value.rem_euclid(unit))
-            })
-            .collect();
-        let array: PrimitiveArray<T> = if maybe_underflow {
-            array.try_unary(|value| {
-                value.checked_sub(value.rem_euclid(unit)).ok_or_else(|| {
-                    exec_datafusion_err!(
-                        "Timestamp {value} out of range after truncating to {granularity}"
-                    )
-                })
-            })?
-        } else {
-            PrimitiveArray::new(values.into(), array.nulls().cloned())
-        }
-        .with_timezone_opt(tz_opt);
-        Ok(Arc::new(array))
-    } else {
-        // truncate to the same or smaller unit
-        Ok(Arc::new(array.clone()))
     }
+}
+
+/// Truncates a single `value` in `tu` to a granularity for which
+/// [`truncates_in_input_unit`] holds, without leaving `tu`.
+fn date_trunc_fine_granularity(
+    tu: TimeUnit,
+    value: i64,
+    granularity: DatePart,
+) -> Result<i64> {
+    let Some(unit) = fine_granularity_unit(tu, granularity) else {
+        return Ok(value);
+    };
+    let unit = unit.get();
+    value.checked_sub(value.rem_euclid(unit)).ok_or_else(|| {
+        exec_datafusion_err!(
+            "Timestamp {value} out of range after truncating to {granularity}"
+        )
+    })
 }
 
 // truncates a single value with the given timeunit to the specified granularity
@@ -1439,6 +1470,96 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    /// Evaluates `date_trunc(granularity, value)` once on a scalar and once on a
+    /// one-row column holding the same value.
+    fn date_trunc_scalar_and_array(
+        granularity: &str,
+        value: ScalarValue,
+    ) -> (
+        datafusion_common::Result<ScalarValue>,
+        datafusion_common::Result<ScalarValue>,
+    ) {
+        let invoke = |arg: ColumnarValue| {
+            let data_type = value.data_type();
+            let args = ScalarFunctionArgs {
+                args: vec![ColumnarValue::Scalar(ScalarValue::from(granularity)), arg],
+                arg_fields: vec![
+                    Field::new("a", DataType::Utf8, false).into(),
+                    Field::new("b", data_type.clone(), true).into(),
+                ],
+                number_rows: 1,
+                return_field: Field::new("f", data_type, true).into(),
+                config_options: Arc::new(ConfigOptions::default()),
+            };
+            match DateTruncFunc::new().invoke_with_args(args)? {
+                ColumnarValue::Scalar(result) => Ok(result),
+                ColumnarValue::Array(result) => ScalarValue::try_from_array(&result, 0),
+            }
+        };
+        (
+            invoke(ColumnarValue::Scalar(value.clone())),
+            invoke(ColumnarValue::Array(value.to_array().unwrap())),
+        )
+    }
+
+    /// A timestamp beyond the nanosecond range is truncated the same way as a
+    /// scalar and as a column: neither converts it to nanoseconds first.
+    #[test]
+    fn scalar_and_array_accept_timestamps_beyond_nanosecond_range() {
+        // 2286-11-20T17:46:40, after the last nanosecond timestamp in 2262
+        let seconds = 10_000_000_000;
+        let utc: Option<Arc<str>> = Some("UTC".into());
+        let cases = [
+            (
+                ScalarValue::TimestampSecond(Some(seconds + 59), None),
+                "minute",
+            ),
+            (
+                ScalarValue::TimestampSecond(Some(seconds + 1), None),
+                "hour",
+            ),
+            (ScalarValue::TimestampSecond(Some(seconds + 1), None), "day"),
+            (ScalarValue::TimestampSecond(Some(seconds), None), "second"),
+            (
+                ScalarValue::TimestampSecond(Some(seconds + 59), utc.clone()),
+                "minute",
+            ),
+            (
+                ScalarValue::TimestampMillisecond(Some(seconds * 1_000 + 999), None),
+                "second",
+            ),
+            (
+                ScalarValue::TimestampMicrosecond(Some(seconds * 1_000_000 + 999), None),
+                "millisecond",
+            ),
+            (
+                ScalarValue::TimestampMicrosecond(Some(-seconds * 1_000_000 - 1), utc),
+                "second",
+            ),
+        ];
+        for (value, granularity) in cases {
+            let (scalar, array) = date_trunc_scalar_and_array(granularity, value.clone());
+            let scalar = scalar.unwrap_or_else(|e| {
+                panic!("scalar date_trunc('{granularity}', {value:?}) failed: {e}")
+            });
+            assert_eq!(
+                scalar,
+                array.unwrap(),
+                "date_trunc('{granularity}', {value:?})"
+            );
+        }
+
+        // The issue's example: `to_timestamp_seconds(10000000000)`
+        let (scalar, _) = date_trunc_scalar_and_array(
+            "second",
+            ScalarValue::TimestampSecond(Some(seconds), None),
+        );
+        assert_eq!(
+            scalar.unwrap(),
+            ScalarValue::TimestampSecond(Some(seconds), None)
+        );
     }
 
     fn assert_fine_granularity_underflow<T: ArrowTimestampType>(
