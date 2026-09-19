@@ -60,6 +60,50 @@ fn collect_type(element_type: DataType) -> DataType {
     DataType::List(Arc::new(Field::new_list_field(element_type, false)))
 }
 
+/// Whether an exact-type array still needs normalization to discard physical
+/// storage that is not part of its logical value.
+fn has_compactable_storage(value: &ArrayRef) -> bool {
+    match value.data_type() {
+        DataType::Dictionary(_, _)
+        | DataType::RunEndEncoded(_, _)
+        | DataType::ListView(_)
+        | DataType::LargeListView(_)
+        | DataType::Union(_, _) => true,
+        DataType::List(_) => {
+            let list = value.as_list::<i32>();
+            list.null_count() != 0
+                || list
+                    .value_offsets()
+                    .first()
+                    .is_some_and(|offset| *offset != 0)
+                || list
+                    .value_offsets()
+                    .last()
+                    .is_some_and(|offset| *offset as usize != list.values().len())
+                || has_compactable_storage(list.values())
+        }
+        DataType::LargeList(_) => {
+            let list = value.as_list::<i64>();
+            list.null_count() != 0
+                || list
+                    .value_offsets()
+                    .first()
+                    .is_some_and(|offset| *offset != 0)
+                || list
+                    .value_offsets()
+                    .last()
+                    .is_some_and(|offset| *offset as usize != list.values().len())
+                || has_compactable_storage(list.values())
+        }
+        DataType::Struct(_) => value
+            .as_struct()
+            .columns()
+            .iter()
+            .any(has_compactable_storage),
+        _ => false,
+    }
+}
+
 /// Materialize only logically reachable values and align their nested type with
 /// `target_type`.
 ///
@@ -72,7 +116,10 @@ fn normalize_array(
     target_type: &DataType,
     require_non_null: bool,
 ) -> Result<ArrayRef> {
-    if value.data_type() == target_type && (!require_non_null || !value.is_nullable()) {
+    if value.data_type() == target_type
+        && !has_compactable_storage(value)
+        && (!require_non_null || !value.is_nullable())
+    {
         return Ok(Arc::clone(value));
     }
     match (value.data_type(), target_type) {
@@ -429,39 +476,33 @@ fn normalize_sparse_union(
         .iter()
         .map(|((source_type_id, _), (_, target_field))| {
             let child = source.child(*source_type_id);
-            let first_active = if require_non_null {
-                (0..source.len()).find(|index| source.type_id(*index) == *source_type_id)
-            } else {
-                None
-            };
-            let child = if require_non_null {
-                match first_active {
-                    None => ScalarValue::new_default(target_field.data_type())?
-                        .to_array_of_size(source.len())?,
-                    Some(first_active) => {
-                        if (first_active..source.len()).any(|index| {
+            let first_active =
+                (0..source.len()).find(|index| source.type_id(*index) == *source_type_id);
+            let child = match first_active {
+                None => ScalarValue::new_default(target_field.data_type())?
+                    .to_array_of_size(source.len())?,
+                Some(first_active) => {
+                    if require_non_null
+                        && (first_active..source.len()).any(|index| {
                             source.type_id(index) == *source_type_id
                                 && child.is_null(index)
-                        }) {
-                            return internal_err!(
-                                "Found unmasked nulls for non-nullable sparse union field {}",
-                                target_field.name()
-                            );
-                        }
-                        let indices = UInt64Array::from_iter_values(
-                            (0..source.len()).map(|index| {
-                                if source.type_id(index) == *source_type_id {
-                                    index as u64
-                                } else {
-                                    first_active as u64
-                                }
-                            }),
+                        })
+                    {
+                        return internal_err!(
+                            "Found unmasked nulls for non-nullable sparse union field {}",
+                            target_field.name()
                         );
-                        take(child.as_ref(), &indices, None)?
                     }
+                    let indices =
+                        UInt64Array::from_iter_values((0..source.len()).map(|index| {
+                            if source.type_id(index) == *source_type_id {
+                                index as u64
+                            } else {
+                                first_active as u64
+                            }
+                        }));
+                    take(child.as_ref(), &indices, None)?
                 }
-            } else {
-                Arc::clone(child)
             };
             let child =
                 normalize_array(&child, target_field.data_type(), require_non_null)?;
@@ -1582,6 +1623,88 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn exact_type_unions_reject_active_nulls() -> Result<()> {
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("integer", DataType::Int32, false),
+                Field::new("string", DataType::Utf8, false),
+            ],
+        )?;
+        let children = || -> Vec<ArrayRef> {
+            vec![
+                Arc::new(Int32Array::from(vec![None])),
+                Arc::new(StringArray::from(vec![Some("unused")])),
+            ]
+        };
+
+        let sparse = Arc::new(UnionArray::try_new(
+            fields.clone(),
+            ScalarBuffer::from(vec![0_i8]),
+            None,
+            children(),
+        )?) as ArrayRef;
+        assert!(sparse.is_nullable());
+        assert_eq!(sparse.logical_null_count(), 1);
+        let error = normalize_array(&sparse, sparse.data_type(), true).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("non-nullable sparse union field integer"),
+            "unexpected error: {error}"
+        );
+
+        let dense = Arc::new(UnionArray::try_new(
+            fields,
+            ScalarBuffer::from(vec![0_i8]),
+            Some(ScalarBuffer::from(vec![0_i32])),
+            children(),
+        )?) as ArrayRef;
+        assert!(dense.is_nullable());
+        assert_eq!(dense.logical_null_count(), 1);
+        let error = normalize_array(&dense, dense.data_type(), true).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("non-nullable dense union field integer"),
+            "unexpected error: {error}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn exact_type_encoded_wrappers_reject_active_union_nulls() -> Result<()> {
+        let union = || -> Result<ArrayRef> {
+            let fields = UnionFields::try_new(
+                vec![0],
+                vec![Field::new("integer", DataType::Int32, false)],
+            )?;
+            Ok(Arc::new(UnionArray::try_new(
+                fields,
+                ScalarBuffer::from(vec![0_i8]),
+                None,
+                vec![Arc::new(Int32Array::from(vec![None]))],
+            )?) as ArrayRef)
+        };
+
+        let dictionary = Arc::new(DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![0]),
+            union()?,
+        )?) as ArrayRef;
+        assert!(dictionary.is_nullable());
+        assert!(normalize_array(&dictionary, dictionary.data_type(), true).is_err());
+
+        let run_ends = Int16Array::from(vec![1]);
+        let run = Arc::new(RunArray::<Int16Type>::try_new(
+            &run_ends,
+            union()?.as_ref(),
+        )?) as ArrayRef;
+        assert!(run.is_nullable());
+        assert!(normalize_array(&run, run.data_type(), true).is_err());
+        Ok(())
+    }
+
     fn assert_active_sparse_union_logical_null_is_rejected(
         active_child: ArrayRef,
     ) -> Result<()> {
@@ -1824,6 +1947,77 @@ mod tests {
         assert_eq!(normalized.values().len(), VALUE_COUNT);
         assert_eq!(normalized.value_offsets()[VIEW_COUNT - 1], 0);
         assert_eq!(normalized.value_sizes()[VIEW_COUNT - 1], VALUE_COUNT as i32);
+        Ok(())
+    }
+
+    #[test]
+    fn exact_list_view_discards_unreferenced_backing() -> Result<()> {
+        const VALUE_COUNT: usize = 8_192;
+        const RETAINED_INDEX: usize = 4_096;
+        let field = Arc::new(Field::new_list_field(DataType::Int32, false));
+        let values = Arc::new(ListViewArray::new(
+            Arc::clone(&field),
+            ScalarBuffer::from(vec![RETAINED_INDEX as i32]),
+            ScalarBuffer::from(vec![1_i32]),
+            Arc::new(Int32Array::from_iter_values(0..VALUE_COUNT as i32)),
+            None,
+        )) as ArrayRef;
+        let data_type = values.data_type().clone();
+
+        let normalized = normalize_array(&values, &data_type, true)?;
+        let normalized = normalized.as_list_view::<i32>();
+        assert_eq!(normalized.values().len(), 1);
+        assert_eq!(normalized.value_offsets(), &[0]);
+        assert_eq!(normalized.value_sizes(), &[1]);
+        assert_eq!(
+            normalized.values().as_primitive::<Int32Type>().value(0),
+            RETAINED_INDEX as i32
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn nullable_nested_sparse_union_scrubs_inactive_payload() -> Result<()> {
+        let union_fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("integer", DataType::Int32, true),
+                Field::new("string", DataType::Utf8, true),
+            ],
+        )?;
+        let union = Arc::new(UnionArray::try_new(
+            union_fields,
+            ScalarBuffer::from(vec![0_i8, 1, 0]),
+            None,
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), Some(999), Some(2)])),
+                Arc::new(StringArray::from(vec![
+                    Some("inactive-secret-before"),
+                    Some("visible"),
+                    Some("inactive-secret-after"),
+                ])),
+            ],
+        )?) as ArrayRef;
+        let fields = Fields::from(vec![Field::new(
+            "optional",
+            union.data_type().clone(),
+            true,
+        )]);
+        let value =
+            Arc::new(StructArray::try_new(fields, vec![union], None)?) as ArrayRef;
+        let data_type = value.data_type().clone();
+
+        let normalized = normalize_array(&value, &data_type, true)?;
+        let union = normalized
+            .as_struct()
+            .column(0)
+            .as_any()
+            .downcast_ref::<UnionArray>()
+            .expect("expected union");
+        let strings = union.child(1).as_string::<i32>();
+        assert_eq!(strings.value(0), "visible");
+        assert_eq!(strings.value(1), "visible");
+        assert_eq!(strings.value(2), "visible");
         Ok(())
     }
 
