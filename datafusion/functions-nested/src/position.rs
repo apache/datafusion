@@ -269,9 +269,9 @@ fn array_position_scalar<O: OffsetSizeTrait>(
 
     // Match positions are relative to visible_values (0-based), so
     // subtract first_offset from each offset when comparing.
-    for i in 0..haystack.len() {
-        let start = offsets[i].as_usize() - first_offset;
-        let end = offsets[i + 1].as_usize() - first_offset;
+    for (i, window) in offsets.windows(2).enumerate() {
+        let start = window[0].as_usize() - first_offset;
+        let end = window[1].as_usize() - first_offset;
 
         if validity.is_some_and(|v| v.is_null(i)) {
             // Null row -> null output; advance past matches in range

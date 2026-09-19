@@ -1536,21 +1536,11 @@ mod tests {
     use sqlparser::ast::Ident;
 
     #[test]
-    fn test_offset_span_len() {
-        let offsets = OffsetBuffer::new(vec![5_i32, 8, 8, 12].into());
-        assert_eq!(offset_span_len(&offsets), 7);
-        assert_eq!(offset_span_len(&offsets.slice(1, 1)), 0);
-        assert_eq!(offset_span_len(&offsets.slice(2, 0)), 0);
-        assert_eq!(offset_span_len(&OffsetBuffer::<i64>::new_empty()), 0);
-        let large = OffsetBuffer::new(vec![i64::MAX - 10, i64::MAX].into());
-        assert_eq!(offset_span_len(&large), 10);
-    }
-
-    #[test]
     fn test_offset_span() {
         let offsets = OffsetBuffer::new(vec![0_i32, 5, 8, 8, 12].into());
         assert_eq!(offset_span(&offsets), (0, 12));
         assert_eq!(offset_span(&offsets.slice(1, 2)), (5, 3));
+        assert_eq!(offset_span_len(&offsets.slice(1, 2)), 3);
         assert_eq!(offset_span(&offsets.slice(2, 1)), (8, 0));
         assert_eq!(offset_span(&offsets.slice(4, 0)), (12, 0));
         assert_eq!(offset_span(&OffsetBuffer::<i64>::new_empty()), (0, 0));

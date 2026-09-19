@@ -284,14 +284,14 @@ impl ArrayAggAccumulator {
     /// This function will return the underlying list array values if all valid values are consecutive without gaps (i.e. no null value point to a non-empty list)
     /// If there are gaps but only in the end of the list array, the function will return the values without the null values in the end
     fn get_optional_values_to_merge_as_is(list_array: &ListArray) -> Option<ArrayRef> {
-        let offsets = list_array.value_offsets();
+        let offsets = list_array.offsets();
         let null_count = list_array.null_count();
 
         // If no nulls than just use the fast path
         // This is ok as the state is a ListArray rather than a ListViewArray so all the values are consecutive
         if null_count == 0 {
             // According to Arrow specification, the first offset can be non-zero
-            let (start, len) = offset_span(list_array.offsets());
+            let (start, len) = offset_span(offsets);
             let list_values = list_array.values().slice(start, len);
             return Some(list_values);
         }

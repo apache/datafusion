@@ -31,7 +31,7 @@ use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
-use datafusion_common::utils::offset_span_len;
+use datafusion_common::utils::{offset_span, offset_span_len};
 use datafusion_common::{ScalarValue, exec_err};
 use datafusion_expr::ColumnarValue;
 
@@ -699,10 +699,8 @@ fn case_conversion_ascii_array<O: OffsetSizeTrait>(
     string_array: &GenericStringArray<O>,
     lower: bool,
 ) -> Result<ArrayRef> {
-    let value_offsets = string_array.value_offsets();
-    let start = value_offsets.first().unwrap().as_usize();
-    let end = value_offsets.last().unwrap().as_usize();
-    let relevant = &string_array.value_data()[start..end];
+    let (start, len) = offset_span(string_array.offsets());
+    let relevant = &string_array.value_data()[start..start + len];
 
     let converted: Vec<u8> = if lower {
         relevant.iter().map(u8::to_ascii_lowercase).collect()
