@@ -49,7 +49,7 @@ arrow-flight = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true }
-# note only use main datafusion crate for examples
+# note only use at datafusion crate for examples
 base64 = "0.23.0"
 datafusion-expr = { workspace = true }
 datafusion-physical-expr-adapter = { workspace = true }
