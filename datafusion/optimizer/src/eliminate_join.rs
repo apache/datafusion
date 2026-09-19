@@ -738,6 +738,34 @@ mod tests {
     }
 
     #[test]
+    fn left_join_eliminates_unique_asof_side() -> Result<()> {
+        let asof_left = scan("asof_left", &test_schema(), primary_key_on_id())?;
+        let asof_right = scan("asof_right", &test_schema(), Constraints::default())?;
+        let asof = LogicalPlanBuilder::from(asof_left)
+            .asof_join_on(
+                asof_right,
+                None,
+                col("asof_left.y").gt_eq(col("asof_right.y")),
+            )?
+            .build()?;
+        let probe = scan("probe", &test_schema(), Constraints::default())?;
+        let plan = LogicalPlanBuilder::from(probe)
+            .join(
+                asof,
+                JoinType::Left,
+                (vec!["probe.id"], vec!["asof_left.id"]),
+                None,
+            )?
+            .project(vec![col("probe.x")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: probe.x
+          TableScan: probe
+        ")
+    }
+
+    #[test]
     fn inner_to_left_semi_for_duplicate_insensitive_parent() -> Result<()> {
         let plan = left_join_right()?
             .aggregate(vec![col("l.x")], Vec::<Expr>::new())?
