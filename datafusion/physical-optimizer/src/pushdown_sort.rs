@@ -67,7 +67,6 @@ use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use std::sync::Arc;
-
 /// A PhysicalOptimizerRule that attempts to push down sort requirements to data sources.
 ///
 /// See module-level documentation for details.
@@ -108,10 +107,16 @@ impl PhysicalOptimizerRule for PushdownSort {
                 match sort_input.try_pushdown_sort(required_ordering)? {
                     SortOrderPushdownResult::Exact { inner } => {
                         // Preserve fetch (LIMIT) from the eliminated SortExec.
-                        // Use LocalLimitExec (not Global) since input is multi-partition.
+                        // Use LocalLimitExec (not Global) since input is multi-partition:
+                        // this rule runs after distribution enforcement, and
+                        // GlobalLimitExec requires a single input partition.
                         let inner = if let Some(fetch) = sort_child.fetch() {
                             inner.with_fetch(Some(fetch)).unwrap_or_else(|| {
-                                Arc::new(LocalLimitExec::new(inner, fetch))
+                                let mut limit = LocalLimitExec::new(inner, fetch);
+                                limit.set_required_ordering(Some(
+                                    sort_child.expr().clone(),
+                                ));
+                                Arc::new(limit)
                             })
                         } else {
                             inner
@@ -171,7 +176,9 @@ impl PhysicalOptimizerRule for PushdownSort {
                     // wrapping with GlobalLimitExec.
                     if let Some(fetch) = sort_exec.fetch() {
                         let inner = inner.with_fetch(Some(fetch)).unwrap_or_else(|| {
-                            Arc::new(GlobalLimitExec::new(inner, 0, Some(fetch)))
+                            let mut limit = GlobalLimitExec::new(inner, 0, Some(fetch));
+                            limit.set_required_ordering(Some(sort_exec.expr().clone()));
+                            Arc::new(limit)
                         });
                         Ok(Transformed::yes(inner))
                     } else {
