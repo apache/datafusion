@@ -18,9 +18,10 @@
 //! PiecewiseMergeJoin stream specialized for existence joins.
 //!
 //! Instantiated by [`PiecewiseMergeJoinExec`] when the join type is `LeftSemi` or `LeftAnti`.
-//! The other existence joins are rejected in `PiecewiseMergeJoinExec::try_new`:
-//! `RightSemi`/`RightAnti`/`RightMark` mark the right side and so need an input swap, while
-//! `LeftMark` marks the left side but needs an extra boolean column rather than a slice.
+//! `RightSemi`/`RightAnti` mark the streamed side instead and are served by
+//! `RightExistencePWMJStream` (see `right_existence_join.rs`); the Mark joins are rejected in
+//! `PiecewiseMergeJoinExec::try_new`, as they need an extra boolean column rather than a
+//! subset of one side's rows.
 //!
 //! # Motivation
 //!
@@ -74,8 +75,8 @@
 //!
 //! Marking only ever covers a suffix, and each mark lowers the watermark to its own start,
 //! so the matched set is always exactly `[min_marked, buffered_len)`. A bitmap would be a
-//! less compact encoding of that one index, so none is allocated (see
-//! `build_visited_indices_map`).
+//! less compact encoding of that one index, so none is allocated. `ClassicPWMJStream` marks
+//! the same way, which is why the watermark lives in `BufferedSideData` rather than here.
 //!
 //! Once every streamed partition has been consumed, the last one to finish slices the
 //! buffered batch: `LeftSemi` takes `[min_marked, len)`, `LeftAnti` the complementary
@@ -227,7 +228,10 @@ impl ExistencePWMJStream {
             return Poll::Ready(Ok(StatefulStreamResult::Continue));
         }
 
-        match ready!(self.streamed.poll_next_unpin(cx)) {
+        let next_batch = ready!(self.streamed.poll_next_unpin(cx));
+        let join_time = self.join_metrics.join_time.clone();
+        let _join_timer = join_time.timer();
+        match next_batch {
             None => self.finish_streamed_side()?,
             Some(Ok(batch)) => {
                 let stream_values: ArrayRef = self
@@ -256,9 +260,7 @@ impl ExistencePWMJStream {
     /// lets every other partition stop too.
     fn nothing_left_to_mark(&self) -> Result<bool> {
         let buffered_data = &self.buffered_side.try_as_ready()?.buffered_data;
-        let min_marked = buffered_data
-            .existence_min_marked
-            .load(AtomicOrdering::SeqCst);
+        let min_marked = buffered_data.min_marked.load(AtomicOrdering::SeqCst);
         let buffered_values = buffered_data.values();
 
         Ok(min_marked.min(buffered_values.len()) <= buffered_values.null_count())
@@ -308,7 +310,7 @@ impl ExistencePWMJStream {
             // watermark: that bounds the comparisons this batch performs, not just the
             // bits it writes.
             let scan_limit = buffered_data
-                .existence_min_marked
+                .min_marked
                 .load(AtomicOrdering::SeqCst)
                 .min(buffered_len);
 
@@ -366,7 +368,7 @@ impl ExistencePWMJStream {
                 if buffer_idx < scan_limit {
                     // Everything from `buffer_idx` on matches, so lowering the
                     // watermark to it records the match: the marked set is exactly
-                    // `[existence_min_marked, buffered_len)` and needs no bitmap.
+                    // `[min_marked, buffered_len)` and needs no bitmap.
                     //
                     // INVARIANT: sound only because the buffered side and each
                     // streamed batch are sorted the same way for this operator
@@ -377,7 +379,7 @@ impl ExistencePWMJStream {
                     // order, which is why the watermark takes a `min` rather than just
                     // decreasing.
                     buffered_data
-                        .existence_min_marked
+                        .min_marked
                         .fetch_min(buffer_idx, AtomicOrdering::SeqCst);
                 }
             }
@@ -389,6 +391,7 @@ impl ExistencePWMJStream {
     /// Emits the existence result by slicing at the watermark: the marked buffered rows for
     /// `LeftSemi`, the unmarked ones for `LeftAnti`.
     fn emit_matched(&mut self) -> Result<StatefulStreamResult<Option<RecordBatch>>> {
+        let _join_timer = self.join_metrics.join_time.timer();
         if !self.emitted {
             self.emitted = true;
 
@@ -402,7 +405,7 @@ impl ExistencePWMJStream {
             // `k`, so the union is `[k, len)`. The result is therefore a slice, with no
             // index array to materialize and no `take`.
             let min_marked = buffered_data
-                .existence_min_marked
+                .min_marked
                 .load(AtomicOrdering::SeqCst)
                 .min(buffered_len);
 
@@ -450,7 +453,7 @@ impl ExistencePWMJStream {
 /// Numeric, temporal, string, binary and boolean keys get a typed arrow kernel -- a linear
 /// scan that allocates nothing. Dictionary and nested keys fall to `min_max_batch_generic`, a
 /// `ScalarValue`-per-row comparator loop; specializing those is left to a follow-up.
-fn extreme_key(values: &ArrayRef, descending: bool) -> Result<ArrayRef> {
+pub(super) fn extreme_key(values: &ArrayRef, descending: bool) -> Result<ArrayRef> {
     let extreme = if descending {
         max_batch(values)?
     } else {
@@ -485,7 +488,7 @@ mod tests {
     use crate::{
         ExecutionPlan, common,
         joins::PiecewiseMergeJoinExec,
-        test::{TestMemoryExec, build_table_i32},
+        test::{TestMemoryExec, assert_join_metrics, build_table_i32},
     };
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::test_util::batches_to_string;
@@ -638,7 +641,8 @@ mod tests {
 
     /// The final pass pushes one slice of the buffered batch into a `BatchCoalescer`, so a
     /// result wider than `batch_size` has to be drained over several polls. Also pins the
-    /// `output_rows` metric, which `record_poll` in `poll_next` is what supplies.
+    /// `output_rows` metric, which `record_poll` in `poll_next` is what supplies, and
+    /// `join_time`, which the streamed-side scan and the final pass record.
     #[tokio::test]
     async fn final_pass_chunks_output_and_records_output_rows() -> Result<()> {
         let left = build_table(
@@ -685,12 +689,15 @@ mod tests {
         assert_eq!(batches.len(), 2, "expected the final pass to be chunked");
         assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 4);
 
-        let output_rows = join
-            .metrics()
-            .unwrap()
-            .output_rows()
-            .expect("output_rows metric");
-        assert_eq!(output_rows, 4);
+        let metrics = join.metrics().expect("metrics should be available");
+        assert_join_metrics!(metrics, 4);
+        assert!(
+            metrics
+                .sum_by_name("join_time")
+                .expect("join_time metric")
+                .as_usize()
+                > 0
+        );
         Ok(())
     }
 
@@ -771,11 +778,8 @@ mod tests {
         Ok(())
     }
 
-    /// The unsupported existence joins must be rejected at construction, not deeper in.
-    /// `required_input_ordering` still has an `unimplemented!()` for right existence joins
-    /// and cannot return an error, so this test is what keeps that panic unreachable: if
-    /// someone opens the gate for RightSemi/RightAnti without also supplying an ordering
-    /// requirement, this fails instead of panicking the optimizer at runtime.
+    /// The Mark joins must be rejected at construction, not deeper in: `execute` has no way
+    /// to fall back, and the planner has already committed to this operator by then.
     #[test]
     fn try_new_rejects_unsupported_existence_joins() -> Result<()> {
         let left = build_table(
@@ -793,12 +797,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
         );
 
-        for join_type in [
-            JoinType::RightSemi,
-            JoinType::RightAnti,
-            JoinType::LeftMark,
-            JoinType::RightMark,
-        ] {
+        for join_type in [JoinType::LeftMark, JoinType::RightMark] {
             let err = PiecewiseMergeJoinExec::try_new(
                 Arc::clone(&left),
                 Arc::clone(&right),

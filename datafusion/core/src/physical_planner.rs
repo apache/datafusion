@@ -41,7 +41,8 @@ use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::filter::FilterExecBuilder;
 use crate::physical_plan::joins::utils as join_utils;
 use crate::physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
+    AsOfJoinExec, AsOfMatchExpr, CrossJoinExec, HashJoinExec, NestedLoopJoinExec,
+    PartitionMode, SortMergeJoinExec,
 };
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::{ProjectionExec, ProjectionExpr};
@@ -869,11 +870,9 @@ impl DefaultPhysicalPlanner {
                     e.context(format!("MERGE INTO operation on table '{table_name}'"))
                 })?;
                 let input_exec = children.one()?;
-                let target_schema = DFSchema::try_from_qualified_schema(
-                    table_name.clone(),
-                    &target.schema(),
-                )?;
-                let merge_schema = Arc::new(target_schema.join(input.schema())?);
+                let merge_schema = Arc::new(
+                    merge_op.expression_schema(&target.schema(), input.schema())?,
+                );
                 provider
                     .merge_into(
                         session_state,
@@ -1269,16 +1268,20 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::SubqueryAlias(_) => children.one()?,
             LogicalPlan::Limit(limit) => {
                 let input = children.one()?;
+                // `get_skip_type` / `get_fetch_type` only return a non literal
+                // type for an expression that is present
                 let SkipType::Literal(skip) = limit.get_skip_type()? else {
+                    let skip = limit.skip.as_deref().map(ToString::to_string);
                     return not_impl_err!(
-                        "Unsupported OFFSET expression: {:?}",
-                        limit.skip
+                        "Unsupported OFFSET expression: {}",
+                        skip.unwrap_or_default()
                     );
                 };
                 let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
+                    let fetch = limit.fetch.as_deref().map(ToString::to_string);
                     return not_impl_err!(
-                        "Unsupported LIMIT expression: {:?}",
-                        limit.fetch
+                        "Unsupported LIMIT expression: {}",
+                        fetch.unwrap_or_default()
                     );
                 };
 
@@ -1592,6 +1595,23 @@ impl DefaultPhysicalPlanner {
 
                 let prefer_hash_join =
                     session_state.config_options().optimizer.prefer_hash_join;
+                // Null-aware joins are pinned to CollectLeft hash joins (see
+                // `HashJoinExec::null_aware`): never repartition them, and
+                // never route them to the sort-merge path below.
+                let can_repartition_join = session_state.config().target_partitions() > 1
+                    && session_state.config().repartition_joins()
+                    && !*null_aware;
+
+                // Only `HashJoinExec` implements null-aware semantics, and it
+                // needs equi-join keys to do so. Without them the join would be
+                // planned as a nested loop (or piecewise merge) join, which
+                // silently ignores the flag and returns wrong results for
+                // `NOT IN` over a nullable subquery. Fail loudly instead.
+                if *null_aware && join_on.is_empty() {
+                    return plan_err!(
+                        "null_aware {join_type} join requires equi-join keys, but the join has none"
+                    );
+                }
 
                 // TODO: Allow PWMJ to deal with residual equijoin conditions
                 let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
@@ -1600,16 +1620,13 @@ impl DefaultPhysicalPlanner {
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
                     } else if num_range_filters == 1
                         && total_filters == 1
-                        // PWMJ supports classic joins and Left Semi/Anti existence joins.
-                        // Right Semi/Anti and Mark joins are not implemented yet (they
-                        // would require swapping the inputs so the marked side is buffered),
-                        // so exclude them here and let them fall back to NestedLoopJoin.
+                        // PWMJ supports classic joins and Semi/Anti existence joins. Mark
+                        // joins are not implemented yet (they need an extra boolean column
+                        // rather than a subset of one side's rows), so exclude them here
+                        // and let them fall back to NestedLoopJoin.
                         && !matches!(
                             join_type,
-                            JoinType::RightSemi
-                                | JoinType::RightAnti
-                                | JoinType::LeftMark
-                                | JoinType::RightMark
+                            JoinType::LeftMark | JoinType::RightMark
                         )
                         && session_state
                             .config_options()
@@ -1643,14 +1660,20 @@ impl DefaultPhysicalPlanner {
                             }
                         }
 
+                        // `Neither` covers an operand that references no column from
+                        // either side (e.g. a literal), and `Both` an operand that
+                        // references columns from both. PWMJ needs one operand pinned
+                        // to each side, so both fall back to NestedLoopJoin below rather
+                        // than erroring or (for `Neither`) panicking.
                         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
                         enum Side {
                             Left,
                             Right,
                             Both,
+                            Neither,
                         }
 
-                        let side_of = |e: &Expr| -> Result<Side> {
+                        let side_of = |e: &Expr| -> Side {
                             let cols = e.column_refs();
                             let any_left = cols
                                 .iter()
@@ -1659,20 +1682,29 @@ impl DefaultPhysicalPlanner {
                                 .iter()
                                 .any(|c| right_df_schema.index_of_column(c).is_ok());
 
-                            Ok(match (any_left, any_right) {
+                            match (any_left, any_right) {
                                 (true, false) => Side::Left,
                                 (false, true) => Side::Right,
                                 (true, true) => Side::Both,
-                                _ => unreachable!(),
-                            })
+                                (false, false) => Side::Neither,
+                            }
                         };
 
                         let mut lhs_logical = &be.left;
                         let mut rhs_logical = &be.right;
 
-                        let left_side = side_of(lhs_logical)?;
-                        let right_side = side_of(rhs_logical)?;
-                        if left_side == Side::Both || right_side == Side::Both {
+                        let left_side = side_of(lhs_logical);
+                        let right_side = side_of(rhs_logical);
+
+                        if left_side == Side::Right && right_side == Side::Left {
+                            std::mem::swap(&mut lhs_logical, &mut rhs_logical);
+                            op = reverse_ineq(op);
+                        } else if !(left_side == Side::Left && right_side == Side::Right)
+                        {
+                            // Anything other than a clean left/right split -- both
+                            // operands on one side, one referencing neither side, or
+                            // either referencing both -- isn't a range predicate PWMJ
+                            // can plan, so let NestedLoopJoin evaluate it instead.
                             return Ok(Arc::new(NestedLoopJoinExec::try_new(
                                 physical_left,
                                 physical_right,
@@ -1680,17 +1712,6 @@ impl DefaultPhysicalPlanner {
                                 join_type,
                                 None,
                             )?));
-                        }
-
-                        if left_side == Side::Right && right_side == Side::Left {
-                            std::mem::swap(&mut lhs_logical, &mut rhs_logical);
-                            op = reverse_ineq(op);
-                        } else if !(left_side == Side::Left && right_side == Side::Right)
-                        {
-                            return plan_err!(
-                                "Unsupported operator for PWMJ: {:?}. Expected one of <, <=, >, >=",
-                                op
-                            );
                         }
 
                         let on_left = create_physical_expr(
@@ -1744,24 +1765,15 @@ impl DefaultPhysicalPlanner {
                         vec![SortOptions::default(); join_on_len],
                         *null_equality,
                     )?)
-                } else if session_state.config().target_partitions() > 1
-                    && session_state.config().repartition_joins()
-                    && prefer_hash_join
-                    && !*null_aware
-                // Null-aware joins must use CollectLeft
-                {
-                    Arc::new(HashJoinExec::try_new(
-                        physical_left,
-                        physical_right,
-                        join_on,
-                        join_filter,
-                        join_type,
-                        None,
-                        PartitionMode::Auto,
-                        *null_equality,
-                        *null_aware,
-                    )?)
                 } else {
+                    // Null-aware joins need global probe-side state, so keep
+                    // them in CollectLeft mode.
+                    let partition_mode = if can_repartition_join {
+                        PartitionMode::Auto
+                    } else {
+                        PartitionMode::CollectLeft
+                    };
+
                     Arc::new(HashJoinExec::try_new(
                         physical_left,
                         physical_right,
@@ -1769,7 +1781,7 @@ impl DefaultPhysicalPlanner {
                         join_filter,
                         join_type,
                         None,
-                        PartitionMode::CollectLeft,
+                        partition_mode,
                         *null_equality,
                         *null_aware,
                     )?)
@@ -1789,6 +1801,51 @@ impl DefaultPhysicalPlanner {
                 } else {
                     join
                 }
+            }
+            LogicalPlan::AsOfJoin(join) => {
+                let [physical_left, physical_right] = children.two()?;
+                let join_on = join
+                    .on
+                    .iter()
+                    .map(|(left, right)| {
+                        Ok((
+                            create_physical_expr(
+                                left,
+                                join.left.schema(),
+                                execution_props,
+                                planning_ctx,
+                            )?,
+                            create_physical_expr(
+                                right,
+                                join.right.schema(),
+                                execution_props,
+                                planning_ctx,
+                            )?,
+                        ))
+                    })
+                    .collect::<Result<join_utils::JoinOn>>()?;
+                let match_condition = AsOfMatchExpr::new(
+                    create_physical_expr(
+                        &join.match_condition.left,
+                        join.left.schema(),
+                        execution_props,
+                        planning_ctx,
+                    )?,
+                    join.match_condition.op,
+                    create_physical_expr(
+                        &join.match_condition.right,
+                        join.right.schema(),
+                        execution_props,
+                        planning_ctx,
+                    )?,
+                );
+                Arc::new(AsOfJoinExec::try_new(
+                    physical_left,
+                    physical_right,
+                    join_on,
+                    match_condition,
+                    None,
+                )?)
             }
             LogicalPlan::RecursiveQuery(RecursiveQuery {
                 name,
@@ -2291,6 +2348,7 @@ fn extract_dml_filters(
             | LogicalPlan::Sort(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::Join(_)
+            | LogicalPlan::AsOfJoin(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Window(_)
@@ -2712,7 +2770,7 @@ impl DefaultPhysicalPlanner {
                     e.plan.display_graphviz().to_string(),
                 ));
             }
-        };
+        }
 
         if !stringified_plans.is_empty() {
             return Ok(Arc::new(ExplainExec::new(
@@ -3582,8 +3640,8 @@ mod tests {
         ctx.register_table("source", source)?;
 
         ctx.sql(
-            "MERGE INTO target AS t USING source AS s ON t.id = s.id \
-             WHEN MATCHED AND t.id > s.id THEN DELETE",
+            "MERGE INTO target AS t USING source AS target ON t.id = target.id \
+             WHEN MATCHED AND t.id > target.id THEN DELETE",
         )
         .await?
         .create_physical_plan()
@@ -3594,11 +3652,11 @@ mod tests {
             captured.as_ref().expect("merge_into should be called");
         assert_eq!(*clause_count, 1);
         assert_eq!(
-            merge_schema.index_of_column(&Column::new(Some("target"), "id"))?,
+            merge_schema.index_of_column(&Column::new(Some("t"), "id"))?,
             0
         );
         assert_eq!(
-            merge_schema.index_of_column(&Column::new(Some("s"), "id"))?,
+            merge_schema.index_of_column(&Column::new(Some("target"), "id"))?,
             1
         );
         assert_contains!(physical_on, "index: 0");
@@ -3992,6 +4050,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn correlated_not_in_is_null_uses_null_aware_hash_mark_join() -> Result<()> {
+        let query = "
+            SELECT value
+            FROM (
+              VALUES
+                (1, 1, 'a'),
+                (3, 1, 'b'),
+                (1, 2, 'c'),
+                (NULL, 1, 'd'),
+                (5, 3, 'e'),
+                (2, 1, 'f'),
+                (NULL, 2, 'g')
+            ) AS outer_corr_table(id, grp, value)
+            WHERE (id NOT IN (
+              SELECT id
+              FROM (
+                VALUES
+                  (2, 1),
+                  (NULL, 1),
+                  (1, 2)
+              ) AS inner_corr_table(id, grp)
+              WHERE inner_corr_table.grp = outer_corr_table.grp
+            )) IS NULL
+            ORDER BY value";
+
+        let config = SessionConfig::new()
+            .with_target_partitions(4)
+            .set_bool("datafusion.optimizer.prefer_hash_join", false);
+        let ctx = SessionContext::new_with_config(config);
+
+        let plan = ctx.sql(query).await?.create_physical_plan().await?;
+        let formatted = displayable(plan.as_ref()).indent(true).to_string();
+        assert_contains!(
+            &formatted,
+            "HashJoinExec: mode=CollectLeft, join_type=LeftMark"
+        );
+        assert!(!formatted.contains("SortMergeJoinExec"), "{formatted}");
+
+        let batches = ctx.sql(query).await?.collect().await?;
+        assert_batches_eq!(
+            &[
+                "+-------+",
+                "| value |",
+                "+-------+",
+                "| a     |",
+                "| b     |",
+                "| d     |",
+                "| g     |",
+                "+-------+",
+            ],
+            &batches
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn scalar_subquery_in_projection_and_filter_plans() -> Result<()> {
         let plan = plan_sql(
             "SELECT x + (SELECT max(y) FROM (VALUES (10), (20)) AS u(y)) \
@@ -4280,9 +4395,6 @@ mod tests {
 
         let plan = plan(&logical_plan).await?;
 
-        // c12 is f64, c7 is u8 -> cast c7 to f64
-        // the cast here is implicit so has CastOptions with safe=true
-        let _expected = "predicate: BinaryExpr { left: TryCastExpr { expr: Column { name: \"c7\", index: 6 }, cast_type: Float64 }, op: Lt, right: Column { name: \"c12\", index: 11 } }";
         let plan_debug_str = format!("{plan:?}");
         assert!(plan_debug_str.contains("GlobalLimitExec"));
         assert!(plan_debug_str.contains("skip: 3"));

@@ -18,12 +18,11 @@
 use std::sync::{Arc, OnceLock};
 
 use arrow::array::{
-    Array, BooleanArray, Capacities, MutableArrayData, Scalar, cast::AsArray, make_array,
-    make_comparator,
+    Array, ArrayRef, BooleanArray, MutableArrayData, cast::AsArray, layout, make_array,
 };
-use arrow::compute::SortOptions;
+use arrow::buffer::NullBuffer;
+use arrow::compute::{nullif, take};
 use arrow::datatypes::{DataType, Field, FieldRef};
-use arrow_buffer::NullBuffer;
 
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{
@@ -39,6 +38,7 @@ use datafusion_macros::user_doc;
 
 use super::named_struct::NamedStructFunc;
 use super::r#struct::StructFunc;
+use crate::utils::map_lookup;
 
 #[user_doc(
     doc_section(label = "Other Functions"),
@@ -100,97 +100,44 @@ impl Default for GetFieldFunc {
     }
 }
 
-/// Process a map array by finding matching keys and extracting corresponding values.
-///
-/// This function handles both simple (scalar) and nested key types by using
-/// appropriate comparison strategies.
-fn process_map_array(
-    array: &dyn Array,
-    key_array: Arc<dyn Array>,
-) -> Result<ColumnarValue> {
-    let map_array = as_map_array(array)?;
-    let keys = if key_array.data_type().is_nested() {
-        let comparator = make_comparator(
-            map_array.keys().as_ref(),
-            key_array.as_ref(),
-            SortOptions::default(),
-        )?;
-        let len = map_array.keys().len().min(key_array.len());
-        let values = (0..len).map(|i| comparator(i, i).is_eq()).collect();
-        let nulls = NullBuffer::union(map_array.keys().nulls(), key_array.nulls());
-        BooleanArray::new(values, nulls)
-    } else {
-        let be_compared = Scalar::new(key_array);
-        arrow::compute::kernels::cmp::eq(&be_compared, map_array.keys())?
+/// Apply a struct's nulls to one of its fields.
+fn apply_parent_nulls(
+    col: &ArrayRef,
+    parent_nulls: Option<&NullBuffer>,
+) -> Result<ArrayRef> {
+    let Some(parent_nulls) = parent_nulls else {
+        // If there are no parent nulls to apply, we can just return
+        return Ok(Arc::clone(col));
     };
 
-    let original_data = map_array.entries().column(1).to_data();
-    let capacity = Capacities::Array(original_data.len());
-    let mut mutable =
-        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
-
-    let offsets = map_array.value_offsets();
-    // Scan the comparison result in place: slicing it per entry would allocate
-    // a new array for every row of the map. Map keys are non-null by
-    // definition, so the comparison result carries no nulls to check here.
-    let matches = keys.values();
-
-    for entry in 0..map_array.len() {
-        let start = offsets[entry] as usize;
-        let end = offsets[entry + 1] as usize;
-
-        let matched = (start..end).find(|&i| matches.value(i));
-
-        match matched {
-            Some(i) => mutable.try_extend(0, i, i + 1)?,
-            None => mutable.try_extend_nulls(1)?,
-        }
+    // NullArray is already entirely null and cannot have a validity bitmap.
+    // If we have 0 parent nulls, we can also avoid extra work.
+    if col.data_type().is_null() || parent_nulls.null_count() == 0 {
+        return Ok(Arc::clone(col));
     }
 
-    let data = mutable.freeze();
-    let data = make_array(data);
-    Ok(ColumnarValue::Array(data))
-}
-
-/// Process a map array with a nested key type by iterating through entries
-/// and using a comparator for key matching.
-///
-/// This specialized version is used when the key type is nested (e.g., struct, list).
-fn process_map_with_nested_key(
-    array: &dyn Array,
-    key_array: &dyn Array,
-) -> Result<ColumnarValue> {
-    let map_array = as_map_array(array)?;
-
-    let comparator =
-        make_comparator(map_array.keys().as_ref(), key_array, SortOptions::default())?;
-
-    let original_data = map_array.entries().column(1).to_data();
-    let capacity = Capacities::Array(original_data.len());
-    let mut mutable =
-        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
-
-    for entry in 0..map_array.len() {
-        let start = map_array.value_offsets()[entry] as usize;
-        let end = map_array.value_offsets()[entry + 1] as usize;
-
-        let mut found_match = false;
-        for i in start..end {
-            if comparator(i, 0).is_eq() {
-                mutable.try_extend(0, i, i + 1)?;
-                found_match = true;
-                break;
-            }
-        }
-
-        if !found_match {
-            mutable.try_extend_nulls(1)?;
-        }
+    if layout(col.data_type()).can_contain_null_mask {
+        // `nullif` marks a row null where the mask is true and keeps the
+        // field's own nulls. Only the validity bitmap is rebuilt; the value
+        // buffers and child arrays are shared with `col`.
+        let null_parents = BooleanArray::new(!parent_nulls.inner(), None);
+        return Ok(nullif(col.as_ref(), &null_parents)?);
     }
 
-    let data = mutable.freeze();
-    let data = make_array(data);
-    Ok(ColumnarValue::Array(data))
+    // Unions and run-end encoded arrays have no validity bitmap of their own
+    // and represent nulls in their children. Rebuild the array so null parents
+    // become null values in those children.
+    let data = col.to_data();
+    let mut mutable = MutableArrayData::new(vec![&data], true, data.len());
+    let mut end = 0;
+    for (start, valid_end) in parent_nulls.valid_slices() {
+        mutable.try_extend_nulls(start - end)?;
+        mutable.try_extend(0, start, valid_end)?;
+        end = valid_end;
+    }
+    mutable.try_extend_nulls(data.len() - end)?;
+
+    Ok(make_array(mutable.freeze()))
 }
 
 /// Extract a single field from a struct or map array
@@ -215,30 +162,24 @@ fn extract_single_field(base: ColumnarValue, name: ScalarValue) -> Result<Column
                         "Field {field_name} not found in dictionary struct"
                     )
                 })?;
-            Ok(ColumnarValue::Array(
-                dict.with_values(Arc::clone(field_col)),
-            ))
+            let field_col = apply_parent_nulls(field_col, values_struct.nulls())?;
+            Ok(ColumnarValue::Array(dict.with_values(field_col)))
         }
-        (DataType::Map(_, _), ScalarValue::List(arr), _) => {
-            let key_array: Arc<dyn Array> = arr;
-            process_map_array(&array, key_array)
-        }
-        (DataType::Map(_, _), ScalarValue::Struct(arr), _) => {
-            process_map_array(&array, arr as Arc<dyn Array>)
-        }
-        (DataType::Map(_, _), other, _) => {
-            let data_type = other.data_type();
-            if data_type.is_nested() {
-                process_map_with_nested_key(&array, &other.to_array()?)
-            } else {
-                process_map_array(&array, other.to_array()?)
-            }
+        (DataType::Map(_, _), key, _) => {
+            // The lookup key is a single scalar
+            let map_array = as_map_array(array.as_ref())?;
+            let indices = map_lookup(map_array, key.to_array()?.as_ref())?;
+            let values = take(map_array.values().as_ref(), &indices, None)?;
+            Ok(ColumnarValue::Array(values))
         }
         (DataType::Struct(_), _, Some(k)) => {
             let as_struct_array = as_struct_array(&array)?;
             match as_struct_array.column_by_name(&k) {
                 None => exec_err!("Field {k} not found in struct"),
-                Some(col) => Ok(ColumnarValue::Array(Arc::clone(col))),
+                Some(col) => Ok(ColumnarValue::Array(apply_parent_nulls(
+                    col,
+                    as_struct_array.nulls(),
+                )?)),
             }
         }
         (DataType::Struct(_), name, _) => exec_err!(
@@ -318,7 +259,7 @@ fn simplify_get_field_over_struct_constructor(args: &[Expr]) -> Option<Expr> {
             return None;
         }
         let mut matched = None;
-        for pair in ctor_args.chunks_exact(2) {
+        for [name_expr, value_expr] in ctor_args.as_chunks::<2>().0 {
             // Every name must be a literal string: a non-literal name appearing
             // *before* the first match could evaluate to `field_name` at runtime
             // and become the real first match (Arrow's `column_by_name` returns
@@ -329,13 +270,13 @@ fn simplify_get_field_over_struct_constructor(args: &[Expr]) -> Option<Expr> {
             // — it can never precede the first match — so bailing there is a
             // deliberate approximation we accept to keep this check simple, not a
             // correctness requirement.
-            let Expr::Literal(name, _) = &pair[0] else {
+            let Expr::Literal(name, _) = name_expr else {
                 return None;
             };
             let name = name.try_as_str().flatten()?;
             // `column_by_name` resolves to the first match, so do the same.
             if matched.is_none() && name == field_name {
-                matched = Some(&pair[1]);
+                matched = Some(value_expr);
             }
         }
         matched?.clone()
@@ -672,8 +613,11 @@ impl ScalarUDFImpl for GetFieldFunc {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{ArrayRef, Int32Array, StructArray};
-    use arrow::datatypes::Fields;
+    use arrow::array::{
+        ArrayRef, Int32Array, Int32Builder, ListArray, ListBuilder, MapBuilder, RunArray,
+        StructArray, UnionArray,
+    };
+    use arrow::datatypes::{Fields, Int32Type, UnionFields};
 
     #[test]
     fn test_get_field_utf8view_key() -> Result<()> {
@@ -708,6 +652,248 @@ mod tests {
 
         assert_eq!(result_array.as_ref(), &expected as &dyn Array);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_field_map_list_key() -> Result<()> {
+        // One map row with two list keys. The lookup key matches the second
+        // entry, so the match is not at the first entry of the row.
+        let mut builder = MapBuilder::new(
+            None,
+            ListBuilder::new(Int32Builder::new()),
+            Int32Builder::new(),
+        );
+        builder.keys().append_value([Some(1), Some(2)]);
+        builder.values().append_value(1);
+        builder.keys().append_value([Some(3), Some(4)]);
+        builder.values().append_value(2);
+        builder.append(true)?;
+        let base = ColumnarValue::Array(Arc::new(builder.finish()));
+
+        let list_key = |values: Vec<i32>| {
+            ScalarValue::List(Arc::new(
+                ListArray::from_iter_primitive::<Int32Type, _, _>([Some(
+                    values.into_iter().map(Some),
+                )]),
+            ))
+        };
+
+        let result = extract_single_field(base.clone(), list_key(vec![3, 4]))?;
+        let expected = Int32Array::from(vec![Some(2)]);
+        assert_eq!(result.into_array(1)?.as_ref(), &expected as &dyn Array);
+
+        let result = extract_single_field(base, list_key(vec![9, 9]))?;
+        let expected = Int32Array::from(vec![None]);
+        assert_eq!(result.into_array(1)?.as_ref(), &expected as &dyn Array);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_field_nested_struct_outer_nulls() -> Result<()> {
+        let inner_array = StructArray::new(
+            vec![Field::new("value", DataType::Int32, false)].into(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+            None,
+        );
+
+        // Only the outer struct marks row 1 as null; its children are all valid.
+        let outer_array = StructArray::new(
+            vec![Field::new("inner", inner_array.data_type().clone(), false)].into(),
+            vec![Arc::new(inner_array)],
+            Some(NullBuffer::from(vec![true, false, true])),
+        );
+
+        for (input, expected) in [
+            (outer_array.clone(), vec![Some(1), None, Some(3)]),
+            (outer_array.slice(1, 2), vec![None, Some(3)]),
+        ] {
+            let inner = extract_single_field(
+                ColumnarValue::Array(Arc::new(input)),
+                ScalarValue::Utf8(Some("inner".to_string())),
+            )?;
+            let result = extract_single_field(
+                inner,
+                ScalarValue::Utf8(Some("value".to_string())),
+            )?
+            .into_array(expected.len())?;
+
+            let expected = Int32Array::from(expected);
+            assert_eq!(result.as_ref(), &expected as &dyn Array);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_field_map_parent_nulls() -> Result<()> {
+        use arrow::array::{FixedSizeListArray, MapArray};
+        use arrow_buffer::OffsetBuffer;
+
+        let keys = Arc::new(Int32Array::from(vec![7; 3])) as ArrayRef;
+        let nested_keys = Arc::new(FixedSizeListArray::new(
+            Arc::new(Field::new("item", DataType::Int32, false)),
+            1,
+            Arc::clone(&keys),
+            None,
+        )) as ArrayRef;
+
+        // Exercise both map lookup paths. The null map has a valid matching entry.
+        for keys in [keys, nested_keys] {
+            let key = ScalarValue::try_from_array(keys.as_ref(), 0)?;
+            let entries = StructArray::new(
+                vec![
+                    Field::new("key", keys.data_type().clone(), false),
+                    Field::new("value", DataType::Int32, false),
+                ]
+                .into(),
+                vec![keys, Arc::new(Int32Array::from(vec![1, 2, 3]))],
+                None,
+            );
+            let map = MapArray::new(
+                Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+                OffsetBuffer::new(vec![0, 1, 2, 3].into()),
+                entries,
+                Some(NullBuffer::from(vec![true, false, true])),
+                false,
+            );
+            let result = extract_single_field(ColumnarValue::Array(Arc::new(map)), key)?
+                .into_array(3)?;
+            let expected = Int32Array::from(vec![Some(1), None, Some(3)]);
+            assert_eq!(result.as_ref(), &expected as &dyn Array);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_field_null_typed_child() -> Result<()> {
+        use arrow::array::{DictionaryArray, NullArray, UInt32Array};
+        use arrow::datatypes::UInt32Type;
+
+        let values = Arc::new(StructArray::new(
+            vec![Field::new("value", DataType::Null, true)].into(),
+            vec![Arc::new(NullArray::new(2))],
+            Some(NullBuffer::from(vec![true, false])),
+        )) as ArrayRef;
+        let dictionary = Arc::new(DictionaryArray::<UInt32Type>::try_new(
+            UInt32Array::from(vec![0, 1]),
+            Arc::clone(&values),
+        )?) as ArrayRef;
+
+        for input in [values, dictionary] {
+            let result = extract_single_field(
+                ColumnarValue::Array(input),
+                ScalarValue::Utf8(Some("value".to_string())),
+            )?
+            .into_array(2)?;
+            assert_eq!(result.logical_null_count(), 2);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_field_union_parent_nulls() -> Result<()> {
+        use arrow::array::{DictionaryArray, StringArray, UInt32Array};
+        use arrow::datatypes::UInt32Type;
+
+        let fields = UnionFields::try_new(
+            [3, 7],
+            [
+                Field::new("int", DataType::Int32, true),
+                Field::new("string", DataType::Utf8, true),
+            ],
+        )?;
+        let ints = Int32Array::from(vec![Some(9), Some(1), Some(2), None, Some(4)]);
+        let strings = StringArray::from(vec!["x"; 5]);
+
+        // Dense rows 1 and 2 share a value, but only row 2 has a null parent.
+        for offsets in [None, Some(vec![0, 1, 1, 3, 0].into())] {
+            let child = UnionArray::try_new(
+                fields.clone(),
+                vec![7, 3, 3, 3, 7].into(),
+                offsets,
+                vec![Arc::new(ints.clone()), Arc::new(strings.clone())],
+            )?;
+            let union_type = child.data_type().clone();
+            let parent = StructArray::new(
+                vec![Field::new("u", union_type.clone(), true)].into(),
+                vec![Arc::new(child)],
+                Some(NullBuffer::from(vec![true, true, false, true, true])),
+            );
+            let values = Arc::new(parent.slice(1, 4)) as ArrayRef;
+            let dictionary = Arc::new(DictionaryArray::<UInt32Type>::try_new(
+                UInt32Array::from(vec![0, 1, 2, 3]),
+                Arc::clone(&values),
+            )?) as ArrayRef;
+
+            for input in [values, dictionary] {
+                let result = extract_single_field(
+                    ColumnarValue::Array(input),
+                    ScalarValue::Utf8(Some("u".to_string())),
+                )?
+                .into_array(4)?;
+                assert_eq!(
+                    result.logical_nulls(),
+                    Some(NullBuffer::from(vec![true, false, false, true]))
+                );
+                let result = match result.data_type() {
+                    DataType::Dictionary(_, _) => result.as_any_dictionary().values(),
+                    _ => &result,
+                };
+                assert_eq!(result.data_type(), &union_type);
+                result.to_data().validate_full()?;
+                let result = result.as_union();
+                assert_eq!(result.value(0).as_ref(), &Int32Array::from(vec![1]));
+                assert_eq!(result.value(3).as_ref(), &StringArray::from(vec!["x"]));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_field_run_encoded_parent_nulls() -> Result<()> {
+        // Logical values: [10, 10, 20, NULL, NULL]
+        let run_ends = Int32Array::from(vec![2, 3, 5]);
+        let values = Int32Array::from(vec![Some(10), Some(20), None]);
+        let child = RunArray::<Int32Type>::try_new(&run_ends, &values)?;
+        let run_type = child.data_type().clone();
+        let parent = StructArray::new(
+            vec![Field::new("r", run_type.clone(), true)].into(),
+            vec![Arc::new(child)],
+            Some(NullBuffer::from(vec![true, false, true, true, true])),
+        );
+
+        for (input, expected) in [
+            (
+                Arc::new(parent.clone()) as ArrayRef,
+                vec![Some(10), None, Some(20), None, None],
+            ),
+            (
+                Arc::new(parent.slice(1, 4)) as ArrayRef,
+                vec![None, Some(20), None, None],
+            ),
+        ] {
+            let result = extract_single_field(
+                ColumnarValue::Array(input),
+                ScalarValue::Utf8(Some("r".to_string())),
+            )?
+            .into_array(expected.len())?;
+            assert_eq!(result.data_type(), &run_type);
+            result.to_data().validate_full()?;
+
+            let run_array = result.as_run::<Int32Type>();
+            let run_values = run_array.values().as_primitive::<Int32Type>();
+            let logical: Vec<Option<i32>> = (0..run_array.len())
+                .map(|i| {
+                    let physical = run_array.get_physical_index(i);
+                    run_values
+                        .is_valid(physical)
+                        .then(|| run_values.value(physical))
+                })
+                .collect();
+            assert_eq!(logical, expected);
+        }
         Ok(())
     }
 

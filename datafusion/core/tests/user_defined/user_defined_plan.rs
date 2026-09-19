@@ -453,7 +453,7 @@ impl OptimizerRule for OptimizerMakeExtensionNodeInvalid {
                     }),
                 }),
             })));
-        };
+        }
 
         Ok(Transformed::no(plan))
     }

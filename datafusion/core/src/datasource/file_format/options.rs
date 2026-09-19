@@ -50,7 +50,7 @@ use futures::future::BoxFuture;
 /// Options that control the reading of CSV files.
 ///
 /// Note this structure is supplied when a datasource is created and
-/// can not not vary from statement to statement. For settings that
+/// can not vary from statement to statement. For settings that
 /// can vary statement to statement see
 /// [`ConfigOptions`](crate::config::ConfigOptions).
 #[derive(Clone)]
@@ -246,7 +246,7 @@ impl<'a> CsvReadOptions<'a> {
 /// Options that control the reading of Parquet files.
 ///
 /// Note this structure is supplied when a datasource is created and
-/// can not not vary from statement to statement. For settings that
+/// can not vary from statement to statement. For settings that
 /// can vary statement to statement see
 /// [`ConfigOptions`](crate::config::ConfigOptions).
 #[derive(Clone)]
@@ -357,7 +357,7 @@ impl<'a> ParquetReadOptions<'a> {
 /// Options that control the reading of ARROW files.
 ///
 /// Note this structure is supplied when a datasource is created and
-/// can not not vary from statement to statement. For settings that
+/// can not vary from statement to statement. For settings that
 /// can vary statement to statement see
 /// [`ConfigOptions`](crate::config::ConfigOptions).
 #[derive(Clone)]
@@ -403,7 +403,7 @@ impl<'a> ArrowReadOptions<'a> {
 /// Options that control the reading of AVRO files.
 ///
 /// Note this structure is supplied when a datasource is created and
-/// can not not vary from statement to statement. For settings that
+/// can not vary from statement to statement. For settings that
 /// can vary statement to statement see
 /// [`ConfigOptions`](crate::config::ConfigOptions).
 #[derive(Clone)]
@@ -581,7 +581,7 @@ impl<'a> JsonReadOptions<'a> {
 }
 
 #[async_trait]
-/// ['ReadOptions'] is implemented by Options like ['CsvReadOptions'] that control the reading of respective files/sources.
+/// [`ReadOptions`] is implemented by Options like [`CsvReadOptions`] that control the reading of respective files/sources.
 pub trait ReadOptions<'a> {
     /// Helper to convert these user facing options to `ListingTable` options
     fn to_listing_options(

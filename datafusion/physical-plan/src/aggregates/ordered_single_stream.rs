@@ -303,6 +303,7 @@ impl OrderedSingleSpillContext {
             .with_metrics(baseline_metrics.intermediate())
             .with_batch_size(batch_size)
             .with_reservation(merge_reservation)
+            .with_replay_headroom()
             .build()?;
         let replay = OrderedFinalAggregateStream::new_with_input_and_metrics(
             &final_agg,
@@ -856,7 +857,6 @@ impl Stream for OrderedSingleAggregateStream {
             match next_state {
                 ControlFlow::Continue(next_state) => {
                     self.state = Some(next_state);
-                    continue;
                 }
                 ControlFlow::Break((Poll::Ready(Some(Err(e))), next_state)) => {
                     debug_assert!(matches!(

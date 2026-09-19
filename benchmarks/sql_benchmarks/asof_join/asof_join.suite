@@ -1,0 +1,21 @@
+# Workloads vary these axes:
+# - relative left and right input sizes
+# - required ordering already available or included in the measured query
+# - no equality key, many balanced groups, or heavily skewed groups
+# - latest right row at or before, or earliest right row at or after, each left row
+# - narrow integer or wide UTF-8 payloads
+
+description = "ASOF join SQL benchmarks"
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[path_replacements]
+DATA_DIR = "../../data"
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- asof_join"
+description = "Run all ASOF join queries."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- asof_join --query 7"
+description = "Run the pre-sorted keyed ASOF join query."

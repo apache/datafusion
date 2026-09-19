@@ -20,6 +20,7 @@
 
 use datafusion::execution::SessionStateDefaults;
 use datafusion::logical_expr::Documentation;
+use std::fmt::Write as _;
 use unicode_width::UnicodeWidthStr;
 
 fn is_border(line: &str) -> bool {
@@ -71,9 +72,9 @@ fn misaligned_tables(name: &str, example: &str) -> Vec<String> {
         }
         let mut report = format!("{name}, table at line {} of the example:", start + 1);
         for ((line, width), fault) in table.iter().zip(&widths).zip(&faults) {
-            report.push_str(&format!("\n  {width:>4}  {line}"));
+            write!(report, "\n  {width:>4}  {line}").ok();
             if let Some(fault) = fault {
-                report.push_str(&format!("    <- {fault}"));
+                write!(report, "    <- {fault}").ok();
             }
         }
         reports.push(report);

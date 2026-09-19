@@ -112,7 +112,7 @@ impl ParseUrl {
                     "The url is invalid: {value}. Use `try_parse_url` to tolerate invalid URL and return NULL instead. SQLSTATE: 22P02"
                 ))
             };
-        };
+        }
         url.map_err(|e| exec_datafusion_err!("{e:?}"))
             .map(|url| match part {
                 "HOST" => url.host_str().map(String::from),

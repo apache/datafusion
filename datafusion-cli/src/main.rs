@@ -208,7 +208,7 @@ async fn main_inner() -> Result<()> {
     if let Some(ref path) = args.data_path {
         let p = Path::new(path);
         env::set_current_dir(p).unwrap();
-    };
+    }
 
     let session_config = get_session_config(&args)?;
 
@@ -353,7 +353,7 @@ fn get_session_config(args: &Args) -> Result<SessionConfig> {
         }
         config_options.execution.batch_size =
             datafusion_common::config::ConfigNonZeroUsize::try_new(batch_size)?;
-    };
+    }
 
     // use easier to understand "tree" mode by default
     // if the user hasn't specified an explain format in the environment
@@ -662,9 +662,9 @@ mod tests {
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
         +-----------------------------------+-----------------+---------------------+------+------------------+
-        | alltypes_plain.parquet            | 1851            | 8794                | 1    | page_index=false |
-        | alltypes_tiny_pages.parquet       | 454233          | 268970              | 2    | page_index=true  |
-        | lz4_raw_compressed_larger.parquet | 380836          | 1331                | 1    | page_index=false |
+        | alltypes_plain.parquet            | 1851            | 8938                | 1    | page_index=false |
+        | alltypes_tiny_pages.parquet       | 454233          | 268826              | 2    | page_index=true  |
+        | lz4_raw_compressed_larger.parquet | 380836          | 1315                | 1    | page_index=false |
         +-----------------------------------+-----------------+---------------------+------+------------------+
         ");
 
@@ -693,9 +693,9 @@ mod tests {
         +-----------------------------------+-----------------+---------------------+------+------------------+
         | filename                          | file_size_bytes | metadata_size_bytes | hits | extra            |
         +-----------------------------------+-----------------+---------------------+------+------------------+
-        | alltypes_plain.parquet            | 1851            | 8794                | 4    | page_index=false |
-        | alltypes_tiny_pages.parquet       | 454233          | 268970              | 2    | page_index=true  |
-        | lz4_raw_compressed_larger.parquet | 380836          | 1331                | 2    | page_index=false |
+        | alltypes_plain.parquet            | 1851            | 8938                | 4    | page_index=false |
+        | alltypes_tiny_pages.parquet       | 454233          | 268826              | 2    | page_index=true  |
+        | lz4_raw_compressed_larger.parquet | 380836          | 1315                | 2    | page_index=false |
         +-----------------------------------+-----------------+---------------------+------+------------------+
         ");
 
@@ -862,14 +862,14 @@ mod tests {
             ])?
             .sort(vec![col("filename").sort(true, false)])?;
         let rbs = df.collect().await?;
-        assert_snapshot!(batches_to_string(&rbs),@r"
+        assert_snapshot!(batches_to_string(&rbs),@r#"
         +---------------------+-----------+-----------------+------+------+
         | metadata_size_bytes | filename  | file_size_bytes | etag | hits |
         +---------------------+-----------+-----------------+------+------+
-        | 212                 | 0.parquet | 3642            | 0    | 2    |
-        | 212                 | 1.parquet | 3642            | 1    | 2    |
+        | 216                 | 0.parquet | 3620            | "0"  | 2    |
+        | 216                 | 1.parquet | 3620            | "1"  | 2    |
         +---------------------+-----------+-----------------+------+------+
-        ");
+        "#);
 
         Ok(())
     }

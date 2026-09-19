@@ -330,7 +330,7 @@ impl RecordBatchMemoryCounter {
         array: &GenericByteViewArray<T>,
     ) {
         self.count_buffer_memory_size(array.views().inner());
-        for buffer in array.data_buffers() {
+        for buffer in array.data_buffers().iter() {
             self.count_buffer_memory_size(buffer);
         }
     }
@@ -381,7 +381,7 @@ fn count_unique_array_object_memory_size(
     array: &ArrayRef,
     counted_arrays: &mut HashSet<usize>,
 ) -> usize {
-    let array_ptr = Arc::as_ptr(array) as *const () as usize;
+    let array_ptr = Arc::as_ptr(array).cast::<()>() as usize;
     if !counted_arrays.insert(array_ptr) {
         return 0;
     }

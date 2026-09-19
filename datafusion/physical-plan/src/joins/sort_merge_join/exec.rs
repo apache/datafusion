@@ -606,7 +606,11 @@ impl ExecutionPlan for SortMergeJoinExec {
         let buffered = buffered.execute(partition, Arc::clone(&context))?;
 
         let batch_size = context.session_config().batch_size();
+        // The stream spills its buffered batches when it cannot grow, so a
+        // pool that budgets spillable and unspillable consumers differently
+        // (`FairSpillPool`) has to know it can.
         let reservation = MemoryConsumer::new(format!("SMJStream[{partition}]"))
+            .with_can_spill(true)
             .register(context.memory_pool());
         let spill_manager = SpillManager::new(
             context.runtime_env(),
