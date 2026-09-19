@@ -1337,11 +1337,17 @@ impl RowGroupsPrunedParquetOpen {
                     replace_columns_with_literals(expr, state.null_replacements())
                 })?,
             };
+            let pushdown_predicate = prepared
+                .pushdown_filters
+                .then_some(prepared.predicate.as_ref())
+                .flatten();
             let read_plan = build_projection_read_plan(
-                projection.expr_iter(),
+                projection.expr_iter().chain(pushdown_predicate.cloned()),
                 &prepared.physical_file_schema,
                 parquet_metadata.file_metadata().schema_descr(),
             );
+            // Partial indexes are supported: only a column read from a row group
+            // with a partial selection needs an offset index to benefit.
             if selected_row_groups.any(|idx| {
                 parquet_metadata
                     .row_group(idx)
@@ -1395,7 +1401,14 @@ impl RowGroupsPrunedParquetOpen {
                 .loaded
                 .options
                 .clone()
-                .with_page_index_policy(PageIndexPolicy::Optional),
+                .with_offset_index_policy(PageIndexPolicy::Optional)
+                .with_column_index_policy(
+                    if self.prepared.page_pruning_predicate.is_some() {
+                        PageIndexPolicy::Optional
+                    } else {
+                        PageIndexPolicy::Skip
+                    },
+                ),
         )
         .await?;
 
@@ -2058,12 +2071,14 @@ async fn load_page_index<T: AsyncFileReader>(
     options: ArrowReaderOptions,
 ) -> Result<ArrowReaderMetadata> {
     let parquet_metadata = reader_metadata.metadata();
-    let missing_column_index = !parquet_metadata
-        .page_index()
-        .is_some_and(|page_index| page_index.has_column_indexes());
-    let missing_offset_index = !parquet_metadata
-        .page_index()
-        .is_some_and(|page_index| page_index.has_offset_indexes());
+    let missing_column_index = options.column_index_policy() != PageIndexPolicy::Skip
+        && !parquet_metadata
+            .page_index()
+            .is_some_and(|page_index| page_index.has_column_indexes());
+    let missing_offset_index = options.offset_index_policy() != PageIndexPolicy::Skip
+        && !parquet_metadata
+            .page_index()
+            .is_some_and(|page_index| page_index.has_offset_indexes());
     // You may ask yourself: why are we even checking if the page index is already loaded here?
     // Didn't we explicitly *not* load it above?
     // Well it's possible that a custom implementation of `AsyncFileReader` gives you
@@ -2073,7 +2088,8 @@ async fn load_page_index<T: AsyncFileReader>(
         let m = Arc::try_unwrap(Arc::clone(parquet_metadata))
             .unwrap_or_else(|e| e.as_ref().clone());
         let mut reader = ParquetMetaDataReader::new_with_metadata(m)
-            .with_page_index_policy(PageIndexPolicy::Optional);
+            .with_column_index_policy(options.column_index_policy())
+            .with_offset_index_policy(options.offset_index_policy());
         reader.load_page_index(input).await?;
         let new_parquet_metadata = reader.finish()?;
         let new_arrow_reader =
@@ -4650,6 +4666,43 @@ mod test {
                 expected,
             );
         }
+        for projection in [vec![0], vec![1], vec![0, 1], vec![]] {
+            assert_eq!(
+                should_load_page_index_with_projection(
+                    page_index_metadata(&[("a", true), ("b", true)], 1),
+                    None,
+                    plan.clone(),
+                    Some(&projection),
+                ),
+                !projection.is_empty(),
+            );
+        }
+        // A missing index in a skipped row group does not prevent loading.
+        let mixed_metadata = page_index_metadata(&[("a", true)], 1)
+            .into_builder()
+            .set_row_groups(vec![
+                page_index_metadata(&[("a", true)], 1).row_group(0).clone(),
+                page_index_metadata(&[("a", false)], 1).row_group(0).clone(),
+            ])
+            .build();
+        let mixed_plan =
+            ParquetAccessPlan::new(vec![plan.inner()[0].clone(), RowGroupAccess::Skip]);
+        assert!(should_load_page_index(
+            mixed_metadata.clone(),
+            None,
+            mixed_plan
+        ));
+        // An index in a skipped or fully scanned row group does not help the
+        // partially selected row group that lacks an index.
+        for access in [RowGroupAccess::Skip, RowGroupAccess::Scan] {
+            let mixed_plan =
+                ParquetAccessPlan::new(vec![access, plan.inner()[0].clone()]);
+            assert!(!should_load_page_index(
+                mixed_metadata.clone(),
+                None,
+                mixed_plan
+            ));
+        }
         // Projection restriction applies only to the external-selection path.
         assert!(should_load_page_index_with_projection(
             metadata,
@@ -4657,6 +4710,77 @@ mod test {
             plan,
             Some(&[0]),
         ));
+    }
+
+    #[tokio::test]
+    async fn test_load_page_index_policies_and_cached_offset_index() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+        let schema = batch.schema();
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .build();
+        let data_len = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            vec![batch],
+            Some(props),
+        )
+        .await;
+        let metrics = ExecutionPlanMetricsSet::new();
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(store)
+            .with_schema(schema)
+            .with_metrics(metrics.clone())
+            .build();
+        let file = PartitionedFile::new("test.parquet".to_string(), data_len as u64);
+        let mut loaded = opener
+            .prepare_open_file(file)
+            .unwrap()
+            .load()
+            .await
+            .unwrap();
+        let options = loaded
+            .options
+            .clone()
+            .with_column_index_policy(PageIndexPolicy::Skip)
+            .with_offset_index_policy(PageIndexPolicy::Optional);
+        let metadata = load_page_index(
+            loaded.reader_metadata,
+            &mut loaded.prepared.async_file_reader,
+            options.clone(),
+        )
+        .await
+        .unwrap();
+        let page_index = metadata.metadata().page_index().unwrap();
+        assert!(page_index.has_offset_indexes());
+        assert!(!page_index.has_column_indexes());
+        let bytes_scanned = counter_metric_value(&metrics, "bytes_scanned");
+        let cached = load_page_index(
+            metadata.clone(),
+            &mut loaded.prepared.async_file_reader,
+            options.clone(),
+        )
+        .await
+        .unwrap();
+        assert!(Arc::ptr_eq(metadata.metadata(), cached.metadata()));
+        assert_eq!(
+            counter_metric_value(&metrics, "bytes_scanned"),
+            bytes_scanned
+        );
+
+        // A later predicate scan must still load the missing column index.
+        let metadata = load_page_index(
+            cached,
+            &mut loaded.prepared.async_file_reader,
+            options.with_column_index_policy(PageIndexPolicy::Optional),
+        )
+        .await
+        .unwrap();
+        let page_index = metadata.metadata().page_index().unwrap();
+        assert!(page_index.has_offset_indexes());
+        assert!(page_index.has_column_indexes());
+        assert!(counter_metric_value(&metrics, "bytes_scanned") > bytes_scanned);
     }
 
     #[tokio::test]
@@ -4723,6 +4847,33 @@ mod test {
                 "offset indexes should reduce I/O: {bytes_scanned:?}"
             );
         }
+        // Filter columns still read pages when the output projection is empty.
+        let mut bytes_scanned = Vec::new();
+        for enabled in [false, true] {
+            let metrics = ExecutionPlanMetricsSet::new();
+            let opener = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[])
+                .with_pushdown_filters(true)
+                .with_enable_page_index(enabled)
+                .with_predicate(logical2physical(&col("a").gt_eq(lit(9950i32)), &schema))
+                .with_metrics(metrics.clone())
+                .build();
+            let batches = open_file(&opener, file.clone())
+                .await
+                .unwrap()
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap();
+            assert_eq!(
+                batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+                50
+            );
+            assert!(batches.iter().all(|batch| batch.num_columns() == 0));
+            bytes_scanned.push(counter_metric_value(&metrics, "bytes_scanned"));
+        }
+        assert!(bytes_scanned[1] < bytes_scanned[0], "{bytes_scanned:?}");
     }
 
     #[test]
