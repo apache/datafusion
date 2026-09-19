@@ -4058,7 +4058,7 @@ impl serde::Serialize for ExplainAnalyzeCategoriesNode {
         if !self.only.is_empty() {
             let v = self.only.iter().copied().map(|v| {
                 MetricCategory::try_from(v)
-                    .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", v)))
+                    .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {v}")))
                 }).collect::<std::result::Result<Vec<_>, _>>()?;
             struct_ser.serialize_field("only", &v)?;
         }
@@ -6491,6 +6491,9 @@ impl serde::Serialize for ParquetOptions {
         if self.max_in_list_size != 0 {
             len += 1;
         }
+        if self.enable_rle_to_dictionary != false {
+            len += 1;
+        }
         if !self.created_by.is_empty() {
             len += 1;
         }
@@ -6615,6 +6618,9 @@ impl serde::Serialize for ParquetOptions {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("maxInListSize", ToString::to_string(&self.max_in_list_size).as_str())?;
+        }
+        if self.enable_rle_to_dictionary != false {
+            struct_ser.serialize_field("enableRleToDictionary", &self.enable_rle_to_dictionary)?;
         }
         if !self.created_by.is_empty() {
             struct_ser.serialize_field("createdBy", &self.created_by)?;
@@ -6776,6 +6782,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "maxRowGroupSize",
             "max_in_list_size",
             "maxInListSize",
+            "enable_rle_to_dictionary",
+            "enableRleToDictionary",
             "created_by",
             "createdBy",
             "content_defined_chunking",
@@ -6829,6 +6837,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             DataPageRowCountLimit,
             MaxRowGroupSize,
             MaxInListSize,
+            EnableRleToDictionary,
             CreatedBy,
             ContentDefinedChunking,
             MetadataSizeHint,
@@ -6886,6 +6895,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
                             "maxInListSize" | "max_in_list_size" => Ok(GeneratedField::MaxInListSize),
+                            "enableRleToDictionary" | "enable_rle_to_dictionary" => Ok(GeneratedField::EnableRleToDictionary),
                             "createdBy" | "created_by" => Ok(GeneratedField::CreatedBy),
                             "contentDefinedChunking" | "content_defined_chunking" => Ok(GeneratedField::ContentDefinedChunking),
                             "metadataSizeHint" | "metadata_size_hint" => Ok(GeneratedField::MetadataSizeHint),
@@ -6941,6 +6951,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut data_page_row_count_limit__ = None;
                 let mut max_row_group_size__ = None;
                 let mut max_in_list_size__ = None;
+                let mut enable_rle_to_dictionary__ = None;
                 let mut created_by__ = None;
                 let mut content_defined_chunking__ = None;
                 let mut metadata_size_hint_opt__ = None;
@@ -7100,6 +7111,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::EnableRleToDictionary => {
+                            if enable_rle_to_dictionary__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("enableRleToDictionary"));
+                            }
+                            enable_rle_to_dictionary__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::CreatedBy => {
                             if created_by__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("createdBy"));
@@ -7214,6 +7231,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
                     max_row_group_size: max_row_group_size__.unwrap_or_default(),
                     max_in_list_size: max_in_list_size__.unwrap_or_default(),
+                    enable_rle_to_dictionary: enable_rle_to_dictionary__.unwrap_or_default(),
                     created_by: created_by__.unwrap_or_default(),
                     content_defined_chunking: content_defined_chunking__,
                     metadata_size_hint_opt: metadata_size_hint_opt__,
