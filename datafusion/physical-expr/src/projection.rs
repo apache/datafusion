@@ -890,7 +890,7 @@ fn project_column_statistics_through_expr(
     // domain, for example, does not bound the converted column. Merely casting
     // a failing endpoint to NULL also cannot establish the remaining extrema.
     let preserves_values = source_type.is_some_and(|source_type| {
-        CastExpr::check_bigger_cast(target_type, &source_type)
+        CastExpr::check_lossless_cast(target_type, &source_type)
             || is_within_extrema(
                 &inner_stats.min_value,
                 &inner_stats.max_value,
@@ -2427,6 +2427,80 @@ pub(crate) mod tests {
                 assert!(!is_within_extrema(
                     &bounds[0], &bounds[1], &bounds[2], &bounds[3],
                 ));
+            }
+        }
+    }
+
+    #[test]
+    fn test_project_statistics_lossless_cast() {
+        use Precision::{Absent, Exact, Inexact};
+
+        for (lower, upper, targets) in [
+            (
+                ScalarValue::UInt8(Some(0)),
+                ScalarValue::UInt8(Some(u8::MAX)),
+                vec![DataType::Int16, DataType::Int32, DataType::Int64],
+            ),
+            (
+                ScalarValue::UInt16(Some(0)),
+                ScalarValue::UInt16(Some(u16::MAX)),
+                vec![DataType::Int32, DataType::Int64],
+            ),
+            (
+                ScalarValue::UInt32(Some(0)),
+                ScalarValue::UInt32(Some(u32::MAX)),
+                vec![DataType::Int64],
+            ),
+            (
+                ScalarValue::Utf8(Some(String::new())),
+                ScalarValue::Utf8(Some("🦀".to_string())),
+                vec![DataType::Utf8View],
+            ),
+            (
+                ScalarValue::Binary(Some(vec![])),
+                ScalarValue::Binary(Some(vec![0xff])),
+                vec![DataType::LargeBinary, DataType::BinaryView],
+            ),
+        ] {
+            for target in targets {
+                // A globally safe cast does not need two exact extrema. Preserve
+                // whichever bounds are available without upgrading their precision.
+                for (min_value, max_value) in [
+                    (Exact(lower.clone()), Exact(upper.clone())),
+                    (Exact(lower.clone()), Absent),
+                    (Absent, Exact(upper.clone())),
+                    (Inexact(lower.clone()), Inexact(upper.clone())),
+                    (Inexact(lower.clone()), Absent),
+                    (Absent, Inexact(upper.clone())),
+                ] {
+                    let input = ColumnStatistics {
+                        min_value: min_value.clone(),
+                        max_value: max_value.clone(),
+                        null_count: Exact(1),
+                        distinct_count: Inexact(3),
+                        sum_value: Absent,
+                        byte_size: Absent,
+                    };
+                    let expr = CastExpr::new(
+                        Arc::new(Column::new("a", 0)),
+                        target.clone(),
+                        None,
+                    );
+                    let output = project_column_statistics_through_expr(&expr, &[input]);
+                    assert_eq!(
+                        output,
+                        ColumnStatistics {
+                            min_value: min_value.cast_to(&target).unwrap(),
+                            max_value: max_value.cast_to(&target).unwrap(),
+                            null_count: Exact(1),
+                            distinct_count: Inexact(3),
+                            sum_value: Absent,
+                            byte_size: Absent,
+                        },
+                        "{} -> {target}, {min_value:?}..{max_value:?}",
+                        lower.data_type()
+                    );
+                }
             }
         }
     }
