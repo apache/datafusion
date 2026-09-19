@@ -718,6 +718,10 @@ fn build_join(
         // filters stay on the legacy path because hash join execution cannot
         // mark UNKNOWN candidates for residual predicates.
         let null_aware = match hashable_only_split {
+            // The subquery repeats the `IN` predicate as its correlation, so
+            // its result is never UNKNOWN and a plain mark join is exact. See
+            // `PullUpCorrelatedExpr::in_predicate_is_correlation`.
+            Some(_) if pull_up.in_predicate_is_correlation => false,
             Some((equijoin_keys, residual_filter)) => join_keys_may_be_null(
                 equijoin_keys,
                 residual_filter.as_ref(),
@@ -757,7 +761,13 @@ fn build_join(
     //
     // Additionally, if no join key can be NULL on either side, we don't need
     // null-aware semantics because NULLs cannot exist in the keys.
-    let null_aware = if join_type == JoinType::LeftAnti && in_predicate_opt.is_some() {
+    //
+    // A subquery that repeats the `IN` predicate as its correlation is never
+    // UNKNOWN either, see `PullUpCorrelatedExpr::in_predicate_is_correlation`.
+    let null_aware = if join_type == JoinType::LeftAnti
+        && in_predicate_opt.is_some()
+        && !pull_up.in_predicate_is_correlation
+    {
         let (equijoin_keys, residual_filter) = split_eq_and_noneq_join_predicate(
             join_filter.clone(),
             left.schema(),
