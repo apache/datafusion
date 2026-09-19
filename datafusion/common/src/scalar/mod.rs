@@ -1724,14 +1724,21 @@ impl ScalarValue {
                     ScalarValue::new_list(&[], field.data_type(), field.is_nullable());
                 Ok(ScalarValue::List(list))
             }
-            DataType::FixedSizeList(field, _size) => {
-                let empty_arr = new_empty_array(field.data_type());
-                let values = Arc::new(
-                    SingleRowListArrayBuilder::new(empty_arr)
-                        .with_field(field)
-                        .build_fixed_size_list_array(0),
-                );
-                Ok(ScalarValue::FixedSizeList(values))
+            DataType::FixedSizeList(field, size) => {
+                let list_size = size.to_usize().ok_or_else(|| {
+                    _internal_datafusion_err!("FixedSizeList size cannot be negative")
+                })?;
+                let values = ScalarValue::new_default(field.data_type())?
+                    .to_array_of_size(list_size)?;
+                Ok(ScalarValue::FixedSizeList(Arc::new(
+                    FixedSizeListArray::try_new_with_length(
+                        Arc::clone(field),
+                        *size,
+                        values,
+                        None,
+                        1,
+                    )?,
+                )))
             }
             DataType::LargeList(field) => {
                 let list = ScalarValue::new_large_list(&[], field.data_type());

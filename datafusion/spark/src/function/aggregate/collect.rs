@@ -2348,6 +2348,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn collect_list_preserves_null_nested_fixed_size_list_sql() -> Result<()> {
+        let inner_field = Arc::new(Field::new_list_field(DataType::Int32, false));
+        let inner = Arc::new(FixedSizeListArray::try_new(
+            inner_field,
+            2,
+            Arc::new(Int32Array::from(vec![1, 2])),
+            None,
+        )?) as ArrayRef;
+        let outer_field =
+            Arc::new(Field::new_list_field(inner.data_type().clone(), false));
+        let outer = Arc::new(FixedSizeListArray::try_new(
+            outer_field,
+            1,
+            inner,
+            Some(NullBuffer::new_null(1)),
+        )?) as ArrayRef;
+        let element_fields = Fields::from(vec![Field::new(
+            "optional",
+            outer.data_type().clone(),
+            true,
+        )]);
+        let element_type = DataType::Struct(element_fields.clone());
+        let values = Arc::new(StructArray::try_new(element_fields, vec![outer], None)?)
+            as ArrayRef;
+        values.to_data().validate_full()?;
+
+        let ctx = SessionContext::new();
+        ctx.register_udaf(AggregateUDF::new_from_impl(SparkCollectList::new()));
+        ctx.register_batch(
+            "nested_fixed_size_list_input",
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![Field::new(
+                    "x",
+                    element_type.clone(),
+                    false,
+                )])),
+                vec![values],
+            )?,
+        )?;
+
+        let batches = ctx
+            .sql("SELECT collect_list(x) AS values FROM nested_fixed_size_list_input")
+            .await?
+            .collect()
+            .await?;
+        let list = batches[0].column(0).as_list::<i32>();
+        assert_eq!(list.data_type(), &list_type(element_type));
+        let collected = list.value(0);
+        let outer = collected.as_struct().column(0).as_fixed_size_list();
+        assert!(outer.is_null(0));
+        outer.to_data().validate_full()?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn collect_list_dictionary_grouped_and_window_sql() -> Result<()> {
         let keys = Int8Array::new(
             ScalarBuffer::from(vec![0_i8, 0, 1, 1]),
