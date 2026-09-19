@@ -384,14 +384,35 @@ SELECT * FROM t1 WHERE upper(t1.s) NOT IN (SELECT t2.s FROM t2 WHERE t2.k = t1.k
 1 a
 
 # `NULLIF(k, 1)` is NULL for `k = 1`, and that group of `t2` is not empty, so
-# the correct result has no row for `k = 1`. The two key join is not
-# null-aware, so this row is wrong. See
+# the correct result has no row for `k = 1`. The join has two keys, the value
+# and the correlation, and the null-aware `LeftAnti` executor takes one key
+# only. The `NOT IN` becomes a null-aware mark join, which takes any number of
+# keys, and a filter on the mark. `main` keeps the `k = 1` row, which is
 # https://github.com/apache/datafusion/issues/25347.
 query I rowsort
 SELECT k FROM t1 WHERE NULLIF(t1.k, 1) NOT IN (SELECT t2.k + 10 FROM t2 WHERE t2.k = t1.k);
 ----
-1
 2
+
+query TT
+EXPLAIN SELECT k FROM t1 WHERE NULLIF(t1.k, 1) NOT IN (SELECT t2.k + 10 FROM t2 WHERE t2.k = t1.k);
+----
+logical_plan
+01)Projection: t1.k
+02)--Filter: NOT __correlated_sq_1.mark
+03)----LeftMark Join: nullif(CAST(t1.k AS Int64), Int64(1)) = __correlated_sq_1.t2.k + Int64(10), t1.k = __correlated_sq_1.k null_aware
+04)------TableScan: t1 projection=[k]
+05)------SubqueryAlias: __correlated_sq_1
+06)--------Projection: CAST(t2.k AS Int64) + Int64(10), t2.k
+07)----------TableScan: t2 projection=[k]
+physical_plan
+01)FilterExec: NOT mark@1, projection=[k@0]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(nullif(t1.k,Int64(1))@1, t2.k + Int64(10)@0), (k@0, k@1)], projection=[k@0, mark@2], null_aware
+04)------ProjectionExec: expr=[k@0 as k, nullif(CAST(k@0 AS Int64), 1) as nullif(t1.k,Int64(1))]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)------ProjectionExec: expr=[CAST(k@0 AS Int64) + 10 as t2.k + Int64(10), k@0 as k]
+07)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 DROP TABLE t1;
@@ -399,12 +420,14 @@ DROP TABLE t1;
 statement ok
 DROP TABLE t2;
 
-# A non-equality correlation leaves one key and a residual join filter. The
-# null-aware `LeftAnti` executor does not apply the residual when it decides
-# whether a NULL makes the result UNKNOWN, so a function key over non-nullable
-# columns must not make this join null-aware either. For `k = 1` the key is
-# NULL and the correlated subquery result is empty, and
-# `NULL NOT IN (<empty set>)` is TRUE. Both rows are correct.
+# A non-equality correlation leaves one key and a residual join filter. No hash
+# join can mark the UNKNOWN rows of a residual filter
+# (https://github.com/apache/datafusion/issues/25336), so a `NOT IN` whose
+# value can be NULL does not become an anti join. It becomes the mark joins
+# that materialize its three-valued result, the same plan as for a projected
+# `IN`, and a filter on that result. For `k = 1` the key is NULL and the
+# correlated subquery result is empty, and `NULL NOT IN (<empty set>)` is TRUE.
+# Both rows are correct.
 statement ok
 CREATE TABLE ra(k INT NOT NULL, z INT NOT NULL) AS VALUES (1, 10), (2, 20);
 
@@ -418,13 +441,42 @@ SELECT k FROM ra WHERE NULLIF(ra.k, 1) NOT IN (SELECT rb.k FROM rb WHERE rb.z < 
 2
 
 # The same shape where the correlated subquery result is not empty for the NULL
-# key. The correct result is `2` only. The plain anti join also gives `1`, which
-# is the gap that https://github.com/apache/datafusion/issues/25336 closes.
+# key: `NULL NOT IN ({5})` is UNKNOWN, so `2` is the only row. `main` builds a
+# plain anti join here and also keeps `1`.
 query I rowsort
 SELECT k FROM ra WHERE NULLIF(ra.k, 1) NOT IN (SELECT rb.k FROM rb WHERE rb.z > ra.z);
 ----
-1
 2
+
+query TT
+EXPLAIN SELECT k FROM ra WHERE NULLIF(ra.k, 1) NOT IN (SELECT rb.k FROM rb WHERE rb.z > ra.z);
+----
+logical_plan
+01)Projection: ra.k
+02)--Filter: NOT CASE WHEN __correlated_sq_2.mark THEN Boolean(true) WHEN __correlated_sq_3.mark OR nullif(CAST(ra.k AS Int64), Int64(1)) IS NULL AND __correlated_sq_4.mark THEN Boolean(NULL) ELSE Boolean(false) END
+03)----Projection: ra.k, __correlated_sq_2.mark, __correlated_sq_3.mark, __correlated_sq_4.mark
+04)------LeftMark Join:  Filter: __correlated_sq_4.z > ra.z
+05)--------LeftMark Join:  Filter: __correlated_sq_3.z > ra.z
+06)----------LeftMark Join: nullif(CAST(ra.k AS Int64), Int64(1)) = __correlated_sq_2.rb.k Filter: __correlated_sq_2.z > ra.z
+07)------------TableScan: ra projection=[k, z]
+08)------------SubqueryAlias: __correlated_sq_2
+09)--------------Projection: CAST(rb.k AS Int64), rb.z
+10)----------------TableScan: rb projection=[k, z]
+11)----------EmptyRelation: rows=0
+12)--------SubqueryAlias: __correlated_sq_4
+13)----------TableScan: rb projection=[z]
+physical_plan
+01)FilterExec: NOT CASE WHEN mark@1 THEN true WHEN mark@2 OR nullif(CAST(k@0 AS Int64), 1) IS NULL AND mark@3 THEN NULL ELSE false END, projection=[k@0]
+02)--NestedLoopJoinExec: join_type=RightMark, filter=z@1 > z@0, projection=[k@0, mark@2, mark@3, mark@4]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----NestedLoopJoinExec: join_type=RightMark, filter=z@1 > z@0
+05)------EmptyExec
+06)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)--------HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(rb.k@0, nullif(ra.k,Int64(1))@2)], filter=z@1 > z@0, projection=[k@0, z@1, mark@3]
+08)----------ProjectionExec: expr=[CAST(k@0 AS Int64) as rb.k, z@1 as z]
+09)------------DataSourceExec: partitions=1, partition_sizes=[1]
+10)----------ProjectionExec: expr=[k@0 as k, z@1 as z, nullif(CAST(k@0 AS Int64), 1) as nullif(ra.k,Int64(1))]
+11)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 DROP TABLE ra;
@@ -506,30 +558,27 @@ NULL 3
 9 9
 5 NULL
 
-# A node above the dropped filter can put a NULL back into the value column, and
-# the result is UNKNOWN again. A grouping set rolls `ci.k` up to a NULL row, so
-# this join stays null-aware.
-query TT
-EXPLAIN SELECT co.id, co.k IN (SELECT ci.k FROM ci WHERE ci.k = co.k GROUP BY ROLLUP(ci.k)) AS m FROM co;
+# The same shape with an expression as the value. The subquery output is then a
+# cast, and the join keys refer to it by its column name. The correlation still
+# names the expression as the query writes it, and the join is not null-aware.
+query IIB
+SELECT co.id, co.k, (co.k + 0) IN (SELECT ci.k FROM ci WHERE ci.k = co.k + 0) AS m FROM co ORDER BY k, id;
 ----
-logical_plan
-01)Projection: co.id, __correlated_sq_1.mark AS m
-02)--LeftMark Join: co.k = __correlated_sq_1.k null_aware
-03)----TableScan: co projection=[id, k]
-04)----SubqueryAlias: __correlated_sq_1
-05)------Projection: ci.k
-06)--------Aggregate: groupBy=[[ROLLUP (ci.k)]], aggr=[[]]
-07)----------TableScan: ci projection=[k]
-physical_plan
-01)ProjectionExec: expr=[id@0 as id, mark@1 as m]
-02)--HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(k@1, k@0)], projection=[id@0, mark@2], null_aware
-03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----ProjectionExec: expr=[k@0 as k]
-05)------AggregateExec: mode=FinalPartitioned, gby=[k@0 as k, __grouping_id@1 as __grouping_id], aggr=[]
-06)--------RepartitionExec: partitioning=Hash([k@0, __grouping_id@1], 4), input_partitions=1
-07)----------AggregateExec: mode=Partial, gby=[(NULL as k), (k@0 as k)], aggr=[]
-08)------------DataSourceExec: partitions=1, partition_sizes=[1]
+1 1 true
+2 1 true
+NULL 1 true
+2 2 true
+NULL 3 false
+9 9 false
+5 NULL false
 
+# A grouping set above the correlated filter is a different problem. The
+# grand-total row of `ROLLUP` exists for every outer row, so a miss is UNKNOWN
+# here, not FALSE. The pull up moves the filter above the aggregate, which
+# loses that row; the same plan gives a wrong `EXISTS` too. That is a bug in
+# the pull up, https://github.com/apache/datafusion/issues/25519, and is not
+# changed here: the three rows for `k = 3`, `k = 9` and `k = NULL` should be
+# NULL.
 query IIB
 SELECT co.id, co.k, co.k IN (SELECT ci.k FROM ci WHERE ci.k = co.k GROUP BY ROLLUP(ci.k)) AS m FROM co ORDER BY k, id;
 ----
@@ -537,9 +586,9 @@ SELECT co.id, co.k, co.k IN (SELECT ci.k FROM ci WHERE ci.k = co.k GROUP BY ROLL
 2 1 true
 NULL 1 true
 2 2 true
-NULL 3 NULL
-9 9 NULL
-5 NULL NULL
+NULL 3 false
+9 9 false
+5 NULL false
 
 statement ok
 DROP TABLE co;
