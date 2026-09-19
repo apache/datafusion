@@ -299,7 +299,13 @@ impl ScalarUDFImpl for DateTruncFunc {
                 // `general_date_trunc` converts to nanoseconds first and so rejects
                 // values outside the nanosecond range.
                 Some(v) if truncates_in_input_unit(granularity, parsed_tz.as_ref()) => {
-                    Some(date_trunc_fine_granularity(T::UNIT, *v, granularity)?)
+                    match fine_granularity_unit(T::UNIT, granularity) {
+                        Some(unit) => {
+                            Some(truncate_to_unit(*v, unit.get(), granularity)?)
+                        }
+                        // `granularity` is no coarser than the input's unit
+                        None => Some(*v),
+                    }
                 }
                 Some(v) => Some(general_date_trunc(T::UNIT, *v, parsed_tz, granularity)?),
                 None => None,
@@ -772,8 +778,7 @@ fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
             })
             .collect();
         let array: PrimitiveArray<T> = if maybe_underflow {
-            array
-                .try_unary(|value| date_trunc_fine_granularity(tu, value, granularity))?
+            array.try_unary(|value| truncate_to_unit(value, unit, granularity))?
         } else {
             PrimitiveArray::new(values.into(), array.nulls().cloned())
         }
@@ -786,8 +791,7 @@ fn general_date_trunc_array_fine_granularity<T: ArrowTimestampType>(
 }
 
 /// Whether truncating to `granularity` is plain arithmetic in the input's own
-/// time unit, which [`fine_granularity_unit`] and [`date_trunc_fine_granularity`]
-/// then perform.
+/// time unit: rounding down to a multiple of [`fine_granularity_unit`].
 ///
 /// For modern timezones, it's correct to truncate "minute" in this way.
 /// Both datafusion and arrow are ignoring historical timezone's non-minute granularity
@@ -827,17 +831,9 @@ fn fine_granularity_unit(tu: TimeUnit, granularity: DatePart) -> Option<NonZeroI
     }
 }
 
-/// Truncates a single `value` in `tu` to a granularity for which
-/// [`truncates_in_input_unit`] holds, without leaving `tu`.
-fn date_trunc_fine_granularity(
-    tu: TimeUnit,
-    value: i64,
-    granularity: DatePart,
-) -> Result<i64> {
-    let Some(unit) = fine_granularity_unit(tu, granularity) else {
-        return Ok(value);
-    };
-    let unit = unit.get();
+/// Rounds `value` down to a multiple of `unit`, the length of `granularity` in
+/// the value's time unit, or errors if that falls below `i64::MIN`.
+fn truncate_to_unit(value: i64, unit: i64, granularity: DatePart) -> Result<i64> {
     value.checked_sub(value.rem_euclid(unit)).ok_or_else(|| {
         exec_datafusion_err!(
             "Timestamp {value} out of range after truncating to {granularity}"
@@ -1551,7 +1547,9 @@ mod tests {
             );
         }
 
-        // The issue's example: `to_timestamp_seconds(10000000000)`
+        // `date_trunc('second', to_timestamp_seconds(10000000000))` returns its input
+        // rather than an out of range error.
+        // See <https://github.com/apache/datafusion/issues/25432>.
         let (scalar, _) = date_trunc_scalar_and_array(
             "second",
             ScalarValue::TimestampSecond(Some(seconds), None),
