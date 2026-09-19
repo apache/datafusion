@@ -18,7 +18,6 @@
 //! Explicit immutable build reuse for embedding executors.
 
 use super::*;
-use crate::memory::MemoryStream;
 use arrow::array::{Array, AsArray};
 use datafusion_common::exec_datafusion_err;
 use datafusion_execution::memory_pool::MemoryPool;
@@ -40,7 +39,6 @@ use datafusion_execution::memory_pool::MemoryPool;
 /// use hash-table membership filters instead of copying range or IN-list values.
 pub struct PreparedHashJoinBuild {
     build: Arc<JoinBuildData>,
-    schema: SchemaRef,
     keys: Vec<usize>,
     null_equality: NullEquality,
 }
@@ -49,7 +47,7 @@ impl fmt::Debug for PreparedHashJoinBuild {
     /// Describe immutable metadata without dumping table contents.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PreparedHashJoinBuild")
-            .field("schema", &self.schema)
+            .field("schema", &self.build.batch.schema())
             .field("keys", &self.keys)
             .field("rows", &self.num_rows())
             .field("reserved_bytes", &self.reserved_bytes())
@@ -86,7 +84,7 @@ impl PreparedHashJoinBuild {
     /// consuming input or modifying either plan. Cache identity is caller-owned.
     pub(super) fn validate(&self, join: &HashJoinExec) -> Result<()> {
         let keys = prepared_key_indices(join)?;
-        if join.left.schema() != self.schema
+        if join.left.schema() != self.build.batch.schema()
             || keys != self.keys
             || join.null_equality != self.null_equality
         {
@@ -132,7 +130,7 @@ impl HashJoinExec {
     /// each consuming join publishes them into its own dynamic filter.
     pub async fn prepare_build(
         &self,
-        mut input: SendableRecordBatchStream,
+        input: SendableRecordBatchStream,
         pool: Arc<dyn MemoryPool>,
         config: Arc<ConfigOptions>,
     ) -> Result<Arc<PreparedHashJoinBuild>> {
@@ -163,28 +161,6 @@ impl HashJoinExec {
         let count = MetricBuilder::new(&metrics_set)
             .counter(ARRAY_MAP_CREATED_COUNT_METRIC_NAME, 0);
         let reservation = MemoryConsumer::new("PreparedHashJoinBuild").register(&pool);
-        // Retain each shared input buffer only once. The collector admits an
-        // independent copy only when it actually concatenates buffered batches.
-        // Ordinary task-local joins retain their existing accounting policy.
-        let mut input_memory = RecordBatchMemoryCounter::new();
-        let mut batches = Vec::new();
-        // Reject cumulative UTF-8 offset overflow before Arrow allocates a compact build.
-        let mut concat_values = vec![0usize; schema.fields().len()];
-        while let Some(batch) = input.try_next().await? {
-            check_byte_concat_sizes(&batch, &mut concat_values)?;
-            reservation.try_grow(input_memory.count_batch(&batch))?;
-            batches.push(batch);
-        }
-        drop(input);
-        if batches.is_empty() {
-            // Empty UTF-8 arrays still retain an offset buffer.
-            let batch = RecordBatch::new_empty(Arc::clone(&schema));
-            reservation.try_grow(input_memory.count_batch(&batch))?;
-            batches.push(batch);
-        }
-        let retained_input_bytes = input_memory.memory_usage();
-        drop(input_memory);
-        let input = Box::pin(MemoryStream::try_new(batches, Arc::clone(&schema), None)?);
         let data = collect_left_input(
             self.random_state.random_state().clone(),
             input,
@@ -198,12 +174,11 @@ impl HashJoinExec {
             self.null_equality,
             None,
             count,
-            Some(retained_input_bytes),
+            true,
         )
         .await?;
         Ok(Arc::new(PreparedHashJoinBuild {
             build: data.build,
-            schema,
             keys,
             null_equality: self.null_equality,
         }))
@@ -248,11 +223,14 @@ fn utf8_value_span(array: &dyn Array) -> usize {
 /// Add `batch`'s byte-column spans to `totals`, one entry per schema column, before
 /// an eventual single-batch concat. Reject offset overflow before allocating
 /// the value buffer; fixed-width columns leave their totals unchanged.
-fn check_byte_concat_sizes(batch: &RecordBatch, totals: &mut [usize]) -> Result<()> {
+pub(super) fn check_byte_concat_sizes(
+    batch: &RecordBatch,
+    totals: &mut [usize],
+) -> Result<()> {
     for (array, total) in batch.columns().iter().zip(totals) {
         if matches!(array.data_type(), DataType::Utf8) {
             *total = total.checked_add(utf8_value_span(array.as_ref()))
-                .filter(|&sum| sum <= i32::MAX as usize)
+                .filter(|&sum| i32::try_from(sum).is_ok())
                 .ok_or_else(|| exec_datafusion_err!(
                     "Prepared hash-join UTF-8 column exceeds its offset limit; a compact build is required"
                 ))?;
@@ -264,8 +242,8 @@ fn check_byte_concat_sizes(batch: &RecordBatch, totals: &mut [usize]) -> Result<
 impl HashJoinExecBuilder {
     /// Attach a fully prepared build to a fresh, compatible join execution.
     ///
-    /// Validates before mutation, replaces any task-local build future and
-    /// resets execution metrics. A previously attached task-local dynamic filter
+    /// [`Self::build`] validates compatibility. Attaching resets the build future
+    /// and execution metrics. A previously attached task-local dynamic filter
     /// keeps its expression handle (also referenced by the probe plan), while
     /// its build-report accumulator is reset. The caller must provide a fresh
     /// filter expression/probe plan for each independent task.
@@ -279,18 +257,14 @@ impl HashJoinExecBuilder {
     /// preserve it. Probe-only rewrites must retain the attached join's `left()`.
     /// Replacing that child or changing to incompatible join keys fails; other
     /// incompatible join-mode/type changes fail validation in `build`.
-    pub fn with_prepared_build(
-        mut self,
-        prepared: Arc<PreparedHashJoinBuild>,
-    ) -> Result<Self> {
-        prepared.validate(&self.exec)?;
+    pub fn with_prepared_build(mut self, prepared: Arc<PreparedHashJoinBuild>) -> Self {
         // This removes the ignored child's ordering/equivalences and preserves
         // its identity through plan resets.
         self.exec.left = Arc::new(crate::empty::EmptyExec::new(self.exec.left.schema()));
         self.reset_prepared_runtime_state();
         self.exec.prepared_build = Some(prepared);
         self.preserve_properties = false;
-        Ok(self)
+        self
     }
 }
 
