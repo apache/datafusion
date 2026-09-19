@@ -2058,8 +2058,12 @@ async fn load_page_index<T: AsyncFileReader>(
     options: ArrowReaderOptions,
 ) -> Result<ArrowReaderMetadata> {
     let parquet_metadata = reader_metadata.metadata();
-    let missing_column_index = parquet_metadata.column_index().is_none();
-    let missing_offset_index = parquet_metadata.offset_index().is_none();
+    let missing_column_index = !parquet_metadata
+        .page_index()
+        .is_some_and(|page_index| page_index.has_column_indexes());
+    let missing_offset_index = !parquet_metadata
+        .page_index()
+        .is_some_and(|page_index| page_index.has_offset_indexes());
     // You may ask yourself: why are we even checking if the page index is already loaded here?
     // Didn't we explicitly *not* load it above?
     // Well it's possible that a custom implementation of `AsyncFileReader` gives you
@@ -3999,8 +4003,11 @@ mod test {
             .fetch_metadata()
             .await
             .unwrap();
-        assert!(original.column_index().is_some());
-        assert!(original.offset_index().is_some());
+        assert!(
+            original
+                .page_index()
+                .is_some_and(|page_index| page_index.is_complete())
+        );
         let mut opener = ParquetMorselizerBuilder::new()
             .with_store(Arc::clone(&store))
             .with_schema(Arc::clone(&schema))

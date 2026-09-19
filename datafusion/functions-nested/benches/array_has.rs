@@ -913,31 +913,42 @@ fn bench_array_has_any_scalar(c: &mut Criterion) {
         Field::new("second", list_type_i64.clone(), false).into(),
     ];
 
-    for &scalar_size in &scalar_sizes {
-        let scalar_arg = create_int64_scalar_list(scalar_size, array_size as i64);
-        let args = vec![
-            ColumnarValue::Array(first_arr_i64.clone()),
-            ColumnarValue::Scalar(scalar_arg),
-        ];
-        group.bench_with_input(
-            BenchmarkId::new("i64_no_match", scalar_size),
-            &scalar_size,
-            |b, _| {
-                let udf = ArrayHasAny::new();
-                b.iter(|| {
-                    black_box(
-                        udf.invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
-                            arg_fields: arg_fields_i64.clone(),
-                            number_rows: NUM_ROWS,
-                            return_field: return_field.clone(),
-                            config_options: config_options.clone(),
-                        })
-                        .unwrap(),
-                    )
-                })
-            },
-        );
+    // The same number of visible rows, sliced from the middle of a backing
+    // array that is 100 times larger.
+    let backing_rows = NUM_ROWS * 100;
+    let sliced_arr_i64 = create_int64_list_array(backing_rows, array_size, NULL_DENSITY)
+        .slice(backing_rows / 2, NUM_ROWS);
+
+    for (name, arr) in [
+        ("i64_no_match", &first_arr_i64),
+        ("i64_no_match_sliced", &sliced_arr_i64),
+    ] {
+        for &scalar_size in &scalar_sizes {
+            let scalar_arg = create_int64_scalar_list(scalar_size, array_size as i64);
+            let args = vec![
+                ColumnarValue::Array(arr.clone()),
+                ColumnarValue::Scalar(scalar_arg),
+            ];
+            group.bench_with_input(
+                BenchmarkId::new(name, scalar_size),
+                &scalar_size,
+                |b, _| {
+                    let udf = ArrayHasAny::new();
+                    b.iter(|| {
+                        black_box(
+                            udf.invoke_with_args(ScalarFunctionArgs {
+                                args: args.clone(),
+                                arg_fields: arg_fields_i64.clone(),
+                                number_rows: NUM_ROWS,
+                                return_field: return_field.clone(),
+                                config_options: config_options.clone(),
+                            })
+                            .unwrap(),
+                        )
+                    })
+                },
+            );
+        }
     }
 
     // String benchmarks
