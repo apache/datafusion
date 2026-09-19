@@ -27,6 +27,7 @@ mod sort_fuzz;
 mod sort_query_fuzz;
 mod topk_filter_pushdown;
 
+mod aggregate_chain_fuzz;
 mod aggregation_fuzzer;
 #[expect(clippy::needless_pass_by_value)]
 mod equivalence;
