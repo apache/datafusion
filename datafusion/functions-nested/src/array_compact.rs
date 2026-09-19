@@ -20,13 +20,13 @@
 use crate::utils::make_scalar_function;
 use arrow::array::{
     Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, OffsetSizeTrait,
-    make_array,
+    make_array, new_empty_array,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeList, List, Null};
+use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::utils::offset_span;
+use datafusion_common::utils::{list_values, offset_span};
 use datafusion_common::{Result, exec_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -128,9 +128,23 @@ fn array_compact_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
 /// Remove null elements from each row of a list array.
 fn compact_list<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
-    field: &Arc<arrow::datatypes::Field>,
+    field: &FieldRef,
 ) -> Result<ArrayRef> {
-    let values = list_array.values();
+    let list_offsets = list_array.offsets();
+    let (first_offset, visible_len) = offset_span(list_offsets);
+    if visible_len == 0 || list_array.null_count() == list_array.len() {
+        // No row has values to keep. Return an empty child rather than a clone
+        // of the input, which would keep the input's child values alive.
+        return Ok(Arc::new(GenericListArray::<O>::new(
+            Arc::clone(field),
+            OffsetBuffer::new_zeroed(list_array.len()),
+            new_empty_array(field.data_type()),
+            list_array.nulls().cloned(),
+        )));
+    }
+    // Restrict the child to the visible values before computing logical nulls,
+    // which can be expensive.
+    let values = list_values(list_array)?;
     // Use logical nulls so element types without a validity buffer
     // (e.g. NullArray) are still treated as null.
     let Some(values_nulls) = values.logical_nulls() else {
@@ -143,11 +157,8 @@ fn compact_list<O: OffsetSizeTrait>(
     }
 
     let list_nulls = list_array.nulls();
-    let list_offsets = list_array.offsets();
     let original_data = values.to_data();
-    let (first_offset, visible_len) = offset_span(list_offsets);
-    let capacity =
-        visible_len - values_nulls.slice(first_offset, visible_len).null_count();
+    let capacity = visible_len - values_nulls.null_count();
     let mut offsets = Vec::<O>::with_capacity(list_array.len() + 1);
     offsets.push(O::zero());
     let mut mutable = MutableArrayData::with_capacities(
@@ -156,14 +167,14 @@ fn compact_list<O: OffsetSizeTrait>(
         Capacities::Array(capacity),
     );
 
-    for row_index in 0..list_array.len() {
+    for (row_index, window) in list_offsets.windows(2).enumerate() {
         if list_nulls.is_some_and(|n| n.is_null(row_index)) {
             offsets.push(offsets[row_index]);
             continue;
         }
 
-        let start = list_offsets[row_index].as_usize();
-        let end = list_offsets[row_index + 1].as_usize();
+        let start = window[0].as_usize() - first_offset;
+        let end = window[1].as_usize() - first_offset;
         let row_null_count = values_nulls.slice(start, end - start).null_count();
         let kept = (end - start) - row_null_count;
 
@@ -202,11 +213,57 @@ fn compact_list<O: OffsetSizeTrait>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::{DictionaryArray, Int32Array, ListArray, RunArray};
+    use arrow::datatypes::{Field, Int32Type};
 
     #[test]
     fn test_sliced_capacity() -> Result<()> {
         crate::utils::tests::check_sliced_list_behavior(|input| {
             array_compact_inner(std::slice::from_ref(input))
         })
+    }
+
+    #[test]
+    fn test_compact_sliced_logical_nulls() -> Result<()> {
+        let primitive =
+            Int32Array::from(vec![None, Some(10), Some(20), None, Some(30), None]);
+        let dictionary = DictionaryArray::<Int32Type>::try_new(
+            Int32Array::from(vec![0, 1, 2, 3, 4, 5]),
+            Arc::new(primitive.clone()),
+        )?;
+        let runs = RunArray::<Int32Type>::try_new(
+            &Int32Array::from(vec![1, 2, 3, 4, 5, 6]),
+            &primitive,
+        )?;
+        let expected = ListArray::from_iter_primitive::<Int32Type, _, _>([
+            Some(vec![Some(10), Some(20)]),
+            Some(vec![Some(30)]),
+        ]);
+        for values in [
+            Arc::new(primitive) as ArrayRef,
+            Arc::new(dictionary),
+            Arc::new(runs),
+        ] {
+            let field = Arc::new(Field::new_list_field(values.data_type().clone(), true));
+            let input = ListArray::new(
+                Arc::clone(&field),
+                OffsetBuffer::from_lengths([1, 2, 2, 1]),
+                values,
+                None,
+            );
+            for data_type in [input.data_type().clone(), LargeList(field)] {
+                let input = arrow::compute::cast(&input, &data_type)?;
+                let result = array_compact_inner(&[input.slice(1, 2)])?;
+                assert_eq!(result.data_type(), &data_type);
+                let decoded = arrow::compute::cast(&result, expected.data_type())?;
+                assert_eq!(decoded.as_ref(), &expected);
+
+                // Nulls outside the selected row must not prevent the zero-copy fast path.
+                let sliced = input.slice(1, 1);
+                let result = array_compact_inner(std::slice::from_ref(&sliced))?;
+                assert!(result.to_data().ptr_eq(&sliced.to_data()));
+            }
+        }
+        Ok(())
     }
 }
