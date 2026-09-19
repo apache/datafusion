@@ -198,6 +198,11 @@ FROM (
 statement ok
 SET datafusion.execution.target_partitions = 4
 
+# Bound merge buffers so each partition can allocate replay state while the
+# other partitions retain aggregate state in the shared greedy memory pool.
+statement ok
+SET datafusion.runtime.max_spill_merge_fan_in = 2
+
 query II
 SELECT count(*), sum(total)
 FROM (
@@ -227,6 +232,9 @@ FROM (
 <slt:ignore>
 
 # Restore settings to slt runner defaults
+statement ok
+RESET datafusion.runtime.max_spill_merge_fan_in
+
 statement ok
 RESET datafusion.runtime.memory_limit
 
