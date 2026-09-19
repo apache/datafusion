@@ -35,7 +35,7 @@ mod tests {
     use substrait::proto::plan_rel::RelType;
     use substrait::proto::rel_common::{Emit, EmitKind};
     use substrait::proto::r#type::{I64, Kind as TypeKind, List, Nullability, Struct};
-    use substrait::proto::{Expression, RelCommon, Type, rel};
+    use substrait::proto::{AggregationPhase, Expression, RelCommon, Type, rel};
 
     use crate::cases::roundtrip_logical_plan::higher_order_function_ctx;
 
@@ -317,6 +317,71 @@ mod tests {
                 (0, 1),
             ]
         );
+
+        Ok(())
+    }
+
+    // Collects the `phase` of every aggregate and window function call in a plan.
+    fn collect_phases(rel_type: &rel::RelType, out: &mut Vec<i32>) {
+        let input = match rel_type {
+            rel::RelType::Aggregate(aggregate) => {
+                for measure in &aggregate.measures {
+                    if let Some(function) = &measure.measure {
+                        out.push(function.phase);
+                    }
+                }
+                aggregate.input.as_ref()
+            }
+            rel::RelType::Project(project) => {
+                for expr in &project.expressions {
+                    if let Some(RexType::WindowFunction(window)) = &expr.rex_type {
+                        out.push(window.phase);
+                    }
+                }
+                project.input.as_ref()
+            }
+            rel::RelType::Filter(filter) => filter.input.as_ref(),
+            rel::RelType::Sort(sort) => sort.input.as_ref(),
+            rel::RelType::Fetch(fetch) => fetch.input.as_ref(),
+            _ => None,
+        };
+        if let Some(rel_type) = input.and_then(|input| input.rel_type.as_ref()) {
+            collect_phases(rel_type, out);
+        }
+    }
+
+    /// Substrait requires `phase` on aggregate and window function calls, and
+    /// requires `INITIAL_TO_RESULT` for a complete invocation. A DataFusion
+    /// logical plan only ever describes complete aggregations, so that is the
+    /// phase every produced call should carry.
+    #[tokio::test]
+    async fn aggregate_and_window_functions_declare_initial_to_result() -> Result<()> {
+        let ctx = create_context().await?;
+
+        for sql in [
+            "SELECT sum(a) FROM data",
+            "SELECT a, count(*) FROM data GROUP BY a",
+            "SELECT RANK() OVER (PARTITION BY a) FROM data",
+        ] {
+            let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+            let proto = to_substrait_plan(&plan, &ctx.state())?;
+
+            let root = match proto.relations.first().unwrap().rel_type.as_ref() {
+                Some(RelType::Root(root)) => root.input.as_ref().unwrap(),
+                _ => panic!("expected Root"),
+            };
+            let mut phases = vec![];
+            collect_phases(root.rel_type.as_ref().unwrap(), &mut phases);
+
+            assert!(!phases.is_empty(), "no function call found for `{sql}`");
+            for phase in phases {
+                assert_eq!(
+                    phase,
+                    AggregationPhase::InitialToResult as i32,
+                    "phase for `{sql}`"
+                );
+            }
+        }
 
         Ok(())
     }

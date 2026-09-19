@@ -65,7 +65,7 @@ pub fn from_aggregate_function(
                 true => AggregationInvocation::Distinct as i32,
                 false => AggregationInvocation::All as i32,
             },
-            phase: AggregationPhase::Unspecified as i32,
+            phase: AggregationPhase::InitialToResult as i32,
             args: vec![],
             options: vec![],
         }),

@@ -702,6 +702,48 @@ jobs:
         #  and this command can be run without filters.
         run: cargo xtask ci step test substrait
 
+  # Runs a plan this crate produces through substrait-java and Spark. A
+  # DataFusion round trip cannot check a field the consumer never reads, so
+  # this is what catches a wrong `AggregationPhase`. It pulls a Spark sized
+  # dependency set, so it only runs when the Substrait crate changes.
+  substrait-java-interop:
+    name: "Run the Substrait java interop test"
+    needs: linux-build-lib
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Check whether the Substrait crate changed
+        id: filter
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v3.0.2
+        with:
+          filters: |
+            substrait:
+              - 'datafusion/substrait/**'
+              - '.github/workflows/rust.yml'
+      # `setup-builder` assumes the amd64/rust container this job does not use,
+      # so the two things the Substrait build needs are installed directly.
+      - name: Install protobuf compiler
+        if: steps.filter.outputs.substrait == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+      - name: Setup Rust toolchain
+        if: steps.filter.outputs.substrait == 'true'
+        run: rustup component add rustfmt
+      - name: Setup Java
+        if: steps.filter.outputs.substrait == 'true'
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6  # v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: Write the plan
+        if: steps.filter.outputs.substrait == 'true'
+        run: cargo test -p datafusion-substrait --test substrait_integration -- --ignored write_java_interop_plan
+      - name: Convert it with substrait-java and run it in Spark
+        if: steps.filter.outputs.substrait == 'true'
+        run: mvn -B -f datafusion/substrait/java-interop/pom.xml test
+
   #  Temporarily commenting out the Windows flow, the reason is enormously slow running build
   #  Waiting for new Windows 2025 github runner
   #  Details: https://github.com/apache/datafusion/issues/13726
