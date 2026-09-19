@@ -22,15 +22,18 @@ use std::sync::{Arc, Mutex};
 use arrow::array::{Int32Array, RecordBatch, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion::datasource::{MemTable, TableProvider, TableType};
+use datafusion::datasource::{MemTable, TableProvider, TableType, provider_as_source};
 use datafusion::error::Result;
 use datafusion::execution::context::{SessionConfig, SessionContext};
+use datafusion::logical_expr::dml::{DmlStatement, WriteOp};
 use datafusion::logical_expr::{
-    Expr, LogicalPlan, TableProviderFilterPushDown, TableScan,
+    Expr, LogicalPlan, LogicalPlanBuilder, TableProviderFilterPushDown, TableScan, col,
+    lit,
 };
+use datafusion::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use datafusion_catalog::Session;
-use datafusion_common::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
 
@@ -983,5 +986,117 @@ async fn test_update_always_false_predicate_affects_no_rows() -> Result<()> {
         provider.captured_filters().is_none(),
         "update() must not be called, or the provider changes every row"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dml_partial_predicate_is_rejected() -> Result<()> {
+    for sql in [
+        "DELETE FROM t WHERE value > 10 AND id IN (SELECT id FROM src)",
+        "UPDATE t SET value = 1 WHERE value > 10 AND id IN (SELECT id FROM src)",
+    ] {
+        let delete_provider = Arc::new(CaptureDeleteProvider::new(test_schema()));
+        let update_provider = Arc::new(CaptureUpdateProvider::new(test_schema()));
+        let provider: Arc<dyn TableProvider> = if sql.starts_with("DELETE") {
+            delete_provider.clone()
+        } else {
+            update_provider.clone()
+        };
+        let ctx = SessionContext::new();
+        ctx.register_table("t", provider)?;
+        register_source_table(&ctx)?;
+
+        let result = ctx.sql(sql).await?.collect().await;
+        assert!(
+            delete_provider.captured_filters().is_none()
+                && update_provider.captured_filters().is_none()
+                && update_provider.captured_assignments().is_none(),
+            "a partial WHERE clause must not reach a provider: {sql}"
+        );
+        let err = result.expect_err("the subquery restriction must not be lost");
+        assert!(
+            err.to_string().contains("IN or an EXISTS subquery"),
+            "{err}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_delete_alias_scoping() -> Result<()> {
+    // Bypass optimization so the alias remains in the input to the physical planner.
+    for scan_name in ["t", "src"] {
+        let provider = Arc::new(CaptureDeleteProvider::new(test_schema()));
+        let target = provider_as_source(provider.clone());
+        let source = if scan_name == "t" {
+            Arc::clone(&target)
+        } else {
+            provider_as_source(Arc::new(MemTable::try_new(test_schema(), vec![vec![]])?))
+        };
+        let input = LogicalPlanBuilder::scan(scan_name, source, None)?
+            .alias("a")?
+            .filter(col("a.id").eq(lit(1)))?
+            .build()?;
+        let plan = LogicalPlan::Dml(DmlStatement::new(
+            "t".into(),
+            target,
+            WriteOp::Delete,
+            Arc::new(input),
+        ));
+        let result = DefaultPhysicalPlanner::default()
+            .create_physical_plan(&plan, &SessionContext::new().state())
+            .await;
+
+        if scan_name == "t" {
+            result?;
+            assert_eq!(
+                provider.captured_filters(),
+                Some(vec![col("id").eq(lit(1))]),
+                "the target alias must be accepted and its qualifier stripped"
+            );
+        } else {
+            assert!(
+                provider.captured_filters().is_none(),
+                "a foreign predicate must not be dropped before calling delete_from()"
+            );
+            let err =
+                result.expect_err("an alias of another table is not a target alias");
+            assert!(matches!(err, DataFusionError::NotImplemented(_)), "{err}");
+            assert!(
+                err.to_string().contains("references another table"),
+                "{err}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_delete_aggregate_input_is_rejected() -> Result<()> {
+    let provider = Arc::new(CaptureDeleteProvider::new(test_schema()));
+    let target = provider_as_source(provider.clone());
+    let input = LogicalPlanBuilder::scan("t", Arc::clone(&target), None)?
+        .aggregate(
+            vec![col("id"), col("status"), col("value")],
+            Vec::<Expr>::new(),
+        )?
+        .build()?;
+    let plan = LogicalPlan::Dml(DmlStatement::new(
+        "t".into(),
+        target,
+        WriteOp::Delete,
+        Arc::new(input),
+    ));
+    let result = DefaultPhysicalPlanner::default()
+        .create_physical_plan(&plan, &SessionContext::new().state())
+        .await;
+
+    assert!(
+        provider.captured_filters().is_none(),
+        "aggregation must not become an unrestricted delete_from() call"
+    );
+    let err = result.expect_err("aggregation cannot be represented by provider filters");
+    assert!(matches!(err, DataFusionError::NotImplemented(_)), "{err}");
+    assert!(err.to_string().contains("Aggregate"), "{err}");
     Ok(())
 }

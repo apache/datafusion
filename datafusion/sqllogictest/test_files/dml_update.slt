@@ -307,6 +307,11 @@ UPDATE test_update_subquery SET name = 'z' WHERE id IN (SELECT id FROM test_upda
 statement error DataFusion error: This feature is not implemented: UPDATE on table 'test_update_subquery' with an IN or an EXISTS subquery in its WHERE clause is not supported
 UPDATE test_update_subquery SET name = 'z' WHERE EXISTS (SELECT 1 FROM test_update_subquery_src WHERE test_update_subquery_src.id = test_update_subquery.id);
 
+# The ordinary predicate matches rows 2 and 3, but the full condition only matches 2.
+# Passing only the ordinary predicate to the provider would update too many rows.
+statement error DataFusion error: This feature is not implemented: UPDATE on table 'test_update_subquery' with an IN or an EXISTS subquery in its WHERE clause is not supported
+UPDATE test_update_subquery SET name = 'z' WHERE id > 1 AND id IN (SELECT id FROM test_update_subquery_src);
+
 # Every row keeps its value after each rejected statement
 query IT rowsort
 SELECT * FROM test_update_subquery;

@@ -220,6 +220,11 @@ DELETE FROM test_delete_subquery WHERE EXISTS (SELECT 1 FROM test_delete_subquer
 statement error DataFusion error: This feature is not implemented: DELETE on table 'test_delete_subquery' with an IN or an EXISTS subquery in its WHERE clause is not supported
 DELETE FROM test_delete_subquery WHERE column1 NOT IN (SELECT column1 FROM test_delete_subquery_src);
 
+# The ordinary predicate matches rows 2 and 3, but the full condition only matches 2.
+# Passing only the ordinary predicate to the provider would delete too many rows.
+statement error DataFusion error: This feature is not implemented: DELETE on table 'test_delete_subquery' with an IN or an EXISTS subquery in its WHERE clause is not supported
+DELETE FROM test_delete_subquery WHERE column1 > 1 AND column1 IN (SELECT column1 FROM test_delete_subquery_src);
+
 # Every row survives each rejected statement
 query I rowsort
 SELECT * FROM test_delete_subquery;
