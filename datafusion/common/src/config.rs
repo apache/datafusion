@@ -1597,6 +1597,27 @@ config_namespace! {
         /// repartitioning to increase parallelism to leverage more CPU cores
         pub enable_round_robin_repartition: bool, default = true
 
+        /// Comma separated names of physical optimizer rules that may be
+        /// skipped when handed a plan they have already been seen to leave
+        /// untouched. Empty, the default, disables the optimization.
+        ///
+        /// Physical rules run as a fixed sequence with no fixpoint loop, so a
+        /// list holding the same rule several times runs it again on plans it
+        /// has already settled. A plan is remembered only after the rule ran
+        /// on it and returned that same plan, so a skip replays an observed
+        /// outcome rather than predicting one; a rule that has not yet
+        /// converged records nothing and keeps running. What is remembered is
+        /// scoped to one planning run, and plans are compared by rendered
+        /// form, since a rule that changes nothing still commonly rebuilds the
+        /// tree. Debug builds re-run a skipped rule and check it.
+        ///
+        /// Names are matched against what a rule reports as its name, which is
+        /// what `EXPLAIN VERBOSE` shows; an unmatched name is ignored. A name
+        /// stands for a behaviour, since every rule answering to it shares one
+        /// record: the built-in `OutputRequirements` names two instances that
+        /// do opposite things, so it must not be listed.
+        pub skip_unchanged_physical_rules: String, default = "".to_string()
+
         /// When set to true, the optimizer will attempt to perform limit operations
         /// during aggregations, if possible
         pub enable_topk_aggregation: bool, default = true
