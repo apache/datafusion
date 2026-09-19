@@ -2377,16 +2377,36 @@ impl PartitionedTopKDenseRank {
         // order, ob values ascending within a partition, entries in
         // insertion order within an ob value — so the interleaved output
         // is already ordered and needs no post-sort.
-        let mut batch_refs = Vec::with_capacity(store.len());
-        let mut batch_id_pos = HashMap::with_capacity(store.len());
-        for (array_pos, (batch_id, entry)) in store.batches.iter().enumerate() {
-            batch_refs.push(&entry.batch);
-            batch_id_pos.insert(*batch_id, array_pos);
-        }
+        //
+        // `indices` carries the global `batch_id` rather than a position
+        // into a fixed `batch_refs` slice: for Dictionary columns,
+        // `interleave` does work proportional to the *number of input
+        // arrays*, not just the ones the indices reference, so passing
+        // every batch in the store on every chunk turns emit into
+        // O(chunks × total batches) instead of O(chunks × batches the
+        // chunk actually uses). Each chunk below rebuilds a batch slice
+        // scoped to just its own `batch_id`s.
+        let mut indices: Vec<(u32, usize)> = Vec::with_capacity(batch_size);
+        let mut flush = |indices: &mut Vec<(u32, usize)>| -> Result<()> {
+            let mut batch_refs = Vec::new();
+            let mut local_pos = HashMap::new();
+            let mut local_indices = Vec::with_capacity(indices.len());
+            for &(batch_id, row) in indices.iter() {
+                let pos = *local_pos.entry(batch_id).or_insert_with(|| {
+                    batch_refs.push(&store.batches[&batch_id].batch);
+                    batch_refs.len() - 1
+                });
+                local_indices.push((pos, row));
+            }
+            let b = interleave_record_batch(&batch_refs, &local_indices)?;
+            (&b).record_output(&metrics.baseline);
+            out.push(Ok(b));
+            indices.clear();
+            Ok(())
+        };
 
         // Chunk at `batch_size` so the operator emits the same batch sizes
         // as before and no single `interleave` output exceeds `batch_size`.
-        let mut indices: Vec<(usize, usize)> = Vec::with_capacity(batch_size);
         for pk in sorted_pks {
             let DenseRankPartitionState {
                 groups,
@@ -2400,23 +2420,17 @@ impl PartitionedTopKDenseRank {
             sorted_obs.sort_by(|a, b| a.0.cmp(&b.0));
             for (_ob, entries) in sorted_obs {
                 for entry in entries {
-                    let array_pos = batch_id_pos[&entry.batch_id];
                     for row in entry.row_indices {
-                        indices.push((array_pos, row as usize));
+                        indices.push((entry.batch_id, row as usize));
                         if indices.len() == batch_size {
-                            let b = interleave_record_batch(&batch_refs, &indices)?;
-                            (&b).record_output(&metrics.baseline);
-                            out.push(Ok(b));
-                            indices.clear();
+                            flush(&mut indices)?;
                         }
                     }
                 }
             }
         }
         if !indices.is_empty() {
-            let b = interleave_record_batch(&batch_refs, &indices)?;
-            (&b).record_output(&metrics.baseline);
-            out.push(Ok(b));
+            flush(&mut indices)?;
         }
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -2460,8 +2474,11 @@ impl PartitionedTopKDenseRank {
 mod tests {
     use super::*;
     use crate::metrics::MetricValue;
-    use arrow::array::{BooleanArray, Float64Array, Int32Array, StringArray};
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::{
+        AsArray, BooleanArray, Float64Array, Int32Array, StringArray,
+        StringDictionaryBuilder,
+    };
+    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use arrow_schema::SortOptions;
     use datafusion_common::{assert_batches_eq, exec_datafusion_err};
     use datafusion_execution::memory_pool::GreedyMemoryPool;
@@ -3480,8 +3497,8 @@ mod tests {
         let batches: Vec<RecordBatch> = stream.try_collect().await?;
         let mut rows: Vec<(i32, i32)> = Vec::new();
         for b in &batches {
-            let pk = b.column(0).as_primitive::<arrow::datatypes::Int32Type>();
-            let val = b.column(1).as_primitive::<arrow::datatypes::Int32Type>();
+            let pk = b.column(0).as_primitive::<Int32Type>();
+            let val = b.column(1).as_primitive::<Int32Type>();
             for i in 0..b.num_rows() {
                 rows.push((pk.value(i), val.value(i)));
             }
@@ -4532,6 +4549,85 @@ mod tests {
             ],
             &results
         );
+        Ok(())
+    }
+
+    /// Regression test for the `emit` rewrite: passing the *entire* store
+    /// to every `interleave_record_batch` call made Dictionary columns
+    /// O(chunks × total batches) instead of O(chunks × batches the chunk
+    /// actually uses), since `interleave_dictionaries` does per-input-array
+    /// work for every array it's handed. `batch_size` is 8, so 20 retained
+    /// rows spread across 2 source batches emit in 3 chunks — with several
+    /// chunks mixing rows from both source batches — the exact shape that
+    /// exercises the per-chunk batch-slice rebuild.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_emit_dictionary_spans_chunks() -> Result<()>
+    {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("pk", DataType::Int32, false),
+            Field::new(
+                "val",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                false,
+            ),
+        ]));
+
+        let pk_expr: Arc<dyn PhysicalExpr> = col("pk", schema.as_ref())?;
+        let partition_sort_fields = build_sort_fields(
+            &[PhysicalSortExpr {
+                expr: Arc::clone(&pk_expr),
+                options: SortOptions::default(),
+            }],
+            &schema,
+        )?;
+        let order_expr = LexOrdering::from([PhysicalSortExpr {
+            expr: col("val", schema.as_ref())?,
+            options: SortOptions::default(),
+        }]);
+
+        let mut state = PartitionedTopKDenseRank::try_new(
+            0,
+            Arc::clone(&schema),
+            vec![pk_expr],
+            partition_sort_fields,
+            order_expr,
+            20, // k: large enough to retain every distinct value below
+            8,  // batch_size
+            &Arc::new(RuntimeEnv::default()),
+            &ExecutionPlanMetricsSet::new(),
+        )?;
+
+        let dict_batch = |vals: &[&str]| -> Result<RecordBatch> {
+            let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+            for v in vals {
+                builder.append_value(v);
+            }
+            Ok(RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1; vals.len()])),
+                    Arc::new(builder.finish()),
+                ],
+            )?)
+        };
+
+        // Two source batches (two distinct `batch_id`s), 10 distinct values
+        // each, all under a single partition key so every output chunk
+        // draws from both.
+        state.insert_batch(&dict_batch(&[
+            "v00", "v01", "v02", "v03", "v04", "v05", "v06", "v07", "v08", "v09",
+        ])?)?;
+        state.insert_batch(&dict_batch(&[
+            "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19",
+        ])?)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_eq!(results.iter().map(|b| b.num_rows()).sum::<usize>(), 20);
+        assert_eq!(results.len(), 3, "expected 3 chunks of batch_size=8");
+        let val_col = results[0].column(1).as_dictionary::<Int32Type>();
+        let dict_values = val_col.values().as_string::<i32>();
+        let first_val = dict_values.value(val_col.keys().value(0) as usize);
+        assert_eq!(first_val, "v00", "rows must still emit in ob-sorted order");
         Ok(())
     }
 
