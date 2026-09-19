@@ -221,9 +221,7 @@ impl OutputChannel {
         }
         result
     }
-
 }
-
 
 /// Channels and resources for a single output partition.
 ///
@@ -1637,8 +1635,7 @@ impl ExecutionPlan for RepartitionExec {
         let partitioning = self.partitioning().clone();
         let metrics = self.metrics.clone();
         let preserve_order = self.sort_exprs().is_some();
-        let coalesce_batches =
-            !preserve_order && !input.boundedness().is_unbounded();
+        let coalesce_batches = !preserve_order && !input.boundedness().is_unbounded();
         let name = self.name().to_owned();
         let schema = self.schema();
         let schema_captured = Arc::clone(&schema);
@@ -2446,11 +2443,10 @@ impl PerPartitionStream {
                                 self.reservation.shrink(batch.get_array_memory_size());
                                 if let Some(coalescer) = &mut self.coalescer {
                                     coalescer.push_batch(batch)?;
-                                    let flushed: Vec<_> =
-                                        std::iter::from_fn(|| {
-                                            coalescer.next_completed_batch()
-                                        })
-                                        .collect();
+                                    let flushed: Vec<_> = std::iter::from_fn(|| {
+                                        coalescer.next_completed_batch()
+                                    })
+                                    .collect();
                                     self.pending.extend(flushed);
                                     // loop back to drain pending or poll for more
                                 } else {
@@ -2474,11 +2470,10 @@ impl PerPartitionStream {
                                 // All input partitions finished — flush coalescer residual
                                 if let Some(coalescer) = &mut self.coalescer {
                                     coalescer.finish()?;
-                                    let flushed: Vec<_> =
-                                        std::iter::from_fn(|| {
-                                            coalescer.next_completed_batch()
-                                        })
-                                        .collect();
+                                    let flushed: Vec<_> = std::iter::from_fn(|| {
+                                        coalescer.next_completed_batch()
+                                    })
+                                    .collect();
                                     self.coalescer = None;
                                     self.pending.extend(flushed);
                                     // loop back to drain pending, then return None
