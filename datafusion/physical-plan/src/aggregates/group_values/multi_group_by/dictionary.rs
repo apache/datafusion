@@ -30,7 +30,7 @@ use datafusion_expr::GroupSelection;
 use hashbrown::{HashMap, hash_table::HashTable};
 use std::marker::PhantomData;
 use std::mem::size_of;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use crate::aggregates::AGGREGATION_HASH_SEED;
 
@@ -63,10 +63,10 @@ pub struct DictionaryGroupValuesColumn<K: ArrowDictionaryKeyType + Send + Sync> 
     val_to_inner: Vec<usize>,
     /// Hashes of the values array in `cached_values`, one per `val_idx`.
     val_hashes: Vec<u64>,
-    /// The values array that `val_hashes` and `val_to_inner` were built for.
-    /// When an incoming `dict.values()` is `Arc::ptr_eq` to this, both caches
-    /// are reused instead of being rebuilt. See [`Self::sync_value_cache`].
-    cached_values: Option<ArrayRef>,
+    /// Weak reference to the values array that `val_hashes` and `val_to_inner`
+    /// were built for. A matching live array reuses both caches without
+    /// retaining an input dictionary after its batch is released.
+    cached_values: Option<Weak<dyn Array>>,
     _phantom: PhantomData<K>,
 }
 
@@ -190,17 +190,17 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
     /// rather than O(rows). `take_n` remaps `inner` and clears
     /// `cached_values`, forcing a rebuild.
     fn sync_value_cache(&mut self, dict_values: &ArrayRef) {
-        if self
-            .cached_values
-            .as_ref()
-            .is_some_and(|c| Arc::ptr_eq(c, dict_values))
-        {
+        if self.cached_values.as_ref().is_some_and(|cached| {
+            cached
+                .upgrade()
+                .is_some_and(|values| Arc::ptr_eq(&values, dict_values))
+        }) {
             return;
         }
         self.hash_values(dict_values);
         self.val_to_inner.clear();
         self.val_to_inner.resize(dict_values.len(), usize::MAX);
-        self.cached_values = Some(Arc::clone(dict_values));
+        self.cached_values = Some(Arc::downgrade(dict_values));
     }
 
     fn find_or_insert_value(
@@ -682,6 +682,29 @@ mod tests {
         (0..buf.len()).map(|i| buf.get_bit(i)).collect()
     }
 
+    #[test]
+    fn hash_cache_does_not_retain_dictionary_values() {
+        let mut column = utf8_col();
+        let input = i32_dict(&[Some(0)], &[Some("retained")]);
+        let values = Arc::clone(input.as_dictionary::<Int32Type>().values());
+        let weak_values = Arc::downgrade(&values);
+        column.append_val(&input, 0).unwrap();
+        assert!(
+            column
+                .cached_values
+                .as_ref()
+                .is_some_and(|cached| cached.ptr_eq(&weak_values))
+        );
+        let size_with_input = column.size();
+
+        // The cache is only an identity hint: it must not keep an input
+        // dictionary allocation alive after its batch is released.
+        drop(values);
+        drop(input);
+        assert!(weak_values.upgrade().is_none());
+        assert_eq!(column.size(), size_with_input);
+    }
+
     fn all_true(len: usize) -> BooleanBufferBuilder {
         let mut buf = BooleanBufferBuilder::new(len);
         buf.append_n(len, true);
@@ -962,11 +985,11 @@ mod tests {
             usize::MAX,
             "unreferenced value resolved"
         );
-        assert!(
-            col.cached_values
-                .as_ref()
-                .is_some_and(|c| Arc::ptr_eq(c, &values))
-        );
+        assert!(col.cached_values.as_ref().is_some_and(|cached| {
+            cached
+                .upgrade()
+                .is_some_and(|value| Arc::ptr_eq(&value, &values))
+        }));
         assert_eq!(col.inner.len(), 2);
     }
 
@@ -1002,10 +1025,11 @@ mod tests {
         col.vectorized_append(&second, &[0]).unwrap();
 
         assert!(
-            col.cached_values.as_ref().is_some_and(|c| Arc::ptr_eq(
-                c,
-                second.as_dictionary::<Int32Type>().values()
-            )),
+            col.cached_values.as_ref().is_some_and(|cached| {
+                cached.upgrade().is_some_and(|value| {
+                    Arc::ptr_eq(&value, second.as_dictionary::<Int32Type>().values())
+                })
+            }),
             "cache should track the most recent values array"
         );
         assert_eq!(col.inner.len(), 1, "'a' must dedup across both arrays");
@@ -1050,11 +1074,11 @@ mod tests {
         let mut col = utf8_col();
 
         col.append_val(&batch, 0).unwrap();
-        assert!(
-            col.cached_values
-                .as_ref()
-                .is_some_and(|c| Arc::ptr_eq(c, &values))
-        );
+        assert!(col.cached_values.as_ref().is_some_and(|cached| {
+            cached
+                .upgrade()
+                .is_some_and(|value| Arc::ptr_eq(&value, &values))
+        }));
 
         col.vectorized_append(&batch, &[0, 1]).unwrap();
         assert_eq!(col.inner.len(), 2, "'a' must not be duplicated");
