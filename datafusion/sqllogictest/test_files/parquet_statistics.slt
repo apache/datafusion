@@ -243,6 +243,33 @@ physical_plan
 statement ok
 DROP TABLE cast_stats_ints;
 
+# An out-of-range minimum or maximum must prevent aggregate folding and preserve
+# the runtime cast error, even when the other endpoint fits in Int8.
+statement ok
+COPY (SELECT CAST(a AS BIGINT) AS a, CAST(b AS BIGINT) AS b
+      FROM (VALUES (-129, -128), (0, 0), (127, 128), (NULL, NULL)) AS t(a, b))
+TO 'test_files/scratch/parquet_statistics/cast_ints_overflow.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE cast_stats_ints_overflow STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_statistics/cast_ints_overflow.parquet';
+
+query error Cast error: Can't cast value -129 to type Int8
+SELECT MIN(CAST(a AS TINYINT)), MAX(CAST(a AS TINYINT)) FROM cast_stats_ints_overflow;
+
+query error Cast error: Can't cast value 128 to type Int8
+SELECT MIN(CAST(b AS TINYINT)), MAX(CAST(b AS TINYINT)) FROM cast_stats_ints_overflow;
+
+query TT
+EXPLAIN SELECT MIN(CAST(a AS TINYINT)), MAX(CAST(a AS TINYINT)) FROM cast_stats_ints_overflow;
+----
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[min(cast_stats_ints_overflow.a), max(cast_stats_ints_overflow.a)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/cast_ints_overflow.parquet]]}, projection=[CAST(a@0 AS Int8) as __common_expr_1], file_type=parquet
+
+statement ok
+DROP TABLE cast_stats_ints_overflow;
+
 statement ok
 SET datafusion.execution.target_partitions = 4;
 
