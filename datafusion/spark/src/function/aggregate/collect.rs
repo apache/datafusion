@@ -109,7 +109,12 @@ fn normalize_array(
             // logical length represented by those runs.
             let value = value.as_ref();
             arrow::array::downcast_run_array! {
-                value => normalize_run_end(value, target_type, target_value.data_type()),
+                value => normalize_run_end(
+                    value,
+                    target_type,
+                    target_value.data_type(),
+                    require_non_null,
+                ),
                 _ => internal_err!("collect_list/collect_set expected a run-end encoded array"),
             }
         }
@@ -200,11 +205,12 @@ fn normalize_run_end<R: RunEndIndexType>(
     source: &RunArray<R>,
     target_type: &DataType,
     target_value_type: &DataType,
+    require_non_null: bool,
 ) -> Result<ArrayRef> {
     let run_ends =
         PrimitiveArray::<R>::from_iter_values(source.run_ends().sliced_values());
     let values = source.values_slice();
-    let values = normalize_array(&values, target_value_type, true)?;
+    let values = normalize_array(&values, target_value_type, require_non_null)?;
 
     let data = ArrayData::builder(target_type.clone())
         .len(source.len())
@@ -1643,6 +1649,78 @@ mod tests {
         let normalized = normalized.as_run::<Int64Type>();
         assert_eq!(normalized.values().len(), 1);
         assert_eq!(normalized.values().data_type(), &DataType::LargeUtf8);
+        Ok(())
+    }
+
+    #[test]
+    fn collect_input_run_end_normalization_preserves_null_runs() -> Result<()> {
+        let runtime_fields = UnionFields::try_new(
+            vec![4, 9],
+            vec![
+                Field::new("integer", DataType::Int32, false),
+                Field::new("null", DataType::Null, true),
+            ],
+        )?;
+        let declared_fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("integer", DataType::Int32, false),
+                Field::new("null", DataType::Null, false),
+            ],
+        )?;
+        let runtime_values = UnionArray::try_new(
+            runtime_fields,
+            ScalarBuffer::from(vec![4_i8, 9]),
+            None,
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), None])),
+                Arc::new(NullArray::new(2)),
+            ],
+        )?;
+        assert_eq!(runtime_values.logical_null_count(), 1);
+
+        let run_ends = Int16Array::from(vec![2, 4]);
+        let values = Arc::new(RunArray::<Int16Type>::try_new(&run_ends, &runtime_values)?)
+            as ArrayRef;
+        assert_eq!(values.logical_null_count(), 2);
+
+        let DataType::RunEndEncoded(run_ends_field, values_field) = values.data_type()
+        else {
+            panic!("expected run-end encoded values")
+        };
+        let element_type = DataType::RunEndEncoded(
+            Arc::clone(run_ends_field),
+            Arc::new(Field::new(
+                values_field.name(),
+                DataType::Union(declared_fields, UnionMode::Sparse),
+                true,
+            )),
+        );
+        let mut accumulator = NullToEmptyListAccumulator::new(
+            ArrayAggAccumulator::try_new(&element_type, true)?,
+            list_type(element_type.clone()),
+        );
+
+        let normalized = accumulator.normalize_input(&values)?;
+        assert_eq!(normalized.data_type(), &element_type);
+        assert_eq!(normalized.len(), 4);
+        assert_eq!(normalized.as_run::<Int16Type>().values().len(), 2);
+
+        accumulator.update_batch(std::slice::from_ref(&values))?;
+        assert_list_values(
+            &accumulator.evaluate()?,
+            &element_type,
+            &["{integer=1}", "{integer=1}"],
+        )?;
+
+        accumulator.retract_batch(&[values.slice(2, 2)])?;
+        assert_list_values(
+            &accumulator.evaluate()?,
+            &element_type,
+            &["{integer=1}", "{integer=1}"],
+        )?;
+        accumulator.retract_batch(&[values.slice(0, 2)])?;
+        assert_empty_list(&accumulator.evaluate()?);
         Ok(())
     }
 
