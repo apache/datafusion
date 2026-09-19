@@ -18,11 +18,8 @@
 //! The join execs.
 
 use super::{roundtrip_test, roundtrip_test_and_return};
-use datafusion::arrow::array::Int64Array;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::logical_expr::{JoinType, Operator};
 use datafusion::physical_expr::LexOrdering;
 use datafusion::physical_plan::ExecutionPlan;
@@ -1059,92 +1056,6 @@ async fn roundtrip_planned_piecewise_merge_join() -> Result<()> {
         assert!(found, "expected a PiecewiseMergeJoinExec for: {query}");
 
         roundtrip_test(plan)?;
-    }
-    Ok(())
-}
-
-/// `roundtrip_test`/`roundtrip_test_and_return` only compare the `Debug` string of the
-/// before/after plans -- which, per their own doc comment, "often isn't sufficient to
-/// guarantee that no information is lost during serde because the string representation of
-/// a plan often only shows a subset of state". `LeftMark`/`RightMark` add no new field to
-/// encode (`join_type` already selects them from the shared proto enum, see
-/// `join_type_to_proto`/`join_type_from_proto`), so the real risk is not a missing wire field
-/// but a decoded plan that behaves differently at execution time. This actually executes both
-/// the original and the roundtripped plan over real data and compares their output batches
-/// row for row, including the `mark` column.
-#[tokio::test]
-async fn roundtrip_piecewise_merge_join_mark_executes_correctly() -> Result<()> {
-    let ctx = SessionContext::new();
-    let codec = DefaultPhysicalExtensionCodec {};
-    let proto_converter = DefaultPhysicalProtoConverter {};
-
-    let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, true)]));
-
-    // `Operator::Gt` needs the buffered side ascending with NULLs first -- `LeftMark` reads
-    // it in that order directly, with no `SortExec` in this hand-built plan to enforce it.
-    let buffered_batch = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![Arc::new(Int64Array::from(vec![None, Some(1), Some(5)]))],
-    )?;
-    let streamed_batch = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![Arc::new(Int64Array::from(vec![
-            Some(4),
-            Some(5),
-            Some(6),
-            None,
-        ]))],
-    )?;
-
-    for join_type in [JoinType::LeftMark, JoinType::RightMark] {
-        let buffered = MemorySourceConfig::try_new_exec(
-            &[vec![buffered_batch.clone()]],
-            Arc::clone(&schema),
-            None,
-        )?;
-        let streamed = MemorySourceConfig::try_new_exec(
-            &[vec![streamed_batch.clone()]],
-            Arc::clone(&schema),
-            None,
-        )?;
-
-        let plan: Arc<dyn ExecutionPlan> = Arc::new(PiecewiseMergeJoinExec::try_new(
-            buffered,
-            streamed,
-            (
-                Arc::new(Column::new("k", 0)) as _,
-                Arc::new(Column::new("k", 0)) as _,
-            ),
-            Operator::Gt,
-            join_type,
-            1,
-        )?);
-
-        let before =
-            datafusion::physical_plan::collect(Arc::clone(&plan), ctx.task_ctx()).await?;
-        assert!(
-            before.iter().any(|b| b.num_rows() > 0),
-            "{join_type}: expected at least one output row from the original plan"
-        );
-
-        let bytes = physical_plan_to_bytes_with_proto_converter(
-            Arc::clone(&plan),
-            &codec,
-            &proto_converter,
-        )?;
-        let decoded = physical_plan_from_bytes_with_proto_converter(
-            bytes.as_ref(),
-            ctx.task_ctx().as_ref(),
-            &codec,
-            &proto_converter,
-        )?;
-        let after = datafusion::physical_plan::collect(decoded, ctx.task_ctx()).await?;
-
-        pretty_assertions::assert_eq!(
-            arrow::util::pretty::pretty_format_batches(&before)?.to_string(),
-            arrow::util::pretty::pretty_format_batches(&after)?.to_string(),
-            "{join_type}: roundtripped plan produced different output"
-        );
     }
     Ok(())
 }

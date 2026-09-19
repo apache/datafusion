@@ -23,7 +23,7 @@ use datafusion_expr::JoinType;
 // `RightMark` belongs here too: deciding its mark column is the same one-key comparison as
 // `RightSemi`/`RightAnti`, just kept instead of used to filter, so it needs no more of the
 // buffered side than they do.
-pub(super) fn is_supported_right_existence_join(join_type: JoinType) -> bool {
+pub(super) fn is_right_existence_join(join_type: JoinType) -> bool {
     matches!(
         join_type,
         JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark

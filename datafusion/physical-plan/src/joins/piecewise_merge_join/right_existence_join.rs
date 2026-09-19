@@ -102,6 +102,7 @@ use std::sync::Arc;
 use std::task::{Poll, ready};
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray, RecordBatch};
+use arrow::buffer::BooleanBuffer;
 use arrow::compute::BatchCoalescer;
 use arrow::compute::filter_record_batch;
 use arrow::compute::kernels::boolean::not;
@@ -347,7 +348,10 @@ impl RightExistencePWMJStream {
     /// column is documented never to be NULL; see `JoinType::LeftMark`).
     fn mark_streamed_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
         let mark: ArrayRef = match self.matched_mask(batch)? {
-            None => Arc::new(BooleanArray::from(vec![false; batch.num_rows()])),
+            None => Arc::new(BooleanArray::new(
+                BooleanBuffer::new_unset(batch.num_rows()),
+                None,
+            )),
             Some(matched) => Arc::new(boolean_mask_from_filter(&matched)),
         };
 

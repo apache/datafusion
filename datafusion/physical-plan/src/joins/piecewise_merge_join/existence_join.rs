@@ -91,7 +91,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering as AtomicOrdering;
 use std::task::{Poll, ready};
 
-use arrow::array::{Array, ArrayRef, BooleanArray, RecordBatch};
+use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder, RecordBatch};
 use arrow::compute::BatchCoalescer;
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::{NullEquality, Result, internal_err};
@@ -419,18 +419,32 @@ impl ExistencePWMJStream {
                     (sliced.num_rows(), sliced.columns().to_vec())
                 }
                 // `LeftMark` keeps every buffered row -- nothing to slice -- and appends
-                // the watermark as a `mark` column instead of using it to drop rows.
+                // the watermark as a `mark` column instead of using it to drop rows: `false`
+                // for the unmatched prefix `[0, min_marked)`, `true` for the matched suffix
+                // `[min_marked, len)` -- the same split `LeftSemi`/`LeftAnti` slice the
+                // buffered batch on, just kept as one column instead of used to drop rows.
                 JoinType::LeftMark => {
+                    let mut mark = BooleanBufferBuilder::new(buffered_len);
+                    mark.append_n(min_marked, false);
+                    mark.append_n(buffered_len - min_marked, true);
+
                     let mut columns = buffered_batch.columns().to_vec();
-                    columns.push(mark_column(buffered_len, min_marked));
+                    columns.push(
+                        Arc::new(BooleanArray::new(mark.finish(), None)) as ArrayRef
+                    );
                     (buffered_len, columns)
                 }
                 // `LeftAnti`: the unmarked prefix, which includes every null-keyed row --
                 // nulls sort first and the watermark never drops below the buffered null
                 // count.
-                _ => {
+                JoinType::LeftAnti => {
                     let sliced = buffered_batch.slice(0, min_marked);
                     (sliced.num_rows(), sliced.columns().to_vec())
+                }
+                other => {
+                    return internal_err!(
+                        "ExistencePWMJStream does not support join type {other:?}"
+                    );
                 }
             };
 
@@ -474,16 +488,6 @@ pub(super) fn extreme_key(values: &ArrayRef, descending: bool) -> Result<ArrayRe
         min_batch(values)?
     };
     extreme.to_array_of_size(1)
-}
-
-/// Builds the `LeftMark` `mark` column from the watermark: `false` for the unmatched prefix
-/// `[0, min_marked)`, `true` for the matched suffix `[min_marked, len)` -- the same split
-/// `LeftSemi`/`LeftAnti` slice the buffered batch on, just kept as one column instead of used
-/// to drop rows.
-fn mark_column(len: usize, min_marked: usize) -> ArrayRef {
-    let mut mark = vec![false; len];
-    mark[min_marked..].fill(true);
-    Arc::new(BooleanArray::from(mark))
 }
 
 impl RecordBatchStream for ExistencePWMJStream {
