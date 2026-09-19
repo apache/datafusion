@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::RecordBatch;
+use arrow::array::{BooleanArray, RecordBatch};
 use arrow::compute::BatchCoalescer;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{Result, assert_or_internal_err};
@@ -120,6 +120,44 @@ impl LimitedBatchCoalescer {
         Ok(PushBatchStatus::Continue)
     }
 
+    /// Pushes the next [`RecordBatch`] into the coalescer after applying `filter`,
+    /// avoiding a separate materialization pass compared to calling
+    /// [`filter_record_batch`] followed by [`Self::push_batch`].
+    ///
+    /// [`filter_record_batch`]: arrow::compute::filter_record_batch
+    pub fn push_batch_with_filter(
+        &mut self,
+        batch: RecordBatch,
+        filter: &BooleanArray,
+    ) -> Result<PushBatchStatus> {
+        assert_or_internal_err!(
+            !self.finished,
+            "LimitedBatchCoalescer: cannot push batch after finish"
+        );
+
+        if let Some(fetch) = self.fetch {
+            if self.total_rows >= fetch {
+                return Ok(PushBatchStatus::LimitReached);
+            }
+
+            let selected_count = filter.true_count();
+            if self.total_rows + selected_count >= fetch {
+                let remaining = fetch - self.total_rows;
+                let truncated = first_n_true(filter, remaining);
+                self.total_rows += remaining;
+                self.inner.push_batch_with_filter(batch, &truncated)?;
+                return Ok(PushBatchStatus::LimitReached);
+            }
+
+            self.total_rows += selected_count;
+        } else {
+            self.total_rows += filter.true_count();
+        }
+
+        self.inner.push_batch_with_filter(batch, filter)?;
+        Ok(PushBatchStatus::Continue)
+    }
+
     /// Return true if there is no data buffered
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
@@ -142,6 +180,19 @@ impl LimitedBatchCoalescer {
     pub fn next_completed_batch(&mut self) -> Option<RecordBatch> {
         self.inner.next_completed_batch()
     }
+}
+
+/// Returns a copy of `filter` where only the first `n` `true` values are kept;
+/// all subsequent `true` values are replaced with `false`.
+fn first_n_true(filter: &BooleanArray, n: usize) -> BooleanArray {
+    let mut count = 0;
+    BooleanArray::from_iter(filter.iter().map(|v| match v {
+        Some(true) if count < n => {
+            count += 1;
+            Some(true)
+        }
+        _ => Some(false),
+    }))
 }
 
 #[cfg(test)]
