@@ -1718,7 +1718,7 @@ explain SELECT t1_id, t1_int FROM t1 WHERE EXISTS (SELECT count(*) FROM t2 WHERE
 ----
 logical_plan
 01)Projection: t1.t1_id, t1.t1_int
-02)--Filter: __correlated_sq_1.__always_true IS NULL OR __correlated_sq_1.__always_true IS NOT NULL AND NOT __correlated_sq_1.count(Int64(1)) = Int64(0) IS NOT TRUE
+02)--Filter: CASE WHEN __correlated_sq_1.__always_true IS NULL THEN Boolean(true) WHEN __correlated_sq_1.count(Int64(1)) = Int64(0) IS NOT TRUE THEN Boolean(false) ELSE Boolean(true) END
 03)----Projection: t1.t1_id, t1.t1_int, __correlated_sq_1.count(Int64(1)), __correlated_sq_1.__always_true
 04)------Left Join: t1.t1_id = __correlated_sq_1.t2_id
 05)--------TableScan: t1 projection=[t1_id, t1_int]
