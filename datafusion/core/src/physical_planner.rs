@@ -200,6 +200,24 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
 /// Verbose so that node detail is included, and with the schema appended so
 /// that two plans differing only in nullability are not taken for one. This is
 /// still not a structural equality: anything no node prints is invisible here.
+/// Configured rule names that no rule in the chain answers to.
+///
+/// A name is matched against what a rule reports as its `name()`, so a typo or
+/// a rule since renamed upstream leaves the entry doing nothing at all. That is
+/// silent otherwise: the option keeps working, just never on the rule the user
+/// meant. Returned in the order configured so the warning reads back the way it
+/// was written.
+fn unmatched_rule_names<'a>(
+    configured: &'a str,
+    available: &HashSet<&str>,
+) -> Vec<&'a str> {
+    configured
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && !available.contains(name))
+        .collect()
+}
+
 fn plan_fingerprint(plan: &dyn ExecutionPlan) -> String {
     let mut out = displayable(plan)
         .set_show_schema(true)
@@ -3041,6 +3059,20 @@ impl DefaultPhysicalPlanner {
             (names, HashMap::<&str, HashSet<String>>::new())
         });
 
+        if fixpoints.is_some() {
+            let available: HashSet<&str> =
+                optimizers.iter().map(|rule| rule.name()).collect();
+            let unmatched = unmatched_rule_names(configured, &available);
+            if !unmatched.is_empty() {
+                log::warn!(
+                    "skip_unchanged_physical_rules names no rule in this chain: {}. \
+                     Check the spelling against the names EXPLAIN VERBOSE prints; \
+                     an unmatched name has no effect.",
+                    unmatched.join(", ")
+                );
+            }
+        }
+
         for optimizer in optimizers {
             // Rendered once per pass when the rule is named, and reused to
             // record the outcome below.
@@ -3960,6 +3992,44 @@ mod tests {
 
     /// The config is a list, and reading it tolerates the spacing people
     /// actually write.
+    #[test]
+    fn unmatched_names_are_reported_so_a_typo_is_not_silent() {
+        let available: HashSet<&str> = ["EnsureRequirements", "OutputRequirements"]
+            .into_iter()
+            .collect();
+
+        // A name the chain answers to is not reported.
+        assert!(unmatched_rule_names("EnsureRequirements", &available).is_empty());
+
+        // A typo is, which is the whole point: the option would otherwise keep
+        // working while never touching the rule the user meant.
+        assert_eq!(
+            unmatched_rule_names("EnsureRequirement", &available),
+            vec!["EnsureRequirement"]
+        );
+
+        // Matching is exact, so case differences are reported rather than
+        // silently accepted.
+        assert_eq!(
+            unmatched_rule_names("ensurerequirements", &available),
+            vec!["ensurerequirements"]
+        );
+
+        // The spacing people actually write is tolerated, and only the unknown
+        // entries come back, in the order they were configured.
+        assert_eq!(
+            unmatched_rule_names(
+                " EnsureRequirements , Nonsense ,, OutputRequirements , Other ",
+                &available
+            ),
+            vec!["Nonsense", "Other"]
+        );
+
+        // Nothing configured, nothing to report.
+        assert!(unmatched_rule_names("", &available).is_empty());
+        assert!(unmatched_rule_names("  ,  ", &available).is_empty());
+    }
+
     #[tokio::test]
     async fn skip_unchanged_reads_a_list_of_names() -> Result<()> {
         for config in [
