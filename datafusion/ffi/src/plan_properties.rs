@@ -23,7 +23,9 @@ use datafusion_common::error::{DataFusionError, Result};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::PlanProperties;
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::execution_plan::{
+    Boundedness, EmissionType, EvaluationType, SchedulingType,
+};
 
 use stabby::vec::Vec as SVec;
 
@@ -44,6 +46,12 @@ pub struct FFI_PlanProperties {
 
     /// Indicate boundedness of the plan and its memory requirements.
     pub boundedness: unsafe extern "C" fn(plan: &Self) -> FFI_Boundedness,
+
+    /// Return the scheduling type of the plan.
+    pub scheduling_type: unsafe extern "C" fn(plan: &Self) -> FFI_SchedulingType,
+
+    /// Return the evaluation type of the plan.
+    pub evaluation_type: unsafe extern "C" fn(plan: &Self) -> FFI_EvaluationType,
 
     /// The output ordering of the plan.
     pub output_ordering:
@@ -94,6 +102,18 @@ unsafe extern "C" fn boundedness_fn_wrapper(
     properties.inner().boundedness.into()
 }
 
+unsafe extern "C" fn scheduling_type_fn_wrapper(
+    properties: &FFI_PlanProperties,
+) -> FFI_SchedulingType {
+    properties.inner().scheduling_type.into()
+}
+
+unsafe extern "C" fn evaluation_type_fn_wrapper(
+    properties: &FFI_PlanProperties,
+) -> FFI_EvaluationType {
+    properties.inner().evaluation_type.into()
+}
+
 unsafe extern "C" fn output_ordering_fn_wrapper(
     properties: &FFI_PlanProperties,
 ) -> FFI_Option<SVec<FFI_PhysicalSortExpr>> {
@@ -140,6 +160,8 @@ impl From<&PlanProperties> for FFI_PlanProperties {
             output_partitioning: output_partitioning_fn_wrapper,
             emission_type: emission_type_fn_wrapper,
             boundedness: boundedness_fn_wrapper,
+            scheduling_type: scheduling_type_fn_wrapper,
+            evaluation_type: evaluation_type_fn_wrapper,
             output_ordering: output_ordering_fn_wrapper,
             schema: schema_fn_wrapper,
             release: release_fn_wrapper,
@@ -186,12 +208,14 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
         let boundedness: Boundedness =
             unsafe { (ffi_props.boundedness)(&ffi_props).into() };
 
-        Ok(PlanProperties::new(
-            eq_properties,
-            partitioning,
-            emission_type,
-            boundedness,
-        ))
+        let scheduling_type = unsafe { (ffi_props.scheduling_type)(&ffi_props).into() };
+        let evaluation_type = unsafe { (ffi_props.evaluation_type)(&ffi_props).into() };
+
+        Ok(
+            PlanProperties::new(eq_properties, partitioning, emission_type, boundedness)
+                .with_scheduling_type(scheduling_type)
+                .with_evaluation_type(evaluation_type),
+        )
     }
 }
 
@@ -259,6 +283,60 @@ impl From<FFI_EmissionType> for EmissionType {
     }
 }
 
+/// FFI safe version of [`SchedulingType`].
+#[expect(non_camel_case_types)]
+#[repr(u8)]
+#[derive(Clone)]
+pub enum FFI_SchedulingType {
+    NonCooperative,
+    Cooperative,
+}
+
+impl From<SchedulingType> for FFI_SchedulingType {
+    fn from(value: SchedulingType) -> Self {
+        match value {
+            SchedulingType::NonCooperative => Self::NonCooperative,
+            SchedulingType::Cooperative => Self::Cooperative,
+        }
+    }
+}
+
+impl From<FFI_SchedulingType> for SchedulingType {
+    fn from(value: FFI_SchedulingType) -> Self {
+        match value {
+            FFI_SchedulingType::NonCooperative => Self::NonCooperative,
+            FFI_SchedulingType::Cooperative => Self::Cooperative,
+        }
+    }
+}
+
+/// FFI safe version of [`EvaluationType`].
+#[expect(non_camel_case_types)]
+#[repr(u8)]
+#[derive(Clone)]
+pub enum FFI_EvaluationType {
+    Lazy,
+    Eager,
+}
+
+impl From<EvaluationType> for FFI_EvaluationType {
+    fn from(value: EvaluationType) -> Self {
+        match value {
+            EvaluationType::Lazy => Self::Lazy,
+            EvaluationType::Eager => Self::Eager,
+        }
+    }
+}
+
+impl From<FFI_EvaluationType> for EvaluationType {
+    fn from(value: FFI_EvaluationType) -> Self {
+        match value {
+            FFI_EvaluationType::Lazy => Self::Lazy,
+            FFI_EvaluationType::Eager => Self::Eager,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
@@ -315,6 +393,38 @@ mod tests {
 
         assert_eq!(format!("{foreign_props:?}"), format!("{original_props:?}"));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_plan_properties_scheduling_round_trip() -> Result<()> {
+        for scheduling in [SchedulingType::NonCooperative, SchedulingType::Cooperative] {
+            for foreign in [false, true] {
+                let props = create_test_props()?.with_scheduling_type(scheduling);
+                let mut ffi_props = FFI_PlanProperties::from(&props);
+                if foreign {
+                    ffi_props.library_marker_id = crate::mock_foreign_marker_id;
+                }
+                let result = PlanProperties::try_from(ffi_props)?;
+                assert_eq!(result.scheduling_type, scheduling, "foreign={foreign}");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_plan_properties_evaluation_round_trip() -> Result<()> {
+        for evaluation in [EvaluationType::Lazy, EvaluationType::Eager] {
+            for foreign in [false, true] {
+                let props = create_test_props()?.with_evaluation_type(evaluation);
+                let mut ffi_props = FFI_PlanProperties::from(&props);
+                if foreign {
+                    ffi_props.library_marker_id = crate::mock_foreign_marker_id;
+                }
+                let result = PlanProperties::try_from(ffi_props)?;
+                assert_eq!(result.evaluation_type, evaluation, "foreign={foreign}");
+            }
+        }
         Ok(())
     }
 
