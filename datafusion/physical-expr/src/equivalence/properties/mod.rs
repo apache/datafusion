@@ -1186,9 +1186,9 @@ impl EquivalenceProperties {
 
     /// Projects constraints according to the given projection mapping.
     ///
-    /// This function takes a projection mapping and extracts column indices of
-    /// target columns. It then projects the constraints to only include
-    /// relationships between columns that exist in the projected output.
+    /// Each constrained input column must be directly projected to an output
+    /// column. Constraints are remapped to those output indices and dropped
+    /// entirely if any of their columns is missing.
     ///
     /// # Parameters
     ///
@@ -1200,15 +1200,30 @@ impl EquivalenceProperties {
     /// Returns an optional `Constraints` object containing only the constraints
     /// that are valid for the projected columns (if any exists).
     fn projected_constraints(&self, mapping: &ProjectionMapping) -> Option<Constraints> {
-        let indices = mapping
+        let constraints = self
+            .constraints
             .iter()
-            .flat_map(|(_, targets)| {
-                targets.iter().filter_map(|(target, _)| {
-                    target.downcast_ref::<Column>().map(|c| c.index())
+            .filter_map(|constraint| {
+                let (Constraint::PrimaryKey(indices) | Constraint::Unique(indices)) =
+                    constraint;
+                let indices = indices
+                    .iter()
+                    .map(|&index| {
+                        let field = self.schema.fields().get(index)?;
+                        let source: Arc<dyn PhysicalExpr> =
+                            Arc::new(Column::new(field.name(), index));
+                        mapping.get(&source)?.iter().find_map(|(target, _)| {
+                            target.downcast_ref::<Column>().map(|column| column.index())
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Some(match constraint {
+                    Constraint::PrimaryKey(_) => Constraint::PrimaryKey(indices),
+                    Constraint::Unique(_) => Constraint::Unique(indices),
                 })
             })
             .collect::<Vec<_>>();
-        self.constraints.project(&indices)
+        (!constraints.is_empty()).then(|| Constraints::new_unverified(constraints))
     }
 
     /// Projects these equivalence properties onto `output_schema` according to
@@ -1687,6 +1702,34 @@ mod tests {
             Field::new("c1", DataType::Int32, true),
             Field::new("d1", DataType::Int32, true),
         ]))
+    }
+
+    #[test]
+    fn test_projected_constraints() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+        let properties = EquivalenceProperties::new(Arc::clone(&schema))
+            .with_constraints(Constraints::new_unverified(vec![Constraint::PrimaryKey(
+                vec![0],
+            )]));
+        let mapping = ProjectionMapping::from_indices(&[1, 0], &schema)?;
+        assert_eq!(
+            properties.projected_constraints(&mapping),
+            Some(Constraints::new_unverified(vec![Constraint::PrimaryKey(
+                vec![1]
+            )]))
+        );
+
+        let properties = EquivalenceProperties::new(Arc::clone(&schema))
+            .with_constraints(Constraints::new_unverified(vec![Constraint::Unique(
+                vec![0, 1],
+            )]));
+        let mapping = ProjectionMapping::from_indices(&[1, 2], &schema)?;
+        assert_eq!(properties.projected_constraints(&mapping), None);
+        Ok(())
     }
 
     #[test]
