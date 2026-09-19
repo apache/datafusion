@@ -774,6 +774,14 @@ Invalid or Unsupported Configuration: value must be greater than 0
 
 
 statement error
+SET datafusion.execution.soft_max_bytes_per_output_file = 0
+----
+DataFusion error: Error setting config datafusion.execution.soft_max_bytes_per_output_file
+caused by
+Invalid or Unsupported Configuration: value must be greater than 0
+
+
+statement error
 SET datafusion.execution.max_spill_file_size_bytes = 0
 ----
 DataFusion error: Error setting config datafusion.execution.max_spill_file_size_bytes
