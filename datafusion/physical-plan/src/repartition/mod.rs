@@ -1028,7 +1028,9 @@ impl BatchPartitioner {
                 exprs,
                 partition_reducer: StrengthReducedU64::new(num_partitions as u64),
                 hash_buffer: vec![],
-                indices: vec![vec![]; num_partitions],
+                indices: (0..num_partitions)
+                    .map(|_| Vec::with_capacity(128))
+                    .collect(),
             },
             timer,
         })
@@ -2292,7 +2294,7 @@ impl RepartitionExec {
         };
 
         // While there are still outputs to send to, keep pulling inputs
-        let mut batches_until_yield = partitioner.num_partitions();
+        let mut batches_until_yield = partitioner.num_partitions() * 2;
         while !output_channels.is_empty() {
             // fetch the next batch
             let timer = metrics.fetch_time.timer();
@@ -2346,7 +2348,7 @@ impl RepartitionExec {
             // in that case anyways
             if batches_until_yield == 0 {
                 tokio::task::yield_now().await;
-                batches_until_yield = partitioner.num_partitions();
+                batches_until_yield = partitioner.num_partitions() * 2;
             } else {
                 batches_until_yield -= 1;
             }
