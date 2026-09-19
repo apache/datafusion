@@ -57,7 +57,7 @@ section headed `# Public Only for Internal Use:`. Name the crate or component
 that requires access and explain why the API is not intended for downstream use.
 For example:
 
-```rust
+```txt
 impl HashTableLookupExpr {
     /// ...
     ///
