@@ -122,6 +122,23 @@ impl BinaryExpr {
         &self.op
     }
 
+    /// Mathematical intervals do not cover values produced by wrapping arithmetic.
+    fn integer_arithmetic_may_wrap(
+        &self,
+        left: &Interval,
+        right: &Interval,
+        result: &Interval,
+    ) -> bool {
+        !self.fail_on_overflow
+            && result.data_type().is_integer()
+            && matches!(
+                self.op,
+                Operator::Plus | Operator::Minus | Operator::Multiply
+            )
+            && (result.is_unbounded()
+                || unsigned_subtraction_may_underflow(self.op, left, right, result))
+    }
+
     /// Wrapping on overflow breaks monotonicity (e.g. the sum of two
     /// ascending `UInt8` columns can wrap back to small values), so the
     /// derived ordering is kept only when overflow is impossible. `time ±
@@ -700,7 +717,12 @@ impl PhysicalExpr for BinaryExpr {
         let left_interval = children[0];
         let right_interval = children[1];
         // Calculate current node's interval:
-        apply_operator(&self.op, left_interval, right_interval)
+        let result = apply_operator(&self.op, left_interval, right_interval)?;
+        if self.integer_arithmetic_may_wrap(left_interval, right_interval, &result) {
+            Interval::make_unbounded(&result.data_type())
+        } else {
+            Ok(result)
+        }
     }
 
     fn propagate_constraints(
@@ -711,6 +733,36 @@ impl PhysicalExpr for BinaryExpr {
         // Get children intervals.
         let left_interval = children[0];
         let right_interval = children[1];
+
+        if left_interval.data_type().is_integer()
+            && right_interval.data_type().is_integer()
+            && matches!(
+                self.op,
+                Operator::Plus | Operator::Minus | Operator::Multiply | Operator::Divide
+            )
+        {
+            // Integer division truncates: a / 2 = 1 permits both 2 and 3.
+            // Wrapping arithmetic is likewise not invertible over mathematical
+            // intervals. Keep the input domains rather than exclude valid rows.
+            let contains_zero = |range: &Interval| -> Result<bool> {
+                range.contains_value(ScalarValue::new_zero(&range.data_type())?)
+            };
+            // If an operand can be zero, a zero product does not constrain
+            // the other operand. Dividing the parent interval loses that case.
+            let zero_product = self.op == Operator::Multiply
+                && contains_zero(interval)?
+                && (contains_zero(left_interval)? || contains_zero(right_interval)?);
+            if self.op == Operator::Divide
+                || zero_product
+                || self.integer_arithmetic_may_wrap(
+                    left_interval,
+                    right_interval,
+                    &apply_operator(&self.op, left_interval, right_interval)?,
+                )
+            {
+                return Ok(Some(vec![]));
+            }
+        }
 
         if self.op.eq(&Operator::And) {
             if interval.eq(&Interval::TRUE) {
@@ -832,7 +884,7 @@ impl PhysicalExpr for BinaryExpr {
         let (r_order, r_range) = (children[1].sort_properties, &children[1].range);
         match self.op() {
             Operator::Plus => {
-                let range = l_range.add(r_range)?;
+                let range = self.evaluate_bounds(&[l_range, r_range])?;
                 Ok(ExprProperties {
                     sort_properties: self.arithmetic_sort_properties(
                         l_order.add(&r_order),
@@ -846,7 +898,7 @@ impl PhysicalExpr for BinaryExpr {
                 })
             }
             Operator::Minus => {
-                let range = l_range.sub(r_range)?;
+                let range = self.evaluate_bounds(&[l_range, r_range])?;
                 Ok(ExprProperties {
                     sort_properties: self.arithmetic_sort_properties(
                         l_order.sub(&r_order),
@@ -6351,6 +6403,246 @@ mod tests {
                 "OR pre-selection must match Kleene OR for d = {d:?}"
             );
         }
+    }
+
+    #[test]
+    fn test_integer_interval_propagation_covers_runtime_values() {
+        // Enumerate small domains and both ends of Int8, including zero divisors,
+        // truncation, signed overflow and checked arithmetic. Every successful
+        // runtime evaluation must remain possible after interval propagation.
+        let batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
+        let domains = [
+            (-3i8, 3i8),
+            (0, 1),
+            (1, 3),
+            (-3, -1),
+            (-128, -127),
+            (126, 127),
+        ];
+        for checked in [false, true] {
+            for op in [
+                Operator::Plus,
+                Operator::Minus,
+                Operator::Multiply,
+                Operator::Divide,
+            ] {
+                let expr = BinaryExpr::new(lit(0i8), op, lit(0i8))
+                    .with_fail_on_overflow(checked);
+                for (lo, hi) in domains {
+                    for (rlo, rhi) in
+                        domains.into_iter().chain([(-1, -1), (0, 0), (2, 2)])
+                    {
+                        let left = Interval::make(Some(lo), Some(hi)).unwrap();
+                        let right = Interval::make(Some(rlo), Some(rhi)).unwrap();
+                        let bounds = expr.evaluate_bounds(&[&left, &right]).unwrap();
+                        if matches!(op, Operator::Plus | Operator::Minus) {
+                            let children = [left.clone(), right.clone()].map(|range| {
+                                ExprProperties {
+                                    range,
+                                    ..ExprProperties::new_unknown()
+                                }
+                            });
+                            assert_eq!(
+                                expr.get_properties(&children).unwrap().range,
+                                bounds
+                            );
+                        }
+                        for a in lo..=hi {
+                            for b in rlo..=rhi {
+                                // Use the execution kernel as the oracle rather than
+                                // duplicating its checked and wrapping arithmetic.
+                                let runtime = BinaryExpr::new(lit(a), op, lit(b))
+                                    .with_fail_on_overflow(checked);
+                                let result = match runtime.evaluate(&batch) {
+                                    Ok(value) => value.into_array(1).unwrap(),
+                                    Err(error) => {
+                                        assert!(
+                                            checked || op == Operator::Divide,
+                                            "wrapping {a} {op} {b} failed: {error}"
+                                        );
+                                        continue;
+                                    }
+                                };
+                                let result = result.as_primitive::<Int8Type>().value(0);
+                                let result =
+                                    Interval::make(Some(result), Some(result)).unwrap();
+                                assert_eq!(
+                                    bounds.contains(&result).unwrap(),
+                                    Interval::TRUE,
+                                    "forward {a} {op} {b}, checked={checked}, bounds={bounds:?}"
+                                );
+                                let propagated = expr
+                                    .propagate_constraints(&result, &[&left, &right])
+                                    .unwrap();
+                                let propagated = propagated
+                                    .expect("successful runtime result must be feasible");
+                                if !propagated.is_empty() {
+                                    assert_eq!(
+                                        propagated[0]
+                                            .contains(
+                                                Interval::make(Some(a), Some(a)).unwrap()
+                                            )
+                                            .unwrap(),
+                                        Interval::TRUE,
+                                        "left input excluded for {a} {op} {b}, checked={checked}: {propagated:?}"
+                                    );
+                                    assert_eq!(
+                                        propagated[1]
+                                            .contains(
+                                                Interval::make(Some(b), Some(b)).unwrap()
+                                            )
+                                            .unwrap(),
+                                        Interval::TRUE,
+                                        "right input excluded for {a} {op} {b}, checked={checked}: {propagated:?}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_integer_interval_error_propagation() {
+        // Compare error messages without backtraces, which differ by call path.
+        let integer = Interval::make(Some(1i32), Some(2i32)).unwrap();
+        let boolean = Interval::TRUE;
+        for op in [Operator::Plus, Operator::Minus] {
+            let expr = BinaryExpr::new(lit(1i32), op, lit(true));
+            let expected = apply_operator(&op, &integer, &boolean)
+                .unwrap_err()
+                .strip_backtrace();
+            assert_eq!(
+                expr.evaluate_bounds(&[&integer, &boolean])
+                    .unwrap_err()
+                    .strip_backtrace(),
+                expected
+            );
+            let children =
+                [integer.clone(), boolean.clone()].map(|range| ExprProperties {
+                    range,
+                    ..ExprProperties::new_unknown()
+                });
+            assert_eq!(
+                expr.get_properties(&children)
+                    .unwrap_err()
+                    .strip_backtrace(),
+                expected
+            );
+        }
+
+        // A nonnumeric parent cannot describe an integer product. Preserve
+        // the error from constructing zero for its unsupported type.
+        let parent = Interval::make_unbounded(&DataType::Utf8).unwrap();
+        let expr = BinaryExpr::new(lit(1i32), Operator::Multiply, lit(2i32));
+        assert_eq!(
+            expr.propagate_constraints(&parent, &[&integer, &integer])
+                .unwrap_err()
+                .strip_backtrace(),
+            ScalarValue::new_zero(&DataType::Utf8)
+                .unwrap_err()
+                .strip_backtrace()
+        );
+    }
+
+    #[test]
+    fn test_unsigned_subtraction_interval_underflow() {
+        let expr = BinaryExpr::new(lit(0u8), Operator::Minus, lit(1u8));
+        let left = Interval::make(Some(0u8), Some(2u8)).unwrap();
+        let right = Interval::make(Some(1u8), Some(1u8)).unwrap();
+        let wrapped = Interval::make(Some(255u8), Some(255u8)).unwrap();
+        assert_eq!(
+            expr.evaluate_bounds(&[&left, &right])
+                .unwrap()
+                .contains(&wrapped)
+                .unwrap(),
+            Interval::TRUE
+        );
+        assert_eq!(
+            expr.propagate_constraints(&wrapped, &[&left, &right])
+                .unwrap(),
+            Some(vec![])
+        );
+    }
+
+    #[test]
+    fn test_nested_wrapping_arithmetic_properties() {
+        let difference = Arc::new(BinaryExpr::new(lit(0u8), Operator::Minus, lit(1u8)));
+        let singleton = |value: u8| ExprProperties {
+            sort_properties: SortProperties::Singleton,
+            range: Interval::make(Some(value), Some(value)).unwrap(),
+            ..ExprProperties::new_unknown()
+        };
+        let difference_props = difference
+            .get_properties(&[singleton(0), singleton(1)])
+            .unwrap();
+        assert_eq!(difference_props.sort_properties, SortProperties::Singleton);
+        assert!(
+            difference_props
+                .range
+                .contains_value(ScalarValue::UInt8(Some(255)))
+                .unwrap()
+        );
+
+        // The inner constant wraps to 255. An incorrect range of [0, 0]
+        // would let the outer addition claim to preserve ascending order.
+        let expr =
+            BinaryExpr::new(Arc::new(Column::new("a", 0)), Operator::Plus, difference);
+        let properties = expr
+            .get_properties(&[
+                ExprProperties {
+                    sort_properties: SortProperties::Ordered(SortOptions::default()),
+                    range: Interval::make(Some(0u8), Some(1u8)).unwrap(),
+                    ..ExprProperties::new_unknown()
+                },
+                difference_props,
+            ])
+            .unwrap();
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("a", DataType::UInt8, false)])),
+            vec![Arc::new(UInt8Array::from(vec![0, 1]))],
+        )
+        .unwrap();
+        let actual = expr.evaluate(&batch).unwrap().into_array(2).unwrap();
+        assert_eq!(actual.as_ref(), &UInt8Array::from(vec![255, 0]));
+        assert_eq!(properties.sort_properties, SortProperties::Unordered);
+        for value in [0u8, 255] {
+            assert!(
+                properties
+                    .range
+                    .contains_value(ScalarValue::UInt8(Some(value)))
+                    .unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn test_integer_comparison_still_propagates() {
+        // Integer comparisons must bypass the arithmetic overflow guard and
+        // still narrow their inputs: a = 5 restricts a in [0, 10] to [5, 5].
+        let expr = BinaryExpr::new(lit(0i32), Operator::Eq, lit(5i32));
+        let left = Interval::make(Some(0i32), Some(10i32)).unwrap();
+        let right = Interval::make(Some(5i32), Some(5i32)).unwrap();
+        assert_eq!(
+            expr.propagate_constraints(&Interval::TRUE, &[&left, &right])
+                .unwrap(),
+            Some(vec![right.clone(), right])
+        );
+    }
+
+    #[test]
+    fn test_safe_integer_multiplication_still_propagates() {
+        let expr = BinaryExpr::new(lit(0i32), Operator::Multiply, lit(2i32));
+        let left = Interval::make(Some(0i32), Some(10i32)).unwrap();
+        let right = Interval::make(Some(2i32), Some(2i32)).unwrap();
+        let parent = Interval::make(Some(4i32), Some(4i32)).unwrap();
+        assert_eq!(
+            expr.propagate_constraints(&parent, &[&left, &right])
+                .unwrap(),
+            Some(vec![Interval::make(Some(2i32), Some(2i32)).unwrap(), right])
+        );
     }
 
     #[test]

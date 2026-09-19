@@ -328,7 +328,7 @@ fn substr_index_view(
     unsafe {
         Ok(Arc::new(StringViewArray::new_unchecked(
             ScalarBuffer::from(views_buf),
-            data_buffers,
+            data_buffers.into(),
             nulls,
         )) as ArrayRef)
     }
@@ -461,7 +461,7 @@ fn substr_index_scalar_view(
     unsafe {
         Ok(Arc::new(StringViewArray::new_unchecked(
             ScalarBuffer::from(views_buf),
-            data_buffers,
+            data_buffers.into(),
             string_array.nulls().cloned(),
         )) as ArrayRef)
     }

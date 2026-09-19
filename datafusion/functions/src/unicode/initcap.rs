@@ -489,11 +489,8 @@ mod tests {
         assert_eq!(result.value(1), "Baz Qux");
 
         // The output values buffer should be compact
-        assert_eq!(*result.offsets().first().unwrap(), 0);
-        assert_eq!(
-            result.value_data().len(),
-            *result.offsets().last().unwrap() as usize
-        );
+        assert_eq!(result.offsets().first(), 0);
+        assert_eq!(result.value_data().len(), result.offsets().last() as usize);
         Ok(())
     }
 
@@ -518,11 +515,8 @@ mod tests {
         assert_eq!(result.value(1), "Baz Qux");
 
         // The output values buffer should be compact
-        assert_eq!(*result.offsets().first().unwrap(), 0);
-        assert_eq!(
-            result.value_data().len(),
-            *result.offsets().last().unwrap() as usize
-        );
+        assert_eq!(result.offsets().first(), 0);
+        assert_eq!(result.value_data().len(), result.offsets().last() as usize);
         Ok(())
     }
 }

@@ -1253,8 +1253,8 @@ pub fn offset_span_len<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> usize {
 /// ```
 #[inline]
 pub fn offset_span<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> (usize, usize) {
-    let start = offsets[0].as_usize();
-    (start, offsets.last().unwrap().as_usize() - start)
+    let start = offsets.first().as_usize();
+    (start, offsets.last().as_usize() - start)
 }
 
 /// Returns the inner values of a list, or an error otherwise
