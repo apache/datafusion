@@ -24,6 +24,7 @@ use arrow::datatypes::DataType;
 use crate::strings::{GenericStringArrayBuilder, StringViewArrayBuilder};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::types::logical_string;
+use datafusion_common::utils::offset_span_len;
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
@@ -204,12 +205,10 @@ fn initcap_ascii_array<T: OffsetSizeTrait>(
 ) -> ArrayRef {
     let offsets = string_array.offsets();
     let src = string_array.value_data();
-    let first_offset = offsets.first().as_usize();
-    let last_offset = offsets.last().as_usize();
 
     // For sliced arrays, only convert the visible bytes, not the entire input
     // buffer.
-    let mut out = Vec::with_capacity(last_offset - first_offset);
+    let mut out = Vec::with_capacity(offset_span_len(offsets));
 
     for window in offsets.windows(2) {
         let start = window[0].as_usize();

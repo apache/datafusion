@@ -248,8 +248,12 @@ impl CastExpr {
         })
     }
 
-    /// Check if casting from the specified source type to the target type is a
-    /// widening cast (e.g. from `Int8` to `Int16`).
+    /// Check if casting from the source type to the target type is known to be
+    /// lossless and strictly order-preserving for all source values, preserving nulls.
+    /// This includes widening casts (e.g. `Int8` to `Int16`) and representation
+    /// conversions such as `Int32` to `Date32`, which interprets the same integer
+    /// as days since the epoch, or `Int64` to `Date64`, which interprets the same
+    /// integer as milliseconds since the epoch.
     pub fn check_bigger_cast(cast_type: &DataType, src: &DataType) -> bool {
         if cast_type.eq(src) {
             return true;
@@ -259,6 +263,10 @@ impl CastExpr {
             (Int8, Int16 | Int32 | Int64)
                 | (Int16, Int32 | Int64)
                 | (Int32, Int64)
+                | (Int32, Date32)
+                | (Date32, Int32)
+                | (Int64, Date64)
+                | (Date64, Int64)
                 | (UInt8, UInt16 | UInt32 | UInt64)
                 | (UInt16, UInt32 | UInt64)
                 | (UInt32, UInt64)
@@ -268,7 +276,8 @@ impl CastExpr {
         )
     }
 
-    /// Check if the cast is a widening cast (e.g. from `Int8` to `Int16`).
+    /// Check if the cast is lossless and strictly order-preserving for all source
+    /// values, preserving nulls. See [`Self::check_bigger_cast`].
     pub fn is_bigger_cast(&self, src: &DataType) -> bool {
         Self::check_bigger_cast(self.cast_type(), src)
     }
@@ -289,8 +298,8 @@ pub(crate) fn cast_expr_properties(
 ) -> Result<ExprProperties> {
     let unbounded = Interval::make_unbounded(target_type)?;
     let source_type = child.range.data_type();
-    // A widening cast is additionally one-to-one, so it is strictly
-    // order-preserving; a narrowing cast may collapse distinct values,
+    // A lossless cast recognized by check_bigger_cast is one-to-one, so it is
+    // strictly order-preserving; a narrowing cast may collapse distinct values,
     // breaking the ordering of subsequent sort keys.
     let bigger_cast = CastExpr::check_bigger_cast(target_type, &source_type);
     if is_order_preserving_cast_family(&source_type, target_type) || bigger_cast {
@@ -1503,6 +1512,60 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_integer_date_cast_preserves_values_and_ordering() {
+        use arrow::array::{Date32Array, Date64Array};
+        use arrow::compute::SortOptions;
+        use datafusion_expr_common::sort_properties::SortProperties;
+
+        let values = vec![None, Some(i32::MIN), Some(-1), Some(0), Some(i32::MAX)];
+        let integers: ArrayRef = Arc::new(Int32Array::from(values.clone()));
+        let dates: ArrayRef = Arc::new(Date32Array::from(values));
+        let values = vec![None, Some(i64::MIN), Some(-1), Some(0), Some(i64::MAX)];
+        let integers64: ArrayRef = Arc::new(Int64Array::from(values.clone()));
+        let dates64: ArrayRef = Arc::new(Date64Array::from(values));
+        for (input, expected) in [
+            (Arc::clone(&integers), Arc::clone(&dates)),
+            (dates, integers),
+            (Arc::clone(&integers64), Arc::clone(&dates64)),
+            (dates64, integers64),
+        ] {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "a",
+                input.data_type().clone(),
+                true,
+            )]));
+            let expr = CastExpr::new(
+                col("a", &schema).expect("column exists"),
+                expected.data_type().clone(),
+                None,
+            );
+            assert!(expr.is_bigger_cast(input.data_type()));
+            let child = ExprProperties::new_unknown()
+                .with_range(
+                    Interval::make_unbounded(input.data_type())
+                        .expect("supported interval type"),
+                )
+                .with_order(SortProperties::Ordered(SortOptions::default()))
+                .with_strictly_order_preserving(true);
+            let properties = expr
+                .get_properties(std::slice::from_ref(&child))
+                .expect("cast properties");
+            assert_eq!(properties.sort_properties, child.sort_properties);
+            assert!(properties.strictly_order_preserving);
+            assert_eq!(properties.range.data_type(), *expected.data_type());
+
+            let batch =
+                RecordBatch::try_new(schema, vec![input]).expect("valid input batch");
+            let actual = expr
+                .evaluate(&batch)
+                .expect("cast succeeds")
+                .into_array(batch.num_rows())
+                .expect("array result");
+            assert_eq!(actual.as_ref(), expected.as_ref());
+        }
     }
 
     #[test]
