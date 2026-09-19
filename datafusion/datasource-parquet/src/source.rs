@@ -21,6 +21,7 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use crate::DefaultParquetFileReaderFactory;
+use crate::EagerPruningSummary;
 use crate::ParquetFileReaderFactory;
 use crate::ParquetFileSchemaProvider;
 use crate::opener::ParquetMorselizer;
@@ -323,6 +324,9 @@ pub struct ParquetSource {
     /// Sort order driving `PreparedAccessPlan::reorder_by_statistics`
     /// in the opener.
     sort_order_for_reorder: Option<LexOrdering>,
+    /// The outcome of eager pruning while the scan was planned, if eager
+    /// pruning was attempted. Only used for display.
+    eager_pruning_summary: Option<EagerPruningSummary>,
 }
 
 impl ParquetSource {
@@ -350,7 +354,22 @@ impl ParquetSource {
             encryption_factory: None,
             reverse_row_groups: false,
             sort_order_for_reorder: None,
+            eager_pruning_summary: None,
         }
+    }
+
+    /// Record the outcome of eager pruning, shown in `EXPLAIN` output.
+    ///
+    /// See [`EagerParquetPruning`](datafusion_common::config::EagerParquetPruning).
+    pub fn with_eager_pruning_summary(mut self, summary: EagerPruningSummary) -> Self {
+        self.eager_pruning_summary = Some(summary);
+        self
+    }
+
+    /// The outcome of eager pruning, if eager pruning was attempted while the
+    /// scan was planned.
+    pub fn eager_pruning_summary(&self) -> Option<&EagerPruningSummary> {
+        self.eager_pruning_summary.as_ref()
     }
 
     /// Set the `TableParquetOptions` for this ParquetSource.
@@ -832,6 +851,10 @@ impl FileSource for ParquetSource {
                         )?;
                     }
                 }
+
+                if let Some(summary) = &self.eager_pruning_summary {
+                    write!(f, ", eager_pruning={summary}")?;
+                }
                 Ok(())
             }
             DisplayFormatType::TreeRender => {
@@ -1132,6 +1155,8 @@ impl FileSource for ParquetSource {
                 encryption_factory: _,
             reverse_row_groups,
             sort_order_for_reorder,
+            // Only used to display the outcome of eager pruning in `EXPLAIN`.
+            eager_pruning_summary: _,
         } = self;
 
         if schema_provider.is_some() {

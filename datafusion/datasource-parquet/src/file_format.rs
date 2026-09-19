@@ -56,9 +56,11 @@ use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::write::get_writer_schema;
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
 use datafusion_session::Session;
 
+use crate::ParquetFileReaderFactory;
+use crate::eager_pruning::EagerPruner;
 use crate::metadata::{DFParquetMetadata, lex_ordering_to_sorting_columns};
 use crate::reader::CachedParquetFileReaderFactory;
 use crate::source::{
@@ -498,6 +500,7 @@ impl FileFormat for ParquetFormat {
         &self,
         state: &dyn Session,
         conf: FileScanConfig,
+        filters: &[Arc<dyn PhysicalExpr>],
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut metadata_size_hint = None;
 
@@ -517,15 +520,35 @@ impl FileFormat for ParquetFormat {
         let store = state
             .runtime_env()
             .object_store(conf.object_store_url.clone())?;
-        let cached_parquet_read_factory =
+        let cached_parquet_read_factory: Arc<dyn ParquetFileReaderFactory> =
             Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
-        source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
+        source = source
+            .with_parquet_file_reader_factory(Arc::clone(&cached_parquet_read_factory));
 
         if let Some(metadata_size_hint) = metadata_size_hint {
             source = source.with_metadata_size_hint(metadata_size_hint)
         }
 
         source = self.set_source_encryption_factory(source, state)?;
+
+        // Eagerly prune files using the filters, to refine the statistics
+        // of the scan (see `EagerParquetPruning`)
+        let mut conf = conf;
+        if let Some(pruner) = EagerPruner::try_new(
+            &self.options,
+            filters,
+            cached_parquet_read_factory,
+            state
+                .config_options()
+                .execution
+                .meta_fetch_concurrency
+                .get(),
+        ) {
+            let (pruned_conf, summary) =
+                pruner.prune(source.table_schema(), conf).await?;
+            conf = pruned_conf;
+            source = source.with_eager_pruning_summary(summary);
+        }
 
         let conf = FileScanConfigBuilder::from(conf)
             .with_source(Arc::new(source))
@@ -745,6 +768,10 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             }),
             max_row_group_size: global_options.global.max_row_group_size as u64,
             max_in_list_size: global_options.global.max_in_list_size as u64,
+            eager_pruning: global_options.global.eager_pruning.to_string(),
+            eager_pruning_file_limit_opt: Some(parquet_options::EagerPruningFileLimitOpt::EagerPruningFileLimit(
+                global_options.global.eager_pruning_file_limit as u64,
+            )),
             created_by: global_options.global.created_by.clone(),
             column_index_truncate_length_opt: global_options.global.column_index_truncate_length.map(|length| {
                 parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(length as u64)

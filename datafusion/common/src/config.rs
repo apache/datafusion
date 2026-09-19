@@ -583,6 +583,75 @@ impl Display for SpillCompression {
     }
 }
 
+/// How much pruning work the Parquet scan performs during planning to refine
+/// the scan's statistics.
+///
+/// Pruning normally happens only when a `DataSourceExec` is executed, so the
+/// optimizer sees row counts for whole files even when a filter can skip most
+/// of them. When eager pruning is enabled, pruning is performed while the scan
+/// is planned and its results are used to tighten the (inexact) row count and
+/// byte size estimates of the scan, e.g. for join ordering.
+///
+/// The levels form a ladder: each level includes the work of all lower levels.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum EagerParquetPruning {
+    /// No pruning during planning
+    #[default]
+    Disabled,
+    /// Prune row groups using row group statistics (min/max)
+    RowGroups,
+    /// Additionally prune data pages using the page index
+    PageIndex,
+    /// Additionally prune row groups using bloom filters
+    BloomFilters,
+}
+
+impl EagerParquetPruning {
+    /// Returns true if this level performs the work of `level`
+    pub fn includes(self, level: EagerParquetPruning) -> bool {
+        self >= level
+    }
+}
+
+impl FromStr for EagerParquetPruning {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "disabled" | "" => Ok(Self::Disabled),
+            "row_groups" => Ok(Self::RowGroups),
+            "page_index" => Ok(Self::PageIndex),
+            "bloom_filters" => Ok(Self::BloomFilters),
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid eager parquet pruning level: {other}. Expected one of: disabled, row_groups, page_index, bloom_filters"
+            ))),
+        }
+    }
+}
+
+impl ConfigField for EagerParquetPruning {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = EagerParquetPruning::from_str(value)?;
+        Ok(())
+    }
+}
+
+impl Display for EagerParquetPruning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = match self {
+            Self::Disabled => "disabled",
+            Self::RowGroups => "row_groups",
+            Self::PageIndex => "page_index",
+            Self::BloomFilters => "bloom_filters",
+        };
+        write!(f, "{str}")
+    }
+}
+
 /// A `usize` configuration value that rejects zero when set from strings.
 ///
 /// Use this for options where zero is never a meaningful runtime value.
@@ -1412,6 +1481,23 @@ config_namespace! {
         ///
         /// Defaults to 20.
         pub max_in_list_size: usize, default = 20
+
+        /// (reading) How much pruning the parquet scan performs while the query
+        /// is planned, to tighten the scan's row count and byte size estimates.
+        /// When the scan executes, it starts from the pruned files and row
+        /// groups, but evaluates its own predicate again.
+        ///
+        /// Valid values are `disabled`, `row_groups` (row group statistics),
+        /// `page_index` (additionally the page index) and `bloom_filters`
+        /// (additionally bloom filters). Each level includes the work of the
+        /// levels before it and may add I/O and latency to planning. Statistics
+        /// derived from eager pruning are always inexact.
+        pub eager_pruning: EagerParquetPruning, default = EagerParquetPruning::Disabled
+
+        /// (reading) Eager pruning is skipped for scans with more files than
+        /// this limit, bounding the planning time spent by
+        /// `eager_pruning`. A limit of 0 skips eager pruning for every scan.
+        pub eager_pruning_file_limit: usize, default = 256
 
         // The following options affect writing to parquet files
         // and map to parquet::file::properties::WriterProperties

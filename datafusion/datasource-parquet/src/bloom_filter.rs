@@ -22,11 +22,79 @@
 use std::collections::{HashMap, HashSet};
 
 use arrow::array::{ArrayRef, BooleanArray};
+use arrow::datatypes::Schema;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::{Column, ScalarValue};
+use datafusion_physical_plan::metrics::Count;
+use datafusion_pruning::PruningPredicate;
+use log::debug;
+use parquet::arrow::ParquetRecordBatchStreamBuilder;
+use parquet::arrow::async_reader::AsyncFileReader;
+use parquet::arrow::parquet_column;
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
 use parquet::data_type::Decimal;
+
+/// Reads the bloom filters needed to evaluate `predicate` on the row groups in
+/// `row_group_indexes`.
+///
+/// Returns one [`BloomFilterStatistics`] per row group in the file. Row groups
+/// not listed in `row_group_indexes` and columns without a bloom filter get no
+/// bloom filters. Errors reading an individual bloom filter are ignored (and
+/// counted in `predicate_evaluation_errors`): a missing bloom filter only means
+/// less pruning.
+pub(crate) async fn load_row_group_bloom_filters<T>(
+    builder: &mut ParquetRecordBatchStreamBuilder<T>,
+    predicate: &PruningPredicate,
+    physical_file_schema: &Schema,
+    row_group_indexes: &[usize],
+    predicate_evaluation_errors: &Count,
+) -> Vec<BloomFilterStatistics>
+where
+    T: AsyncFileReader + Send + 'static,
+{
+    let mut row_group_bloom_filters =
+        vec![BloomFilterStatistics::new(); builder.metadata().num_row_groups()];
+
+    let parquet_columns: Vec<(String, usize, Type, i32)> = predicate
+        .literal_columns()
+        .into_iter()
+        .filter_map(|column_name| {
+            let parquet_schema = builder.parquet_schema();
+            let (column_idx, _) =
+                parquet_column(parquet_schema, physical_file_schema, &column_name)?;
+            Some((
+                column_name,
+                column_idx,
+                parquet_schema.column(column_idx).physical_type(),
+                parquet_schema.column(column_idx).type_length(),
+            ))
+        })
+        .collect();
+
+    for &idx in row_group_indexes {
+        let mut row_group_filters =
+            BloomFilterStatistics::with_capacity(parquet_columns.len());
+        for (column_name, column_idx, physical_type, type_length) in &parquet_columns {
+            let bf: Sbbf = match builder
+                .get_row_group_column_bloom_filter(idx, *column_idx)
+                .await
+            {
+                Ok(Some(bf)) => bf,
+                Ok(None) => continue,
+                Err(e) => {
+                    debug!("Ignoring error reading bloom filter: {e}");
+                    predicate_evaluation_errors.add(1);
+                    continue;
+                }
+            };
+            row_group_filters.insert(column_name, bf, *physical_type, *type_length);
+        }
+        row_group_bloom_filters[idx] = row_group_filters;
+    }
+
+    row_group_bloom_filters
+}
 
 /// In memory Parquet Split Block Bloom Filters (SBBF).
 ///
@@ -663,55 +731,16 @@ mod tests {
 
         let access_plan = ParquetAccessPlan::new_all(builder.metadata().num_row_groups());
         let mut pruned_row_groups = RowGroupAccessPlanFilter::new(access_plan);
-        let literal_columns = pruning_predicate.literal_columns();
-        let parquet_columns: Vec<_> = literal_columns
-            .into_iter()
-            .filter_map(|column_name| {
-                let (column_idx, _) = parquet::arrow::parquet_column(
-                    builder.parquet_schema(),
-                    pruning_predicate.schema(),
-                    &column_name,
-                )?;
-                Some((
-                    column_name.to_string(),
-                    column_idx,
-                    builder.parquet_schema().column(column_idx).physical_type(),
-                    builder.parquet_schema().column(column_idx).type_length(),
-                ))
-            })
-            .collect::<Vec<_>>();
-        let mut row_group_bloom_filters =
-            Vec::with_capacity(builder.metadata().num_row_groups());
-        row_group_bloom_filters.resize_with(
-            builder.metadata().num_row_groups(),
-            BloomFilterStatistics::new,
-        );
-        for idx in pruned_row_groups.row_group_indexes() {
-            let mut bloom_filters =
-                BloomFilterStatistics::with_capacity(parquet_columns.len());
-            for (column_name, column_idx, physical_type, type_length) in &parquet_columns
-            {
-                let bf = match builder
-                    .get_row_group_column_bloom_filter(idx, *column_idx)
-                    .await
-                {
-                    Ok(Some(bf)) => bf,
-                    Ok(None) => continue,
-                    Err(e) => {
-                        log::debug!("Ignoring error reading bloom filter: {e}");
-                        file_metrics.predicate_evaluation_errors.add(1);
-                        continue;
-                    }
-                };
-                bloom_filters.insert(
-                    column_name.clone(),
-                    bf,
-                    *physical_type,
-                    *type_length,
-                );
-            }
-            row_group_bloom_filters[idx] = bloom_filters;
-        }
+        let row_group_indexes: Vec<usize> =
+            pruned_row_groups.row_group_indexes().collect();
+        let row_group_bloom_filters = load_row_group_bloom_filters(
+            &mut builder,
+            pruning_predicate,
+            pruning_predicate.schema(),
+            &row_group_indexes,
+            &file_metrics.predicate_evaluation_errors,
+        )
+        .await;
         pruned_row_groups.prune_by_bloom_filters(
             pruning_predicate,
             &file_metrics,

@@ -407,6 +407,17 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                 .transpose()?,
             max_row_group_size: to_usize(proto.max_row_group_size, "max_row_group_size")?,
             max_in_list_size: to_usize(proto.max_in_list_size, "max_in_list_size")?,
+            eager_pruning: proto.eager_pruning.parse()?,
+            eager_pruning_file_limit: proto
+                .eager_pruning_file_limit_opt
+                .as_ref()
+                .map(|opt| match opt {
+                    parquet_options::EagerPruningFileLimitOpt::EagerPruningFileLimit(
+                        limit,
+                    ) => to_usize(*limit, "eager_pruning_file_limit"),
+                })
+                .transpose()?
+                .unwrap_or_else(|| ParquetOptions::default().eager_pruning_file_limit),
             created_by: proto.created_by.clone(),
             column_index_truncate_length: proto
                 .column_index_truncate_length_opt
@@ -567,6 +578,7 @@ impl TryFrom<&TableParquetOptionsProto> for TableParquetOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion_common::config::EagerParquetPruning;
 
     #[test]
     fn rejects_invalid_parquet_statistics() {
@@ -584,5 +596,39 @@ mod tests {
             err.to_string()
                 .contains("Invalid parquet statistics setting: invalid")
         );
+    }
+
+    #[test]
+    fn eager_pruning_defaults_when_unset() {
+        // Messages without the eager pruning fields (e.g. written before they
+        // existed) decode to the config defaults, not to 0 / empty values
+        let proto = ParquetOptionsProto {
+            writer_version: "1.0".to_string(),
+            ..Default::default()
+        };
+
+        let options = ParquetOptions::try_from(&proto).unwrap();
+        let defaults = ParquetOptions::default();
+        assert_eq!(options.eager_pruning, defaults.eager_pruning);
+        assert_eq!(
+            options.eager_pruning_file_limit,
+            defaults.eager_pruning_file_limit
+        );
+    }
+
+    #[test]
+    fn eager_pruning_from_proto() {
+        let proto = ParquetOptionsProto {
+            writer_version: "1.0".to_string(),
+            eager_pruning: "page_index".to_string(),
+            eager_pruning_file_limit_opt: Some(
+                parquet_options::EagerPruningFileLimitOpt::EagerPruningFileLimit(7),
+            ),
+            ..Default::default()
+        };
+
+        let options = ParquetOptions::try_from(&proto).unwrap();
+        assert_eq!(options.eager_pruning, EagerParquetPruning::PageIndex);
+        assert_eq!(options.eager_pruning_file_limit, 7);
     }
 }

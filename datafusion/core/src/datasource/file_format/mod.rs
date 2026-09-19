@@ -87,6 +87,7 @@ pub(crate) mod test_util {
                 .with_projection_indices(projection)?
                 .with_limit(limit)
                 .build(),
+                &[],
             )
             .await?;
         Ok(exec)

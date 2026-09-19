@@ -47,6 +47,7 @@ use tempfile::NamedTempFile;
 mod content_defined_chunking;
 mod custom_reader;
 mod dynamic_row_group_pruning;
+mod eager_pruning;
 #[cfg(feature = "parquet_encryption")]
 mod encryption;
 mod expr_adapter;
