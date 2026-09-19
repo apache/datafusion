@@ -19,7 +19,9 @@ use std::sync::Arc;
 
 use super::EquivalenceProperties;
 use crate::expressions::Column;
-use crate::{ConstExpr, PhysicalExprRef, equivalence::OrderingEquivalenceClass};
+use crate::{
+    ConstExpr, LexOrdering, PhysicalExprRef, equivalence::OrderingEquivalenceClass,
+};
 
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{Constraint, JoinSide, JoinType, NullEquality, Result};
@@ -52,15 +54,15 @@ pub fn join_equivalence_properties(
     match maintains_input_order {
         [true, false] => {
             if probe_side == Some(JoinSide::Left)
-                && (*join_type == JoinType::Inner
-                    || (*join_type == JoinType::Left && !has_filter))
+                && matches!(join_type, JoinType::Inner | JoinType::Left)
             {
-                result.add_orderings(unique_build_join_orderings(
+                result.add_orderings(join_orderings_with_suffix(
                     &left,
                     &right,
                     on,
                     JoinSide::Left,
                     *join_type != JoinType::Inner,
+                    has_filter,
                     null_equality,
                 )?);
             }
@@ -68,15 +70,15 @@ pub fn join_equivalence_properties(
         }
         [false, true] => {
             if probe_side == Some(JoinSide::Right)
-                && (*join_type == JoinType::Inner
-                    || (*join_type == JoinType::Right && !has_filter))
+                && matches!(join_type, JoinType::Inner | JoinType::Right)
             {
-                result.add_orderings(unique_build_join_orderings(
+                result.add_orderings(join_orderings_with_suffix(
                     &right,
                     &left,
                     on,
                     JoinSide::Right,
                     *join_type != JoinType::Inner,
+                    has_filter,
                     null_equality,
                 )?);
             }
@@ -95,20 +97,19 @@ pub fn join_equivalence_properties(
     Ok(result)
 }
 
-/// Append build orderings only when equal probe ordering values identify at most
-/// one build row. The suffix is then constant within each probe ordering group,
-/// even if probe rows repeat. For an outer join preserving the probe side, all
-/// join keys must be fixed within the group, and the caller must rule out filters,
-/// so the group cannot mix matched build rows with NULL-extended rows.
-fn unique_build_join_orderings(
+/// Append build orderings to each probe ordering that permits a build suffix.
+fn join_orderings_with_suffix(
     probe: &EquivalenceProperties,
     build: &EquivalenceProperties,
     on: &[(PhysicalExprRef, PhysicalExprRef)],
     probe_side: JoinSide,
     preserves_unmatched_probe: bool,
+    has_filter: bool,
     null_equality: NullEquality,
 ) -> Result<OrderingEquivalenceClass> {
-    if build.constraints().is_empty() || build.oeq_class().is_empty() {
+    if (probe.constraints().is_empty() && build.constraints().is_empty())
+        || build.oeq_class().is_empty()
+    {
         return Ok(OrderingEquivalenceClass::default());
     }
     let on = on
@@ -122,55 +123,182 @@ fn unique_build_join_orderings(
             (Arc::clone(probe_key), Arc::clone(build_key))
         })
         .collect::<Vec<_>>();
-    let mut valid_orderings = Vec::new();
-    for ordering in probe.oeq_class().iter() {
-        // Within a group of equal ordering values, these expressions are
-        // constant. Keep this assumption local to the ordering proof.
-        let mut group = probe.eq_group().clone();
-        for sort in ordering {
-            let expr = probe.eq_group().normalize_expr(Arc::clone(&sort.expr));
-            group.add_constant(ConstExpr::from(expr));
-        }
-        let probe_key_is_fixed = |key: &PhysicalExprRef| {
-            // Normalization can hide a volatile function behind an equivalent
-            // column. Check the original expression before using equivalences.
-            if is_volatile(key) {
-                return false;
-            }
-            let key = probe.eq_group().normalize_expr(Arc::clone(key));
-            !is_volatile(&key) && group.is_expr_constant(&key).is_some()
-        };
-
-        // Outer joins must have the same match status throughout the group.
-        if preserves_unmatched_probe
-            && !on
-                .iter()
-                .all(|(probe_key, _)| probe_key_is_fixed(probe_key))
-        {
-            continue;
-        }
-        if !ordering_covers_unique_build_key(
-            &probe.schema,
+    let mut build_orderings = build.oeq_class().clone();
+    if probe_side == JoinSide::Left {
+        build_orderings.add_offset(probe.schema.fields().len() as _)?;
+    }
+    let mut result = OrderingEquivalenceClass::default();
+    let candidates =
+        probe_ordering_candidates(probe, build, &on, preserves_unmatched_probe)?;
+    for ordering in candidates {
+        if !can_append_build_ordering(
+            &ordering,
+            probe,
             build,
             &on,
-            probe_key_is_fixed,
+            preserves_unmatched_probe,
+            has_filter,
             null_equality,
         ) {
             continue;
         }
-        valid_orderings.push(ordering.clone());
+        // Append before removing redundant prefixes: [a] and [a, b] may both
+        // be valid, but [a, suffix] is not implied by [a, b, suffix].
+        let mut prefix = OrderingEquivalenceClass::new([ordering]);
+        if probe_side == JoinSide::Right {
+            prefix.add_offset(build.schema.fields().len() as _)?;
+        }
+        result.extend(prefix.join_suffix(&build_orderings));
     }
-    let mut probe_orderings = OrderingEquivalenceClass::new(valid_orderings);
-    if probe_orderings.is_empty() {
-        return Ok(probe_orderings);
+    Ok(result)
+}
+
+/// Collect probe ordering prefixes to check before appending build orderings.
+/// Keep the original orderings, their combined ordering, and combinations selected
+/// by each unique constraint. The caller must prove the suffix for each candidate.
+fn probe_ordering_candidates(
+    probe: &EquivalenceProperties,
+    build: &EquivalenceProperties,
+    on: &[(PhysicalExprRef, PhysicalExprRef)],
+    preserves_unmatched_probe: bool,
+) -> Result<Vec<LexOrdering>> {
+    let mut orderings = probe.oeq_class().iter().cloned().collect::<Vec<_>>();
+    if orderings.len() > 1 {
+        orderings.extend(probe.oeq_class().output_ordering());
     }
-    let mut build_orderings = build.oeq_class().clone();
-    match probe_side {
-        JoinSide::Left => build_orderings.add_offset(probe.schema.fields().len() as _)?,
-        JoinSide::Right => probe_orderings.add_offset(build.schema.fields().len() as _)?,
-        JoinSide::None => unreachable!(),
+
+    // For a unique probe row, look for an ordering of its constrained columns.
+    for constraint in probe.constraints().iter() {
+        let keys = constraint_columns(constraint, &probe.schema);
+        let (ordering, _) = probe.find_longest_permutation(&keys)?;
+        orderings.extend(LexOrdering::new(ordering));
     }
-    Ok(probe_orderings.join_suffix(&build_orderings))
+
+    // For a unique build match, map the constrained columns to probe join keys.
+    // This can select [a, b] from [extra], [a], [b] without the unrelated extra.
+    for constraint in build.constraints().iter() {
+        let mut keys = vec![];
+        for column in constraint_columns(constraint, &build.schema) {
+            let column = build.eq_group().normalize_expr(column);
+            for (probe_key, build_key) in on {
+                let build_key = build.eq_group().normalize_expr(Arc::clone(build_key));
+                if build_key.eq(&column) {
+                    keys.push(Arc::clone(probe_key));
+                }
+            }
+        }
+        // Outer joins also need the additional keys to have a fixed match status.
+        if preserves_unmatched_probe {
+            keys.extend(on.iter().map(|(key, _)| Arc::clone(key)));
+        }
+        let (ordering, _) = probe.find_longest_permutation(&keys)?;
+        orderings.extend(LexOrdering::new(ordering));
+    }
+    Ok(orderings)
+}
+
+fn constraint_columns(constraint: &Constraint, schema: &Schema) -> Vec<PhysicalExprRef> {
+    let (Constraint::PrimaryKey(indices) | Constraint::Unique(indices)) = constraint;
+    indices
+        .iter()
+        .filter_map(|&index| {
+            let field = schema.fields().get(index)?;
+            Some(Arc::new(Column::new(field.name(), index)) as PhysicalExprRef)
+        })
+        .collect()
+}
+
+/// A build suffix is ordered within each group of equal probe ordering values if:
+///
+/// - the group contains at most one probe row, or only unmatched NULL keys; or
+/// - the group can match at most one build row, so the suffix is constant.
+///
+/// The latter also requires a constant match status for outer joins.
+fn can_append_build_ordering(
+    ordering: &LexOrdering,
+    probe: &EquivalenceProperties,
+    build: &EquivalenceProperties,
+    on: &[(PhysicalExprRef, PhysicalExprRef)],
+    preserves_unmatched_probe: bool,
+    has_filter: bool,
+    null_equality: NullEquality,
+) -> bool {
+    // Keep the assumption of equal ordering values local to this proof.
+    let mut group = probe.eq_group().clone();
+    for sort in ordering {
+        let expr = probe.eq_group().normalize_expr(Arc::clone(&sort.expr));
+        group.add_constant(ConstExpr::from(expr));
+    }
+    let probe_key_is_fixed = |key: &PhysicalExprRef| {
+        // Normalization can hide a volatile function behind an equivalent
+        // column. Check the original expression before using equivalences.
+        if is_volatile(key) {
+            return false;
+        }
+        let key = probe.eq_group().normalize_expr(Arc::clone(key));
+        !is_volatile(&key) && group.is_expr_constant(&key).is_some()
+    };
+
+    if ordering_covers_unique_probe_key(
+        probe,
+        &build.schema,
+        on,
+        probe_key_is_fixed,
+        null_equality,
+    ) {
+        return true;
+    }
+    // Repeated probe rows in an outer join must have the same match status.
+    if preserves_unmatched_probe
+        && (has_filter || !on.iter().all(|(key, _)| probe_key_is_fixed(key)))
+    {
+        return false;
+    }
+    ordering_covers_unique_build_key(
+        &probe.schema,
+        build,
+        on,
+        probe_key_is_fixed,
+        null_equality,
+    )
+}
+
+/// A nullable UNIQUE key permits duplicate NULLs. It is sufficient only when
+/// those NULLs cannot match: their group then emits no rows or only NULL-extended
+/// build columns, while a non-NULL key identifies at most one probe row.
+fn ordering_covers_unique_probe_key(
+    probe: &EquivalenceProperties,
+    build_schema: &Schema,
+    on: &[(PhysicalExprRef, PhysicalExprRef)],
+    probe_key_is_fixed: impl Fn(&PhysicalExprRef) -> bool,
+    null_equality: NullEquality,
+) -> bool {
+    probe.constraints().iter().any(|constraint| {
+        let (Constraint::PrimaryKey(indices) | Constraint::Unique(indices)) = constraint;
+        !indices.is_empty()
+            && indices.iter().all(|&index| {
+                let Some(field) = probe.schema.fields().get(index) else {
+                    return false;
+                };
+                let column: PhysicalExprRef = Arc::new(Column::new(field.name(), index));
+                if !probe_key_is_fixed(&column) {
+                    return false;
+                }
+                if !matches!(constraint, Constraint::Unique(_)) || !field.is_nullable() {
+                    return true;
+                }
+                let column = probe.eq_group().normalize_expr(column);
+                on.iter().any(|(probe_key, build_key)| {
+                    !is_volatile(probe_key)
+                        && probe
+                            .eq_group()
+                            .normalize_expr(Arc::clone(probe_key))
+                            .eq(&column)
+                        && (null_equality == NullEquality::NullEqualsNothing
+                            || !build_key.nullable(build_schema).unwrap_or(true))
+                })
+            })
+    })
 }
 
 /// Check whether the probe ordering determines a unique build key.
@@ -410,6 +538,140 @@ mod tests {
                 NullEquality::NullEqualsNothing,
             )?;
             assert!(output.ordering_satisfy(required(Arc::clone(&b_plus_one)))?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_join_suffix_with_unique_probe() -> Result<()> {
+        use Constraint::{PrimaryKey, Unique};
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, true),
+            Field::new("v", DataType::Int32, true),
+        ]));
+        let sort = |name| PhysicalSortExpr::new_default(col(name, &schema).unwrap());
+        let build = EquivalenceProperties::new_with_orderings(
+            Arc::clone(&schema),
+            [vec![sort("v")]],
+        );
+        let output_schema = Arc::new(Schema::new(
+            schema
+                .fields()
+                .iter()
+                .chain(schema.fields())
+                .cloned()
+                .collect::<Vec<_>>(),
+        ));
+        let ordinary = NullEquality::NullEqualsNothing;
+        let null_safe = NullEquality::NullEqualsNull;
+        for (constraint, prefix, on, null_equality, expected) in [
+            (PrimaryKey(vec![0]), vec!["a"], ("a", "a"), null_safe, true),
+            (Unique(vec![0]), vec!["a"], ("a", "a"), null_safe, true),
+            (Unique(vec![1]), vec!["b"], ("b", "b"), null_safe, false),
+            (
+                PrimaryKey(vec![0, 1]),
+                vec!["a"],
+                ("a", "a"),
+                null_safe,
+                false,
+            ),
+            // Duplicate NULLs are safe only when the join cannot match them.
+            (Unique(vec![1]), vec!["b"], ("b", "b"), ordinary, true),
+            (Unique(vec![1]), vec!["b"], ("a", "a"), ordinary, false),
+            (Unique(vec![1]), vec!["b"], ("b", "a"), null_safe, true),
+            // The join excludes NULLs in b, but not in the other UNIQUE column.
+            (
+                Unique(vec![1, 2]),
+                vec!["b", "v"],
+                ("b", "b"),
+                ordinary,
+                false,
+            ),
+        ] {
+            let probe = EquivalenceProperties::new_with_orderings(
+                Arc::clone(&schema),
+                [prefix.iter().map(|name| sort(name))],
+            )
+            .with_constraints(Constraints::new_unverified(vec![constraint.clone()]));
+            // A single probe row can either emit its ordered matches or one
+            // NULL-extended row, even when an additional ON filter is present.
+            for join_type in [JoinType::Inner, JoinType::Left] {
+                let output = join_equivalence_properties(
+                    probe.clone(),
+                    build.clone(),
+                    &join_type,
+                    Arc::clone(&output_schema),
+                    &[true, false],
+                    Some(JoinSide::Left),
+                    &[(col(on.0, &schema)?, col(on.1, &schema)?)],
+                    true,
+                    null_equality,
+                )?;
+                assert_eq!(
+                    output.ordering_satisfy(
+                        prefix.iter().map(|name| sort(name)).chain([
+                            PhysicalSortExpr::new_default(Arc::new(Column::new("v", 5))),
+                        ])
+                    )?,
+                    expected,
+                    "{constraint:?}, {join_type:?}, {on:?}, {null_equality:?}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_join_suffix_with_combined_probe_orderings() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("v", DataType::Int32, false),
+            Field::new("extra", DataType::Int32, false),
+        ]));
+        let sort = |name| PhysicalSortExpr::new_default(col(name, &schema).unwrap());
+        let probe = EquivalenceProperties::new_with_orderings(
+            Arc::clone(&schema),
+            [vec![sort("extra")], vec![sort("a")], vec![sort("b")]],
+        );
+        let build = EquivalenceProperties::new_with_orderings(
+            Arc::clone(&schema),
+            [vec![sort("v")]],
+        )
+        .with_constraints(Constraints::new_unverified(vec![
+            Constraint::PrimaryKey(vec![0, 1]),
+        ]));
+        let output_schema = Arc::new(Schema::new(
+            schema
+                .fields()
+                .iter()
+                .chain(schema.fields())
+                .cloned()
+                .collect::<Vec<_>>(),
+        ));
+        let output = join_equivalence_properties(
+            probe,
+            build,
+            &JoinType::Left,
+            output_schema,
+            &[true, false],
+            Some(JoinSide::Left),
+            &[
+                (col("a", &schema)?, col("a", &schema)?),
+                (col("b", &schema)?, col("b", &schema)?),
+            ],
+            false,
+            NullEquality::NullEqualsNothing,
+        )?;
+        let suffix = PhysicalSortExpr::new_default(Arc::new(Column::new("v", 6)));
+        for (first, second) in [("a", "b"), ("b", "a")] {
+            assert!(output.ordering_satisfy([
+                sort(first),
+                sort(second),
+                suffix.clone()
+            ])?);
+            assert!(!output.ordering_satisfy([sort(first), suffix.clone()])?);
         }
         Ok(())
     }
