@@ -22,7 +22,6 @@
 use std::fmt::{Debug, Display, Formatter};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::task::{Context, Poll};
 use std::vec;
 
@@ -107,18 +106,11 @@ use distributor_channels::{
 /// # Batch Flow with Spilling
 ///
 /// ```text
-///                      Input Stream   ◀──────┐
-///                           │                │
-///                           ▼                │
-///                    Partition Logic         │
-///                           │           `batch_size` not
-///                           ▼            reached yet
-///                    Coalesce Batch          │
-///           ┌───────────────┴────────────────┘
-///           ▼
-/// `batch_size` reached
-///           │
-///           └───────────────┐
+///                      Input Stream
+///                           │
+///                           ▼
+///                    Partition Logic
+///                           │
 ///                           ▼
 ///                        try_grow()
 ///           ┌───────────────┴────────────────┐
@@ -144,12 +136,13 @@ use distributor_channels::{
 ///           ┌──────────────┴────────────────┐
 ///           ▼                               ▼
 /// RepartitionBatch::Memory      RepartitionBatch::Spilled
-/// Return batch immediately       Poll spill_stream (blocks)
-///           └─────────────┬─────────────────┘
-///                         │
+///  Push to consumer coalescer    Poll spill_stream (blocks)
+///  (flush when batch_size met)           │
+///           │                            ▼
+///           └─────────────┬─────── Return batch
+///                         │      (FIFO order preserved)
 ///                         ▼
 ///                    Return batch
-///               (FIFO order preserved)
 /// ```
 ///
 /// See [`RepartitionExec`] for overall architecture and [`StreamState`] for
@@ -170,16 +163,10 @@ type InputPartitionsToCurrentPartitionSender = Vec<DistributionSender<MaybeBatch
 type InputPartitionsToCurrentPartitionReceiver = Vec<DistributionReceiver<MaybeBatch>>;
 
 /// Output channel with its associated memory reservation and spill writer.
-///
-/// `coalescer` is `None` for preserve-order mode, where downstream
-/// [`StreamingMergeBuilder`] performs the batching; otherwise it's a
-/// [`SharedCoalescer`] cloned from the per-partition one held by
-/// [`PartitionChannels`].
 struct OutputChannel {
     sender: DistributionSender<MaybeBatch>,
     reservation: SharedMemoryReservation,
     spill_writer: SpillPoolSink,
-    shared_coalescer: Option<SharedCoalescer>,
 }
 
 /// The set of spill-pool writers for a single output partition, before they are handed to the
@@ -213,18 +200,6 @@ impl PartitionSpillWriters {
 }
 
 impl OutputChannel {
-    fn coalesce(&mut self, batch: RecordBatch) -> Result<Vec<RecordBatch>> {
-        match &self.shared_coalescer {
-            Some(shared) => Ok(shared.push_and_drain(batch)?),
-            None => Ok(vec![batch]),
-        }
-    }
-
-    /// Send a single batch through the channel for `partition`, applying
-    /// the memory reservation / spill-writer fallback. Removes the channel
-    /// from `self.inner` if the receiver has hung up.
-    ///
-    /// Used after [`OutputChannel::coalesce`] for performance purposes.
     async fn send(&mut self, batch: RecordBatch) -> Result<(), SendError<MaybeBatch>> {
         let size = batch.get_array_memory_size();
 
@@ -245,75 +220,6 @@ impl OutputChannel {
             self.reservation.shrink(size);
         }
         result
-    }
-
-    async fn finalize(mut self) -> Result<()> {
-        let Some(shared) = self.shared_coalescer.take() else {
-            return Ok(());
-        };
-        for batch in shared.finalize()? {
-            // If this errored, it means that nobody is listening on the other side, which is fine
-            // and can happen in certain cases, like when a LIMIT drops the stream that listens.
-            let _ = self.send(batch).await;
-        }
-        Ok(())
-    }
-}
-
-/// A producer-side coalescer shared across all input tasks targeting a
-/// single output partition.
-///
-/// Bundles the [`LimitedBatchCoalescer`] (behind a [`Mutex`]) with the
-/// active-sender counter that tracks how many input tasks may still push
-/// into it. The last task to call [`Self::finalize`] is the one that
-/// finalizes the coalescer and ships the residual batch.
-///
-/// Cheap to [`Clone`]: both fields are [`Arc`]s.
-#[derive(Clone)]
-struct SharedCoalescer {
-    inner: Arc<Mutex<LimitedBatchCoalescer>>,
-    active_senders: Arc<AtomicUsize>,
-}
-
-impl SharedCoalescer {
-    fn new(schema: SchemaRef, target_batch_size: usize, num_senders: usize) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(LimitedBatchCoalescer::new(
-                schema,
-                target_batch_size,
-                None,
-            ))),
-            active_senders: Arc::new(AtomicUsize::new(num_senders)),
-        }
-    }
-
-    /// Push `batch` into the coalescer and drain any newly completed
-    /// batches. The mutex is held only briefly.
-    fn push_and_drain(&self, batch: RecordBatch) -> Result<Vec<RecordBatch>> {
-        let mut acc = Vec::new();
-        let mut c = self.inner.lock();
-        c.push_batch(batch)?;
-        while let Some(b) = c.next_completed_batch() {
-            acc.push(b);
-        }
-        Ok(acc)
-    }
-
-    /// Decrement the active-senders counter. If this caller was the last
-    /// sender, finalize the coalescer and return its residual batches; if
-    /// other senders are still active, return `Ok(None)`.
-    fn finalize(&self) -> Result<Vec<RecordBatch>> {
-        let was_last = self.active_senders.fetch_sub(1, AtomicOrdering::AcqRel) == 1;
-        if !was_last {
-            return Ok(vec![]);
-        }
-        let mut acc = Vec::new();
-        let mut c = self.inner.lock();
-        c.finish()?;
-        while let Some(b) = c.next_completed_batch() {
-            acc.push(b);
-        }
-        Ok(acc)
     }
 }
 
@@ -345,10 +251,6 @@ struct PartitionChannels {
     rx: InputPartitionsToCurrentPartitionReceiver,
     /// Memory reservation for this output partition
     reservation: SharedMemoryReservation,
-    /// Shared coalescer used by all input tasks targeting this output
-    /// partition. `None` in preserve-order mode (downstream
-    /// `StreamingMergeBuilder` handles batching).
-    shared_coalescer: Option<SharedCoalescer>,
     /// Spill writers for writing spilled data, before they are handed to the per-input tasks.
     /// The variant is chosen by the repartition mode (see [`PartitionSpillWriters`]): a dedicated
     /// single-producer FIFO writer per input in preserve-order mode, or one shared writer in
@@ -445,7 +347,6 @@ impl RepartitionExecState {
         name: &str,
         context: &Arc<TaskContext>,
         spill_manager: SpillManager,
-        coalescer_batch_size: usize,
     ) -> Result<&mut ConsumingInputStreamsState> {
         let streams_and_metrics = match self {
             RepartitionExecState::NotInitialized => {
@@ -470,7 +371,6 @@ impl RepartitionExecState {
 
         let num_input_partitions = streams_and_metrics.len();
         let num_output_partitions = partitioning.partition_count();
-        let coalesce_batches = !preserve_order && !input.boundedness().is_unbounded();
 
         let spill_manager = Arc::new(spill_manager);
 
@@ -537,26 +437,12 @@ impl RepartitionExecState {
                 (PartitionSpillWriters::Shared(writer), vec![reader])
             };
 
-            // Coalesce on the producer side, before the channel's gate, so
-            // the consumer never sees the per-input-task small batches.
-            // Skip in preserve-order mode, where `StreamingMergeBuilder`
-            // handles batching, and for unbounded inputs, where a residual
-            // batch could otherwise be withheld indefinitely.
-            let shared_coalescer = coalesce_batches.then(|| {
-                SharedCoalescer::new(
-                    input.schema(),
-                    coalescer_batch_size,
-                    num_input_partitions,
-                )
-            });
-
             channels.insert(
                 partition,
                 PartitionChannels {
                     tx,
                     rx,
                     reservation,
-                    shared_coalescer,
                     spill_writers,
                     spill_readers,
                 },
@@ -598,7 +484,6 @@ impl RepartitionExecState {
                             sender: channels.tx[i].clone(),
                             reservation: Arc::clone(&channels.reservation),
                             spill_writer: channels.spill_writers.take_for_input(i)?,
-                            shared_coalescer: channels.shared_coalescer.clone(),
                         },
                     ))
                 })
@@ -1028,7 +913,9 @@ impl BatchPartitioner {
                 exprs,
                 partition_reducer: StrengthReducedU64::new(num_partitions as u64),
                 hash_buffer: vec![],
-                indices: vec![vec![]; num_partitions],
+                indices: (0..num_partitions)
+                    .map(|_| Vec::with_capacity(128))
+                    .collect(),
             },
             timer,
         })
@@ -1748,12 +1635,13 @@ impl ExecutionPlan for RepartitionExec {
         let partitioning = self.partitioning().clone();
         let metrics = self.metrics.clone();
         let preserve_order = self.sort_exprs().is_some();
+        let coalesce_batches = !preserve_order && !input.boundedness().is_unbounded();
         let name = self.name().to_owned();
         let schema = self.schema();
         let schema_captured = Arc::clone(&schema);
         let coalescer_batch_size = self
             .batch_size
-            .unwrap_or_else(|| context.session_config().batch_size());
+            .unwrap_or_else(|| context.session_config().batch_size() * 2);
 
         let spill_manager = SpillManager::new(
             Arc::clone(&context.runtime_env()),
@@ -1789,7 +1677,6 @@ impl ExecutionPlan for RepartitionExec {
                     &name,
                     &context,
                     spill_manager.clone(),
-                    coalescer_batch_size,
                 )?;
 
                 // now return stream for the specified *output* partition which will
@@ -1838,6 +1725,7 @@ impl ExecutionPlan for RepartitionExec {
                             spill_stream,
                             1, // Each receiver handles one input partition
                             None,
+                            None, // preserve_order: StreamingMerge handles coalescing
                         )) as SendableRecordBatchStream
                     })
                     .collect::<Vec<_>>();
@@ -1867,7 +1755,7 @@ impl ExecutionPlan for RepartitionExec {
                     .expect("at least one spill reader should exist");
 
                 Ok(Box::pin(PerPartitionStream::new(
-                    schema_captured,
+                    Arc::clone(&schema_captured),
                     rx.into_iter()
                         .next()
                         .expect("at least one receiver should exist"),
@@ -1876,6 +1764,13 @@ impl ExecutionPlan for RepartitionExec {
                     spill_stream,
                     num_input_partitions,
                     Some(BaselineMetrics::new(&metrics, partition)),
+                    coalesce_batches.then(|| {
+                        LimitedBatchCoalescer::new(
+                            schema_captured,
+                            coalescer_batch_size,
+                            None,
+                        )
+                    }),
                 )) as SendableRecordBatchStream)
             }
         })
@@ -2289,7 +2184,7 @@ impl RepartitionExec {
         };
 
         // While there are still outputs to send to, keep pulling inputs
-        let mut batches_until_yield = partitioner.num_partitions();
+        let mut batches_until_yield = partitioner.num_partitions() * 2;
         while !output_channels.is_empty() {
             // fetch the next batch
             let timer = metrics.fetch_time.timer();
@@ -2312,15 +2207,12 @@ impl RepartitionExec {
 
                 let timer = metrics.send_time[partition].timer();
                 // if there is still a receiver, send to it
-                if let Some(output_channel) = output_channels.get_mut(&partition) {
-                    for batch in output_channel.coalesce(batch)? {
-                        if output_channel.send(batch).await.is_err() {
-                            // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
-                            // so ignore this channel from now on.
-                            output_channels.remove(&partition);
-                            break;
-                        }
-                    }
+                if let Some(output_channel) = output_channels.get_mut(&partition)
+                    && output_channel.send(batch).await.is_err()
+                {
+                    // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
+                    // so ignore this channel from now on.
+                    output_channels.remove(&partition);
                 }
                 timer.done();
             }
@@ -2343,18 +2235,10 @@ impl RepartitionExec {
             // in that case anyways
             if batches_until_yield == 0 {
                 tokio::task::yield_now().await;
-                batches_until_yield = partitioner.num_partitions();
+                batches_until_yield = partitioner.num_partitions() * 2;
             } else {
                 batches_until_yield -= 1;
             }
-        }
-
-        // End of input for this task. For each output partition we still
-        // have a channel to, decrement the active-senders counter; whoever
-        // sees the count drop to zero is the last input task and must
-        // finalize the shared coalescer and ship its residual.
-        for (_, output_channel) in output_channels.drain() {
-            output_channel.finalize().await?;
         }
 
         // Spill writers will auto-finalize when dropped
@@ -2488,9 +2372,19 @@ struct PerPartitionStream {
 
     /// Execution metrics (None in preserve-order mode where StreamingMerge owns the metrics)
     baseline_metrics: Option<BaselineMetrics>,
+
+    /// Consumer-side coalescer: buffers small per-partition mini-batches until
+    /// `target_batch_size` rows accumulate, then emits one larger batch.
+    /// `None` in preserve-order mode (StreamingMerge handles coalescing) and for
+    /// unbounded inputs (a residual batch could be withheld indefinitely).
+    coalescer: Option<LimitedBatchCoalescer>,
+
+    /// Completed batches waiting to be returned by `poll_next`.
+    pending: std::collections::VecDeque<RecordBatch>,
 }
 
 impl PerPartitionStream {
+    #[expect(clippy::too_many_arguments)]
     fn new(
         schema: SchemaRef,
         receiver: DistributionReceiver<MaybeBatch>,
@@ -2499,6 +2393,7 @@ impl PerPartitionStream {
         spill_stream: SendableRecordBatchStream,
         num_input_partitions: usize,
         baseline_metrics: Option<BaselineMetrics>,
+        coalescer: Option<LimitedBatchCoalescer>,
     ) -> Self {
         Self {
             schema,
@@ -2509,6 +2404,8 @@ impl PerPartitionStream {
             state: StreamState::ReadingMemory,
             remaining_partitions: num_input_partitions,
             baseline_metrics,
+            coalescer,
+            pending: std::collections::VecDeque::new(),
         }
     }
 
@@ -2524,6 +2421,11 @@ impl PerPartitionStream {
         let _timer = elapsed.as_ref().map(|t| t.timer());
 
         loop {
+            // Drain any coalesced batches before polling for more input.
+            if let Some(batch) = self.pending.pop_front() {
+                return Poll::Ready(Some(Ok(batch)));
+            }
+
             match self.state {
                 StreamState::ReadingMemory => {
                     // Poll the memory channel for next message
@@ -2538,9 +2440,18 @@ impl PerPartitionStream {
                     match value {
                         Some(Some(v)) => match v {
                             Ok(RepartitionBatch::Memory(batch)) => {
-                                // Release memory and return batch
                                 self.reservation.shrink(batch.get_array_memory_size());
-                                return Poll::Ready(Some(Ok(batch)));
+                                if let Some(coalescer) = &mut self.coalescer {
+                                    coalescer.push_batch(batch)?;
+                                    let flushed: Vec<_> = std::iter::from_fn(|| {
+                                        coalescer.next_completed_batch()
+                                    })
+                                    .collect();
+                                    self.pending.extend(flushed);
+                                    // loop back to drain pending or poll for more
+                                } else {
+                                    return Poll::Ready(Some(Ok(batch)));
+                                }
                             }
                             Ok(RepartitionBatch::Spilled) => {
                                 // Batch was spilled, transition to reading from spill stream
@@ -2556,8 +2467,19 @@ impl PerPartitionStream {
                             // One input partition finished
                             self.remaining_partitions -= 1;
                             if self.remaining_partitions == 0 {
-                                // All input partitions finished
-                                return Poll::Ready(None);
+                                // All input partitions finished — flush coalescer residual
+                                if let Some(coalescer) = &mut self.coalescer {
+                                    coalescer.finish()?;
+                                    let flushed: Vec<_> = std::iter::from_fn(|| {
+                                        coalescer.next_completed_batch()
+                                    })
+                                    .collect();
+                                    self.coalescer = None;
+                                    self.pending.extend(flushed);
+                                    // loop back to drain pending, then return None
+                                } else {
+                                    return Poll::Ready(None);
+                                }
                             }
                             // Otherwise poll for more data from the other partitions
                         }
