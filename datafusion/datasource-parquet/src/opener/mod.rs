@@ -258,6 +258,7 @@ pub(super) struct ParquetMorselizer {
     pub metrics: ExecutionPlanMetricsSet,
     /// Factory for instantiating parquet reader
     pub parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
+    pub schema_provider: Option<Arc<dyn crate::ParquetFileSchemaProvider>>,
     /// Should the filters be evaluated during the parquet scan using
     /// [`DatafusionArrowPredicate`](crate::row_filter::DatafusionArrowPredicate)?
     pub pushdown_filters: bool,
@@ -443,6 +444,7 @@ struct PreparedParquetOpen {
     metadata_size_hint: Option<usize>,
     metrics: ExecutionPlanMetricsSet,
     parquet_file_reader_factory: Arc<dyn ParquetFileReaderFactory>,
+    schema_provider: Option<Arc<dyn crate::ParquetFileSchemaProvider>>,
     async_file_reader: Box<dyn AsyncFileReader>,
     batch_size: usize,
     logical_file_schema: SchemaRef,
@@ -907,6 +909,7 @@ impl ParquetMorselizer {
             metadata_size_hint,
             metrics: self.metrics.clone(),
             parquet_file_reader_factory: Arc::clone(&self.parquet_file_reader_factory),
+            schema_provider: self.schema_provider.clone(),
             async_file_reader,
             batch_size: self.batch_size,
             logical_file_schema: Arc::clone(&logical_file_schema),
@@ -1001,9 +1004,14 @@ impl PreparedParquetOpen {
         // the returned metadata may actually include page indexes as some
         // readers may return page indexes even when not requested -- for
         // example when they are cached)
-        let reader_metadata =
-            ArrowReaderMetadata::load_async(&mut self.async_file_reader, options.clone())
-                .await?;
+        let metadata = self.async_file_reader.get_metadata(Some(&options)).await?;
+        if self.partitioned_file.arrow_schema.is_none()
+            && let Some(provider) = &self.schema_provider
+        {
+            let schema = provider.schema(metadata.file_metadata().schema_descr())?;
+            options = options.with_schema(schema);
+        }
+        let reader_metadata = ArrowReaderMetadata::try_new(metadata, options.clone())?;
         metadata_timer.stop();
         drop(metadata_timer);
 
@@ -1996,8 +2004,12 @@ async fn load_page_index<T: AsyncFileReader>(
     options: ArrowReaderOptions,
 ) -> Result<ArrowReaderMetadata> {
     let parquet_metadata = reader_metadata.metadata();
-    let missing_column_index = parquet_metadata.column_index().is_none();
-    let missing_offset_index = parquet_metadata.offset_index().is_none();
+    let missing_column_index = !parquet_metadata
+        .page_index()
+        .is_some_and(|page_index| page_index.has_column_indexes());
+    let missing_offset_index = !parquet_metadata
+        .page_index()
+        .is_some_and(|page_index| page_index.has_offset_indexes());
     // You may ask yourself: why are we even checking if the page index is already loaded here?
     // Didn't we explicitly *not* load it above?
     // Well it's possible that a custom implementation of `AsyncFileReader` gives you
@@ -2026,9 +2038,10 @@ mod test {
     use crate::metadata::DFParquetMetadata;
     use crate::{
         CachedParquetFileReaderFactory, DefaultParquetFileReaderFactory,
-        ParquetFileReaderFactory, ParquetRowSelection, RowGroupAccess,
+        ParquetFileReaderFactory, ParquetFileSchemaProvider, ParquetRowSelection,
+        RowGroupAccess,
     };
-    use arrow::array::{RecordBatch, record_batch};
+    use arrow::array::{AsArray, RecordBatch, record_batch};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{
@@ -2053,15 +2066,17 @@ mod test {
     };
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use datafusion_pruning::MAX_IN_LIST_SIZE;
-    use futures::StreamExt;
     use futures::stream::BoxStream;
+    use futures::{StreamExt, TryStreamExt};
     use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory, path::Path};
-    use parquet::arrow::{ArrowSchemaConverter, ArrowWriter};
+    use parquet::arrow::{ArrowSchemaConverter, ArrowWriter, parquet_to_arrow_schema};
+    use parquet::basic::ConvertedType;
     use parquet::file::metadata::{ColumnChunkMetaData, FileMetaData, ParquetMetaData};
     use parquet::file::properties::{EnabledStatistics, WriterProperties};
-    use parquet::schema::types::SchemaDescPtr;
+    use parquet::schema::types::{SchemaDescPtr, SchemaDescriptor};
     use std::collections::VecDeque;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Builder for creating [`ParquetMorselizer`] instances with sensible defaults for tests.
     /// This helps reduce code duplication and makes it clear what differs between test cases.
@@ -2237,8 +2252,6 @@ mod test {
         plan: ParquetAccessPlan,
     ) -> bool {
         use crate::RowGroupAccessPlanFilter;
-        use parquet::arrow::parquet_to_arrow_schema;
-
         let arrow_schema: SchemaRef = Arc::new(
             parquet_to_arrow_schema(metadata.file_metadata().schema_descr(), None)
                 .unwrap(),
@@ -2463,6 +2476,7 @@ mod test {
                     .unwrap_or_else(|| {
                         Arc::new(DefaultParquetFileReaderFactory::new(store)) as _
                     }),
+                schema_provider: None,
                 pushdown_filters: self.pushdown_filters,
                 reorder_filters: self.reorder_filters,
                 force_filter_selections: self.force_filter_selections,
@@ -2495,7 +2509,7 @@ mod test {
     /// plans CPU work, awaits any discovered I/O futures, and feeds the planner
     /// back into the ready queue until a stream morsel is ready.
     async fn open_file(
-        morselizer: &ParquetMorselizer,
+        morselizer: &dyn Morselizer,
         file: PartitionedFile,
     ) -> Result<BoxStream<'static, Result<RecordBatch>>> {
         let mut planners = VecDeque::from([morselizer.plan_file(file)?]);
@@ -3718,6 +3732,384 @@ mod test {
                 .message(),
             "Arrow: Incompatible supplied Arrow schema: data type mismatch for field b: requested Float64 but found Float32"
         );
+    }
+
+    #[derive(Debug, Default)]
+    struct EnumSchemaProvider(AtomicUsize);
+
+    impl ParquetFileSchemaProvider for EnumSchemaProvider {
+        fn schema(&self, parquet_schema: &SchemaDescriptor) -> Result<SchemaRef> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            let schema = parquet_to_arrow_schema(parquet_schema, None)?;
+            let DataType::Struct(fields) = schema.field(1).data_type() else {
+                return internal_err!("expected a nested test schema");
+            };
+            let fields = fields
+                .iter()
+                .zip(parquet_schema.columns().iter().skip(1))
+                .map(|(field, column)| {
+                    if column.converted_type() == ConvertedType::ENUM {
+                        Arc::new(field.as_ref().clone().with_data_type(DataType::Utf8))
+                    } else {
+                        Arc::clone(field)
+                    }
+                })
+                .collect::<arrow::datatypes::Fields>();
+            Ok(Arc::new(Schema::new(vec![
+                schema.field(0).clone(),
+                schema
+                    .field(1)
+                    .clone()
+                    .with_data_type(DataType::Struct(fields)),
+            ])))
+        }
+    }
+
+    /// Write an ENUM beside raw bytes that are deliberately invalid UTF-8.
+    async fn write_enum_file(
+        store: &dyn ObjectStore,
+        name: &str,
+        extra_field: bool,
+        props: WriterProperties,
+    ) -> (PartitionedFile, SchemaRef) {
+        use parquet::data_type::{ByteArray, ByteArrayType, Int32Type};
+        use parquet::file::writer::SerializedFileWriter;
+        use parquet::schema::parser::parse_message_type;
+
+        let extra = if extra_field {
+            "required int32 extra;"
+        } else {
+            ""
+        };
+        let schema = Arc::new(
+            parse_message_type(&format!(
+                "message test {{ required int32 id; required group nested {{
+                required binary e (ENUM); required binary b; {extra}
+            }} }}"
+            ))
+            .unwrap(),
+        );
+        let arrow_schema = EnumSchemaProvider::default()
+            .schema(&SchemaDescriptor::new(Arc::clone(&schema)))
+            .unwrap();
+        let mut bytes = Vec::new();
+        let mut writer =
+            SerializedFileWriter::new(&mut bytes, schema, Arc::new(props)).unwrap();
+        let mut row_group = writer.next_row_group().unwrap();
+        let mut column = row_group.next_column().unwrap().unwrap();
+        column
+            .typed::<Int32Type>()
+            .write_batch(&[1, 2, 3], None, None)
+            .unwrap();
+        column.close().unwrap();
+        for values in [
+            vec![
+                ByteArray::from("a"),
+                ByteArray::from("b"),
+                ByteArray::from("c"),
+            ],
+            vec![ByteArray::from(vec![0xff, 0x00]); 3],
+        ] {
+            let mut column = row_group.next_column().unwrap().unwrap();
+            column
+                .typed::<ByteArrayType>()
+                .write_batch(&values, None, None)
+                .unwrap();
+            column.close().unwrap();
+        }
+        if extra_field {
+            let mut column = row_group.next_column().unwrap().unwrap();
+            column
+                .typed::<Int32Type>()
+                .write_batch(&[10, 20, 30], None, None)
+                .unwrap();
+            column.close().unwrap();
+        }
+        row_group.close().unwrap();
+        writer.close().unwrap();
+        let path = Path::from(name);
+        store.put(&path, bytes.into()).await.unwrap();
+        (
+            PartitionedFile::from(store.head(&path).await.unwrap()),
+            arrow_schema,
+        )
+    }
+
+    fn invalid_arrow_hint() -> parquet::file::properties::WriterPropertiesBuilder {
+        use parquet::file::metadata::KeyValue;
+        WriterProperties::builder()
+            .set_key_value_metadata(Some(vec![KeyValue::new(
+                "ARROW:schema".to_string(),
+                "invalid schema".to_string(),
+            )]))
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .set_data_page_row_count_limit(1)
+            .set_write_batch_size(1)
+    }
+
+    #[tokio::test]
+    async fn test_schema_provider_lazy_nested_scans() {
+        use crate::source::ParquetSource;
+        use datafusion_datasource::file::FileSource;
+        use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+        use datafusion_execution::object_store::ObjectStoreUrl;
+        use datafusion_functions::core::expr_fn::get_field;
+
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let (file1, schema) = write_enum_file(
+            store.as_ref(),
+            "one.parquet",
+            false,
+            invalid_arrow_hint().build(),
+        )
+        .await;
+        let (file2, _) = write_enum_file(
+            store.as_ref(),
+            "two.parquet",
+            true,
+            invalid_arrow_hint().build(),
+        )
+        .await;
+        let cache: Arc<FileMetadataCache> = Arc::new(DefaultCache::new(1024 * 1024));
+        let provider = Arc::new(EnumSchemaProvider::default());
+        let source = ParquetSource::new(Arc::clone(&schema))
+            .with_schema_provider(provider.clone())
+            .with_parquet_file_reader_factory(Arc::new(
+                CachedParquetFileReaderFactory::new(
+                    Arc::clone(&store),
+                    Arc::clone(&cache),
+                ),
+            ))
+            .with_predicate(logical2physical(
+                &get_field(col("nested"), "e").eq(lit("b")),
+                &schema,
+            ))
+            .with_pushdown_filters(true)
+            .with_enable_page_index(true)
+            .with_batch_size(1024);
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            Arc::clone(&source),
+        )
+        .build();
+        let morselizer = source
+            .create_morselizer(Arc::clone(&store), &config, 0)
+            .unwrap();
+        assert_eq!(provider.0.load(Ordering::Relaxed), 0);
+        for pass in 0..2 {
+            for file in [&file1, &file2] {
+                let batches = open_file(morselizer.as_ref(), file.clone())
+                    .await
+                    .unwrap()
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .unwrap();
+                let batch = arrow::compute::concat_batches(&schema, &batches).unwrap();
+                assert_eq!(batch.num_rows(), 1);
+                assert_eq!(batch.schema(), schema);
+                let nested = batch.column(1).as_struct();
+                let e = nested.column(0).as_string::<i32>();
+                let b = nested.column(1).as_binary::<i32>();
+                assert_eq!(e.value(0), "b");
+                assert_eq!(b.value(0), &[0xff, 0x00]);
+            }
+            assert_eq!(provider.0.load(Ordering::Relaxed), (pass + 1) * 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_schema_provider_preserves_metadata_and_precedence() {
+        use crate::metadata::{CachedParquetMetaData, DFParquetMetadata};
+
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let (file, schema) = write_enum_file(
+            store.as_ref(),
+            "test.parquet",
+            false,
+            invalid_arrow_hint().build(),
+        )
+        .await;
+        let cache: Arc<FileMetadataCache> = Arc::new(DefaultCache::new(1024 * 1024));
+        let original = DFParquetMetadata::new(store.as_ref(), &file.object_meta)
+            .with_file_metadata_cache(Some(Arc::clone(&cache)))
+            .with_page_index_policy(Some(PageIndexPolicy::Optional))
+            .fetch_metadata()
+            .await
+            .unwrap();
+        assert!(
+            original
+                .page_index()
+                .is_some_and(|page_index| page_index.is_complete())
+        );
+        let mut opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_parquet_file_reader_factory(Arc::new(
+                CachedParquetFileReaderFactory::new(
+                    Arc::clone(&store),
+                    Arc::clone(&cache),
+                ),
+            ))
+            .build();
+        // The default scan still rejects an invalid advisory Arrow hint.
+        assert!(
+            opener
+                .prepare_open_file(file.clone())
+                .unwrap()
+                .load()
+                .await
+                .is_err()
+        );
+        opener.schema_provider = Some(Arc::new(EnumSchemaProvider::default()));
+        for _ in 0..2 {
+            let loaded = opener
+                .prepare_open_file(file.clone())
+                .unwrap()
+                .load()
+                .await
+                .unwrap();
+            assert!(Arc::ptr_eq(&original, loaded.reader_metadata.metadata()));
+            assert_eq!(loaded.reader_metadata.schema(), &schema);
+            let prepared = loaded.prepare_filters().unwrap();
+            assert!(Arc::ptr_eq(
+                &original,
+                prepared.loaded.reader_metadata.metadata()
+            ));
+        }
+        let cached = cache.get(&file.object_meta.location).unwrap();
+        let cached = cached
+            .file_metadata
+            .as_any()
+            .downcast_ref::<CachedParquetMetaData>()
+            .unwrap();
+        assert!(Arc::ptr_eq(&original, cached.parquet_metadata()));
+
+        #[derive(Debug)]
+        struct RejectSchema;
+        impl ParquetFileSchemaProvider for RejectSchema {
+            fn schema(&self, _: &SchemaDescriptor) -> Result<SchemaRef> {
+                exec_err!("schema policy rejected file")
+            }
+        }
+        opener.schema_provider = Some(Arc::new(RejectSchema));
+        let err = opener
+            .prepare_open_file(file.clone())
+            .unwrap()
+            .load()
+            .await
+            .err()
+            .unwrap();
+        assert_contains!(err.to_string(), "schema policy rejected file");
+        // Explicit schemas skip the provider, but still undergo Arrow validation.
+        let loaded = opener
+            .prepare_open_file(file.clone().with_arrow_schema(Arc::clone(&schema)))
+            .unwrap()
+            .load()
+            .await
+            .unwrap();
+        assert_eq!(loaded.reader_metadata.schema(), &schema);
+        let incompatible = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Float64, false),
+            schema.field(1).clone(),
+        ]));
+        let err = opener
+            .prepare_open_file(file.clone().with_arrow_schema(Arc::clone(&incompatible)))
+            .unwrap()
+            .load()
+            .await
+            .err()
+            .unwrap();
+        assert_contains!(err.to_string(), "Incompatible supplied Arrow schema");
+
+        #[derive(Debug)]
+        struct FixedSchema(SchemaRef);
+        impl ParquetFileSchemaProvider for FixedSchema {
+            fn schema(&self, _: &SchemaDescriptor) -> Result<SchemaRef> {
+                Ok(Arc::clone(&self.0))
+            }
+        }
+        opener.schema_provider = Some(Arc::new(FixedSchema(incompatible)));
+        let err = opener
+            .prepare_open_file(file)
+            .unwrap()
+            .load()
+            .await
+            .err()
+            .unwrap();
+        assert_contains!(err.to_string(), "Incompatible supplied Arrow schema");
+    }
+
+    #[cfg(feature = "parquet_encryption")]
+    #[tokio::test]
+    async fn test_schema_provider_encrypted_scan() {
+        use datafusion_physical_plan::metrics::MetricValue;
+        use parquet::encryption::encrypt::FileEncryptionProperties;
+
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let footer_key = b"0123456789012345".to_vec();
+        let column_key = b"1234567890123450".to_vec();
+        for plaintext_footer in [false, true] {
+            let encrypt = FileEncryptionProperties::builder(footer_key.clone())
+                .with_plaintext_footer(plaintext_footer)
+                .with_column_key("nested.e", column_key.clone())
+                .build()
+                .unwrap();
+            let decrypt = FileDecryptionProperties::builder(footer_key.clone())
+                .with_column_key("nested.e", column_key.clone())
+                .build()
+                .unwrap();
+            let (file, schema) = write_enum_file(
+                store.as_ref(),
+                "encrypted.parquet",
+                false,
+                invalid_arrow_hint()
+                    .with_file_encryption_properties(encrypt)
+                    .build(),
+            )
+            .await;
+            let cache: Arc<FileMetadataCache> = Arc::new(DefaultCache::new(1024 * 1024));
+            let mut opener = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_predicate(logical2physical(&col("id").eq(lit(2i32)), &schema))
+                .with_pushdown_filters(true)
+                .with_enable_page_index(true)
+                .with_parquet_file_reader_factory(Arc::new(
+                    CachedParquetFileReaderFactory::new(
+                        Arc::clone(&store),
+                        Arc::clone(&cache),
+                    ),
+                ))
+                .build();
+            opener.file_decryption_properties = Some(decrypt);
+            opener.schema_provider = Some(Arc::new(EnumSchemaProvider::default()));
+            let batches = open_file(&opener, file.clone())
+                .await
+                .unwrap()
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap();
+            let batch = arrow::compute::concat_batches(&schema, &batches).unwrap();
+            assert_eq!(batch.num_rows(), 1);
+            let nested = batch.column(1).as_struct();
+            assert_eq!(nested.column(0).as_string::<i32>().value(0), "b");
+            let page_pruning = opener
+                .metrics
+                .clone_inner()
+                .sum_by_name("page_index_rows_pruned")
+                .unwrap();
+            let MetricValue::PruningMetrics {
+                pruning_metrics, ..
+            } = page_pruning
+            else {
+                panic!("expected page pruning metrics");
+            };
+            assert_eq!(pruning_metrics.pruned(), 2);
+            assert!(
+                cache.get(&file.object_meta.location).is_none(),
+                "encrypted metadata must not enter the shared cache"
+            );
+        }
     }
 
     #[tokio::test]
