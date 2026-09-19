@@ -1927,13 +1927,12 @@ impl FallbackCoordinator {
                                     if is_last {
                                         inner.left_exhausted = true;
                                     }
-                                    let arc_data = Arc::new(data);
                                     inner.current = Some(CurrentChunk {
                                         chunk_index,
-                                        data: Arc::clone(&arc_data),
+                                        data: Arc::clone(&data),
                                         is_last,
                                     });
-                                    Some(Ok(Some((arc_data, is_last))))
+                                    Some(Ok(Some((data, is_last))))
                                 }
                                 Ok(LoadOutcome::Empty) => {
                                     inner.left_exhausted = true;
@@ -2058,7 +2057,7 @@ impl FallbackCoordinator {
         );
 
         Ok(LoadOutcome::Chunk {
-            data,
+            data: Arc::new(data),
             is_last: left_stream_exhausted,
             carryover: next_carryover,
         })
@@ -2087,7 +2086,7 @@ enum Decision<'a> {
 
 enum LoadOutcome {
     Chunk {
-        data: JoinLeftData,
+        data: Arc<JoinLeftData>,
         is_last: bool,
         carryover: Option<RecordBatch>,
     },
