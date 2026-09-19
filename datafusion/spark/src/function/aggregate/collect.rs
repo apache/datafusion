@@ -453,7 +453,15 @@ fn normalize_sparse_union(
             } else {
                 Arc::clone(child)
             };
-            normalize_array(&child, target_field.data_type(), require_non_null)
+            let child =
+                normalize_array(&child, target_field.data_type(), require_non_null)?;
+            if require_non_null && child.logical_null_count() != 0 {
+                return internal_err!(
+                    "Found unmasked nulls for non-nullable sparse union field {}",
+                    target_field.name()
+                );
+            }
+            Ok(child)
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(Arc::new(UnionArray::try_new(
@@ -766,6 +774,17 @@ impl<T: Accumulator> NullToEmptyListAccumulator<T> {
         };
         if value.data_type() == field.data_type() {
             Ok(Arc::clone(value))
+        } else if matches!(
+            (value.data_type(), field.data_type()),
+            (
+                DataType::RunEndEncoded(source_run_ends, _),
+                DataType::RunEndEncoded(target_run_ends, _)
+            ) if source_run_ends.data_type() == target_run_ends.data_type()
+        ) {
+            // Normalizing a run-end encoded array through `take` requires an
+            // index for every logical row. Dispatch it directly so work stays
+            // bounded by the physical run count.
+            normalize_array(value, field.data_type(), false)
         } else {
             // Materialize only retained rows before narrowing nested fields.
             // A slice can still reference null payload outside its logical rows.
@@ -1423,6 +1442,62 @@ mod tests {
         Ok(())
     }
 
+    fn assert_active_sparse_union_logical_null_is_rejected(
+        active_child: ArrayRef,
+    ) -> Result<()> {
+        assert!(active_child.is_valid(0));
+        assert_eq!(active_child.logical_null_count(), 1);
+
+        let runtime_fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("logical", active_child.data_type().clone(), true),
+                Field::new("integer", DataType::Int32, true),
+            ],
+        )?;
+        let declared_fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("logical", active_child.data_type().clone(), false),
+                Field::new("integer", DataType::Int32, false),
+            ],
+        )?;
+        let element_type = DataType::Union(declared_fields, UnionMode::Sparse);
+        let values = Arc::new(UnionArray::try_new(
+            runtime_fields,
+            ScalarBuffer::from(vec![0_i8]),
+            None,
+            vec![active_child, Arc::new(Int32Array::from(vec![Some(1)]))],
+        )?) as ArrayRef;
+
+        let error = normalize_array(&values, &element_type, true).unwrap_err();
+        assert!(
+            error.to_string().contains(
+                "Found unmasked nulls for non-nullable sparse union field logical"
+            ),
+            "unexpected error: {error}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn active_sparse_union_dictionary_logical_null_is_rejected() -> Result<()> {
+        let keys = Int8Array::from(vec![0]);
+        let values = Arc::new(StringArray::from(vec![None::<&str>]));
+        let dictionary =
+            Arc::new(DictionaryArray::<Int8Type>::try_new(keys, values)?) as ArrayRef;
+        assert_active_sparse_union_logical_null_is_rejected(dictionary)
+    }
+
+    #[test]
+    fn active_sparse_union_run_end_logical_null_is_rejected() -> Result<()> {
+        let run_ends = Int16Array::from(vec![1]);
+        let values = StringArray::from(vec![None::<&str>]);
+        let run =
+            Arc::new(RunArray::<Int16Type>::try_new(&run_ends, &values)?) as ArrayRef;
+        assert_active_sparse_union_logical_null_is_rejected(run)
+    }
+
     #[test]
     fn collect_aggregates_compact_dense_union_children() -> Result<()> {
         let fields = UnionFields::try_new(
@@ -1481,6 +1556,39 @@ mod tests {
         let normalized = normalize_array(&values, &data_type, true)?;
         assert_eq!(normalized.len(), logical_len as usize);
         assert_eq!(normalized.as_run::<Int64Type>().values().len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn collect_input_run_end_normalization_is_bounded_by_physical_runs() -> Result<()> {
+        let logical_len = i32::MAX as i64;
+        let run_ends = Int64Array::from(vec![logical_len]);
+        let values = StringArray::from(vec!["a"]);
+        let values =
+            Arc::new(RunArray::<Int64Type>::try_new(&run_ends, &values)?) as ArrayRef;
+        let DataType::RunEndEncoded(run_ends_field, values_field) = values.data_type()
+        else {
+            panic!("expected run-end encoded values")
+        };
+        let target_type = DataType::RunEndEncoded(
+            Arc::clone(run_ends_field),
+            Arc::new(Field::new(
+                values_field.name(),
+                DataType::LargeUtf8,
+                values_field.is_nullable(),
+            )),
+        );
+        let accumulator = NullToEmptyListAccumulator::new(
+            ArrayAggAccumulator::try_new(&target_type, true)?,
+            list_type(target_type.clone()),
+        );
+
+        let normalized = accumulator.normalize_input(&values)?;
+        assert_eq!(normalized.data_type(), &target_type);
+        assert_eq!(normalized.len(), logical_len as usize);
+        let normalized = normalized.as_run::<Int64Type>();
+        assert_eq!(normalized.values().len(), 1);
+        assert_eq!(normalized.values().data_type(), &DataType::LargeUtf8);
         Ok(())
     }
 
