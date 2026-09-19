@@ -1710,7 +1710,7 @@ impl ValuesFields {
         let name = format!("column{}", self.inner.len() + 1);
         let mut field = Field::new(name, data_type, nullable);
         if let Some(metadata) = metadata {
-            field.set_metadata(metadata.to_hashmap());
+            field.set_metadata(metadata.into_inner());
         }
         self.inner.push(field);
     }
