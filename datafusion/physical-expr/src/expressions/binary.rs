@@ -26,6 +26,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use arrow::array::*;
+use arrow::buffer::NullBuffer;
 use arrow::compute::kernels::boolean::{and_kleene, or_kleene};
 use arrow::compute::kernels::concat_elements::concat_elements_dyn;
 use arrow::compute::{SlicesIterator, cast, filter_record_batch};
@@ -1369,21 +1370,56 @@ fn pre_selection_scatter(
     let mut last_end = 0;
     match right_result {
         Some(right_result) => {
+            // Borrow the RHS buffers once. `BooleanArray::slice` clones and
+            // drops an `Arc` for every run, which dominates this loop when the
+            // mask selects many short runs.
+            let right_values = right_result.values();
+            let right_offset = right_values.offset();
+            let right_bytes = right_values.values();
+            let right_nulls = right_result.nulls();
+
+            let mut values = BooleanBufferBuilder::new(result_len);
+            // Only build a validity bitmap when the RHS has nulls. Otherwise
+            // every run pays a second pass to write an all-ones mask that is
+            // then discarded.
+            let mut validity = right_nulls.map(|_| BooleanBufferBuilder::new(result_len));
+
             SlicesIterator::new(mask).for_each(|(start, end)| {
                 if start > last_end {
-                    result_array_builder.append_n(start - last_end, fill_value);
+                    let gap = start - last_end;
+                    values.append_n(gap, fill_value);
+                    if let Some(v) = validity.as_mut() {
+                        v.append_n(gap, true);
+                    }
                 }
 
-                // copy values from right array for this slice
+                // Both sides are bit-packed, so copy the run a word at a
+                // time. Iterating the RHS would yield one `Option<bool>` and
+                // set one bit per row.
                 let len = end - start;
-                right_result
-                    .slice(right_array_pos, len)
-                    .iter()
-                    .for_each(|v| result_array_builder.append_option(v));
+                let from = right_offset + right_array_pos;
+                values.append_packed_range(from..from + len, right_bytes);
+                if let (Some(v), Some(nulls)) = (validity.as_mut(), right_nulls) {
+                    let nb = nulls.inner();
+                    let nfrom = nb.offset() + right_array_pos;
+                    v.append_packed_range(nfrom..nfrom + len, nb.values());
+                }
 
                 right_array_pos += len;
                 last_end = end;
             });
+
+            if last_end < result_len {
+                let gap = result_len - last_end;
+                values.append_n(gap, fill_value);
+                if let Some(v) = validity.as_mut() {
+                    v.append_n(gap, true);
+                }
+            }
+
+            let nulls = validity.map(|mut v| NullBuffer::new(v.finish()));
+            let boolean_result = BooleanArray::new(values.finish(), nulls);
+            return Ok(ColumnarValue::Array(Arc::new(boolean_result)));
         }
         None => SlicesIterator::new(mask).for_each(|(start, end)| {
             if start > last_end {
