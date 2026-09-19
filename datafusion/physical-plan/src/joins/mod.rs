@@ -25,7 +25,8 @@ pub use asof_join::{AsOfJoinExec, AsOfMatchExpr};
 pub use cross_join::CrossJoinExec;
 use datafusion_physical_expr::PhysicalExprRef;
 pub use hash_join::{
-    HashExpr, HashJoinExec, HashJoinExecBuilder, HashTableLookupExpr, SeededRandomState,
+    HashExpr, HashJoinExec, HashJoinExecBuilder, HashTableLookupExpr,
+    PreparedHashJoinBuild, SeededRandomState,
 };
 pub use nested_loop_join::{NestedLoopJoinExec, NestedLoopJoinExecBuilder};
 use parking_lot::Mutex;

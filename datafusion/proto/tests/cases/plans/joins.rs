@@ -1079,3 +1079,45 @@ async fn roundtrip_planned_piecewise_merge_join() -> Result<()> {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn prepared_hash_join_cannot_be_serialized_without_its_build() -> Result<()> {
+    use datafusion::arrow::array::Int64Array;
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::physical_plan::memory::MemoryStream;
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_execution::memory_pool::GreedyMemoryPool;
+
+    let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Int64, false)]));
+    let join = HashJoinExec::try_new(
+        Arc::new(EmptyExec::new(Arc::clone(&schema))),
+        Arc::new(EmptyExec::new(Arc::clone(&schema))),
+        vec![(
+            Arc::new(Column::new("col", 0)),
+            Arc::new(Column::new("col", 0)),
+        )],
+        None,
+        &JoinType::Inner,
+        None,
+        PartitionMode::CollectLeft,
+        NullEquality::NullEqualsNothing,
+        false,
+    )?;
+    roundtrip_test(Arc::new(join.builder().build()?))?;
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int64Array::from(vec![1_i64]))],
+    )?;
+    let prepared = join
+        .prepare_build(
+            Box::pin(MemoryStream::try_new(vec![batch], schema, None)?),
+            Arc::new(GreedyMemoryPool::new(1 << 20)),
+            Arc::new(ConfigOptions::default()),
+        )
+        .await?;
+    let attached = join.builder().with_prepared_build(prepared)?.build()?;
+    let error = roundtrip_test(Arc::new(attached))
+        .expect_err("serializing the empty build placeholder would lose prepared rows");
+    assert!(error.to_string().contains("prepared build"), "{error}");
+    Ok(())
+}

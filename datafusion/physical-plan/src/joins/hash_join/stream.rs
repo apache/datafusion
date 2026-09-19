@@ -633,8 +633,8 @@ impl HashJoinStream {
 
         let pushdown = left_data.membership().clone();
         let bounds = left_data
-            .bounds
-            .clone()
+            .bounds()
+            .cloned()
             .unwrap_or_else(|| PartitionBounds::new(vec![]));
         // Use the logical null count: a dictionary key whose entry points at a
         // NULL dictionary value is a NULL key even though the key bitmap has no
