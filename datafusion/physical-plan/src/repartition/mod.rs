@@ -2294,7 +2294,7 @@ impl RepartitionExec {
         };
 
         // While there are still outputs to send to, keep pulling inputs
-        let mut batches_until_yield = partitioner.num_partitions() * 2;
+        let mut batches_until_yield = partitioner.num_partitions();
         while !output_channels.is_empty() {
             // fetch the next batch
             let timer = metrics.fetch_time.timer();
