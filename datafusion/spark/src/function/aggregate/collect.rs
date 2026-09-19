@@ -16,9 +16,9 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayData, ArrayRef, GenericListArray, GenericListViewArray, OffsetSizeTrait,
-    PrimitiveArray, RunArray, StructArray, UInt64Array, UnionArray, cast::AsArray,
-    downcast_run_array, make_array,
+    Array, ArrayData, ArrayRef, FixedSizeListArray, GenericListArray,
+    GenericListViewArray, MapArray, OffsetSizeTrait, PrimitiveArray, RunArray,
+    StructArray, UInt64Array, UnionArray, cast::AsArray, downcast_run_array, make_array,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::{cast, take};
@@ -95,11 +95,35 @@ fn has_compactable_storage(value: &ArrayRef) -> bool {
                     .is_some_and(|offset| *offset as usize != list.values().len())
                 || has_compactable_storage(list.values())
         }
+        DataType::FixedSizeList(_, size) => {
+            let list = value.as_fixed_size_list();
+            let has_exact_child_length = usize::try_from(*size)
+                .ok()
+                .and_then(|size| list.len().checked_mul(size))
+                .is_some_and(|length| length == list.values().len());
+            list.null_count() != 0
+                || list.values().offset() != 0
+                || !has_exact_child_length
+                || has_compactable_storage(list.values())
+        }
         DataType::Struct(_) => value
             .as_struct()
             .columns()
             .iter()
             .any(has_compactable_storage),
+        DataType::Map(_, _) => {
+            let map = value.as_map();
+            map.null_count() != 0
+                || map
+                    .value_offsets()
+                    .first()
+                    .is_some_and(|offset| *offset != 0)
+                || map
+                    .value_offsets()
+                    .last()
+                    .is_some_and(|offset| *offset as usize != map.entries().len())
+                || map.entries().columns().iter().any(has_compactable_storage)
+        }
         _ => false,
     }
 }
@@ -132,6 +156,12 @@ fn normalize_array(
         }
         (DataType::LargeListView(_), DataType::LargeListView(field)) => {
             normalize_list_view::<i64>(value, field)
+        }
+        (
+            DataType::FixedSizeList(_, source_size),
+            DataType::FixedSizeList(field, target_size),
+        ) if source_size == target_size => {
+            normalize_fixed_size_list(value, field, *target_size)
         }
         (
             DataType::Dictionary(source_key, _),
@@ -189,6 +219,9 @@ fn normalize_array(
                 columns,
                 source.nulls().cloned(),
             )?))
+        }
+        (DataType::Map(_, _), DataType::Map(field, ordered)) => {
+            normalize_map(value, field, *ordered)
         }
         (
             DataType::Union(source_fields, UnionMode::Sparse),
@@ -432,6 +465,139 @@ fn normalize_list_view<Offset: OffsetSizeTrait>(
         ScalarBuffer::from(sizes),
         values,
         source.nulls().cloned(),
+    )?))
+}
+
+fn normalize_fixed_size_list(
+    value: &ArrayRef,
+    field: &FieldRef,
+    size: i32,
+) -> Result<ArrayRef> {
+    let source = value.as_fixed_size_list();
+    let size = usize::try_from(size).map_err(|_| {
+        internal_datafusion_err!("fixed-size-list size cannot be negative")
+    })?;
+    let values_len = source.len().checked_mul(size).ok_or_else(|| {
+        internal_datafusion_err!("fixed-size-list child length overflow")
+    })?;
+    if source.values().len() != values_len {
+        return internal_err!(
+            "fixed-size-list has {} child values, expected {values_len}",
+            source.values().len()
+        );
+    }
+
+    let values = if source.null_count() == 0 && source.values().offset() == 0 {
+        Arc::clone(source.values())
+    } else if let Some(fallback_row) =
+        (0..source.len()).find(|index| source.is_valid(*index))
+    {
+        let mut indices = Vec::new();
+        indices.try_reserve(values_len).map_err(|error| {
+            internal_datafusion_err!(
+                "failed to reserve fixed-size-list child indices: {error}"
+            )
+        })?;
+        for row in 0..source.len() {
+            let source_row = if source.is_valid(row) {
+                row
+            } else {
+                fallback_row
+            };
+            let start = source_row.checked_mul(size).ok_or_else(|| {
+                internal_datafusion_err!("fixed-size-list child offset overflow")
+            })?;
+            for offset in 0..size {
+                let index = start.checked_add(offset).ok_or_else(|| {
+                    internal_datafusion_err!("fixed-size-list child offset overflow")
+                })?;
+                indices.push(u64::try_from(index).map_err(|_| {
+                    internal_datafusion_err!("fixed-size-list child offset exceeds u64")
+                })?);
+            }
+        }
+        take(
+            source.values().as_ref(),
+            &UInt64Array::from_iter_values(indices),
+            None,
+        )?
+    } else {
+        ScalarValue::new_default(field.data_type())?.to_array_of_size(values_len)?
+    };
+    let values = normalize_array(&values, field.data_type(), !field.is_nullable())?;
+    Ok(Arc::new(FixedSizeListArray::try_new_with_length(
+        Arc::clone(field),
+        i32::try_from(size)
+            .map_err(|_| internal_datafusion_err!("fixed-size-list size exceeds i32"))?,
+        values,
+        source.nulls().cloned(),
+        source.len(),
+    )?))
+}
+
+fn normalize_map(value: &ArrayRef, field: &FieldRef, ordered: bool) -> Result<ArrayRef> {
+    let source = value.as_map();
+    let source_offsets = source.value_offsets();
+    let requires_entry_compaction = source.null_count() != 0
+        || source_offsets.first().is_some_and(|offset| *offset != 0)
+        || source_offsets
+            .last()
+            .is_some_and(|offset| *offset as usize != source.entries().len());
+
+    let (offsets, entries) = if requires_entry_compaction {
+        let retained_len = (0..source.len())
+            .filter(|index| source.is_valid(*index))
+            .try_fold(0_usize, |retained, index| {
+                let start = source_offsets[index] as usize;
+                let end = source_offsets[index + 1] as usize;
+                retained.checked_add(end - start).ok_or_else(|| {
+                    internal_datafusion_err!("compacted map length overflow")
+                })
+            })?;
+        let mut indices = Vec::new();
+        indices.try_reserve(retained_len).map_err(|error| {
+            internal_datafusion_err!(
+                "failed to reserve compacted map entry indices: {error}"
+            )
+        })?;
+        let mut offsets = Vec::new();
+        let offsets_len = source.len().checked_add(1).ok_or_else(|| {
+            internal_datafusion_err!("compacted map offset length overflow")
+        })?;
+        offsets.try_reserve(offsets_len).map_err(|error| {
+            internal_datafusion_err!("failed to reserve compacted map offsets: {error}")
+        })?;
+        offsets.push(0_i32);
+        for index in 0..source.len() {
+            if source.is_valid(index) {
+                let start = source_offsets[index] as usize;
+                let end = source_offsets[index + 1] as usize;
+                indices.extend((start..end).map(|index| index as u64));
+            }
+            offsets.push(i32::try_from(indices.len()).map_err(|_| {
+                internal_datafusion_err!("compacted map offset exceeds i32")
+            })?);
+        }
+        let entries = take(
+            source.entries(),
+            &UInt64Array::from_iter_values(indices),
+            None,
+        )?;
+        (OffsetBuffer::new(ScalarBuffer::from(offsets)), entries)
+    } else {
+        (
+            source.offsets().clone(),
+            Arc::new(source.entries().clone()) as ArrayRef,
+        )
+    };
+
+    let entries = normalize_array(&entries, field.data_type(), true)?;
+    Ok(Arc::new(MapArray::try_new(
+        Arc::clone(field),
+        offsets,
+        entries.as_struct().clone(),
+        source.nulls().cloned(),
+        ordered,
     )?))
 }
 
@@ -905,8 +1071,9 @@ impl<T: Accumulator> Accumulator for NullToEmptyListAccumulator<T> {
 mod tests {
     use super::*;
     use arrow::array::{
-        DictionaryArray, Int8Array, Int16Array, Int32Array, Int64Array, ListArray,
-        ListViewArray, NullArray, RunArray, StringArray, StructArray, UnionArray,
+        DictionaryArray, FixedSizeListArray, Int8Array, Int16Array, Int32Array,
+        Int64Array, ListArray, ListViewArray, MapArray, NullArray, RunArray, StringArray,
+        StructArray, UnionArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{
@@ -916,6 +1083,7 @@ mod tests {
     use arrow::util::display::array_value_to_string;
     use datafusion::prelude::SessionContext;
     use datafusion_expr::AggregateUDF;
+    use std::collections::HashMap;
 
     fn list_type(element_type: DataType) -> DataType {
         DataType::List(Arc::new(Field::new_list_field(element_type, false)))
@@ -2055,6 +2223,127 @@ mod tests {
         let value = ScalarValue::try_from_array(batches[0].column(0), 0)?;
         assert_list_values(&value, &element_type, &["a", "a"])?;
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn collect_list_map_discards_unreferenced_entries_sql() -> Result<()> {
+        let key_field = Arc::new(Field::new("key", DataType::Int32, false));
+        let value_field = Arc::new(Field::new("value", DataType::Utf8, false));
+        let entries = StructArray::try_new(
+            Fields::from(vec![Arc::clone(&key_field), Arc::clone(&value_field)]),
+            vec![
+                Arc::new(Int32Array::from(vec![0, 1, 2])),
+                Arc::new(StringArray::from(vec![
+                    "secret-before",
+                    "visible",
+                    "secret-after",
+                ])),
+            ],
+            None,
+        )?;
+        let entry_field = Arc::new(
+            Field::new("entries", entries.data_type().clone(), false).with_metadata(
+                HashMap::from([("test-metadata".to_string(), "preserved".to_string())]),
+            ),
+        );
+        let values = Arc::new(MapArray::try_new(
+            Arc::clone(&entry_field),
+            OffsetBuffer::new(ScalarBuffer::from(vec![1_i32, 2_i32])),
+            entries,
+            None,
+            true,
+        )?) as ArrayRef;
+        let element_type = values.data_type().clone();
+
+        let ctx = SessionContext::new();
+        ctx.register_udaf(AggregateUDF::new_from_impl(SparkCollectList::new()));
+        ctx.register_batch(
+            "map_input",
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![Field::new(
+                    "x",
+                    element_type.clone(),
+                    false,
+                )])),
+                vec![values],
+            )?,
+        )?;
+
+        let batches = ctx
+            .sql("SELECT collect_list(x) AS values FROM map_input")
+            .await?
+            .collect()
+            .await?;
+        let list = batches[0].column(0).as_list::<i32>();
+        let values = list.value(0);
+        let map = values.as_map();
+        assert_eq!(map.data_type(), &element_type);
+        assert_eq!(map.value_offsets(), &[0, 1]);
+        assert_eq!(map.entries().len(), 1);
+        assert_eq!(
+            map.values().as_string::<i32>().iter().collect::<Vec<_>>(),
+            vec![Some("visible")]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn collect_list_sliced_fixed_size_list_compacts_nested_dictionary_sql()
+    -> Result<()> {
+        let dictionary = Arc::new(DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![0, 1, 2]),
+            Arc::new(StringArray::from(vec![
+                "secret-before",
+                "visible",
+                "secret-after",
+            ])),
+        )?) as ArrayRef;
+        let item_field = Arc::new(
+            Field::new_list_field(dictionary.data_type().clone(), false).with_metadata(
+                HashMap::from([("test-metadata".to_string(), "preserved".to_string())]),
+            ),
+        );
+        let values =
+            FixedSizeListArray::try_new(Arc::clone(&item_field), 1, dictionary, None)?
+                .slice(1, 1);
+        assert_eq!(values.values().len(), 1);
+        let values = Arc::new(values) as ArrayRef;
+        let element_type = values.data_type().clone();
+
+        let ctx = SessionContext::new();
+        ctx.register_udaf(AggregateUDF::new_from_impl(SparkCollectList::new()));
+        ctx.register_batch(
+            "fixed_size_list_input",
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![Field::new(
+                    "x",
+                    element_type.clone(),
+                    false,
+                )])),
+                vec![values],
+            )?,
+        )?;
+
+        let batches = ctx
+            .sql("SELECT collect_list(x) AS values FROM fixed_size_list_input")
+            .await?
+            .collect()
+            .await?;
+        let list = batches[0].column(0).as_list::<i32>();
+        let values = list.value(0);
+        let fixed = values.as_fixed_size_list();
+        assert_eq!(fixed.data_type(), &element_type);
+        assert_eq!(fixed.values().len(), 1);
+        let dictionary = fixed
+            .values()
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int8Type>>()
+            .expect("expected Int8 dictionary");
+        assert_eq!(dictionary.keys().offset(), 0);
+        let dictionary = dictionary.values().as_string::<i32>();
+        assert_eq!(dictionary.len(), 1);
+        assert_eq!(dictionary.value(0), "visible");
         Ok(())
     }
 
