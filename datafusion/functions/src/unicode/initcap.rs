@@ -204,8 +204,8 @@ fn initcap_ascii_array<T: OffsetSizeTrait>(
 ) -> ArrayRef {
     let offsets = string_array.offsets();
     let src = string_array.value_data();
-    let first_offset = offsets.first().unwrap().as_usize();
-    let last_offset = offsets.last().unwrap().as_usize();
+    let first_offset = offsets.first().as_usize();
+    let last_offset = offsets.last().as_usize();
 
     // For sliced arrays, only convert the visible bytes, not the entire input
     // buffer.
@@ -490,11 +490,8 @@ mod tests {
         assert_eq!(result.value(1), "Baz Qux");
 
         // The output values buffer should be compact
-        assert_eq!(*result.offsets().first().unwrap(), 0);
-        assert_eq!(
-            result.value_data().len(),
-            *result.offsets().last().unwrap() as usize
-        );
+        assert_eq!(result.offsets().first(), 0);
+        assert_eq!(result.value_data().len(), result.offsets().last() as usize);
         Ok(())
     }
 
@@ -519,11 +516,8 @@ mod tests {
         assert_eq!(result.value(1), "Baz Qux");
 
         // The output values buffer should be compact
-        assert_eq!(*result.offsets().first().unwrap(), 0);
-        assert_eq!(
-            result.value_data().len(),
-            *result.offsets().last().unwrap() as usize
-        );
+        assert_eq!(result.offsets().first(), 0);
+        assert_eq!(result.value_data().len(), result.offsets().last() as usize);
         Ok(())
     }
 }
