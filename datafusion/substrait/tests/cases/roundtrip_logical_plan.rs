@@ -1687,23 +1687,54 @@ async fn simple_window_function() -> Result<()> {
 #[tokio::test]
 async fn stacked_windows_with_same_default_name_via_builder() -> Result<()> {
     // Substrait projections are positional and drop DataFusion's aliases, so the
-    // inherited `rn1` column and the new window both come back under the default
-    // name `row_number() ROWS BETWEEN ...`. The consumer must keep them apart.
+    // inherited `rn1` column and the new window both come back under the same
+    // default name. The consumer must keep them apart.
     // See https://github.com/apache/datafusion/issues/23007
+    use datafusion::arrow::util::pretty::pretty_format_batches;
     use datafusion::functions_window::expr_fn::row_number;
+    use datafusion::logical_expr::ExprFunctionExt;
 
     let ctx = create_context().await?;
     let scan = ctx.table("data").await?.into_optimized_plan()?;
+    let row_number_by_a = || {
+        row_number()
+            .order_by(vec![col("a").sort(true, false)])
+            .build()
+    };
+    // The filter between the two windows makes `rn1` and `rn2` differ for the
+    // surviving row. A consumer that resolved `rn2` to the inherited window
+    // column would then return wrong values instead of passing unnoticed.
     let plan = LogicalPlanBuilder::from(scan)
-        .window(vec![row_number().alias("rn1")])?
-        .window(vec![row_number().alias("rn2")])?
+        .window(vec![row_number_by_a()?.alias("rn1")])?
+        .filter(col("a").gt(lit(1i64)))?
+        .window(vec![row_number_by_a()?.alias("rn2")])?
         .build()?;
 
     let plan2 = substrait_roundtrip(&plan, &ctx).await?;
     // Compare output fields; qualifiers and functional dependencies
     // can differ after a Substrait round trip.
     assert_eq!(plan.schema().as_arrow(), plan2.schema().as_arrow());
-    DataFrame::new(ctx.state(), plan2).show().await?;
+
+    let expected = DataFrame::new(ctx.state(), plan)
+        .select_columns(&["a", "rn1", "rn2"])?
+        .collect()
+        .await?;
+    let actual = DataFrame::new(ctx.state(), plan2)
+        .select_columns(&["a", "rn1", "rn2"])?
+        .collect()
+        .await?;
+    let actual = pretty_format_batches(&actual)?.to_string();
+    assert_eq!(pretty_format_batches(&expected)?.to_string(), actual);
+    assert_snapshot!(
+        actual,
+        @r"
+    +---+-----+-----+
+    | a | rn1 | rn2 |
+    +---+-----+-----+
+    | 3 | 2   | 1   |
+    +---+-----+-----+
+    "
+    );
     Ok(())
 }
 
