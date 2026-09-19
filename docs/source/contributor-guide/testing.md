@@ -223,8 +223,9 @@ bash ci/scripts/rust_docs.sh
 ## ASF Status Check Validation
 
 `ci/scripts/check_asf_yaml_status_checks.py` checks that every required status
-check in `.asf.yaml` matches a job in `.github/workflows`. `./dev/rust_lint.sh`
-runs it and needs `python3` with [PyYAML]. The [uv] workspace provides both:
+check in `.asf.yaml` matches a job in `.github/workflows`, and that `rust.yml`
+skips only its listed jobs on pushes to `main`. `./dev/rust_lint.sh` runs it
+and needs `python3` with [PyYAML]. The [uv] workspace provides both:
 
 ```shell
 uv run ./dev/rust_lint.sh
@@ -273,6 +274,19 @@ To run either check on its own:
 
 [`dev/depcheck`]: https://github.com/apache/datafusion/tree/main/dev/depcheck
 [cargo-machete]: https://github.com/bnjbvr/cargo-machete
+
+## Examples README Check
+
+`datafusion-examples/README.md` is generated from the documentation comments in
+`datafusion-examples/examples/<group>/main.rs`. `ci/scripts/check_examples_docs.sh`
+regenerates it and fails if the committed file differs. `./dev/rust_lint.sh`
+runs it and needs `cargo` and `npx`. To run the check on its own, or to update
+the README:
+
+```shell
+./ci/scripts/check_examples_docs.sh
+./ci/scripts/check_examples_docs.sh --write
+```
 
 ## Benchmarks
 

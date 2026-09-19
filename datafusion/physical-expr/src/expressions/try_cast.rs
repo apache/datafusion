@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -23,7 +22,7 @@ use std::sync::Arc;
 use crate::PhysicalExpr;
 use arrow::compute;
 use arrow::compute::CastOptions;
-use arrow::datatypes::{DataType, Field, FieldRef, Schema};
+use arrow::datatypes::{DataType, Field, FieldRef, Metadata, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use compute::can_cast_types;
@@ -124,7 +123,7 @@ impl TryCastExpr {
     }
 
     /// Explicit metadata for the output field, or `None` to pass through source metadata.
-    pub fn target_metadata(&self) -> Option<&HashMap<String, String>> {
+    pub fn target_metadata(&self) -> Option<&Metadata> {
         self.explicit_target.then(|| self.target_field.metadata())
     }
 
@@ -343,6 +342,8 @@ pub fn try_cast_with_target_field(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::expressions::col;
     use arrow::array::{

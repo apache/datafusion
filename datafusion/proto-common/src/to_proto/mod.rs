@@ -100,7 +100,7 @@ impl TryFrom<&Field> for protobuf::Field {
             arrow_type: Some(Box::new(arrow_type)),
             nullable: field.is_nullable(),
             children: Vec::new(),
-            metadata: field.metadata().clone(),
+            metadata: field.metadata().into(),
         })
     }
 }
@@ -266,7 +266,7 @@ impl TryFrom<&Schema> for protobuf::Schema {
     fn try_from(schema: &Schema) -> Result<Self, Self::Error> {
         Ok(Self {
             columns: convert_arc_fields_to_proto_fields(schema.fields())?,
-            metadata: schema.metadata.clone(),
+            metadata: schema.metadata().into(),
         })
     }
 }
@@ -277,7 +277,7 @@ impl TryFrom<SchemaRef> for protobuf::Schema {
     fn try_from(schema: SchemaRef) -> Result<Self, Self::Error> {
         Ok(Self {
             columns: convert_arc_fields_to_proto_fields(schema.fields())?,
-            metadata: schema.metadata.clone(),
+            metadata: schema.metadata().into(),
         })
     }
 }
@@ -299,7 +299,7 @@ impl TryFrom<&DFSchema> for protobuf::DfSchema {
             .collect::<Result<Vec<_>, Error>>()?;
         Ok(Self {
             columns,
-            metadata: s.metadata().clone(),
+            metadata: s.metadata().into(),
         })
     }
 }
