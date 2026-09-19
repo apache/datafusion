@@ -250,7 +250,7 @@ impl CastExpr {
 
     /// Check if casting from the source type to the target type is known to be
     /// lossless and strictly order-preserving for all source values, preserving nulls.
-    /// This includes widening casts (e.g. `Int8` to `Int16`) and representation
+    /// This includes widening casts (e.g. `Int8` or `UInt8` to `Int16`) and representation
     /// conversions such as `Int32` to `Date32`, which interprets the same integer
     /// as days since the epoch, or `Int64` to `Date64`, which interprets the same
     /// integer as milliseconds since the epoch.
@@ -267,12 +267,13 @@ impl CastExpr {
                 | (Date32, Int32)
                 | (Int64, Date64)
                 | (Date64, Int64)
-                | (UInt8, UInt16 | UInt32 | UInt64)
-                | (UInt16, UInt32 | UInt64)
-                | (UInt32, UInt64)
+                | (UInt8, UInt16 | UInt32 | UInt64 | Int16 | Int32 | Int64)
+                | (UInt16, UInt32 | UInt64 | Int32 | Int64)
+                | (UInt32, UInt64 | Int64)
                 | (Int8 | Int16 | UInt8 | UInt16, Float32)
                 | (Int8 | Int16 | Int32 | UInt8 | UInt16 | UInt32, Float64)
-                | (Utf8, LargeUtf8)
+                | (Utf8, LargeUtf8 | Utf8View)
+                | (Binary, LargeBinary | BinaryView)
         )
     }
 
@@ -301,13 +302,13 @@ pub(crate) fn cast_expr_properties(
     // A lossless cast recognized by check_bigger_cast is one-to-one, so it is
     // strictly order-preserving; a narrowing cast may collapse distinct values,
     // breaking the ordering of subsequent sort keys.
-    let bigger_cast = CastExpr::check_bigger_cast(target_type, &source_type);
-    if is_order_preserving_cast_family(&source_type, target_type) || bigger_cast {
+    let lossless_cast = CastExpr::check_bigger_cast(target_type, &source_type);
+    if is_order_preserving_cast_family(&source_type, target_type) || lossless_cast {
         Ok(child
             .clone()
             .with_range(unbounded)
             .with_strictly_order_preserving(
-                child.strictly_order_preserving && bigger_cast,
+                child.strictly_order_preserving && lossless_cast,
             ))
     } else {
         Ok(ExprProperties::new_unknown().with_range(unbounded))
@@ -1569,6 +1570,176 @@ mod tests {
     }
 
     #[test]
+    fn test_byte_representation_cast_preserves_values_and_ordering() -> Result<()> {
+        use arrow::array::{
+            BinaryArray, BinaryViewArray, LargeBinaryArray, StringViewArray,
+        };
+        use arrow::compute::SortOptions;
+        use datafusion_expr_common::sort_properties::SortProperties;
+
+        // Cover nulls, empty values, inline/long views, Unicode, and non-UTF8 bytes.
+        let strings = vec![
+            None,
+            Some(""),
+            Some("a"),
+            Some("a longer shared string"),
+            Some("a longer shared string"),
+            Some("🦀"),
+        ];
+        let bytes: Vec<Option<&[u8]>> = vec![
+            None,
+            Some(b""),
+            Some(b"\0"),
+            Some(b"a longer shared byte string"),
+            Some(b"a longer shared byte string"),
+            Some(b"\xff"),
+        ];
+        let binary: ArrayRef = Arc::new(BinaryArray::from(bytes.clone()));
+        let cases: [(ArrayRef, ArrayRef); 3] = [
+            (
+                Arc::new(StringArray::from(strings.clone())),
+                Arc::new(StringViewArray::from(strings)),
+            ),
+            (
+                Arc::clone(&binary),
+                Arc::new(LargeBinaryArray::from(bytes.clone())),
+            ),
+            (binary, Arc::new(BinaryViewArray::from(bytes))),
+        ];
+        for (input, expected) in cases {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "a",
+                input.data_type().clone(),
+                true,
+            )]));
+            let expr =
+                CastExpr::new(col("a", &schema)?, expected.data_type().clone(), None);
+            assert!(expr.is_bigger_cast(input.data_type()));
+            for descending in [false, true] {
+                for nulls_first in [false, true] {
+                    let child = ExprProperties::new_unknown()
+                        .with_range(Interval::make_unbounded(input.data_type())?)
+                        .with_order(SortProperties::Ordered(SortOptions {
+                            descending,
+                            nulls_first,
+                        }))
+                        .with_strictly_order_preserving(true);
+                    let properties = expr.get_properties(std::slice::from_ref(&child))?;
+                    assert_eq!(properties.sort_properties, child.sort_properties);
+                    assert!(properties.strictly_order_preserving);
+                    assert_eq!(properties.range.data_type(), *expected.data_type());
+                }
+            }
+            let batch = RecordBatch::try_new(schema, vec![input])?;
+            let actual = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+            assert_eq!(actual.as_ref(), expected.as_ref());
+        }
+        for (source, target) in [
+            (Utf8View, Utf8),
+            (LargeBinary, Binary),
+            (BinaryView, Binary),
+        ] {
+            assert!(!CastExpr::check_bigger_cast(&target, &source));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_unsigned_to_signed_cast_preserves_values_and_ordering() {
+        use arrow::array::{UInt8Array, UInt16Array, UInt32Array};
+        use arrow::compute::SortOptions;
+        use datafusion_expr_common::sort_properties::SortProperties;
+
+        let inputs: [(ArrayRef, Vec<DataType>, i64); 3] = [
+            (
+                Arc::new(UInt8Array::from(vec![
+                    None,
+                    Some(0),
+                    Some(1),
+                    Some(u8::MAX),
+                ])),
+                vec![Int16, Int32, Int64],
+                i64::from(u8::MAX),
+            ),
+            (
+                Arc::new(UInt16Array::from(vec![
+                    None,
+                    Some(0),
+                    Some(1),
+                    Some(u16::MAX),
+                ])),
+                vec![Int32, Int64],
+                i64::from(u16::MAX),
+            ),
+            (
+                Arc::new(UInt32Array::from(vec![
+                    None,
+                    Some(0),
+                    Some(1),
+                    Some(u32::MAX),
+                ])),
+                vec![Int64],
+                i64::from(u32::MAX),
+            ),
+        ];
+        for (input, target_types, max) in inputs {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "a",
+                input.data_type().clone(),
+                true,
+            )]));
+            let batch =
+                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::clone(&input)])
+                    .expect("valid input batch");
+            for target_type in target_types {
+                let expr =
+                    CastExpr::new(col("a", &schema).unwrap(), target_type.clone(), None);
+                let actual = expr
+                    .evaluate(&batch)
+                    .unwrap()
+                    .into_array(batch.num_rows())
+                    .unwrap();
+                for (index, value) in
+                    [None, Some(0), Some(1), Some(max)].into_iter().enumerate()
+                {
+                    let expected = match target_type {
+                        Int16 => {
+                            ScalarValue::Int16(value.map(|v| i16::try_from(v).unwrap()))
+                        }
+                        Int32 => {
+                            ScalarValue::Int32(value.map(|v| i32::try_from(v).unwrap()))
+                        }
+                        Int64 => ScalarValue::Int64(value),
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(
+                        ScalarValue::try_from_array(&actual, index).unwrap(),
+                        expected
+                    );
+                }
+                for descending in [false, true] {
+                    for nulls_first in [false, true] {
+                        let child = ExprProperties::new_unknown()
+                            .with_range(
+                                Interval::make_unbounded(input.data_type()).unwrap(),
+                            )
+                            .with_order(SortProperties::Ordered(SortOptions {
+                                descending,
+                                nulls_first,
+                            }))
+                            .with_strictly_order_preserving(true);
+                        let properties =
+                            expr.get_properties(std::slice::from_ref(&child)).unwrap();
+                        assert_eq!(properties.sort_properties, child.sort_properties);
+                        assert!(properties.strictly_order_preserving);
+                        assert_eq!(properties.range.data_type(), target_type);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_check_bigger_cast_precision_loss() {
         use DataType::*;
 
@@ -1587,10 +1758,15 @@ mod tests {
         assert!(!CastExpr::check_bigger_cast(&Float64, &Int64));
         assert!(!CastExpr::check_bigger_cast(&Float64, &UInt64));
 
-        // Signed <-> Unsigned conversions should return false (not order-preserving due to negative values)
+        // Signed-to-unsigned and unsigned-to-signed casts whose target cannot
+        // represent the entire source range are not lossless for all values.
         assert!(!CastExpr::check_bigger_cast(&UInt16, &Int8));
         assert!(!CastExpr::check_bigger_cast(&UInt32, &Int16));
-        assert!(!CastExpr::check_bigger_cast(&Int16, &UInt8));
+        assert!(!CastExpr::check_bigger_cast(&Int8, &UInt8));
+        assert!(!CastExpr::check_bigger_cast(&Int16, &UInt16));
+        assert!(!CastExpr::check_bigger_cast(&Int32, &UInt32));
+        assert!(!CastExpr::check_bigger_cast(&Int64, &UInt64));
+        assert!(!CastExpr::check_bigger_cast(&Int8, &UInt16));
     }
 }
 
