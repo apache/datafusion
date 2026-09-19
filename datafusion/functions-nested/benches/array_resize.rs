@@ -95,11 +95,15 @@ fn criterion_benchmark(c: &mut Criterion) {
     // Keep the visible rows and output size fixed while varying the backing
     // child size. Slicing a ListArray retains the entire child array.
     for backing_rows in [NUM_ROWS, NUM_ROWS * 100] {
-        let array = create_int64_list_array(backing_rows, 10)
+        let list_len = 10;
+        let array = create_int64_list_array(backing_rows, list_len)
             .slice((backing_rows - NUM_ROWS) / 2, NUM_ROWS);
         bench_case(
             &mut group,
-            &format!("shrink_default_null_fill_sliced_10_to_5_backing_{backing_rows}"),
+            &format!(
+                "shrink_default_null_fill_sliced_10_to_5_backing_values_{}",
+                backing_rows * list_len
+            ),
             &[
                 ColumnarValue::Array(array),
                 ColumnarValue::Array(repeated_int64_array(5)),

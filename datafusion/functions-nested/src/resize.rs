@@ -32,7 +32,8 @@ use arrow::datatypes::{
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{
-    Result, ScalarValue, exec_datafusion_err, exec_err, internal_datafusion_err,
+    Result, ScalarValue, assert_or_internal_err, exec_datafusion_err, exec_err,
+    internal_datafusion_err,
 };
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
@@ -338,7 +339,7 @@ where
         let count = O::usize_as(count);
         let start = offset_window[0];
         if start + count > offset_window[1] {
-            debug_assert!(
+            assert_or_internal_err!(
                 default_value_data.is_some(),
                 "fill values are required when growing a list"
             );
