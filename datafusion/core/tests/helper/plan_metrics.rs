@@ -52,3 +52,20 @@ pub fn plan_spilled_bytes(plan: &dyn ExecutionPlan) -> usize {
         .map(|child| plan_spilled_bytes(child.as_ref()))
         .sum::<usize>()
 }
+
+/// Sums the counter or gauge named `name` across every operator of `plan`.
+///
+/// Returns 0 when no operator reports that metric.
+pub fn plan_metric_sum(plan: &dyn ExecutionPlan, name: &str) -> usize {
+    let own = plan
+        .metrics()
+        .and_then(|m| m.sum_by_name(name))
+        .map(|v| v.as_usize())
+        .unwrap_or(0);
+
+    own + plan
+        .children()
+        .into_iter()
+        .map(|child| plan_metric_sum(child.as_ref(), name))
+        .sum::<usize>()
+}
