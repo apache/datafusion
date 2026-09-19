@@ -18,10 +18,10 @@
 use crate::spill::get_record_batch_memory_size;
 use arrow::array::ArrayRef;
 use arrow::compute::interleave;
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, assert_or_internal_err};
 use datafusion_execution::memory_pool::MemoryReservation;
 use log::warn;
 use std::sync::Arc;
@@ -149,29 +149,175 @@ impl BatchBuilder {
     /// Release fully consumed batches after a merge drains at an input boundary.
     /// Keeping their dictionaries can otherwise enlarge the next output even
     /// though none of its rows refer to those batches.
-    pub(super) fn discard_consumed_batches(&mut self) {
-        assert!(self.indices.is_empty());
-        self.retain_current_batches(false);
+    pub(super) fn discard_consumed_batches(&mut self) -> Result<()> {
+        assert_or_internal_err!(
+            self.indices.is_empty(),
+            "pending merge rows must be emitted before discarding source batches"
+        );
+        self.retain_cursor_batches();
+        // Bypassed spill merges only update their local accounting here; their
+        // real pool reservation remains attached to the outer merge stream.
         self.release_unused_memory();
+        Ok(())
     }
 
-    fn retain_current_batches(&mut self, keep_consumed: bool) {
-        let mut batch_idx = 0;
-        let mut retained = 0;
-        self.batches.retain(|(stream_idx, batch)| {
-            let stream_cursor = &mut self.cursors[*stream_idx];
-            let retain = stream_cursor.batch_idx == batch_idx
-                && (keep_consumed || stream_cursor.row_idx < batch.num_rows());
-            batch_idx += 1;
+    /// Whether replacing an exhausted input would exceed the allowance for
+    /// retained source batches and materializing output together. This preserves
+    /// the caller's existing source/output estimate; cursor, read-ahead and IPC
+    /// allocations still depend on the merge's heuristic workspace reservation.
+    ///
+    /// This check runs only at input boundaries. A tight allowance falls back
+    /// to flushing at every boundary with pending rows, as before. An empty
+    /// builder skips flushing, so this policy cannot emit empty batches or
+    /// stall progress while waiting for a larger allowance.
+    pub(super) fn should_flush_before_input(
+        &self,
+        next_batch_bytes: usize,
+        memory_limit: usize,
+        batch_size: usize,
+    ) -> Result<bool> {
+        if self.is_empty() {
+            return Ok(false);
+        }
 
-            if retain {
-                stream_cursor.batch_idx = retained;
-                retained += 1;
-            } else {
-                self.batches_mem_used -= get_record_batch_memory_size(batch);
+        // Rows selected from each source batch form one contiguous range, even
+        // though the merged indices interleave those ranges.
+        let mut ranges = self
+            .schema
+            .fields()
+            .iter()
+            .any(|field| {
+                matches!(
+                    field.data_type(),
+                    DataType::Utf8
+                        | DataType::Binary
+                        | DataType::LargeUtf8
+                        | DataType::LargeBinary
+                )
+            })
+            .then(|| vec![None; self.batches.len()]);
+        if let Some(ranges) = &mut ranges {
+            for &(batch, row) in &self.indices {
+                let range = ranges[batch].get_or_insert(row..row);
+                range.end = row + 1;
             }
-            retain
+        }
+
+        let mut remaining_rows = 0usize;
+        for (batch_idx, (stream_idx, batch)) in self.batches.iter().enumerate() {
+            let cursor = &self.cursors[*stream_idx];
+            // Released cursors have no matching batch and contribute no rows.
+            if cursor.batch_idx == batch_idx && cursor.row_idx < batch.num_rows() {
+                remaining_rows =
+                    remaining_rows.saturating_add(batch.num_rows() - cursor.row_idx);
+                if let Some(ranges) = &mut ranges {
+                    let range =
+                        ranges[batch_idx].get_or_insert(cursor.row_idx..cursor.row_idx);
+                    range.end = batch.num_rows();
+                }
+            }
+        }
+        // A primitive column bounds the number of rows in the next input even
+        // when other columns are variable-width. Use the largest individual
+        // width, since columns may share their backing buffers.
+        let minimum_row_bytes = self
+            .schema
+            .fields()
+            .iter()
+            .filter_map(|field| field.data_type().primitive_width())
+            .max();
+        let future_rows = minimum_row_bytes.map_or(batch_size, |width| {
+            self.len()
+                .saturating_add(remaining_rows)
+                .saturating_add(next_batch_bytes / width)
+                .min(batch_size)
         });
+
+        let mut output_bytes = 0usize;
+        let mut next_batch_may_contribute_values = false;
+        for (column, field) in self.schema.fields().iter().enumerate() {
+            let data_type = field.data_type();
+            let column_bytes = if let Some(width) = data_type.primitive_width() {
+                padded_buffer_size(future_rows.saturating_mul(width))
+            } else {
+                match data_type {
+                    DataType::Null => 0,
+                    DataType::Boolean => padded_buffer_size(future_rows.div_ceil(8)),
+                    DataType::Utf8
+                    | DataType::Binary
+                    | DataType::LargeUtf8
+                    | DataType::LargeBinary => {
+                        next_batch_may_contribute_values = true;
+                        let offset_width =
+                            if matches!(data_type, DataType::Utf8 | DataType::Binary) {
+                                4
+                            } else {
+                                8
+                            };
+                        let mut values_bytes = 0usize;
+                        let ranges = ranges.as_ref().expect("byte arrays have ranges");
+                        for ((_, batch), range) in self.batches.iter().zip(ranges) {
+                            if let Some(range) = range {
+                                let data = batch.column(column).to_data();
+                                let slice = data.slice(range.start, range.len());
+                                // Remove the source's offsets and validity so
+                                // the output accounts for those buffers once.
+                                let validity = if slice.nulls().is_some() {
+                                    range.len().div_ceil(8)
+                                } else {
+                                    0
+                                };
+                                values_bytes = values_bytes.saturating_add(
+                                    slice.get_slice_memory_size()?
+                                        - (range.len() + 1) * offset_width
+                                        - validity,
+                                );
+                            }
+                        }
+                        padded_buffer_size(values_bytes).saturating_add(
+                            padded_buffer_size(
+                                future_rows
+                                    .saturating_add(1)
+                                    .saturating_mul(offset_width),
+                            ),
+                        )
+                    }
+                    _ => {
+                        // Nested arrays, dictionaries and views can retain or
+                        // concatenate buffers with no selected rows. Count the
+                        // entire input buffers, including the next input, rather
+                        // than estimating them from an average row width.
+                        next_batch_may_contribute_values = true;
+                        self.batches.iter().fold(0usize, |bytes, (_, batch)| {
+                            bytes.saturating_add(
+                                batch.column(column).get_buffer_memory_size(),
+                            )
+                        })
+                    }
+                }
+            };
+            output_bytes = output_bytes.saturating_add(column_bytes);
+            if field.is_nullable()
+                || self
+                    .batches
+                    .iter()
+                    .any(|(_, batch)| batch.column(column).nulls().is_some())
+            {
+                output_bytes = output_bytes
+                    .saturating_add(padded_buffer_size(future_rows.div_ceil(8)));
+            }
+        }
+        if next_batch_may_contribute_values {
+            // The replacement's variable-width values are not available yet.
+            // Include their full maximum rather than their average row width.
+            output_bytes = output_bytes.saturating_add(next_batch_bytes);
+        }
+
+        Ok(self
+            .batches_mem_used
+            .saturating_add(next_batch_bytes)
+            .saturating_add(output_bytes)
+            > memory_limit)
     }
 
     fn release_unused_memory(&mut self) {
@@ -314,6 +460,11 @@ impl BatchBuilder {
     }
 }
 
+/// Arrow rounds newly allocated buffers up to a multiple of 64 bytes.
+fn padded_buffer_size(bytes: usize) -> usize {
+    bytes.checked_add(63).map_or(usize::MAX, |size| size & !63)
+}
+
 /// Try to grow `reservation` so it covers at least `needed` bytes.
 ///
 /// When a reservation has been pre-loaded with bytes (e.g. via
@@ -373,7 +524,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Array, ArrayDataBuilder, Int32Array, ListArray};
+    use arrow::array::{
+        Array, ArrayDataBuilder, Int32Array, Int64Array, ListArray, StringArray,
+    };
     use arrow::buffer::Buffer;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -488,6 +641,71 @@ mod tests {
         assert!(builder.batches.is_empty());
         assert_eq!(builder.batches_mem_used, 0);
         assert_eq!(builder.reservation.size(), 0);
+    }
+
+    #[test]
+    fn test_merge_budget_includes_future_replacement_rows() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, false)]));
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let mut builder = BatchBuilder::new(
+            Arc::clone(&schema),
+            2,
+            8192,
+            MemoryConsumer::new("test").register(&pool),
+        );
+        for stream in 0..2 {
+            builder.push_batch(
+                stream,
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(Int64Array::from_iter_values(0..8))],
+                )?,
+            )?;
+        }
+        for _ in 0..8 {
+            builder.push_row(0);
+        }
+        // Current output (64 bytes), both inputs (128), and replacement (64)
+        // fit. Future output also includes the live input and replacement.
+        assert!(builder.should_flush_before_input(64, 256, 8192)?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_merge_budget_includes_unselected_wide_values() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Utf8, false)]));
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let mut builder = BatchBuilder::new(
+            Arc::clone(&schema),
+            2,
+            3,
+            MemoryConsumer::new("test").register(&pool),
+        );
+        builder.push_batch(
+            0,
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(StringArray::from(vec!["a"]))],
+            )?,
+        )?;
+        let wide_value = "z".repeat(4096);
+        builder.push_batch(
+            1,
+            RecordBatch::try_new(
+                schema,
+                vec![Arc::new(StringArray::from(vec!["b", wide_value.as_str()]))],
+            )?,
+        )?;
+        builder.push_row(0);
+        // Only a small value is pending, but the other live batch can add its
+        // large value before the next input boundary. Average widths or only
+        // the current pending slice would miss this materialization cost.
+        assert!(builder.should_flush_before_input(
+            64,
+            builder.batches_mem_used + 64 + 256,
+            3,
+        )?);
+        Ok(())
     }
 
     #[test]

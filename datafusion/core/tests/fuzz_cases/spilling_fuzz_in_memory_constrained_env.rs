@@ -22,7 +22,8 @@ use std::sync::Arc;
 
 use crate::fuzz_cases::aggregate_fuzz::assert_spill_count_metric;
 use crate::fuzz_cases::once_exec::OnceExec;
-use arrow::array::UInt64Array;
+use arrow::array::{AsArray, UInt64Array};
+use arrow::datatypes::UInt64Type;
 use arrow::row::{RowConverter, SortField};
 use arrow::{array::StringArray, compute::SortOptions, record_batch::RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
@@ -34,7 +35,7 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::prelude::SessionConfig;
 use datafusion_common::units::{KB, MB};
 use datafusion_execution::memory_pool::{
-    FairSpillPool, MemoryConsumer, MemoryReservation,
+    FairSpillPool, GreedyMemoryPool, MemoryConsumer, MemoryReservation,
 };
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_functions_aggregate::array_agg::array_agg_udaf;
@@ -48,7 +49,8 @@ use datafusion_physical_plan::aggregates::{
 use datafusion_physical_plan::metrics::MetricValue;
 use datafusion_physical_plan::spill::get_record_batch_memory_size;
 use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 
 use arrow::array::Int32Array;
 use datafusion::datasource::memory::MemorySourceConfig;
@@ -826,9 +828,125 @@ async fn test_aggregate_with_high_cardinality_with_limited_memory_and_large_reco
     Ok(())
 }
 
+#[rstest::rstest]
+#[case::greedy_seed_7(7, false)]
+#[case::greedy_seed_91(91, false)]
+#[case::fair_seed_7(7, true)]
+#[case::fair_seed_91(91, true)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn aggregate_spill_with_seeded_batches_and_concurrent_peer(
+    #[case] seed: u64,
+    #[case] fair: bool,
+) -> Result<()> {
+    const POOL_SIZE: usize = 2 * MB as usize;
+    const INPUT_BATCHES: usize = 96;
+    let inner: Arc<dyn MemoryPool> = if fair {
+        Arc::new(FairSpillPool::new(POOL_SIZE))
+    } else {
+        Arc::new(GreedyMemoryPool::new(POOL_SIZE))
+    };
+    let pool = Arc::new(PeakRecordingPool::new(inner));
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::clone(&pool) as Arc<dyn MemoryPool>)
+        .build_arc()?;
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut runs = Vec::new();
+    // Construct both pipelines before polling either, so their reservations
+    // overlap. Each peer reads seeded narrow and oversized string batches,
+    // spills, and replays against the same pool with default merge fan-in.
+    for _ in 0..2 {
+        let batch_size = [64, 128][rng.random_range(0..2)];
+        let sizes = Arc::new(
+            (0..INPUT_BATCHES)
+                .map(|index| {
+                    if index % 19 == 0 {
+                        rng.random_range(POOL_SIZE / 12..POOL_SIZE / 6)
+                    } else {
+                        rng.random_range(POOL_SIZE / 128..POOL_SIZE / 32)
+                    }
+                })
+                .collect::<Vec<_>>(),
+        );
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(batch_size))
+                .with_runtime(Arc::clone(&runtime)),
+        );
+        let generated_sizes = Arc::clone(&sizes);
+        let (args, plan, stream) =
+            build_high_cardinality_aggregate(RunTestWithLimitedMemoryArgs {
+                pool_size: POOL_SIZE,
+                task_ctx,
+                number_of_record_batches: INPUT_BATCHES,
+                get_size_of_record_batch_to_generate: Box::pin(move |index| {
+                    generated_sizes[index]
+                }),
+                memory_behavior: MemoryBehavior::AsIs,
+                assert_all_output_batches_roughly_match_batch_size_conf: false,
+            })?;
+        let schema = stream.schema();
+        let mut seen = vec![false; INPUT_BATCHES * batch_size];
+        let checked = stream.map_ok(move |batch| {
+            let keys = batch.column(0).as_primitive::<UInt64Type>();
+            let lists = batch.column(1).as_list::<i32>();
+            for row in 0..batch.num_rows() {
+                let key = keys.value(row) as usize;
+                assert!(key < INPUT_BATCHES * batch_size, "seed={seed}, key={key}");
+                assert!(
+                    !std::mem::replace(&mut seen[key], true),
+                    "duplicate key {key}, seed={seed}"
+                );
+                let expected_length = sizes[key / batch_size]
+                    .saturating_sub(size_of::<u64>() * batch_size)
+                    / batch_size;
+                let values = lists.value(row);
+                let strings = values.as_string::<i32>();
+                assert_eq!(values.len(), 1, "seed={seed}, key={key}");
+                assert_eq!(
+                    strings.value(0).len(),
+                    expected_length,
+                    "seed={seed}, key={key}"
+                );
+                assert!(strings.value(0).bytes().all(|byte| byte == b'a'));
+            }
+            batch
+        });
+        let stream = Box::pin(RecordBatchStreamAdapter::new(schema, checked));
+        runs.push(run_test(args, plan, stream));
+    }
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        futures::future::try_join_all(runs),
+    )
+    .await
+    .expect("concurrent seeded aggregates must complete")?;
+    assert!(
+        pool.peak_reserved() <= POOL_SIZE,
+        "seed={seed}, fair={fair}"
+    );
+    assert_eq!(pool.reserved(), 0);
+    assert_eq!(runtime.disk_manager.used_disk_space(), 0);
+    assert_eq!(
+        runtime.disk_manager.spilling_progress().active_files_count,
+        0
+    );
+    Ok(())
+}
+
 async fn run_test_aggregate_with_high_cardinality(
-    mut args: RunTestWithLimitedMemoryArgs,
+    args: RunTestWithLimitedMemoryArgs,
 ) -> Result<MetricsSet> {
+    let (args, aggregate_final, result) = build_high_cardinality_aggregate(args)?;
+    run_test(args, aggregate_final, result).await
+}
+
+fn build_high_cardinality_aggregate(
+    mut args: RunTestWithLimitedMemoryArgs,
+) -> Result<(
+    RunTestWithLimitedMemoryArgs,
+    Arc<AggregateExec>,
+    SendableRecordBatchStream,
+)> {
     let get_size_of_record_batch_to_generate = std::mem::replace(
         &mut args.get_size_of_record_batch_to_generate,
         Box::pin(move |_| unreachable!("should not be called after take")),
@@ -909,8 +1027,7 @@ async fn run_test_aggregate_with_high_cardinality(
     )?);
 
     let result = aggregate_final.execute(0, Arc::clone(&args.task_ctx))?;
-
-    run_test(args, aggregate_final, result).await
+    Ok((args, aggregate_final, result))
 }
 
 async fn run_test(

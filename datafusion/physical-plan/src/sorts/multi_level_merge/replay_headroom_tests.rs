@@ -17,13 +17,14 @@
 
 use super::*;
 
-use crate::expressions::PhysicalSortExpr;
+use super::tests::{
+    build_merge_builder, build_spill_manager, make_sorted_spill_file, test_schema,
+};
 use arrow::array::{AsArray, Int64Array, StringArray};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{DataType, Field, Int64Type, Schema};
 use datafusion_execution::memory_pool::{GreedyMemoryPool, MemoryConsumer, MemoryPool};
 use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
-use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -43,19 +44,8 @@ fn replay_merge_builder(
     pool: &Arc<dyn MemoryPool>,
     batch_size: usize,
 ) -> MultiLevelMergeBuilder {
-    MultiLevelMergeBuilder::new(
-        spill_manager,
-        schema,
-        spills,
-        vec![],
-        [PhysicalSortExpr::new_default(Arc::new(Column::new("x", 0)))].into(),
-        BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
-        batch_size,
-        MemoryConsumer::new("replay headroom test").register(pool),
-        None,
-        false,
-    )
-    .with_replay_headroom(true)
+    build_merge_builder(spill_manager, schema, spills, pool, batch_size)
+        .with_replay_headroom(true)
 }
 
 /// Create equally sized, interleaved input runs.
@@ -68,27 +58,17 @@ fn replay_merge_fixture(
     let env = RuntimeEnvBuilder::new()
         .with_max_spill_merge_fan_in(max_fan_in)
         .build_arc()?;
-    let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, false)]));
-    let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
-    let spill_manager =
-        SpillManager::new(Arc::clone(&env), metrics.clone(), Arc::clone(&schema));
-    let mut spills = Vec::with_capacity(run_count);
-    for run in 0..run_count {
-        let values = Int64Array::from_iter_values(
-            (0..rows_per_run).map(|row| (row * run_count + run) as i64),
-        );
-        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(values)])?;
-        let (file, max_record_batch_memory) = spill_manager
-            .spill_record_batch_iter_and_return_max_batch_memory(
-                std::iter::once(Ok(batch)),
-                "replay headroom test input",
-            )?
-            .expect("a nonempty input must spill");
-        spills.push(SortedSpillFile {
-            file,
-            max_record_batch_memory,
-        });
-    }
+    let schema = test_schema();
+    let spill_manager = build_spill_manager(&env, &schema);
+    let metrics = spill_manager.metrics.clone();
+    let spills = (0..run_count)
+        .map(|run| {
+            let values = (0..rows_per_run)
+                .map(|row| (row * run_count + run) as i64)
+                .collect();
+            make_sorted_spill_file(&spill_manager, &schema, values)
+        })
+        .collect::<Vec<_>>();
     let input_bytes = metrics.spilled_bytes.value();
     let pool_size = memory_batches * spills[0].max_record_batch_memory;
     let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(pool_size));
@@ -146,7 +126,7 @@ async fn merge_replay_runs(
 }
 
 #[rstest::rstest]
-#[case::intermediate_uses_full_pool(6, 16, 0, 2, 16)]
+#[case::intermediate_reuses_admitted_buffers(6, 16, 0, 2, 8)]
 #[case::intermediate_holds_back_a_run(3, 16, 0, 1, 8)]
 #[case::final_disables_read_ahead(3, 12, 0, 0, 6)]
 #[case::fan_in_limited_intermediate(4, 8, 2, 2, 4)]
@@ -185,6 +165,57 @@ async fn replay_headroom_depends_on_merge_phase(
     Ok(())
 }
 
+#[rstest::rstest]
+#[case::original_read_ahead(false, 4)]
+#[case::widened_intermediate(true, 8)]
+#[tokio::test]
+async fn intermediate_merge_preserves_competing_replay_budget(
+    #[case] widen: bool,
+    #[case] selected_runs: usize,
+) -> Result<()> {
+    let ReplayMergeFixture {
+        mut builder,
+        env,
+        pool,
+        ..
+    } = replay_merge_fixture(10, 128, 40, 0)?;
+    let batch_memory = builder.sorted_spill_files[0].0.max_record_batch_memory;
+    let peer = MemoryConsumer::new("another partition replay").register(&pool);
+    peer.try_grow(8 * batch_memory)?;
+    builder.widen_intermediate_merges = widen;
+
+    let MergeStep::Stream { stream, retry, .. } =
+        builder.merge_sorted_runs_within_mem_limit(false)?
+    else {
+        panic!("the merge should fit without splitting a run");
+    };
+    assert_eq!(builder.sorted_spill_files.len(), 10 - selected_runs);
+    assert_eq!(retry.is_some(), widen);
+    if let Some(retry) = &retry {
+        assert_eq!(retry.spills.len(), selected_runs);
+        assert_eq!(retry.original_count, 4);
+        assert_eq!(retry.buffer_size, 2);
+        assert_eq!(retry.reservation.size(), 16 * batch_memory);
+    }
+    // Both selections retain the same sixteen batches of memory. Widening
+    // used to grow this grant to thirty-two and consume all of the peer's
+    // remaining replay budget before its next allocation.
+    assert_eq!(pool.reserved() - peer.size(), 16 * batch_memory);
+    peer.try_grow(4 * batch_memory)?;
+    assert_eq!(pool.reserved(), 28 * batch_memory);
+    let batches: Vec<RecordBatch> = stream.try_collect().await?;
+    assert_eq!(
+        batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+        selected_runs * 128
+    );
+    drop(retry);
+    drop(builder);
+    peer.free();
+    assert_eq!(pool.reserved(), 0);
+    assert_eq!(env.disk_manager.used_disk_space(), 0);
+    Ok(())
+}
+
 #[tokio::test]
 async fn replay_headroom_keeps_split_retries_before_intermediate_merges() -> Result<()> {
     let ReplayMergeFixture {
@@ -199,50 +230,55 @@ async fn replay_headroom_keeps_split_retries_before_intermediate_merges() -> Res
     Ok(())
 }
 
+#[rstest::rstest]
+#[case::indivisible_split_retry(3, 32, 6, true)]
+#[case::widened_short_batches(6, 3, 16, false)]
 #[tokio::test]
-async fn replay_headroom_preserves_indivisible_run_batch_limits() -> Result<()> {
+async fn replay_headroom_preserves_short_run_batch_limits(
+    #[case] run_count: usize,
+    #[case] batches_per_run: usize,
+    #[case] memory_batches: usize,
+    #[case] expect_split: bool,
+) -> Result<()> {
     let env = Arc::new(RuntimeEnv::default());
     let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Utf8, false)]));
-    let spill_manager = SpillManager::new(
-        Arc::clone(&env),
-        SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
-        Arc::clone(&schema),
-    );
-    let values = (0..96)
-        .map(|value| format!("{value:03}{}", "x".repeat(1024)))
+    let manager = build_spill_manager(&env, &schema);
+    let values = (0..run_count * batches_per_run)
+        .map(|value| format!("{value:04}{}", "x".repeat(1024)))
         .collect::<Vec<_>>();
-    let mut spills = Vec::new();
-    for run in 0..3 {
-        // Every batch is already indivisible, but the configured merge batch
-        // size is much larger. The split/retry path must discover the one-row
-        // limit before an intermediate pass can concatenate these batches.
-        let batches = values.iter().skip(run).step_by(3).map(|value| {
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![Arc::new(StringArray::from(vec![value.as_str()]))],
-            )
-            .map_err(Into::into)
-        });
-        let (file, max_record_batch_memory) = spill_manager
-            .spill_record_batch_iter_and_return_max_batch_memory(
-                batches,
-                "indivisible replay input",
-            )?
-            .expect("a nonempty input must spill");
-        spills.push(SortedSpillFile {
-            file,
-            max_record_batch_memory,
-        });
-    }
-    let pool_size = 6 * spills[0].max_record_batch_memory;
+    let spills = (0..run_count)
+        .map(|run| {
+            let batches = values.iter().skip(run).step_by(run_count).map(|value| {
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(StringArray::from(vec![value.as_str()]))],
+                )
+                .map_err(Into::into)
+            });
+            let (file, max_record_batch_memory) = manager
+                .spill_record_batch_iter_and_return_max_batch_memory(
+                    batches,
+                    "short replay input",
+                )?
+                .expect("a nonempty input must spill");
+            Ok(SortedSpillFile {
+                file,
+                max_record_batch_memory,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let pool_size = memory_batches * spills[0].max_record_batch_memory;
     let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(pool_size));
-    let builder =
-        replay_merge_builder(spill_manager, Arc::clone(&schema), spills, &pool, 8192);
+    let builder = replay_merge_builder(manager, Arc::clone(&schema), spills, &pool, 8192);
     let mut stream = builder.create_spillable_merge_stream();
     let mut batches = Vec::new();
     while let Some(batch) = stream.try_next().await? {
-        assert_eq!(batch.num_rows(), 1);
-        assert!(crate::spill::get_record_batch_memory_size(&batch) <= pool.reserved());
+        if expect_split {
+            // Unlike the parent module's direct minimum-admission test, this
+            // carries many wide singleton batches through intermediate passes.
+            // Their discovered one-row limit must survive the nominal 8192 size.
+            assert_eq!(batch.num_rows(), 1);
+        }
         assert!(pool.reserved() <= pool_size);
         batches.push(batch);
     }
@@ -260,16 +296,16 @@ async fn replay_headroom_preserves_indivisible_run_batch_limits() -> Result<()> 
 
 #[tokio::test]
 async fn replay_headroom_does_not_rewrite_intermediate_runs_twice() -> Result<()> {
-    // The pool holds eight read-ahead inputs, or four plus equal replay headroom.
+    // The admitted grant holds four inputs with read-ahead, or eight without it.
     // Four intermediate merges of eight runs leave four runs for the final merge.
-    // Reserving headroom for every pass instead writes ten intermediate files,
+    // Keeping read-ahead for every pass instead writes ten intermediate files,
     // rewriting every input row twice before returning the final merge.
     let (spill_count, spilled_rows, spilled_bytes) =
         merge_replay_runs(32, 256, 32).await?;
-    println!(
-        "Intermediate spill: {spill_count} files, {spilled_rows} rows, {spilled_bytes} bytes"
+    assert_eq!(
+        spill_count, 4,
+        "intermediate spill: {spilled_rows} rows, {spilled_bytes} bytes"
     );
-    assert_eq!(spill_count, 4, "additional spill bytes: {spilled_bytes}");
     assert_eq!(spilled_rows, 32 * 256);
     Ok(())
 }
@@ -282,59 +318,6 @@ async fn replay_headroom_is_restored_after_intermediate_split_retries() -> Resul
     // all reservations and temporary files when the stream finishes.
     let (spill_count, _, _) = merge_replay_runs(3, 128, 3).await?;
     assert!(spill_count > 1, "the merge must spill and split runs");
-    Ok(())
-}
-
-#[tokio::test]
-async fn intermediate_merge_preserves_short_batch_replay() -> Result<()> {
-    let env = Arc::new(RuntimeEnv::default());
-    let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Utf8, false)]));
-    let manager = SpillManager::new(
-        Arc::clone(&env),
-        SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
-        Arc::clone(&schema),
-    );
-    let values = (0..18)
-        .map(|value| format!("{value:04}{}", "x".repeat(1024)))
-        .collect::<Vec<_>>();
-    let mut spills = Vec::new();
-    for run in 0..6 {
-        let batches = values.iter().skip(run).step_by(6).map(|value| {
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![Arc::new(StringArray::from(vec![value.as_str()]))],
-            )
-            .map_err(Into::into)
-        });
-        let (file, max_record_batch_memory) = manager
-            .spill_record_batch_iter_and_return_max_batch_memory(
-                batches,
-                "short replay input",
-            )?
-            .expect("a nonempty input must spill");
-        spills.push(SortedSpillFile {
-            file,
-            max_record_batch_memory,
-        });
-    }
-    // A two-input merge fits with headroom, so no initial split discovers the
-    // actual one-row input size. Widening to four runs must not combine their
-    // twelve rows into an intermediate batch too large to split or replay.
-    let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(
-        16 * spills[0].max_record_batch_memory,
-    ));
-    let builder = replay_merge_builder(manager, Arc::clone(&schema), spills, &pool, 8192);
-    let batches: Vec<RecordBatch> = builder
-        .create_spillable_merge_stream()
-        .try_collect()
-        .await?;
-    let merged = concat_batches(&schema, &batches)?;
-    assert_eq!(
-        merged.column(0).as_string::<i32>(),
-        &StringArray::from(values)
-    );
-    assert_eq!(pool.reserved(), 0);
-    assert_eq!(env.disk_manager.used_disk_space(), 0);
     Ok(())
 }
 
@@ -413,9 +396,15 @@ async fn check_intermediate_merge_disk_quota(sufficient_quota: bool) -> Result<(
         assert_eq!(merged.column(0).as_primitive::<Int64Type>(), &expected);
     } else {
         let error = result.expect_err("the quota must reject even a two-input merge");
+        let message = error.to_string();
         assert!(
-            error.to_string().contains("max_temp_directory_size"),
-            "expected a disk quota error, got {error}"
+            message.contains("Retrying the narrower intermediate merge after:"),
+            "the error must identify the failed wider attempt: {message}"
+        );
+        assert_eq!(
+            message.matches("max_temp_directory_size").count(),
+            2,
+            "both the original and narrower write errors must survive: {message}"
         );
     }
     // On a multithreaded runtime, dropping a failed merge cancels background
@@ -450,7 +439,7 @@ fn intermediate_merge_keeps_admitted_buffers(
     // underlying pool's normal fallible admission.
     // With read-ahead disabled, the contender first takes the released replay
     // headroom. Retrying admission with read-ahead enabled would then fail to
-    // seat two inputs and relinquish the usable three-input merge's grant.
+    // seat two inputs and relinquish the usable minimum merge's grant.
     #[derive(Debug)]
     struct HandoffPool {
         inner: Arc<dyn MemoryPool>,
