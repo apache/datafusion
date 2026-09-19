@@ -2523,9 +2523,32 @@ SELECT arrow_typeof(date_trunc('hour', TIME '14:30:45'));
 ----
 Time64(ns)
 
+# date_trunc accepts the same timestamps as a scalar as it does as a column,
+# including ones beyond the range of a nanosecond timestamp
+query P
+SELECT date_trunc('second', to_timestamp_seconds(10000000000));
+----
+2286-11-20T17:46:40
+
+query P
+SELECT date_trunc('second', to_timestamp_seconds(ts))
+FROM (VALUES (10000000000)) AS timestamps(ts);
+----
+2286-11-20T17:46:40
+
+query P
+SELECT date_trunc('minute', to_timestamp_millis(10000000019999));
+----
+2286-11-20T17:46:00
+
+query P
+SELECT date_trunc('millisecond', to_timestamp_micros(10000000000123456));
+----
+2286-11-20T17:46:40.123
+
 query error DataFusion error: Execution error: Timestamp 9223372036854775807 out of range
 SELECT date_trunc(
-  'hour',
+  'week',
   arrow_cast(9223372036854775807, 'Timestamp(Second, None)')
 );
 
