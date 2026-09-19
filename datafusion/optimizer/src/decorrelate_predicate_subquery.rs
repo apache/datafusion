@@ -1879,6 +1879,63 @@ mod tests {
         Ok(())
     }
 
+    /// A correlation that repeats the `IN` predicate keeps every NULL out of
+    /// the subquery result, so the mark join must not be null-aware.
+    #[test]
+    fn mark_join_for_in_predicate_correlation_is_not_null_aware() -> Result<()> {
+        let outer_scan = nullable_scalar_mark_scan("outer_t")?;
+        let inner_scan = nullable_scalar_mark_scan("inner_t")?;
+
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(inner_scan)
+                .filter(out_ref_col(DataType::Int32, "outer_t.id").eq(col("inner_t.id")))?
+                .project(vec![col("inner_t.id")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(in_subquery(col("outer_t.id"), subquery).is_null())?
+            .build()?;
+
+        let optimized = optimize_with_decorrelate(plan)?;
+        assert!(
+            has_non_null_aware_left_mark_join(&optimized),
+            "{}",
+            optimized.display_indent_schema()
+        );
+
+        Ok(())
+    }
+
+    /// The same for the `LeftAnti` join that a `NOT IN` filter builds.
+    #[test]
+    fn anti_join_for_in_predicate_correlation_is_not_null_aware() -> Result<()> {
+        let outer_scan = nullable_scalar_mark_scan("outer_t")?;
+        let inner_scan = nullable_scalar_mark_scan("inner_t")?;
+
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(inner_scan)
+                .filter(out_ref_col(DataType::Int32, "outer_t.id").eq(col("inner_t.id")))?
+                .project(vec![col("inner_t.id")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(not_in_subquery(col("outer_t.id"), subquery))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        LeftAnti Join:  Filter: outer_t.id = __correlated_sq_1.id [id:Int32;N, grp:Int32;N]
+          TableScan: outer_t [id:Int32;N, grp:Int32;N]
+          SubqueryAlias: __correlated_sq_1 [id:Int32;N]
+            Projection: inner_t.id [id:Int32;N]
+              TableScan: inner_t [id:Int32;N, grp:Int32;N]
+        "
+        )
+    }
+
     #[test]
     fn in_subquery_both_side_expr() -> Result<()> {
         let table_scan = test_table_scan()?;
