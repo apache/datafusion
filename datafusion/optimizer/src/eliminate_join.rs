@@ -60,9 +60,10 @@
 //!   DISTINCT, an `Aggregate` plan node whose aggregate expressions all ignore
 //!   duplicate input rows, or the existence side of a semi/anti/mark join) sets
 //!   it `true` for its subtree, and it propagates downward until a node that
-//!   makes the row count observable again (a `LIMIT`, a top-N sort, a volatile
-//!   expression, ...) clears it. It is therefore fixed by the nearest such node,
-//!   not by the whole ancestor chain: a collapsing node shields its subtree,
+//!   makes the row count observable again (a `LIMIT`, a top-N sort, an
+//!   expression that is not repeatable such as `random()` or a subquery, ...)
+//!   clears it. It is therefore fixed by the nearest such node, not by the
+//!   whole ancestor chain: a collapsing node shields its subtree,
 //!   so a duplicate-sensitive node further above does not matter.
 //!
 //! At each join, `rewritten_join_type` combines this context with the side's
@@ -1000,47 +1001,65 @@ mod tests {
         ")
     }
 
-    fn volatile_expr() -> Expr {
-        test_udf(Volatility::Volatile).call(vec![col("l.x")])
-    }
-
     #[test]
     fn volatile_aggregate_expressions_block_rewrite() -> Result<()> {
-        for (group_expr, aggr) in [
-            (vec![], min(volatile_expr())),
-            (vec![volatile_expr()], min(col("l.x"))),
-            (
-                vec![],
-                min(col("l.x"))
-                    .filter(volatile_expr().gt(lit(0_u32)))
-                    .build()?,
-            ),
-            (
-                vec![],
-                min(col("l.x"))
-                    .order_by(vec![volatile_expr().sort(true, false)])
-                    .build()?,
-            ),
-        ] {
-            let plan = left_join_right()?
-                .aggregate(group_expr, vec![aggr])?
-                .build()?;
-            assert_not_rewritten(plan)?;
+        // `Stable` is the control: the same plan with a repeatable expression
+        // is rewritten.
+        for volatility in [Volatility::Stable, Volatility::Volatile] {
+            let expr = test_udf(volatility).call(vec![col("l.x")]);
+            for (group_expr, aggr) in [
+                (vec![], min(expr.clone())),
+                (vec![expr.clone()], min(col("l.x"))),
+                (
+                    vec![],
+                    min(col("l.x"))
+                        .filter(expr.clone().gt(lit(0_u32)))
+                        .build()?,
+                ),
+                (
+                    vec![],
+                    min(col("l.x"))
+                        .order_by(vec![expr.clone().sort(true, false)])
+                        .build()?,
+                ),
+            ] {
+                let plan = left_join_right()?
+                    .aggregate(group_expr, vec![aggr])?
+                    .build()?;
+                let result = rewrite(plan.clone())?;
+                assert_eq!(
+                    result.transformed,
+                    volatility != Volatility::Volatile,
+                    "{volatility:?}: {}",
+                    plan.display_indent(),
+                );
+            }
         }
         Ok(())
     }
 
     #[test]
     fn volatile_intervening_expressions_block_rewrite() -> Result<()> {
-        for input in [
-            left_join_right()?.project(vec![col("l.x"), volatile_expr().alias("v")])?,
-            left_join_right()?.filter(volatile_expr().gt(lit(0_u32)))?,
-            left_join_right()?.sort(vec![volatile_expr().sort(true, false)])?,
-        ] {
-            let plan = input
-                .aggregate(Vec::<Expr>::new(), vec![min(col("l.x"))])?
-                .build()?;
-            assert_not_rewritten(plan)?;
+        // `Stable` is the control: the same plan with a repeatable expression
+        // is rewritten.
+        for volatility in [Volatility::Stable, Volatility::Volatile] {
+            let expr = test_udf(volatility).call(vec![col("l.x")]);
+            for input in [
+                left_join_right()?.project(vec![col("l.x"), expr.clone().alias("v")])?,
+                left_join_right()?.filter(expr.clone().gt(lit(0_u32)))?,
+                left_join_right()?.sort(vec![expr.clone().sort(true, false)])?,
+            ] {
+                let plan = input
+                    .aggregate(Vec::<Expr>::new(), vec![min(col("l.x"))])?
+                    .build()?;
+                let result = rewrite(plan.clone())?;
+                assert_eq!(
+                    result.transformed,
+                    volatility != Volatility::Volatile,
+                    "{volatility:?}: {}",
+                    plan.display_indent(),
+                );
+            }
         }
         Ok(())
     }

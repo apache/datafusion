@@ -187,8 +187,11 @@ SELECT COUNT(DISTINCT l.x), COUNT(l.g) FROM l JOIN r ON l.id = r.id;
 ----
 2 7
 
-# REGR_COUNT does not implement DISTINCT and counts every joined row, so
-# DISTINCT does not hide the join fanout and the join must stay an inner join.
+# REGR_COUNT declares `DistinctHandling::Unsupported`: its accumulator ignores
+# `is_distinct` and counts every joined row, so the results below are the
+# non-distinct counts (4 and 6; the distinct counts would be 2 and 4). DISTINCT
+# therefore does not hide the join fanout: the inner join must stay an inner
+# join, and the left join must be kept.
 query TT
 EXPLAIN SELECT REGR_COUNT(DISTINCT l.x, l.g) FROM l JOIN r ON l.id = r.id;
 ----

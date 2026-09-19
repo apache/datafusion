@@ -1364,8 +1364,9 @@ logical_plan
 05)--------TableScan: join_t1 projection=[t1_id, t1_int]
 06)--------TableScan: join_t2 projection=[t2_id]
 
-# A similar query with two DISTINCT aggregates is currently not rewritten
-# TODO: https://github.com/apache/datafusion/issues/22644
+# A similar query with two DISTINCT aggregates is also rewritten: each
+# `count(DISTINCT ...)` removes its own duplicates, so the join's duplicates
+# are not observable.
 query TT
 EXPLAIN
 select join_t1.t1_id, count(distinct join_t1.t1_int), count(distinct join_t1.t1_name)
