@@ -1497,6 +1497,12 @@ impl DisplayAs for HashJoinExec {
                     .map_or_else(String::new, |f| format!(", fetch={f}"));
                 let display_null_aware =
                     if self.null_aware { ", null_aware" } else { "" };
+                let display_prepared = self
+                    .prepared_build
+                    .as_ref()
+                    .map_or_else(String::new, |prepared| {
+                        format!(", prepared_build={} rows", prepared.num_rows())
+                    });
                 let on = self
                     .on
                     .iter()
@@ -1505,7 +1511,7 @@ impl DisplayAs for HashJoinExec {
                     .join(", ");
                 write!(
                     f,
-                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}{}{}{}",
+                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}{}{}{}{}",
                     self.mode,
                     self.join_type,
                     on,
@@ -1514,6 +1520,7 @@ impl DisplayAs for HashJoinExec {
                     display_null_equality,
                     display_fetch,
                     display_null_aware,
+                    display_prepared,
                 )
             }
             DisplayFormatType::TreeRender => {
@@ -1531,6 +1538,10 @@ impl DisplayAs for HashJoinExec {
                 }
 
                 writeln!(f, "on={on}")?;
+
+                if let Some(prepared) = &self.prepared_build {
+                    writeln!(f, "prepared_build={} rows", prepared.num_rows())?;
+                }
 
                 if self.null_equality() == NullEquality::NullEqualsNull {
                     writeln!(f, "NullsEqual: true")?;
@@ -1687,6 +1698,7 @@ impl ExecutionPlan for HashJoinExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         if let Some(prepared) = &self.prepared_build {
+            // Public fields such as `on` can change after builder validation.
             prepared.validate(self)?;
         }
         let on_left = self
@@ -1777,7 +1789,7 @@ impl ExecutionPlan for HashJoinExec {
                         self.null_equality,
                         null_aware,
                         array_map_created_count,
-                        false,
+                        BuildMode::Ordinary,
                     ))
                 })?,
                 PartitionMode::Partitioned => {
@@ -1800,7 +1812,7 @@ impl ExecutionPlan for HashJoinExec {
                         self.null_equality,
                         null_aware,
                         array_map_created_count,
-                        false,
+                        BuildMode::Ordinary,
                     ))
                 }
                 PartitionMode::Auto => {
@@ -1897,9 +1909,9 @@ impl ExecutionPlan for HashJoinExec {
             Statistics::new_unknown(self.left.schema().as_ref())
                 .with_num_rows(Precision::Exact(prepared.num_rows()))
         } else {
-            Arc::unwrap_or_clone(Arc::clone(&input_stats[0]))
+            input_stats[0].as_ref().clone()
         };
-        let right_stats = Arc::unwrap_or_clone(Arc::clone(&input_stats[1]));
+        let right_stats = input_stats[1].as_ref().clone();
         let stats = estimate_join_statistics(
             left_stats,
             right_stats,
@@ -2165,7 +2177,9 @@ impl ExecutionPlan for HashJoinExec {
         } = self;
 
         if prepared_build.is_some() {
-            return plan_err!("HashJoinExec with a prepared build cannot be serialized");
+            return datafusion_common::not_impl_err!(
+                "HashJoinExec with a prepared build cannot be serialized"
+            );
         }
         let left = ctx.encode_child(left)?;
         let right = ctx.encode_child(right)?;
@@ -2821,6 +2835,12 @@ impl CollectLeftAccumulator {
     }
 }
 
+#[derive(PartialEq, Eq)]
+enum BuildMode {
+    Ordinary,
+    Prepared,
+}
+
 /// State for collecting the build-side data during hash join
 struct BuildSideState {
     batches: Vec<RecordBatch>,
@@ -3036,9 +3056,10 @@ async fn collect_left_input(
     null_equality: NullEquality,
     null_aware: Option<NullAwareMode>,
     array_map_created_count: Count,
-    prepared: bool,
+    mode: BuildMode,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
+    let prepared = mode == BuildMode::Prepared;
 
     // The extra scope maps + null bitmap are only built for correlated
     // null-aware joins (see `NullAwareMode`).
@@ -3054,15 +3075,25 @@ async fn collect_left_input(
         should_compute_dynamic_filters || is_phj_candidate,
     )?;
 
-    let mut concat_values = if prepared {
+    let mut concat_value_bytes = if prepared {
         vec![0; schema.fields().len()]
     } else {
         vec![]
     };
+    let mut copy_bytes = 0usize;
+    let mut max_batch_rows = 0;
     while let Some(batch) = left_stream.try_next().await? {
         if prepared {
-            prepared::check_byte_concat_sizes(&batch, &mut concat_values)?;
+            prepared::check_byte_concat_sizes(&batch, &mut concat_value_bytes)?;
+            copy_bytes = copy_bytes
+                .checked_add(prepared::prepared_copy_bytes(&batch)?)
+                .ok_or_else(|| {
+                    datafusion_common::exec_datafusion_err!(
+                        "Prepared hash-join copy size overflow"
+                    )
+                })?;
         }
+        max_batch_rows = max_batch_rows.max(batch.num_rows());
         if let Some(accumulators) = &mut state.bounds_accumulators {
             for accumulator in accumulators {
                 accumulator.update_batch(&batch)?;
@@ -3099,21 +3130,11 @@ async fn collect_left_input(
 
     // Admit concatenation copies while the original batches are retained.
     // Arrow keeps a single batch as an inexpensive slice.
-    let copy_bytes = if prepared && batches.len() > 1 {
-        let bytes = batches.iter().try_fold(0usize, |total, batch| {
-            total
-                .checked_add(prepared::prepared_copy_bytes(batch)?)
-                .ok_or_else(|| {
-                    datafusion_common::exec_datafusion_err!(
-                        "Prepared hash-join copy size overflow"
-                    )
-                })
-        })?;
-        reservation.try_grow(bytes)?;
-        bytes
+    if prepared && batches.len() > 1 {
+        reservation.try_grow(copy_bytes)?;
     } else {
-        0
-    };
+        copy_bytes = 0;
+    }
 
     // Compute bounds
     let mut bounds = match bounds_accumulators {
@@ -3166,43 +3187,16 @@ async fn collect_left_input(
         let mut hashmap = new_join_hashmap(num_rows, &mut reservation, &metrics)?;
 
         let scratch_reservation = reservation.new_empty();
-        let mut hashes_buffer = if prepared {
-            let rows = batches.iter().map(RecordBatch::num_rows).max().unwrap_or(0);
-            // Combining nullable keys can hold an old and a new validity
-            // bitmap at once. NullArray also materializes logical validity.
-            let mask_count = if null_equality == NullEquality::NullEqualsNothing {
-                let null_keys = on_left
-                    .iter()
-                    .filter(|key| {
-                        key.downcast_ref::<Column>().is_some_and(|column| {
-                            schema.field(column.index()).data_type() == &DataType::Null
-                        })
-                    })
-                    .count();
-                null_keys + if on_left.len() > 1 { 2 } else { 0 }
-            } else {
-                0
-            };
-            let validity_bytes = rows
-                .div_ceil(8)
-                .checked_add(64)
-                .and_then(|bytes| bytes.checked_mul(mask_count));
-            let bytes = rows
-                .checked_mul(size_of::<u64>())
-                .and_then(|bytes| {
-                    validity_bytes.and_then(|validity| bytes.checked_add(validity))
-                })
-                .ok_or_else(|| {
-                    datafusion_common::exec_datafusion_err!(
-                        "Prepared hash-join scratch size overflow"
-                    )
-                })?;
-            scratch_reservation.try_grow(bytes)?;
-            // Avoid geometric Vec growth exceeding the admitted maximum.
-            Vec::with_capacity(rows)
-        } else {
-            Vec::new()
-        };
+        if prepared {
+            scratch_reservation.try_grow(prepared::hash_scratch_bytes(
+                max_batch_rows,
+                &on_left,
+                &schema,
+                null_equality,
+            )?)?;
+        }
+        // The maximum is known: avoid geometric growth and its excess capacity.
+        let mut hashes_buffer = Vec::with_capacity(max_batch_rows);
         let mut offset = 0;
 
         // Updating hashmap starting from the last batch

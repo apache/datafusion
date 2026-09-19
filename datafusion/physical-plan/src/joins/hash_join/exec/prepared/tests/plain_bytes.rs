@@ -150,17 +150,12 @@ async fn prepared_plain_bytes_copy_admission_counts_aliases_and_releases_errors(
     assert!(copy >= 2 * HIDDEN);
     let retained = get_record_batch_memory_size(&build);
     let base = join(build.schema(), build.slice(1, 1))?;
-    let denied: Arc<dyn MemoryPool> =
-        Arc::new(GreedyMemoryPool::new(retained + 2 * copy - 1));
-    let error = prepare(
+    assert_admission_denied(
         &base,
         vec![build.clone(), build.clone()],
-        Arc::clone(&denied),
+        retained + 2 * copy - 1,
     )
-    .await
-    .unwrap_err();
-    assert!(error.to_string().contains("Resources exhausted"));
-    assert_eq!(denied.reserved(), 0);
+    .await;
     let funded: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1 << 20));
     let prepared =
         prepare(&base, vec![build.clone(), build], Arc::clone(&funded)).await?;

@@ -18,6 +18,7 @@
 //! Explicit immutable build reuse for embedding executors.
 
 use super::*;
+use crate::spill::spill_manager::GetSlicedSize;
 use arrow::array::{Array, AsArray};
 use datafusion_common::exec_datafusion_err;
 use datafusion_execution::memory_pool::MemoryPool;
@@ -76,6 +77,8 @@ impl PreparedHashJoinBuild {
             null_indices_bitmap: Mutex::new(BooleanBufferBuilder::new(0)),
             probe_completion: ProbeCompletion::new(probe_threads),
             build_side_has_null: false,
+            // INNER needs no bitmap. Any future mutable probe allocation must
+            // use the consuming task's pool instead of the durable build pool.
             _probe_reservation: self.build.reservation.new_empty(),
         }
     }
@@ -112,22 +115,57 @@ impl PreparedHashJoinBuild {
 }
 
 impl HashJoinExec {
-    /// Prepare one immutable build using an embedding executor's durable pool.
+    /// Prepare the supplied build snapshot using an embedding executor's durable pool.
     ///
-    /// The supplied stream must own its native buffers independently of producer
-    /// task cleanup. This method consumes only that stream, never `self.left`,
-    /// and reserves retained data, hash buckets and row-index chains against
-    /// `pool`. The caller must keep original producer allocations charged until
-    /// its stream releases them. `config` controls ordinary perfect-map and
-    /// dynamic-filter choices. UTF-8 and fixed-size binary keys
-    /// retain hash membership only:
-    /// range bounds and IN-list literals would allocate unaccounted key copies.
+    /// The caller owns snapshot identity: this consumes `input`, never `self.left`.
+    /// Schema and key compatibility cannot establish that two inputs contain the
+    /// same data. Attaching the wrong snapshot can silently change query results.
     ///
-    /// Validates eligibility and the stream schema before polling. On error or
-    /// future cancellation, all work and reservations are dropped; no partially
-    /// prepared object is returned. Concurrent preparation/cache publication is
-    /// the caller's responsibility. Bounds and membership are prepared once, but
-    /// each consuming join publishes them into its own dynamic filter.
+    /// # Caller contract
+    ///
+    /// * Input buffers must remain valid independently of producer task cleanup.
+    ///   Keep producer allocations charged until the stream releases them.
+    /// * Supply a pool whose lifetime covers every consumer. It accounts for
+    ///   retained input, hash storage, and preparation's copy/scratch buffers.
+    /// * Coordinate concurrent preparation, publication, and invalidation in the
+    ///   embedding executor. This method does not provide a cache.
+    ///
+    /// Eligibility and stream schema are checked before polling. Errors and
+    /// cancellation drop the work and its reservations without publishing a build.
+    /// `config` controls perfect-map and dynamic-filter choices. UTF-8 and
+    /// fixed-size binary keys use hash membership to avoid copying byte payloads
+    /// into range bounds and IN-list literals. Numeric IN-lists also allocate
+    /// per-row literals when published; that consumer-local filter state is
+    /// outside this reservation. The IN-list size setting measures input array
+    /// bytes, not the resulting expression's heap usage.
+    ///
+    /// # Example
+    ///
+    /// Given two independently planned, compatible joins over different probe
+    /// inputs, a service can prepare one dimension snapshot for both consumers.
+    ///
+    /// ```no_run
+    /// # use std::sync::Arc;
+    /// # use datafusion_common::{Result, config::ConfigOptions};
+    /// # use datafusion_execution::memory_pool::MemoryPool;
+    /// # use datafusion_physical_plan::SendableRecordBatchStream;
+    /// # use datafusion_physical_plan::joins::HashJoinExec;
+    /// # async fn example(first_join: HashJoinExec, second_join: HashJoinExec,
+    /// #     dimension_snapshot: SendableRecordBatchStream,
+    /// #     durable_pool: Arc<dyn MemoryPool>, config: Arc<ConfigOptions>) -> Result<()> {
+    /// let prepared = first_join
+    ///     .prepare_build(dimension_snapshot, durable_pool, config)
+    ///     .await?;
+    /// let first = first_join.builder()
+    ///     .with_prepared_build(Arc::clone(&prepared))
+    ///     .build()?;
+    /// let second = second_join.builder()
+    ///     .with_prepared_build(prepared)
+    ///     .build()?;
+    /// # let _ = (first, second);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn prepare_build(
         &self,
         input: SendableRecordBatchStream,
@@ -174,7 +212,7 @@ impl HashJoinExec {
             self.null_equality,
             None,
             count,
-            true,
+            BuildMode::Prepared,
         )
         .await?;
         Ok(Arc::new(PreparedHashJoinBuild {
@@ -188,30 +226,59 @@ impl HashJoinExec {
 /// Bound copy allocations, including validity, offsets and alignment. Aliased
 /// columns count separately because concatenation materializes each column.
 pub(super) fn prepared_copy_bytes(batch: &RecordBatch) -> Result<usize> {
-    let rows = batch.num_rows();
-    batch.columns().iter().try_fold(0usize, |total, array| {
-        let values = match array.data_type() {
-            DataType::Utf8 => rows
-                .checked_add(1)
-                .and_then(|len| len.checked_mul(4))
-                .and_then(|offsets| utf8_value_span(array.as_ref()).checked_add(offsets))
-                // UTF-8 has a third allocation for offsets.
-                .and_then(|bytes| bytes.checked_add(64)),
-            DataType::Null => Some(0),
-            DataType::Boolean => Some(rows.div_ceil(8)),
-            DataType::FixedSizeBinary(width) => usize::try_from(*width)
-                .ok()
-                .and_then(|width| width.checked_mul(rows)),
-            ty => ty
-                .primitive_width()
-                .and_then(|width| width.checked_mul(rows)),
-        };
-        values
-            .and_then(|bytes| bytes.checked_add(rows.div_ceil(8)))
-            .and_then(|bytes| bytes.checked_add(2 * 64))
-            .and_then(|bytes| total.checked_add(bytes))
-            .ok_or_else(|| exec_datafusion_err!("Prepared hash-join copy size overflow"))
-    })
+    // Concat can materialize validity for an all-valid input when another input
+    // contains nulls. Arrow's slice measurement only counts existing bitmaps.
+    let missing_validity = batch
+        .columns()
+        .iter()
+        .filter(|array| array.nulls().is_none())
+        .count();
+    // These are flat arrays: allow one alignment unit for each physical buffer
+    // and a potential validity buffer, whether or not the input has one.
+    let buffers = batch
+        .columns()
+        .iter()
+        .map(|array| array.to_data().buffers().len() + 1)
+        .sum::<usize>();
+    let validity = batch.num_rows().div_ceil(8).checked_mul(missing_validity);
+    batch
+        .get_sliced_size()?
+        .checked_add(validity.ok_or_else(|| {
+            exec_datafusion_err!("Prepared hash-join copy size overflow")
+        })?)
+        .and_then(|bytes| buffers.checked_mul(64)?.checked_add(bytes))
+        .ok_or_else(|| exec_datafusion_err!("Prepared hash-join copy size overflow"))
+}
+
+/// Admit hashing and the logical validity masks created by `matchable_join_keys`.
+/// NullArray materializes its mask; combining keys can retain an old and a new
+/// union result. Keep this bound in sync with that helper's temporary buffers.
+pub(super) fn hash_scratch_bytes(
+    rows: usize,
+    on_left: &[PhysicalExprRef],
+    schema: &Schema,
+    null_equality: NullEquality,
+) -> Result<usize> {
+    let mask_count = if null_equality == NullEquality::NullEqualsNothing {
+        let null_keys = on_left
+            .iter()
+            .filter(|key| {
+                key.downcast_ref::<Column>().is_some_and(|column| {
+                    schema.field(column.index()).data_type() == &DataType::Null
+                })
+            })
+            .count();
+        null_keys + if on_left.len() > 1 { 2 } else { 0 }
+    } else {
+        0
+    };
+    let validity_bytes = rows
+        .div_ceil(8)
+        .checked_add(64)
+        .and_then(|bytes| bytes.checked_mul(mask_count));
+    rows.checked_mul(size_of::<u64>())
+        .and_then(|bytes| validity_bytes.and_then(|validity| bytes.checked_add(validity)))
+        .ok_or_else(|| exec_datafusion_err!("Prepared hash-join scratch size overflow"))
 }
 
 /// Include values hidden by nulls but exclude bytes outside a sliced array.
@@ -242,21 +309,23 @@ pub(super) fn check_byte_concat_sizes(
 impl HashJoinExecBuilder {
     /// Attach a fully prepared build to a fresh, compatible join execution.
     ///
-    /// [`Self::build`] validates compatibility. Attaching resets the build future
-    /// and execution metrics. A previously attached task-local dynamic filter
-    /// keeps its expression handle (also referenced by the probe plan), while
-    /// its build-report accumulator is reset. The caller must provide a fresh
-    /// filter expression/probe plan for each independent task.
-    /// Residual filters also remain consumer-local, so compatible INNER joins
-    /// may use different predicates with the same prepared data.
-    /// The resulting join plan retains the build lease. A caller retaining a
-    /// dynamic-filter expression beyond that plan must retain a prepared-build
-    /// lease alongside it, because membership filters can reference build data.
-    /// Attach after child-rewriting physical optimizations. The unused left
-    /// subtree is replaced with an empty schema placeholder so plan resets
-    /// preserve it. Probe-only rewrites must retain the attached join's `left()`.
-    /// Replacing that child or changing to incompatible join keys fails; other
-    /// incompatible join-mode/type changes fail validation in `build`.
+    /// [`Self::build`] checks schema, keys, null equality, and supported join modes.
+    /// Attaching resets execution state and replaces the unused left subtree with
+    /// an empty schema placeholder. Residual predicates remain consumer-local.
+    ///
+    /// # Caller contract
+    ///
+    /// * Choose the correct build snapshot; compatibility checks do not verify
+    ///   input identity. See [`HashJoinExec::prepare_build`].
+    /// * Supply fresh dynamic-filter expressions and probe plans for independent
+    ///   executions. An existing expression handle is preserved for its probe
+    ///   consumers, while the build-report accumulator is reset.
+    /// * Retain a prepared-build lease if a dynamic-filter expression outlives
+    ///   this plan. Its array/map references preserve allocation lifetime, but
+    ///   the lease is what preserves the corresponding memory charge.
+    /// * Attach after physical optimizations that rewrite the build child.
+    ///   Probe-only rewrites must preserve the attached join's `left()`; replacing
+    ///   it or making incompatible key, mode, or join-type changes fails.
     pub fn with_prepared_build(mut self, prepared: Arc<PreparedHashJoinBuild>) -> Self {
         // This removes the ignored child's ordering/equivalences and preserves
         // its identity through plan resets.
