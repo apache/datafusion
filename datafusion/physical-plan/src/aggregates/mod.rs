@@ -191,7 +191,7 @@ use datafusion_common::{
     assert_eq_or_internal_err, internal_err, not_impl_err,
 };
 use datafusion_execution::TaskContext;
-use datafusion_expr::{Accumulator, Aggregate};
+use datafusion_expr::{Accumulator, Aggregate, AggregateMetrics};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
@@ -1033,6 +1033,8 @@ impl AggregateExec {
         let required_input_ordering =
             LexRequirement::new(new_requirements).map(OrderingRequirements::new_soft);
 
+        // Constant expressions never change, so they cannot mark a completed group.
+        // Exclude them from both the ordering indices and the group expression count.
         // If our aggregation has grouping sets then our base grouping exprs will
         // be expanded based on the flags in `group_by.groups` where for each
         // group we swap the grouping expr for `null` if the flag is `true`
@@ -1041,9 +1043,18 @@ impl AggregateExec {
         let indices: Vec<usize> = indices
             .into_iter()
             .filter(|idx| group_by.groups.iter().all(|group| !group[*idx]))
+            .filter(|idx| {
+                input_eq_properties
+                    .is_expr_constant(&groupby_exprs[*idx])
+                    .is_none()
+            })
             .collect();
 
-        let mut input_order_mode = if indices.len() == groupby_exprs.len()
+        let num_non_constant_groupby_exprs = groupby_exprs
+            .iter()
+            .filter(|expr| input_eq_properties.is_expr_constant(expr).is_none())
+            .count();
+        let mut input_order_mode = if indices.len() == num_non_constant_groupby_exprs
             && !indices.is_empty()
             && group_by.groups.len() == 1
         {
@@ -3002,6 +3013,18 @@ pub fn create_accumulators(
         .collect()
 }
 
+pub(crate) fn create_accumulators_with_metrics(
+    aggr_expr: &[Arc<AggregateFunctionExpr>],
+    aggregate_metrics: &[Arc<dyn AggregateMetrics>],
+) -> Result<Vec<AccumulatorItem>> {
+    debug_assert_eq!(aggr_expr.len(), aggregate_metrics.len());
+    aggr_expr
+        .iter()
+        .zip(aggregate_metrics)
+        .map(|(expr, metrics)| expr.create_accumulator_with_metrics(Arc::clone(metrics)))
+        .collect()
+}
+
 /// returns a vector of ArrayRefs, where each entry corresponds to either the
 /// final value (mode = Final, FinalPartitioned and Single) or states (mode = Partial)
 pub fn finalize_aggregation(
@@ -3226,20 +3249,23 @@ mod tests {
         BlockingExec, PanicExec, StatisticsExec, assert_strong_count_converges_to_zero,
     };
 
+    use arrow::array::AsArray;
     use arrow::array::{
         BooleanArray, DictionaryArray, Float32Array, Float64Array, Int32Array,
-        Int64Array, NullArray, StructArray, UInt32Array, UInt64Array,
+        Int64Array, NullArray, StringArray, StructArray, UInt32Array, UInt64Array,
     };
     use arrow::compute::{SortOptions, concat_batches};
-    use arrow::datatypes::Int32Type;
+    use arrow::datatypes::{Int32Type, Int64Type};
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{DataFusionError, internal_err};
     use datafusion_execution::config::SessionConfig;
-    use datafusion_execution::memory_pool::FairSpillPool;
+    use datafusion_execution::memory_pool::{
+        FairSpillPool, MemoryPool, PeakRecordingPool,
+    };
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
     use datafusion_expr::{
-        Accumulator, AggregateUDF, AggregateUDFImpl, EmitTo, GroupsAccumulator,
+        Accumulator, AggregateUDF, AggregateUDFImpl, EmitTo, GroupsAccumulator, Operator,
         Signature, Volatility,
     };
     use datafusion_functions_aggregate::approx_percentile_cont::approx_percentile_cont_udaf;
@@ -3253,7 +3279,7 @@ mod tests {
     use datafusion_physical_expr::Partitioning;
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
-    use datafusion_physical_expr::expressions::{Literal, NotExpr};
+    use datafusion_physical_expr::expressions::{Literal, NotExpr, binary};
 
     use crate::projection::ProjectionExec;
     use crate::repartition::RepartitionExec;
@@ -3438,6 +3464,391 @@ mod tests {
                 .with_runtime(runtime)
                 .with_session_config(migrated_hash_session_config(batch_size)),
         ))
+    }
+
+    #[rstest::rstest]
+    #[case::single(AggregateMode::Single)]
+    #[case::final_stage(AggregateMode::Final)]
+    #[tokio::test]
+    async fn legacy_aggregate_spill_merge_leaves_memory_for_replay(
+        #[case] mode: AggregateMode,
+    ) -> Result<()> {
+        use arrow::array::ListArray;
+        use arrow::buffer::OffsetBuffer;
+
+        const KEYS: usize = 64;
+        const VALUES_PER_KEY: i64 = 64;
+        const MEMORY_LIMIT: usize = 8192;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int64, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".into())]);
+        let aggregates = vec![Arc::new(
+            AggregateExprBuilder::new(array_agg_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("values")
+                .build()?,
+        )];
+        let input_schema = if mode == AggregateMode::Single {
+            Arc::clone(&schema)
+        } else {
+            Arc::new(create_schema(
+                &schema,
+                &group_by,
+                &aggregates,
+                AggregateMode::Partial,
+            )?)
+        };
+        let mut batches = vec![];
+        // Each group grows across many one-row replay batches before it can be
+        // emitted. A merge that fills the allowance starves this state growth.
+        for value in 1..=VALUES_PER_KEY {
+            for key in (0..KEYS as i64).rev() {
+                let values: ArrayRef = Arc::new(Int64Array::from(vec![value]));
+                let values = if mode == AggregateMode::Single {
+                    values
+                } else {
+                    let DataType::List(field) = input_schema.field(1).data_type() else {
+                        unreachable!("ARRAY_AGG state must be a list")
+                    };
+                    Arc::new(ListArray::new(
+                        Arc::clone(field),
+                        OffsetBuffer::from_lengths([1]),
+                        values,
+                        None,
+                    )) as ArrayRef
+                };
+                batches.push(RecordBatch::try_new(
+                    Arc::clone(&input_schema),
+                    vec![Arc::new(Int64Array::from(vec![key])), values],
+                )?);
+            }
+        }
+        let input = TestMemoryExec::try_new_exec(&[batches], input_schema, None)?;
+        let aggregate = AggregateExec::try_new(
+            mode,
+            group_by,
+            aggregates,
+            vec![None],
+            input,
+            schema,
+        )?;
+        let pool = Arc::new(PeakRecordingPool::new(Arc::new(FairSpillPool::new(
+            MEMORY_LIMIT,
+        ))));
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(
+                    SessionConfig::new().with_batch_size(1).set_bool(
+                        "datafusion.execution.enable_migration_aggregate",
+                        false,
+                    ),
+                )
+                .with_runtime(
+                    RuntimeEnvBuilder::new()
+                        .with_memory_pool(Arc::clone(&pool) as Arc<dyn MemoryPool>)
+                        .build_arc()?,
+                ),
+        );
+        let stream = aggregate.execute_typed(0, &context)?;
+        assert!(matches!(stream, StreamType::GroupedHash(_)));
+        let output = collect(stream.into()).await?;
+        let mut seen = HashSet::new();
+        for batch in output {
+            assert!(
+                batch
+                    .columns()
+                    .iter()
+                    .all(|column| column.null_count() == 0)
+            );
+            let keys = batch.column(0).as_primitive::<Int64Type>();
+            let values = batch.column(1).as_list::<i32>();
+            for row in 0..batch.num_rows() {
+                let key = keys.value(row);
+                assert!((0..KEYS as i64).contains(&key));
+                assert!(seen.insert(key), "duplicate group");
+                let values = values.value(row);
+                assert_eq!(values.null_count(), 0);
+                let mut values = values.as_primitive::<Int64Type>().values().to_vec();
+                values.sort_unstable();
+                assert_eq!(values, (1..=VALUES_PER_KEY).collect::<Vec<_>>());
+            }
+        }
+        assert_eq!(seen.len(), KEYS);
+        assert!(aggregate.metrics().unwrap().spill_count().unwrap() > 1);
+        assert!(pool.peak_reserved() <= MEMORY_LIMIT);
+        assert_eq!(pool.reserved(), 0);
+        let progress = context.runtime_env().disk_manager.spilling_progress();
+        assert_eq!(progress.current_bytes, 0);
+        assert_eq!(progress.active_files_count, 0);
+        Ok(())
+    }
+
+    // This high-cardinality memory test would create quadratic collision scratch
+    // space; small group-value tests cover forced hash-collision correctness.
+    #[cfg(not(feature = "force_hash_collisions"))]
+    #[rstest::rstest]
+    #[case::final_hash(AggregateMode::Final, false)]
+    #[case::single_hash(AggregateMode::Single, false)]
+    #[case::ordered_final(AggregateMode::Final, true)]
+    #[case::ordered_single(AggregateMode::Single, true)]
+    #[tokio::test]
+    async fn migrated_aggregate_spill_merge_leaves_memory_for_replay(
+        #[case] mode: AggregateMode,
+        #[case] ordered: bool,
+        #[values(false, true)] with_peer: bool,
+    ) -> Result<()> {
+        use arrow::array::{ListArray, StringArray};
+        use arrow::buffer::OffsetBuffer;
+        use datafusion_execution::memory_pool::MemoryConsumer;
+
+        const BATCH_SIZE: usize = 8192;
+        const KEYS_PER_PREFIX: usize = 25 * BATCH_SIZE;
+        const MEMORY_LIMIT: usize = 2 * 1024 * 1024;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("prefix", DataType::Int64, false),
+            Field::new("key", DataType::Int64, false),
+            Field::new("value", DataType::Utf8, false),
+        ]));
+        let group_by = PhysicalGroupBy::new_single(vec![
+            (col("prefix", &schema)?, "prefix".to_string()),
+            (col("key", &schema)?, "key".to_string()),
+        ]);
+        let aggregates = vec![Arc::new(
+            AggregateExprBuilder::new(array_agg_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("values")
+                .build()?,
+        )];
+        let input_schema = if mode == AggregateMode::Single {
+            Arc::clone(&schema)
+        } else {
+            Arc::new(create_schema(
+                &schema,
+                &group_by,
+                &aggregates,
+                AggregateMode::Partial,
+            )?)
+        };
+        let mut batches = vec![];
+        for prefix in 0..2 {
+            // Repeat every key across spill runs. Only the prefix is ordered;
+            // the second pass restarts the descending key sequence.
+            for value in 1..=2 {
+                for start in (0..KEYS_PER_PREFIX).step_by(BATCH_SIZE).rev() {
+                    let values: ArrayRef =
+                        Arc::new(StringArray::from(vec![
+                            format!("{value:08}");
+                            BATCH_SIZE
+                        ]));
+                    // Final takes singleton ARRAY_AGG states rather than raw strings.
+                    let values = if mode == AggregateMode::Single {
+                        values
+                    } else {
+                        let DataType::List(field) = input_schema.field(2).data_type()
+                        else {
+                            unreachable!("ARRAY_AGG state must be a list")
+                        };
+                        Arc::new(ListArray::new(
+                            Arc::clone(field),
+                            OffsetBuffer::from_lengths(std::iter::repeat_n(
+                                1, BATCH_SIZE,
+                            )),
+                            values,
+                            None,
+                        )) as ArrayRef
+                    };
+                    batches.push(RecordBatch::try_new(
+                        Arc::clone(&input_schema),
+                        vec![
+                            Arc::new(Int64Array::from(vec![prefix; BATCH_SIZE])),
+                            Arc::new(Int64Array::from_iter_values(
+                                (start..start + BATCH_SIZE).rev().map(|key| key as i64),
+                            )),
+                            values,
+                        ],
+                    )?);
+                }
+            }
+        }
+
+        let mut input =
+            TestMemoryExec::try_new(&[batches], Arc::clone(&input_schema), None)?;
+        if ordered {
+            input = input.try_with_sort_information(vec![
+                LexOrdering::new([PhysicalSortExpr::new_default(col(
+                    "prefix", &schema,
+                )?)])
+                .unwrap(),
+            ])?;
+        }
+        let aggregate = AggregateExec::try_new(
+            mode,
+            group_by,
+            aggregates,
+            vec![None],
+            Arc::new(input),
+            Arc::clone(&schema),
+        )?;
+        // Keep the aggregate's allowance at 2 MiB even with a second consumer.
+        // Falling back to half the global limit would consume its entire share.
+        let pool_limit = MEMORY_LIMIT * if with_peer { 2 } else { 1 };
+        let pool = Arc::new(PeakRecordingPool::new(Arc::new(FairSpillPool::new(
+            pool_limit,
+        ))));
+        let memory_pool = Arc::clone(&pool) as Arc<dyn MemoryPool>;
+        let _peer = with_peer.then(|| {
+            MemoryConsumer::new("other spilling operator")
+                .with_can_spill(true)
+                .register(&memory_pool)
+        });
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(migrated_hash_session_config(BATCH_SIZE))
+                .with_runtime(
+                    RuntimeEnvBuilder::new()
+                        .with_memory_pool(memory_pool)
+                        .build_arc()?,
+                ),
+        );
+        let stream = aggregate.execute_typed(0, &context)?;
+        match (mode, ordered, &stream) {
+            (AggregateMode::Final, false, StreamType::FinalHash(_))
+            | (AggregateMode::Single, false, StreamType::SingleHash(_)) => {}
+            (AggregateMode::Final, true, StreamType::OrderedFinalAggregate(_))
+            | (AggregateMode::Single, true, StreamType::OrderedSingleAggregate(_)) => {
+                assert_eq!(
+                    aggregate.input_order_mode(),
+                    &InputOrderMode::PartiallySorted(vec![0])
+                );
+            }
+            _ => panic!("unexpected stream for {mode:?}, ordered={ordered}"),
+        }
+        let result = collect(stream.into()).await.unwrap_or_else(|error| {
+            panic!("{mode:?}, ordered={ordered}, with_peer={with_peer}: {error}")
+        });
+        let mut seen = HashSet::new();
+        for batch in &result {
+            assert!(
+                batch
+                    .columns()
+                    .iter()
+                    .all(|column| column.null_count() == 0)
+            );
+            let columns = batch
+                .columns()
+                .iter()
+                .take(2)
+                .map(|column| column.as_primitive::<Int64Type>())
+                .collect::<Vec<_>>();
+            let values = batch.column(2).as_list::<i32>();
+            for row in 0..batch.num_rows() {
+                let prefix = columns[0].value(row);
+                let key = columns[1].value(row);
+                assert!((0..2).contains(&prefix));
+                assert!((0..KEYS_PER_PREFIX as i64).contains(&key));
+                let values = values.value(row);
+                assert_eq!(values.len(), 2);
+                assert_eq!(values.null_count(), 0);
+                let values = values.as_string::<i32>();
+                let mut values = [values.value(0), values.value(1)];
+                values.sort_unstable();
+                assert_eq!(values, ["00000001", "00000002"]);
+                assert!(seen.insert((prefix, key)), "duplicate group");
+            }
+        }
+        assert_eq!(seen.len(), 2 * KEYS_PER_PREFIX);
+        assert!(pool.peak_reserved() <= MEMORY_LIMIT);
+        let metrics = aggregate.metrics().unwrap();
+        assert!(metrics.spill_count().unwrap() > 1);
+        assert!(metrics.spilled_rows().unwrap() > 0);
+        assert!(metrics.spilled_bytes().unwrap() > 0);
+        assert_eq!(context.memory_pool().reserved(), 0);
+        let progress = context.runtime_env().disk_manager.spilling_progress();
+        assert_eq!(progress.current_bytes, 0);
+        assert_eq!(progress.active_files_count, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn migrated_aggregate_spill_merge_allows_indivisible_rows() -> Result<()> {
+        use arrow::array::StringArray;
+        use datafusion_execution::memory_pool::GreedyMemoryPool;
+
+        const KEY_BYTES: usize = 350_000;
+        const GROUPS: usize = 24;
+        const MEMORY_LIMIT: usize = 5 * 1024 * 1024 / 2;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+        let mut batches = Vec::new();
+        for _ in 0..2 {
+            for key in (0..GROUPS).rev() {
+                batches.push(RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(StringArray::from(vec![format!(
+                            "{key:02}{}",
+                            "x".repeat(KEY_BYTES - 2)
+                        )])),
+                        Arc::new(Int64Array::from(vec![1])),
+                    ],
+                )?);
+            }
+        }
+        let input = TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None)?;
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new_single(vec![(col("key", &schema)?, "key".into())]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("value", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("sum")
+                    .build()?,
+            )],
+            vec![None],
+            Arc::new(input),
+            schema,
+        )?;
+        let pool = Arc::new(PeakRecordingPool::new(Arc::new(GreedyMemoryPool::new(
+            MEMORY_LIMIT,
+        ))));
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(migrated_hash_session_config(1))
+                .with_runtime(
+                    RuntimeEnvBuilder::new()
+                        .with_memory_pool(Arc::clone(&pool) as Arc<dyn MemoryPool>)
+                        .build_arc()?,
+                ),
+        );
+
+        // Two one-row spill inputs need 1,400,064 bytes for merge buffers, more
+        // than half the pool. They cannot shrink, but merge plus replay fits.
+        let result = collect(aggregate.execute(0, Arc::clone(&context))?).await?;
+        let mut seen = HashSet::new();
+        for batch in result {
+            let keys = batch.column(0).as_string::<i32>();
+            let sums = batch.column(1).as_primitive::<Int64Type>();
+            for row in 0..batch.num_rows() {
+                let key = keys.value(row);
+                assert_eq!(key.len(), KEY_BYTES);
+                let group = key[..2].parse::<usize>().unwrap();
+                assert!(group < GROUPS && seen.insert(group));
+                assert_eq!(sums.value(row), 2);
+            }
+        }
+        assert_eq!(seen.len(), GROUPS);
+        assert!(aggregate.metrics().unwrap().spill_count().unwrap() > 1);
+        assert!(pool.peak_reserved() <= MEMORY_LIMIT);
+        assert_eq!(pool.reserved(), 0);
+        let progress = context.runtime_env().disk_manager.spilling_progress();
+        assert_eq!(progress.current_bytes, 0);
+        assert_eq!(progress.active_files_count, 0);
+        Ok(())
     }
 
     async fn check_grouping_sets(
@@ -4693,6 +5104,87 @@ mod tests {
             "partial reduce advertised an ordering it does not maintain: {:?}",
             partial_reduce.properties().output_ordering()
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn constant_grouping_expr_is_not_a_completion_boundary() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, true),
+            Field::new("market", DataType::Utf8, true),
+            Field::new("value", DataType::Int64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![None, Some(10), Some(10)])),
+                Arc::new(StringArray::from(vec![Some("US"), Some("US"), Some("US")])),
+                Arc::new(Int64Array::from(vec![3, 1, 2])),
+            ],
+        )?;
+
+        let build_aggregate = |input: Arc<dyn ExecutionPlan>| -> Result<AggregateExec> {
+            let predicate =
+                binary(col("market", &schema)?, Operator::Eq, lit("US"), &schema)?;
+            let input = Arc::new(FilterExecBuilder::new(predicate, input).build()?);
+            AggregateExec::try_new(
+                AggregateMode::Single,
+                PhysicalGroupBy::new_single(vec![
+                    (col("key", &schema)?, "key".to_string()),
+                    (col("market", &schema)?, "market".to_string()),
+                ]),
+                vec![Arc::new(
+                    AggregateExprBuilder::new(count_udaf(), vec![col("value", &schema)?])
+                        .schema(Arc::clone(&schema))
+                        .alias("COUNT(value)")
+                        .build()?,
+                )],
+                vec![None],
+                input,
+                Arc::clone(&schema),
+            )
+        };
+
+        let unordered_input = TestMemoryExec::try_new_exec(
+            &[vec![batch.clone()]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let aggregate = build_aggregate(unordered_input)?;
+        assert_eq!(aggregate.input_order_mode(), &InputOrderMode::Linear);
+        assert_eq!(
+            aggregate.schema().as_ref(),
+            &Schema::new(vec![
+                Field::new("key", DataType::Int32, true),
+                Field::new("market", DataType::Utf8, true),
+                Field::new("COUNT(value)", DataType::Int64, false),
+            ])
+        );
+
+        let output =
+            collect(aggregate.execute(0, Arc::new(TaskContext::default()))?).await?;
+        assert_eq!(output.iter().map(RecordBatch::num_rows).sum::<usize>(), 2);
+        assert_snapshot!(batches_to_sort_string(&output), @r"
++-----+--------+--------------+
+| key | market | COUNT(value) |
++-----+--------+--------------+
+|     | US     | 1            |
+| 10  | US     | 2            |
++-----+--------+--------------+
+");
+
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(
+            Column::new("key", 0),
+        ))])
+        .unwrap();
+        let ordered_input =
+            TestMemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None)?
+                .try_with_sort_information(vec![ordering])?;
+        let ordered_input =
+            Arc::new(TestMemoryExec::update_cache(&Arc::new(ordered_input)));
+        let aggregate = build_aggregate(ordered_input)?;
+        assert_eq!(aggregate.input_order_mode(), &InputOrderMode::Sorted);
 
         Ok(())
     }
@@ -6584,7 +7076,10 @@ mod tests {
             ");
                 }
             }
-            Err(e) => assert!(matches!(e, DataFusionError::ResourcesExhausted(_))),
+            Err(e) => assert!(
+                matches!(e.find_root(), DataFusionError::ResourcesExhausted(_)),
+                "unexpected error: {e}"
+            ),
         }
 
         Ok(())
@@ -7408,32 +7903,22 @@ mod tests {
             Field::new("c", DataType::Int64, false),
         ]));
 
-        let batches = vec![vec![
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int64Array::from(vec![2])),
-                    Arc::new(Int64Array::from(vec![2])),
-                    Arc::new(Int64Array::from(vec![1])),
-                ],
-            )?,
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int64Array::from(vec![1])),
-                    Arc::new(Int64Array::from(vec![1])),
-                    Arc::new(Int64Array::from(vec![1])),
-                ],
-            )?,
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int64Array::from(vec![0])),
-                    Arc::new(Int64Array::from(vec![0])),
-                    Arc::new(Int64Array::from(vec![1])),
-                ],
-            )?,
-        ]];
+        let mut descending_batches = Vec::new();
+        for ordered_group in (0_i64..3).rev() {
+            // Multiple groups sharing the ordered prefix must remain in memory
+            // until its boundary, which forces an actual aggregation spill.
+            for unordered_group in 1_i64..=16 {
+                descending_batches.push(RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Int64Array::from(vec![ordered_group])),
+                        Arc::new(Int64Array::from(vec![ordered_group])),
+                        Arc::new(Int64Array::from(vec![unordered_group])),
+                    ],
+                )?);
+            }
+        }
+        let batches = vec![descending_batches];
         let scan = TestMemoryExec::try_new(&batches, Arc::clone(&schema), None)?;
         let scan = scan.try_with_sort_information(vec![
             LexOrdering::new([PhysicalSortExpr::new(
@@ -7465,30 +7950,40 @@ mod tests {
             Arc::clone(&schema),
         )?);
 
-        let task_ctx = new_migrated_spill_ctx(1, 600);
+        // The merge input and replay aggregate now share one allowance. Keep
+        // enough space for both while the additional groups still force spilling.
+        let task_ctx = new_migrated_spill_ctx(1, 1024);
         let result = collect(aggr.execute(0, Arc::clone(&task_ctx))?).await?;
+        assert_eq!(task_ctx.memory_pool().reserved(), 0);
         assert_spill_count_metric(true, Arc::clone(&aggr));
-        let metrics = aggr.metrics().unwrap();
-        for phase in ["update", "state", "merge", "evaluate"] {
-            let time = metrics
-                .sum_by_name(&format!("agg_expr_0_{phase}_time"))
-                .unwrap_or_else(|| {
-                    panic!("migrated single aggregate records {phase} time")
-                });
-            assert!(time.as_usize() > 0);
-        }
+        assert_accumulator_phase_times(&aggr, &["update", "state", "merge", "evaluate"]);
 
-        allow_duplicates! {
-            assert_snapshot!(batches_to_string(&result), @r"
-            +---+---+--------+
-            | b | c | SUM(c) |
-            +---+---+--------+
-            | 2 | 1 | 1      |
-            | 1 | 1 | 1      |
-            | 0 | 1 | 1      |
-            +---+---+--------+
-        ");
-        }
+        let batch = concat_batches(&result[0].schema(), &result)?;
+        assert!(
+            batch
+                .columns()
+                .iter()
+                .all(|column| column.null_count() == 0)
+        );
+        let columns = batch
+            .columns()
+            .iter()
+            .map(|column| column.as_primitive::<Int64Type>())
+            .collect::<Vec<_>>();
+        let actual = (0..batch.num_rows())
+            .map(|row| {
+                (
+                    columns[0].value(row),
+                    columns[1].value(row),
+                    columns[2].value(row),
+                )
+            })
+            .collect::<Vec<_>>();
+        let expected = (0_i64..3)
+            .rev()
+            .flat_map(|prefix| (1_i64..=16).map(move |key| (prefix, key, key)))
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
         Ok(())
     }
 

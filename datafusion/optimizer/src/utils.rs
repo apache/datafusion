@@ -31,7 +31,7 @@ use datafusion_expr::expr::{Exists, InSubquery, SetComparison};
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{
-    ColumnarValue, DistinctHandling, Expr, Volatility, logical_plan::LogicalPlan,
+    ColumnarValue, DistinctHandling, Expr, Volatility, WriteOp, logical_plan::LogicalPlan,
 };
 use datafusion_physical_expr::create_physical_expr;
 use log::{debug, trace};
@@ -84,6 +84,17 @@ pub(crate) fn is_duplicate_insensitive_aggregate(mut expr: &Expr) -> bool {
     ignores_duplicates
         && aggregate.func.signature().volatility != Volatility::Volatile
         && is_repeatable(expr)
+}
+
+/// Return the expression schema for a MERGE DML node.
+pub(crate) fn merge_into_schema(plan: &LogicalPlan) -> Result<Option<DFSchema>> {
+    let LogicalPlan::Dml(dml) = plan else {
+        return Ok(None);
+    };
+    let WriteOp::MergeInto(_) = &dml.op else {
+        return Ok(None);
+    };
+    dml.merge_schema().map(Some)
 }
 
 /// Invokes `f` with the index, within `schema`, of every column referenced by

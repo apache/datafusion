@@ -21,7 +21,7 @@ use crate::memory_pool::{
 use datafusion_common::HashMap;
 use datafusion_common::{DataFusionError, Result, resources_datafusion_err};
 use log::debug;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use std::fmt::{Display, Formatter};
 use std::{
     num::NonZeroUsize,
@@ -324,6 +324,18 @@ struct TrackedConsumer {
     can_spill: bool,
     reserved: AtomicUsize,
     peak: AtomicUsize,
+    #[cfg(test)]
+    grow_pause: Mutex<Option<GrowPause>>,
+}
+
+#[cfg(test)]
+const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+#[cfg(test)]
+#[derive(Debug)]
+struct GrowPause {
+    entered: std::sync::mpsc::Sender<()>,
+    resume: std::sync::mpsc::Receiver<()>,
 }
 
 impl TrackedConsumer {
@@ -340,8 +352,14 @@ impl TrackedConsumer {
     /// Grows the tracked consumer's reserved size,
     /// should be called after the pool has successfully performed the grow().
     fn grow(&self, additional: usize) {
-        self.reserved.fetch_add(additional, Ordering::Relaxed);
-        self.peak.fetch_max(self.reserved(), Ordering::Relaxed);
+        let reserved =
+            self.reserved.fetch_add(additional, Ordering::Relaxed) + additional;
+        #[cfg(test)]
+        if let Some(pause) = self.grow_pause.lock().take() {
+            pause.entered.send(()).unwrap();
+            pause.resume.recv_timeout(TEST_TIMEOUT).unwrap();
+        }
+        self.peak.fetch_max(reserved, Ordering::Relaxed);
     }
 
     /// Reduce the tracked consumer's reserved size,
@@ -407,8 +425,12 @@ pub struct TrackConsumersPool<I> {
     inner: I,
     /// The amount of consumers to report(ordered top to bottom by reservation size)
     top: NonZeroUsize,
-    /// Maps consumer_id --> TrackedConsumer
-    tracked_consumers: Mutex<HashMap<usize, TrackedConsumer>>,
+    /// Maps consumer_id --> TrackedConsumer.
+    ///
+    /// Reservation updates only read the map and update the atomics in
+    /// `TrackedConsumer`. Structural changes and snapshots take the exclusive
+    /// write lock so reports cannot observe a partially updated consumer.
+    tracked_consumers: RwLock<HashMap<usize, TrackedConsumer>>,
 }
 
 impl<I: MemoryPool> Display for TrackConsumersPool<I> {
@@ -476,7 +498,7 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
     /// Returns a snapshot of all currently tracked consumers.
     pub fn metrics(&self) -> Vec<MemoryConsumerMetrics> {
         self.tracked_consumers
-            .lock()
+            .write()
             .values()
             .map(Into::into)
             .collect()
@@ -486,7 +508,7 @@ impl<I: MemoryPool> TrackConsumersPool<I> {
     pub fn report_top(&self, top: usize) -> String {
         let mut consumers = self
             .tracked_consumers
-            .lock()
+            .write()
             .iter()
             .map(|(consumer_id, tracked_consumer)| {
                 (
@@ -525,7 +547,7 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
     fn register(&self, consumer: &MemoryConsumer) {
         self.inner.register(consumer);
 
-        let mut guard = self.tracked_consumers.lock();
+        let mut guard = self.tracked_consumers.write();
         let existing = guard.insert(
             consumer.id(),
             TrackedConsumer {
@@ -533,6 +555,8 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                 can_spill: consumer.can_spill(),
                 reserved: Default::default(),
                 peak: Default::default(),
+                #[cfg(test)]
+                grow_pause: Default::default(),
             },
         );
 
@@ -544,27 +568,29 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
 
     fn unregister(&self, consumer: &MemoryConsumer) {
         self.inner.unregister(consumer);
-        self.tracked_consumers.lock().remove(&consumer.id());
+        self.tracked_consumers.write().remove(&consumer.id());
     }
 
     fn grow(&self, reservation: &MemoryReservation, additional: usize) {
         self.inner.grow(reservation, additional);
-        self.tracked_consumers
-            .lock()
-            .entry(reservation.consumer().id())
-            .and_modify(|tracked_consumer| {
-                tracked_consumer.grow(additional);
-            });
+        if let Some(tracked_consumer) = self
+            .tracked_consumers
+            .read()
+            .get(&reservation.consumer().id())
+        {
+            tracked_consumer.grow(additional);
+        }
     }
 
     fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
         self.inner.shrink(reservation, shrink);
-        self.tracked_consumers
-            .lock()
-            .entry(reservation.consumer().id())
-            .and_modify(|tracked_consumer| {
-                tracked_consumer.shrink(shrink);
-            });
+        if let Some(tracked_consumer) = self
+            .tracked_consumers
+            .read()
+            .get(&reservation.consumer().id())
+        {
+            tracked_consumer.shrink(shrink);
+        }
     }
 
     fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
@@ -584,12 +610,13 @@ impl<I: MemoryPool> MemoryPool for TrackConsumersPool<I> {
                 _ => e,
             })?;
 
-        self.tracked_consumers
-            .lock()
-            .entry(reservation.consumer().id())
-            .and_modify(|tracked_consumer| {
-                tracked_consumer.grow(additional);
-            });
+        if let Some(tracked_consumer) = self
+            .tracked_consumers
+            .read()
+            .get(&reservation.consumer().id())
+        {
+            tracked_consumer.grow(additional);
+        }
         Ok(())
     }
 
@@ -937,6 +964,48 @@ mod tests {
         let metrics = track_consumers_pool.metrics();
         assert_eq!(metrics.len(), 1);
         assert_eq!(metrics[0].name, "spilling");
+    }
+
+    #[test]
+    fn test_track_consumers_pool_concurrent_peak() {
+        let track_consumers_pool = Arc::new(TrackConsumersPool::new(
+            GreedyMemoryPool::new(100),
+            NonZeroUsize::new(1).unwrap(),
+        ));
+        let memory_pool: Arc<dyn MemoryPool> = Arc::clone(&track_consumers_pool) as _;
+        let reservation_a = MemoryConsumer::new("shared").register(&memory_pool);
+        let reservation_b = reservation_a.new_empty();
+
+        reservation_b.grow(10);
+
+        // Pause A after the shared counter grows, then release B before A records the peak.
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+        track_consumers_pool
+            .tracked_consumers
+            .write()
+            .get_mut(&reservation_a.consumer().id())
+            .unwrap()
+            .grow_pause
+            .get_mut()
+            .replace(GrowPause {
+                entered: entered_tx,
+                resume: resume_rx,
+            });
+
+        std::thread::scope(|scope| {
+            let grow = scope.spawn(|| reservation_a.grow(10));
+            entered_rx.recv_timeout(TEST_TIMEOUT).unwrap();
+            reservation_b.shrink(10);
+            resume_tx.send(()).unwrap();
+            grow.join().unwrap();
+        });
+        reservation_a.shrink(10);
+
+        let metrics = track_consumers_pool.metrics();
+        assert_eq!(metrics.len(), 1);
+        assert_eq!(metrics[0].reserved, 0);
+        assert_eq!(metrics[0].peak, 20);
     }
 
     #[test]
