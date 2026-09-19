@@ -92,7 +92,8 @@ fn normalize_array(
         ) if source_key == target_key => {
             let compact = garbage_collect_any_dictionary(value.as_any_dictionary())?;
             let dictionary = compact.as_any_dictionary();
-            let values = normalize_array(dictionary.values(), target_value, true)?;
+            let values =
+                normalize_array(dictionary.values(), target_value, require_non_null)?;
             let dictionary = dictionary.with_values(values);
             if dictionary.null_count() == 0 && dictionary.to_data().nulls().is_some() {
                 let data = dictionary.to_data().into_builder().nulls(None).build()?;
@@ -1346,6 +1347,85 @@ mod tests {
         assert_accumulator_outputs(Arc::clone(&values), false, &["a", "a"])?;
         assert_accumulator_outputs(values, true, &["a"])?;
 
+        Ok(())
+    }
+
+    #[test]
+    fn nullable_nested_dictionary_preserves_logical_null_union_value() -> Result<()> {
+        let runtime_union_fields = UnionFields::try_new(
+            vec![4, 9],
+            vec![
+                Field::new("integer", DataType::Int32, false),
+                Field::new("null", DataType::Null, true),
+            ],
+        )?;
+        let declared_union_fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("integer", DataType::Int32, false),
+                Field::new("null", DataType::Null, false),
+            ],
+        )?;
+        let runtime_union = Arc::new(UnionArray::try_new(
+            runtime_union_fields,
+            ScalarBuffer::from(vec![4_i8, 9]),
+            None,
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), None])),
+                Arc::new(NullArray::new(2)),
+            ],
+        )?) as ArrayRef;
+        assert_eq!(runtime_union.logical_null_count(), 1);
+
+        let dictionary = Arc::new(DictionaryArray::<Int8Type>::try_new(
+            Int8Array::from(vec![0, 1]),
+            runtime_union,
+        )?) as ArrayRef;
+        assert_eq!(dictionary.logical_null_count(), 1);
+
+        let runtime_fields = Fields::from(vec![Field::new(
+            "optional",
+            dictionary.data_type().clone(),
+            true,
+        )]);
+        let values = Arc::new(StructArray::try_new(
+            runtime_fields,
+            vec![dictionary],
+            None,
+        )?) as ArrayRef;
+        let target_dictionary_type = DataType::Dictionary(
+            Box::new(DataType::Int8),
+            Box::new(DataType::Union(declared_union_fields, UnionMode::Sparse)),
+        );
+        let element_type = DataType::Struct(Fields::from(vec![Field::new(
+            "optional",
+            target_dictionary_type.clone(),
+            true,
+        )]));
+
+        let assert_output = |value: ScalarValue,
+                             expected_len: usize,
+                             expected_null_count: usize|
+         -> Result<()> {
+            let ScalarValue::List(array) = value else {
+                panic!("expected a list scalar")
+            };
+            let collected = array.value(0);
+            assert_eq!(collected.len(), expected_len);
+            let dictionary = collected.as_struct().column(0);
+            assert_eq!(dictionary.data_type(), &target_dictionary_type);
+            assert_eq!(dictionary.logical_null_count(), expected_null_count);
+            Ok(())
+        };
+
+        let mut accumulator = accumulator(&element_type, false)?;
+        accumulator.update_batch(std::slice::from_ref(&values))?;
+        assert_output(accumulator.evaluate()?, 2, 1)?;
+
+        accumulator.retract_batch(&[values.slice(0, 1)])?;
+        assert_output(accumulator.evaluate()?, 1, 1)?;
+        accumulator.retract_batch(&[values.slice(1, 1)])?;
+        assert_empty_list(&accumulator.evaluate()?);
         Ok(())
     }
 
