@@ -112,6 +112,46 @@ physical_plan
 04)------SortExec: TopK(fetch=5), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno], file_type=csv, has_header=true
 
+# Non-null offsets cannot be used as physical row counts for LIMIT pushdown.
+statement ok
+SET datafusion.optimizer.enable_window_limits = false;
+
+query III
+SELECT id,
+       LEAD(v) IGNORE NULLS OVER w,
+       LAG(v, -1, -1) IGNORE NULLS OVER w
+FROM (VALUES (1, 10), (2, NULL), (3, NULL), (4, 40)) AS t(id, v)
+WINDOW w AS (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+ORDER BY id
+LIMIT 1;
+----
+1 40 40
+
+statement ok
+SET datafusion.optimizer.enable_window_limits = true;
+
+query III
+SELECT id,
+       LEAD(v) IGNORE NULLS OVER w,
+       LAG(v, -1, -1) IGNORE NULLS OVER w
+FROM (VALUES (1, 10), (2, NULL), (3, NULL), (4, 40)) AS t(id, v)
+WINDOW w AS (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+ORDER BY id
+LIMIT 1;
+----
+1 40 40
+
+# Negative-offset LAG must also block pushdown when no LEAD is present.
+query II
+SELECT id, LAG(v, -1) IGNORE NULLS OVER (
+    ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+)
+FROM (VALUES (1, 10), (2, NULL), (3, NULL), (4, 40)) AS t(id, v)
+ORDER BY id
+LIMIT 1;
+----
+1 40
+
 # Should use the max of leads
 statement ok
 set datafusion.optimizer.enable_window_limits = false;
