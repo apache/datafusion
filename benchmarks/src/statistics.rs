@@ -41,8 +41,10 @@ use serde::{Deserialize, Serialize};
 
 /// Generate reports that compare planning statistics with runtime metrics.
 ///
-/// Parser options are captured when the run starts, so `SET` statements do not
-/// affect parsing in later query files.
+/// Parser options are refreshed before each query file is parsed, so `SET`
+/// statements affect later files. Because each file is parsed before any of its
+/// statements are executed, parser-setting changes do not affect later
+/// statements in the same file.
 #[derive(Debug, Args)]
 #[command(verbatim_doc_comment)]
 pub struct RunOpt {
@@ -68,7 +70,6 @@ impl RunOpt {
         let mut config = SessionConfig::from_env()?.with_collect_statistics(true);
         config.options_mut().optimizer.prefer_hash_join = true;
         let ctx = SessionContext::new_with_config(config);
-        let sql_parser_options = ctx.state().config_options().sql_parser.clone();
         register_parquet_files(&ctx, &self.path).await?;
 
         let branch = current_branch_name();
@@ -87,48 +88,8 @@ impl RunOpt {
 
         let mut reports = vec![];
         for query_path in query_files(&self.query_path, self.query.as_deref())? {
-            let query = query_path
-                .file_stem()
-                .expect("query file has a filename")
-                .to_string_lossy()
-                .to_string();
-            let sql = fs::read_to_string(query_path)?;
-            let statements = match sql_statements(&sql, &sql_parser_options) {
-                Ok(statements) => statements,
-                Err(error) => {
-                    let report = QueryReport {
-                        query: query.clone(),
-                        statement: 1,
-                        operators: vec![],
-                        success: false,
-                        error: Some(error.to_string()),
-                    };
-                    print_query_report(&report, previous.as_deref());
-                    reports.push(report);
-                    continue;
-                }
-            };
-            for (statement, sql) in statements.into_iter().enumerate() {
-                let statement = statement + 1;
-                let report = match self.report_statement(&ctx, sql).await {
-                    Ok(operators) => QueryReport {
-                        query: query.clone(),
-                        statement,
-                        operators,
-                        success: true,
-                        error: None,
-                    },
-                    Err(error) => QueryReport {
-                        query: query.clone(),
-                        statement,
-                        operators: vec![],
-                        success: false,
-                        error: Some(error.to_string()),
-                    },
-                };
-                print_query_report(&report, previous.as_deref());
-                reports.push(report);
-            }
+            self.report_query_file(&ctx, &query_path, previous.as_deref(), &mut reports)
+                .await?;
         }
         store_report(&result_path, &reports)?;
         print_q_error_summary(
@@ -137,6 +98,59 @@ impl RunOpt {
             &branch,
             &comparison_description,
         );
+        Ok(())
+    }
+
+    async fn report_query_file(
+        &self,
+        ctx: &SessionContext,
+        query_path: &Path,
+        previous: Option<&[QueryReport]>,
+        reports: &mut Vec<QueryReport>,
+    ) -> Result<()> {
+        let query = query_path
+            .file_stem()
+            .expect("query file has a filename")
+            .to_string_lossy()
+            .to_string();
+        let sql = fs::read_to_string(query_path)?;
+        let sql_parser_options = ctx.state().config_options().sql_parser.clone();
+        let statements = match sql_statements(&sql, &sql_parser_options) {
+            Ok(statements) => statements,
+            Err(error) => {
+                let report = QueryReport {
+                    query,
+                    statement: 1,
+                    operators: vec![],
+                    success: false,
+                    error: Some(error.to_string()),
+                };
+                print_query_report(&report, previous);
+                reports.push(report);
+                return Ok(());
+            }
+        };
+        for (statement, sql) in statements.into_iter().enumerate() {
+            let statement = statement + 1;
+            let report = match self.report_statement(ctx, sql).await {
+                Ok(operators) => QueryReport {
+                    query: query.clone(),
+                    statement,
+                    operators,
+                    success: true,
+                    error: None,
+                },
+                Err(error) => QueryReport {
+                    query: query.clone(),
+                    statement,
+                    operators: vec![],
+                    success: false,
+                    error: Some(error.to_string()),
+                },
+            };
+            print_query_report(&report, previous);
+            reports.push(report);
+        }
         Ok(())
     }
 
@@ -770,6 +784,80 @@ mod tests {
             .await
             .unwrap();
         assert!(!reports.is_empty());
+    }
+
+    async fn report_query_files(
+        options: &RunOpt,
+        ctx: &SessionContext,
+    ) -> Vec<QueryReport> {
+        let mut reports = vec![];
+        for path in query_files(&options.query_path, options.query.as_deref()).unwrap() {
+            options
+                .report_query_file(ctx, &path, None, &mut reports)
+                .await
+                .unwrap();
+        }
+        reports
+    }
+
+    #[tokio::test]
+    async fn refreshes_sql_dialect_between_query_files() {
+        let directory = tempdir().unwrap();
+        fs::write(
+            directory.path().join("01.sql"),
+            "SET datafusion.sql_parser.dialect = 'MySQL'",
+        )
+        .unwrap();
+        fs::write(directory.path().join("02.sql"), "# MySQL comment\nSELECT 1").unwrap();
+        let options = RunOpt {
+            query: None,
+            compare: None,
+            path: directory.path().to_path_buf(),
+            query_path: directory.path().to_path_buf(),
+        };
+
+        let reports = report_query_files(&options, &SessionContext::new()).await;
+
+        assert_eq!(reports.len(), 2);
+        assert!(reports.iter().all(|report| report.success));
+        assert_eq!(reports[1].query, "02");
+        assert!(!reports[1].operators.is_empty());
+    }
+
+    #[tokio::test]
+    async fn refreshes_parser_recursion_limit_between_query_files() {
+        let directory = tempdir().unwrap();
+        fs::write(
+            directory.path().join("01.sql"),
+            "SET datafusion.sql_parser.recursion_limit = 2",
+        )
+        .unwrap();
+        fs::write(
+            directory.path().join("02.sql"),
+            "SELECT (((((((((((1)))))))))))",
+        )
+        .unwrap();
+        let options = RunOpt {
+            query: None,
+            compare: None,
+            path: directory.path().to_path_buf(),
+            query_path: directory.path().to_path_buf(),
+        };
+
+        let reports = report_query_files(&options, &SessionContext::new()).await;
+
+        assert_eq!(reports.len(), 2);
+        assert!(reports[0].success);
+        assert!(!reports[1].success);
+        assert_eq!(reports[1].query, "02");
+        assert!(
+            reports[1]
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("RecursionLimitExceeded")),
+            "unexpected report: {:?}",
+            reports[1]
+        );
     }
 
     #[test]
