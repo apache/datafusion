@@ -48,6 +48,72 @@ SELECT 0.0 IS DISTINCT FROM -0.0 AS is_distinct;
 false
 
 #####
+## IN / NOT IN predicates
+#####
+
+statement ok
+CREATE TABLE negative_zero_in_list AS
+SELECT arrow_cast(0.0, 'Float16') AS positive_f16,
+       arrow_cast(0.0, 'Float32') AS positive_f32,
+       arrow_cast(0.0, 'Float64') AS positive_f64,
+       arrow_cast(-0.0, 'Float16') AS negative_f16,
+       arrow_cast(-0.0, 'Float32') AS negative_f32,
+       arrow_cast(-0.0, 'Float64') AS negative_f64,
+       arrow_cast(-0.0, 'Dictionary(Int32, Float64)') AS negative_dict_f64;
+
+# A three-item list is rewritten to comparisons, while a four-item list remains
+# an InList. All paths must implement the same signed-zero equality.
+query BBBB
+SELECT
+  positive_f64 IN (arrow_cast(-0.0, 'Float64'), arrow_cast(1.0, 'Float64'), arrow_cast(2.0, 'Float64')),
+  positive_f16 IN (arrow_cast(-0.0, 'Float16'), arrow_cast(1.0, 'Float16'), arrow_cast(2.0, 'Float16'), arrow_cast(3.0, 'Float16')),
+  positive_f32 IN (arrow_cast(-0.0, 'Float32'), arrow_cast(1.0, 'Float32'), arrow_cast(2.0, 'Float32'), arrow_cast(3.0, 'Float32')),
+  positive_f64 IN (arrow_cast(-0.0, 'Float64'), arrow_cast(1.0, 'Float64'), arrow_cast(2.0, 'Float64'), arrow_cast(3.0, 'Float64'))
+FROM negative_zero_in_list;
+----
+true true true true
+
+# Check the mirror direction for every floating-point width.
+query BBB
+SELECT
+  negative_f16 IN (arrow_cast(0.0, 'Float16'), arrow_cast(1.0, 'Float16'), arrow_cast(2.0, 'Float16'), arrow_cast(3.0, 'Float16')),
+  negative_f32 IN (arrow_cast(0.0, 'Float32'), arrow_cast(1.0, 'Float32'), arrow_cast(2.0, 'Float32'), arrow_cast(3.0, 'Float32')),
+  negative_f64 IN (arrow_cast(0.0, 'Float64'), arrow_cast(1.0, 'Float64'), arrow_cast(2.0, 'Float64'), arrow_cast(3.0, 'Float64'))
+FROM negative_zero_in_list;
+----
+true true true
+
+# NOT IN uses the same membership result before negation.
+query B
+SELECT
+  positive_f64 NOT IN (arrow_cast(-0.0, 'Float64'), arrow_cast(1.0, 'Float64'), arrow_cast(2.0, 'Float64'), arrow_cast(3.0, 'Float64'))
+FROM negative_zero_in_list;
+----
+false
+
+# Dictionary encoding must not change the result on either side of the rewrite
+# threshold. A one-item list becomes equality; a four-item list stays InList.
+query BB
+SELECT
+  negative_dict_f64 IN (arrow_cast(0.0, 'Float64')),
+  negative_dict_f64 IN (arrow_cast(0.0, 'Float64'), arrow_cast(1.0, 'Float64'), arrow_cast(2.0, 'Float64'), arrow_cast(3.0, 'Float64'))
+FROM negative_zero_in_list;
+----
+true true
+
+# A column-valued list item forces non-static evaluation. Check both directions.
+query BB
+SELECT
+  positive_f64 IN (negative_f64, arrow_cast(1.0, 'Float64'), arrow_cast(2.0, 'Float64'), arrow_cast(3.0, 'Float64')),
+  negative_f64 IN (positive_f64, arrow_cast(1.0, 'Float64'), arrow_cast(2.0, 'Float64'), arrow_cast(3.0, 'Float64'))
+FROM negative_zero_in_list;
+----
+true true
+
+statement ok
+DROP TABLE negative_zero_in_list;
+
+#####
 ## SELECT DISTINCT with +0.0 / -0.0 (Float64)
 #####
 
