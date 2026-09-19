@@ -3601,4 +3601,165 @@ mod tests {
 
         Ok(())
     }
+
+    /// `passthrough_column` tells `split_and_push_projection` which projection
+    /// expressions the input already produces. A renaming alias (`test.a AS b`)
+    /// does not qualify: it is a new output column. If the function accepted
+    /// it, the rename would count as captured, and the recovery projection
+    /// that restores the name would be dropped.
+    #[test]
+    fn test_passthrough_column_rejects_renaming_alias() {
+        // A bare column is a pass-through.
+        let bare = Expr::Column(Column::new(Some("test"), "a"));
+        assert_eq!(
+            passthrough_column(&bare).map(|c| c.flat_name()),
+            Some("test.a".to_string())
+        );
+
+        // `test.a AS a` keeps the name, so it is a pass-through.
+        let trivial_rename = Expr::Column(Column::new(Some("test"), "a")).alias("a");
+        assert_eq!(
+            passthrough_column(&trivial_rename).map(|c| c.flat_name()),
+            Some("test.a".to_string())
+        );
+
+        // `test.a AS b` changes the name, so it is not a pass-through.
+        let renaming = Expr::Column(Column::new(Some("test"), "a")).alias("b");
+        assert_eq!(passthrough_column(&renaming), None);
+
+        // An alias over anything other than a column is not a pass-through.
+        let not_a_column = lit(1).alias("a");
+        assert_eq!(passthrough_column(&not_a_column), None);
+    }
+
+    /// `is_pure_extraction_projection` decides if a merged projection can go
+    /// down one more level. It must accept only `__datafusion_extracted`
+    /// aliases and plain columns, and only with at least one extraction. An
+    /// alias with a different prefix must not count: a second push would
+    /// re-extract the expression under a new alias that the parent cannot
+    /// resolve.
+    #[test]
+    fn test_is_pure_extraction_projection() -> Result<()> {
+        let scan = test_table_scan_with_struct()?;
+
+        // Not a projection.
+        assert!(!is_pure_extraction_projection(&scan));
+
+        // Columns only: nothing was extracted.
+        let columns_only = LogicalPlanBuilder::from(scan.clone())
+            .project(vec![col("id"), col("user")])?
+            .build()?;
+        assert!(!is_pure_extraction_projection(&columns_only));
+
+        // One extraction alias and one pass-through column.
+        let pure = LogicalPlanBuilder::from(scan.clone())
+            .project(vec![
+                leaf_udf(col("user"), "status").alias("__datafusion_extracted_1"),
+                col("id"),
+            ])?
+            .build()?;
+        assert!(is_pure_extraction_projection(&pure));
+
+        // The same shape under a `CommonSubexprEliminate` alias is not an
+        // extraction projection.
+        let common_expr = LogicalPlanBuilder::from(scan.clone())
+            .project(vec![
+                leaf_udf(col("user"), "status").alias("__common_expr_1"),
+                col("id"),
+            ])?
+            .build()?;
+        assert!(!is_pure_extraction_projection(&common_expr));
+
+        // A bare expression is never allowed.
+        let bare_expr = LogicalPlanBuilder::from(scan)
+            .project(vec![leaf_udf(col("user"), "status"), col("id")])?
+            .build()?;
+        assert!(!is_pure_extraction_projection(&bare_expr));
+
+        Ok(())
+    }
+
+    /// A non-volatile `KeepInPlace` expression: the kind that
+    /// `CommonSubexprEliminate` hoists into a column so it runs one time.
+    fn keep_in_place_udf(expr: Expr) -> Expr {
+        Expr::ScalarFunction(ScalarFunction::new_udf(
+            Arc::new(ScalarUDF::new_from_impl(
+                PlacementTestUDF::new().with_placement(ExpressionPlacement::KeepInPlace),
+            )),
+            vec![expr],
+        ))
+    }
+
+    /// `merge_would_duplicate_kept_expr` must block a merge only when it would
+    /// inline one `KeepInPlace` definition into more than one reference site.
+    /// It must count reference sites for `KeepInPlace` columns alone: a plain
+    /// column is cheap to duplicate, and a merge that touches only plain
+    /// columns must still go ahead.
+    #[test]
+    fn test_merge_would_duplicate_kept_expr_counts_only_kept_columns() -> Result<()> {
+        let scan = test_table_scan_with_struct()?;
+        // `k` holds a `KeepInPlace` definition. `id` is a plain column.
+        let child = Projection::try_new(
+            vec![keep_in_place_udf(col("user")).alias("k"), col("id")],
+            Arc::new(scan),
+        )?;
+        let no_columns = IndexSet::new();
+
+        // One reference site: the merge inlines one copy, so it is free.
+        let one_site = vec![(
+            get_field_like(col("k"), "a"),
+            "__datafusion_extracted_1".to_string(),
+        )];
+        assert!(!merge_would_duplicate_kept_expr(
+            &one_site,
+            &no_columns,
+            &child
+        ));
+
+        // Two reference sites: the merge would evaluate `k` two times.
+        let two_sites = vec![
+            (
+                get_field_like(col("k"), "a"),
+                "__datafusion_extracted_1".to_string(),
+            ),
+            (
+                get_field_like(col("k"), "b"),
+                "__datafusion_extracted_2".to_string(),
+            ),
+        ];
+        assert!(merge_would_duplicate_kept_expr(
+            &two_sites,
+            &no_columns,
+            &child
+        ));
+
+        // A pass-through reference to `k` is a second site too (#23655).
+        let kept_column: IndexSet<Column> =
+            std::iter::once(Column::new_unqualified("k")).collect();
+        assert!(merge_would_duplicate_kept_expr(
+            &one_site,
+            &kept_column,
+            &child
+        ));
+
+        // Two sites that reference the plain column `id` are cheap to
+        // duplicate, so the merge must still go ahead.
+        let plain_column_sites = vec![
+            (
+                get_field_like(col("id"), "a"),
+                "__datafusion_extracted_1".to_string(),
+            ),
+            (
+                get_field_like(col("id"), "b"),
+                "__datafusion_extracted_2".to_string(),
+            ),
+        ];
+        assert!(!merge_would_duplicate_kept_expr(
+            &plain_column_sites,
+            &no_columns,
+            &child
+        ));
+
+        Ok(())
+    }
 }
