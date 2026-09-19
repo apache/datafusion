@@ -2906,7 +2906,8 @@ fn concat_build_batches(
 /// Build batches are added to `reservation` as they arrive. They are then copied
 /// into a single batch, see [`concat_build_batches`]: the copy is reserved
 /// before it is made, and the reservation is trimmed to what the single batch
-/// retains once the input batches are dropped.
+/// retains once the input batches are dropped. Join key arrays that do not
+/// share the buffers of that batch are reserved as well.
 ///
 /// # Dynamic Filter Coordination
 /// When `should_compute_dynamic_filters` is true, this function computes the min/max bounds
@@ -3069,6 +3070,17 @@ async fn collect_left_input(
 
         (Map::HashMap(hashmap), batch, left_values)
     };
+
+    // Join keys that are plain columns share the buffers of `batch`, any other
+    // expression evaluates to new arrays that are kept for the whole join.
+    let mut key_counter = RecordBatchMemoryCounter::new();
+    key_counter.count_batch(&batch);
+    let keys_size = left_values
+        .iter()
+        .map(|values| key_counter.count_array(values.as_ref()))
+        .sum::<usize>();
+    reservation.try_grow(keys_size)?;
+    metrics.build_mem_used.add(keys_size);
 
     let allocate_bitmap = || -> Result<BooleanBufferBuilder> {
         let bitmap_size = bit_util::ceil(batch.num_rows(), 8);
@@ -7444,6 +7456,94 @@ mod tests {
                 &JoinType::Inner,
                 None,
                 mode,
+                NullEquality::NullEqualsNothing,
+                false,
+            )?;
+
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(limit, 1.0)
+                .build_arc()?;
+            let task_ctx = prepare_task_ctx(8192, use_perfect_hash_join_as_possible);
+            let task_ctx = Arc::new(
+                TaskContext::default()
+                    .with_session_config(task_ctx.session_config().clone())
+                    .with_runtime(runtime),
+            );
+
+            let result = common::collect(join.execute(0, task_ctx)?).await;
+            if fits {
+                result?;
+            } else {
+                assert_contains!(
+                    result.unwrap_err().to_string(),
+                    "Resources exhausted: Additional allocation failed for HashJoinInput"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Join keys that are not plain columns evaluate to new arrays, which are
+    /// kept for the whole join and must be reserved.
+    #[rstest]
+    #[tokio::test]
+    async fn join_build_key_arrays_are_reserved(
+        #[values(false, true)] use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let num_rows = 16000;
+        let values = (0..num_rows).collect::<Vec<i32>>();
+        // A single build batch, so that there is no concatenated copy
+        let batch = build_table_i32(("a1", &values), ("b1", &values), ("c1", &values));
+        let inputs = get_record_batch_memory_size(&batch);
+        let keys = inputs / 3;
+        let left_schema = batch.schema();
+        let right = build_table(
+            ("a2", &vec![10, 11]),
+            ("b2", &vec![12, 13]),
+            ("c2", &vec![14, 15]),
+        );
+
+        let map = if use_perfect_hash_join_as_possible {
+            ArrayMap::estimate_memory_size(1, num_rows as u64, num_rows as usize)
+        } else {
+            estimate_memory_size::<(u32, u64)>(
+                num_rows as usize,
+                size_of::<JoinHashMapU32>(),
+            )?
+        };
+
+        for (computed_key, limit, fits) in [
+            (false, inputs + map + keys / 2, true),
+            (true, inputs + map + keys / 2, false),
+            (true, inputs + map + keys * 2, true),
+        ] {
+            let column = Arc::new(Column::new_with_schema("a1", &left_schema)?) as _;
+            let left_key: PhysicalExprRef = if computed_key {
+                Arc::new(BinaryExpr::new(
+                    column,
+                    Operator::Plus,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                ))
+            } else {
+                column
+            };
+            let on = vec![(
+                left_key,
+                Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+            )];
+            let left = TestMemoryExec::try_new_exec(
+                &[vec![batch.clone()]],
+                Arc::clone(&left_schema),
+                None,
+            )?;
+            let join = HashJoinExec::try_new(
+                left,
+                Arc::clone(&right),
+                on,
+                None,
+                &JoinType::Inner,
+                None,
+                PartitionMode::CollectLeft,
                 NullEquality::NullEqualsNothing,
                 false,
             )?;
