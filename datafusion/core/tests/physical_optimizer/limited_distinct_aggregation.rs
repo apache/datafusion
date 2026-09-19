@@ -635,3 +635,101 @@ fn test_has_filter() -> Result<()> {
     );
     Ok(())
 }
+
+/// `count(DISTINCT ..) <op> literal` receives a soft group limit: bound `1`
+/// needs 2 groups to decide the comparison plus 1 slot for a NULL group.
+#[tokio::test]
+async fn count_distinct_comparison_sets_soft_limit() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE t(v INT) AS VALUES (1), (1), (2), (2), (3), (NULL)")
+        .await?
+        .collect()
+        .await?;
+
+    let explain = ctx
+        .sql("EXPLAIN SELECT count(DISTINCT v) > 1 FROM t")
+        .await?
+        .collect()
+        .await?;
+    let plan = format!("{}", pretty_format_batches(&explain)?);
+    assert!(plan.contains("lim=[3]"), "expected soft limit in:\n{plan}");
+
+    // capped execution decides every operator correctly (3 distinct values)
+    for (query, expected) in [
+        ("SELECT count(DISTINCT v) > 1 FROM t", "true"),
+        ("SELECT count(DISTINCT v) = 3 FROM t", "true"),
+        ("SELECT count(DISTINCT v) < 3 FROM t", "false"),
+        ("SELECT count(DISTINCT v) = 0 FROM t", "false"),
+    ] {
+        let batches = ctx.sql(query).await?.collect().await?;
+        let actual = format!("{}", pretty_format_batches(&batches)?);
+        assert!(actual.contains(expected), "{query} got:\n{actual}");
+    }
+    Ok(())
+}
+
+/// No soft limit for a multi-expression projection: another expression could
+/// report the count itself, which capping the groups would make wrong.
+#[tokio::test]
+async fn count_distinct_escaping_count_prevents_soft_limit() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE t(v INT) AS VALUES (1), (2), (3)")
+        .await?
+        .collect()
+        .await?;
+
+    let explain = ctx
+        .sql("EXPLAIN SELECT count(DISTINCT v), count(DISTINCT v) > 1 FROM t")
+        .await?
+        .collect()
+        .await?;
+    let plan = format!("{}", pretty_format_batches(&explain)?);
+    assert!(!plan.contains("lim=["), "unexpected soft limit in:\n{plan}");
+
+    let batches = ctx
+        .sql("SELECT count(DISTINCT v), count(DISTINCT v) > 1 FROM t")
+        .await?
+        .collect()
+        .await?;
+    let actual = format!("{}", pretty_format_batches(&batches)?);
+    assert!(actual.contains('3'), "got:\n{actual}");
+    Ok(())
+}
+
+/// The capped plan and the uncapped plan (optimization disabled) agree on
+/// every comparison operator, including when the cap truncates the groups.
+#[tokio::test]
+async fn count_distinct_comparison_capped_matches_uncapped() -> Result<()> {
+    let queries = [
+        "SELECT count(DISTINCT v) > 1 FROM t",
+        "SELECT count(DISTINCT v) >= 5 FROM t",
+        "SELECT count(DISTINCT v) = 5 FROM t",
+        "SELECT count(DISTINCT v) != 5 FROM t",
+        "SELECT count(DISTINCT v) < 2 FROM t",
+        "SELECT count(DISTINCT v) <= 5 FROM t",
+        "SELECT count(DISTINCT v) = 10 FROM t",
+    ];
+    let mut results = vec![];
+    for enabled in [true, false] {
+        let cfg = SessionConfig::new().set_bool(
+            "datafusion.optimizer.enable_distinct_aggregation_soft_limit",
+            enabled,
+        );
+        let ctx = SessionContext::new_with_config(cfg);
+        ctx.sql(
+            "CREATE TABLE t(v INT) AS \
+             SELECT value % 10 FROM generate_series(1, 1000)",
+        )
+        .await?
+        .collect()
+        .await?;
+        let mut run = vec![];
+        for query in queries {
+            let batches = ctx.sql(query).await?.collect().await?;
+            run.push(format!("{}", pretty_format_batches(&batches)?));
+        }
+        results.push(run);
+    }
+    assert_eq!(results[0], results[1]);
+    Ok(())
+}
