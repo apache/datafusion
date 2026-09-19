@@ -689,8 +689,8 @@ fn hash_map_array(
     let offsets = array.offsets();
 
     // Create hashes for each entry in each row
-    let first_offset = offsets.first().copied().unwrap_or_default() as usize;
-    let last_offset = offsets.last().copied().unwrap_or_default() as usize;
+    let first_offset = offsets.first() as usize;
+    let last_offset = offsets.last() as usize;
     let entries_len = last_offset - first_offset;
 
     // Only hash the entries that are actually referenced
