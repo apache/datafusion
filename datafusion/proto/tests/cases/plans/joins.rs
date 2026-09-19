@@ -1095,7 +1095,7 @@ async fn prepared_hash_join_cannot_be_serialized_without_its_build() -> Result<(
             Arc::new(ConfigOptions::default()),
         )
         .await?;
-    let attached = join.builder().with_prepared_build(prepared)?.build()?;
+    let attached = join.builder().with_prepared_build(prepared).build()?;
     let error = roundtrip_test(Arc::new(attached))
         .expect_err("serializing the empty build placeholder would lose prepared rows");
     assert!(error.to_string().contains("prepared build"), "{error}");

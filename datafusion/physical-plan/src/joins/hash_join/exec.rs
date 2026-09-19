@@ -1428,10 +1428,6 @@ impl HashJoinExec {
              Optimizer rules that reorder join inputs must run before optimizer rules `FilterPushdown::new_post_optimization()`"
         );
 
-        assert_or_internal_err!(
-            self.prepared_build.is_none(),
-            "Cannot swap a prepared hash join"
-        );
         let left = self.left();
         let right = self.right();
         let new_join = self
@@ -1781,7 +1777,7 @@ impl ExecutionPlan for HashJoinExec {
                         self.null_equality,
                         null_aware,
                         array_map_created_count,
-                        None,
+                        false,
                     ))
                 })?,
                 PartitionMode::Partitioned => {
@@ -1804,7 +1800,7 @@ impl ExecutionPlan for HashJoinExec {
                         self.null_equality,
                         null_aware,
                         array_map_created_count,
-                        None,
+                        false,
                     ))
                 }
                 PartitionMode::Auto => {
@@ -3029,7 +3025,7 @@ fn concat_build_batches(
 #[expect(clippy::too_many_arguments)]
 async fn collect_left_input(
     random_state: RandomState,
-    left_stream: SendableRecordBatchStream,
+    mut left_stream: SendableRecordBatchStream,
     on_left: Vec<PhysicalExprRef>,
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
@@ -3040,7 +3036,7 @@ async fn collect_left_input(
     null_equality: NullEquality,
     null_aware: Option<NullAwareMode>,
     array_map_created_count: Count,
-    prepared_input_bytes: Option<usize>,
+    prepared: bool,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
 
@@ -3050,7 +3046,7 @@ async fn collect_left_input(
 
     let is_phj_candidate = is_perfect_hash_join_candidate(&on_left, &schema)?;
 
-    let initial = BuildSideState::try_new(
+    let mut state = BuildSideState::try_new(
         metrics,
         reservation,
         on_left.clone(),
@@ -3058,32 +3054,38 @@ async fn collect_left_input(
         should_compute_dynamic_filters || is_phj_candidate,
     )?;
 
-    let state = left_stream
-        .try_fold(initial, |mut state, batch| async move {
-            // Update accumulators if computing bounds
-            if let Some(ref mut accumulators) = state.bounds_accumulators {
-                for accumulator in accumulators {
-                    accumulator.update_batch(&batch)?;
-                }
+    let mut concat_values = if prepared {
+        vec![0; schema.fields().len()]
+    } else {
+        vec![]
+    };
+    while let Some(batch) = left_stream.try_next().await? {
+        if prepared {
+            prepared::check_byte_concat_sizes(&batch, &mut concat_values)?;
+        }
+        if let Some(accumulators) = &mut state.bounds_accumulators {
+            for accumulator in accumulators {
+                accumulator.update_batch(&batch)?;
             }
-
-            // Decide if we spill or not
-            let batch_size = state.memory_counter.count_batch(&batch);
-            // Reserve memory for incoming batch
-            if prepared_input_bytes.is_none() {
-                state.reservation.try_grow(batch_size)?;
-            }
-            // Update metrics
-            state.metrics.build_mem_used.add(batch_size);
-            state.metrics.build_input_batches.add(1);
-            state.metrics.build_input_rows.add(batch.num_rows());
-            // Update row count
-            state.num_rows += batch.num_rows();
-            // Push batch to output
-            state.batches.push(batch);
-            Ok(state)
-        })
-        .await?;
+        }
+        let batch_size = state.memory_counter.count_batch(&batch);
+        state.reservation.try_grow(batch_size)?;
+        state.metrics.build_mem_used.add(batch_size);
+        state.metrics.build_input_batches.add(1);
+        state.metrics.build_input_rows.add(batch.num_rows());
+        state.num_rows += batch.num_rows();
+        state.batches.push(batch);
+    }
+    drop(left_stream);
+    if prepared && state.batches.is_empty() {
+        // Even empty UTF-8 output retains an offset buffer.
+        let empty = RecordBatch::new_empty(Arc::clone(&schema));
+        state
+            .reservation
+            .try_grow(state.memory_counter.count_batch(&empty))?;
+        state.batches.push(empty);
+    }
+    let input_bytes = state.memory_counter.memory_usage();
 
     // Bind the reservation first so error paths release allocations before their charge.
     let BuildSideState {
@@ -3092,13 +3094,12 @@ async fn collect_left_input(
         num_rows,
         metrics,
         bounds_accumulators,
-        memory_counter,
+        memory_counter: _,
     } = state;
-    let inputs_reserved = memory_counter.memory_usage();
 
     // Admit concatenation copies while the original batches are retained.
     // Arrow keeps a single batch as an inexpensive slice.
-    let copy_bytes = if prepared_input_bytes.is_some() && batches.len() > 1 {
+    let copy_bytes = if prepared && batches.len() > 1 {
         let bytes = batches.iter().try_fold(0usize, |total, batch| {
             total
                 .checked_add(prepared::prepared_copy_bytes(batch)?)
@@ -3137,14 +3138,14 @@ async fn collect_left_input(
             config.execution.perfect_hash_join_min_key_density,
             null_equality,
         )? {
-        let batch = if prepared_input_bytes.is_some() {
+        let batch = if prepared {
             concat_batches(&schema, batches.iter())?
         } else {
             concat_build_batches(
                 &schema,
                 std::mem::take(&mut batches),
                 false,
-                inputs_reserved,
+                input_bytes,
                 &mut reservation,
                 &metrics,
             )?
@@ -3165,7 +3166,7 @@ async fn collect_left_input(
         let mut hashmap = new_join_hashmap(num_rows, &mut reservation, &metrics)?;
 
         let scratch_reservation = reservation.new_empty();
-        let mut hashes_buffer = if prepared_input_bytes.is_some() {
+        let mut hashes_buffer = if prepared {
             let rows = batches.iter().map(RecordBatch::num_rows).max().unwrap_or(0);
             // Combining nullable keys can hold an old and a new validity
             // bitmap at once. NullArray also materializes logical validity.
@@ -3223,14 +3224,14 @@ async fn collect_left_input(
         }
 
         // Merge all batches into a single batch, so we can directly index into the arrays
-        let batch = if prepared_input_bytes.is_some() {
+        let batch = if prepared {
             concat_batches(&schema, batches.iter().rev())?
         } else {
             concat_build_batches(
                 &schema,
                 std::mem::take(&mut batches),
                 true,
-                inputs_reserved,
+                input_bytes,
                 &mut reservation,
                 &metrics,
             )?
@@ -3389,7 +3390,7 @@ async fn collect_left_input(
         && !left_values.is_empty()
         && left_values[0].logical_null_count() > 0;
 
-    if let Some(input_bytes) = prepared_input_bytes {
+    if prepared {
         drop(batches);
         let retained = RecordBatchMemoryCounter::new().count_batch(&batch);
         let allowance = input_bytes.checked_add(copy_bytes).ok_or_else(|| {
@@ -7585,18 +7586,14 @@ mod tests {
         // With room for the copy, the reservation ends up at what is retained
         let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(inputs * 2));
         let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
-        let batch = if prepared_input_bytes.is_some() {
-            concat_batches(&schema, batches.iter())?
-        } else {
-            concat_build_batches(
-                &schema,
-                std::mem::take(&mut batches),
-                false,
-                inputs_reserved,
-                &mut reservation,
-                &metrics,
-            )?
-        };
+        let batch = concat_build_batches(
+            &schema,
+            batches,
+            false,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )?;
         assert_eq!(reservation.size(), get_record_batch_memory_size(&batch));
         assert_eq!(pool.reserved(), reservation.size());
         Ok(())
@@ -7612,18 +7609,14 @@ mod tests {
 
         let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(inputs));
         let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
-        let batch = if prepared_input_bytes.is_some() {
-            concat_batches(&schema, batches.iter().rev())?
-        } else {
-            concat_build_batches(
-                &schema,
-                std::mem::take(&mut batches),
-                true,
-                inputs_reserved,
-                &mut reservation,
-                &metrics,
-            )?
-        };
+        let batch = concat_build_batches(
+            &schema,
+            batches,
+            true,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )?;
         assert_eq!(batch.num_rows(), 1000);
         assert_eq!(reservation.size(), inputs);
         Ok(())
@@ -7649,18 +7642,14 @@ mod tests {
         let pool: Arc<dyn MemoryPool> =
             Arc::new(GreedyMemoryPool::new(inputs + views * 5 / 4));
         let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
-        let batch = if prepared_input_bytes.is_some() {
-            concat_batches(&schema, batches.iter())?
-        } else {
-            concat_build_batches(
-                &schema,
-                std::mem::take(&mut batches),
-                false,
-                inputs_reserved,
-                &mut reservation,
-                &metrics,
-            )?
-        };
+        let batch = concat_build_batches(
+            &schema,
+            batches,
+            false,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )?;
         assert_eq!(reservation.size(), get_record_batch_memory_size(&batch));
         Ok(())
     }

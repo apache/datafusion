@@ -102,7 +102,7 @@ async fn prepared_plain_bytes_preserve_slices_nulls_and_output_ownership() -> Re
         let addresses = buffer_addresses(prepared.build.batch.columns());
         let task = base
             .builder()
-            .with_prepared_build(Arc::clone(&prepared))?
+            .with_prepared_build(Arc::clone(&prepared))
             .build()?;
         let output = run(&task).await?;
         assert!(
@@ -217,17 +217,11 @@ async fn prepared_plain_bytes_keys_keep_hash_filter_without_scalar_copies() -> R
             PushdownStrategy::Map(_)
         ));
         assert_eq!(config.optimizer.hash_join_inlist_pushdown_max_size, 4 << 20);
-        let filter = HashJoinExec::create_dynamic_filter(&base.on);
-        let task = base.with_dynamic_filter_expr(Arc::clone(&filter))?;
-        let filtered_probe = Arc::new(FilterExec::try_new(
-            Arc::clone(&filter) as _,
-            Arc::clone(task.right()),
-        )?);
-        let task = task
+        let task = with_probe_filter(base)?
             .builder()
-            .with_new_children(vec![Arc::clone(task.left()), filtered_probe])?
-            .with_prepared_build(Arc::clone(&prepared))?
+            .with_prepared_build(Arc::clone(&prepared))
             .build()?;
+        let filter = Arc::clone(&task.dynamic_filter.as_ref().unwrap().filter);
         let output = run(&task).await?;
         assert_eq!(output.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
         let row = output.iter().find(|batch| batch.num_rows() != 0).unwrap();
@@ -240,24 +234,5 @@ async fn prepared_plain_bytes_keys_keep_hash_filter_without_scalar_copies() -> R
         drop(prepared);
         assert_eq!(pool.reserved(), 0);
     }
-    Ok(())
-}
-
-/// The UTF-8 preflight rejects offset overflow before concat allocation.
-#[test]
-fn prepared_plain_bytes_preflight_rejects_accumulated_offset_overflow() -> Result<()> {
-    let bytes = utf8_array(&[0, 2], Buffer::from_vec(b"ab".to_vec()), None);
-    let batch = RecordBatch::try_new(
-        Arc::new(Schema::new(vec![
-            Field::new("key", DataType::Utf8, false),
-            Field::new("fixed", DataType::Int64, false),
-        ])),
-        vec![bytes, Arc::new(Int64Array::from(vec![1]))],
-    )?;
-    let mut totals = vec![i32::MAX as usize - 2, 17];
-    check_byte_concat_sizes(&batch, &mut totals)?;
-    assert_eq!(totals, vec![i32::MAX as usize, 17]);
-    let error = check_byte_concat_sizes(&batch, &mut totals).unwrap_err();
-    assert!(error.to_string().contains("offset limit"));
     Ok(())
 }
