@@ -18,10 +18,11 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use arrow::array::{
-    Array, ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, RecordBatch,
-    StringArray, builder::BooleanBuilder, cast::AsArray,
+    Array, ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+    RecordBatch, StringArray, builder::BooleanBuilder, cast::AsArray,
 };
 use arrow::array::{Int8Array, UInt64Array, as_string_array, create_array, record_batch};
 use arrow::compute::kernels::numeric::add;
@@ -2347,5 +2348,97 @@ async fn test_extension_metadata_preserve_in_uncorrelated_scalar_subquery() -> R
         .await?;
     let batches = df.collect().await?;
     assert!(!batches.is_empty());
+    Ok(())
+}
+
+/// Volatile UDF that counts how many values it produces.
+///
+/// Each row gets the next value of the shared counter, so the counter also
+/// gives the number of rows that the function was evaluated for.
+#[derive(Debug)]
+struct CountingVolatileUdf {
+    signature: Signature,
+    rows_evaluated: Arc<AtomicUsize>,
+}
+
+impl PartialEq for CountingVolatileUdf {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.rows_evaluated, &other.rows_evaluated)
+    }
+}
+
+impl Eq for CountingVolatileUdf {}
+
+impl Hash for CountingVolatileUdf {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.signature.hash(state);
+    }
+}
+
+impl ScalarUDFImpl for CountingVolatileUdf {
+    fn name(&self) -> &str {
+        "counting_volatile"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Int64)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let first = self
+            .rows_evaluated
+            .fetch_add(args.number_rows, Ordering::SeqCst) as i64;
+        let values = (0..args.number_rows as i64).map(|offset| first + offset);
+        Ok(ColumnarValue::Array(Arc::new(
+            Int64Array::from_iter_values(values),
+        )))
+    }
+}
+
+/// `BETWEEN` must evaluate a volatile value one time per row.
+///
+/// See <https://github.com/apache/datafusion/issues/25457>.
+#[tokio::test]
+async fn between_evaluates_a_volatile_value_one_time_per_row() -> Result<()> {
+    let row_count = 100;
+
+    for predicate in [
+        "counting_volatile() BETWEEN 0 AND 1000000",
+        "counting_volatile() NOT BETWEEN 0 AND 1000000",
+    ] {
+        let rows_evaluated = Arc::new(AtomicUsize::new(0));
+        let udf = ScalarUDF::from(CountingVolatileUdf {
+            signature: Signature::exact(vec![], Volatility::Volatile),
+            rows_evaluated: Arc::clone(&rows_evaluated),
+        });
+
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(1),
+        );
+        ctx.register_udf(udf);
+        ctx.register_batch(
+            "t",
+            RecordBatch::try_from_iter(vec![(
+                "a",
+                Arc::new(Int64Array::from_iter_values(0..row_count as i64)) as ArrayRef,
+            )])?,
+        )?;
+
+        ctx.sql(&format!("SELECT a FROM t WHERE {predicate}"))
+            .await?
+            .collect()
+            .await?;
+
+        let evaluated = rows_evaluated.load(Ordering::SeqCst);
+        assert_eq!(
+            evaluated, row_count,
+            "{predicate} evaluated the volatile value {evaluated} times for {row_count} rows"
+        );
+    }
+
     Ok(())
 }
