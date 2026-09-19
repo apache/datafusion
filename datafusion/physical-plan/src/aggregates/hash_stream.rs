@@ -345,6 +345,7 @@ impl FinalSpillContext {
             .with_metrics(baseline_metrics.intermediate())
             .with_batch_size(batch_size)
             .with_reservation(merge_reservation)
+            .with_replay_headroom()
             .build()?;
         let replay = OrderedFinalAggregateStream::new_with_input_and_metrics(
             &final_agg,

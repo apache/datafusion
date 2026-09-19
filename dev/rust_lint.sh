@@ -112,6 +112,8 @@ ensure_tool "taplo" "cargo install taplo-cli --locked"
 ensure_tool "hawkeye" "cargo install hawkeye --locked"
 ensure_tool "typos" "cargo install typos-cli --locked"
 ensure_tool "lychee" "cargo install lychee --locked --version ${LYCHEE_VERSION}"
+ensure_tool "cargo-audit" "cargo install cargo-audit --locked"
+ensure_tool "cargo-machete" "cargo install cargo-machete --locked --version ^${CARGO_MACHETE_VERSION}"
 
 run_step() {
   local name="$1"
@@ -127,12 +129,16 @@ declare -a WRITE_STEPS=(
   "ci/scripts/license_header.sh|true"
   "ci/scripts/typos_check.sh|true"
   "ci/scripts/doc_prettier_check.sh|true"
+  "ci/scripts/check_examples_docs.sh|true"
 )
 
 declare -a READONLY_STEPS=(
   "ci/scripts/check_no_cargo_install_in_workflows.sh|false"
   "ci/scripts/check_asf_yaml_status_checks.py|false"
   "ci/scripts/markdown_link_check.sh|false"
+  "ci/scripts/security_audit.sh|false"
+  "ci/scripts/check_circular_dependencies.sh|false"
+  "ci/scripts/check_unused_dependencies.sh|false"
   "ci/scripts/rust_docs.sh|false"
 )
 

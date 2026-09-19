@@ -96,6 +96,8 @@ pub struct StreamingMergeBuilder<'a> {
     fetch: Option<usize>,
     reservation: Option<MemoryReservation>,
     merge_pool: Option<Arc<MergeMemoryPool>>,
+    /// Leave memory for the aggregate consuming the merged spill rows.
+    reserve_replay_headroom: bool,
     enable_round_robin_tie_breaker: bool,
 }
 
@@ -161,6 +163,13 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
+    /// Leave room for aggregate replay by checking that the pool can admit
+    /// merge buffers plus equal headroom. Release the headroom before replay.
+    pub(crate) fn with_replay_headroom(mut self) -> Self {
+        self.reserve_replay_headroom = true;
+        self
+    }
+
     /// See [SortPreservingMergeExec::with_round_robin_repartition] for more
     /// information.
     ///
@@ -194,6 +203,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             batch_size,
             reservation,
             merge_pool,
+            reserve_replay_headroom,
             fetch,
             expressions,
             enable_round_robin_tie_breaker,
@@ -235,6 +245,7 @@ impl<'a> StreamingMergeBuilder<'a> {
                 enable_round_robin_tie_breaker,
             )
             .with_merge_pool(merge_pool)
+            .with_replay_headroom(reserve_replay_headroom)
             .create_spillable_merge_stream());
         }
 
