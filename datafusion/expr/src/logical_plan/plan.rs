@@ -1836,14 +1836,21 @@ impl LogicalPlan {
             .collect())
     }
 
-    /// Walk the logical plan, find any `Placeholder` tokens, and return a map of their IDs and FieldRefs
+    /// Walk the logical plan, find any `Placeholder` tokens, and return a map of their IDs and FieldRefs.
+    /// Bare `LIMIT`/`OFFSET` parameters default to `Int64` if no occurrence provides a type.
     pub fn get_parameter_fields(
         &self,
     ) -> Result<HashMap<String, Option<FieldRef>>, DataFusionError> {
         let mut param_types: HashMap<String, Option<FieldRef>> = HashMap::new();
+        let mut row_count_parameters: HashSet<String> = HashSet::new();
 
         self.apply_with_subqueries(|plan| {
             plan.apply_expressions(|expr| {
+                if matches!(plan, LogicalPlan::Limit(_))
+                    && let Expr::Placeholder(Placeholder { id, field: None }) = expr
+                {
+                    row_count_parameters.insert(id.clone());
+                }
                 expr.apply(|expr| {
                     if let Expr::Placeholder(Placeholder { id, field }) = expr {
                         let prev = param_types.get(id);
@@ -1860,15 +1867,22 @@ impl LogicalPlan {
                                 param_types.insert(id.clone(), Some(Arc::clone(field)));
                             }
                             _ => {
-                                param_types.insert(id.clone(), None);
+                                param_types.entry(id.clone()).or_insert(None);
                             }
                         }
                     }
                     Ok(TreeNodeRecursion::Continue)
                 })
             })
-        })
-        .map(|_| param_types)
+        })?;
+
+        for id in row_count_parameters {
+            param_types
+                .entry(id)
+                .or_default()
+                .get_or_insert_with(|| Arc::new(Field::new("", DataType::Int64, true)));
+        }
+        Ok(param_types)
     }
 
     // ------------
