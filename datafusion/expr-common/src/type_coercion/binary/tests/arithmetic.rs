@@ -475,3 +475,32 @@ fn test_decimal_precision_overflow_cross_variant() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_timestamp_minus_mixed_timezone_awareness() -> Result<()> {
+    let aware_tz: Arc<str> = Arc::from("America/New_York");
+    let aware_ms = DataType::Timestamp(Millisecond, Some(Arc::clone(&aware_tz)));
+    let aware_ns = DataType::Timestamp(Nanosecond, Some(Arc::clone(&aware_tz)));
+    let naive_ns = DataType::Timestamp(Nanosecond, None);
+
+    // Differing units already coerced to the aware zone; equal units did not.
+    // Both must now coerce both operands to the aware zone at the finer unit,
+    // in either operand order.
+    test_coercion_binary_rule!(aware_ms, naive_ns, Operator::Minus, aware_ns);
+    test_coercion_binary_rule!(naive_ns, aware_ms, Operator::Minus, aware_ns);
+    test_coercion_binary_rule!(aware_ns, naive_ns, Operator::Minus, aware_ns);
+    test_coercion_binary_rule!(naive_ns, aware_ns, Operator::Minus, aware_ns);
+
+    // Pairs that are both aware or both naive are untouched.
+    test_coercion_binary_rule!(aware_ns, aware_ns, Operator::Minus, aware_ns);
+    test_coercion_binary_rule!(naive_ns, naive_ns, Operator::Minus, naive_ns);
+    // Two different aware zones keep their own types (arrow subtracts the
+    // instants directly); unchanged by this rule.
+    let other_tz = DataType::Timestamp(Nanosecond, Some(Arc::from("+08:00")));
+    test_coercion_binary_rule!(aware_ns, other_tz, Operator::Minus, aware_ns, other_tz);
+
+    // For contrast, comparisons already coerced the mixed pair this way.
+    test_coercion_binary_rule!(aware_ms, naive_ns, Operator::Eq, aware_ns);
+
+    Ok(())
+}
