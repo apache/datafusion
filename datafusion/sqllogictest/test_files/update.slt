@@ -35,7 +35,7 @@ logical_plan
 03)----TableScan: t1
 physical_plan
 01)CooperativeExec
-02)--DmlResultExec: rows_affected=0
+02)--MemDmlExec: op=Update
 
 query TT
 explain update t1 set a=c+1, b=a, c=c+1.0, d=b;
@@ -46,7 +46,7 @@ logical_plan
 03)----TableScan: t1
 physical_plan
 01)CooperativeExec
-02)--DmlResultExec: rows_affected=0
+02)--MemDmlExec: op=Update
 
 statement ok
 create table t2(a int, b varchar, c double, d int);
