@@ -1166,6 +1166,45 @@ impl HashJoinExec {
         self.null_equality
     }
 
+    /// Return the [`InputDistributionRequirements`] that this hash join would
+    /// require if executed in [`PartitionMode::Partitioned`].
+    pub fn partitioned_input_distribution_requirements(
+        &self,
+    ) -> InputDistributionRequirements {
+        let (left_expr, right_expr) = self
+            .on
+            .iter()
+            .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
+            .unzip();
+        InputDistributionRequirements::co_partitioned(vec![
+            Distribution::KeyPartitioned(left_expr),
+            Distribution::KeyPartitioned(right_expr),
+        ])
+    }
+
+    /// Returns `true` if both inputs have more than 1 partition and already
+    /// satisfy the distribution and co-partitioning requirements for
+    /// [`PartitionMode::Partitioned`].
+    ///
+    /// Null-aware joins cannot use [`PartitionMode::Partitioned`] and return `false`.
+    pub fn inputs_satisfy_partitioned_requirements(&self) -> Result<bool> {
+        if self.null_aware {
+            return Ok(false);
+        }
+
+        if self.left.output_partitioning().partition_count() <= 1
+            || self.right.output_partitioning().partition_count() <= 1
+        {
+            return Ok(false);
+        }
+
+        let requirements = self.partitioned_input_distribution_requirements();
+        let children = [self.left.as_ref(), self.right.as_ref()];
+        let unsatisfied =
+            requirements.unsatisfied_co_partitioned_children(self.name(), &children)?;
+        Ok(unsatisfied.is_empty())
+    }
+
     /// Returns the dynamic filter expression produced by this hash join, if set.
     #[deprecated(
         since = "55.0.0",
@@ -1509,15 +1548,7 @@ impl ExecutionPlan for HashJoinExec {
     fn input_distribution_requirements(&self) -> InputDistributionRequirements {
         match self.mode {
             PartitionMode::Partitioned => {
-                let (left_expr, right_expr) = self
-                    .on
-                    .iter()
-                    .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
-                    .unzip();
-                InputDistributionRequirements::co_partitioned(vec![
-                    Distribution::KeyPartitioned(left_expr),
-                    Distribution::KeyPartitioned(right_expr),
-                ])
+                self.partitioned_input_distribution_requirements()
             }
             PartitionMode::CollectLeft => InputDistributionRequirements::new(vec![
                 Distribution::SinglePartition,
@@ -9375,22 +9406,34 @@ mod tests {
         Ok((join, on))
     }
 
-    fn with_hash_partitioned_children(
+    fn with_partitioned_children(
         join: &HashJoinExec,
-        on: &JoinOn,
+        left_partitioning: Partitioning,
+        right_partitioning: Partitioning,
     ) -> Result<HashJoinExec> {
         join.builder()
             .with_new_children(vec![
                 Arc::new(PartitionedTestExec::try_new(
                     join.left().schema(),
-                    Partitioning::Hash(vec![Arc::clone(&on[0].0)], 2),
+                    left_partitioning,
                 )?),
                 Arc::new(PartitionedTestExec::try_new(
                     join.right().schema(),
-                    Partitioning::Hash(vec![Arc::clone(&on[0].1)], 2),
+                    right_partitioning,
                 )?),
             ])?
             .build()
+    }
+
+    fn with_hash_partitioned_children(
+        join: &HashJoinExec,
+        on: &JoinOn,
+    ) -> Result<HashJoinExec> {
+        with_partitioned_children(
+            join,
+            Partitioning::Hash(vec![Arc::clone(&on[0].0)], 2),
+            Partitioning::Hash(vec![Arc::clone(&on[0].1)], 2),
+        )
     }
 
     #[test]
@@ -9467,6 +9510,82 @@ mod tests {
             lit(true),
         ));
         assert!(join.set_dynamic_filter(df).is_err());
+        Ok(())
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum PartitionRequirementCase {
+        MatchingRange,
+        MatchingHash,
+        MismatchedRange,
+        NonJoinKeyHash,
+        UnknownPartitioning,
+        SinglePartition,
+        NullAware,
+    }
+
+    fn build_partition_case_join(
+        scenario: PartitionRequirementCase,
+    ) -> Result<HashJoinExec> {
+        let (range_join, on) = range_partitioned_dynamic_filter_test_join(10, 10)?;
+        match scenario {
+            PartitionRequirementCase::MatchingRange => Ok(range_join),
+            PartitionRequirementCase::MatchingHash => {
+                with_hash_partitioned_children(&range_join, &on)
+            }
+            PartitionRequirementCase::MismatchedRange => {
+                let (join, _) = range_partitioned_dynamic_filter_test_join(10, 11)?;
+                Ok(join)
+            }
+            PartitionRequirementCase::NonJoinKeyHash => {
+                let non_join_key_left =
+                    Arc::new(Column::new_with_schema("a1", &range_join.left().schema())?)
+                        as _;
+                let non_join_key_right = Arc::new(Column::new_with_schema(
+                    "a2",
+                    &range_join.right().schema(),
+                )?) as _;
+                with_partitioned_children(
+                    &range_join,
+                    Partitioning::Hash(vec![non_join_key_left], 2),
+                    Partitioning::Hash(vec![non_join_key_right], 2),
+                )
+            }
+            PartitionRequirementCase::UnknownPartitioning => with_partitioned_children(
+                &range_join,
+                Partitioning::UnknownPartitioning(2),
+                Partitioning::UnknownPartitioning(2),
+            ),
+            PartitionRequirementCase::SinglePartition => with_partitioned_children(
+                &range_join,
+                Partitioning::Hash(vec![Arc::clone(&on[0].0)], 1),
+                Partitioning::Hash(vec![Arc::clone(&on[0].1)], 1),
+            ),
+            PartitionRequirementCase::NullAware => {
+                let hash_join = with_hash_partitioned_children(&range_join, &on)?;
+                hash_join
+                    .builder()
+                    .with_type(JoinType::LeftAnti)
+                    .with_null_aware(true)
+                    .build()
+            }
+        }
+    }
+
+    #[rstest]
+    #[case::matching_range(PartitionRequirementCase::MatchingRange, true)]
+    #[case::matching_hash(PartitionRequirementCase::MatchingHash, true)]
+    #[case::mismatched_range(PartitionRequirementCase::MismatchedRange, false)]
+    #[case::non_join_key_hash(PartitionRequirementCase::NonJoinKeyHash, false)]
+    #[case::unknown_partitioning(PartitionRequirementCase::UnknownPartitioning, false)]
+    #[case::single_partition(PartitionRequirementCase::SinglePartition, false)]
+    #[case::null_aware(PartitionRequirementCase::NullAware, false)]
+    fn test_inputs_satisfy_partitioned_requirements(
+        #[case] scenario: PartitionRequirementCase,
+        #[case] expected: bool,
+    ) -> Result<()> {
+        let join = build_partition_case_join(scenario)?;
+        assert_eq!(join.inputs_satisfy_partitioned_requirements()?, expected);
         Ok(())
     }
 }
