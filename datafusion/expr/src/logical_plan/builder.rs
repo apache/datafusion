@@ -1710,7 +1710,7 @@ impl ValuesFields {
         let name = format!("column{}", self.inner.len() + 1);
         let mut field = Field::new(name, data_type, nullable);
         if let Some(metadata) = metadata {
-            field.set_metadata(metadata.to_hashmap());
+            field.set_metadata(metadata.into_inner());
         }
         self.inner.push(field);
     }
@@ -1882,12 +1882,8 @@ pub fn build_join_schema(
         _ => (right, left),
     };
 
-    let metadata = schema1
-        .metadata()
-        .clone()
-        .into_iter()
-        .chain(schema2.metadata().clone())
-        .collect();
+    let mut metadata = schema1.metadata().clone();
+    metadata.extend(schema2.metadata().clone());
 
     let dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
     dfschema.with_functional_dependencies(func_dependencies)

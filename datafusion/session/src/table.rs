@@ -150,8 +150,8 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     ///
     /// # Limit
     ///
-    /// If `limit` is specified, the scan must produce *at least* this many
-    /// rows, though it may return more. Like Projection Pushdown and Filter
+    /// If `limit` is specified, the scan must produce *at most* this many
+    /// rows, though it may return less. Like Projection Pushdown and Filter
     /// Pushdown, DataFusion pushes `LIMIT`s as far down in the plan as
     /// possible. This is called "Limit Pushdown", and some sources can use the
     /// information to improve performance.
@@ -416,9 +416,13 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// The `merge_schema` contains the target columns followed by the source
     /// columns, preserving their logical qualifiers. Providers can use this
     /// schema to resolve the logical expressions against the combined rows
-    /// they construct while executing the merge.
+    /// they construct while executing the merge. Providers should identify
+    /// target fields by this leading field range rather than comparing their
+    /// qualifiers with the provider's catalog name.
     /// The `on` condition is the join predicate from the ON clause.
     /// The `clauses` describe the WHEN MATCHED / WHEN NOT MATCHED actions.
+    /// These logical expressions may contain residual subqueries. Providers
+    /// must either support those subqueries or return an explicit error.
     ///
     /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
     // Hand-written `#[async_trait]` expansion to reduce compile time. See

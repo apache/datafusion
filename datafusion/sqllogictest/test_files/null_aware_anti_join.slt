@@ -564,3 +564,105 @@ DROP TABLE nai_outer;
 
 statement ok
 DROP TABLE nai_inner;
+
+#############
+## Regression: constant (non-column) value expression in `NOT IN (subquery)`
+##
+## `3 NOT IN (1, NULL)` is UNKNOWN, so a `WHERE` clause must remove every row.
+## The value expression `3` contains no column, so on its own it cannot be an
+## equi-join key; decorrelation projects it as a column of the outer side so
+## the null-aware hash join gets a real key. Otherwise the predicate stays in
+## the join filter, where it is pushed into the subquery (dropping the NULL
+## rows before the join can observe them) and leaves a keyless join that no
+## null-aware operator can execute.
+#############
+
+statement ok
+CREATE TABLE naconst_t1(id INT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE naconst_t2(id INT) AS VALUES (1), (NULL);
+
+# Q1: expected no rows (subquery yields {1, NULL} => `3 NOT IN {1, NULL}` is UNKNOWN)
+query I
+SELECT id FROM naconst_t1 WHERE 3 NOT IN (SELECT id FROM naconst_t2) ORDER BY id;
+----
+
+# Q2: `NOT (x IN (...))` is the same predicate spelled differently
+query I
+SELECT id FROM naconst_t1 WHERE NOT (3 IN (SELECT id FROM naconst_t2)) ORDER BY id;
+----
+
+# C1: the constant is present in the subquery => FALSE, no rows (already correct)
+query I
+SELECT id FROM naconst_t1 WHERE 1 NOT IN (SELECT id FROM naconst_t2) ORDER BY id;
+----
+
+# C2: no NULL in the subquery => plain TRUE, all rows survive
+query I
+SELECT id FROM naconst_t1 WHERE 3 NOT IN (SELECT id FROM naconst_t2 WHERE id IS NOT NULL) ORDER BY id;
+----
+1
+2
+
+# C3: column value expression (an equi-join key exists) => already correct
+query I
+SELECT id FROM naconst_t1 WHERE id + 2 NOT IN (SELECT id FROM naconst_t2) ORDER BY id;
+----
+
+# A constant that is absent from a NULL-free subquery still yields TRUE even
+# when other outer predicates are present.
+query I
+SELECT id FROM naconst_t1
+WHERE id > 1 AND 3 NOT IN (SELECT id FROM naconst_t2 WHERE id IS NOT NULL)
+ORDER BY id;
+----
+2
+
+# The projected value column is named after the subquery alias. A user column
+# that happens to share that name must not make the reference ambiguous.
+statement ok
+CREATE TABLE naconst_clash("__correlated_sq_1_value" INT) AS VALUES (1), (2);
+
+query I
+SELECT "__correlated_sq_1_value" FROM naconst_clash
+WHERE 3 NOT IN (SELECT id FROM naconst_t2)
+ORDER BY 1;
+----
+
+query I
+SELECT "__correlated_sq_1_value" FROM naconst_clash
+WHERE 3 NOT IN (SELECT id FROM naconst_t2 WHERE id IS NOT NULL)
+ORDER BY 1;
+----
+1
+2
+
+statement ok
+DROP TABLE naconst_clash;
+
+# A constant value expression with a non-equality correlation leaves the
+# null-aware join without any equi-join key. Only `HashJoinExec` implements
+# null-aware semantics and it needs a key, so the planner reports the gap
+# instead of falling back to a nested loop join that ignores the NULLs and
+# silently returns wrong results.
+statement ok
+CREATE TABLE naconst_corr_t1(id INT, g INT) AS VALUES (1, 1), (2, 2);
+
+statement ok
+CREATE TABLE naconst_corr_t2(id INT, g INT) AS VALUES (1, 1), (NULL, 2);
+
+query error DataFusion error: Error during planning: null_aware LeftAnti join requires equi\-join keys, but the join has none
+SELECT id FROM naconst_corr_t1 WHERE 3 NOT IN (SELECT id FROM naconst_corr_t2 WHERE naconst_corr_t2.g > naconst_corr_t1.g);
+
+statement ok
+DROP TABLE naconst_corr_t1;
+
+statement ok
+DROP TABLE naconst_corr_t2;
+
+statement ok
+DROP TABLE naconst_t1;
+
+statement ok
+DROP TABLE naconst_t2;

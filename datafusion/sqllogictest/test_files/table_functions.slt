@@ -259,6 +259,184 @@ SELECT * FROM generate_series(DATE '2262-04-10', DATE '2262-04-11', INTERVAL '2'
 ----
 2262-04-10T00:00:00
 
+#
+# Timestamp bounds of every precision
+# https://github.com/apache/datafusion/issues/25169
+#
+
+query P
+SELECT * FROM generate_series(arrow_cast(TIMESTAMP '2024-01-01T00:00:00', 'Timestamp(Second, None)'), arrow_cast(TIMESTAMP '2024-01-03T00:00:00', 'Timestamp(Second, None)'), INTERVAL '1' DAY)
+----
+2024-01-01T00:00:00
+2024-01-02T00:00:00
+2024-01-03T00:00:00
+
+query P
+SELECT * FROM generate_series(arrow_cast(TIMESTAMP '2024-01-01T00:00:00', 'Timestamp(Millisecond, None)'), arrow_cast(TIMESTAMP '2024-01-03T00:00:00', 'Timestamp(Millisecond, None)'), INTERVAL '1' DAY)
+----
+2024-01-01T00:00:00
+2024-01-02T00:00:00
+2024-01-03T00:00:00
+
+query P
+SELECT * FROM generate_series(arrow_cast(TIMESTAMP '2024-01-01T00:00:00', 'Timestamp(Microsecond, None)'), arrow_cast(TIMESTAMP '2024-01-03T00:00:00', 'Timestamp(Microsecond, None)'), INTERVAL '1' DAY)
+----
+2024-01-01T00:00:00
+2024-01-02T00:00:00
+2024-01-03T00:00:00
+
+query P
+SELECT * FROM generate_series(arrow_cast(TIMESTAMP '2024-01-01T00:00:00', 'Timestamp(Nanosecond, None)'), arrow_cast(TIMESTAMP '2024-01-03T00:00:00', 'Timestamp(Nanosecond, None)'), INTERVAL '1' DAY)
+----
+2024-01-01T00:00:00
+2024-01-02T00:00:00
+2024-01-03T00:00:00
+
+query P
+SELECT * FROM range(arrow_cast(TIMESTAMP '2024-01-01T00:00:00', 'Timestamp(Second, None)'), arrow_cast(TIMESTAMP '2024-01-03T00:00:00', 'Timestamp(Second, None)'), INTERVAL '1' DAY)
+----
+2024-01-01T00:00:00
+2024-01-02T00:00:00
+
+query P
+SELECT * FROM generate_series(arrow_cast(TIMESTAMP '2024-01-01T00:00:00', 'Timestamp(Second, None)'), arrow_cast(TIMESTAMP '2024-01-01T00:00:01', 'Timestamp(Second, None)'), INTERVAL '250' MILLISECOND)
+----
+2024-01-01T00:00:00
+2024-01-01T00:00:00.250
+2024-01-01T00:00:00.500
+2024-01-01T00:00:00.750
+2024-01-01T00:00:01
+
+# Mixed precisions
+query P
+SELECT * FROM generate_series(arrow_cast(TIMESTAMP '2024-01-01T00:00:00', 'Timestamp(Second, None)'), arrow_cast(TIMESTAMP '2024-01-03T00:00:00', 'Timestamp(Microsecond, None)'), INTERVAL '1' DAY)
+----
+2024-01-01T00:00:00
+2024-01-02T00:00:00
+2024-01-03T00:00:00
+
+query P
+SELECT * FROM range(arrow_cast(TIMESTAMP '2024-01-03T00:00:00', 'Timestamp(Millisecond, None)'), arrow_cast(TIMESTAMP '2024-01-01T00:00:00', 'Timestamp(Second, None)'), INTERVAL '-1' DAY)
+----
+2024-01-03T00:00:00
+2024-01-02T00:00:00
+
+# Output is always nanoseconds
+query T
+SELECT DISTINCT arrow_typeof(value) FROM generate_series(arrow_cast(TIMESTAMP '2024-01-01T00:00:00', 'Timestamp(Second, None)'), arrow_cast(TIMESTAMP '2024-01-02T00:00:00', 'Timestamp(Second, None)'), INTERVAL '1' DAY)
+----
+Timestamp(ns)
+
+query T
+SELECT DISTINCT arrow_typeof(value) FROM generate_series(arrow_cast(TIMESTAMP '2024-01-01T00:00:00Z', 'Timestamp(Second, Some("+05:00"))'), arrow_cast(TIMESTAMP '2024-01-02T00:00:00Z', 'Timestamp(Second, Some("+05:00"))'), INTERVAL '1' DAY)
+----
+Timestamp(ns, "+05:00")
+
+# Mixed timezones: the output uses the start's timezone
+query T
+SELECT DISTINCT arrow_typeof(value) FROM generate_series(arrow_cast(TIMESTAMP '2024-01-01T00:00:00Z', 'Timestamp(Second, Some("+05:00"))'), arrow_cast(TIMESTAMP '2024-01-03T00:00:00Z', 'Timestamp(Microsecond, Some("America/New_York"))'), INTERVAL '1' DAY)
+----
+Timestamp(ns, "+05:00")
+
+query P
+SELECT * FROM generate_series(arrow_cast(TIMESTAMP '2024-01-01T00:00:00Z', 'Timestamp(Second, Some("+05:00"))'), arrow_cast(TIMESTAMP '2024-01-03T00:00:00Z', 'Timestamp(Microsecond, Some("America/New_York"))'), INTERVAL '1' DAY)
+----
+2024-01-01T00:00:00+05:00
+2024-01-02T00:00:00+05:00
+2024-01-03T00:00:00+05:00
+
+# Bounds compare as instants: 2024-01-01T05:00Z to 2024-01-02T19:00Z
+query P
+SELECT * FROM generate_series(arrow_cast(TIMESTAMP '2024-01-01T00:00:00Z', 'Timestamp(Microsecond, Some("America/New_York"))'), arrow_cast(TIMESTAMP '2024-01-03T00:00:00Z', 'Timestamp(Second, Some("+05:00"))'), INTERVAL '1' DAY)
+----
+2024-01-01T00:00:00-05:00
+2024-01-02T00:00:00-05:00
+
+# NULL bounds
+query P
+SELECT * FROM generate_series(arrow_cast(TIMESTAMP '2024-01-01T00:00:00', 'Timestamp(Second, None)'), arrow_cast(NULL, 'Timestamp(Millisecond, None)'), INTERVAL '1' DAY)
+----
+
+query P
+SELECT * FROM range(arrow_cast(NULL, 'Timestamp(Second, None)'), arrow_cast(TIMESTAMP '2024-01-03T00:00:00', 'Timestamp(Microsecond, None)'), INTERVAL '1' DAY)
+----
+
+query P
+SELECT * FROM generate_series(arrow_cast(TIMESTAMP '2024-01-01T00:00:00', 'Timestamp(Second, None)'), NULL, INTERVAL '1' DAY)
+----
+
+# Bounds outside the nanosecond range
+statement error DataFusion error: Error during planning: First argument for generate_series is out of range of nanosecond timestamps: 9223372036854775807 \(Timestamp\(Second, None\)\) is outside 1677\-09\-21T00:12:43\.145224192 to 2262\-04\-11T23:47:16\.854775807
+SELECT * FROM generate_series(arrow_cast(9223372036854775807, 'Timestamp(Second, None)'), arrow_cast(0, 'Timestamp(Second, None)'), INTERVAL '-1' DAY)
+
+statement error DataFusion error: Error during planning: Second argument for generate_series is out of range of nanosecond timestamps: \-9223372036854775808 \(Timestamp\(Millisecond, None\)\) is outside 1677\-09\-21T00:12:43\.145224192 to 2262\-04\-11T23:47:16\.854775807
+SELECT * FROM generate_series(arrow_cast(0, 'Timestamp(Millisecond, None)'), arrow_cast(-9223372036854775808, 'Timestamp(Millisecond, None)'), INTERVAL '-1' DAY)
+
+statement error DataFusion error: Error during planning: First argument for range is out of range of nanosecond timestamps: 9223372036854775807 \(Timestamp\(Microsecond, None\)\) is outside
+SELECT * FROM range(arrow_cast(9223372036854775807, 'Timestamp(Microsecond, None)'), arrow_cast(0, 'Timestamp(Microsecond, None)'), INTERVAL '-1' DAY)
+
+# Edge of the nanosecond range for each unit
+query P
+SELECT * FROM generate_series(arrow_cast(9223372036, 'Timestamp(Second, None)'), arrow_cast(9223372036, 'Timestamp(Second, None)'), INTERVAL '1' DAY)
+----
+2262-04-11T23:47:16
+
+query P
+SELECT * FROM generate_series(arrow_cast(-9223372036854775, 'Timestamp(Microsecond, None)'), arrow_cast(-9223372036854775, 'Timestamp(Microsecond, None)'), INTERVAL '1' DAY)
+----
+1677-09-21T00:12:43.145225
+
+query P
+SELECT * FROM generate_series(arrow_cast(-9223372036, 'Timestamp(Second, None)'), arrow_cast(-9223372036, 'Timestamp(Second, None)'), INTERVAL '1' DAY)
+----
+1677-09-21T00:12:44
+
+query P
+SELECT * FROM generate_series(arrow_cast(9223372036854, 'Timestamp(Millisecond, None)'), arrow_cast(9223372036854, 'Timestamp(Millisecond, None)'), INTERVAL '1' DAY)
+----
+2262-04-11T23:47:16.854
+
+query P
+SELECT * FROM generate_series(arrow_cast(-9223372036854, 'Timestamp(Millisecond, None)'), arrow_cast(-9223372036854, 'Timestamp(Millisecond, None)'), INTERVAL '1' DAY)
+----
+1677-09-21T00:12:43.146
+
+query P
+SELECT * FROM generate_series(arrow_cast(9223372036854775, 'Timestamp(Microsecond, None)'), arrow_cast(9223372036854775, 'Timestamp(Microsecond, None)'), INTERVAL '1' DAY)
+----
+2262-04-11T23:47:16.854775
+
+statement error DataFusion error: Error during planning: First argument for generate_series is out of range of nanosecond timestamps
+SELECT * FROM generate_series(arrow_cast(9223372037, 'Timestamp(Second, None)'), arrow_cast(9223372037, 'Timestamp(Second, None)'), INTERVAL '1' DAY)
+
+statement error DataFusion error: Error during planning: First argument for generate_series is out of range of nanosecond timestamps
+SELECT * FROM generate_series(arrow_cast(-9223372036854776, 'Timestamp(Microsecond, None)'), arrow_cast(-9223372036854776, 'Timestamp(Microsecond, None)'), INTERVAL '1' DAY)
+
+statement error DataFusion error: Error during planning: First argument for generate_series is out of range of nanosecond timestamps
+SELECT * FROM generate_series(arrow_cast(-9223372037, 'Timestamp(Second, None)'), arrow_cast(-9223372037, 'Timestamp(Second, None)'), INTERVAL '1' DAY)
+
+statement error DataFusion error: Error during planning: First argument for generate_series is out of range of nanosecond timestamps
+SELECT * FROM generate_series(arrow_cast(9223372036855, 'Timestamp(Millisecond, None)'), arrow_cast(9223372036855, 'Timestamp(Millisecond, None)'), INTERVAL '1' DAY)
+
+statement error DataFusion error: Error during planning: First argument for generate_series is out of range of nanosecond timestamps
+SELECT * FROM generate_series(arrow_cast(-9223372036855, 'Timestamp(Millisecond, None)'), arrow_cast(-9223372036855, 'Timestamp(Millisecond, None)'), INTERVAL '1' DAY)
+
+statement error DataFusion error: Error during planning: First argument for generate_series is out of range of nanosecond timestamps
+SELECT * FROM generate_series(arrow_cast(9223372036854776, 'Timestamp(Microsecond, None)'), arrow_cast(9223372036854776, 'Timestamp(Microsecond, None)'), INTERVAL '1' DAY)
+
+# Invalid argument types
+statement error DataFusion error: Error during planning: Second argument for generate_series must be a TIMESTAMP or NULL constant, got Int64
+SELECT * FROM generate_series(arrow_cast(TIMESTAMP '2024-01-01T00:00:00', 'Timestamp(Second, None)'), 5, INTERVAL '1' DAY)
+
+statement error DataFusion error: Error during planning: Third argument for generate_series must be an INTERVAL or NULL constant, got Utf8
+SELECT * FROM generate_series(arrow_cast(TIMESTAMP '2024-01-01T00:00:00', 'Timestamp(Second, None)'), arrow_cast(TIMESTAMP '2024-01-03T00:00:00', 'Timestamp(Second, None)'), 'not an interval')
+
+statement error DataFusion error: Error during planning: Second argument for generate_series must be a DATE or NULL constant, got Int64
+SELECT * FROM generate_series(DATE '2024-01-01', 5, INTERVAL '1' DAY)
+
+statement error DataFusion error: Error during planning: Second argument for generate_series must be a TIMESTAMP or NULL constant, got \(<subquery>\)
+SELECT * FROM generate_series(arrow_cast(TIMESTAMP '2024-01-01T00:00:00', 'Timestamp(Second, None)'), (SELECT TIMESTAMP '2024-01-03T00:00:00'), INTERVAL '1' DAY)
+
 # UDF and UDTF `generate_series` can be used simultaneously
 query ? rowsort
 SELECT generate_series(1, t1.end) FROM generate_series(3, 5) as t1(end)
