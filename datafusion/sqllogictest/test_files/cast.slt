@@ -91,6 +91,54 @@ statement ok
 drop table t0;
 
 
+# Regression for https://github.com/apache/datafusion/issues/25523.
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE TABLE lossy_cast (id INT, x DOUBLE, n BIGINT)
+AS VALUES (1, -0.5, 16777216), (2, 0.5, 16777217), (3, NULL, NULL);
+
+# A singleton cast result does not imply a singleton input.
+query I
+SELECT id FROM lossy_cast WHERE CAST(x AS INT) = 0 ORDER BY x DESC;
+----
+2
+1
+
+query I
+SELECT id FROM lossy_cast WHERE CAST(n AS REAL) = 16777216::REAL ORDER BY n DESC;
+----
+2
+1
+
+statement ok
+DROP TABLE lossy_cast;
+
+statement ok
+CREATE TABLE lossy_non_numeric (id INT, t TIMESTAMP, s VARCHAR)
+AS VALUES (1, TIMESTAMP '2026-01-01 01:00:00', '01'),
+          (2, TIMESTAMP '2026-01-01 02:00:00', '1');
+
+query I
+SELECT id FROM lossy_non_numeric
+WHERE CAST(t AS DATE) = DATE '2026-01-01' ORDER BY t DESC;
+----
+2
+1
+
+query I
+SELECT id FROM lossy_non_numeric WHERE CAST(s AS INT) = 1 ORDER BY s DESC;
+----
+2
+1
+
+statement ok
+DROP TABLE lossy_non_numeric;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
 # ensure that automatically casting with "datafusion.optimizer.expand_views_at_output" does not
 # change the column name
 
