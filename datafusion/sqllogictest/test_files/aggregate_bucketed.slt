@@ -105,12 +105,15 @@ select k, c, s from (select v as k, count(*) c, sum(v) s from t group by v) orde
 statement ok
 set datafusion.execution.hash_aggregate_bucket_threshold = 100;
 
-# Each of the four final partitions moved its groups into buckets once
+# Each of the four final partitions moved its groups into buckets once, and
+# the partial aggregations flushed their tables
 query TT
 explain analyze select count(*) from (select v % 10007 as k, count(*) c from t group by k);
 ----
 <slt:ignore>
 06)----------AggregateExec: mode=FinalPartitioned, gby=[t.v % Int64(10007)@0 as t.v % Int64(10007)], aggr=[], metrics=[<slt:ignore>bucket_splits=4,<slt:ignore>]
+<slt:ignore>
+08)--------------AggregateExec: mode=Partial, gby=[v@0 % 10007 as t.v % Int64(10007)], aggr=[], metrics=[<slt:ignore>table_flush_count=<slt:ignore>]
 <slt:ignore>
 
 # integer key, several accumulators
