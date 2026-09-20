@@ -286,7 +286,6 @@ pub(crate) fn to_substrait_literal(
                 }?;
                 LiteralType::EmptyMap(mt)
             } else {
-                // A scalar map can retain children from other rows after slicing.
                 let entries = m.value(0);
                 let keys = (0..entries.len())
                     .map(|i| {
