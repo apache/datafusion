@@ -239,6 +239,33 @@ WHERE NOT EXISTS (
 ----
 4950
 
+# --- LEFT MARK JOIN ---
+# The `OR` keeps the subquery from becoming a semi join: every left row is
+# marked, then filtered. 50 left rows are marked true, 10 more pass on `v1`.
+query I nosort
+SELECT count(*) as cnt
+FROM generate_series(1, 5000) AS t1(v1)
+WHERE t1.v1 > 4990 OR EXISTS (
+  SELECT 1 FROM generate_series(1, 100) AS t2(v2)
+  WHERE (t1.v1 + t2.v2) = 101 AND t2.v2 <= 50
+)
+----
+60
+
+# --- LIMIT ---
+# A satisfied LIMIT drops the join's partitions before they finish. That must
+# neither hang nor fail the query.
+query I nosort
+SELECT count(*) as cnt FROM (
+  SELECT t1.v1, t2.v2
+  FROM generate_series(1, 5000) AS t1(v1)
+  LEFT JOIN generate_series(1, 100) AS t2(v2)
+    ON (t1.v1 + t2.v2) = 101 AND t2.v2 <= 50
+  LIMIT 5
+)
+----
+5
+
 # Restore settings to slt runner defaults
 statement ok
 RESET datafusion.runtime.memory_limit
