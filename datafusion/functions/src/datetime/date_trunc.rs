@@ -1013,7 +1013,7 @@ mod tests {
         })
     }
 
-    fn assert_timezone_less_range_analysis_contract<T: ArrowTimestampType>() {
+    fn assert_timezone_less_date_trunc_contract<T: ArrowTimestampType>() {
         let scale = match T::UNIT {
             TimeUnit::Second => 1_000_000_000,
             TimeUnit::Millisecond => 1_000_000,
@@ -1103,12 +1103,19 @@ mod tests {
         }
     }
 
+    /// Verifies the function-level contract required by
+    /// [`ScalarUDFImpl::supports_range_partitioning_analysis`] across every
+    /// supported granularity and timezone-less timestamp unit. Ordered input
+    /// remains ordered, and output nullness exactly matches input nullness.
+    /// Concrete range-split separation is tested separately.
+    ///
+    /// See <https://github.com/apache/datafusion/issues/25344>.
     #[test]
-    fn timezone_less_timestamps_satisfy_range_analysis_contract() {
-        assert_timezone_less_range_analysis_contract::<TimestampSecondType>();
-        assert_timezone_less_range_analysis_contract::<TimestampMillisecondType>();
-        assert_timezone_less_range_analysis_contract::<TimestampMicrosecondType>();
-        assert_timezone_less_range_analysis_contract::<TimestampNanosecondType>();
+    fn timezone_less_date_trunc_is_ordered_and_preserves_nullness() {
+        assert_timezone_less_date_trunc_contract::<TimestampSecondType>();
+        assert_timezone_less_date_trunc_contract::<TimestampMillisecondType>();
+        assert_timezone_less_date_trunc_contract::<TimestampMicrosecondType>();
+        assert_timezone_less_date_trunc_contract::<TimestampNanosecondType>();
     }
 
     #[test]
