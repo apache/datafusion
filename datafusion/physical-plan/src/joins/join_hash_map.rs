@@ -311,6 +311,18 @@ pub fn update_from_iter<'a, T>(
     T: Copy + TryFrom<usize> + PartialOrd,
     <T as TryFrom<usize>>::Error: Debug,
 {
+    update_from_iter_inner(map, next, iter, deleted_offset);
+}
+
+pub(crate) fn update_from_iter_inner<'a, T>(
+    map: &mut HashTable<(u64, T)>,
+    next: &mut [T],
+    iter: impl Iterator<Item = (usize, &'a u64)> + Send + 'a,
+    deleted_offset: usize,
+) where
+    T: Copy + TryFrom<usize> + PartialOrd,
+    <T as TryFrom<usize>>::Error: Debug,
+{
     for (row, &hash_value) in iter {
         let entry = map.entry(
             hash_value,

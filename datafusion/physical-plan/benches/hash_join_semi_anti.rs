@@ -453,6 +453,8 @@ fn bench_hash_join_build(c: &mut Criterion) {
 
     for distribution in [
         "duplicates",
+        "mid_20k",
+        "mid_100k",
         "mostly_unique",
         "unique",
         "unique_prefix",
@@ -466,6 +468,8 @@ fn bench_hash_join_build(c: &mut Criterion) {
                     (start..(start + 8192).min(ROWS)).map(|row| {
                         let key = match distribution {
                             "duplicates" => row % 64,
+                            "mid_20k" => row % 20_000,
+                            "mid_100k" => row % 100_000,
                             "mostly_unique" => row % 900_000,
                             "unique" => row,
                             _ => {
