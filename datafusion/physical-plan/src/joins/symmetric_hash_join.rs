@@ -41,7 +41,8 @@ use crate::joins::stream_join_utils::{
 };
 use crate::joins::utils::{
     BatchSplitter, BatchTransformer, ColumnIndex, JoinFilter, JoinHashMapType, JoinOn,
-    JoinOnRef, NoopBatchTransformer, StatefulStreamResult, apply_join_filter_to_indices,
+    JoinOnRef, NoopBatchTransformer, StatefulStreamResult,
+    add_full_join_key_equivalences, apply_join_filter_to_indices,
     build_batch_from_indices, build_join_schema, check_join_is_valid, equal_rows_arr,
     matchable_join_keys, symmetric_join_output_partitioning, update_hash,
 };
@@ -268,7 +269,7 @@ impl SymmetricHashJoinExec {
         join_on: JoinOnRef,
     ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
-        let eq_properties = join_equivalence_properties(
+        let mut eq_properties = join_equivalence_properties(
             left.equivalence_properties().clone(),
             right.equivalence_properties().clone(),
             &join_type,
@@ -280,7 +281,14 @@ impl SymmetricHashJoinExec {
         )?;
 
         let output_partitioning =
-            symmetric_join_output_partitioning(left, right, &join_type)?;
+            symmetric_join_output_partitioning(left, right, &join_type, join_on)?;
+        add_full_join_key_equivalences(
+            &mut eq_properties,
+            &output_partitioning,
+            join_type,
+            join_on,
+            left.schema().fields().len(),
+        )?;
 
         Ok(PlanProperties::new(
             eq_properties,

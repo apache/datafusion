@@ -85,7 +85,7 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
-use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::expressions::{Column, case, is_not_null};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::aggregates::{
@@ -2778,9 +2778,24 @@ async fn verify_join_output_partitioning() -> Result<()> {
                 );
             }
             JoinType::Full => {
-                assert!(matches!(
-                        out_partitioning,
-                    &Partitioning::UnknownPartitioning(partition_count) if partition_count == default_partition_count));
+                let coalesced_exprs = [("c1", "c2_c1"), ("c2", "c2_c2")]
+                    .into_iter()
+                    .map(|(left, right)| {
+                        let left: Arc<dyn PhysicalExpr> =
+                            Arc::new(Column::new_with_schema(left, &join_schema)?);
+                        let right: Arc<dyn PhysicalExpr> =
+                            Arc::new(Column::new_with_schema(right, &join_schema)?);
+                        case(
+                            None,
+                            vec![(is_not_null(Arc::clone(&left))?, left)],
+                            Some(right),
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                assert_eq!(
+                    out_partitioning,
+                    &Partitioning::Hash(coalesced_exprs, default_partition_count)
+                );
             }
         }
     }
