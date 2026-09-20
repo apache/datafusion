@@ -995,15 +995,13 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// Returns whether this function and argument-type combination may
     /// participate in range-partitioning locality analysis.
     ///
-    /// Returning `true` asserts that:
+    /// Returning `true` asserts that successful evaluation returns null exactly
+    /// when the range input is null.
     ///
-    /// - same-direction [`SortProperties::Ordered`] metadata is valid over the
-    ///   admitted non-null domain when all other inputs are singleton;
-    /// - successful evaluation returns null exactly when the range input is null.
-    ///
-    /// Callers may use this contract to prove key locality by evaluating values
-    /// on both sides of each concrete range split. Ordered metadata alone is
-    /// insufficient because a non-strict transform can collapse a split boundary.
+    /// Callers may combine this contract with same-direction
+    /// [`SortProperties::Ordered`] metadata and concrete range-split evaluation
+    /// to prove key locality. Ordered metadata alone is insufficient because a
+    /// non-strict transform can collapse a split boundary.
     ///
     /// This does not claim a concrete partition layout or cross-input
     /// co-partitioning compatibility. Boundary evaluation errors cause the
