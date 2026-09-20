@@ -393,6 +393,28 @@ fn roundtrip_statement_with_dialect_4() -> Result<(), DataFusionError> {
 }
 
 #[test]
+fn unparse_preserves_derived_aggregate_output_name() -> Result<()> {
+    let schema = Schema::new(vec![Field::new("j1_id", DataType::Int32, false)]);
+    let aggregate = sum(col("j1.j1_id"));
+    let output = Expr::Column(Column::from_name(aggregate.schema_name().to_string()));
+    let plan = table_scan(Some("j1"), &schema, None)?
+        .aggregate(Vec::<Expr>::new(), vec![aggregate])?
+        .project(vec![output.clone().alias("visible"), output.clone()])?
+        .project(vec![output])?
+        .build()?;
+
+    let sql = Unparser::new(&UnparserPostgreSqlDialect {})
+        .plan_to_sql(&plan)?
+        .to_string();
+    println!("UNPARSED_SQL={sql}");
+    assert_snapshot!(
+        sql,
+        @r#"SELECT "sum(j1.j1_id)" FROM (SELECT sum("j1"."j1_id") AS "visible", sum("j1"."j1_id") AS "sum(j1.j1_id)" FROM "j1") AS "derived_projection""#
+    );
+    Ok(())
+}
+
+#[test]
 fn roundtrip_rebases_derived_projection_references() -> Result<(), DataFusionError> {
     roundtrip_statement_with_dialect_helper!(
         sql: "select j1_id from (select ta.j1_id as j1_id from j1 ta);",
