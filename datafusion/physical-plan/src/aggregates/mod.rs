@@ -1676,12 +1676,11 @@ impl AggregateExec {
             return false;
         }
 
-        let required = Distribution::KeyPartitioned(self.group_by.input_exprs());
-        if input
-            .output_partitioning()
-            .satisfaction(&required, input.equivalence_properties(), allow_subset)
-            .is_key_local()
-        {
+        if input.output_partitioning().keeps_keys_local(
+            &self.group_by.input_exprs(),
+            input.equivalence_properties(),
+            allow_subset,
+        ) {
             return true;
         }
 
