@@ -995,10 +995,10 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// Returns whether this function and argument-type combination may
     /// participate in range-partitioning locality analysis.
     ///
-    /// Returning `true` asserts that, whenever the concrete expression reports
-    /// same-direction ordering with all other inputs singleton:
+    /// Returning `true` asserts that:
     ///
-    /// - the function is globally nondecreasing over its admitted non-null domain;
+    /// - same-direction [`SortProperties::Ordered`] metadata is valid over the
+    ///   admitted non-null domain when all other inputs are singleton;
     /// - successful evaluation returns null exactly when the range input is null.
     ///
     /// Callers may use this contract to prove key locality by evaluating values
