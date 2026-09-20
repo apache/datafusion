@@ -809,6 +809,12 @@ mod tests {
         )
         .unwrap();
         fs::write(directory.path().join("02.sql"), "# MySQL comment\nSELECT 1").unwrap();
+        fs::write(
+            directory.path().join("03.sql"),
+            "RESET datafusion.sql_parser.dialect",
+        )
+        .unwrap();
+        fs::write(directory.path().join("04.sql"), "SELECT 1,").unwrap();
         let options = RunOpt {
             query: None,
             compare: None,
@@ -818,10 +824,12 @@ mod tests {
 
         let reports = report_query_files(&options, &SessionContext::new()).await;
 
-        assert_eq!(reports.len(), 2);
+        assert_eq!(reports.len(), 4);
         assert!(reports.iter().all(|report| report.success));
         assert_eq!(reports[1].query, "02");
         assert!(!reports[1].operators.is_empty());
+        assert_eq!(reports[3].query, "04");
+        assert!(!reports[3].operators.is_empty());
     }
 
     #[tokio::test]
