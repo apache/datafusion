@@ -75,7 +75,7 @@ pub struct PullUpCorrelatedExpr {
     /// lateral joins, we need to produce a left outer join in such cases.
     pub pulled_up_scalar_agg: bool,
     /// Every correlated conjunct that a `Filter` of the subquery applies,
-    /// before [`remove_duplicated_filter`] drops the ones that the `IN`
+    /// before `remove_duplicated_filter` drops the ones that the `IN`
     /// predicate already covers.
     ///
     /// `join_filters` holds only the conjuncts that the join still needs.
