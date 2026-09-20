@@ -578,27 +578,35 @@ fn evaluate_with_range_value(
 /// key occurs in two partitions. In other words, the partition images must be
 /// disjoint: `f(Pᵢ) ∩ f(Pⱼ) = ∅` for `i ≠ j`.
 ///
-/// Monotonicity alone is insufficient. It guarantees only that values do not
-/// reverse order across a split:
+/// Monotonicity alone is insufficient. Ordered metadata gives only
 ///
 /// ```text
 /// f(predecessor(xᵢ)) ≤ f(xᵢ)
 /// ```
 ///
-/// Equality means a group crosses the split. For example, an hourly truncation
-/// maps timestamps immediately before and at a `01:30` split to the same
-/// `01:00` bucket. A split at `01:00` is safe because its predecessor maps to
-/// `00:00`, while the split itself maps to `01:00`.
-///
-/// Timestamp values form a discrete domain. For every `x < xᵢ`, monotonicity
-/// gives `f(x) ≤ f(predecessor(xᵢ))`; for every `y ≥ xᵢ`, it gives
-/// `f(xᵢ) ≤ f(y)`. Therefore checking
+/// but locality requires strict separation at every split:
 ///
 /// ```text
 /// f(predecessor(xᵢ)) < f(xᵢ)
 /// ```
 ///
-/// at every split proves all partition images are disjoint. The successor of
+/// Since ordering already supplies the non-strict inequality, the analysis
+/// proves strictness by explicitly checking that the two outputs are not equal.
+/// Otherwise, the same transformed key could occur in both adjacent partitions,
+/// so the transform would not preserve key locality. For example, an hourly
+/// truncation maps timestamps immediately before and at a `01:30` split to the
+/// same `01:00` bucket. A split at `01:00` is safe because its predecessor maps
+/// to `00:00`, while the split itself maps to `01:00`.
+///
+/// `predecessor(xᵢ)` is the greatest representable timestamp below the split.
+/// Therefore, for every `x < xᵢ` and `y ≥ xᵢ`, ordering and the strict boundary
+/// check give
+///
+/// ```text
+/// f(x) ≤ f(predecessor(xᵢ)) < f(xᵢ) ≤ f(y)
+/// ```
+///
+/// Thus no transformed key can occur on both sides of the split. The successor of
 /// an ascending split is already in the same partition as `xᵢ`, so checking it
 /// would not say anything about groups crossing that split.
 ///
