@@ -423,11 +423,13 @@ impl PhysicalExpr for CastExpr {
         interval: &Interval,
         children: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
-        let child_interval = children[0];
-        // Get child's datatype:
-        let cast_type = child_interval.data_type();
+        let source_type = children[0].data_type();
+        let target_type = self.cast_type();
+        if !can_propagate_cast_constraints(&source_type, target_type) {
+            return Ok(Some(vec![]));
+        }
         Ok(Some(vec![
-            interval.cast_to(&cast_type, &DEFAULT_SAFE_CAST_OPTIONS)?,
+            interval.cast_to(&source_type, &DEFAULT_SAFE_CAST_OPTIONS)?,
         ]))
     }
 
@@ -461,6 +463,19 @@ impl PhysicalExpr for CastExpr {
             ))),
         }))
     }
+}
+
+/// Whether output bounds can be cast back to `source` without excluding valid inputs.
+///
+/// Used for reverse constraint propagation through a cast from `source` to `target`.
+/// Many-to-one casts, such as Float64 to Int32, cannot generally be inverted this way:
+/// an output of 0 does not imply an input of 0.0.
+/// Returns false for unrecognized conversions so the input range remains unchanged.
+fn can_propagate_cast_constraints(source: &DataType, target: &DataType) -> bool {
+    CastExpr::check_bigger_cast(target, source)
+        || (source.is_integer() && target.is_integer())
+        // NaN bounds are unbounded; finite Float32 values widen exactly.
+        || (*source == Float32 && *target == Float64)
 }
 
 #[cfg(feature = "proto")]
@@ -631,9 +646,119 @@ mod tests {
         as_boolean_array, as_int64_array, as_string_array, as_struct_array,
         as_uint8_array,
     };
+    use datafusion_common::rounding::{next_down, next_up};
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
     use insta::assert_snapshot;
     use std::collections::HashMap;
+
+    #[test]
+    fn test_cast_constraint_propagation() -> Result<()> {
+        for (source, target, propagates) in [
+            (Utf8, Int32, false),
+            (Utf8View, Int32, false),
+            (Timestamp(TimeUnit::Nanosecond, None), Date32, false),
+            (Int32, Date32, true),
+            (Date32, Int32, true),
+            (Utf8, LargeUtf8, true),
+            (Utf8, Utf8, true),
+            (Float64, Int32, false),
+            (Int64, Float32, false),
+            (Float64, Float32, false),
+            (Decimal128(4, 1), Decimal128(4, 0), false),
+            (Decimal128(4, 1), Int32, false),
+            (Float64, Decimal128(4, 1), false),
+            (Int8, Int64, true),
+            (Int64, Int8, true),
+            (Int32, UInt32, true),
+            (UInt32, Int32, true),
+            (Int32, Float64, true),
+            (Float32, Float64, true),
+            (Decimal128(4, 1), Decimal128(4, 1), true),
+        ] {
+            let schema = Schema::new(vec![Field::new("x", source.clone(), true)]);
+            let expr = CastExpr::new(col("x", &schema)?, target.clone(), None);
+            let input = Interval::make_unbounded(&source)?;
+            let value = ScalarValue::Int32(Some(0)).cast_to(&target)?;
+            let output = Interval::from(&value);
+            let expected = if propagates {
+                vec![Interval::from(&value.cast_to(&source)?)]
+            } else {
+                vec![]
+            };
+            assert_eq!(
+                expr.propagate_constraints(&output, &[&input])?,
+                Some(expected),
+                "{source} -> {target}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_float_widening_constraint_boundaries() -> Result<()> {
+        let mut values = vec![
+            f32::NEG_INFINITY,
+            -f32::MAX,
+            -1.0,
+            -f32::MIN_POSITIVE,
+            -f32::from_bits(1),
+            -0.0,
+            0.0,
+            f32::from_bits(1),
+            f32::MIN_POSITIVE,
+            1.0,
+            f32::MAX,
+            f32::INFINITY,
+        ];
+        // Include both signs of signaling and quiet NaNs with distinct payloads.
+        values.extend(
+            [0x7f800001, 0x7f800002, 0x7fc00001, 0xff800001, 0xffc00001]
+                .map(f32::from_bits),
+        );
+        values.extend([next_down(1.0f32), next_up(1.0f32)]);
+        let schema = Arc::new(Schema::new(vec![Field::new("x", Float32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Float32Array::from(values.clone()))],
+        )?;
+        let expr = CastExpr::new(col("x", &schema)?, Float64, None);
+        let array = expr.evaluate(&batch)?.into_array(values.len())?;
+        let widened = array.as_any().downcast_ref::<Float64Array>().unwrap();
+        let mut bounds = vec![-f64::MAX, f64::MAX];
+        for value in widened.values() {
+            bounds.extend([next_down(*value), *value, next_up(*value)]);
+        }
+        // Midpoints exercise rounding back to Float32 in both directions.
+        bounds.extend([
+            f64::from(f32::from_bits(1)) / 2.0,
+            -f64::from(f32::from_bits(1)) / 2.0,
+            f64::midpoint(1.0, f64::from(next_up(1.0f32))),
+        ]);
+        bounds.sort_by(f64::total_cmp);
+        bounds.dedup_by(|a, b| a.to_bits() == b.to_bits());
+        let input = Interval::make_unbounded(&Float32)?;
+        for (i, lower) in bounds.iter().enumerate() {
+            for upper in &bounds[i..] {
+                let output = Interval::make(Some(*lower), Some(*upper))?;
+                let propagated = expr.propagate_constraints(&output, &[&input])?.unwrap();
+                assert_eq!(propagated.len(), 1);
+                for (index, value) in values.iter().enumerate() {
+                    if output.contains_value(ScalarValue::Float64(Some(
+                        widened.value(index),
+                    )))? {
+                        assert!(
+                            propagated[0]
+                                .contains_value(ScalarValue::Float32(Some(*value)))?,
+                            "input bits={:08x}, output={output}, propagated={:?}",
+                            value.to_bits(),
+                            propagated[0]
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 
     fn make_struct_array(fields: Fields, arrays: Vec<ArrayRef>) -> StructArray {
         StructArray::new(fields, arrays, None)

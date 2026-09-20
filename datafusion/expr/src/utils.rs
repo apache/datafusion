@@ -28,7 +28,7 @@ use crate::{
 };
 use datafusion_expr_common::signature::{Signature, TypeSignature};
 
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -1483,6 +1483,23 @@ pub fn merge_schema(inputs: &[&LogicalPlan]) -> DFSchema {
 /// Build state name. State is the intermediate state of the aggregate function.
 pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{name}[{state_name}]")
+}
+
+/// Creates aggregate state fields for ordering expressions with unique names.
+///
+/// Each field is renamed using the aggregate name and its ordering position.
+pub fn ordering_state_fields(
+    name: &str,
+    ordering_fields: &[FieldRef],
+) -> impl Iterator<Item = FieldRef> {
+    ordering_fields.iter().enumerate().map(|(idx, field)| {
+        Arc::new(
+            field
+                .as_ref()
+                .clone()
+                .with_name(format_state_name(name, &format!("ordering_{idx}"))),
+        )
+    })
 }
 
 /// Determine the set of [`Column`]s produced by the subquery.
