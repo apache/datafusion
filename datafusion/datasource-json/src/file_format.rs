@@ -500,6 +500,13 @@ impl DataSink for JsonSink {
         use datafusion_proto_models::protobuf;
         use protobuf::physical_plan_node::PhysicalPlanType;
 
+        // Keep an exhaustive guard in the active hook while centralizing the
+        // field mapping in the exhaustive `TryFrom<&JsonSink>` below.
+        let Self {
+            config: _,
+            writer_options: _,
+        } = self;
+
         let input = ctx.encode_child(exec.input())?;
         let sort_order = exec.encode_sort_order(ctx)?;
         let sink = protobuf::JsonSink::try_from(self)?;
@@ -520,9 +527,14 @@ impl TryFrom<&JsonSink> for datafusion_proto_models::protobuf::JsonSink {
     type Error = datafusion_common::DataFusionError;
 
     fn try_from(value: &JsonSink) -> Result<Self> {
+        // Keep this public conversion exhaustive like the active serde hook.
+        let JsonSink {
+            config,
+            writer_options,
+        } = value;
         Ok(Self {
-            config: Some(value.config().try_into()?),
-            writer_options: Some(value.writer_options().try_into()?),
+            config: Some(config.try_into()?),
+            writer_options: Some(writer_options.try_into()?),
         })
     }
 }
@@ -532,14 +544,17 @@ impl TryFrom<&datafusion_proto_models::protobuf::JsonSink> for JsonSink {
     type Error = datafusion_common::DataFusionError;
 
     fn try_from(value: &datafusion_proto_models::protobuf::JsonSink) -> Result<Self> {
-        let config =
-            FileSinkConfig::try_from(value.config.as_ref().ok_or_else(|| {
-                datafusion_common::internal_datafusion_err!(
-                    "JsonSink is missing required field 'config'"
-                )
-            })?)?;
-        let writer_options = value
-            .writer_options
+        // Exhaustive destructure: new wire fields must be explicitly restored.
+        let datafusion_proto_models::protobuf::JsonSink {
+            config,
+            writer_options,
+        } = value;
+        let config = FileSinkConfig::try_from(config.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "JsonSink is missing required field 'config'"
+            )
+        })?)?;
+        let writer_options = writer_options
             .as_ref()
             .ok_or_else(|| {
                 datafusion_common::internal_datafusion_err!(
@@ -566,19 +581,26 @@ impl JsonSink {
             protobuf::physical_plan_node::PhysicalPlanType::JsonSink,
             "JsonSink",
         );
-        let input = ctx.decode_required_child(
-            sink_node.input.as_deref(),
-            "JsonSinkExecNode",
-            "input",
-        )?;
-        let proto_sink = sink_node.sink.as_ref().ok_or_else(|| {
+        // Exhaustive destructure: a new field on `JsonSinkExecNode` is a
+        // compile error here rather than a silently ignored wire field.
+        let protobuf::JsonSinkExecNode {
+            input,
+            sink,
+            // The output schema is recomputed by `DataSinkExec::new`.
+            sink_schema: _,
+            sort_order,
+        } = sink_node.as_ref();
+
+        let input =
+            ctx.decode_required_child(input.as_deref(), "JsonSinkExecNode", "input")?;
+        let proto_sink = sink.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "JsonSinkExecNode is missing required field 'sink'"
             )
         })?;
         let data_sink = JsonSink::try_from(proto_sink)?;
         let sort_order = DataSinkExec::decode_sort_order(
-            sink_node.sort_order.as_ref(),
+            sort_order.as_ref(),
             ctx,
             input.schema().as_ref(),
         )?;

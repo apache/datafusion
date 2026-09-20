@@ -16,11 +16,6 @@
 // under the License.
 
 //! Partial-reduce hash aggregation stream implementation.
-//!
-//! This stream is part of the incremental migration from
-//! [`crate::aggregates::grouped_hash_stream::GroupedHashAggregateStream`].
-//!
-//! See issue for details: <https://github.com/apache/datafusion/issues/22710>
 
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -35,7 +30,7 @@ use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
 use super::aggregate_hash_table::{AggregateHashTable, PartialReduceMarker};
-use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
+use crate::metrics::{BaselineMetrics, Count, MetricBuilder, RecordOutput, SpillMetrics};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
 
@@ -92,6 +87,9 @@ pub(crate) struct PartialReduceHashAggregateStream {
 
     /// Memory reservation for group keys and accumulators.
     reservation: MemoryReservation,
+
+    /// Number of times accumulated states were emitted due to memory pressure.
+    early_emit_count: Count,
 
     /// Tracks the high-level stream lifecycle. The hash table owns the lower-level
     /// state for emitting output batches.
@@ -193,6 +191,8 @@ impl PartialReduceHashAggregateStream {
 
         // Preserve the existing aggregate metric surface for this plan node.
         let _spill_metrics = SpillMetrics::new(&agg.metrics, partition);
+        let early_emit_count =
+            MetricBuilder::new(&agg.metrics).counter("early_emit_count", partition);
 
         let hash_table = AggregateHashTable::<PartialReduceMarker>::new(
             agg,
@@ -203,6 +203,10 @@ impl PartialReduceHashAggregateStream {
 
         let reservation =
             MemoryConsumer::new(format!("PartialReduceHashAggregateStream[{partition}]"))
+                // We interpret 'can spill' as 'can handle memory back pressure'.
+                // This value needs to be set to true for the default memory pool implementations
+                // to ensure fair application of back pressure amongst the memory consumers.
+                .with_can_spill(true)
                 .register(context.memory_pool());
 
         Ok(Self {
@@ -211,6 +215,7 @@ impl PartialReduceHashAggregateStream {
             batch_size,
             baseline_metrics,
             reservation,
+            early_emit_count,
             state: Some(PartialReduceHashAggregateState::ReadingInput { hash_table }),
         })
     }
@@ -316,12 +321,15 @@ impl PartialReduceHashAggregateStream {
         let state_batch_result = original_state.hash_table_mut().take_state_batch();
 
         match state_batch_result {
-            Ok(Some(remaining_groups)) => ControlFlow::Continue(
-                PartialReduceHashAggregateState::EmittingOnMemoryPressure {
-                    hash_table: original_state.into_hash_table(),
-                    remaining_groups,
-                },
-            ),
+            Ok(Some(remaining_groups)) => {
+                self.early_emit_count.add(1);
+                ControlFlow::Continue(
+                    PartialReduceHashAggregateState::EmittingOnMemoryPressure {
+                        hash_table: original_state.into_hash_table(),
+                        remaining_groups,
+                    },
+                )
+            }
             // No accumulated group to emit, so early emission cannot release any
             // memory: report the original error.
             Ok(None) => Self::break_with_err(oom),

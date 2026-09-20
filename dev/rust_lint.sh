@@ -22,7 +22,9 @@
 #
 # Note: The installed checking tools (e.g., taplo) are not guaranteed to match
 # the CI versions for simplicity, there might be some minor differences. Check
-# `.github/workflows` for the CI versions.
+# `.github/workflows` for the CI versions. When this script installs a missing
+# tool that has a pinned version in `ci/scripts/utils/tool_versions.sh`, it
+# installs that pinned version. An already installed tool is used as is.
 #
 #
 #
@@ -84,10 +86,34 @@ while [[ $# -gt 0 ]]; do
 done
 
 SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# `ci/scripts/check_asf_yaml_status_checks.py` runs with `python3` from PATH
+# and imports PyYAML. Report a missing prerequisite before any tool is
+# installed or any formatter runs, and point at `uv run`, which sets up the
+# Python dependencies from the uv workspace.
+ensure_python_with_yaml() {
+  if ! command -v python3 &> /dev/null; then
+    echo "[${SCRIPT_NAME}] python3 was not found on PATH. Please run the suite through uv, which provides Python and its packages: uv run ./dev/rust_lint.sh" >&2
+    exit 1
+  fi
+  if ! python3 -c 'import yaml' &> /dev/null; then
+    echo "[${SCRIPT_NAME}] PyYAML is not installed for $(command -v python3). Please run the suite through uv, which installs it: uv run ./dev/rust_lint.sh" >&2
+    exit 1
+  fi
+}
+
+ensure_python_with_yaml
+
+# Load the tool versions shared with CI (for example, LYCHEE_VERSION).
+source "${SCRIPT_DIR}/../ci/scripts/utils/tool_versions.sh"
 
 ensure_tool "taplo" "cargo install taplo-cli --locked"
 ensure_tool "hawkeye" "cargo install hawkeye --locked"
 ensure_tool "typos" "cargo install typos-cli --locked"
+ensure_tool "lychee" "cargo install lychee --locked --version ${LYCHEE_VERSION}"
+ensure_tool "cargo-audit" "cargo install cargo-audit --locked"
+ensure_tool "cargo-machete" "cargo install cargo-machete --locked --version ^${CARGO_MACHETE_VERSION}"
 
 run_step() {
   local name="$1"
@@ -103,10 +129,17 @@ declare -a WRITE_STEPS=(
   "ci/scripts/license_header.sh|true"
   "ci/scripts/typos_check.sh|true"
   "ci/scripts/doc_prettier_check.sh|true"
+  "ci/scripts/check_examples_docs.sh|true"
 )
 
 declare -a READONLY_STEPS=(
   "ci/scripts/check_no_cargo_install_in_workflows.sh|false"
+  "ci/scripts/check_asf_yaml_status_checks.py|false"
+  "ci/scripts/check_large_files.sh|false"
+  "ci/scripts/markdown_link_check.sh|false"
+  "ci/scripts/security_audit.sh|false"
+  "ci/scripts/check_circular_dependencies.sh|false"
+  "ci/scripts/check_unused_dependencies.sh|false"
   "ci/scripts/rust_docs.sh|false"
 )
 

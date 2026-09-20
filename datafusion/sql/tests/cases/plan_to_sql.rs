@@ -2823,6 +2823,37 @@ fn test_unparse_inner_join_with_table_scan_projection() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_unparse_asof_join() -> Result<()> {
+    let trades_schema = Schema::new(vec![
+        Field::new("symbol", DataType::Utf8, false),
+        Field::new("ts", DataType::Int64, false),
+        Field::new("trade_id", DataType::Int32, false),
+    ]);
+    let prices_schema = Schema::new(vec![
+        Field::new("symbol", DataType::Utf8, false),
+        Field::new("ts", DataType::Int64, false),
+        Field::new("price", DataType::Int32, false),
+    ]);
+    let trades = table_scan(Some("trades"), &trades_schema, None)?
+        .alias("t")?
+        .build()?;
+    let prices = table_scan(Some("prices"), &prices_schema, None)?
+        .alias("p")?
+        .build()?;
+    let plan = LogicalPlanBuilder::from(trades)
+        .asof_join_on(
+            prices,
+            Some(col("t.symbol").eq(col("p.symbol"))),
+            col("t.ts").gt_eq(col("p.ts")),
+        )?
+        .project(vec![col("t.trade_id"), col("p.price")])?
+        .build()?;
+
+    assert_snapshot!(plan_to_sql(&plan)?, @r#"SELECT t.trade_id, p.price FROM trades AS t ASOF JOIN prices AS p MATCH_CONDITION ((t.ts >= p.ts)) ON t.symbol = p.symbol"#);
+    Ok(())
+}
+
 /// Build the three base table scans (`left_table`, `mid_table`, `right_table`)
 /// shared by the nested passthrough-projection join unparsing tests.
 fn nested_passthrough_join_tables() -> Result<(LogicalPlan, LogicalPlan, LogicalPlan)> {
@@ -2929,6 +2960,65 @@ fn test_unparse_projected_join_unwraps_left_nested_passthrough_projection() -> R
         sql,
         @r#"SELECT left_table.left_id, mid_table.mid_id, right_table."value" FROM left_table INNER JOIN mid_table ON left_table.mid_id = mid_table.mid_id INNER JOIN right_table ON mid_table.right_id = right_table.right_id"#
     );
+
+    Ok(())
+}
+
+#[test]
+fn test_unparse_nested_asof_join_inputs() -> Result<()> {
+    let (left, mid, right) = nested_passthrough_join_tables()?;
+    let nested_left = LogicalPlanBuilder::from(left)
+        .asof_join_on(
+            mid,
+            Some(col("left_table.mid_id").eq(col("mid_table.mid_id"))),
+            col("left_table.left_id").gt_eq(col("mid_table.mid_id")),
+        )?
+        .project(vec![
+            col("left_table.left_id"),
+            col("mid_table.mid_id"),
+            col("mid_table.right_id"),
+        ])?
+        .build()?;
+    let plan = LogicalPlanBuilder::from(nested_left)
+        .asof_join_on(
+            right,
+            Some(col("mid_table.right_id").eq(col("right_table.right_id"))),
+            col("mid_table.right_id").gt_eq(col("right_table.right_id")),
+        )?
+        .project(vec![
+            col("left_table.left_id"),
+            col("mid_table.mid_id"),
+            col("right_table.value"),
+        ])?
+        .build()?;
+    assert_snapshot!(plan_to_sql(&plan)?, @r#"SELECT left_table.left_id, mid_table.mid_id, right_table."value" FROM left_table ASOF JOIN mid_table MATCH_CONDITION ((left_table.left_id >= mid_table.mid_id)) ON left_table.mid_id = mid_table.mid_id ASOF JOIN right_table MATCH_CONDITION ((mid_table.right_id >= right_table.right_id)) ON mid_table.right_id = right_table.right_id"#);
+
+    let (left, mid, right) = nested_passthrough_join_tables()?;
+    let nested_right = LogicalPlanBuilder::from(mid)
+        .asof_join_on(
+            right,
+            Some(col("mid_table.right_id").eq(col("right_table.right_id"))),
+            col("mid_table.right_id").gt_eq(col("right_table.right_id")),
+        )?
+        .project(vec![
+            col("mid_table.mid_id"),
+            col("mid_table.right_id"),
+            col("right_table.value"),
+        ])?
+        .build()?;
+    let plan = LogicalPlanBuilder::from(left)
+        .asof_join_on(
+            nested_right,
+            Some(col("left_table.mid_id").eq(col("mid_table.mid_id"))),
+            col("left_table.left_id").gt_eq(col("mid_table.mid_id")),
+        )?
+        .project(vec![
+            col("left_table.left_id"),
+            col("mid_table.mid_id"),
+            col("right_table.value"),
+        ])?
+        .build()?;
+    assert_snapshot!(plan_to_sql(&plan)?, @r#"SELECT left_table.left_id, mid_table.mid_id, right_table."value" FROM left_table ASOF JOIN (mid_table ASOF JOIN right_table MATCH_CONDITION ((mid_table.right_id >= right_table.right_id)) ON mid_table.right_id = right_table.right_id) MATCH_CONDITION ((left_table.left_id >= mid_table.mid_id)) ON left_table.mid_id = mid_table.mid_id"#);
 
     Ok(())
 }

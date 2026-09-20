@@ -111,7 +111,7 @@ cargo test --profile=ci --test sqllogictests -- --complete
 
 Like similar systems such as [DuckDB](https://duckdb.org/dev/testing), DataFusion has chosen to trade off a slightly higher barrier to contribution for longer term maintainability.
 
-DataFusion has integrated [sqlite's test suite](https://sqlite.org/sqllogictest/doc/trunk/about.wiki) as a supplemental test suite that is run whenever a PR is merged into DataFusion. To run it manually please refer to the [README](https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md#running-tests-sqlite) file for instructions.
+DataFusion runs [sqlite's test suite](https://sqlite.org/sqllogictest/doc/trunk/about.wiki) in the merge queue before merging PRs into `main`. For local instructions, see [Running Tests: sqlite](https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md#running-tests-sqlite).
 
 ## Snapshot testing (`cargo insta`)
 
@@ -127,15 +127,15 @@ cargo insta review
 
 ## Extended Tests
 
-In addition to the standard CI test suite that is run on all PRs prior to merge,
-DataFusion has "extended" tests (defined in [extended.yml]) that are run on each
-commit to `main`. These tests rarely fail but take significantly longer to run
-than the standard test suite and add important test coverage such as ensuring
-correctness when there are hash collisions and running the relevant portions of
-the entire [sqlite test suite]. You can run the extended tests
-locally by following the [instructions in the documentation].
+DataFusion has extended tests (defined in [extended.yml]) that take significantly
+longer to run than the standard suite. They provide additional correctness
+coverage and must pass in the merge queue before a PR merges into `main`.
 
-[sqlite test suite]: https://www.sqlite.org/sqllogictest/dir?ci=tip
+To conserve CI resources, these tests do not run on ordinary PR updates. They
+also run on pushes to release branches (`branch-*`). You can run them manually.
+
+For local SQLite test instructions, see the [instructions in the documentation].
+
 [instructions in the documentation]: https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest#running-tests-sqlite
 [extended.yml]: https://github.com/apache/datafusion/blob/main/.github/workflows/extended.yml
 
@@ -164,7 +164,7 @@ contributions. Kudos to [@2010YOUY01] for the initial implementation.
 ## Documentation Examples
 
 We use Rust [doctest] to verify examples from the documentation are correct and
-up-to-date. These tests are run as part of our CI and you can run them them
+up-to-date. These tests are run as part of our CI and you can run them
 locally with the following command:
 
 ```shell
@@ -188,7 +188,12 @@ tested in the same way using the [doc_comment] crate. See the end of
 
 ## Documentation Link Checks
 
-Run the internal markdown link check locally:
+`./dev/rust_lint.sh` runs the internal markdown link check. If `lychee` is
+missing, the script installs the version pinned in
+`ci/scripts/utils/tool_versions.sh`. It uses an existing installation as is,
+even if the version differs from the pin.
+
+To run the check on its own:
 
 ```shell
 source ci/scripts/utils/tool_versions.sh
@@ -200,6 +205,7 @@ Notes:
 
 - The script is run with `bash` and is compatible with the default Bash on macOS (no `mapfile` dependency).
 - The CI configuration currently checks internal markdown links only. External `http(s)` and `mailto` links are excluded to avoid flaky failures.
+- The check only reports broken links. `./dev/rust_lint.sh --write` does not change them.
 
 When a link is broken, lychee prints the file and URL/path that failed. For example:
 
@@ -212,6 +218,90 @@ Rust doc comments are validated by rustdoc in CI and can be checked locally with
 
 ```shell
 bash ci/scripts/rust_docs.sh
+```
+
+## ASF Status Check Validation
+
+`ci/scripts/check_asf_yaml_status_checks.py` checks that every required status
+check in `.asf.yaml` matches a job in `.github/workflows`, and that `rust.yml`
+skips only its listed jobs on pushes to `main`. `./dev/rust_lint.sh` runs it
+and needs `python3` with [PyYAML]. The [uv] workspace provides both:
+
+```shell
+uv run ./dev/rust_lint.sh
+```
+
+To run the check on its own:
+
+```shell
+uv run python3 ci/scripts/check_asf_yaml_status_checks.py
+```
+
+[pyyaml]: https://pypi.org/project/PyYAML/
+[uv]: https://docs.astral.sh/uv/
+
+## Security Audit
+
+`ci/scripts/security_audit.sh` runs `cargo audit` on the root `Cargo.lock` with
+the advisory exceptions that CI uses. `./dev/rust_lint.sh` runs it and installs
+[cargo-audit] if it is missing. To run the audit on its own:
+
+```shell
+./ci/scripts/security_audit.sh
+```
+
+The audit fetches the RustSec advisory database. A new advisory or a different
+`cargo-audit` version can change the result without any change to the repository.
+
+[cargo-audit]: https://github.com/rustsec/rustsec/blob/main/cargo-audit/README.md
+
+## Large File Check
+
+`ci/scripts/check_large_files.sh` fails if any file committed between a base
+ref and a head ref is larger than 1.5 MB, the same check the "Large files PR
+check" workflow runs on pull requests. `./dev/rust_lint.sh` runs it against
+the merge base of `HEAD` and `main` on the remote that points at
+`apache/datafusion`, or on `origin` when there is no such remote. To run the
+check on its own, or against a different range:
+
+```shell
+./ci/scripts/check_large_files.sh
+./ci/scripts/check_large_files.sh --base upstream/main --head my-branch
+```
+
+Only committed files are checked. Commit a change before running it.
+
+## Dependency Checks
+
+CI runs two dependency checks, and `./dev/rust_lint.sh` runs both:
+
+- `ci/scripts/check_circular_dependencies.sh` builds and runs [`dev/depcheck`],
+  which fails on dependency cycles between DataFusion crates.
+- `ci/scripts/check_unused_dependencies.sh` runs `cargo machete --with-metadata`
+  from the repository root. The lint suite installs [cargo-machete] with the
+  version in `ci/scripts/utils/tool_versions.sh` if it is missing.
+
+To run either check on its own:
+
+```shell
+./ci/scripts/check_circular_dependencies.sh
+./ci/scripts/check_unused_dependencies.sh
+```
+
+[`dev/depcheck`]: https://github.com/apache/datafusion/tree/main/dev/depcheck
+[cargo-machete]: https://github.com/bnjbvr/cargo-machete
+
+## Examples README Check
+
+`datafusion-examples/README.md` is generated from the documentation comments in
+`datafusion-examples/examples/<group>/main.rs`. `ci/scripts/check_examples_docs.sh`
+regenerates it and fails if the committed file differs. `./dev/rust_lint.sh`
+runs it and needs `cargo` and `npx`. To run the check on its own, or to update
+the README:
+
+```shell
+./ci/scripts/check_examples_docs.sh
+./ci/scripts/check_examples_docs.sh --write
 ```
 
 ## Benchmarks
