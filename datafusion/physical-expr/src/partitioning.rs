@@ -620,20 +620,20 @@ fn evaluate_with_range_value(
 /// same partition as `xᵢ`. Null preservation is also required so the transform
 /// cannot introduce a null group outside the source partition selected by null
 /// order.
-fn range_transform_keeps_groups_local(
+fn range_transform_keeps_keys_local(
     function: &Arc<dyn PhysicalExpr>,
     range_key: &Arc<dyn PhysicalExpr>,
     range: &RangePartitioning,
-    key_index: usize,
     schema: &Schema,
 ) -> Option<()> {
     let range_type = range_key.data_type(schema).ok()?;
+    let sort_options = range.ordering().first().options;
     range.split_points().iter().try_for_each(|split_point| {
-        let split_value = split_point.values().get(key_index)?;
+        let split_value = split_point.values().first()?;
         if split_value.data_type() != range_type {
             return None;
         }
-        let adjacent = if range.ordering()[key_index].options.descending {
+        let adjacent = if sort_options.descending {
             checked_successor(split_value)
         } else {
             checked_predecessor(split_value)
@@ -656,7 +656,6 @@ fn is_audited_range_transform(
     candidate: &Arc<dyn PhysicalExpr>,
     range_key: &Arc<dyn PhysicalExpr>,
     range: &RangePartitioning,
-    key_index: usize,
     eq_properties: &EquivalenceProperties,
 ) -> bool {
     let Some(function) = candidate.downcast_ref::<ScalarFunctionExpr>() else {
@@ -682,61 +681,25 @@ fn is_audited_range_transform(
     }
 
     range_argument_count == 1
-        && range_transform_keeps_groups_local(
-            candidate, range_key, range, key_index, schema,
-        )
-        .is_some()
+        && range_transform_keeps_keys_local(candidate, range_key, range, schema).is_some()
 }
 
-fn range_transform_satisfaction(
+fn range_partitioning_keeps_keys_local(
     range: &RangePartitioning,
     required_exprs: &[Arc<dyn PhysicalExpr>],
     eq_properties: &EquivalenceProperties,
     allow_subset: bool,
-) -> PartitioningSatisfaction {
-    if required_exprs.is_empty() || range.ordering().len() > required_exprs.len() {
-        return PartitioningSatisfaction::NotSatisfied;
+) -> bool {
+    if range.ordering().len() != 1 || required_exprs.is_empty() {
+        return false;
     }
 
-    let mut unmatched_required = (0..required_exprs.len()).collect::<Vec<_>>();
-    let last_range_key = range.ordering().len() - 1;
-    let mut used_transform = false;
+    let range_key = &range.ordering()[0].expr;
+    let has_audited_transform = required_exprs.iter().any(|required| {
+        is_audited_range_transform(required, range_key, range, eq_properties)
+    });
 
-    for (key_index, range_sort) in range.ordering().iter().enumerate() {
-        let mut match_position = unmatched_required.iter().position(|required_index| {
-            equivalent_expr(
-                &range_sort.expr,
-                &required_exprs[*required_index],
-                eq_properties,
-            )
-        });
-        if match_position.is_none() && key_index == last_range_key {
-            match_position = unmatched_required.iter().position(|required_index| {
-                is_audited_range_transform(
-                    &required_exprs[*required_index],
-                    &range_sort.expr,
-                    range,
-                    key_index,
-                    eq_properties,
-                )
-            });
-        }
-        let Some(match_position) = match_position else {
-            return PartitioningSatisfaction::NotSatisfied;
-        };
-        used_transform |= !equivalent_expr(
-            &range_sort.expr,
-            &required_exprs[unmatched_required[match_position]],
-            eq_properties,
-        );
-        unmatched_required.swap_remove(match_position);
-    }
-
-    if used_transform && (unmatched_required.is_empty() || allow_subset) {
-        PartitioningSatisfaction::KeyLocal
-    } else {
-        PartitioningSatisfaction::NotSatisfied
-    }
+    has_audited_transform && (required_exprs.len() == 1 || allow_subset)
 }
 
 /// Represents how a [`Partitioning`] satisfies a [`Distribution`] requirement.
@@ -748,22 +711,11 @@ pub enum PartitioningSatisfaction {
     Exact,
     /// The partitioning satisfies the distribution requirement via subset logic
     Subset,
-    /// Equal values of the required keys are partition-local, but the concrete
-    /// partition layout is not claimed to match the requested distribution.
-    ///
-    /// This is sufficient for independent keyed aggregation. It is not general
-    /// distribution satisfaction and must not be used for co-partitioned joins.
-    KeyLocal,
 }
 
 impl PartitioningSatisfaction {
     pub fn is_satisfied(&self) -> bool {
         matches!(self, Self::Exact | Self::Subset)
-    }
-
-    /// Returns whether equal required-key tuples cannot occur in two partitions.
-    pub fn is_key_local(&self) -> bool {
-        !matches!(self, Self::NotSatisfied)
     }
 
     pub fn is_subset(&self) -> bool {
@@ -810,13 +762,6 @@ impl Partitioning {
 
     /// Returns the relationship between this [`Partitioning`] and the
     /// `required` [`Distribution`].
-    ///
-    /// [`PartitioningSatisfaction::KeyLocal`] is deliberately weaker than
-    /// distribution satisfaction: it only proves that equal required-key tuples
-    /// cannot occur in different partitions. Callers that require a concrete
-    /// partition layout must use [`PartitioningSatisfaction::is_satisfied`].
-    /// Operators that only require independent processing of each key may use
-    /// [`PartitioningSatisfaction::is_key_local`].
     #[expect(
         deprecated,
         reason = "HashPartitioned is accepted during the KeyPartitioned migration"
@@ -855,22 +800,12 @@ impl Partitioning {
                         .iter()
                         .map(|sort_expr| Arc::clone(&sort_expr.expr))
                         .collect::<Vec<_>>();
-                    let satisfaction = Self::key_satisfaction(
+                    Self::key_satisfaction(
                         &partition_exprs,
                         required_exprs,
                         eq_properties,
                         allow_subset,
-                    );
-                    if satisfaction.is_satisfied() {
-                        satisfaction
-                    } else {
-                        range_transform_satisfaction(
-                            range,
-                            required_exprs,
-                            eq_properties,
-                            allow_subset,
-                        )
-                    }
+                    )
                 }
                 Partitioning::RoundRobinBatch(_)
                 | Partitioning::UnknownPartitioning(_) => {
@@ -878,6 +813,41 @@ impl Partitioning {
                 }
             },
             Distribution::SinglePartition => PartitioningSatisfaction::NotSatisfied,
+        }
+    }
+
+    /// Returns true when it can prove that equal tuples of `required_exprs`
+    /// cannot occur in different partitions.
+    ///
+    /// Unlike [`Self::satisfaction`], this does not claim a concrete partition
+    /// layout that can be compared with another input. It is sufficient for
+    /// operators such as grouped aggregation that process each key
+    /// independently, but must not establish co-partitioning between inputs.
+    /// Transform analysis is currently limited to single-key range partitioning.
+    pub fn keeps_keys_local(
+        &self,
+        required_exprs: &[Arc<dyn PhysicalExpr>],
+        eq_properties: &EquivalenceProperties,
+        allow_subset: bool,
+    ) -> bool {
+        let required = Distribution::KeyPartitioned(required_exprs.to_vec());
+        if self
+            .satisfaction(&required, eq_properties, allow_subset)
+            .is_satisfied()
+        {
+            return true;
+        }
+
+        match self {
+            Self::Range(range) => range_partitioning_keeps_keys_local(
+                range,
+                required_exprs,
+                eq_properties,
+                allow_subset,
+            ),
+            Self::RoundRobinBatch(_)
+            | Self::Hash(_, _)
+            | Self::UnknownPartitioning(_) => false,
         }
     }
 
@@ -1348,6 +1318,26 @@ mod tests {
         );
     }
 
+    fn assert_key_locality(
+        desc: &str,
+        partitioning: &Partitioning,
+        required_exprs: &[Arc<dyn PhysicalExpr>],
+        eq_properties: &EquivalenceProperties,
+        expected_with_subset: bool,
+        expected_without_subset: bool,
+    ) {
+        assert_eq!(
+            partitioning.keeps_keys_local(required_exprs, eq_properties, true),
+            expected_with_subset,
+            "Failed for {desc} with subset enabled"
+        );
+        assert_eq!(
+            partitioning.keeps_keys_local(required_exprs, eq_properties, false),
+            expected_without_subset,
+            "Failed for {desc} with subset disabled"
+        );
+    }
+
     fn date_trunc_of(
         timestamp: Arc<dyn PhysicalExpr>,
         precision: &str,
@@ -1465,11 +1455,8 @@ mod tests {
                     Field::new("bucket", data_type.clone(), true).into(),
                     Arc::new(ConfigOptions::default()),
                 ));
-                let required = Distribution::KeyPartitioned(vec![Arc::clone(&function)]);
                 assert_eq!(
-                    range
-                        .satisfaction(&required, &properties, false)
-                        .is_key_local(),
+                    range.keeps_keys_local(&[Arc::clone(&function)], &properties, false),
                     expect_disjoint
                 );
 
@@ -1555,19 +1542,12 @@ mod tests {
         let function =
             function.with_new_children(vec![scalar_but_not_literal, fixture.col(0)])?;
         let range = fixture.range_partitioning([0], vec![timestamp_split(Some(0), None)]);
-        assert_eq!(
-            range.satisfaction(
-                &Distribution::KeyPartitioned(vec![function]),
-                &fixture.eq_properties,
-                false,
-            ),
-            PartitioningSatisfaction::NotSatisfied
-        );
+        assert!(!range.keeps_keys_local(&[function], &fixture.eq_properties, false));
         Ok(())
     }
 
     #[test]
-    fn range_transform_satisfaction_is_key_local_only() -> Result<()> {
+    fn range_transform_establishes_key_locality_only() -> Result<()> {
         let fixture = PartitioningTestFixture::new(vec![
             ("timestamp", DataType::Timestamp(TimeUnit::Nanosecond, None)),
             ("tag", DataType::Utf8),
@@ -1577,39 +1557,50 @@ mod tests {
             fixture.range_partitioning([0], vec![timestamp_split(Some(hour), None)]);
         let trunc_hour = date_trunc_of(fixture.col(0), "hour", None);
 
-        let exact_keys = Distribution::KeyPartitioned(vec![Arc::clone(&trunc_hour)]);
-        let satisfaction =
-            aligned.satisfaction(&exact_keys, &fixture.eq_properties, false);
-        assert_eq!(satisfaction, PartitioningSatisfaction::KeyLocal);
-        assert!(satisfaction.is_key_local());
-        assert!(!satisfaction.is_satisfied());
-
-        assert_satisfaction(
-            "additional grouping keys require subset permission",
+        let exact_key_exprs = vec![Arc::clone(&trunc_hour)];
+        assert_eq!(
+            aligned.satisfaction(
+                &Distribution::KeyPartitioned(exact_key_exprs.clone()),
+                &fixture.eq_properties,
+                false,
+            ),
+            PartitioningSatisfaction::NotSatisfied
+        );
+        assert_key_locality(
+            "aligned transformed key",
             &aligned,
-            &Distribution::KeyPartitioned(vec![trunc_hour, fixture.col(1)]),
+            &exact_key_exprs,
             &fixture.eq_properties,
-            PartitioningSatisfaction::KeyLocal,
-            PartitioningSatisfaction::NotSatisfied,
+            true,
+            true,
         );
 
-        assert_satisfaction(
+        assert_key_locality(
+            "additional grouping keys require subset permission",
+            &aligned,
+            &[trunc_hour, fixture.col(1)],
+            &fixture.eq_properties,
+            true,
+            false,
+        );
+
+        assert_key_locality(
             "date_bin remains default-denied",
             &aligned,
-            &Distribution::KeyPartitioned(vec![date_bin_of(fixture.col(0))]),
+            &[date_bin_of(fixture.col(0))],
             &fixture.eq_properties,
-            PartitioningSatisfaction::NotSatisfied,
-            PartitioningSatisfaction::NotSatisfied,
+            false,
+            false,
         );
 
         let trunc_day = date_trunc_of(fixture.col(0), "day", None);
-        assert_satisfaction(
+        assert_key_locality(
             "an hour split straddles a day bucket",
             &aligned,
-            &Distribution::KeyPartitioned(vec![trunc_day]),
+            &[trunc_day],
             &fixture.eq_properties,
-            PartitioningSatisfaction::NotSatisfied,
-            PartitioningSatisfaction::NotSatisfied,
+            false,
+            false,
         );
 
         let two_aligned = fixture.range_partitioning(
@@ -1619,91 +1610,70 @@ mod tests {
                 timestamp_split(Some(hour + 3_600_000_000_000), None),
             ],
         );
-        assert_satisfaction(
+        assert_key_locality(
             "every split must be aligned",
             &two_aligned,
-            &exact_keys,
+            &exact_key_exprs,
             &fixture.eq_properties,
-            PartitioningSatisfaction::KeyLocal,
-            PartitioningSatisfaction::KeyLocal,
+            true,
+            true,
         );
 
         let unaligned =
             fixture.range_partitioning([0], vec![timestamp_split(Some(hour + 1), None)]);
-        assert_satisfaction(
+        assert_key_locality(
             "an unaligned split straddles an hour bucket",
             &unaligned,
-            &exact_keys,
+            &exact_key_exprs,
             &fixture.eq_properties,
-            PartitioningSatisfaction::NotSatisfied,
-            PartitioningSatisfaction::NotSatisfied,
+            false,
+            false,
         );
         Ok(())
     }
 
     #[test]
-    fn range_transform_supports_only_the_final_compound_key() -> Result<()> {
+    fn range_transform_rejects_compound_range_keys() -> Result<()> {
         let fixture = PartitioningTestFixture::new(vec![
             ("key", DataType::Utf8),
             ("timestamp", DataType::Timestamp(TimeUnit::Nanosecond, None)),
         ])?;
-        let hour = 1_704_070_800_000_000_000;
         let split = SplitPoint::new(vec![
             ScalarValue::Utf8(Some("m".into())),
-            ScalarValue::TimestampNanosecond(Some(hour), None),
+            ScalarValue::TimestampNanosecond(Some(1_704_070_800_000_000_000), None),
         ]);
         let range = fixture.range_partitioning([0, 1], vec![split]);
-        assert_satisfaction(
-            "the final compound key can be transformed",
-            &range,
-            &Distribution::KeyPartitioned(vec![
-                fixture.col(0),
-                date_trunc_of(fixture.col(1), "hour", None),
-            ]),
-            &fixture.eq_properties,
-            PartitioningSatisfaction::KeyLocal,
-            PartitioningSatisfaction::KeyLocal,
-        );
 
-        let split = SplitPoint::new(vec![
-            ScalarValue::TimestampNanosecond(Some(hour), None),
-            ScalarValue::Utf8(Some("m".into())),
-        ]);
-        let range = fixture.range_partitioning([1, 0], vec![split]);
-        assert_satisfaction(
-            "a non-final compound key cannot be transformed",
-            &range,
-            &Distribution::KeyPartitioned(vec![
-                date_trunc_of(fixture.col(1), "hour", None),
-                fixture.col(0),
-            ]),
+        // Start with single-key ranges; compound transforms can follow once
+        // tuple-boundary safety is established.
+        assert!(!range.keeps_keys_local(
+            &[fixture.col(0), date_trunc_of(fixture.col(1), "hour", None),],
             &fixture.eq_properties,
-            PartitioningSatisfaction::NotSatisfied,
-            PartitioningSatisfaction::NotSatisfied,
-        );
+            false,
+        ));
         Ok(())
     }
 
     #[test]
-    fn range_transform_satisfaction_fails_closed() -> Result<()> {
+    fn range_transform_key_locality_fails_closed() -> Result<()> {
         let fixture = PartitioningTestFixture::new(vec![(
             "timestamp",
             DataType::Timestamp(TimeUnit::Nanosecond, None),
         )])?;
         let trunc_hour = date_trunc_of(fixture.col(0), "hour", None);
-        let required = Distribution::KeyPartitioned(vec![trunc_hour]);
+        let required = vec![trunc_hour];
 
         for (description, split) in [
             ("null", timestamp_split(None, None)),
             ("minimum", timestamp_split(Some(i64::MIN), None)),
         ] {
-            assert_satisfaction(
+            assert_key_locality(
                 description,
                 &fixture.range_partitioning([0], vec![split]),
                 &required,
                 &fixture.eq_properties,
-                PartitioningSatisfaction::NotSatisfied,
-                PartitioningSatisfaction::NotSatisfied,
+                false,
+                false,
             );
         }
 
@@ -1711,31 +1681,28 @@ mod tests {
             fixture.range_ordering([0]),
             vec![SplitPoint::new(vec![ScalarValue::Int64(Some(10))])],
         ));
-        assert_satisfaction(
+        assert_key_locality(
             "split scalar type must match the range key",
             &mismatched_split,
             &required,
             &fixture.eq_properties,
-            PartitioningSatisfaction::NotSatisfied,
-            PartitioningSatisfaction::NotSatisfied,
+            false,
+            false,
         );
 
-        let invalid_precision = Distribution::KeyPartitioned(vec![date_trunc_of(
-            fixture.col(0),
-            "not-a-precision",
-            None,
-        )]);
+        let invalid_precision =
+            vec![date_trunc_of(fixture.col(0), "not-a-precision", None)];
         let aligned = fixture.range_partitioning(
             [0],
             vec![timestamp_split(Some(1_704_070_800_000_000_000), None)],
         );
-        assert_satisfaction(
+        assert_key_locality(
             "split evaluation errors fail closed",
             &aligned,
             &invalid_precision,
             &fixture.eq_properties,
-            PartitioningSatisfaction::NotSatisfied,
-            PartitioningSatisfaction::NotSatisfied,
+            false,
+            false,
         );
 
         let timezone_fixture = PartitioningTestFixture::new(vec![(
@@ -1750,13 +1717,13 @@ mod tests {
                 Some("UTC"),
             )],
         );
-        assert_satisfaction(
+        assert_key_locality(
             "timezone-aware date_trunc is not audited",
             &timezone_range,
-            &Distribution::KeyPartitioned(vec![timezone_trunc]),
+            &[timezone_trunc],
             &timezone_fixture.eq_properties,
-            PartitioningSatisfaction::NotSatisfied,
-            PartitioningSatisfaction::NotSatisfied,
+            false,
+            false,
         );
         Ok(())
     }
@@ -1770,13 +1737,9 @@ mod tests {
         let hour = 1_704_070_800_000_000_000;
         let ordering: LexOrdering =
             [fixture.range_sort_expr(0, SortOptions::new(true, false))].into();
-        let required = Distribution::KeyPartitioned(vec![date_trunc_of(
-            fixture.col(0),
-            "hour",
-            None,
-        )]);
+        let required = vec![date_trunc_of(fixture.col(0), "hour", None)];
 
-        assert_satisfaction(
+        assert_key_locality(
             "the successor of an hour boundary is in the same bucket",
             &fixture.range_partitioning_with_ordering(
                 ordering.clone(),
@@ -1784,10 +1747,10 @@ mod tests {
             ),
             &required,
             &fixture.eq_properties,
-            PartitioningSatisfaction::NotSatisfied,
-            PartitioningSatisfaction::NotSatisfied,
+            false,
+            false,
         );
-        assert_satisfaction(
+        assert_key_locality(
             "the successor of the final nanosecond starts a new bucket",
             &fixture.range_partitioning_with_ordering(
                 ordering,
@@ -1795,8 +1758,8 @@ mod tests {
             ),
             &required,
             &fixture.eq_properties,
-            PartitioningSatisfaction::KeyLocal,
-            PartitioningSatisfaction::KeyLocal,
+            true,
+            true,
         );
         Ok(())
     }

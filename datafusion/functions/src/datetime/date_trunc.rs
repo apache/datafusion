@@ -451,6 +451,19 @@ impl ScalarUDFImpl for DateTruncFunc {
             Ok(SortProperties::Unordered)
         }
     }
+
+    fn supports_range_partitioning_analysis(&self, argument_types: &[DataType]) -> bool {
+        // Named timezone transitions can make date_trunc non-monotonic (#25353).
+        // Keep the audited domain to timezone-less timestamp columns.
+        matches!(
+            argument_types,
+            [
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                Timestamp(_, None)
+            ]
+        )
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
@@ -919,8 +932,8 @@ mod tests {
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::compute::{DatePart, SortOptions};
     use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
+    use datafusion_common::ScalarValue;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::interval_arithmetic::Interval;
     use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
@@ -1021,7 +1034,7 @@ mod tests {
         timestamp: ColumnarValue,
         timestamp_type: DataType,
         number_rows: usize,
-    ) -> Result<ColumnarValue> {
+    ) -> datafusion_common::Result<ColumnarValue> {
         DateTruncFunc::new().invoke_with_args(ScalarFunctionArgs {
             args: vec![ScalarValue::from(granularity).into(), timestamp],
             arg_fields: vec![
