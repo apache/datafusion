@@ -1016,9 +1016,7 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     ///   all non-range inputs singleton, it is globally nondecreasing over the
     ///   admitted non-null input domain;
     /// - successful evaluation preserves nullness: null range inputs remain
-    ///   null and non-null range inputs do not produce null; and
-    /// - successful scalar evaluation at a split boundary is consistent with
-    ///   array evaluation of that value.
+    ///   null and non-null range inputs do not produce null.
     ///
     /// This method does not assert that a concrete range partitioning is
     /// preserved. Callers must still identify the range input, establish

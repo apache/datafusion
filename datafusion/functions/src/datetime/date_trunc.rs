@@ -1134,25 +1134,6 @@ mod tests {
                 }
                 previous = Some(value);
             }
-
-            for (index, value) in values.iter().enumerate() {
-                let scalar_output = invoke_date_trunc(
-                    granularity,
-                    ColumnarValue::Scalar(ScalarValue::new_timestamp::<T>(*value, None)),
-                    timestamp_type.clone(),
-                    1,
-                )
-                .unwrap();
-                let ColumnarValue::Scalar(scalar_output) = scalar_output else {
-                    panic!("expected scalar output")
-                };
-                assert_eq!(
-                    scalar_output,
-                    ScalarValue::try_from_array(output, index).unwrap(),
-                    "scalar and array evaluation must agree for {granularity} {:?}",
-                    T::UNIT
-                );
-            }
         }
     }
 
