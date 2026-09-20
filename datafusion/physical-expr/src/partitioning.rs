@@ -624,30 +624,40 @@ fn range_transform_keeps_keys_local(
     range_key: &Arc<dyn PhysicalExpr>,
     range: &RangePartitioning,
     schema: &Schema,
-) -> Option<()> {
-    let range_type = range_key.data_type(schema).ok()?;
+) -> bool {
+    let Ok(range_type) = range_key.data_type(schema) else {
+        return false;
+    };
     let sort_options = range.ordering().first().options;
-    range.split_points().iter().try_for_each(|split_point| {
-        let split_value = split_point.values().first()?;
+    range.split_points().iter().all(|split_point| {
+        let Some(split_value) = split_point.values().first() else {
+            return false;
+        };
         if split_value.data_type() != range_type {
-            return None;
+            return false;
         }
         let adjacent = if sort_options.descending {
             checked_successor(split_value)
         } else {
             checked_predecessor(split_value)
-        }?;
-        let at_split = evaluate_with_range_value(function, range_key, split_value)?;
-        let across_split = evaluate_with_range_value(function, range_key, &adjacent)?;
-        if at_split.is_null()
-            || across_split.is_null()
-            || at_split.data_type() != across_split.data_type()
-            || at_split == across_split
-        {
-            return None;
-        }
+        };
+        let Some(adjacent) = adjacent else {
+            return false;
+        };
+        let Some(at_split) = evaluate_with_range_value(function, range_key, split_value)
+        else {
+            return false;
+        };
+        let Some(across_split) =
+            evaluate_with_range_value(function, range_key, &adjacent)
+        else {
+            return false;
+        };
 
-        Some(())
+        !at_split.is_null()
+            && !across_split.is_null()
+            && at_split.data_type() == across_split.data_type()
+            && at_split != across_split
     })
 }
 
@@ -680,7 +690,7 @@ fn is_audited_range_transform(
     }
 
     range_argument_count == 1
-        && range_transform_keeps_keys_local(candidate, range_key, range, schema).is_some()
+        && range_transform_keeps_keys_local(candidate, range_key, range, schema)
 }
 
 fn range_partitioning_keeps_keys_local(
