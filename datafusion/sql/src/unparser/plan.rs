@@ -594,36 +594,20 @@ impl Unparser<'_> {
         lateral: bool,
     ) -> Result<()> {
         let preserve_names = matches!(plan, LogicalPlan::Projection(_))
-            && alias.as_ref().is_some_and(|alias| alias.columns.is_empty());
+            && alias.as_ref().is_none_or(|alias| alias.columns.is_empty());
         let mut derived_builder = DerivedRelationBuilder::default();
+        if preserve_names {
+            derived_builder.projection_names(
+                plan.schema()
+                    .fields()
+                    .iter()
+                    .map(|field| self.column_alias_to_sql(field.name()))
+                    .collect::<Result<Vec<_>>>()?,
+            );
+        }
         derived_builder.lateral(lateral).alias(alias).subquery({
             let inner_statement = self.plan_to_sql(plan)?;
-            if let ast::Statement::Query(mut inner_query) = inner_statement {
-                if preserve_names
-                    && let SetExpr::Select(select) = inner_query.body.as_mut()
-                    && select.projection.len() == plan.schema().fields().len()
-                {
-                    for (item, field) in
-                        select.projection.iter_mut().zip(plan.schema().fields())
-                    {
-                        if let ast::SelectItem::UnnamedExpr(expr) = item {
-                            let alias = self.column_alias_to_sql(field.name())?;
-                            let preserves_name = match expr {
-                                ast::Expr::Identifier(name) => name.value == alias.value,
-                                ast::Expr::CompoundIdentifier(names) => names
-                                    .last()
-                                    .is_some_and(|name| name.value == alias.value),
-                                _ => false,
-                            };
-                            if !preserves_name {
-                                *item = ast::SelectItem::ExprWithAlias {
-                                    expr: expr.clone(),
-                                    alias,
-                                };
-                            }
-                        }
-                    }
-                }
+            if let ast::Statement::Query(inner_query) = inner_statement {
                 inner_query
             } else {
                 return internal_err!(

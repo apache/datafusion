@@ -17,6 +17,7 @@
 
 use arrow::datatypes::{DataType, Field, Schema};
 
+use datafusion_common::tree_node::{Transformed, TransformedResult};
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, Result, TableReference,
     assert_contains,
@@ -109,6 +110,25 @@ fn roundtrip_expr(table: TableReference, sql: &str) -> Result<String> {
     let ast = expr_to_sql(&expr)?;
 
     Ok(ast.to_string())
+}
+
+fn remove_column_self_aliases(plan: LogicalPlan) -> Result<LogicalPlan> {
+    plan.transform_up_with_subqueries(|plan| {
+        plan.map_expressions(|expr| {
+            if let Expr::Alias(alias) = &expr
+                && alias.relation.is_none()
+                && alias.metadata.is_none()
+                && let Expr::Column(column) = alias.expr.as_ref()
+                && column.relation.is_none()
+                && column.name == alias.name
+            {
+                Ok(Transformed::yes(*alias.expr.clone()))
+            } else {
+                Ok(Transformed::no(expr))
+            }
+        })
+    })
+    .data()
 }
 
 #[test]
@@ -254,7 +274,11 @@ fn roundtrip_statement() -> Result<()> {
             .sql_statement_to_plan(roundtrip_statement.clone())
             .unwrap();
 
-        assert_eq!(plan, plan_roundtrip);
+        // Explicit output names can add unqualified self-aliases without changing the plan's meaning.
+        assert_eq!(
+            remove_column_self_aliases(plan)?,
+            remove_column_self_aliases(plan_roundtrip)?,
+        );
     }
 
     Ok(())
@@ -410,6 +434,15 @@ fn unparse_preserves_derived_aggregate_output_name() -> Result<()> {
     assert_snapshot!(
         sql,
         @r#"SELECT "sum(j1.j1_id)" FROM (SELECT sum("j1"."j1_id") AS "visible", sum("j1"."j1_id") AS "sum(j1.j1_id)" FROM "j1") AS "derived_projection""#
+    );
+
+    let sql = Unparser::new(&BigQueryDialect {})
+        .plan_to_sql(&plan)?
+        .to_string();
+    println!("BIGQUERY_SQL={sql}");
+    assert_snapshot!(
+        sql,
+        @r#"SELECT `sum_40j1_46j1_id_41` FROM (SELECT sum(`j1`.`j1_id`) AS `visible`, sum(`j1`.`j1_id`) AS `sum_40j1_46j1_id_41` FROM `j1`)"#
     );
     Ok(())
 }
