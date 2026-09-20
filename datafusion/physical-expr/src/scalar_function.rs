@@ -160,7 +160,7 @@ impl ScalarFunctionExpr {
 
     /// Returns whether this function expression's argument types have been
     /// explicitly audited as candidates for range-partitioning analysis.
-    pub fn supports_range_partitioning_analysis(
+    pub(crate) fn supports_range_partitioning_analysis(
         &self,
         input_schema: &Schema,
     ) -> Result<bool> {
