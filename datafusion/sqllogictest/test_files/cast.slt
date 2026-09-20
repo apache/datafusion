@@ -125,3 +125,59 @@ set datafusion.optimizer.expand_views_at_output = false;
 
 statement ok
 drop table t;
+
+# Regression for https://github.com/apache/datafusion/issues/25524
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE TABLE narrow_column (a INT, z TINYINT) AS VALUES (1, 0), (2, 0), (3, 0);
+
+# Inferred upper bound 1000 is out of range, but all runtime values are zero.
+query I
+SELECT a FROM narrow_column
+WHERE CAST(CAST(a < 0 AS INT) * 1000 AS TINYINT) = z
+ORDER BY a;
+----
+1
+2
+3
+
+# The same applies to the inferred lower bound -1000.
+query I
+SELECT a FROM narrow_column
+WHERE CAST(CAST(a < 0 AS INT) * -1000 AS TINYINT) = z
+ORDER BY a;
+----
+1
+2
+3
+
+# Real overflow must still fail at execution.
+statement error Can't cast value 1000 to type Int8
+SELECT CAST(CAST(a > 0 AS INT) * 1000 AS TINYINT) FROM narrow_column;
+
+statement error Can't cast value -1000 to type Int8
+SELECT CAST(CAST(a > 0 AS INT) * -1000 AS TINYINT) FROM narrow_column;
+
+# TRY_CAST must still return NULL for real overflow.
+query I
+SELECT TRY_CAST(CAST(a > 0 AS INT) * 1000 AS TINYINT) FROM narrow_column;
+----
+NULL
+NULL
+NULL
+
+query I
+SELECT TRY_CAST(CAST(a > 0 AS INT) * -1000 AS TINYINT) FROM narrow_column;
+----
+NULL
+NULL
+NULL
+
+statement ok
+DROP TABLE narrow_column;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
