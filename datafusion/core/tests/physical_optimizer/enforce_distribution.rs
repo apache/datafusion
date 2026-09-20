@@ -1417,8 +1417,8 @@ fn range_left_anti_hash_join_rehashes_incompatible_null_options() -> Result<()> 
     Ok(())
 }
 
-/// Builds a Full `HashJoinExec` over two scans laid out by `partitioning`, with the right
-/// side aliased to `a1`, `b1`.
+/// Builds a Full `HashJoinExec` over two scans laid out by `partitioning`. The right side
+/// columns are aliased to `a1` and `b1`.
 fn co_partitioned_full_join(
     partitioning: Partitioning,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1437,8 +1437,7 @@ fn co_partitioned_full_join(
     Ok(hash_join_exec(left, right, &join_on, &JoinType::Full))
 }
 
-/// Builds `CASE WHEN first IS NOT NULL THEN first ELSE second END` over two columns of
-/// `join`, which is the physical form `coalesce` takes.
+/// Builds `coalesce(first, second)` over two columns of `join` in its physical CASE form.
 fn coalesced_key(
     join: &Arc<dyn ExecutionPlan>,
     first: &str,
@@ -1453,8 +1452,8 @@ fn coalesced_key(
     )
 }
 
-/// Joins `join` on `key` against a scan laid out by `partitioning`, then enforces
-/// distribution over the result.
+/// Inner joins `join` on `key` with a scan laid out by `partitioning`, then runs the
+/// distribution rule over the result.
 fn plan_join_on_key(
     join: Arc<dyn ExecutionPlan>,
     key: Arc<dyn PhysicalExpr>,

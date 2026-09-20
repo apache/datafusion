@@ -1895,8 +1895,7 @@ ORDER BY b.range_key;
 
 ##########
 # TEST 49: Full Join Output Partitioning Feeds Aggregate on Coalesced Key
-# Co-partitioned Full join inputs keep every row in the partition of its key, so
-# an aggregate on COALESCE(l.range_key, r.range_key) needs no repartitioning.
+# Co-partitioned inputs keep every row in the partition of its key, so no repartition.
 ##########
 
 statement ok
@@ -1950,8 +1949,7 @@ ORDER BY k;
 
 ##########
 # TEST 50: Full Join Output Partitioning Feeds a Further Join on Coalesced Key
-# The Range partitioning on the coalesced key flows through the projection the
-# planner inserts, so the outer Full join needs no repartitioning on either side.
+# The Range partitioning flows through the planner's projection, so no repartition.
 ##########
 
 query TT
@@ -1988,8 +1986,7 @@ NULL NULL 40 400
 
 ##########
 # TEST 51: Hash Repartitioned Full Join Feeds Aggregate on Coalesced Key
-# Differing split points force Hash repartitioning below the join, and the
-# resulting Hash partitioning on the coalesced key satisfies the aggregate above.
+# Differing split points force Hash repartitioning below the join, not above it.
 ##########
 
 query TT
@@ -2025,8 +2022,7 @@ ORDER BY k;
 
 ##########
 # TEST 52: Full Join Output Partitioning Does Not Cover a Single Side Key
-# Right only rows carry NULL in l.range_key across every partition, so an
-# aggregate on l.range_key alone still needs Hash repartitioning above the join.
+# Right only rows carry NULL in l.range_key in every partition, so a repartition stays.
 ##########
 
 query TT
@@ -2063,8 +2059,7 @@ NULL 2
 
 ##########
 # TEST 53: Full Join Output Partitioning Matches Coalesce in Either Key Order
-# Both coalesce orders are equal on every Full join row, so grouping by
-# COALESCE(r.range_key, l.range_key) needs no repartitioning either.
+# Both coalesce orders are equal on every Full join row, so no repartition either.
 ##########
 
 query TT

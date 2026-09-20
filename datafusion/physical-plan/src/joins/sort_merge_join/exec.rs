@@ -28,9 +28,9 @@ use super::metrics::SortMergeJoinMetrics;
 use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
-    JoinFilter, JoinOn, JoinOnRef, add_full_join_key_equivalences, build_join_schema,
-    check_join_is_valid, estimate_join_statistics, reorder_output_after_swap,
-    swap_join_projection, symmetric_join_output_partitioning,
+    JoinFilter, JoinOn, JoinOnRef, build_join_schema, check_join_is_valid,
+    estimate_join_statistics, reorder_output_after_swap, swap_join_projection,
+    symmetric_join_output_partitioning,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet, SpillMetrics};
 use crate::projection::{
@@ -326,14 +326,12 @@ impl SortMergeJoinExec {
             join_on,
         )?;
 
-        let mut output_partitioning =
-            symmetric_join_output_partitioning(left, right, &join_type, join_on)?;
-        add_full_join_key_equivalences(
-            &mut eq_properties,
-            &output_partitioning,
-            join_type,
+        let mut output_partitioning = symmetric_join_output_partitioning(
+            left,
+            right,
+            &join_type,
             join_on,
-            left.schema().fields().len(),
+            &mut eq_properties,
         )?;
 
         if let Some(projection) = projection {

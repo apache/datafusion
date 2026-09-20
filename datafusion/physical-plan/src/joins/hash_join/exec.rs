@@ -63,9 +63,8 @@ use crate::{
     common::can_project,
     joins::utils::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
-        add_full_join_key_equivalences, build_join_schema, check_join_is_valid,
-        estimate_join_statistics, need_produce_result_in_final,
-        symmetric_join_output_partitioning,
+        build_join_schema, check_join_is_valid, estimate_join_statistics,
+        need_produce_result_in_final, symmetric_join_output_partitioning,
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
@@ -1295,17 +1294,14 @@ impl HashJoinExec {
             PartitionMode::Auto => Partitioning::UnknownPartitioning(
                 right.output_partitioning().partition_count(),
             ),
-            PartitionMode::Partitioned => {
-                symmetric_join_output_partitioning(left, right, &join_type, on)?
-            }
+            PartitionMode::Partitioned => symmetric_join_output_partitioning(
+                left,
+                right,
+                &join_type,
+                on,
+                &mut eq_properties,
+            )?,
         };
-        add_full_join_key_equivalences(
-            &mut eq_properties,
-            &output_partitioning,
-            join_type,
-            on,
-            left.schema().fields().len(),
-        )?;
 
         let emission_type =
             // LeftSemi does not emit rows during probing. It records matching build-side
