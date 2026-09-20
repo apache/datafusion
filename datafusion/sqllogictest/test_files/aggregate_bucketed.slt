@@ -1,0 +1,191 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Final hash aggregation splits its groups into hash buckets once the table
+# reaches `hash_aggregate_bucket_threshold` groups. Every query runs with the
+# option off and with a tiny threshold; the results must be identical.
+
+# The test context runs with 4 target partitions, so the aggregation is two-stage.
+
+statement ok
+set datafusion.execution.batch_size = 1024;
+
+statement ok
+create table t as select value as v from generate_series(1, 200000);
+
+# --- hash_aggregate_bucket_threshold = 0
+
+statement ok
+set datafusion.execution.hash_aggregate_bucket_threshold = 0;
+
+# integer key, several accumulators
+query IIIII
+select count(*), sum(c), sum(s), min(mn), max(mx) from (select v % 10007 as k, count(*) c, sum(v) s, min(v) mn, max(v) mx from t group by k);
+----
+10007 200000 20000100000 1 200000
+
+# avg keeps sum and count as state
+query IR
+select count(*), round(sum(a), 3) from (select v % 10007 as k, avg(v) a from t group by k);
+----
+10007 1000705003.5
+
+# string key
+query II
+select count(*), sum(c) from (select concat('key-', cast(v % 9973 as varchar)) as k, count(*) c from t group by k);
+----
+9973 200000
+
+# string view key
+query II
+select count(*), sum(c) from (select arrow_cast(concat('a-long-enough-string-view-key-', cast(v % 9973 as varchar)), 'Utf8View') as k, count(*) c from t group by k);
+----
+9973 200000
+
+# several key columns of mixed types
+query III
+select count(*), sum(c), sum(s) from (select v % 101 as k1, concat('k', cast(v % 103 as varchar)) as k2, v % 7 = 0 as k3, count(*) c, sum(v) s from t group by k1, k2, k3);
+----
+20806 200000 20000100000
+
+# nullable key
+query II
+select count(*), sum(c) from (select case when v % 11 = 0 then null else v % 5003 end as k, count(*) c from t group by k);
+----
+5004 200000
+
+# distinct has no accumulators
+query I
+select count(*) from (select distinct v % 20011 as k, v % 3 as j from t);
+----
+60033
+
+# accumulators with list state
+query II
+select count(*), sum(d) from (select v % 5003 as k, count(distinct v % 17) d from t group by k);
+----
+5003 85051
+
+# median
+query IR
+select count(*), sum(m) from (select v % 5003 as k, median(v) m from t group by k);
+----
+5003 500302501.5
+
+# array_agg
+query II
+select count(*), sum(array_length(a)) from (select v % 5003 as k, array_agg(v) a from t group by k);
+----
+5003 200000
+
+# every row its own group, largest groups first
+query III
+select k, c, s from (select v as k, count(*) c, sum(v) s from t group by v) order by k desc limit 3;
+----
+200000 1 200000
+199999 1 199999
+199998 1 199998
+
+# --- hash_aggregate_bucket_threshold = 100
+
+statement ok
+set datafusion.execution.hash_aggregate_bucket_threshold = 100;
+
+# Each of the four final partitions moved its groups into buckets once
+query TT
+explain analyze select count(*) from (select v % 10007 as k, count(*) c from t group by k);
+----
+<slt:ignore>
+06)----------AggregateExec: mode=FinalPartitioned, gby=[t.v % Int64(10007)@0 as t.v % Int64(10007)], aggr=[], metrics=[<slt:ignore>bucket_splits=4,<slt:ignore>]
+<slt:ignore>
+
+# integer key, several accumulators
+query IIIII
+select count(*), sum(c), sum(s), min(mn), max(mx) from (select v % 10007 as k, count(*) c, sum(v) s, min(v) mn, max(v) mx from t group by k);
+----
+10007 200000 20000100000 1 200000
+
+# avg keeps sum and count as state
+query IR
+select count(*), round(sum(a), 3) from (select v % 10007 as k, avg(v) a from t group by k);
+----
+10007 1000705003.5
+
+# string key
+query II
+select count(*), sum(c) from (select concat('key-', cast(v % 9973 as varchar)) as k, count(*) c from t group by k);
+----
+9973 200000
+
+# string view key
+query II
+select count(*), sum(c) from (select arrow_cast(concat('a-long-enough-string-view-key-', cast(v % 9973 as varchar)), 'Utf8View') as k, count(*) c from t group by k);
+----
+9973 200000
+
+# several key columns of mixed types
+query III
+select count(*), sum(c), sum(s) from (select v % 101 as k1, concat('k', cast(v % 103 as varchar)) as k2, v % 7 = 0 as k3, count(*) c, sum(v) s from t group by k1, k2, k3);
+----
+20806 200000 20000100000
+
+# nullable key
+query II
+select count(*), sum(c) from (select case when v % 11 = 0 then null else v % 5003 end as k, count(*) c from t group by k);
+----
+5004 200000
+
+# distinct has no accumulators
+query I
+select count(*) from (select distinct v % 20011 as k, v % 3 as j from t);
+----
+60033
+
+# accumulators with list state
+query II
+select count(*), sum(d) from (select v % 5003 as k, count(distinct v % 17) d from t group by k);
+----
+5003 85051
+
+# median
+query IR
+select count(*), sum(m) from (select v % 5003 as k, median(v) m from t group by k);
+----
+5003 500302501.5
+
+# array_agg
+query II
+select count(*), sum(array_length(a)) from (select v % 5003 as k, array_agg(v) a from t group by k);
+----
+5003 200000
+
+# every row its own group, largest groups first
+query III
+select k, c, s from (select v as k, count(*) c, sum(v) s from t group by v) order by k desc limit 3;
+----
+200000 1 200000
+199999 1 199999
+199998 1 199998
+
+statement ok
+reset datafusion.execution.hash_aggregate_bucket_threshold;
+
+statement ok
+reset datafusion.execution.batch_size;
+
+statement ok
+drop table t;

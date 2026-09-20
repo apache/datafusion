@@ -23,6 +23,7 @@
 use std::mem::size_of;
 use std::sync::Arc;
 
+use arrow::compute::BatchCoalescer;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
@@ -34,6 +35,7 @@ use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use futures::future::BoxFuture;
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
@@ -41,6 +43,7 @@ use super::aggregate_hash_table::{
     AggregateHashTable, FinalMarker, OrderedAggregateTableMetrics, PartialMarker,
     PartialSkipMarker,
 };
+use super::final_buckets::{FinalBuckets, MAX_BUCKET_LEVELS};
 use super::ordered_final_stream::OrderedFinalAggregateStream;
 use super::skip_partial::SkipAggregationProbe;
 use crate::metrics::{
@@ -228,6 +231,53 @@ pub(crate) struct FinalHashAggregateStream {
     hash_table: Option<AggregateHashTable<FinalMarker>>,
     /// `None` if spilling is not supported by the configured `DiskManager`.
     spill_context: Option<Box<FinalSpillContext>>,
+    /// `None` unless `hash_aggregate_bucket_threshold` is set and applies.
+    bucketing: Option<Arc<FinalBucketing>>,
+    /// Combines the output of small buckets into batches of the target size.
+    bucket_output: Option<BatchCoalescer>,
+}
+
+/// What [`FinalHashAggregateStream`] needs to split its groups into hash
+/// buckets once the hash table has grown past the configured threshold, and
+/// to aggregate those buckets one after another. See [`FinalBuckets`].
+struct FinalBucketing {
+    /// Number of groups in one hash table that triggers bucketing
+    threshold: usize,
+    /// Aggregate configuration used to construct the table of each bucket.
+    agg: AggregateExec,
+    /// Original partition index.
+    partition: usize,
+    /// Target batch size from configuration.
+    batch_size: usize,
+    /// Schema of the partial state rows held by the buckets.
+    state_schema: SchemaRef,
+    /// `None` if spilling is not supported by the configured `DiskManager`.
+    spill_manager: Option<SpillManager>,
+    /// Number of times a hash table was split into buckets
+    bucket_splits: metrics::Count,
+    /// Number of times the rows of a bucket were replaced by their aggregated state
+    bucket_compactions: metrics::Count,
+}
+
+impl FinalBucketing {
+    fn new_buckets(&self, level: u32) -> FinalBuckets {
+        FinalBuckets::new(
+            &self.state_schema,
+            self.agg.group_by.num_group_exprs(),
+            self.batch_size,
+            level,
+            self.spill_manager.clone(),
+        )
+    }
+
+    fn new_table(&self, schema: &SchemaRef) -> Result<AggregateHashTable<FinalMarker>> {
+        AggregateHashTable::<FinalMarker>::new(
+            &self.agg,
+            self.partition,
+            Arc::clone(schema),
+            self.batch_size,
+        )
+    }
 }
 
 impl FinalSpillContext {
@@ -779,14 +829,54 @@ impl FinalHashAggregateStream {
                 .with_can_spill(can_spill)
                 .register(context.memory_pool());
 
+        let group_values_soft_limit = agg.limit_options().map(|config| config.limit());
+
+        let bucket_threshold = context
+            .session_config()
+            .options()
+            .execution
+            .hash_aggregate_bucket_threshold;
+        // Bucketing turns the table's state into rows and merges those rows
+        // again. That is cheap for fixed-width and string state, but nested
+        // state (the lists kept by `count(distinct)`, `array_agg` or `median`)
+        // is costly to rebuild and takes more memory as rows than inside the
+        // accumulator, so such aggregations keep their single table.
+        let has_nested_state = input_schema
+            .fields()
+            .iter()
+            .skip(agg.group_by.num_group_exprs())
+            .any(|field| field.data_type().is_nested());
+        // A soft limit stops reading input early, which bucketing cannot do.
+        let bucketing = (bucket_threshold > 0
+            && group_values_soft_limit.is_none()
+            && !has_nested_state)
+            .then(|| {
+                Arc::new(FinalBucketing {
+                    threshold: bucket_threshold,
+                    agg: agg.clone(),
+                    partition,
+                    batch_size,
+                    state_schema: Arc::clone(&input_schema),
+                    spill_manager: spill_context
+                        .as_ref()
+                        .map(|context| context.spill_manager.clone()),
+                    bucket_splits: MetricBuilder::new(&agg.metrics)
+                        .counter("bucket_splits", partition),
+                    bucket_compactions: MetricBuilder::new(&agg.metrics)
+                        .counter("bucket_compactions", partition),
+                })
+            });
+
         Ok(Self {
             schema,
             input,
             baseline_metrics,
             reservation,
-            group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
+            group_values_soft_limit,
             hash_table: Some(hash_table),
             spill_context,
+            bucketing,
+            bucket_output: None,
         })
     }
 
@@ -808,9 +898,38 @@ impl FinalHashAggregateStream {
 
             let mut spill_context = self.spill_context.take();
 
-            self.consume_input(&mut hash_table, &mut spill_context)
+            let hash_table_batch_size = self
+                .bucketing
+                .as_ref()
+                .map_or(0, |bucketing| bucketing.batch_size);
+            let buckets = self
+                .consume_input(&mut hash_table, &mut spill_context)
                 .await?;
             self.close_input();
+
+            if let Some(buckets) = buckets {
+                // The table handed its groups over to the buckets
+                drop(hash_table);
+                let mut emitter = emitter;
+                let batch_size = hash_table_batch_size;
+                self.bucket_output = Some(
+                    BatchCoalescer::new(Arc::clone(&self.schema), batch_size)
+                        .with_biggest_coalesce_batch_size(Some(batch_size / 2)),
+                );
+                self.produce_output_from_buckets(buckets, &mut emitter)
+                    .await?;
+                self.reservation.try_resize(0)?;
+
+                let mut bucket_output =
+                    self.bucket_output.take().expect("bucket output was set");
+                bucket_output.finish_buffered_batch()?;
+                while let Some(batch) = bucket_output.next_completed_batch() {
+                    emitter
+                        .emit(batch.record_output(&self.baseline_metrics))
+                        .await;
+                }
+                return Ok(());
+            }
 
             match spill_context.filter(|s| s.has_spills()) {
                 // - If spilled before, perform merging spill runs
@@ -861,15 +980,29 @@ impl FinalHashAggregateStream {
     ///
     /// Spilling: The table cannot reserve enough memory.
     ///           Move all current states into one fully group-key-sorted spill run.
+    ///
+    /// Bucketing: The table has reached `hash_aggregate_bucket_threshold` groups.
+    ///            Move all current states and the rest of the input into hash
+    ///            buckets, which are returned for [`Self::produce_output_from_buckets`].
     async fn consume_input(
         &mut self,
         hash_table: &mut AggregateHashTable<FinalMarker>,
         spill_context: &mut Option<Box<FinalSpillContext>>,
-    ) -> Result<()> {
+    ) -> Result<Option<FinalBuckets>> {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+        let mut buckets: Option<FinalBuckets> = None;
+        let mut compaction_table = None;
 
         while let Some(batch) = self.input.next().await.transpose()? {
             let _timer = elapsed_compute.timer();
+
+            if let Some(buckets) = buckets.as_mut() {
+                buckets.route(&batch)?;
+                self.compact_buckets(buckets, &mut compaction_table)?;
+                self.reserve_for_buckets(0, buckets)?;
+                continue;
+            }
+
             hash_table.aggregate_batch(&batch)?;
 
             // Soft group limits are usually small and rarely coincide with
@@ -880,6 +1013,22 @@ impl FinalHashAggregateStream {
                 .is_some_and(|context| context.has_spills());
             if self.hit_soft_group_limit(hash_table) && !spilled {
                 break;
+            }
+
+            // Once sorted runs exist the output comes from merging them, so
+            // bucketing only starts from a table that has never spilled.
+            if let Some(bucketing) = &self.bucketing
+                && !spilled
+                && hash_table.building_group_count() >= bucketing.threshold
+            {
+                let mut new_buckets = bucketing.new_buckets(0);
+                bucketing.bucket_splits.add(1);
+                if let Some(state) = hash_table.take_state_batch()? {
+                    new_buckets.route(&state)?;
+                }
+                self.reserve_for_buckets(hash_table.memory_size(), &mut new_buckets)?;
+                buckets = Some(new_buckets);
+                continue;
             }
 
             // Check memory reservation, and potentially spill.
@@ -932,7 +1081,175 @@ impl FinalHashAggregateStream {
             }
         }
 
+        Ok(buckets)
+    }
+
+    /// Replaces the rows of every bucket that is due for it by their aggregated
+    /// state. See the compaction section of [`FinalBuckets`].
+    fn compact_buckets(
+        &mut self,
+        buckets: &mut FinalBuckets,
+        table: &mut Option<AggregateHashTable<FinalMarker>>,
+    ) -> Result<()> {
+        let Some(bucketing) = self.bucketing.as_ref() else {
+            return Ok(());
+        };
+        while let Some(index) = buckets.bucket_to_compact() {
+            let table = match table {
+                Some(table) => table,
+                None => table.insert(bucketing.new_table(&self.schema)?),
+            };
+            let mut input_rows = 0;
+            for batch in buckets.take_bucket(index)? {
+                input_rows += batch.num_rows();
+                table.aggregate_batch(&batch)?;
+            }
+            buckets.put_compacted(index, table.take_state_batch()?, input_rows);
+            bucketing.bucket_compactions.add(1);
+        }
         Ok(())
+    }
+
+    /// Reserves `other_bytes` plus the memory of `buckets`, spilling buckets
+    /// for as long as the reservation does not fit.
+    fn reserve_for_buckets(
+        &mut self,
+        other_bytes: usize,
+        buckets: &mut FinalBuckets,
+    ) -> Result<()> {
+        loop {
+            let size = other_bytes.saturating_add(buckets.memory_size());
+            match self.reservation.try_resize(size) {
+                Ok(()) => return Ok(()),
+                Err(e @ DataFusionError::ResourcesExhausted(_)) => {
+                    if buckets.spill_largest()? {
+                        continue;
+                    }
+                    // Every bucket is on disk. What is left is the fixed cost
+                    // of routing a batch, which no spill can release, so go on
+                    // like the sort based spill path does after it has spilled
+                    // its table: with the reservation the pool still grants.
+                    if other_bytes == 0 && buckets.is_fully_spilled() {
+                        self.reservation.try_resize(0)?;
+                        return Ok(());
+                    }
+                    return Err(
+                        e.context("Final hash aggregate has no more buckets to spill")
+                    );
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// Aggregates the buckets one after another, each with a table of its
+    /// own, and emits the groups of a bucket before reading the next one.
+    ///
+    /// A bucket whose table reaches the bucketing threshold again, or does
+    /// not fit in memory, is split into buckets of the next level.
+    fn produce_output_from_buckets<'a>(
+        &'a mut self,
+        buckets: FinalBuckets,
+        emitter: &'a mut TryEmitter<RecordBatch, DataFusionError>,
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+            let bucketing = Arc::clone(
+                self.bucketing
+                    .as_ref()
+                    .expect("bucketing is configured when buckets exist"),
+            );
+            let next_level = buckets.level() + 1;
+            let state_schema = Arc::clone(&bucketing.state_schema);
+
+            let sources = buckets.into_sources()?;
+            // Memory of the buckets that wait for their turn
+            let mut waiting_bytes: usize =
+                sources.iter().map(|source| source.memory_size()).sum();
+
+            for source in sources {
+                let mut source_bytes = source.memory_size();
+                waiting_bytes -= source_bytes;
+                let mut input = source.into_stream(&state_schema);
+
+                let mut timer = elapsed_compute.timer();
+                let mut hash_table = bucketing.new_table(&self.schema)?;
+                let mut sub_buckets: Option<FinalBuckets> = None;
+                let mut compaction_table = None;
+
+                while let Some(batch) = input.next().await.transpose()? {
+                    // Batches of an in-memory bucket are released as they are read
+                    source_bytes =
+                        source_bytes.saturating_sub(batch.get_array_memory_size());
+                    let held_bytes = waiting_bytes + source_bytes;
+
+                    if let Some(sub_buckets) = sub_buckets.as_mut() {
+                        sub_buckets.route(&batch)?;
+                        self.compact_buckets(sub_buckets, &mut compaction_table)?;
+                        self.reserve_for_buckets(held_bytes, sub_buckets)?;
+                        continue;
+                    }
+
+                    hash_table.aggregate_batch(&batch)?;
+
+                    let can_split = next_level < MAX_BUCKET_LEVELS;
+                    let split = match self
+                        .reservation
+                        .try_resize(held_bytes + hash_table.memory_size())
+                    {
+                        Ok(()) => {
+                            can_split
+                                && hash_table.building_group_count()
+                                    >= bucketing.threshold
+                        }
+                        Err(DataFusionError::ResourcesExhausted(_)) if can_split => true,
+                        Err(e) => return Err(e),
+                    };
+                    if split {
+                        let mut new_buckets = bucketing.new_buckets(next_level);
+                        bucketing.bucket_splits.add(1);
+                        if let Some(state) = hash_table.take_state_batch()? {
+                            new_buckets.route(&state)?;
+                        }
+                        self.reserve_for_buckets(
+                            held_bytes + hash_table.memory_size(),
+                            &mut new_buckets,
+                        )?;
+                        sub_buckets = Some(new_buckets);
+                    }
+                }
+                drop(input);
+
+                if let Some(sub_buckets) = sub_buckets {
+                    drop(hash_table);
+                    timer.done();
+                    self.produce_output_from_buckets(sub_buckets, emitter)
+                        .await?;
+                    continue;
+                }
+
+                hash_table.start_output()?;
+                while let Some(batch) = hash_table.next_output_batch()? {
+                    self.reservation
+                        .try_resize(waiting_bytes + hash_table.memory_size())?;
+                    let bucket_output = self
+                        .bucket_output
+                        .as_mut()
+                        .expect("bucket output is set while buckets are read");
+                    bucket_output.push_batch(batch)?;
+                    while let Some(batch) = bucket_output.next_completed_batch() {
+                        timer.done();
+                        emitter
+                            .emit(batch.record_output(&self.baseline_metrics))
+                            .await;
+                        timer = elapsed_compute.timer();
+                    }
+                }
+                timer.done();
+            }
+
+            Ok(())
+        })
     }
 
     /// Produce output from spills
@@ -1341,6 +1658,196 @@ mod tests {
             "Expected batch 3's rows ({batch3_rows}) to be skipped",
         );
 
+        Ok(())
+    }
+
+    /// Runs the final hash aggregation of `SELECT group_col, COUNT(value_col)
+    /// .. GROUP BY group_col` over partial state that holds every group
+    /// `num_partitions` times with a count of 1, as if that many partial
+    /// aggregations had fed it. The input is not charged to the memory pool,
+    /// so a memory limit only constrains the final aggregation.
+    ///
+    /// Returns the `(group, count)` rows sorted by group, and the final
+    /// aggregation's `bucket_splits` and `spill_count` metrics.
+    async fn run_final_hash_aggregate(
+        num_groups: usize,
+        num_partitions: usize,
+        bucket_threshold: usize,
+        memory_limit: Option<usize>,
+    ) -> Result<(Vec<(i32, i64)>, usize, usize)> {
+        use datafusion_common::ScalarValue;
+
+        let batch_size = 1024;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("group_col", DataType::Int32, false),
+            Field::new("value_col", DataType::Int64, false),
+        ]));
+
+        let mut runtime = RuntimeEnvBuilder::default();
+        if let Some(memory_limit) = memory_limit {
+            runtime = runtime.with_memory_limit(memory_limit, 1.0);
+        }
+        let task_ctx = TaskContext::default().with_runtime(runtime.build_arc()?);
+        let session_config = task_ctx
+            .session_config()
+            .clone()
+            .set(
+                "datafusion.execution.batch_size",
+                &ScalarValue::UInt64(Some(batch_size as u64)),
+            )
+            .set(
+                "datafusion.execution.hash_aggregate_bucket_threshold",
+                &ScalarValue::UInt64(Some(bucket_threshold as u64)),
+            );
+        let task_ctx = Arc::new(task_ctx.with_session_config(session_config));
+
+        let group_by = PhysicalGroupBy::new_single(vec![(
+            col("group_col", &schema)?,
+            "group_col".to_string(),
+        )]);
+        let aggr_expr = vec![Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col("value_col", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("count_value")
+                .build()?,
+        )];
+
+        // The partial aggregation is only built for its output schema
+        let empty = TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let state_schema = AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            aggr_expr.clone(),
+            vec![None],
+            empty,
+            Arc::clone(&schema),
+        )?
+        .schema();
+        let mut state_batches = vec![];
+        for _ in 0..num_partitions {
+            for start in (0..num_groups).step_by(batch_size) {
+                let end = (start + batch_size).min(num_groups);
+                let groups: Vec<i32> = (start as i32..end as i32).collect();
+                let counts = vec![1i64; groups.len()];
+                state_batches.push(RecordBatch::try_new(
+                    Arc::clone(&state_schema),
+                    vec![
+                        Arc::new(Int32Array::from(groups)),
+                        Arc::new(Int64Array::from(counts)),
+                    ],
+                )?);
+            }
+        }
+        let state_input = TestMemoryExec::try_new_exec(
+            &[state_batches],
+            Arc::clone(&state_schema),
+            None,
+        )?;
+        let final_agg = Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by.as_final(),
+            aggr_expr,
+            vec![None],
+            state_input,
+            Arc::clone(&schema),
+        )?);
+
+        let batches =
+            crate::collect(Arc::clone(&final_agg) as Arc<dyn ExecutionPlan>, task_ctx)
+                .await?;
+        let mut rows = vec![];
+        for batch in &batches {
+            let groups = batch.column(0).as_primitive::<Int32Type>();
+            let counts = batch
+                .column(1)
+                .as_primitive::<arrow::datatypes::Int64Type>();
+            rows.extend(
+                groups
+                    .values()
+                    .iter()
+                    .copied()
+                    .zip(counts.values().iter().copied()),
+            );
+        }
+        rows.sort_unstable();
+
+        let metrics = final_agg.metrics().expect("final aggregate has metrics");
+        let bucket_splits = metrics
+            .sum_by_name("bucket_splits")
+            .map(|value| value.as_usize())
+            .unwrap_or(0);
+        BUCKET_COMPACTIONS.with(|compactions| {
+            compactions.set(
+                metrics
+                    .sum_by_name("bucket_compactions")
+                    .map(|value| value.as_usize())
+                    .unwrap_or(0),
+            )
+        });
+        Ok((rows, bucket_splits, metrics.spill_count().unwrap_or(0)))
+    }
+
+    thread_local! {
+        /// `bucket_compactions` metric of the last [`run_final_hash_aggregate`]
+        static BUCKET_COMPACTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    #[tokio::test]
+    async fn final_hash_aggregate_compacts_repeated_groups() -> Result<()> {
+        // Every group arrives 40 times, so buffering the input as is would
+        // hold 40 rows per group.
+        let (rows, splits, spills) =
+            run_final_hash_aggregate(20_000, 40, 1_000, None).await?;
+        assert_eq!(rows.len(), 20_000);
+        assert!(rows.iter().all(|&(_, count)| count == 40));
+        assert!(splits >= 1);
+        assert_eq!(spills, 0);
+        let compactions = BUCKET_COMPACTIONS.with(|compactions| compactions.get());
+        assert!(compactions > 0, "buckets were compacted");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn final_hash_aggregate_buckets_match_single_table() -> Result<()> {
+        let (expected, splits, _) = run_final_hash_aggregate(50_000, 3, 0, None).await?;
+        assert_eq!(splits, 0);
+        assert_eq!(expected.len(), 50_000);
+        assert!(expected.iter().all(|&(_, count)| count == 3));
+
+        // One split: 64 buckets of ~780 groups stay below the threshold
+        let (rows, splits, spills) =
+            run_final_hash_aggregate(50_000, 3, 10_000, None).await?;
+        assert_eq!(rows, expected);
+        assert_eq!(splits, 1);
+        assert_eq!(spills, 0);
+
+        // A table that never reaches the threshold is left alone
+        let (rows, splits, _) = run_final_hash_aggregate(50_000, 3, 50_001, None).await?;
+        assert_eq!(rows, expected);
+        assert_eq!(splits, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn final_hash_aggregate_splits_large_buckets_again() -> Result<()> {
+        let (expected, _, _) = run_final_hash_aggregate(50_000, 2, 0, None).await?;
+
+        // Buckets of ~780 groups exceed the threshold and are split once more
+        let (rows, splits, _) = run_final_hash_aggregate(50_000, 2, 100, None).await?;
+        assert_eq!(rows, expected);
+        assert!(splits > 1, "buckets were split again, got {splits} splits");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn final_hash_aggregate_spills_buckets_under_memory_limit() -> Result<()> {
+        let (expected, _, _) = run_final_hash_aggregate(200_000, 3, 0, None).await?;
+
+        let (rows, splits, spills) =
+            run_final_hash_aggregate(200_000, 3, 10_000, Some(3 * 1024 * 1024)).await?;
+        assert_eq!(rows, expected);
+        assert!(splits >= 1);
+        assert!(spills > 0, "buckets were spilled");
         Ok(())
     }
 
