@@ -373,11 +373,11 @@ mod tests {
     /// Returns the value of results. For example, returns 6 given the following
     ///
     /// ```text
-    /// +-------+,
-    /// | count |,
-    /// +-------+,
-    /// | 6     |,
-    /// +-------+,
+    /// +-------+
+    /// | count |
+    /// +-------+
+    /// | 6     |
+    /// +-------+
     /// ```
     fn extract_count(res: Vec<RecordBatch>) -> u64 {
         assert_eq!(res.len(), 1, "expected one batch, got {}", res.len());
