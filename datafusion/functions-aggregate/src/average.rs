@@ -32,10 +32,14 @@ use arrow::datatypes::{
     DurationSecondType, Field, FieldRef, Float64Type, TimeUnit, UInt64Type,
 };
 use datafusion_common::types::{NativeType, logical_float64};
+use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{
     Result, ScalarValue, exec_datafusion_err, exec_err, internal_err, not_impl_err,
 };
+use datafusion_expr::expr::AggregateFunction;
+use datafusion_expr::expr_fn::cast;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
+use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, Documentation, EmitTo, Expr, GroupSelection,
@@ -66,7 +70,7 @@ make_udaf_expr_and_func!(
 );
 
 pub fn avg_distinct(expr: Expr) -> Expr {
-    Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+    Expr::AggregateFunction(AggregateFunction::new_udf(
         avg_udaf(),
         vec![expr],
         true,
@@ -492,9 +496,74 @@ impl AggregateUDFImpl for Avg {
         ReversedUDAF::Identical
     }
 
+    fn decompose(
+        &self,
+        aggregate_function: &AggregateFunction,
+        info: &SimplifyContext,
+    ) -> Result<Option<Expr>> {
+        decompose_avg_aggregate(aggregate_function, info)
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+}
+
+/// Returns a candidate rewrite of `AVG(x)` to
+/// `SUM(x) / CAST(COUNT(x) AS Float64)`.
+///
+/// The optimizer applies the candidate only when at least one resulting
+/// aggregate can be shared without increasing the number of distinct aggregate
+/// expressions. Duplicate components are removed when the optimizer rebuilds
+/// the inner aggregate.
+///
+/// Only the Float64 path is rewritten: decimal and duration AVGs use widened
+/// intermediate sum types and different division semantics.
+fn decompose_avg_aggregate(
+    aggregate_function: &AggregateFunction,
+    info: &SimplifyContext,
+) -> Result<Option<Expr>> {
+    let params = &aggregate_function.params;
+
+    // DISTINCT / FILTER / ORDER BY / null treatment would have to be
+    // replicated onto both SUM and COUNT; keep those AVGs as-is.
+    if params.distinct
+        || params.filter.is_some()
+        || !params.order_by.is_empty()
+        || params.null_treatment.is_some()
+    {
+        return Ok(None);
+    }
+
+    let [arg] = params.args.as_slice() else {
+        return Ok(None);
+    };
+
+    // Numeric inputs are coerced to Float64 by AVG's signature, so this single
+    // check selects the Float64 path and skips decimal/duration inputs.
+    if info.get_data_type(arg)? != DataType::Float64 {
+        return Ok(None);
+    }
+
+    // After the split the argument is evaluated once per aggregate, which is
+    // not equivalent for volatile expressions.
+    if arg.is_volatile() {
+        return Ok(None);
+    }
+
+    // For non-nullable arguments count rows so the component can be shared
+    // with an existing COUNT(*).
+    let count_arg = if info.nullable(arg)? {
+        arg.clone()
+    } else {
+        Expr::Literal(COUNT_STAR_EXPANSION, None)
+    };
+
+    // SUM keeps AVG's Float64 argument so the arithmetic matches AVG exactly.
+    let sum_expr = crate::sum::sum(arg.clone());
+    let count_expr = crate::count::count(count_arg);
+
+    Ok(Some(sum_expr / cast(count_expr, DataType::Float64)))
 }
 
 /// The precision and scale of a decimal `DataType`

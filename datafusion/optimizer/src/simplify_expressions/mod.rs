@@ -18,6 +18,7 @@
 //! [`SimplifyExpressions`] simplifies expressions in the logical plan,
 //! [`ExprSimplifier`] simplifies individual `Expr`s.
 
+mod aggregate_decomposition;
 pub mod expr_simplifier;
 mod inlist_simplifier;
 mod linear_aggregates;

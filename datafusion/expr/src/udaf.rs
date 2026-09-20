@@ -40,6 +40,7 @@ use crate::function::{
     AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
 };
 use crate::groups_accumulator::GroupsAccumulator;
+use crate::simplify::SimplifyContext;
 use crate::udf_eq::UdfEq;
 use crate::utils::AggregateOrderSensitivity;
 use crate::utils::format_state_name;
@@ -310,6 +311,17 @@ impl AggregateUDF {
     /// See [`AggregateUDFImpl::simplify`] for more details.
     pub fn simplify(&self) -> Option<AggregateFunctionSimplification> {
         self.inner.simplify()
+    }
+
+    /// Returns this aggregate function's candidate decomposition, if any.
+    ///
+    /// See [`AggregateUDFImpl::decompose`] for more details.
+    pub fn decompose(
+        &self,
+        aggregate_function: &AggregateFunction,
+        info: &SimplifyContext,
+    ) -> Result<Option<Expr>> {
+        self.inner.decompose(aggregate_function, info)
     }
 
     /// Rewrite aggregate to have simpler arguments
@@ -749,6 +761,25 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// later in query planning.
     fn simplify(&self) -> Option<AggregateFunctionSimplification> {
         None
+    }
+
+    /// Returns an optional candidate decomposition into simpler aggregates.
+    ///
+    /// Unlike [`Self::simplify`], the optimizer only applies this rewrite when
+    /// at least one aggregate in the returned expression can be shared with
+    /// another aggregate in the same plan node. This makes the hook suitable
+    /// for rewrites such as `AVG(x)` into `SUM(x) / COUNT(x)`, which may be
+    /// slower when neither component can be reused.
+    ///
+    /// A returned candidate expression must have the same data type and
+    /// nullability as the original aggregate expression. Return `None` when
+    /// this aggregate cannot be decomposed.
+    fn decompose(
+        &self,
+        _aggregate_function: &AggregateFunction,
+        _info: &SimplifyContext,
+    ) -> Result<Option<Expr>> {
+        Ok(None)
     }
 
     /// Rewrite the aggregate to have simpler arguments
@@ -1635,6 +1666,14 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         self.inner.simplify()
     }
 
+    fn decompose(
+        &self,
+        aggregate_function: &AggregateFunction,
+        info: &SimplifyContext,
+    ) -> Result<Option<Expr>> {
+        self.inner.decompose(aggregate_function, info)
+    }
+
     fn simplify_expr_op_literal(
         &self,
         agg_function: &AggregateFunction,
@@ -1715,7 +1754,9 @@ pub enum SetMonotonicity {
 
 #[cfg(test)]
 mod test {
-    use crate::{AggregateUDF, AggregateUDFImpl};
+    use crate::expr::AggregateFunction;
+    use crate::simplify::SimplifyContext;
+    use crate::{AggregateUDF, AggregateUDFImpl, Expr, col};
     use arrow::datatypes::{DataType, FieldRef};
     use datafusion_common::Result;
     use datafusion_expr_common::accumulator::Accumulator;
@@ -1761,6 +1802,13 @@ mod test {
         }
         fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
             unimplemented!()
+        }
+        fn decompose(
+            &self,
+            _aggregate_function: &AggregateFunction,
+            _info: &SimplifyContext,
+        ) -> Result<Option<Expr>> {
+            Ok(Some(col("decomposed")))
         }
     }
 
@@ -1822,6 +1870,34 @@ mod test {
         let b1 = AggregateUDF::from(BMeanUdf::new());
         assert!(a1 < b1);
         assert!(!(a1 == b1));
+    }
+
+    #[test]
+    fn test_decompose_forwarded_through_aliases() -> Result<()> {
+        let udf = AggregateUDF::from(AMeanUdf::new()).with_aliases(["alias"]);
+        let Expr::AggregateFunction(aggregate_function) = udf.call(vec![col("a")]) else {
+            panic!("expected aggregate function")
+        };
+
+        assert_eq!(
+            udf.decompose(&aggregate_function, &SimplifyContext::default())?,
+            Some(col("decomposed"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_default_decompose_returns_none() -> Result<()> {
+        let udf = AggregateUDF::from(BMeanUdf::new());
+        let Expr::AggregateFunction(aggregate_function) = udf.call(vec![col("a")]) else {
+            panic!("expected aggregate function")
+        };
+
+        assert_eq!(
+            udf.decompose(&aggregate_function, &SimplifyContext::default())?,
+            None
+        );
+        Ok(())
     }
 
     fn hash<T: Hash>(value: T) -> u64 {

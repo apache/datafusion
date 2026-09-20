@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::logical_plan::consumer::{NameTracker, SubstraitConsumer};
+use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::consumer::{from_substrait_agg_func, from_substrait_sorts};
 use datafusion::common::{Column, DFSchemaRef, internal_err, not_impl_err};
 use datafusion::logical_expr::builder::project;
+use datafusion::logical_expr::utils::NameTracker;
 use datafusion::logical_expr::{
     Aggregate, Expr, GroupingSet, LogicalPlan, LogicalPlanBuilder,
 };
