@@ -56,8 +56,8 @@ use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
-    Column, Constraints, DFSchema, DFSchemaRef, NullEquality, Result, ScalarValue,
-    TableReference, ToDFSchema, UnnestOptions, exec_err,
+    Column, Constraints, DFSchema, DFSchemaRef, FunctionalDependencies, NullEquality,
+    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions, exec_err,
     get_target_functional_dependencies, internal_datafusion_err, plan_datafusion_err,
     plan_err,
 };
@@ -1896,10 +1896,18 @@ pub fn build_join_schema(
 pub fn build_asof_join_schema(left: &DFSchema, right: &DFSchema) -> Result<DFSchema> {
     // ASOF emits exactly one output row for each left row. Unlike a general
     // left join, it cannot duplicate left rows, so left dependencies retain
-    // their modes. Right dependencies do not hold because one right row may
-    // match multiple left rows.
-    build_join_schema(left, right, &JoinType::Left)?
-        .with_functional_dependencies(left.functional_dependencies().clone())
+    // their modes. Right dependencies remain valid but not unique because one
+    // right row may match multiple left rows.
+    let schema = build_join_schema(left, right, &JoinType::Left)?;
+    // `build_join_schema` places the downgraded left dependencies before the
+    // nullable, non-unique right dependencies. Replace only the left prefix.
+    let left_dependencies_len = left.functional_dependencies().len();
+    let right_dependencies =
+        schema.functional_dependencies()[left_dependencies_len..].to_vec();
+    let mut dependencies = left.functional_dependencies().clone();
+    dependencies.extend_target_indices(schema.fields().len());
+    dependencies.extend(FunctionalDependencies::new(right_dependencies));
+    schema.with_functional_dependencies(dependencies)
 }
 
 /// (Re)qualify the sides of a join if needed, i.e. if the columns from one side would otherwise
@@ -3205,7 +3213,7 @@ mod tests {
     }
 
     #[test]
-    fn asof_join_schema_preserves_only_left_dependencies() -> Result<()> {
+    fn asof_join_schema_preserves_dependencies() -> Result<()> {
         let left = DFSchema::try_from_qualified_schema(
             "left",
             &Schema::new(vec![
@@ -3233,7 +3241,12 @@ mod tests {
 
         assert_eq!(
             schema.functional_dependencies(),
-            left.functional_dependencies()
+            &FunctionalDependencies::new(vec![
+                FunctionalDependence::new(vec![0], vec![0, 1, 2, 3], false)
+                    .with_mode(Dependency::Single),
+                FunctionalDependence::new(vec![2], vec![2, 3], true)
+                    .with_mode(Dependency::Multi),
+            ])
         );
         Ok(())
     }
