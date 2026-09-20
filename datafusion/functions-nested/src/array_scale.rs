@@ -226,7 +226,7 @@ mod tests {
 
     #[test]
     fn test_sliced_capacity() -> Result<()> {
-        crate::utils::tests::check_sliced_list_capacity(|input| {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
             array_scale_inner(&[
                 Arc::clone(input),
                 Arc::new(Float64Array::from(vec![2.0; input.len()])),

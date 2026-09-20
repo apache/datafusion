@@ -654,14 +654,14 @@ mod tests {
 
     #[test]
     fn test_concat_sliced_capacity() -> Result<()> {
-        crate::utils::tests::check_sliced_list_capacity(|input| {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
             array_concat_inner(&[Arc::clone(input), Arc::clone(input)])
         })
     }
 
     #[test]
     fn test_append_sliced_capacity() -> Result<()> {
-        crate::utils::tests::check_sliced_list_capacity(|input| {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
             array_append_inner(
                 &[
                     Arc::clone(input),

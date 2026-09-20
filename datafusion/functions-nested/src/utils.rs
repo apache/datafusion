@@ -612,7 +612,7 @@ pub(crate) mod tests {
     ///    child storage.
     /// 2. Capacity: output buffers retain little memory, catching reservations
     ///    based on the full backing child array rather than the visible slice.
-    pub(crate) fn check_sliced_list_capacity(
+    pub(crate) fn check_sliced_list_behavior(
         run: impl Fn(&ArrayRef) -> Result<ArrayRef>,
     ) -> Result<()> {
         let padding = 8192;

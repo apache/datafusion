@@ -137,7 +137,7 @@ mod tests {
 
     #[test]
     fn test_sliced_capacity() -> Result<()> {
-        crate::utils::tests::check_sliced_list_capacity(|input| {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
             array_add_inner(&[Arc::clone(input), Arc::clone(input)])
         })
     }

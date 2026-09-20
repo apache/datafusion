@@ -232,7 +232,7 @@ mod tests {
 
     #[test]
     fn test_sliced_capacity() -> Result<()> {
-        crate::utils::tests::check_sliced_list_capacity(|input| {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
             array_normalize_inner(std::slice::from_ref(input))
         })
     }

@@ -1170,7 +1170,7 @@ mod tests {
 
     #[test]
     fn test_sliced_capacity() -> datafusion_common::Result<()> {
-        crate::utils::tests::check_sliced_list_capacity(|input| {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
             let element: ArrayRef =
                 Arc::new(arrow::array::Float64Array::from(vec![3.0; input.len()]));
             super::array_remove_internal(input, &element, &vec![Some(1); input.len()])

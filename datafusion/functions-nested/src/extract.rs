@@ -1400,7 +1400,7 @@ mod tests {
 
     #[test]
     fn test_element_sliced_capacity() -> Result<()> {
-        crate::utils::tests::check_sliced_list_capacity(|input| {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
             super::array_element_inner(&[
                 Arc::clone(input),
                 Arc::new(Int64Array::from(vec![1; input.len()])),
@@ -1410,7 +1410,7 @@ mod tests {
 
     #[test]
     fn test_slice_sliced_capacity() -> Result<()> {
-        crate::utils::tests::check_sliced_list_capacity(|input| {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
             super::array_slice_inner(&[
                 Arc::clone(input),
                 Arc::new(Int64Array::from(vec![1; input.len()])),

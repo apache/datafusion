@@ -827,7 +827,7 @@ mod tests {
 
     #[test]
     fn test_sliced_capacity() -> Result<()> {
-        crate::utils::tests::check_sliced_list_capacity(|input| {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
             let from: ArrayRef =
                 Arc::new(arrow::array::Float64Array::from(vec![3.0; input.len()]));
             let to: ArrayRef =
