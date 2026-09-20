@@ -798,6 +798,24 @@ instead of specifically accepting a <code class="docutils literal notranslate"><
 the exact non-generic function signature of <code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> may need
 to be updated to account for the new generic API.</p>
 </section>
+<section id="aggregate-ordering-state-field-names-are-now-namespaced">
+<h3>Aggregate ordering state field names are now namespaced<a class="headerlink" href="#aggregate-ordering-state-field-names-are-now-namespaced" title="Link to this heading">#</a></h3>
+<p>Ordering expressions exposed as top-level aggregate state fields now use names
+derived from the aggregate name and their ordering position.</p>
+<p>For example:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>first_value(value)[ordering_0]
+</pre></div>
+</div>
+<p>is now used instead of an unqualified ordering field name such as:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>timestamp@0
+</pre></div>
+</div>
+<p>This guarantees unique aggregate state field names and allows
+<code class="docutils literal notranslate"><span class="pre">DFSchema::check_names()</span></code> to be enforced.</p>
+<p><strong>Who is affected:</strong></p>
+<p>Users or integrations that inspect aggregate state field names directly,
+including custom UDAFs and FFI integrations.</p>
+</section>
 <section id="physical-filter-pushdown-resolves-columns-by-position">
 <h3>Physical filter pushdown resolves columns by position<a class="headerlink" href="#physical-filter-pushdown-resolves-columns-by-position" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">datafusion_physical_plan::filter_pushdown::ChildFilterDescription::from_child</span></code>
@@ -993,6 +1011,7 @@ expressions, which can cause resolution failure or incorrect rebinding.</p></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#api-change-for-floor-and-ceil-udf">API change for <code class="docutils literal notranslate"><span class="pre">floor</span></code> and <code class="docutils literal notranslate"><span class="pre">ceil</span></code> UDF</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#map-extract-element-at-return-an-empty-list-for-absent-keys"><code class="docutils literal notranslate"><span class="pre">map_extract</span></code> / <code class="docutils literal notranslate"><span class="pre">element_at</span></code> return an empty list for absent keys</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dataframe-from-columns-accepts-intoiterator"><code class="docutils literal notranslate"><span class="pre">DataFrame::from_columns</span></code> accepts <code class="docutils literal notranslate"><span class="pre">IntoIterator</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregate-ordering-state-field-names-are-now-namespaced">Aggregate ordering state field names are now namespaced</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physical-filter-pushdown-resolves-columns-by-position">Physical filter pushdown resolves columns by position</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#default-datafusion-sql-parser-recursion-limit-raised-from-50-to-51">Default <code class="docutils literal notranslate"><span class="pre">datafusion.sql_parser.recursion_limit</span></code> raised from 50 to 51</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ensure-distribution-is-deprecated-in-favour-of-ensure-distribution-with-stats"><code class="docutils literal notranslate"><span class="pre">ensure_distribution</span></code> is deprecated in favour of <code class="docutils literal notranslate"><span class="pre">ensure_distribution_with_stats</span></code></a></li>
