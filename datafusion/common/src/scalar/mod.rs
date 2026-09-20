@@ -4302,20 +4302,6 @@ impl ScalarValue {
         })
     }
 
-    /// Converts `array`'s values into non-null [`ScalarValue`]s, preserving duplicates,
-    /// returning `None` if any value fails to convert (e.g. an unsupported type).
-    pub fn nonnull_scalars(array: &dyn Array) -> Option<Vec<ScalarValue>> {
-        let mut values = Vec::with_capacity(array.len());
-        for i in 0..array.len() {
-            match ScalarValue::try_from_array(array, i) {
-                Ok(v) if !v.is_null() => values.push(v),
-                Ok(_) => {} // NULL never satisfies `=`; harmless to drop
-                Err(_) => return None,
-            }
-        }
-        Some(values)
-    }
-
     /// Try to parse `value` into a ScalarValue of type `target_type`
     pub fn try_from_string(value: String, target_type: &DataType) -> Result<Self> {
         ScalarValue::from(value).cast_to(target_type)
@@ -6052,28 +6038,6 @@ mod tests {
     use arrow::util::pretty::pretty_format_columns;
     use insta::assert_snapshot;
     use rand::Rng;
-
-    #[test]
-    fn test_nonnull_scalars() {
-        let array = Int32Array::from(vec![Some(1), Some(2), Some(1), None, Some(2)]);
-        let values = ScalarValue::nonnull_scalars(&array).expect("convertible");
-        assert_eq!(
-            values,
-            vec![
-                ScalarValue::Int32(Some(1)),
-                ScalarValue::Int32(Some(2)),
-                ScalarValue::Int32(Some(1)),
-                ScalarValue::Int32(Some(2)),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_nonnull_scalars_all_null() {
-        let array = Int32Array::from(vec![None, None]);
-        let values = ScalarValue::nonnull_scalars(&array).expect("convertible");
-        assert!(values.is_empty());
-    }
 
     #[test]
     fn test_scalar_value_from_for_map() {

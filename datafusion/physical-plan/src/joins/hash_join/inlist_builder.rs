@@ -19,9 +19,8 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, AsArray, StructArray};
-use arrow::compute::cast;
-use arrow::datatypes::{Field, FieldRef, Fields, Int32Type};
+use arrow::array::{ArrayRef, StructArray};
+use arrow::datatypes::{Field, FieldRef, Fields};
 use arrow_schema::DataType;
 use datafusion_common::Result;
 
@@ -76,25 +75,6 @@ pub(super) fn build_struct_inlist_values(
     };
 
     Ok(Some(source_array))
-}
-
-/// Deduplicates `array`'s values (dropping nulls) via Arrow's dictionary-encoding cast,
-/// cheaper than converting every row to a `ScalarValue` to test uniqueness.
-///
-/// Returns `None` if the type isn't dictionary-encodable or every value is null -
-/// both safe to treat as "no pruning literals available".
-pub(super) fn dedupe_array_values(array: &ArrayRef) -> Option<ArrayRef> {
-    let dict_type = DataType::Dictionary(
-        Box::new(DataType::Int32),
-        Box::new(array.data_type().clone()),
-    );
-    let dict = cast(array.as_ref(), &dict_type).ok()?;
-    let values = Arc::clone(dict.as_dictionary::<Int32Type>().values());
-    if values.is_empty() {
-        None
-    } else {
-        Some(values)
-    }
 }
 
 #[cfg(test)]
@@ -160,27 +140,6 @@ mod tests {
                 .unwrap()
             )
         );
-    }
-
-    #[test]
-    fn test_dedupe_array_values() {
-        let array = Arc::new(Int32Array::from(vec![
-            Some(1),
-            Some(2),
-            Some(1),
-            None,
-            Some(2),
-        ])) as ArrayRef;
-        let deduped = dedupe_array_values(&array).expect("dictionary-encodable");
-        assert_eq!(deduped.len(), 2);
-        let deduped = deduped.as_ref().as_primitive::<Int32Type>();
-        assert_eq!(deduped.values(), &[1, 2]);
-    }
-
-    #[test]
-    fn test_dedupe_array_values_all_null() {
-        let array = Arc::new(Int32Array::from(vec![None, None])) as ArrayRef;
-        assert!(dedupe_array_values(&array).is_none());
     }
 
     #[test]

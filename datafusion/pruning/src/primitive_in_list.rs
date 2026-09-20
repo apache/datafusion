@@ -94,6 +94,27 @@ macro_rules! define_primitive_values {
                 }
             }
 
+            /// Appends `array`'s non-null values, which must share this domain's
+            /// native representation (see [`shares_native_domain`]).
+            pub(crate) fn extend_from_array(&mut self, array: &dyn Array) -> Option<()> {
+                if !shares_native_domain(&self.data_type, array.data_type()) {
+                    return None;
+                }
+                match &mut self.values {
+                    $(
+                        PrimitiveValues::$variant(values) => {
+                            let array = array.as_primitive_opt::<$arrow_type>()?;
+                            if array.null_count() == 0 {
+                                values.extend_from_slice(array.values());
+                            } else {
+                                values.extend(array.iter().flatten());
+                            }
+                        }
+                    )+
+                }
+                Some(())
+            }
+
             pub(crate) fn is_empty(&self) -> bool {
                 match &self.values {
                     $(PrimitiveValues::$variant(values) => values.is_empty(),)+
@@ -193,6 +214,34 @@ define_primitive_values! {
     DurationNanosecond, DurationNanosecondType,
         DataType::Duration(TimeUnit::Nanosecond),
         ScalarValue::DurationNanosecond(Some(value)), *value;
+}
+
+/// Can values of `domain` and `array` be compared as the same native type?
+///
+/// A timestamp's timezone and a decimal's declared precision are metadata that do
+/// not change what the stored integer means; anything else has to match exactly,
+/// since the domain is searched against statistics cast to `domain`.
+fn shares_native_domain(domain: &DataType, array: &DataType) -> bool {
+    match (domain, array) {
+        (DataType::Timestamp(left, _), DataType::Timestamp(right, _)) => left == right,
+        (DataType::Decimal32(_, left), DataType::Decimal32(_, right))
+        | (DataType::Decimal64(_, left), DataType::Decimal64(_, right))
+        | (DataType::Decimal128(_, left), DataType::Decimal128(_, right))
+        | (DataType::Decimal256(_, left), DataType::Decimal256(_, right)) => {
+            left == right
+        }
+        (domain, array) => domain == array,
+    }
+}
+
+impl PrimitiveInListDomain {
+    /// Collects `array`'s non-null values into a domain over `data_type`. `None` if
+    /// `data_type` is not a supported primitive, or the array holds something else.
+    pub(crate) fn from_array(data_type: &DataType, array: &dyn Array) -> Option<Self> {
+        let mut domain = Self::new(data_type, array.len() - array.null_count())?;
+        domain.extend_from_array(array)?;
+        Some(domain)
+    }
 }
 
 /// Tests an inclusive statistics interval against a sorted primitive domain.
