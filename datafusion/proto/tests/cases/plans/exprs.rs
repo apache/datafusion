@@ -377,6 +377,39 @@ fn roundtrip_binary_expr_overflow_legacy() -> Result<()> {
     Ok(())
 }
 
+#[test]
+#[cfg(feature = "json")]
+fn roundtrip_binary_expr_overflow_json() -> Result<()> {
+    use arrow::record_batch::RecordBatch;
+
+    let schema = Schema::empty();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DefaultPhysicalProtoConverter {};
+    let expr: Arc<dyn PhysicalExpr> = Arc::new(
+        BinaryExpr::new(lit(i32::MAX), Operator::Plus, lit(1i32))
+            .with_fail_on_overflow(true),
+    );
+
+    let proto = converter.physical_expr_to_proto(&expr, &codec)?;
+    let json = serde_json::to_value(proto).unwrap();
+    assert_eq!(json["binaryExpr"]["operands"].as_array().unwrap().len(), 2);
+    assert_eq!(json["binaryExpr"]["failOnOverflow"], true);
+
+    let proto: protobuf::PhysicalExprNode = serde_json::from_value(json).unwrap();
+    let task_ctx = SessionContext::new().task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(&task_ctx, &codec);
+    let decoded = converter.proto_to_physical_expr(&proto, &schema, &decode_ctx)?;
+    let batch = RecordBatch::new_empty(Arc::new(schema));
+    assert!(
+        decoded
+            .evaluate(&batch)
+            .unwrap_err()
+            .to_string()
+            .contains("overflow")
+    );
+    Ok(())
+}
+
 /// Test that a chain of the same operator (a AND b AND c) is linearized
 /// and roundtrips correctly.
 #[test]
