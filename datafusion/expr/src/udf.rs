@@ -999,7 +999,7 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// same-direction ordering with all other inputs singleton:
     ///
     /// - the function is globally nondecreasing over its admitted non-null domain;
-    /// - successful evaluation preserves nullness.
+    /// - successful evaluation returns null exactly when the range input is null.
     ///
     /// Callers may use this contract to prove key locality by evaluating values
     /// on both sides of each concrete range split. Ordered metadata alone is
