@@ -17,6 +17,7 @@
 
 use crate::utils::test::read_json;
 use datafusion::arrow::array::ArrayRef;
+use datafusion::arrow::util::pretty::pretty_format_batches;
 use datafusion::config::Dialect;
 use datafusion::functions_nested::map::map;
 use datafusion::logical_expr::{
@@ -416,7 +417,15 @@ async fn aggregate_grouping_sets() -> Result<()> {
     let Some(RelType::Project(project)) = &root.input.as_ref().unwrap().rel_type else {
         panic!("expected project relation");
     };
-    let Some(RelType::Aggregate(aggregate)) = &project.input.as_ref().unwrap().rel_type
+    // A multi-set aggregate is followed by the projection that maps Substrait's
+    // grouping set index back to DataFusion's `__grouping_id`.
+    let Some(RelType::Project(grouping_set_map)) =
+        &project.input.as_ref().unwrap().rel_type
+    else {
+        panic!("expected the grouping set projection");
+    };
+    let Some(RelType::Aggregate(aggregate)) =
+        &grouping_set_map.input.as_ref().unwrap().rel_type
     else {
         panic!("expected aggregate relation");
     };
@@ -426,15 +435,23 @@ async fn aggregate_grouping_sets() -> Result<()> {
     assert_eq!(aggregate.groupings[1].expression_references, [0]);
     assert_eq!(aggregate.groupings[2].expression_references, [2]);
     assert!(aggregate.groupings[3].expression_references.is_empty());
-    let output_mapping = match aggregate
+    // The aggregate keeps Substrait's own output, which ends with the index
+    assert!(
+        aggregate.common.is_none(),
+        "the aggregate should not remap its output"
+    );
+    assert_eq!(grouping_set_map.expressions.len(), 1);
+    let output_mapping = match grouping_set_map
         .common
         .as_ref()
         .and_then(|common| common.emit_kind.as_ref())
     {
         Some(substrait::proto::rel_common::EmitKind::Emit(emit)) => &emit.output_mapping,
-        _ => panic!("expected aggregate output mapping"),
+        _ => panic!("expected the grouping set projection output mapping"),
     };
-    assert_eq!(output_mapping, &[0, 1, 2, 5, 3, 4]);
+    // 3 grouping columns, the map at 6 (after the aggregate's 6 fields), then
+    // the 2 measures
+    assert_eq!(output_mapping, &[0, 1, 2, 6, 3, 4]);
 
     let plan = from_substrait_plan(&ctx.state(), &proto).await?;
     let results = DataFrame::new(ctx.state(), plan).collect().await?;
@@ -455,6 +472,107 @@ async fn aggregate_grouping_sets() -> Result<()> {
         &results
     );
 
+    Ok(())
+}
+
+/// `GROUPING()` reads the aggregate's `__grouping_id`, so it only survives a
+/// round trip if the grouping set index Substrait carries is mapped back to it.
+#[tokio::test]
+async fn aggregate_grouping_sets_keep_grouping_function() -> Result<()> {
+    let ctx = create_context().await?;
+    // `(a)` first, then `(c)`: the bitmask is 1 then 2 while the index is 0 then
+    // 1, so a test that listed `(a, c)` first would pass either way
+    let sql = "SELECT a, c, GROUPING(a) AS ga, GROUPING(c) AS gc, avg(b) \
+               FROM data GROUP BY GROUPING SETS ((a), (c), (a, c)) ORDER BY a, c, ga, gc";
+    let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+    let expected = DataFrame::new(ctx.state(), plan.clone()).collect().await?;
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    let actual = DataFrame::new(ctx.state(), plan2).collect().await?;
+
+    assert_eq!(
+        format!("{}", pretty_format_batches(&expected)?),
+        format!("{}", pretty_format_batches(&actual)?)
+    );
+    // The values differ per set, so this is not vacuous
+    assert_snapshot!(
+        pretty_format_batches(&expected)?,
+        @r"
+    +---+------------+----+----+-------------+
+    | a | c          | ga | gc | avg(data.b) |
+    +---+------------+----+----+-------------+
+    | 1 | 2020-01-01 | 0  | 0  | 2.000000    |
+    | 1 |            | 0  | 1  | 2.000000    |
+    | 3 | 2020-01-01 | 0  | 0  | 4.500000    |
+    | 3 |            | 0  | 1  | 4.500000    |
+    |   | 2020-01-01 | 1  | 0  | 3.250000    |
+    +---+------------+----+----+-------------+
+    "
+    );
+    Ok(())
+}
+
+/// The same set listed twice is two sets in Substrait, and DataFusion separates
+/// them with an ordinal packed above the `__grouping_id` bitmask.
+#[tokio::test]
+async fn aggregate_duplicate_grouping_sets() -> Result<()> {
+    let ctx = create_context().await?;
+    let sql = "SELECT a, GROUPING(a) AS ga, avg(b) \
+               FROM data GROUP BY GROUPING SETS ((a), (a), ()) ORDER BY a, ga";
+    let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+    let expected = DataFrame::new(ctx.state(), plan.clone()).collect().await?;
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    let actual = DataFrame::new(ctx.state(), plan2).collect().await?;
+
+    assert_eq!(
+        format!("{}", pretty_format_batches(&expected)?),
+        format!("{}", pretty_format_batches(&actual)?)
+    );
+    // Each occurrence of `(a)` keeps its own rows
+    assert_snapshot!(
+        pretty_format_batches(&expected)?,
+        @r"
+    +---+----+-------------+
+    | a | ga | avg(data.b) |
+    +---+----+-------------+
+    | 1 | 0  | 2.000000    |
+    | 1 | 0  | 2.000000    |
+    | 3 | 0  | 4.500000    |
+    | 3 | 0  | 4.500000    |
+    |   | 1  | 3.250000    |
+    +---+----+-------------+
+    "
+    );
+    Ok(())
+}
+
+/// With more than eight grouping columns `__grouping_id` is a `UInt16` rather
+/// than a `UInt8`, so the map back to it has to carry the wider literal.
+#[tokio::test]
+async fn aggregate_grouping_sets_wider_grouping_id() -> Result<()> {
+    let ctx = create_context().await?;
+    let columns = (0..9)
+        .map(|offset| format!("a + {offset}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT a, GROUPING(a) AS ga, avg(b) FROM data \
+         GROUP BY GROUPING SETS (({columns}), (a), ()) ORDER BY a, ga"
+    );
+    let plan = ctx.sql(&sql).await?.into_optimized_plan()?;
+    let expected = DataFrame::new(ctx.state(), plan.clone()).collect().await?;
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    let actual = DataFrame::new(ctx.state(), plan2).collect().await?;
+
+    assert_eq!(
+        format!("{}", pretty_format_batches(&expected)?),
+        format!("{}", pretty_format_batches(&actual)?)
+    );
     Ok(())
 }
 
