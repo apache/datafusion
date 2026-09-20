@@ -739,6 +739,8 @@ mod tests {
 
     #[test]
     fn left_join_eliminates_unique_asof_side() -> Result<()> {
+        // Each left row appears exactly once in the ASOF output, so the primary
+        // key from the left input remains unique after the ASOF join.
         let asof_left = scan("asof_left", &test_schema(), primary_key_on_id())?;
         let asof_right = scan("asof_right", &test_schema(), Constraints::default())?;
         let asof = LogicalPlanBuilder::from(asof_left)
@@ -748,6 +750,9 @@ mod tests {
                 col("asof_left.y").gt_eq(col("asof_right.y")),
             )?
             .build()?;
+
+        // The outer join uses that unique key and projects no columns from the
+        // ASOF side, allowing EliminateJoin to remove the redundant join.
         let probe = scan("probe", &test_schema(), Constraints::default())?;
         let plan = LogicalPlanBuilder::from(probe)
             .join(
