@@ -1633,37 +1633,44 @@ mod tests {
 
     #[tokio::test]
     async fn final_hash_spill_replay_with_other_partitions_holding_state() -> Result<()> {
-        for input_batches in [40, 55, 70] {
-            run_shared_pool_case(input_batches, 1024 * 1024, Finish::Collect).await?;
+        for spills in [1, 2, 3] {
+            run_shared_pool_case(spills, 1024 * 1024, Finish::Collect).await?;
         }
-        // The same input also produces the reference results without spilling.
-        run_shared_pool_case(70, 10 * 1024 * 1024, Finish::Collect).await
+        // An unlimited pool produces the reference results without spilling.
+        run_shared_pool_case(0, 10 * 1024 * 1024, Finish::Collect).await
     }
 
     #[tokio::test]
     async fn final_hash_spill_replay_releases_memory_on_drop() -> Result<()> {
-        run_shared_pool_case(55, 1024 * 1024, Finish::DropDuringReplay).await
+        run_shared_pool_case(1, 1024 * 1024, Finish::DropDuringReplay).await
     }
 
     #[tokio::test]
     async fn final_hash_spill_releases_memory_on_input_error() -> Result<()> {
-        run_shared_pool_case(55, 1024 * 1024, Finish::InputError).await
+        run_shared_pool_case(1, 1024 * 1024, Finish::InputError).await
     }
 
-    /// Partition 0 spills and replays while partitions 1..3 keep their
-    /// aggregate state in the same greedy pool.
+    /// Partition 0 spills `spills` times and replays while partitions 1..3
+    /// keep their aggregate state in the same greedy pool. With `spills` at 0,
+    /// partition 0 reads a fixed input that fits in memory.
+    ///
+    /// Input sizes follow the observed reservations, so the cases do not
+    /// depend on the memory accounting of a platform or feature set.
     ///
     /// These cases cover the spill and replay lifecycle in a shared pool:
     /// results, spill metrics, and memory release. Case G in
     /// `aggregate_memory_spill.slt` covers the merge fan-in regression for
     /// issue #25423.
     async fn run_shared_pool_case(
-        input_batches: i64,
+        spills: usize,
         limit: usize,
         finish: Finish,
     ) -> Result<()> {
         const PARTITIONS: usize = 4;
-        const HELD_BATCHES: i64 = 20;
+        /// Partitions 1..3 hold at least this much state.
+        const HELD_BYTES: usize = 512 * 1024;
+        /// A case that never reaches its target fails instead of looping.
+        const MAX_BATCHES: i64 = 1000;
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, false),
@@ -1777,28 +1784,51 @@ mod tests {
             )
             .unwrap()
         };
+        // Channel inputs return Pending after each supplied batch, so the
+        // interleaving below does not depend on task scheduling.
+        let mut feed = |partition: usize, batch: i64| {
+            senders[partition]
+                .unbounded_send(Ok(make_batch(partition as i64, batch * 128)))
+                .unwrap();
+            assert!(streams[partition].next().now_or_never().is_none());
+        };
         // Keep the state of partitions 1..3 live while partition 0 spills and
-        // replays. Channel inputs return Pending after each supplied batch, so
-        // this interleaving does not depend on task scheduling.
-        for partition in 1..PARTITIONS {
-            for batch in 0..HELD_BATCHES {
-                senders[partition]
-                    .unbounded_send(Ok(make_batch(partition as i64, batch * 128)))
-                    .unwrap();
-                assert!(streams[partition].next().now_or_never().is_none());
+        // replays.
+        let mut held_batches = 0;
+        while pool.reserved() < HELD_BYTES {
+            assert!(held_batches < MAX_BATCHES, "held state stays small");
+            for partition in 1..PARTITIONS {
+                feed(partition, held_batches);
             }
+            held_batches += 1;
         }
         let held = pool.reserved();
-        assert!(held > 512 * 1024, "held {held} bytes");
-        for batch in 0..input_batches {
-            // Repeated keys cross spill runs, so replay must merge their sums.
-            senders[0]
-                .unbounded_send(Ok(make_batch(0, batch * 128)))
-                .unwrap();
-            assert!(streams[0].next().now_or_never().is_none());
-        }
         let spill_count = || aggregate.metrics().unwrap().spill_count().unwrap();
-        assert_eq!(spill_count() > 0, limit == 1024 * 1024);
+        assert_eq!(spill_count(), 0);
+        // Feed partition 0 until it has spilled `spills` times. Key (0, 0)
+        // repeats in every batch, so replay must merge its sum across runs.
+        let mut batches = 0;
+        loop {
+            let done = if spills == 0 {
+                batches == 70
+            } else {
+                spill_count() >= spills
+            };
+            if done {
+                break;
+            }
+            assert!(batches < MAX_BATCHES, "partition 0 did not spill");
+            feed(0, batches);
+            batches += 1;
+        }
+        // Add groups after the last spill so replay also merges the final
+        // in-memory run.
+        for _ in 0..8 {
+            feed(0, batches);
+            batches += 1;
+        }
+        assert!(spill_count() >= spills);
+        assert_eq!(spill_count() == 0, spills == 0);
         let mut first = streams.remove(0);
         match finish {
             Finish::Collect => {
@@ -1845,7 +1875,7 @@ mod tests {
                     }
                 }
                 assert_eq!(actual, expected);
-                assert_eq!(spill_count() > 0, limit == 1024 * 1024);
+                assert_eq!(spill_count() == 0, spills == 0);
             }
             Finish::DropDuringReplay => {
                 senders[0].close_channel();
