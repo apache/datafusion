@@ -25,7 +25,7 @@ use arrow::array::{
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::utils::{ListCoercion, offset_span};
+use datafusion_common::utils::{ListCoercion, offset_span, offset_span_len};
 use datafusion_common::{
     Result, ScalarValue, exec_err, internal_err, utils::take_function_args,
 };
@@ -470,7 +470,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
     let mut mutable = MutableArrayData::with_capacities(
         vec![&original_data],
         false,
-        Capacities::Array(original_data.len()),
+        Capacities::Array(offset_span_len(list_array.offsets())),
     );
     let mut valid = NullBufferBuilder::new(list_array.len());
 
@@ -1166,5 +1166,14 @@ mod tests {
             }
             _ => panic!("Expected ColumnarValue::Array"),
         }
+    }
+
+    #[test]
+    fn test_sliced_capacity() -> datafusion_common::Result<()> {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
+            let element: ArrayRef =
+                Arc::new(arrow::array::Float64Array::from(vec![3.0; input.len()]));
+            super::array_remove_internal(input, &element, &vec![Some(1); input.len()])
+        })
     }
 }
