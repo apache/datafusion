@@ -729,7 +729,8 @@ fn validate_function_body_placeholders(expr: &Expr, arg_count: usize) -> Result<
             }
             _ => None,
         } {
-            subquery.apply_with_subqueries(|plan| {
+            // Nested subqueries are handled by this expression visitor
+            subquery.apply(|plan| {
                 plan.apply_expressions(|e| {
                     validate_function_body_placeholders(e, arg_count)?;
                     Ok(TreeNodeRecursion::Continue)
@@ -913,10 +914,12 @@ impl PartialOrd for CreateIndex {
 mod test {
     use super::{CreateFunction, CreateFunctionBody, OperateFunctionArg};
     use crate::expr_fn::placeholder;
-    use crate::{CreateCatalog, DdlStatement, DropView};
+    use crate::{
+        CreateCatalog, DdlStatement, DropView, Expr, LogicalPlanBuilder, Subquery,
+    };
     use arrow::datatypes::DataType;
     use datafusion_common::{DFSchema, DFSchemaRef, TableReference};
-    use std::cmp::Ordering;
+    use std::{cmp::Ordering, sync::Arc};
 
     #[test]
     fn create_function_try_new_validates_placeholders() {
@@ -951,6 +954,25 @@ mod test {
                 "Error during planning: Invalid placeholder, out of range: $2"
             );
         }
+
+        let mut nested_body = placeholder("$2");
+        for _ in 0..16 {
+            let plan = LogicalPlanBuilder::empty(true)
+                .project(vec![nested_body.alias("v")])
+                .unwrap()
+                .build()
+                .unwrap();
+            nested_body = Expr::ScalarSubquery(Subquery {
+                subquery: Arc::new(plan),
+                outer_ref_columns: vec![],
+                spans: Default::default(),
+            });
+        }
+        let err = create(Some(nested_body), None).unwrap_err();
+        assert_eq!(
+            err.strip_backtrace(),
+            "Error during planning: Invalid placeholder, out of range: $2"
+        );
     }
 
     #[test]
