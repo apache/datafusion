@@ -539,18 +539,6 @@ fn normalize_exprs(
         .collect()
 }
 
-fn equivalent_expr(
-    left: &Arc<dyn PhysicalExpr>,
-    right: &Arc<dyn PhysicalExpr>,
-    eq_properties: &EquivalenceProperties,
-) -> bool {
-    equivalent_exprs(
-        std::slice::from_ref(left),
-        std::slice::from_ref(right),
-        eq_properties,
-    )
-}
-
 fn evaluate_with_range_value(
     expr: &Arc<dyn PhysicalExpr>,
     range_key: &Arc<dyn PhysicalExpr>,
@@ -682,7 +670,7 @@ fn is_audited_range_transform(
 
     let mut range_argument_count = 0;
     for argument in function.args() {
-        if equivalent_expr(argument, range_key, eq_properties) {
+        if eq_properties.eq_group().exprs_equal(argument, range_key) {
             range_argument_count += 1;
         } else if !argument.is::<Literal>() {
             return false;
