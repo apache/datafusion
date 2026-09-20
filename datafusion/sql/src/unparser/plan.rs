@@ -33,12 +33,13 @@ use super::{
         unproject_unnest_expr_as_flatten_value, unproject_window_exprs,
     },
 };
-use crate::unparser::extension_unparser::{
-    UnparseToStatementResult, UnparseWithinStatementResult,
-};
 use crate::unparser::utils::{find_unnest_node_until_relation, unproject_agg_exprs};
 use crate::unparser::{
     ast::FlattenRelationBuilder, ast::UnnestRelationBuilder, rewrite::rewrite_qualify,
+};
+use crate::unparser::{
+    extension_unparser::{UnparseToStatementResult, UnparseWithinStatementResult},
+    utils::filter_depends_on_input_alias,
 };
 use crate::utils::UNNEST_PLACEHOLDER;
 use datafusion_common::{
@@ -1230,6 +1231,12 @@ impl Unparser<'_> {
                     )?;
                     let filter_expr = self.expr_to_sql(&predicate)?;
                     select.selection(Some(filter_expr));
+                }
+
+                // if the inner plan aliases columns used by the filter, we need to convert to a
+                // subquery to prevent invalid references
+                if filter_depends_on_input_alias(filter) {
+                    return self.derive(&filter.input, relation, None, false);
                 }
 
                 self.select_to_sql_recursively(
