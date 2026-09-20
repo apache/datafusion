@@ -2744,3 +2744,93 @@ b 400
 
 statement ok
 DROP TABLE metrics;
+
+# Regression test for #25519: a correlated filter that sits below an aggregate
+# with a grouping set must not be pulled above it. The pull up adds the
+# correlated column to every set, so `ROLLUP(k)`, which is
+# `GROUPING SETS ((k), ())`, turns into `GROUPING SETS ((k), (k, k))`. The empty
+# set is gone, and with it the grand total row the subquery returns for every
+# outer row, including the rows whose filter matches nothing.
+statement ok
+CREATE TABLE gs_outer(k INT) AS VALUES (1), (2), (NULL), (4), (5);
+
+statement ok
+CREATE TABLE gs_inner(k INT, j INT) AS VALUES (1, 10), (NULL, 20), (5, 30), (2, 40);
+
+# ROLLUP holds the empty set, so the subquery stays correlated.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY ROLLUP(gs_inner.k)) FROM gs_outer;
+
+# So does CUBE.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY CUBE(gs_inner.k)) FROM gs_outer;
+
+# And an explicit grouping set that lists the empty set.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), ())) FROM gs_outer;
+
+# A set that groups by another column does not carry the correlated column either.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), (gs_inner.j))) FROM gs_outer;
+
+# The correlated column does not have to appear in the grouping set at all.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY ROLLUP(gs_inner.j)) FROM gs_outer;
+
+# The `IN` form of the same subquery.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression InSubquery
+SELECT gs_outer.k, gs_outer.k IN (SELECT gs_inner.k FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY ROLLUP(gs_inner.k)) FROM gs_outer;
+
+# `NOT EXISTS` too.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT gs_outer.k, NOT EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY ROLLUP(gs_inner.k)) FROM gs_outer;
+
+# And a correlated scalar subquery.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT gs_outer.k, (SELECT count(*) FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY ROLLUP(gs_inner.k) LIMIT 1) FROM gs_outer;
+
+# When every set already groups by the correlated column the pull up adds
+# nothing, so the subquery still decorrelates and keeps its results.
+query IB
+SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k))) FROM gs_outer ORDER BY gs_outer.k;
+----
+1 true
+2 true
+4 false
+5 true
+NULL false
+
+query IB
+SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), (gs_inner.k, gs_inner.j))) FROM gs_outer ORDER BY gs_outer.k;
+----
+1 true
+2 true
+4 false
+5 true
+NULL false
+
+# A plain GROUP BY is unaffected.
+query IB
+SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY gs_inner.k) FROM gs_outer ORDER BY gs_outer.k;
+----
+1 true
+2 true
+4 false
+5 true
+NULL false
+
+# An uncorrelated subquery keeps its grouping set.
+query IB
+SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner GROUP BY ROLLUP(gs_inner.k)) FROM gs_outer ORDER BY gs_outer.k;
+----
+1 true
+2 true
+4 true
+5 true
+NULL true
+
+statement ok
+DROP TABLE gs_outer;
+
+statement ok
+DROP TABLE gs_inner;

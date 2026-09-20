@@ -713,7 +713,9 @@ mod tests {
     use crate::assert_optimized_plan_eq_display_indent_snapshot;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::builder::table_source;
-    use datafusion_expr::{and, binary_expr, col, out_ref_col, table_scan};
+    use datafusion_expr::{
+        and, binary_expr, col, cube, grouping_set, out_ref_col, rollup, table_scan,
+    };
 
     macro_rules! assert_optimized_plan_equal {
         (
@@ -773,6 +775,138 @@ mod tests {
             DecorrelatePredicateSubquery::new(),
         )]);
         optimizer.optimize(plan, &crate::OptimizerContext::new(), |_, _| {})
+    }
+
+    /// A grouping set subquery for the tests below: `SELECT c FROM <name> WHERE
+    /// c = test.c GROUP BY <group_expr>`.
+    fn correlated_grouping_set_subquery(
+        name: &str,
+        group_expr: Expr,
+    ) -> Result<Arc<LogicalPlan>> {
+        Ok(Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name(name)?)
+                .filter(
+                    col(format!("{name}.c")).eq(out_ref_col(DataType::UInt32, "test.c")),
+                )?
+                .aggregate(vec![group_expr], Vec::<Expr>::new())?
+                .project(vec![col(format!("{name}.c"))])?
+                .build()?,
+        ))
+    }
+
+    /// `ROLLUP(c)` is `GROUPING SETS ((c), ())`. Adding the correlated column to
+    /// every set drops the empty one, so the subquery is left correlated.
+    /// <https://github.com/apache/datafusion/issues/25519>
+    #[test]
+    fn exists_subquery_with_rollup_is_not_decorrelated() -> Result<()> {
+        let subquery = correlated_grouping_set_subquery("sq", rollup(vec![col("sq.c")]))?;
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(exists(subquery))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.b [b:UInt32]
+          Filter: EXISTS (<subquery>) [a:UInt32, b:UInt32, c:UInt32]
+            Subquery: [c:UInt32;N]
+              Projection: sq.c [c:UInt32;N]
+                Aggregate: groupBy=[[ROLLUP (sq.c)]], aggr=[[]] [c:UInt32;N, __grouping_id:UInt8]
+                  Filter: sq.c = outer_ref(test.c) [a:UInt32, b:UInt32, c:UInt32]
+                    TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    /// `CUBE(c)` holds the empty set for the same reason. The correlation is on
+    /// `a` rather than on the `IN` key, so it stays a filter of its own instead
+    /// of being folded into the `IN` predicate.
+    /// <https://github.com/apache/datafusion/issues/25519>
+    #[test]
+    fn in_subquery_with_cube_is_not_decorrelated() -> Result<()> {
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+                .filter(col("sq.a").eq(out_ref_col(DataType::UInt32, "test.a")))?
+                .aggregate(vec![cube(vec![col("sq.c")])], Vec::<Expr>::new())?
+                .project(vec![col("sq.c")])?
+                .build()?,
+        );
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(in_subquery(col("test.c"), subquery))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.b [b:UInt32]
+          Filter: test.c IN (<subquery>) [a:UInt32, b:UInt32, c:UInt32]
+            Subquery: [c:UInt32;N]
+              Projection: sq.c [c:UInt32;N]
+                Aggregate: groupBy=[[CUBE (sq.c)]], aggr=[[]] [c:UInt32;N, __grouping_id:UInt8]
+                  Filter: sq.a = outer_ref(test.a) [a:UInt32, b:UInt32, c:UInt32]
+                    TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    /// A set that groups by another column does not carry the correlated one.
+    /// <https://github.com/apache/datafusion/issues/25519>
+    #[test]
+    fn exists_subquery_with_partial_grouping_set_is_not_decorrelated() -> Result<()> {
+        let subquery = correlated_grouping_set_subquery(
+            "sq",
+            grouping_set(vec![vec![col("sq.c")], vec![col("sq.b")]]),
+        )?;
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(exists(subquery))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.b [b:UInt32]
+          Filter: EXISTS (<subquery>) [a:UInt32, b:UInt32, c:UInt32]
+            Subquery: [c:UInt32;N]
+              Projection: sq.c [c:UInt32;N]
+                Aggregate: groupBy=[[GROUPING SETS ((sq.c), (sq.b))]], aggr=[[]] [c:UInt32;N, b:UInt32;N, __grouping_id:UInt8]
+                  Filter: sq.c = outer_ref(test.c) [a:UInt32, b:UInt32, c:UInt32]
+                    TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    /// Every set already groups by the correlated column, so the pull up adds
+    /// nothing and the subquery decorrelates as it did before.
+    /// <https://github.com/apache/datafusion/issues/25519>
+    #[test]
+    fn exists_subquery_with_covering_grouping_set_is_decorrelated() -> Result<()> {
+        let subquery = correlated_grouping_set_subquery(
+            "sq",
+            grouping_set(vec![vec![col("sq.c")], vec![col("sq.c"), col("sq.b")]]),
+        )?;
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(exists(subquery))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.b [b:UInt32]
+          LeftSemi Join:  Filter: __correlated_sq_1.c = test.c [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+            SubqueryAlias: __correlated_sq_1 [c:UInt32;N]
+              Projection: sq.c [c:UInt32;N]
+                Aggregate: groupBy=[[GROUPING SETS ((sq.c), (sq.c, sq.b))]], aggr=[[]] [c:UInt32;N, b:UInt32;N, __grouping_id:UInt8]
+                  TableScan: sq [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
     }
 
     /// Test for several IN subquery expressions
