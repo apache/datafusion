@@ -455,6 +455,10 @@ impl PullUpCorrelatedExpr {
     /// `ROLLUP` and `CUBE` always contain the empty set, which yields a row for
     /// outer rows the correlated filter matches nothing for, so they are only safe
     /// when there is nothing to add.
+    ///
+    /// A non-empty set that leaves a column out fills it with NULL. Adding the
+    /// column would give it a value instead, which a `HAVING` or a projection
+    /// above the aggregate can read, so such a set is rejected as well.
     fn grouping_sets_cover_pull_up_cols(
         &self,
         group_expr: &[Expr],

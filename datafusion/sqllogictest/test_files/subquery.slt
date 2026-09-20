@@ -2769,9 +2769,23 @@ SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k 
 statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
 SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), ())) FROM gs_outer;
 
-# A set that groups by another column does not carry the correlated column either.
+# A set that leaves out the correlated column fills it with NULL. The pull up
+# would turn `(j)` into `(j, k)`, and `k` would then carry a value in the rows
+# where the set fills it with NULL. Anything above the aggregate that reads `k`
+# sees the difference, so the subquery stays correlated.
+#
+# Known limitation: when nothing reads `k`, as here, the pull up was correct
+# before this guard and the query now fails to plan. Telling the two cases apart
+# needs the correlated column added to each set under an alias.
 statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
 SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), (gs_inner.j))) FROM gs_outer;
+
+# The same sets with a HAVING that reads the NULL filled column. For k = 1 the
+# `(j)` set yields the row `(NULL, 10)`, which passes the HAVING, so EXISTS is
+# true; with `(j, k)` that row holds k = 1 and is filtered out. On main this
+# query answers false for every row.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY GROUPING SETS ((gs_inner.k), (gs_inner.j)) HAVING gs_inner.k IS NULL) FROM gs_outer;
 
 # The correlated column does not have to appear in the grouping set at all.
 statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
