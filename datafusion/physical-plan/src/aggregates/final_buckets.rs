@@ -165,6 +165,20 @@ impl FinalBuckets {
         self.level
     }
 
+    /// Tells the buckets what share of its input rows the table they are
+    /// split from kept as groups. If that table found (almost) no repeated
+    /// groups, the first compaction of a bucket would most likely find none
+    /// either, so it waits as long as after a poor compaction.
+    pub(super) fn expect_kept(&mut self, kept: f64) {
+        if kept > POOR_COMPACTION {
+            let compact_at =
+                (self.min_compaction_rows as f64 * POOR_COMPACTION_FACTOR) as usize;
+            for bucket in &mut self.buckets {
+                bucket.compact_at = compact_at;
+            }
+        }
+    }
+
     /// Appends every row of `batch` to the bucket of its group key.
     pub(super) fn route(&mut self, batch: &RecordBatch) -> Result<()> {
         let num_rows = batch.num_rows();

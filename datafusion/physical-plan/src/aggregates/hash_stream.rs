@@ -1002,6 +1002,8 @@ impl FinalHashAggregateStream {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let mut buckets: Option<FinalBuckets> = None;
         let mut compaction_table = None;
+        // Rows aggregated by `hash_table`
+        let mut table_rows = 0usize;
 
         while let Some(batch) = self.input.next().await.transpose()? {
             let _timer = elapsed_compute.timer();
@@ -1014,6 +1016,7 @@ impl FinalHashAggregateStream {
             }
 
             hash_table.aggregate_batch(&batch)?;
+            table_rows += batch.num_rows();
 
             // Soft group limits are usually small and rarely coincide with
             // spilling. Once spilling has occurred, skip this optimization to
@@ -1033,6 +1036,9 @@ impl FinalHashAggregateStream {
             {
                 let mut new_buckets = bucketing.new_buckets(0);
                 bucketing.bucket_splits.add(1);
+                new_buckets.expect_kept(
+                    hash_table.building_group_count() as f64 / table_rows.max(1) as f64,
+                );
                 if let Some(state) = hash_table.take_state_batch()? {
                     new_buckets.route(&state)?;
                 }
@@ -1116,7 +1122,11 @@ impl FinalHashAggregateStream {
                 input_rows += batch.num_rows();
                 table.aggregate_batch(&batch)?;
             }
-            buckets.put_compacted(index, table.take_state_batch()?, input_rows);
+            buckets.put_compacted(
+                index,
+                table.take_state_batch_keep_capacity()?,
+                input_rows,
+            );
             bucketing.bucket_compactions.add(1);
         }
         Ok(())
@@ -1140,9 +1150,11 @@ impl FinalHashAggregateStream {
                     // Every bucket is on disk. What is left is the fixed cost
                     // of routing a batch, which no spill can release, so go on
                     // like the sort based spill path does after it has spilled
-                    // its table: with the reservation the pool still grants.
-                    if other_bytes == 0 && buckets.is_fully_spilled() {
-                        self.reservation.try_resize(0)?;
+                    // its table: with what the pool still grants, which covers
+                    // at least the memory held besides these buckets.
+                    if buckets.is_fully_spilled()
+                        && self.reservation.try_resize(other_bytes).is_ok()
+                    {
                         return Ok(());
                     }
                     return Err(
@@ -1179,13 +1191,19 @@ impl FinalHashAggregateStream {
             let mut waiting_bytes: usize =
                 sources.iter().map(|source| source.memory_size()).sum();
 
+            // One table aggregates all the buckets, one after another
+            let mut reusable_table = None;
             for source in sources {
                 let mut source_bytes = source.memory_size();
                 waiting_bytes -= source_bytes;
                 let mut input = source.into_stream(&state_schema);
 
                 let mut timer = elapsed_compute.timer();
-                let mut hash_table = bucketing.new_table(&self.schema)?;
+                let mut hash_table = match reusable_table.take() {
+                    Some(hash_table) => hash_table,
+                    None => bucketing.new_table(&self.schema)?.with_restart(),
+                };
+                let mut table_rows = 0usize;
                 let mut sub_buckets: Option<FinalBuckets> = None;
                 let mut compaction_table = None;
 
@@ -1203,6 +1221,7 @@ impl FinalHashAggregateStream {
                     }
 
                     hash_table.aggregate_batch(&batch)?;
+                    table_rows += batch.num_rows();
 
                     let can_split = next_level < MAX_BUCKET_LEVELS;
                     let split = match self
@@ -1220,6 +1239,10 @@ impl FinalHashAggregateStream {
                     if split {
                         let mut new_buckets = bucketing.new_buckets(next_level);
                         bucketing.bucket_splits.add(1);
+                        new_buckets.expect_kept(
+                            hash_table.building_group_count() as f64
+                                / table_rows.max(1) as f64,
+                        );
                         if let Some(state) = hash_table.take_state_batch()? {
                             new_buckets.route(&state)?;
                         }
@@ -1233,7 +1256,8 @@ impl FinalHashAggregateStream {
                 drop(input);
 
                 if let Some(sub_buckets) = sub_buckets {
-                    drop(hash_table);
+                    // The table handed its groups over and is empty again
+                    reusable_table = Some(hash_table);
                     timer.done();
                     self.produce_output_from_buckets(sub_buckets, emitter)
                         .await?;
@@ -1256,6 +1280,9 @@ impl FinalHashAggregateStream {
                             .await;
                         timer = elapsed_compute.timer();
                     }
+                }
+                if hash_table.restart() {
+                    reusable_table = Some(hash_table);
                 }
                 timer.done();
             }

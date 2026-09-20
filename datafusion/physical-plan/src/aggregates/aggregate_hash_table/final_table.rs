@@ -24,7 +24,9 @@ use datafusion_common::Result;
 use crate::aggregates::AggregateExec;
 use crate::aggregates::group_values::AccumulatorPhase;
 
-use super::common::{AggregateHashTable, FinalMarker, HashAggregateAccumulator};
+use super::common::{
+    AggregateHashTable, AggregateHashTableState, FinalMarker, HashAggregateAccumulator,
+};
 
 /// Implementation specific to final aggregation, where the table stores partial
 /// aggregate states and the input rows are also partial states.
@@ -76,6 +78,29 @@ impl AggregateHashTable<FinalMarker> {
             HashAggregateAccumulator::merge_batch,
             AccumulatorPhase::Merge,
         )
+    }
+
+    /// Makes the table reusable through [`Self::restart`].
+    pub(in crate::aggregates) fn with_restart(mut self) -> Self {
+        self.recycle_buffer = true;
+        self
+    }
+
+    /// After all output has been taken, goes back to aggregating a new set of
+    /// groups with the allocations of the previous one: a fresh table grows
+    /// from a few entries, rehashing every group it holds each time it
+    /// doubles. Returns false if the table cannot be reused.
+    pub(in crate::aggregates) fn restart(&mut self) -> bool {
+        match (&self.state, self.recycled_buffer.take()) {
+            (AggregateHashTableState::Done, Some(buffer)) => {
+                self.state = AggregateHashTableState::Building(buffer);
+                true
+            }
+            (_, buffer) => {
+                self.recycled_buffer = buffer;
+                false
+            }
+        }
     }
 
     pub(in crate::aggregates) fn start_output(&mut self) -> Result<()> {
