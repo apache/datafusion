@@ -657,9 +657,8 @@ impl From<AggregateOrderSensitivity> for FFI_AggregateOrderSensitivity {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
 
-    use arrow::datatypes::Schema;
+    use arrow::datatypes::{Metadata, Schema};
     use datafusion::common::create_array;
     use datafusion::functions_aggregate::sum::Sum;
     use datafusion::physical_expr::PhysicalSortExpr;
@@ -776,8 +775,7 @@ mod tests {
         let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&local_udaf).into();
         let foreign_udaf = AggregateUDF::new_from_shared_impl(foreign_udaf);
 
-        let metadata: HashMap<String, String> =
-            std::iter::once(("a_key".to_string(), "a_value".to_string())).collect();
+        let metadata = Metadata::new().with("a_key", "a_value");
         let input_field = Arc::new(
             Field::new("a", DataType::Float64, false).with_metadata(metadata.clone()),
         );
