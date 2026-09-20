@@ -20,12 +20,14 @@
 //! See comments in [`PartialHashAggregateStream`] and [`FinalHashAggregateStream`]
 //! for details.
 
+use std::collections::{HashMap, VecDeque};
 use std::mem::size_of;
 use std::sync::Arc;
 
 use arrow::compute::BatchCoalescer;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_common::{
     DataFusionError, Result, assert_ne_or_internal_err, internal_datafusion_err,
     internal_err,
@@ -168,6 +170,9 @@ pub(crate) struct PartialHashAggregateStream {
 
     /// Number of times accumulated states were emitted due to memory pressure.
     early_emit_count: metrics::Count,
+
+    /// `None` unless `hash_aggregate_bucket_threshold` is set and applies.
+    table_flush: Option<PartialTableFlush>,
 
     /// Tracks whether partial aggregation should switch to direct state conversion.
     skip_aggregation_probe: Option<SkipAggregationProbe>,
@@ -421,7 +426,116 @@ enum HandleInputResult {
     ReachedLimit,
     #[expect(clippy::upper_case_acronyms)]
     OOM,
+    /// The table reached the bucket threshold, see [`PartialTableFlush`]
+    TableFull,
     SwitchToSkipAggregation,
+}
+
+/// Number of flushed groups whose hashes are kept to detect recurring groups.
+const FLUSH_SAMPLE_SIZE: usize = 1024;
+
+/// Number of earlier flushes whose samples are kept, so that groups which
+/// only come back after many flushes (keys that cycle with a long period) are
+/// noticed as well. Costs at most `64 * 1024` remembered hashes.
+const FLUSH_SAMPLES_KEPT: usize = 64;
+
+/// Flushing stops once more than this share of the sampled groups of an
+/// earlier flush shows up again in a later one.
+const MAX_RECURRING_GROUPS: f64 = 0.2;
+
+/// Seed for the hashes of sampled groups, only compared with each other.
+const FLUSH_SAMPLE_SEED: RandomState = RandomState::with_seed(8122871950429871369);
+
+/// Keeps the table of a partial hash aggregation small: once it holds
+/// `hash_aggregate_bucket_threshold` groups, its state is emitted downstream
+/// and the table starts over, the same way it does under memory pressure.
+///
+/// A table that has outgrown the CPU caches pays a cache miss for every probe
+/// and every accumulator update, so capping it keeps the partial aggregation
+/// fast; the final aggregation merges whatever is emitted more than once.
+///
+/// That only pays while flushing is free, that is while a flushed group does
+/// not come back: a group that returns is emitted again, and the reduction
+/// the partial stage exists for is lost. Each flush therefore remembers a
+/// sample of its groups and the following flushes count how many of them they
+/// hold again. Sorted, clustered or mostly unique keys never recur and keep being
+/// flushed; keys that recur turn flushing off for the rest of the stream,
+/// which then grows one table as before.
+struct PartialTableFlush {
+    threshold: usize,
+    /// Number of leading columns of the state batch that are the group keys
+    num_group_columns: usize,
+    /// Set once flushed groups were seen to recur
+    disabled: bool,
+    /// Hashes of a sample of the groups emitted by the last flushes, with the
+    /// number of the flush that emitted them
+    sampled_groups: HashMap<u64, usize>,
+    /// `(flush number, sample size)` of the flushes in `sampled_groups`
+    sampled_flushes: VecDeque<(usize, usize)>,
+    /// Number of flushes so far
+    num_flushes: usize,
+    /// Groups emitted so far, which the skip aggregation probe must still count
+    flushed_groups: usize,
+    flush_count: metrics::Count,
+    hashes: Vec<u64>,
+}
+
+impl PartialTableFlush {
+    fn should_flush(&self, num_groups: usize) -> bool {
+        !self.disabled && num_groups >= self.threshold
+    }
+
+    /// Records the flush of `state`, the emitted groups and their states.
+    fn record_flush(&mut self, state: &RecordBatch) -> Result<()> {
+        let num_groups = state.num_rows();
+        self.flush_count.add(1);
+        self.flushed_groups += num_groups;
+
+        self.hashes.clear();
+        self.hashes.resize(num_groups, 0);
+        create_hashes(
+            &state.columns()[..self.num_group_columns],
+            &FLUSH_SAMPLE_SEED,
+            &mut self.hashes,
+        )?;
+
+        // How many sampled groups of each earlier flush are in this one?
+        let oldest = self.sampled_flushes.front().map_or(0, |(flush, _)| *flush);
+        let mut recurring = vec![0usize; self.sampled_flushes.len()];
+        for hash in &self.hashes {
+            if let Some(flush) = self.sampled_groups.get(hash) {
+                recurring[flush - oldest] += 1;
+            }
+        }
+        let groups_recur = recurring.iter().zip(&self.sampled_flushes).any(
+            |(recurring, (_, sample_size))| {
+                *recurring as f64 > MAX_RECURRING_GROUPS * *sample_size as f64
+            },
+        );
+        if groups_recur {
+            self.disabled = true;
+            self.sampled_groups = HashMap::new();
+            self.sampled_flushes = VecDeque::new();
+            self.hashes = vec![];
+            return Ok(());
+        }
+
+        if self.sampled_flushes.len() == FLUSH_SAMPLES_KEPT
+            && let Some((evicted, _)) = self.sampled_flushes.pop_front()
+        {
+            self.sampled_groups.retain(|_, flush| *flush != evicted);
+        }
+        let step = num_groups.div_ceil(FLUSH_SAMPLE_SIZE).max(1);
+        let mut sample_size = 0;
+        for hash in self.hashes.iter().step_by(step) {
+            self.sampled_groups.insert(*hash, self.num_flushes);
+            sample_size += 1;
+        }
+        self.sampled_flushes
+            .push_back((self.num_flushes, sample_size));
+        self.num_flushes += 1;
+        Ok(())
+    }
 }
 
 impl PartialHashAggregateStream {
@@ -445,6 +559,36 @@ impl PartialHashAggregateStream {
             .ratio_metrics("reduction_factor", partition);
         let early_emit_count =
             MetricBuilder::new(&agg.metrics).counter("early_emit_count", partition);
+
+        let group_values_soft_limit = agg.limit_options().map(|config| config.limit());
+        let bucket_threshold = context
+            .session_config()
+            .options()
+            .execution
+            .hash_aggregate_bucket_threshold;
+        let num_group_columns = agg.group_by.num_group_exprs();
+        // Same conditions as for bucketing in the final aggregation, which
+        // receives what is flushed here: see `FinalHashAggregateStream::new`.
+        let has_nested_state = schema
+            .fields()
+            .iter()
+            .skip(num_group_columns)
+            .any(|field| field.data_type().is_nested());
+        let table_flush = (bucket_threshold > 0
+            && group_values_soft_limit.is_none()
+            && !has_nested_state)
+            .then(|| PartialTableFlush {
+                threshold: bucket_threshold,
+                num_group_columns,
+                disabled: false,
+                sampled_groups: HashMap::new(),
+                sampled_flushes: VecDeque::new(),
+                num_flushes: 0,
+                flushed_groups: 0,
+                flush_count: MetricBuilder::new(&agg.metrics)
+                    .counter("table_flush_count", partition),
+                hashes: vec![],
+            });
 
         let hash_table = AggregateHashTable::<PartialMarker>::new(
             agg,
@@ -490,8 +634,9 @@ impl PartialHashAggregateStream {
             reservation,
             reduction_factor,
             early_emit_count,
+            table_flush,
             skip_aggregation_probe,
-            group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
+            group_values_soft_limit,
             hash_table: Some(hash_table),
         })
     }
@@ -526,14 +671,19 @@ impl PartialHashAggregateStream {
                     | HandleInputResult::SwitchToSkipAggregation => {
                         break;
                     }
-                    HandleInputResult::OOM => {
+                    HandleInputResult::OOM | HandleInputResult::TableFull => {
                         let materialized_group_states = hash_table.take_state_batch()?.ok_or_else(|| {
                             internal_datafusion_err!(
                                 "Partial hash aggregate ran out of memory with no aggregated groups"
                             )
                         })?;
 
-                        self.early_emit_count.add(1);
+                        match (&last_state, self.table_flush.as_mut()) {
+                            (HandleInputResult::TableFull, Some(table_flush)) => {
+                                table_flush.record_flush(&materialized_group_states)?
+                            }
+                            _ => self.early_emit_count.add(1),
+                        }
                         timer.done();
                         self.emit_on_memory_pressure(
                             materialized_group_states,
@@ -621,7 +771,14 @@ impl PartialHashAggregateStream {
         // ----------------------------------------------
         // Step 3: Skip partial aggregation optimization
         // ----------------------------------------------
-        self.update_skip_aggregation_probe(input_rows, hash_table.building_group_count());
+        let flushed_groups = self
+            .table_flush
+            .as_ref()
+            .map_or(0, |table_flush| table_flush.flushed_groups);
+        self.update_skip_aggregation_probe(
+            input_rows,
+            flushed_groups + hash_table.building_group_count(),
+        );
 
         // True branch: a decision has been made to skip partial aggregation.
         if self.should_skip_aggregation() {
@@ -633,10 +790,24 @@ impl PartialHashAggregateStream {
         // -------------------------------------------------
         let resize_result = self.reservation.try_resize(hash_table.memory_size());
         match resize_result {
-            Ok(()) => Ok(HandleInputResult::ProcessNext),
-            Err(DataFusionError::ResourcesExhausted(_)) => Ok(HandleInputResult::OOM),
-            Err(e) => Err(e),
+            Ok(()) => {}
+            Err(DataFusionError::ResourcesExhausted(_)) => {
+                return Ok(HandleInputResult::OOM);
+            }
+            Err(e) => return Err(e),
         }
+
+        // -----------------------------------------------------------
+        // Step 5: Keep the table small while that is free (see
+        // `PartialTableFlush`)
+        // -----------------------------------------------------------
+        let table_full = self.table_flush.as_ref().is_some_and(|table_flush| {
+            table_flush.should_flush(hash_table.building_group_count())
+        });
+        if table_full {
+            return Ok(HandleInputResult::TableFull);
+        }
+        Ok(HandleInputResult::ProcessNext)
     }
 
     /// emit a materialized partial-state on memory pressure
@@ -1785,6 +1956,135 @@ mod tests {
             )
         });
         Ok((rows, bucket_splits, metrics.spill_count().unwrap_or(0)))
+    }
+
+    /// Runs the partial hash aggregation of `SELECT group_col, COUNT(value_col)
+    /// .. GROUP BY group_col` over `keys`, and returns the count of every group
+    /// summed over all the state rows emitted for it, the number of state rows,
+    /// and the `table_flush_count` metric.
+    async fn run_partial_hash_aggregate(
+        keys: Vec<i32>,
+        bucket_threshold: usize,
+    ) -> Result<(BTreeMap<i32, i64>, usize, usize)> {
+        use datafusion_common::ScalarValue;
+
+        let batch_size = 1024;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("group_col", DataType::Int32, false),
+            Field::new("value_col", DataType::Int64, false),
+        ]));
+        let batches = keys
+            .chunks(batch_size)
+            .map(|keys| {
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Int32Array::from(keys.to_vec())),
+                        Arc::new(Int64Array::from(vec![1i64; keys.len()])),
+                    ],
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let task_ctx = TaskContext::default();
+        let session_config = task_ctx
+            .session_config()
+            .clone()
+            .set(
+                "datafusion.execution.batch_size",
+                &ScalarValue::UInt64(Some(batch_size as u64)),
+            )
+            .set(
+                "datafusion.execution.hash_aggregate_bucket_threshold",
+                &ScalarValue::UInt64(Some(bucket_threshold as u64)),
+            )
+            // keep the skip aggregation probe out of the way
+            .set(
+                "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+                &ScalarValue::Float64(Some(1.0)),
+            );
+        let task_ctx = Arc::new(task_ctx.with_session_config(session_config));
+
+        let aggr_expr = vec![Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col("value_col", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("count_value")
+                .build()?,
+        )];
+        let input = TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let partial = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(vec![(
+                col("group_col", &schema)?,
+                "group_col".to_string(),
+            )]),
+            aggr_expr,
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?);
+
+        let output =
+            crate::collect(Arc::clone(&partial) as Arc<dyn ExecutionPlan>, task_ctx)
+                .await?;
+        let mut counts = BTreeMap::new();
+        let mut state_rows = 0;
+        for batch in &output {
+            state_rows += batch.num_rows();
+            let groups = batch.column(0).as_primitive::<Int32Type>();
+            let states = batch
+                .column(1)
+                .as_primitive::<arrow::datatypes::Int64Type>();
+            for (group, count) in groups.values().iter().zip(states.values()) {
+                *counts.entry(*group).or_insert(0) += count;
+            }
+        }
+        let flushes = partial
+            .metrics()
+            .expect("partial aggregate has metrics")
+            .sum_by_name("table_flush_count")
+            .map(|value| value.as_usize())
+            .unwrap_or(0);
+        Ok((counts, state_rows, flushes))
+    }
+
+    #[tokio::test]
+    async fn partial_hash_aggregate_flushes_groups_that_do_not_recur() -> Result<()> {
+        // Clustered keys: the 3 rows of a group are adjacent
+        let keys: Vec<i32> = (0..60_000).map(|row| row / 3).collect();
+
+        let (expected, state_rows, flushes) =
+            run_partial_hash_aggregate(keys.clone(), 0).await?;
+        assert_eq!((state_rows, flushes), (20_000, 0));
+        assert!(expected.values().all(|&count| count == 3));
+
+        let (counts, state_rows, flushes) =
+            run_partial_hash_aggregate(keys, 2_000).await?;
+        assert_eq!(counts, expected);
+        assert!(flushes >= 9, "the table was flushed throughout: {flushes}");
+        // A group is only emitted twice when a flush falls between its rows
+        assert!(state_rows <= 20_000 + flushes);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn partial_hash_aggregate_stops_flushing_groups_that_recur() -> Result<()> {
+        // The same 30000 keys come around five times: every flushed group
+        // returns, but only 15 flushes later.
+        let keys: Vec<i32> = (0..150_000).map(|row| row % 30_000).collect();
+        let (expected, _, _) = run_partial_hash_aggregate(keys.clone(), 0).await?;
+
+        let (counts, state_rows, flushes) =
+            run_partial_hash_aggregate(keys, 2_000).await?;
+        assert_eq!(counts, expected);
+        assert!(expected.values().all(|&count| count == 5));
+        // The first round is flushed; the flush that sees its groups again is the last
+        assert!((15..=17).contains(&flushes), "flushing stopped: {flushes}");
+        assert!(
+            state_rows <= 64_000,
+            "later rounds are reduced: {state_rows}"
+        );
+        Ok(())
     }
 
     thread_local! {
