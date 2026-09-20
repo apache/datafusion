@@ -857,7 +857,7 @@ jobs:
           node-version: "20"
       - name: Check generated config and function docs
         run: |
-          ./ci/scripts/check_config_function_docs.sh
+          ./ci/scripts/check_generated_docs.sh
           git diff --exit-code
 
 # This job ensures `datafusion-examples/README.md` stays in sync with the source code:

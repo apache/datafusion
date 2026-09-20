@@ -147,6 +147,6 @@ if [[ ${stale_count} -gt 0 ]]; then
   echo ""
   echo "${stale_count} generated page(s) out of date. To update them, run:"
   echo ""
-  echo "  ./ci/scripts/check_config_function_docs.sh --write"
+  echo "  ./ci/scripts/check_generated_docs.sh --write"
   exit 1
 fi
