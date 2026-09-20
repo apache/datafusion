@@ -40,8 +40,8 @@ use crate::aggregates::group_values::{
 };
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
-    AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
-    group_id_array, max_duplicate_ordinal,
+    AggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions,
+    evaluate_group_by, group_id_array, max_duplicate_ordinal,
 };
 
 use super::AggregateTableMetrics;
@@ -156,17 +156,40 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         batch_size: usize,
         filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
     ) -> Result<Self> {
+        Self::new_for_input(
+            agg,
+            agg.input().schema(),
+            &agg.mode,
+            partition,
+            output_schema,
+            state_schema,
+            batch_size,
+            filters,
+        )
+    }
+
+    /// Like [`Self::new_with_filters`], for a table whose input is not the
+    /// input of `agg`: `input_schema` is the schema of the batches it
+    /// aggregates and `mode` decides how they are read, as raw rows or as
+    /// partial state. `agg.group_by` must refer to `input_schema`.
+    #[expect(clippy::too_many_arguments)]
+    pub(super) fn new_for_input(
+        agg: &AggregateExec,
+        input_schema: SchemaRef,
+        mode: &AggregateMode,
+        partition: usize,
+        output_schema: SchemaRef,
+        state_schema: SchemaRef,
+        batch_size: usize,
+        filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
+    ) -> Result<Self> {
         if batch_size == 0 {
             return internal_err!("AggregateHashTable requires config batch_size >= 1");
         }
 
-        let input_schema = agg.input().schema();
         let metrics = AggregateTableMetrics::new(agg, partition);
-        let aggregate_arguments = aggregate_expressions(
-            &agg.aggr_expr,
-            &agg.mode,
-            agg.group_by.num_group_exprs(),
-        )?;
+        let aggregate_arguments =
+            aggregate_expressions(&agg.aggr_expr, mode, agg.group_by.num_group_exprs())?;
         let accumulators: Vec<_> = agg
             .aggr_expr
             .iter()
