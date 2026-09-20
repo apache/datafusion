@@ -200,6 +200,15 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
 /// Verbose so that node detail is included, and with the schema appended so
 /// that two plans differing only in nullability are not taken for one. This is
 /// still not a structural equality: anything no node prints is invisible here.
+/// A plan a rule has been observed to return unchanged, kept alive alongside
+/// its fingerprint.
+///
+/// The `Arc` is held rather than a raw address so that pointer equality is a
+/// sound identity check: while this entry lives the node cannot be dropped, so
+/// its address cannot be handed to a different plan. That is what lets the
+/// lookup below answer from the pointer alone and skip rendering entirely.
+type ProvenFixpoint = (Arc<dyn ExecutionPlan>, String);
+
 /// Configured rule names that no rule in the chain answers to.
 ///
 /// A name is matched against what a rule reports as its `name()`, so a typo or
@@ -3056,7 +3065,7 @@ impl DefaultPhysicalPlanner {
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
                 .collect();
-            (names, HashMap::<&str, HashSet<String>>::new())
+            (names, HashMap::<&str, Vec<ProvenFixpoint>>::new())
         });
 
         if fixpoints.is_some() {
@@ -3074,21 +3083,44 @@ impl DefaultPhysicalPlanner {
         }
 
         for optimizer in optimizers {
-            // Rendered once per pass when the rule is named, and reused to
-            // record the outcome below.
-            let mut rendered_input = None;
+            // `Some` when the rule is named and this plan is not already known
+            // to be one of its fixpoints: carries the input to record below.
+            let mut pending: Option<ProvenFixpoint> = None;
             if let Some((names, seen)) = fixpoints.as_ref()
                 && names.contains(optimizer.name())
             {
-                let before = plan_fingerprint(new_plan.as_ref());
-                if seen
-                    .get(optimizer.name())
-                    .is_some_and(|plans| plans.contains(&before))
-                {
+                let known = seen.get(optimizer.name());
+
+                // The same object coming back around is the common case when
+                // the rules in between left the plan alone, and it settles
+                // identity without rendering anything.
+                let same_object = known.is_some_and(|entries| {
+                    entries.iter().any(|(plan, _)| Arc::ptr_eq(plan, &new_plan))
+                });
+
+                // Otherwise the plan has to be rendered: a rule that changed
+                // nothing still commonly rebuilds the tree, so a different
+                // object can still be the same plan.
+                let fingerprint =
+                    (!same_object).then(|| plan_fingerprint(new_plan.as_ref()));
+                let same_content = fingerprint.as_ref().is_some_and(|rendered| {
+                    known.is_some_and(|entries| {
+                        entries.iter().any(|(_, seen_fp)| seen_fp == rendered)
+                    })
+                });
+
+                if same_object || same_content {
                     // This rule has already run on this exact plan and left it
                     // alone, so running it again yields the same plan. Debug
                     // builds check that rather than trusting it.
-                    #[cfg(debug_assertions)]
+                    //
+                    // Off under `cfg(test)`: re-running the rule makes a skipped
+                    // pass indistinguishable from one that ran, since both leave
+                    // the same call count behind, which would leave every unit
+                    // test below unable to tell the feature working from the
+                    // feature absent. Integration tests compile the library
+                    // without `cfg(test)` and so still exercise this.
+                    #[cfg(all(debug_assertions, not(test)))]
                     {
                         let rerun = optimizer
                             .optimize_with_context(
@@ -3103,7 +3135,7 @@ impl DefaultPhysicalPlanner {
                             })?;
                         debug_assert_eq!(
                             plan_fingerprint(rerun.as_ref()),
-                            before,
+                            plan_fingerprint(new_plan.as_ref()),
                             "PhysicalOptimizer rule '{}' is named in \
                              datafusion.optimizer.skip_unchanged_physical_rules \
                              but stopped leaving a plan it had left alone before \
@@ -3115,7 +3147,13 @@ impl DefaultPhysicalPlanner {
                     observer(new_plan.as_ref(), optimizer.as_ref());
                     continue;
                 }
-                rendered_input = Some(before);
+
+                // Not a known fixpoint, so the rule runs. `fingerprint` is
+                // `Some` here: `same_object` was false, or the branch above
+                // would have been taken.
+                if let Some(rendered) = fingerprint {
+                    pending = Some((Arc::clone(&new_plan), rendered));
+                }
             }
 
             let before_schema = new_plan.schema();
@@ -3127,11 +3165,18 @@ impl DefaultPhysicalPlanner {
             // Record a fixpoint only where the rule demonstrably produced
             // the plan it was given. A rule still working towards its
             // fixpoint records nothing, so its next pass is not skipped.
-            if let Some(before) = rendered_input
+            if let Some((input, fingerprint)) = pending
                 && let Some((_, seen)) = fixpoints.as_mut()
-                && plan_fingerprint(new_plan.as_ref()) == before
             {
-                seen.entry(optimizer.name()).or_default().insert(before);
+                // Handing back the object it was given proves the rule left the
+                // plan alone, without rendering the result to find out.
+                let unchanged = Arc::ptr_eq(&input, &new_plan)
+                    || plan_fingerprint(new_plan.as_ref()) == fingerprint;
+                if unchanged {
+                    seen.entry(optimizer.name())
+                        .or_default()
+                        .push((input, fingerprint));
+                }
             }
 
             // This only checks the schema in release build, and performs additional checks in debug mode.
@@ -3933,7 +3978,12 @@ mod tests {
     /// anyway and asserting it changed nothing, so the call still happens
     /// there: what the skip saves in debug is nothing, and in release it is
     /// the whole second pass.
-    const SKIPPED_CALLS: usize = if cfg!(debug_assertions) { 2 } else { 1 };
+    /// Calls a rule receives when its repeated pass is skipped.
+    ///
+    /// One: the first pass. The self-check that would re-run it is compiled
+    /// out under `cfg(test)` precisely so this number differs from the two
+    /// calls an unskipped chain makes.
+    const SKIPPED_CALLS: usize = 1;
 
     /// A context whose physical rule list is exactly `rules`, with the given
     /// value for `skip_unchanged_physical_rules`.
@@ -3966,6 +4016,84 @@ mod tests {
         let logical_plan = LogicalPlanBuilder::empty(false).build()?;
         ctx.state().create_physical_plan(&logical_plan).await?;
         Ok(calls.load(AtomicOrdering::Relaxed))
+    }
+
+    /// Returns a plan equal to its input but built fresh, the way a rule that
+    /// rewrites the tree and then rewrites it back leaves it.
+    #[derive(Debug)]
+    struct RebuildingNoopRule {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl PhysicalOptimizerRule for RebuildingNoopRule {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.calls.fetch_add(1, AtomicOrdering::Relaxed);
+            // Build an equal node from scratch. Going through
+            // `with_new_children` would not do: it routes to
+            // `replace_children_if_necessary`, whose fast path returns the
+            // original object when the child pointers are unchanged, so the
+            // rule would hand back the very Arc it was given and never
+            // exercise the path this rule exists to cover.
+            // Rebuild the same node type so the plan is unchanged; only the
+            // object is new. `with_new_children` would not do: it routes to
+            // `replace_children_if_necessary`, whose fast path hands back the
+            // original object when the child pointers are unchanged, so the
+            // rule would return the very Arc it was given and never exercise
+            // the path this rule exists to cover.
+            let rebuilt: Arc<dyn ExecutionPlan> = if plan.name() == "EmptyExec" {
+                Arc::new(EmptyExec::new(plan.schema()))
+            } else {
+                Arc::new(PlaceholderRowExec::new(plan.schema()))
+            };
+            Ok(rebuilt)
+        }
+
+        fn name(&self) -> &str {
+            "rebuilding_noop_rule"
+        }
+
+        fn schema_check(&self) -> bool {
+            true
+        }
+    }
+
+    /// Runs `RebuildingNoopRule` twice in a row, returning how often it ran.
+    async fn run_repeated_rebuilding_rule(skip_config: &str) -> Result<usize> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let rule = || {
+            Arc::new(RebuildingNoopRule {
+                calls: Arc::clone(&calls),
+            }) as Arc<dyn PhysicalOptimizerRule + Send + Sync>
+        };
+        let ctx = session_with_rules(skip_config, vec![rule(), rule()]);
+        let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+        ctx.state().create_physical_plan(&logical_plan).await?;
+        Ok(calls.load(AtomicOrdering::Relaxed))
+    }
+
+    /// The skip must survive a rule that rebuilds the tree.
+    ///
+    /// The lookup answers from the pointer first, which only works while the
+    /// rule hands the same object back. A rule that changed nothing still
+    /// commonly returns a fresh tree, and most of the no-op passes measured on
+    /// a real chain did exactly that, so the content comparison behind the
+    /// pointer check is what carries the feature. Deleting the pointer fast
+    /// path would not fail this test; deleting the fallback would.
+    #[tokio::test]
+    async fn skip_unchanged_survives_a_rule_that_rebuilds_the_tree() -> Result<()> {
+        assert_eq!(
+            run_repeated_rebuilding_rule("rebuilding_noop_rule").await?,
+            SKIPPED_CALLS,
+            "a rebuilt but identical plan must still count as the fixpoint \
+             already proven, or the pointer check would be the only path"
+        );
+        // And it stays off when unnamed, like every other rule.
+        assert_eq!(run_repeated_rebuilding_rule("").await?, 2);
+        Ok(())
     }
 
     /// A named rule is called once instead of twice: the second entry receives
@@ -4057,7 +4185,11 @@ mod tests {
             _config: &ConfigOptions,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             if self.rewrite {
-                Ok(Arc::new(EmptyExec::new(plan.schema())))
+                // Must change the plan, not merely rebuild it: the input here
+                // is already an `EmptyExec` with this schema, so returning
+                // another one leaves the plan identical and the pass that
+                // follows would be skipped as a fixpoint it never reached.
+                Ok(Arc::new(CoalescePartitionsExec::new(plan)))
             } else {
                 Ok(plan)
             }
@@ -4105,10 +4237,8 @@ mod tests {
         let logical_plan = LogicalPlanBuilder::empty(false).build()?;
         ctx.state().create_physical_plan(&logical_plan).await?;
 
-        // Two enforcement passes have real work; the third is skipped (and in
-        // debug builds re-run by the self-check, which is why this counts
-        // against SKIPPED_CALLS rather than a literal).
-        assert_eq!(calls.load(AtomicOrdering::Relaxed), 2 + (SKIPPED_CALLS - 1));
+        // Two enforcement passes have real work; the third is skipped.
+        assert_eq!(calls.load(AtomicOrdering::Relaxed), 2);
         Ok(())
     }
 
