@@ -1632,7 +1632,11 @@ impl Unparser<'_> {
                 // we must emit a derived subquery: (SELECT ...) AS alias.
                 // Without this, the recursive handler would merge those clauses
                 // into the outer SELECT, losing the subquery structure entirely.
-                if unparsed_table_scan.is_none() && Self::requires_derived_subquery(plan)
+                // Also, do not add a table alias past a Filter, as otherwise the predicates might
+                // refer to invalid tables.
+                if (unparsed_table_scan.is_none()
+                    && Self::requires_derived_subquery(plan))
+                    || matches!(plan, LogicalPlan::Filter(_))
                 {
                     // When the dialect does not support column aliases in
                     // table aliases (e.g. SQLite), inject the aliases into
