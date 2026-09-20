@@ -1125,6 +1125,15 @@ config_namespace! {
         /// aggregation ratio check and trying to switch to skipping aggregation mode
         pub skip_partial_aggregation_probe_rows_threshold: usize, default = 100_000
 
+        /// (experimental) Number of groups in one final hash aggregation
+        /// partition above which the partition stops growing a single hash
+        /// table. The groups seen so far and all further input are instead
+        /// split into hash buckets, which are aggregated one after another so
+        /// that each bucket's hash table stays small enough to be cache
+        /// friendly, and can be spilled and released independently. Set to 0
+        /// to disable.
+        pub hash_aggregate_bucket_threshold: usize, default = 0
+
         /// Should DataFusion use row number estimates at the input to decide
         /// whether increasing parallelism is beneficial or not. By default,
         /// only exact row numbers (not estimates) are used for this decision.
