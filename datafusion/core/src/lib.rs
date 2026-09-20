@@ -261,6 +261,12 @@
 //!    [`Expr`]s to compute the desired result by [`SqlToRel`]. This phase
 //!    also includes name and type resolution ("binding").
 //!
+//! Note the parser checks *syntax* only. Semantic checks belong on the
+//! [`LogicalPlan`], so they apply to plans built by the DataFrame API and other
+//! frontends as well as by SQL. See the [Syntax vs Semantics] specification.
+//!
+//! [Syntax vs Semantics]: https://datafusion.apache.org/contributor-guide/specification/syntax-vs-semantics.html
+//!
 //! [`Statement`]: https://docs.rs/sqlparser/latest/sqlparser/ast/enum.Statement.html
 //!
 //! ### DataFrame
