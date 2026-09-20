@@ -1652,6 +1652,11 @@ mod tests {
 
     /// Partition 0 spills and replays while partitions 1..3 keep their
     /// aggregate state in the same greedy pool.
+    ///
+    /// These cases cover the spill and replay lifecycle in a shared pool:
+    /// results, spill metrics, and memory release. Case G in
+    /// `aggregate_memory_spill.slt` covers the merge fan-in regression for
+    /// issue #25423.
     async fn run_shared_pool_case(
         input_batches: i64,
         limit: usize,
@@ -1715,7 +1720,6 @@ mod tests {
                 .with_session_config(SessionConfig::new().with_batch_size(128))
                 .with_runtime(
                     RuntimeEnvBuilder::new()
-                        .with_max_spill_merge_fan_in(2)
                         .with_memory_pool(Arc::clone(&pool))
                         .build_arc()?,
                 ),
