@@ -619,6 +619,20 @@ the advisory exceptions that CI uses. <code class="docutils literal notranslate"
 <p>The audit fetches the RustSec advisory database. A new advisory or a different
 <code class="docutils literal notranslate"><span class="pre">cargo-audit</span></code> version can change the result without any change to the repository.</p>
 </section>
+<section id="large-file-check">
+<h2>Large File Check<a class="headerlink" href="#large-file-check" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">ci/scripts/check_large_files.sh</span></code> fails if any file committed between a base
+ref and a head ref is larger than 1.5 MB, the same check the “Large files PR
+check” workflow runs on pull requests. <code class="docutils literal notranslate"><span class="pre">./dev/rust_lint.sh</span></code> runs it against
+the merge base of <code class="docutils literal notranslate"><span class="pre">HEAD</span></code> and <code class="docutils literal notranslate"><span class="pre">main</span></code> on the remote that points at
+<code class="docutils literal notranslate"><span class="pre">apache/datafusion</span></code>, or on <code class="docutils literal notranslate"><span class="pre">origin</span></code> when there is no such remote. To run the
+check on its own, or against a different range:</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>./ci/scripts/check_large_files.sh
+./ci/scripts/check_large_files.sh<span class="w"> </span>--base<span class="w"> </span>upstream/main<span class="w"> </span>--head<span class="w"> </span>my-branch
+</pre></div>
+</div>
+<p>Only committed files are checked. Commit a change before running it.</p>
+</section>
 <section id="dependency-checks">
 <h2>Dependency Checks<a class="headerlink" href="#dependency-checks" title="Link to this heading">#</a></h2>
 <p>CI runs two dependency checks, and <code class="docutils literal notranslate"><span class="pre">./dev/rust_lint.sh</span></code> runs both:</p>
@@ -755,6 +769,7 @@ the README:</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#documentation-link-checks">Documentation Link Checks</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#asf-status-check-validation">ASF Status Check Validation</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#security-audit">Security Audit</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#large-file-check">Large File Check</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#dependency-checks">Dependency Checks</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#examples-readme-check">Examples README Check</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#benchmarks">Benchmarks</a><ul class="nav section-nav flex-column">
