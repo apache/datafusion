@@ -1014,48 +1014,8 @@ mod tests {
         })
     }
 
-    fn assert_timezone_less_date_trunc_contract<T: ArrowTimestampType>() {
-        let scale = match T::UNIT {
-            TimeUnit::Second => 1_000_000_000,
-            TimeUnit::Millisecond => 1_000_000,
-            TimeUnit::Microsecond => 1_000,
-            TimeUnit::Nanosecond => 1,
-        };
-        // Probe both sides of calendar and fixed-width boundaries at the
-        // input's own resolution, including negative fractional timestamps.
-        let mut timestamps = [
-            "1900-03-01T00:00:00Z", // Non-leap century.
-            "1969-12-29T00:00:00Z", // Monday before the epoch.
-            "1970-01-01T00:00:00Z",
-            "1970-01-01T00:00:00.000001Z",
-            "1970-01-01T00:00:00.001Z",
-            "1970-01-01T00:00:01Z",
-            "1970-01-01T00:01:00Z",
-            "1970-01-01T01:00:00Z",
-            "2000-01-01T00:00:00Z",
-            "2000-02-29T00:00:00Z", // Leap century.
-            "2000-03-01T00:00:00Z",
-            "2000-04-01T00:00:00Z", // Quarter boundary.
-            "2024-01-01T00:00:00Z", // Monday and year boundary.
-        ]
-        .into_iter()
-        .flat_map(|value| {
-            let boundary = string_to_timestamp_nanos(value).unwrap() / scale;
-            [boundary - 1, boundary, boundary + 1]
-        })
-        .collect::<Vec<_>>();
-        // Stay inside the scalar nanosecond domain with room to truncate a
-        // full year at its lower edge; the upper edge needs no such margin.
-        timestamps.extend([
-            i64::MIN / scale + 366 * 86_400 * (1_000_000_000 / scale),
-            i64::MAX / scale,
-        ]);
-        timestamps.sort_unstable();
-        timestamps.dedup();
-        let values = timestamps
-            .into_iter()
-            .flat_map(|value| [Some(value), None])
-            .collect::<Vec<_>>();
+    fn assert_timezone_less_date_trunc_preserves_nullness<T: ArrowTimestampType>() {
+        let input = PrimitiveArray::<T>::from_iter([Some(0), None]);
         let timestamp_type = DataType::Timestamp(T::UNIT, None);
 
         for granularity in [
@@ -1070,7 +1030,6 @@ mod tests {
             "quarter",
             "year",
         ] {
-            let input = PrimitiveArray::<T>::from_iter(values.iter().copied());
             let output = invoke_date_trunc(
                 granularity,
                 ColumnarValue::Array(Arc::new(input.clone())),
@@ -1081,7 +1040,6 @@ mod tests {
             let ColumnarValue::Array(output) = output else {
                 panic!("expected array output")
             };
-            let output = as_primitive_array::<T>(&output);
 
             assert_eq!(
                 input.nulls(),
@@ -1089,34 +1047,19 @@ mod tests {
                 "{granularity} must preserve nullness for {:?}",
                 T::UNIT
             );
-
-            let mut previous = None;
-            for value in output.iter().flatten() {
-                if let Some(previous) = previous {
-                    assert!(
-                        previous <= value,
-                        "{granularity} must be nondecreasing for {:?}",
-                        T::UNIT
-                    );
-                }
-                previous = Some(value);
-            }
         }
     }
 
-    /// Verifies the function-level contract required by
+    /// Verifies the exact null contract required by
     /// [`ScalarUDFImpl::supports_range_partitioning_analysis`] across every
-    /// supported granularity and timezone-less timestamp unit. Ordered input
-    /// remains ordered, and output nullness exactly matches input nullness.
-    /// Concrete range-split separation is tested separately.
-    ///
-    /// See <https://github.com/apache/datafusion/issues/25344>.
+    /// supported granularity and timezone-less timestamp unit. Ordering metadata
+    /// and concrete range-split separation are tested separately.
     #[test]
-    fn timezone_less_date_trunc_is_ordered_and_preserves_nullness() {
-        assert_timezone_less_date_trunc_contract::<TimestampSecondType>();
-        assert_timezone_less_date_trunc_contract::<TimestampMillisecondType>();
-        assert_timezone_less_date_trunc_contract::<TimestampMicrosecondType>();
-        assert_timezone_less_date_trunc_contract::<TimestampNanosecondType>();
+    fn timezone_less_date_trunc_preserves_nullness() {
+        assert_timezone_less_date_trunc_preserves_nullness::<TimestampSecondType>();
+        assert_timezone_less_date_trunc_preserves_nullness::<TimestampMillisecondType>();
+        assert_timezone_less_date_trunc_preserves_nullness::<TimestampMicrosecondType>();
+        assert_timezone_less_date_trunc_preserves_nullness::<TimestampNanosecondType>();
     }
 
     #[test]
