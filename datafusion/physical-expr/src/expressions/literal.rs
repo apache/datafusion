@@ -151,7 +151,7 @@ impl PhysicalExpr for Literal {
             protobuf::physical_expr_node::ExprType::LiteralWithMetadata(
                 protobuf::PhysicalLiteralNode {
                     value: Some(value.try_into()?),
-                    metadata: field.metadata().clone(),
+                    metadata: field.metadata().into(),
                 },
             )
         };
