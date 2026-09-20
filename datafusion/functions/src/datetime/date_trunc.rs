@@ -978,21 +978,21 @@ mod tests {
 
     #[test]
     fn range_partitioning_analysis_requires_timezone_less_timestamp() {
-        let function = DateTruncFunc::new();
+        let date_trunc = DateTruncFunc::new();
 
-        assert!(function.supports_range_partitioning_analysis(&[
+        assert!(date_trunc.supports_range_partitioning_analysis(&[
             DataType::Utf8,
             DataType::Timestamp(TimeUnit::Nanosecond, None),
         ]));
-        assert!(!function.supports_range_partitioning_analysis(&[
+        assert!(!date_trunc.supports_range_partitioning_analysis(&[
             DataType::Utf8,
             DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
         ]));
-        assert!(!function.supports_range_partitioning_analysis(&[
+        assert!(!date_trunc.supports_range_partitioning_analysis(&[
             DataType::Int64,
             DataType::Timestamp(TimeUnit::Nanosecond, None),
         ]));
-        assert!(!function.supports_range_partitioning_analysis(&[DataType::Utf8]));
+        assert!(!date_trunc.supports_range_partitioning_analysis(&[DataType::Utf8]));
     }
 
     fn invoke_date_trunc(
