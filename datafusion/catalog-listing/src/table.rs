@@ -25,14 +25,12 @@ use async_trait::async_trait;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_common::{
-    Constraints, DFSchema, SchemaExt, SplitPoint, Statistics, internal_datafusion_err,
-    plan_err, project_schema,
+    Column, Constraints, DFSchema, SchemaExt, SplitPoint, Statistics,
+    internal_datafusion_err, plan_err, project_schema,
 };
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
-use datafusion_datasource::file_scan_config::{
-    FileScanConfig, FileScanConfigBuilder, range_partitioning_from_partition_fields,
-};
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::{FileOutputMode, FileSinkConfig};
 #[expect(deprecated)]
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
@@ -46,7 +44,9 @@ use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{
-    Expr, Partitioning as LogicalPartitioning, TableProviderFilterPushDown, TableType,
+    Expr, Partitioning as LogicalPartitioning,
+    RangePartitioning as LogicalRangePartitioning, TableProviderFilterPushDown,
+    TableType,
 };
 use datafusion_physical_expr::{create_lex_ordering, create_physical_partitioning};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
@@ -683,8 +683,26 @@ impl ListingTable {
             None => {} // no ordering required
         }
 
+        // Hive grouped files are contiguous key intervals, so they declare `Range`
+        // unless the statistics re-cut above changed the groups. The ordering must
+        // match the `SortOptions::default()` used to cut the groups.
+        let derived_output_partitioning =
+            if partitioned_by_file_group && !regrouped_by_statistics {
+                let ordering = table_partition_cols
+                    .iter()
+                    .map(|field| {
+                        Expr::Column(Column::from_name(field.name())).sort(true, true)
+                    })
+                    .collect();
+                Some(LogicalPartitioning::Range(
+                    LogicalRangePartitioning::try_new(ordering, partition_split_points)?,
+                ))
+            } else {
+                None
+            };
+
         let output_partitioning = if let Some(output_partitioning) =
-            declared_output_partitioning
+            declared_output_partitioning.or(derived_output_partitioning.as_ref())
         {
             let output_partitioning = match output_partitioning {
                 LogicalPartitioning::RoundRobinBatch(_) => {
@@ -715,31 +733,6 @@ impl ListingTable {
                 );
             }
             Some(output_partitioning)
-        } else if partitioned_by_file_group {
-            // Groups are contiguous key intervals, so `Range` records where each key
-            // lives and the optimizer can prove co-partitioning instead of assuming it.
-            if regrouped_by_statistics {
-                log::debug!(
-                    "file groups were re-cut by statistics, not declaring partition based output partitioning"
-                );
-                None
-            } else {
-                debug_assert_eq!(
-                    partition_split_points.len() + 1,
-                    partitioned_file_lists.len()
-                );
-                range_partitioning_from_partition_fields(
-                    &self.table_schema,
-                    &table_partition_cols.clone().into(),
-                    partition_split_points,
-                )
-                .unwrap_or_else(|e| {
-                    log::debug!(
-                        "could not derive range partitioning from partition-grouped file groups: {e}"
-                    );
-                    None
-                })
-            }
         } else {
             None
         };

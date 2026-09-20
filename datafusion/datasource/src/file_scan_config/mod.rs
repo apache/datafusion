@@ -39,8 +39,8 @@ use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    Constraint, Constraints, Result, ScalarValue, SplitPoint, Statistics,
-    internal_datafusion_err, internal_err,
+    Constraint, Constraints, Result, ScalarValue, Statistics, internal_datafusion_err,
+    internal_err,
 };
 use datafusion_execution::{
     SendableRecordBatchStream, TaskContext, object_store::ObjectStoreUrl,
@@ -52,9 +52,7 @@ use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::projection::{ProjectionExprs, ProjectionMapping};
 use datafusion_physical_expr::utils::reassign_expr_columns;
-use datafusion_physical_expr::{
-    EquivalenceProperties, Partitioning, RangePartitioning, split_conjunction,
-};
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning, split_conjunction};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -617,54 +615,15 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
     }
 }
 
-/// Builds `Partitioning::Hash` over `partition_cols` (resolved to their indices in
-/// `schema`). Returns `None` when there are no partition columns.
-///
-/// # Deprecated
-/// Use [`range_partitioning_from_partition_fields`] instead.
-#[deprecated(
-    since = "56.0.0",
-    note = "Hive file groups are value partitioned, not hash partitioned. Use range_partitioning_from_partition_fields"
-)]
+/// Builds output partitioning over `partition_cols` (resolved to their indices in
+/// `schema`) with `partition_count` partitions. Returns `None` when there are no
+/// partition columns. Callers use this to declare the output partitioning of a scan
+/// whose file groups are organized by partition column values.
 pub fn output_partitioning_from_partition_fields(
     schema: &Schema,
     partition_cols: &Fields,
     partition_count: usize,
 ) -> Option<Partitioning> {
-    let exprs = partition_column_exprs(schema, partition_cols)?;
-    Some(Partitioning::Hash(exprs, partition_count))
-}
-
-/// Builds the [`Partitioning::Range`] that describes a scan whose file groups were
-/// produced by [`FileGroup::group_by_partition_values_with_split_points`].
-pub fn range_partitioning_from_partition_fields(
-    schema: &Schema,
-    partition_cols: &Fields,
-    split_points: Vec<SplitPoint>,
-) -> Result<Option<Partitioning>> {
-    let Some(exprs) = partition_column_exprs(schema, partition_cols) else {
-        return Ok(None);
-    };
-    let sort_exprs = exprs
-        .into_iter()
-        .map(PhysicalSortExpr::new_default)
-        .collect::<Vec<_>>();
-    let Some(ordering) = LexOrdering::new(sort_exprs) else {
-        return Ok(None);
-    };
-    if ordering.len() != partition_cols.len() {
-        return Ok(None);
-    }
-    let range = RangePartitioning::try_new(ordering, split_points)?;
-    Ok(Some(Partitioning::Range(range)))
-}
-
-/// Resolves `partition_cols` to `Column` expressions against `schema`. Returns `None`
-/// when there are no partition columns or one is missing.
-fn partition_column_exprs(
-    schema: &Schema,
-    partition_cols: &Fields,
-) -> Option<Vec<Arc<dyn PhysicalExpr>>> {
     if partition_cols.is_empty() {
         return None;
     }
@@ -678,7 +637,8 @@ fn partition_column_exprs(
             .position(|field| field.name() == name)?;
         exprs.push(Arc::new(Column::new(name, idx)));
     }
-    Some(exprs)
+
+    Some(Partitioning::Hash(exprs, partition_count))
 }
 
 fn project_output_partitioning(
@@ -3158,6 +3118,7 @@ mod tests {
     fn test_output_partitioning_with_partition_columns() {
         let file_schema = aggr_test_schema();
 
+        // Test single partition column
         let single_partition_col = vec![Field::new(
             "date",
             wrap_partition_type_in_dict(DataType::Utf8),
@@ -3175,31 +3136,20 @@ mod tests {
             FileGroup::new(vec![PartitionedFile::new("f2.parquet".to_string(), 1024)]),
             FileGroup::new(vec![PartitionedFile::new("f3.parquet".to_string(), 1024)]),
         ];
-        let dict = |v: &str| wrap_partition_value_in_dict(ScalarValue::from(v));
-        config.output_partitioning = range_partitioning_from_partition_fields(
+        config.output_partitioning = output_partitioning_from_partition_fields(
             config.file_source.table_schema().table_schema(),
             config.table_partition_cols(),
-            vec![
-                SplitPoint::new(vec![dict("2026-09")]),
-                SplitPoint::new(vec![dict("2026-10")]),
-            ],
-        )
-        .unwrap();
+            config.file_groups.len(),
+        );
 
         let partitioning = config.output_partitioning();
         match partitioning {
-            Partitioning::Range(range) => {
-                assert_eq!(range.partition_count(), 3);
-                assert_eq!(range.ordering().len(), 1);
-                let sort_expr = &range.ordering()[0];
-                assert_eq!(
-                    sort_expr.expr.downcast_ref::<Column>().unwrap().name(),
-                    "date"
-                );
-                assert_eq!(sort_expr.options, arrow::compute::SortOptions::default());
-                assert_eq!(range.split_points().len(), 2);
+            Partitioning::Hash(exprs, num_partitions) => {
+                assert_eq!(num_partitions, 3);
+                assert_eq!(exprs.len(), 1);
+                assert_eq!(exprs[0].downcast_ref::<Column>().unwrap().name(), "date");
             }
-            other => panic!("Expected Range partitioning, got {other}"),
+            _ => panic!("Expected Hash partitioning"),
         }
 
         // Test multiple partition columns
@@ -3218,61 +3168,25 @@ mod tests {
             FileGroup::new(vec![PartitionedFile::new("f1.parquet".to_string(), 1024)]),
             FileGroup::new(vec![PartitionedFile::new("f2.parquet".to_string(), 1024)]),
         ];
-        config.output_partitioning = range_partitioning_from_partition_fields(
+        config.output_partitioning = output_partitioning_from_partition_fields(
             config.file_source.table_schema().table_schema(),
             config.table_partition_cols(),
-            vec![SplitPoint::new(vec![dict("2026"), dict("09")])],
-        )
-        .unwrap();
+            config.file_groups.len(),
+        );
 
         let partitioning = config.output_partitioning();
         match partitioning {
-            Partitioning::Range(range) => {
-                assert_eq!(range.partition_count(), 2);
-                let col_names: Vec<_> = range
-                    .ordering()
+            Partitioning::Hash(exprs, num_partitions) => {
+                assert_eq!(num_partitions, 2);
+                assert_eq!(exprs.len(), 2);
+                let col_names: Vec<_> = exprs
                     .iter()
-                    .map(|e| e.expr.downcast_ref::<Column>().unwrap().name())
+                    .map(|e| e.downcast_ref::<Column>().unwrap().name())
                     .collect();
                 assert_eq!(col_names, vec!["year", "month"]);
             }
-            other => panic!("Expected Range partitioning, got {other}"),
+            _ => panic!("Expected Hash partitioning"),
         }
-    }
-
-    #[test]
-    fn test_range_partitioning_from_partition_fields_rejects_unordered_split_points() {
-        let file_schema = aggr_test_schema();
-        let config = config_for_projection(
-            Arc::clone(&file_schema),
-            None,
-            Statistics::new_unknown(&file_schema),
-            vec![Field::new(
-                "date",
-                wrap_partition_type_in_dict(DataType::Utf8),
-                false,
-            )],
-        );
-        let dict = |v: &str| wrap_partition_value_in_dict(ScalarValue::from(v));
-        let err = range_partitioning_from_partition_fields(
-            config.file_source.table_schema().table_schema(),
-            config.table_partition_cols(),
-            vec![
-                SplitPoint::new(vec![dict("2026-10")]),
-                SplitPoint::new(vec![dict("2026-09")]),
-            ],
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("strictly ordered"), "{err}");
-
-        // No partition columns => no declared partitioning.
-        let none = range_partitioning_from_partition_fields(
-            config.file_source.table_schema().table_schema(),
-            &Fields::empty(),
-            vec![],
-        )
-        .unwrap();
-        assert!(none.is_none());
     }
 
     #[test]

@@ -525,9 +525,9 @@ impl FileGroup {
 
         let num_unique_partitions = partition_groups.len();
 
-        // Sort for deterministic bucket assignment across query executions.
-        // Must match the ordering declared by `range_partitioning_from_partition_fields`,
-        // otherwise the split points would not describe the groups.
+        // Sort for deterministic bucket assignment across query executions. Must match
+        // the ordering the caller declares, otherwise the split points would not
+        // describe the groups.
         let mut sorted_partitions: Vec<_> = partition_groups.into_iter().collect();
         let sort_options =
             vec![
