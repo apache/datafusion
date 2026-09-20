@@ -1488,19 +1488,18 @@ pub fn format_state_name(name: &str, state_name: &str) -> String {
 /// Creates aggregate state fields for ordering expressions with unique names.
 ///
 /// Each field is renamed using the aggregate name and its ordering position.
-pub fn ordering_state_fields(name: &str, ordering_fields: &[FieldRef]) -> Vec<FieldRef> {
-    ordering_fields
-        .iter()
-        .enumerate()
-        .map(|(idx, field)| {
-            Arc::new(
-                field
-                    .as_ref()
-                    .clone()
-                    .with_name(format_state_name(name, &format!("ordering_{idx}"))),
-            )
-        })
-        .collect()
+pub fn ordering_state_fields(
+    name: &str,
+    ordering_fields: &[FieldRef],
+) -> impl Iterator<Item = FieldRef> {
+    ordering_fields.iter().enumerate().map(|(idx, field)| {
+        Arc::new(
+            field
+                .as_ref()
+                .clone()
+                .with_name(format_state_name(name, &format!("ordering_{idx}"))),
+        )
+    })
 }
 
 /// Determine the set of [`Column`]s produced by the subquery.
