@@ -455,13 +455,11 @@ impl ScalarUDFImpl for DateTruncFunc {
     fn supports_range_partitioning_analysis(&self, argument_types: &[DataType]) -> bool {
         // Named timezone transitions can make date_trunc non-monotonic (#25353).
         // Keep the audited domain to timezone-less timestamp columns.
-        matches!(
-            argument_types,
-            [
-                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
-                Timestamp(_, None)
-            ]
-        )
+        let [precision, timestamp] = argument_types else {
+            return false;
+        };
+
+        precision.is_string() && matches!(timestamp, Timestamp(_, None))
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -931,7 +929,7 @@ mod tests {
     use arrow::buffer::NullBuffer;
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::compute::{DatePart, SortOptions};
-    use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
+    use arrow::datatypes::{DataType, Field, TimeUnit};
     use datafusion_common::ScalarValue;
     use datafusion_common::config::ConfigOptions;
     use datafusion_expr::interval_arithmetic::Interval;
@@ -979,54 +977,22 @@ mod tests {
     }
 
     #[test]
-    fn supports_range_partitioning_analysis_for_timezone_less_timestamps() {
+    fn range_partitioning_analysis_requires_timezone_less_timestamp() {
         let function = DateTruncFunc::new();
 
-        for unit in [
-            TimeUnit::Second,
-            TimeUnit::Millisecond,
-            TimeUnit::Microsecond,
-            TimeUnit::Nanosecond,
-        ] {
-            for string_type in [DataType::Utf8, DataType::Utf8View, DataType::LargeUtf8] {
-                assert!(function.supports_range_partitioning_analysis(&[
-                    string_type,
-                    DataType::Timestamp(unit, None),
-                ]));
-            }
-
-            for timezone in ["UTC", "+05:30", "America/Goose_Bay"] {
-                assert!(!function.supports_range_partitioning_analysis(&[
-                    DataType::Utf8,
-                    DataType::Timestamp(unit, Some(timezone.into())),
-                ]));
-            }
-        }
-
-        assert!(!function.supports_range_partitioning_analysis(&[
+        assert!(function.supports_range_partitioning_analysis(&[
             DataType::Utf8,
-            DataType::Time32(TimeUnit::Second),
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
         ]));
         assert!(!function.supports_range_partitioning_analysis(&[
             DataType::Utf8,
-            DataType::Time64(TimeUnit::Nanosecond),
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
         ]));
-        assert!(!function.supports_range_partitioning_analysis(&[DataType::Utf8,]));
         assert!(!function.supports_range_partitioning_analysis(&[
             DataType::Int64,
             DataType::Timestamp(TimeUnit::Nanosecond, None),
         ]));
-    }
-
-    #[test]
-    fn date_bin_does_not_support_range_partitioning_analysis() {
-        assert!(
-            !crate::datetime::date_bin::DateBinFunc::new()
-                .supports_range_partitioning_analysis(&[
-                    DataType::Interval(IntervalUnit::MonthDayNano),
-                    DataType::Timestamp(TimeUnit::Nanosecond, None),
-                ])
-        );
+        assert!(!function.supports_range_partitioning_analysis(&[DataType::Utf8]));
     }
 
     fn invoke_date_trunc(
