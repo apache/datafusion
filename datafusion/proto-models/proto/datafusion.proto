@@ -1477,8 +1477,9 @@ message ProjectionExecNode {
   repeated PhysicalExprNode expr = 2;
   repeated string expr_name = 3;
   // Only field and schema metadata are used; output types are derived from expr.
-  // Present only when the projection overrides metadata derived from its input,
-  // including an explicit clear. Absent for older plans and inherited metadata.
+  // Present when the projection output has metadata or explicitly overrides
+  // inherited metadata, including an explicit clear. Absent for older plans
+  // and metadata-free projections.
   datafusion_common.Schema schema = 4;
 }
 
