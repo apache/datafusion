@@ -995,24 +995,22 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// Returns whether this function and argument-type combination has been
     /// audited for range-partitioning locality analysis.
     ///
-    /// Returning `true` explicitly opts the combination into this analysis and
-    /// asserts that:
+    /// Range-boundary analysis has subtle correctness requirements, so the
+    /// policy is default-deny. Functions may opt in only after individual audit.
+    /// At minimum, an opted-in combination must:
     ///
-    /// - same-direction [`SortProperties::Ordered`] metadata accurately describes
-    ///   successful evaluation over the admitted non-null domain when all other
-    ///   inputs are singleton;
-    /// - successful evaluation returns null exactly when the range input is null.
+    /// - have same-direction [`SortProperties::Ordered`] metadata over the
+    ///   admitted non-null domain when all other inputs are singleton;
+    /// - preserve nullness exactly, so successful evaluation returns null if and
+    ///   only if the range input is null.
     ///
-    /// This explicit audit is required in addition to ordered metadata. Callers
-    /// may then prove key locality by evaluating values on both sides of each
-    /// concrete range split. Ordered metadata alone is insufficient because a
-    /// non-strict transform can collapse a split boundary.
+    /// Callers may then prove key locality by evaluating values on both sides of
+    /// each concrete range split. Ordered metadata alone is insufficient because
+    /// a non-strict transform can collapse a split boundary.
     ///
     /// This does not claim a concrete partition layout or cross-input
     /// co-partitioning compatibility. Boundary evaluation errors cause the
-    /// analysis to return `false`.
-    ///
-    /// The default is `false`. This capability is not transported across FFI.
+    /// analysis to return `false`. This capability is not transported across FFI.
     fn supports_range_partitioning_analysis(&self, _argument_types: &[DataType]) -> bool {
         false
     }
