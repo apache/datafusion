@@ -228,3 +228,22 @@ SELECT * FROM test_delete_explain;
 
 statement ok
 DROP TABLE test_delete_explain;
+
+# Predicate errors belong to execution; EXPLAIN only plans the expression.
+statement ok
+CREATE TABLE test_delete_error AS VALUES (0), (2);
+
+statement ok
+EXPLAIN DELETE FROM test_delete_error WHERE 10 / column1 > 1;
+
+statement error Divide by zero
+DELETE FROM test_delete_error WHERE 10 / column1 > 1;
+
+query I rowsort
+SELECT * FROM test_delete_error;
+----
+0
+2
+
+statement ok
+DROP TABLE test_delete_error;

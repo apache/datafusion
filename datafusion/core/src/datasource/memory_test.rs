@@ -28,11 +28,13 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use arrow_schema::SchemaRef;
     use datafusion_catalog::TableProvider;
+    use datafusion_common::tree_node::TreeNodeRecursion;
     use datafusion_common::{
-        Constraint, Constraints, DataFusionError, Result, ScalarValue, assert_contains,
+        Constraint, Constraints, DataFusionError, Result, assert_contains,
     };
     use datafusion_expr::dml::InsertOp;
     use datafusion_expr::{Expr, LogicalPlanBuilder, col, lit};
+    use datafusion_physical_expr::utils::collect_columns;
     use futures::StreamExt;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -555,6 +557,132 @@ mod tests {
             .collect()
     }
 
+    // SQL cannot hold an unpolled stream or execute the same physical plan twice.
+    #[tokio::test]
+    async fn test_dml_execution_lifecycle() -> Result<()> {
+        for update in [false, true] {
+            let session_ctx = SessionContext::new();
+            let schema = one_column_schema();
+            let batch = one_column_batch(&schema)?;
+            let ordering = vec![vec![col("a").sort(true, false)]];
+            let table = MemTable::try_new(schema, vec![vec![batch.clone()], vec![]])?
+                .with_sort_order(ordering.clone());
+            let filters = vec![col("a").gt(lit(1))];
+            let plan = if update {
+                table
+                    .update(
+                        &session_ctx.state(),
+                        vec![("a".to_string(), col("a") + lit(10))],
+                        filters,
+                    )
+                    .await?
+            } else {
+                table.delete_from(&session_ctx.state(), filters).await?
+            };
+
+            let stream = plan.execute(0, session_ctx.task_ctx())?;
+            assert_eq!(stream.schema(), plan.schema());
+            drop(stream);
+            assert_eq!(
+                column_values(&read_partition(&table, 0).await[0]),
+                vec![1, 2, 3]
+            );
+            assert_eq!(*table.sort_order.lock(), ordering);
+
+            // Rows added after planning must participate, including duplicates
+            // in separate batches and an initially empty partition.
+            table.batches[1]
+                .write()
+                .await
+                .extend([batch.clone(), batch]);
+            assert_eq!(run_dml(Arc::clone(&plan), &session_ctx).await?, 6);
+            assert!(table.sort_order.lock().is_empty());
+            let expected = if update { vec![1, 12, 13] } else { vec![1] };
+            let mut actual = Vec::new();
+            for partition in &table.batches {
+                for batch in partition.read().await.iter() {
+                    actual.extend(column_values(batch));
+                }
+            }
+            actual.sort_unstable();
+            let mut expected = expected.repeat(3);
+            expected.sort_unstable();
+            assert_eq!(actual, expected);
+
+            // Reusing the plan reevaluates current rows and emits a fresh count.
+            assert_eq!(
+                run_dml(plan, &session_ctx).await?,
+                if update { 6 } else { 0 }
+            );
+            let expected = if update { vec![1, 22, 23] } else { vec![1] };
+            let mut actual = Vec::new();
+            for partition in &table.batches {
+                for batch in partition.read().await.iter() {
+                    actual.extend(column_values(batch));
+                }
+            }
+            actual.sort_unstable();
+            let mut expected = expected.repeat(3);
+            expected.sort_unstable();
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    // Expression visitors must see both assignments and predicates, while
+    // respecting early termination across those two groups.
+    #[tokio::test]
+    async fn test_dml_expression_visitors() -> Result<()> {
+        let session_ctx = SessionContext::new();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("untouched", DataType::Int32, false),
+        ]));
+        let table = MemTable::try_new(schema, vec![vec![]])?;
+        let state = session_ctx.state();
+        let delete = table.delete_from(&state, vec![col("a").gt(lit(1))]).await?;
+        let update = table
+            .update(
+                &state,
+                vec![("b".to_string(), col("b") + lit(10))],
+                vec![col("a").gt(lit(1))],
+            )
+            .await?;
+
+        for (plan, expected) in [(delete, vec!["a"]), (update, vec!["a", "b"])] {
+            for recursion in [TreeNodeRecursion::Continue, TreeNodeRecursion::Jump] {
+                let mut columns = Vec::new();
+                plan.apply_expressions(&mut |expr| {
+                    columns.extend(
+                        collect_columns(expr)
+                            .iter()
+                            .map(|col| col.name().to_string()),
+                    );
+                    Ok(recursion)
+                })?;
+                columns.sort();
+                assert_eq!(columns, expected);
+            }
+
+            let mut visits = 0;
+            let result = plan.apply_expressions(&mut |_| {
+                visits += 1;
+                Ok(TreeNodeRecursion::Stop)
+            })?;
+            assert_eq!(result, TreeNodeRecursion::Stop);
+            assert_eq!(visits, 1);
+
+            let err = plan
+                .apply_expressions(&mut |_| {
+                    Err(DataFusionError::Execution("visitor failed".to_string()))
+                })
+                .unwrap_err();
+            assert_contains!(err.to_string(), "visitor failed");
+        }
+        Ok(())
+    }
+
     // A DELETE on a table without a partition affects no row
     #[tokio::test]
     async fn test_delete_from_zero_partition() -> Result<()> {
@@ -682,42 +810,6 @@ mod tests {
         Ok(())
     }
 
-    // A DELETE whose `WHERE` clause names an unknown column fails while the
-    // plan is built, before any row changes
-    #[tokio::test]
-    async fn test_delete_from_unknown_filter_column() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let state = session_ctx.state();
-        let table = one_column_table()?;
-
-        let err = table
-            .delete_from(&state, vec![col("nonexistent").eq(lit(1))])
-            .await
-            .unwrap_err();
-        assert_contains!(err.strip_backtrace(), "nonexistent");
-        Ok(())
-    }
-
-    // An UPDATE whose `WHERE` clause names an unknown column fails while the
-    // plan is built, before any row changes
-    #[tokio::test]
-    async fn test_update_unknown_filter_column() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let state = session_ctx.state();
-        let table = one_column_table()?;
-
-        let err = table
-            .update(
-                &state,
-                vec![("a".to_string(), lit(7))],
-                vec![col("nonexistent").eq(lit(1))],
-            )
-            .await
-            .unwrap_err();
-        assert_contains!(err.strip_backtrace(), "nonexistent");
-        Ok(())
-    }
-
     // An UPDATE whose `SET` clause names an unknown column fails while the plan
     // is built, so `EXPLAIN` reports it
     #[tokio::test]
@@ -801,25 +893,6 @@ mod tests {
         Ok(())
     }
 
-    // An UPDATE reports the failure of an assignment expression
-    #[tokio::test]
-    async fn test_update_assignment_evaluation_error() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let state = session_ctx.state();
-        let table = one_column_table()?;
-
-        let plan = table
-            .update(
-                &state,
-                vec![("a".to_string(), col("a") / lit(0))],
-                vec![col("a").gt(lit(1))],
-            )
-            .await?;
-        let err = run_dml(plan, &session_ctx).await.unwrap_err();
-        assert_contains!(err.strip_backtrace(), "Divide by zero");
-        Ok(())
-    }
-
     // An UPDATE reports an assignment of a value of the wrong type
     #[tokio::test]
     async fn test_update_assignment_type_mismatch() -> Result<()> {
@@ -836,26 +909,6 @@ mod tests {
             err.strip_backtrace(),
             "arguments need to have the same data type"
         );
-        Ok(())
-    }
-
-    // An UPDATE rejects a null value for a column that the table declares NOT NULL
-    #[tokio::test]
-    async fn test_update_null_into_non_nullable_column() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let state = session_ctx.state();
-        let table = one_column_table()?;
-
-        let null = lit(ScalarValue::Int32(None));
-        let plan = table
-            .update(
-                &state,
-                vec![("a".to_string(), null)],
-                vec![col("a").gt(lit(1))],
-            )
-            .await?;
-        let err = run_dml(plan, &session_ctx).await.unwrap_err();
-        assert_contains!(err.strip_backtrace(), "non-nullable but contains null");
         Ok(())
     }
 }

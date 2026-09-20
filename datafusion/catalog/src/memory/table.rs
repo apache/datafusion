@@ -498,10 +498,10 @@ fn dml_plan_properties(schema: &SchemaRef) -> Arc<PlanProperties> {
 }
 
 /// A single row holding the number of rows the statement changed.
-fn count_batch(schema: &SchemaRef, rows_affected: u64) -> Result<RecordBatch> {
+fn count_batch(schema: SchemaRef, rows_affected: u64) -> Result<RecordBatch> {
     let count_array = UInt64Array::from(vec![rows_affected]);
     Ok(RecordBatch::try_new(
-        Arc::clone(schema),
+        schema,
         vec![Arc::new(count_array) as ArrayRef],
     )?)
 }
@@ -621,16 +621,18 @@ impl ExecutionPlan for MemDeleteExec {
         let partitions = self.partitions.clone();
         let sort_order = Arc::clone(&self.sort_order);
         let predicates = self.predicates.clone();
-        let schema = Arc::clone(&self.schema);
-        let count_schema = Arc::clone(&self.schema);
+        let schema = self.schema();
 
         let stream = futures::stream::once(async move {
             let rows_affected =
                 delete_rows(&partitions, &sort_order, &predicates).await?;
-            count_batch(&count_schema, rows_affected)
+            count_batch(schema, rows_affected)
         });
 
-        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.schema(),
+            stream,
+        )))
     }
 
     fn apply_expressions(
@@ -827,8 +829,7 @@ impl ExecutionPlan for MemUpdateExec {
         let table_schema = Arc::clone(&self.table_schema);
         let set_exprs = self.set_exprs.clone();
         let predicates = self.predicates.clone();
-        let schema = Arc::clone(&self.schema);
-        let count_schema = Arc::clone(&self.schema);
+        let schema = self.schema();
 
         let stream = futures::stream::once(async move {
             let rows_affected = update_rows(
@@ -839,10 +840,13 @@ impl ExecutionPlan for MemUpdateExec {
                 &predicates,
             )
             .await?;
-            count_batch(&count_schema, rows_affected)
+            count_batch(schema, rows_affected)
         });
 
-        Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.schema(),
+            stream,
+        )))
     }
 
     fn apply_expressions(
