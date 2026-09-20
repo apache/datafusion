@@ -183,9 +183,10 @@ use crate::spill::spill_manager::SpillManager;
 /// 3. For each subsequent left chunk, the right side is re-read from the spill file
 ///
 /// The fallback is triggered automatically when the initial in-memory load
-/// fails with `ResourcesExhausted` and disk spilling is available. Each
-/// output partition independently re-executes the left child and manages
-/// its own spill state.
+/// fails with `ResourcesExhausted` and disk spilling is available. The left
+/// child is executed once and spilled to one file during that same load, which
+/// every output partition then reads back; each partition spills its own right
+/// input.
 ///
 /// All join types are supported. For RIGHT/FULL/RIGHT SEMI/RIGHT ANTI/
 /// RIGHT MARK joins, a global right-side bitmap (indexed by right batch
@@ -749,36 +750,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
         let probe_side_data = self.right.execute(partition, Arc::clone(&context))?;
 
-        // Determine if OOM fallback to memory-limited mode is possible.
-        // Condition: disk manager supports temp files (needed for spilling).
-        //
-        // For join types that emit unmatched left rows in the final output
-        // (LEFT, LEFT SEMI, LEFT ANTI, LEFT MARK, FULL), the fallback path
-        // shares per-chunk `JoinLeftData` (visited bitmap + probe-thread
-        // counter) across all right-side partitions via
-        // [`FallbackCoordinator`], so left-side tracking is coordinated
-        // exactly as in the single-pass path.
-        //
-        // That coordination assumes all right partitions run in the same
-        // process. Distributed engines run each partition as an independent
-        // task with its own coordinator, so the shared probe-thread counter
-        // would never reach zero and the fallback would stall. When
-        // `enable_nlj_coordinated_fallback` is disabled, such engines opt
-        // out of the coordinated fallback for the affected join types
-        // (left-emitting joins with a multi-partition right side); those cases
-        // use `SpillState::Disabled` and fail with resource exhaustion under
-        // memory pressure instead of deadlocking. Single-partition and
-        // non-left-emitting joins are always safe and keep the fallback.
-        let coordinated_fallback_disabled = !context
-            .session_config()
-            .options()
-            .execution
-            .enable_nlj_coordinated_fallback
-            && need_produce_result_in_final(self.join_type)
-            && right_partition_count > 1;
-        let spill_state = if context.runtime_env().disk_manager.tmp_files_enabled()
-            && !coordinated_fallback_disabled
-        {
+        let spill_state = if can_spill {
             SpillState::Pending {
                 task_context: Arc::clone(&context),
                 fallback_coordinator: Arc::clone(&self.fallback_coordinator),
@@ -2256,8 +2228,6 @@ pub(crate) struct NestedLoopJoinStream {
     /// Should we go back to `BufferingLeft` state again after `EmitLeftUnmatched`
     /// state is over.
     left_exhausted: bool,
-    /// If we can buffer all left data in one pass (false means memory-limited multi-pass)
-    left_buffered_in_one_pass: bool,
 
     // Probe(right) side
     // -----------------
@@ -2641,7 +2611,6 @@ impl NestedLoopJoinStream {
             left_probe_idx: 0,
             left_emit_idx: 0,
             left_exhausted: false,
-            left_buffered_in_one_pass: true,
             handled_empty_output: false,
             should_track_unmatched_right: need_produce_right_in_final(join_type),
             spill_state,
@@ -2832,7 +2801,6 @@ impl NestedLoopJoinStream {
                 self.metrics.join_metrics.build_input_rows.add(n_rows);
                 self.buffered_left_data = Some(data);
                 self.left_exhausted = is_last;
-                self.left_buffered_in_one_pass = is_last && active.next_chunk_index == 0;
 
                 active.right_batch_index = 0;
                 match active.right_input.open_pass() {
@@ -3655,18 +3623,13 @@ impl NestedLoopJoinStream {
         let left_batch_sliced =
             left_data.batch().slice(start_idx, end_idx - start_idx)?;
 
-        // Can this be more efficient?
-        let mut bitmap_sliced = BooleanBufferBuilder::new(end_idx - start_idx);
-        bitmap_sliced.append_n(end_idx - start_idx, false);
-        let bitmap = left_data.bitmap().lock();
-        for i in start_idx..end_idx {
-            assert!(
-                i - start_idx < bitmap_sliced.capacity(),
-                "DBG: {start_idx}, {end_idx}"
-            );
-            bitmap_sliced.set_bit(i - start_idx, bitmap.get_bit(i));
-        }
-        let bitmap_sliced = BooleanArray::new(bitmap_sliced.finish(), None);
+        let bitmap_sliced = {
+            let bitmap = left_data.bitmap().lock();
+            BooleanBuffer::collect_bool(end_idx - start_idx, |i| {
+                bitmap.get_bit(start_idx + i)
+            })
+        };
+        let bitmap_sliced = BooleanArray::new(bitmap_sliced, None);
 
         let right_schema = self
             .right_data
