@@ -453,7 +453,8 @@ impl ScalarUDFImpl for DateTruncFunc {
     }
 
     fn supports_range_partitioning_analysis(&self, argument_types: &[DataType]) -> bool {
-        // Named timezone transitions can make date_trunc non-monotonic (#25353).
+        // Across an America/Goose_Bay transition, ascending epoch seconds
+        // 562129259 < 562129260 truncate to 562129200 > 562125600.
         // Keep the audited domain to timezone-less timestamp columns.
         let [precision, timestamp] = argument_types else {
             return false;
