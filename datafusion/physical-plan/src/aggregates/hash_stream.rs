@@ -136,7 +136,7 @@ use crate::{InputOrderMode, SendableRecordBatchStream, metrics};
 /// 3. Perform a sort-preserving merge of all spill files and feed the merged output
 ///    into an ordered streaming aggregation, which ensures bounded memory usage and
 ///    evaluates the final result.
-///    - [`OrderedFinalAggregateStream`] is reused for the streaming aggregation.
+///    - [`OrderedFinalAggregateStream`](super::ordered_final_stream::OrderedFinalAggregateStream) is reused for the streaming aggregation.
 pub(crate) struct PartialHashAggregateStream {
     /// Output schema: group columns followed by partial aggregate state columns.
     schema: SchemaRef,
