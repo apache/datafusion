@@ -2270,8 +2270,6 @@ pub(crate) fn matchable_join_keys(
     join_key_arrays: &[ArrayRef],
     null_equality: NullEquality,
 ) -> Option<NullBuffer> {
-    // Prepared builds admit these temporary masks in
-    // hash_join::exec::prepared::hash_scratch_bytes; keep its bound in sync.
     match null_equality {
         NullEquality::NullEqualsNothing => {
             let logical_nulls: Vec<_> = join_key_arrays

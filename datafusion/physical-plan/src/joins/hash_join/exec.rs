@@ -310,7 +310,6 @@ struct JoinBuildData {
 
 /// A build lease and mutable bookkeeping for one join execution.
 pub(super) struct JoinLeftData {
-    build: Arc<JoinBuildData>,
     /// Hash table over correlated scope keys for correlated null-aware joins.
     ///
     /// Key 0 is the scalar `NOT IN` value key and keys 1..N are correlated
@@ -330,6 +329,8 @@ pub(super) struct JoinLeftData {
     probe_completion: ProbeCompletion,
     /// Whether the smaller RightAnti subquery contains a NULL key.
     pub(super) build_side_has_null: bool,
+    // Keep build buffers alive until mutable probe state has been dropped.
+    build: Arc<JoinBuildData>,
     // Mutable bitmap and null-aware state never belong to a reusable build.
     _probe_reservation: MemoryReservation,
 }
@@ -500,9 +501,6 @@ impl HashJoinExecBuilder {
 
     /// Set expressions to join on.
     pub fn with_on(mut self, on: Vec<(PhysicalExprRef, PhysicalExprRef)>) -> Self {
-        if self.exec.prepared_build.is_some() {
-            self.reset_prepared_runtime_state();
-        }
         self.exec.on = on;
         self.preserve_properties = false;
         self
@@ -548,28 +546,17 @@ impl HashJoinExecBuilder {
             children.len() == 2,
             "wrong number of children passed into `HashJoinExecBuilder`"
         );
-        if self.exec.prepared_build.is_some() {
-            if !Arc::ptr_eq(&self.exec.left, &children[0]) {
-                return plan_err!(
-                    "Cannot replace the build child after attaching a prepared hash-join build"
-                );
-            }
-            if !Arc::ptr_eq(&self.exec.right, &children[1]) {
-                self.reset_prepared_runtime_state();
-            }
+        if self.exec.prepared_build.is_some()
+            && !Arc::ptr_eq(&self.exec.left, &children[0])
+        {
+            return plan_err!(
+                "Cannot replace the build child after attaching a prepared hash-join build"
+            );
         }
         self.preserve_properties &= has_same_children_properties(&self.exec, &children)?;
         self.exec.right = children.swap_remove(1);
         self.exec.left = children.swap_remove(0);
         Ok(self)
-    }
-
-    fn reset_prepared_runtime_state(&mut self) {
-        self.exec.left_fut = Default::default();
-        self.exec.metrics = ExecutionPlanMetricsSet::new();
-        if let Some(filter) = &mut self.exec.dynamic_filter {
-            filter.build_accumulator = OnceLock::new();
-        }
     }
 
     /// Reset task-local runtime state while retaining the immutable prepared build.
@@ -588,12 +575,17 @@ impl HashJoinExecBuilder {
     /// Build resulting execution plan.
     pub fn build(self) -> Result<HashJoinExec> {
         let Self {
-            exec,
+            mut exec,
             preserve_properties,
         } = self;
 
         if let Some(prepared) = &exec.prepared_build {
             prepared.validate(&exec)?;
+            exec.left_fut = Default::default();
+            exec.metrics = ExecutionPlanMetricsSet::new();
+            if let Some(filter) = &mut exec.dynamic_filter {
+                filter.build_accumulator = OnceLock::new();
+            }
         }
         // Validate null_aware flag
         exec.null_aware_mode()?;
@@ -1697,10 +1689,6 @@ impl ExecutionPlan for HashJoinExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        if let Some(prepared) = &self.prepared_build {
-            // Public fields such as `on` can change after builder validation.
-            prepared.validate(self)?;
-        }
         let on_left = self
             .on
             .iter()
@@ -1763,64 +1751,62 @@ impl ExecutionPlan for HashJoinExec {
 
         let null_aware = self.null_aware_mode()?;
 
-        let left_fut = if let Some(prepared) = &self.prepared_build {
-            let prepared = Arc::clone(prepared);
-            self.left_fut.try_once(|| {
-                Ok(async move { Ok(prepared.probe_data(right_partitions)) })
-            })?
-        } else {
-            match self.mode {
-                PartitionMode::CollectLeft => self.left_fut.try_once(|| {
-                    let left_stream = self.left.execute(0, Arc::clone(&context))?;
+        let left_fut = match (&self.prepared_build, self.mode) {
+            (Some(prepared), _) => {
+                let prepared = Arc::clone(prepared);
+                self.left_fut.try_once(|| {
+                    Ok(async move { Ok(prepared.probe_data(right_partitions)) })
+                })?
+            }
+            (None, PartitionMode::CollectLeft) => self.left_fut.try_once(|| {
+                let left_stream = self.left.execute(0, Arc::clone(&context))?;
 
-                    let reservation = MemoryConsumer::new("HashJoinInput")
+                let reservation =
+                    MemoryConsumer::new("HashJoinInput").register(context.memory_pool());
+
+                Ok(collect_left_input(
+                    self.random_state.random_state().clone(),
+                    left_stream,
+                    on_left.clone(),
+                    join_metrics.clone(),
+                    reservation,
+                    need_produce_result_in_final(self.join_type),
+                    right_partitions,
+                    enable_dynamic_filter_pushdown,
+                    Arc::clone(context.session_config().options()),
+                    self.null_equality,
+                    null_aware,
+                    array_map_created_count,
+                    BuildMode::Ordinary,
+                ))
+            })?,
+            (None, PartitionMode::Partitioned) => {
+                let left_stream = self.left.execute(partition, Arc::clone(&context))?;
+
+                let reservation =
+                    MemoryConsumer::new(format!("HashJoinInput[{partition}]"))
                         .register(context.memory_pool());
-
-                    Ok(collect_left_input(
-                        self.random_state.random_state().clone(),
-                        left_stream,
-                        on_left.clone(),
-                        join_metrics.clone(),
-                        reservation,
-                        need_produce_result_in_final(self.join_type),
-                        self.right().output_partitioning().partition_count(),
-                        enable_dynamic_filter_pushdown,
-                        Arc::clone(context.session_config().options()),
-                        self.null_equality,
-                        null_aware,
-                        array_map_created_count,
-                        BuildMode::Ordinary,
-                    ))
-                })?,
-                PartitionMode::Partitioned => {
-                    let left_stream =
-                        self.left.execute(partition, Arc::clone(&context))?;
-
-                    let reservation =
-                        MemoryConsumer::new(format!("HashJoinInput[{partition}]"))
-                            .register(context.memory_pool());
-                    OnceFut::new(collect_left_input(
-                        self.random_state.random_state().clone(),
-                        left_stream,
-                        on_left.clone(),
-                        join_metrics.clone(),
-                        reservation,
-                        need_produce_result_in_final(self.join_type),
-                        1,
-                        enable_dynamic_filter_pushdown,
-                        Arc::clone(context.session_config().options()),
-                        self.null_equality,
-                        null_aware,
-                        array_map_created_count,
-                        BuildMode::Ordinary,
-                    ))
-                }
-                PartitionMode::Auto => {
-                    return plan_err!(
-                        "Invalid HashJoinExec, unsupported PartitionMode {:?} in execute()",
-                        PartitionMode::Auto
-                    );
-                }
+                OnceFut::new(collect_left_input(
+                    self.random_state.random_state().clone(),
+                    left_stream,
+                    on_left.clone(),
+                    join_metrics.clone(),
+                    reservation,
+                    need_produce_result_in_final(self.join_type),
+                    1,
+                    enable_dynamic_filter_pushdown,
+                    Arc::clone(context.session_config().options()),
+                    self.null_equality,
+                    null_aware,
+                    array_map_created_count,
+                    BuildMode::Ordinary,
+                ))
+            }
+            (None, PartitionMode::Auto) => {
+                return plan_err!(
+                    "Invalid HashJoinExec, unsupported PartitionMode {:?} in execute()",
+                    PartitionMode::Auto
+                );
             }
         };
 
@@ -1873,7 +1859,7 @@ impl ExecutionPlan for HashJoinExec {
     }
 
     fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
-        let mut requests = match (partition, self.mode) {
+        match (partition, self.mode) {
             // Left side is broadcast, so it always needs overall stats
             // Right side is partitioned, so it needs per-partition stats
             (Some(_), PartitionMode::CollectLeft) => {
@@ -1891,12 +1877,7 @@ impl ExecutionPlan for HashJoinExec {
             (Some(_), PartitionMode::Auto) => {
                 vec![ChildStats::At(None), ChildStats::At(None)]
             }
-        };
-        if self.prepared_build.is_some() {
-            // The left child is only a schema placeholder for a prepared build.
-            requests[0] = ChildStats::Skip;
         }
-        requests
     }
 
     fn statistics_from_inputs(
@@ -3075,23 +3056,11 @@ async fn collect_left_input(
         should_compute_dynamic_filters || is_phj_candidate,
     )?;
 
-    let mut concat_value_bytes = if prepared {
-        vec![0; schema.fields().len()]
-    } else {
-        vec![]
-    };
     let mut copy_bytes = 0usize;
     let mut max_batch_rows = 0;
     while let Some(batch) = left_stream.try_next().await? {
         if prepared {
-            prepared::check_byte_concat_sizes(&batch, &mut concat_value_bytes)?;
-            copy_bytes = copy_bytes
-                .checked_add(prepared::prepared_copy_bytes(&batch)?)
-                .ok_or_else(|| {
-                    datafusion_common::exec_datafusion_err!(
-                        "Prepared hash-join copy size overflow"
-                    )
-                })?;
+            copy_bytes += prepared::prepared_copy_bytes(&batch)?;
         }
         max_batch_rows = max_batch_rows.max(batch.num_rows());
         if let Some(accumulators) = &mut state.bounds_accumulators {
@@ -3188,12 +3157,16 @@ async fn collect_left_input(
 
         let scratch_reservation = reservation.new_empty();
         if prepared {
-            scratch_reservation.try_grow(prepared::hash_scratch_bytes(
-                max_batch_rows,
-                &on_left,
-                &schema,
-                null_equality,
-            )?)?;
+            // Allow one logical null mask per key plus the combined mask.
+            let masks = if null_equality == NullEquality::NullEqualsNothing {
+                on_left.len() + 1
+            } else {
+                0
+            };
+            scratch_reservation.try_grow(
+                max_batch_rows * size_of::<u64>()
+                    + (max_batch_rows.div_ceil(8) + 64) * masks,
+            )?;
         }
         // The maximum is known: avoid geometric growth and its excess capacity.
         let mut hashes_buffer = Vec::with_capacity(max_batch_rows);
@@ -3387,16 +3360,8 @@ async fn collect_left_input(
     if prepared {
         drop(batches);
         let retained = RecordBatchMemoryCounter::new().count_batch(&batch);
-        let allowance = input_bytes.checked_add(copy_bytes).ok_or_else(|| {
-            datafusion_common::exec_datafusion_err!(
-                "Prepared hash-join payload size overflow"
-            )
-        })?;
-        if retained > allowance {
-            return internal_err!(
-                "Prepared hash-join concat exceeded its admitted copy bound"
-            );
-        }
+        let allowance = input_bytes + copy_bytes;
+        debug_assert!(retained <= allowance);
         reservation.shrink(allowance - retained);
     }
 

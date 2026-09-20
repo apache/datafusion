@@ -19,8 +19,6 @@
 
 use super::*;
 use crate::spill::spill_manager::GetSlicedSize;
-use arrow::array::{Array, AsArray};
-use datafusion_common::exec_datafusion_err;
 use datafusion_execution::memory_pool::MemoryPool;
 
 /// An immutable, fully prepared broadcast build, independent of any probe task.
@@ -76,10 +74,8 @@ impl PreparedHashJoinBuild {
             visited_indices_bitmap: Mutex::new(BooleanBufferBuilder::new(0)),
             null_indices_bitmap: Mutex::new(BooleanBufferBuilder::new(0)),
             probe_completion: ProbeCompletion::new(probe_threads),
-            build_side_has_null: false,
-            // INNER needs no bitmap. Any future mutable probe allocation must
-            // use the consuming task's pool instead of the durable build pool.
             _probe_reservation: self.build.reservation.new_empty(),
+            build_side_has_null: false,
         }
     }
 
@@ -96,15 +92,8 @@ impl PreparedHashJoinBuild {
             );
         }
         if let Some(filter) = &join.dynamic_filter {
-            let filter_keys = filter.filter.children();
-            if filter_keys.len() != join.on.len()
-                || filter_keys
-                    .iter()
-                    .zip(&join.on)
-                    .any(|(filter_key, (_, probe_key))| {
-                        filter_key.as_ref() != probe_key.as_ref()
-                    })
-            {
+            let probe_keys = join.on.iter().map(|(_, right)| right);
+            if !filter.filter.children().into_iter().eq(probe_keys) {
                 return plan_err!(
                     "Prepared hash-join dynamic filter keys do not match probe keys"
                 );
@@ -130,14 +119,10 @@ impl HashJoinExec {
     /// * Coordinate concurrent preparation, publication, and invalidation in the
     ///   embedding executor. This method does not provide a cache.
     ///
-    /// Eligibility and stream schema are checked before polling. Errors and
-    /// cancellation drop the work and its reservations without publishing a build.
-    /// `config` controls perfect-map and dynamic-filter choices. UTF-8 and
-    /// fixed-size binary keys use hash membership to avoid copying byte payloads
-    /// into range bounds and IN-list literals. Numeric IN-lists also allocate
-    /// per-row literals when published; that consumer-local filter state is
-    /// outside this reservation. The IN-list size setting measures input array
-    /// bytes, not the resulting expression's heap usage.
+    /// Errors and cancellation release unfinished work. `config` controls
+    /// perfect-map and dynamic-filter choices. Byte keys use hash membership
+    /// to avoid copying payloads into range bounds and IN-list literals.
+    /// Consumer-local dynamic-filter allocations are outside this reservation.
     ///
     /// # Example
     ///
@@ -240,70 +225,9 @@ pub(super) fn prepared_copy_bytes(batch: &RecordBatch) -> Result<usize> {
         .iter()
         .map(|array| array.to_data().buffers().len() + 1)
         .sum::<usize>();
-    let validity = batch.num_rows().div_ceil(8).checked_mul(missing_validity);
-    batch
-        .get_sliced_size()?
-        .checked_add(validity.ok_or_else(|| {
-            exec_datafusion_err!("Prepared hash-join copy size overflow")
-        })?)
-        .and_then(|bytes| buffers.checked_mul(64)?.checked_add(bytes))
-        .ok_or_else(|| exec_datafusion_err!("Prepared hash-join copy size overflow"))
-}
-
-/// Admit hashing and the logical validity masks created by `matchable_join_keys`.
-/// NullArray materializes its mask; combining keys can retain an old and a new
-/// union result. Keep this bound in sync with that helper's temporary buffers.
-pub(super) fn hash_scratch_bytes(
-    rows: usize,
-    on_left: &[PhysicalExprRef],
-    schema: &Schema,
-    null_equality: NullEquality,
-) -> Result<usize> {
-    let mask_count = if null_equality == NullEquality::NullEqualsNothing {
-        let null_keys = on_left
-            .iter()
-            .filter(|key| {
-                key.downcast_ref::<Column>().is_some_and(|column| {
-                    schema.field(column.index()).data_type() == &DataType::Null
-                })
-            })
-            .count();
-        null_keys + if on_left.len() > 1 { 2 } else { 0 }
-    } else {
-        0
-    };
-    let validity_bytes = rows
-        .div_ceil(8)
-        .checked_add(64)
-        .and_then(|bytes| bytes.checked_mul(mask_count));
-    rows.checked_mul(size_of::<u64>())
-        .and_then(|bytes| validity_bytes.and_then(|validity| bytes.checked_add(validity)))
-        .ok_or_else(|| exec_datafusion_err!("Prepared hash-join scratch size overflow"))
-}
-
-/// Include values hidden by nulls but exclude bytes outside a sliced array.
-fn utf8_value_span(array: &dyn Array) -> usize {
-    let offsets = array.as_string::<i32>().value_offsets();
-    (offsets[offsets.len() - 1] - offsets[0]) as usize
-}
-
-/// Add `batch`'s byte-column spans to `totals`, one entry per schema column, before
-/// an eventual single-batch concat. Reject offset overflow before allocating
-/// the value buffer; fixed-width columns leave their totals unchanged.
-pub(super) fn check_byte_concat_sizes(
-    batch: &RecordBatch,
-    totals: &mut [usize],
-) -> Result<()> {
-    for (array, total) in batch.columns().iter().zip(totals) {
-        if matches!(array.data_type(), DataType::Utf8) {
-            *total = total.checked_add(utf8_value_span(array.as_ref()))
-                .filter(|&sum| i32::try_from(sum).is_ok())
-                .ok_or_else(|| exec_datafusion_err!(
-                    "Prepared hash-join UTF-8 column exceeds its offset limit; a compact build is required"
-                ))?;
-        }
-    }
-    Ok(())
+    Ok(batch.get_sliced_size()?
+        + batch.num_rows().div_ceil(8) * missing_validity
+        + buffers * 64)
 }
 
 impl HashJoinExecBuilder {
@@ -330,18 +254,14 @@ impl HashJoinExecBuilder {
         // This removes the ignored child's ordering/equivalences and preserves
         // its identity through plan resets.
         self.exec.left = Arc::new(crate::empty::EmptyExec::new(self.exec.left.schema()));
-        self.reset_prepared_runtime_state();
         self.exec.prepared_build = Some(prepared);
         self.preserve_properties = false;
         self
     }
 }
 
-/// Validate the narrow prepared-build contract and return ordered build key
-/// indices. Reads schemas/expressions only; invalid columns are rejected before
-/// any array access. Matching probe types preserve hashing and equality semantics.
-/// INNER joins need no shared build-match bitmap. Residual predicates are
-/// evaluated by each consumer after hash lookup.
+/// Validate eligibility and return build-key indices in join-key order.
+/// INNER joins need no shared build-match bitmap.
 fn prepared_key_indices(join: &HashJoinExec) -> Result<Vec<usize>> {
     if join.join_type != JoinType::Inner
         || join.mode != PartitionMode::CollectLeft
@@ -375,15 +295,7 @@ fn prepared_key_indices(join: &HashJoinExec) -> Result<Vec<usize>> {
             let Some(r) = r.downcast_ref::<Column>() else {
                 return plan_err!("Prepared hash-join builds require direct column keys");
             };
-            let Some(left_type) = left.fields().get(l.index()).map(|f| f.data_type())
-            else {
-                return plan_err!("Prepared hash-join build key is out of bounds");
-            };
-            let Some(right_type) = right.fields().get(r.index()).map(|f| f.data_type())
-            else {
-                return plan_err!("Prepared hash-join probe key is out of bounds");
-            };
-            if left_type != right_type {
+            if l.data_type(&left)? != r.data_type(&right)? {
                 return plan_err!("Prepared hash-join key types must match");
             }
             Ok(l.index())

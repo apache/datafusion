@@ -23,9 +23,7 @@
 //! `cold` includes preparation; `warm` retains a build across iterations.
 //! Input generation is excluded, but plan construction and draining outputs are
 //! timed. This does not measure Comet decoding, its cache, or its single-flight
-//! wait. Printed memory samples are DataFusion pool reservations, not RSS or
-//! total allocation. They do not separately charge the pre-created input
-//! fixture or output batches. Sparse integer keys avoid perfect-hash selection.
+//! wait. Sparse integer keys avoid perfect-hash selection.
 
 use std::hint::black_box;
 use std::sync::Arc;
@@ -37,10 +35,6 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::{JoinType, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
-use datafusion_execution::memory_pool::{
-    MemoryPool, PeakRecordingPool, UnboundedMemoryPool,
-};
-use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::joins::{
@@ -227,17 +221,7 @@ fn benchmark(c: &mut Criterion) {
             let workload = Workload::new(rows, strings);
             for consumers in [1, 4] {
                 for mode in [Mode::Rebuild, Mode::Cold, Mode::Warm] {
-                    let pool = Arc::new(PeakRecordingPool::new(Arc::new(
-                        UnboundedMemoryPool::default(),
-                    )));
-                    let context = Arc::new(
-                        TaskContext::default().with_runtime(
-                            RuntimeEnvBuilder::new()
-                                .with_memory_pool(Arc::clone(&pool) as _)
-                                .build_arc()
-                                .unwrap(),
-                        ),
-                    );
+                    let context = Arc::new(TaskContext::default());
                     let warm = matches!(mode, Mode::Warm).then(|| {
                         runtime
                             .block_on(
@@ -245,7 +229,6 @@ fn benchmark(c: &mut Criterion) {
                             )
                             .unwrap()
                     });
-                    pool.reset_peak();
                     let output = runtime
                         .block_on(run(
                             &workload,
@@ -263,23 +246,6 @@ fn benchmark(c: &mut Criterion) {
                         )
                     );
                     let case = format!("{key_type}/{rows}/{consumers}_consumers");
-                    eprintln!(
-                        "pool reservation {case}/{}: peak={} bytes, retained={} bytes (not RSS)",
-                        mode.name(),
-                        pool.peak_reserved(),
-                        pool.reserved()
-                    );
-                    drop(warm);
-                    assert_eq!(pool.reserved(), 0);
-                    // Keep recording overhead out of the timing measurement.
-                    let context = Arc::new(TaskContext::default());
-                    let warm = matches!(mode, Mode::Warm).then(|| {
-                        runtime
-                            .block_on(
-                                workload.prepare(&workload.join().unwrap(), &context),
-                            )
-                            .unwrap()
-                    });
                     group.bench_function(BenchmarkId::new(mode.name(), case), |b| {
                         b.iter(|| {
                             black_box(
@@ -295,8 +261,6 @@ fn benchmark(c: &mut Criterion) {
                             )
                         });
                     });
-                    drop(warm);
-                    assert_eq!(context.memory_pool().reserved(), 0);
                 }
             }
         }

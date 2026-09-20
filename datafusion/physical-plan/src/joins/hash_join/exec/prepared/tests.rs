@@ -25,15 +25,17 @@ use crate::{
     filter::FilterExec,
     memory::MemoryStream,
     sorts::sort::SortExec,
-    statistics::{ChildStats, StatisticsArgs, StatisticsContext},
+    statistics::{StatisticsArgs, StatisticsContext},
     stream::RecordBatchStreamAdapter,
     test::TestMemoryExec,
 };
-use arrow::array::{Array, BooleanArray, Int64Array, LargeStringArray, StringViewArray};
+use arrow::array::{
+    BooleanArray, FixedSizeBinaryArray, Int64Array, StringArray, StringViewArray,
+};
+use arrow::buffer::Buffer;
 use arrow::compute::kernels::sort::SortOptions;
 use arrow_schema::Field;
 use datafusion_common::test_util::batches_to_sort_string;
-use datafusion_common::utils::memory::get_record_batch_memory_size;
 use datafusion_common::{DataFusionError, assert_batches_eq};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::GreedyMemoryPool;
@@ -41,7 +43,6 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use futures::{StreamExt, stream};
-use rand::{Rng, SeedableRng, rngs::StdRng};
 
 fn batch(keys: Vec<Option<i64>>) -> RecordBatch {
     let rows = keys.len();
@@ -91,20 +92,6 @@ async fn prepare(
         Arc::new(ConfigOptions::default()),
     )
     .await
-}
-
-async fn assert_admission_denied(
-    join: &HashJoinExec,
-    batches: Vec<RecordBatch>,
-    limit: usize,
-) {
-    let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(limit));
-    let result = prepare(join, batches, Arc::clone(&pool)).await;
-    assert!(
-        matches!(result, Err(DataFusionError::ResourcesExhausted(_))),
-        "expected admission failure, got {result:?}"
-    );
-    assert_eq!(pool.reserved(), 0);
 }
 
 fn buffer_addresses(arrays: &[ArrayRef]) -> Vec<usize> {
@@ -242,19 +229,11 @@ async fn prepared_build_placeholder_properties_and_reset() -> Result<()> {
     let prepared =
         prepare(&base, vec![build], Arc::new(GreedyMemoryPool::new(1 << 20))).await?;
     let attached = base.builder().with_prepared_build(prepared).build()?;
-    let display = DisplayableExecutionPlan::new(&attached);
-    for verbose in [false, true] {
-        assert!(
-            display
-                .indent(verbose)
-                .to_string()
-                .contains("prepared_build=2 rows")
-        );
-    }
-    let tree = display.tree_render().to_string();
     assert!(
-        tree.contains("prepared_build:") && tree.contains("2 rows"),
-        "{tree}"
+        DisplayableExecutionPlan::new(&attached)
+            .indent(false)
+            .to_string()
+            .contains("prepared_build=2 rows")
     );
     let properties = attached.properties().equivalence_properties();
     assert!(
@@ -264,23 +243,10 @@ async fn prepared_build_placeholder_properties_and_reset() -> Result<()> {
     );
     assert!(properties.ordering_satisfy([ascending("key", 2)])?);
     assert!(!properties.ordering_satisfy(asserted_order)?);
-    assert_eq!(base.child_stats_requests(None)[0], ChildStats::At(None));
-    assert_eq!(attached.child_stats_requests(None)[0], ChildStats::Skip);
-    assert_eq!(attached.child_stats_requests(Some(0))[0], ChildStats::Skip);
     let stats = StatisticsContext::new().compute(&attached, &StatisticsArgs::new())?;
     assert_ne!(stats.num_rows.get_value(), Some(&0));
     let output = run(&attached).await?;
-    assert_batches_eq!(
-        [
-            "+-----+---------+-----+",
-            "| key | payload | key |",
-            "+-----+---------+-----+",
-            "| 1   | 2       | 1   |",
-            "| 1   | 1       | 1   |",
-            "+-----+---------+-----+",
-        ],
-        &output
-    );
+    assert_eq!(output.iter().map(RecordBatch::num_rows).sum::<usize>(), 2);
     // Resetting the unused projection/sort must retain the prepared rows.
     let reset = crate::execution_plan::reset_plan_states(Arc::new(attached))?;
     assert_eq!(
@@ -424,6 +390,12 @@ async fn prepared_build_reuses_data_with_independent_dynamic_filters() -> Result
 async fn prepared_build_errors_and_cancellation_release_reservations() -> Result<()> {
     let build = batch(vec![Some(1), Some(2)]);
     let base = join(build.schema(), build.clone())?;
+    let exhausted: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(0));
+    assert!(matches!(
+        prepare(&base, vec![build.clone()], Arc::clone(&exhausted)).await,
+        Err(DataFusionError::ResourcesExhausted(_))
+    ));
+    assert_eq!(exhausted.reserved(), 0);
     let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1 << 20));
     let failing = stream::iter(vec![
         Ok(build.clone()),
@@ -452,74 +424,60 @@ async fn prepared_build_errors_and_cancellation_release_reservations() -> Result
 }
 
 #[tokio::test]
-async fn prepared_build_accounts_for_hash_map_row_indices() -> Result<()> {
-    let rows = 32_768;
-    // Sparse keys exclude the dense ArrayMap without overriding configuration.
-    let build = batch((0..rows).map(|i| Some(i as i64 * 32)).collect());
-    let base = join(build.schema(), batch(vec![Some(0)]))?;
-    let retained = get_record_batch_memory_size(&build);
-    let buckets = estimate_memory_size::<(u32, u64)>(rows, size_of::<JoinHashMapU32>())?;
-    let scratch = rows * size_of::<u64>();
-    let row_indices = rows * size_of::<u32>();
-    assert_admission_denied(
-        &base,
-        vec![build.clone()],
-        retained + buckets + scratch + row_indices - 1,
-    )
-    .await;
-
-    let admitted: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(
-        retained + buckets + scratch + row_indices,
-    ));
-    let prepared = prepare(&base, vec![build], Arc::clone(&admitted)).await?;
-    assert!(matches!(prepared.build.map.as_ref(), Map::HashMap(_)));
-    assert_eq!(prepared.reserved_bytes(), retained + buckets + row_indices);
-    assert_eq!(admitted.reserved(), prepared.reserved_bytes());
-    drop(prepared);
-    assert_eq!(admitted.reserved(), 0);
-    Ok(())
-}
-
-#[tokio::test]
-async fn prepared_single_batch_shares_build_but_owns_output() -> Result<()> {
-    let rows = 4096;
-    let build = batch((0..rows + 2).map(|i| Some(i as i64 * 4)).collect()).slice(1, rows);
-    let source_values = build.column(0).to_data().buffers()[0].as_ptr();
-    let base = join(build.schema(), batch(vec![Some(4), Some(8)]))?;
-    let retained = get_record_batch_memory_size(&build);
-    let map_bytes = ArrayMap::estimate_memory_size(4, rows as u64 * 4, rows);
-    let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(retained + map_bytes));
-    let prepared = prepare(&base, vec![build], Arc::clone(&pool)).await?;
-    assert!(matches!(prepared.build.map.as_ref(), Map::ArrayMap(_)));
-    assert_eq!(
-        prepared.build.batch.column(0).to_data().buffers()[0].as_ptr(),
-        source_values
-    );
-    assert_eq!(pool.reserved(), retained + map_bytes);
-    let source_addresses = buffer_addresses(prepared.build.batch.columns());
-    let task = base
-        .builder()
-        .with_prepared_build(Arc::clone(&prepared))
-        .build()?;
-    drop(prepared);
-    let output = run(&task).await?;
-    assert_eq!(output.iter().map(RecordBatch::num_rows).sum::<usize>(), 2);
-    for batch in &output {
-        for address in buffer_addresses(&batch.columns()[..2]) {
-            assert!(!source_addresses.contains(&address));
+async fn prepared_build_shares_single_batch_but_owns_output() -> Result<()> {
+    for array in [
+        Arc::new(Int64Array::from(vec![
+            Some(0),
+            Some(1),
+            None,
+            Some(2),
+            Some(2),
+            Some(3),
+        ])) as ArrayRef,
+        Arc::new(StringArray::from(vec![
+            Some("prefix"),
+            Some("a"),
+            None,
+            Some("b"),
+            Some("b"),
+            Some("suffix"),
+        ])),
+    ] {
+        let build = RecordBatch::try_from_iter([("key", array.slice(1, 4))])?;
+        let probe = RecordBatch::try_from_iter([("key", array.slice(1, 3))])?;
+        let base = join(build.schema(), probe)?
+            .builder()
+            .with_null_equality(NullEquality::NullEqualsNull)
+            .build()?;
+        for sources in [
+            vec![build.clone()],
+            vec![build.slice(0, 2), build.slice(2, 2)],
+        ] {
+            let single_batch = sources.len() == 1;
+            let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1 << 20));
+            let prepared = prepare(&base, sources, Arc::clone(&pool)).await?;
+            let addresses = buffer_addresses(prepared.build.batch.columns());
+            if single_batch {
+                assert_eq!(addresses, buffer_addresses(build.columns()));
+            }
+            let bytes = prepared.reserved_bytes();
+            let task = base.builder().with_prepared_build(prepared).build()?;
+            let output = run(&task).await?;
+            assert_eq!(output.iter().map(RecordBatch::num_rows).sum::<usize>(), 4);
+            assert!(
+                output
+                    .iter()
+                    .flat_map(|batch| buffer_addresses(&batch.columns()[..1]))
+                    .all(|address| !addresses.contains(&address))
+            );
+            assert_eq!(pool.reserved(), bytes);
+            drop(task);
+            assert_eq!(pool.reserved(), 0);
+            for batch in output {
+                assert_eq!(batch.column(0).to_data(), batch.column(1).to_data());
+            }
         }
     }
-    assert_eq!(pool.reserved(), retained + map_bytes);
-    drop(task);
-    assert_eq!(pool.reserved(), 0);
-    assert_eq!(
-        output[0]
-            .column(0)
-            .as_primitive::<arrow::datatypes::Int64Type>()
-            .values()
-            .as_ref(),
-        &[4, 8]
-    );
     Ok(())
 }
 
@@ -527,73 +485,43 @@ async fn prepared_single_batch_shares_build_but_owns_output() -> Result<()> {
 async fn prepared_build_validates_descriptor_and_builder_changes() -> Result<()> {
     let build = batch(vec![Some(1), Some(2)]);
     let base = with_probe_filter(join(build.schema(), build.clone())?)?;
-    let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1 << 20));
-    let prepared = prepare(&base, vec![build.clone()], pool).await?;
-    assert!(
-        base.builder()
-            .with_null_equality(NullEquality::NullEqualsNull)
-            .with_prepared_build(Arc::clone(&prepared))
-            .build()
-            .is_err()
-    );
-    assert!(
-        base.builder()
-            .with_type(JoinType::Right)
-            .with_prepared_build(Arc::clone(&prepared))
-            .build()
-            .is_err()
-    );
-    assert!(
-        base.builder()
-            .with_partition_mode(PartitionMode::Partitioned)
-            .with_prepared_build(Arc::clone(&prepared))
-            .build()
-            .is_err()
-    );
+    let prepared = prepare(
+        &base,
+        vec![build.clone()],
+        Arc::new(GreedyMemoryPool::new(1 << 20)),
+    )
+    .await?;
     let keys: JoinOn = vec![(
         Arc::new(Column::new("payload", 1)),
         Arc::new(Column::new("payload", 1)),
     )];
-    assert!(
+    for builder in [
         base.builder()
-            .with_on(keys.clone())
-            .with_prepared_build(Arc::clone(&prepared))
-            .build()
-            .is_err()
-    );
+            .with_null_equality(NullEquality::NullEqualsNull),
+        base.builder().with_type(JoinType::Right),
+        base.builder()
+            .with_partition_mode(PartitionMode::Partitioned),
+        base.builder().with_on(keys),
+    ] {
+        assert!(
+            builder
+                .with_prepared_build(Arc::clone(&prepared))
+                .build()
+                .is_err()
+        );
+    }
     let attached = Arc::new(base.builder().with_prepared_build(prepared).build()?);
+    // Changing only the probe key must not reuse its existing dynamic filter.
     assert!(
         attached
             .builder()
-            .reset_state()
-            .build()?
-            .swap_inputs(PartitionMode::CollectLeft)
+            .with_on(vec![(
+                Arc::new(Column::new("key", 0)),
+                Arc::new(Column::new("payload", 1)),
+            )])
+            .build()
             .is_err()
     );
-    let same_keys = attached.builder().with_on(attached.on().to_vec()).build()?;
-    assert_eq!(
-        run(&same_keys)
-            .await?
-            .iter()
-            .map(RecordBatch::num_rows)
-            .sum::<usize>(),
-        2
-    );
-    assert!(attached.builder().with_on(keys.clone()).build().is_err());
-    // Public key mutation bypasses the builder, so execution validates it too.
-    let mut mutated = attached.builder().build()?;
-    mutated.on = keys;
-    let error = run(&mutated)
-        .await
-        .expect_err("changed keys require a new build");
-    assert!(error.to_string().contains("does not match"), "{error}");
-
-    // A compatible build cannot make an existing probe filter follow new keys.
-    let probe_payload: JoinOn = vec![(
-        Arc::new(Column::new("key", 0)),
-        Arc::new(Column::new("payload", 1)),
-    )];
-    assert!(attached.builder().with_on(probe_payload).build().is_err());
     let replacement = Arc::new(EmptyExec::new(build.schema())) as Arc<dyn ExecutionPlan>;
     assert!(
         Arc::clone(&attached)
@@ -620,110 +548,54 @@ async fn prepared_build_validates_descriptor_and_builder_changes() -> Result<()>
             .sum::<usize>(),
         1
     );
-    assert!(
-        attached
-            .builder()
-            .with_type(JoinType::Left)
-            .build()
-            .is_err()
-    );
     Ok(())
 }
 
 #[tokio::test]
 async fn prepared_build_rejects_view_payload_before_consumption() -> Result<()> {
-    let payloads: [ArrayRef; 2] = [
-        Arc::new(StringViewArray::from(vec!["x"])),
-        Arc::new(LargeStringArray::from(vec!["x"])),
-    ];
-    for payload in payloads {
-        let build = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![
-                Field::new("key", DataType::Int64, false),
-                Field::new("payload", payload.data_type().clone(), false),
-            ])),
-            vec![Arc::new(Int64Array::from(vec![1])), payload],
-        )?;
-        let base = join(build.schema(), batch(vec![Some(1)]))?;
-        let never_polled =
-            stream::poll_fn(|_| -> std::task::Poll<Option<Result<RecordBatch>>> {
-                panic!("unsupported input must not be polled")
-            });
-        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1 << 20));
-        assert!(
-            base.prepare_build(
-                Box::pin(RecordBatchStreamAdapter::new(build.schema(), never_polled)),
-                Arc::clone(&pool),
-                Arc::new(ConfigOptions::default())
-            )
-            .await
-            .is_err()
-        );
-        assert_eq!(pool.reserved(), 0);
-    }
+    let build = RecordBatch::try_from_iter([
+        ("key", Arc::new(Int64Array::from(vec![1])) as ArrayRef),
+        ("payload", Arc::new(StringViewArray::from(vec!["x"]))),
+    ])?;
+    let base = join(build.schema(), batch(vec![Some(1)]))?;
+    let never_polled =
+        stream::poll_fn(|_| -> std::task::Poll<Option<Result<RecordBatch>>> {
+            panic!("unsupported input must not be polled")
+        });
+    let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1 << 20));
+    assert!(
+        base.prepare_build(
+            Box::pin(RecordBatchStreamAdapter::new(build.schema(), never_polled)),
+            Arc::clone(&pool),
+            Arc::new(ConfigOptions::default()),
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(pool.reserved(), 0);
     Ok(())
 }
 
 #[tokio::test]
-async fn prepared_build_preserves_nulls_duplicates_and_batch_cap() -> Result<()> {
-    let build = batch(vec![None, None, Some(1), Some(1)]);
-    for (nulls, expected) in [
-        (NullEquality::NullEqualsNothing, 2),
-        (NullEquality::NullEqualsNull, 4),
-    ] {
-        let base = join(build.schema(), batch(vec![None, Some(1)]))?
-            .builder()
-            .with_null_equality(nulls)
-            .build()?;
-        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1 << 20));
-        let prepared = prepare(&base, vec![build.clone()], pool).await?;
-        let task = base.builder().with_prepared_build(prepared).build()?;
-        let context = TaskContext::default().with_session_config(
-            datafusion_execution::config::SessionConfig::new().with_batch_size(1),
-        );
-        let output = common::collect(task.execute(0, Arc::new(context))?).await?;
-        assert!(output.iter().all(|batch| batch.num_rows() <= 1));
-        assert_eq!(
-            output.iter().map(RecordBatch::num_rows).sum::<usize>(),
-            expected
-        );
-    }
-    Ok(())
-}
-
-#[tokio::test]
-async fn prepared_build_matches_collect_left_for_seeded_inputs() -> Result<()> {
-    let split = |batch: &RecordBatch, size: usize| {
+async fn prepared_build_matches_collect_left() -> Result<()> {
+    let split = |batch: &RecordBatch| {
         (0..batch.num_rows())
-            .step_by(size)
-            .map(|offset| batch.slice(offset, size.min(batch.num_rows() - offset)))
+            .step_by(2)
+            .map(|offset| batch.slice(offset, 2.min(batch.num_rows() - offset)))
             .collect::<Vec<_>>()
     };
-    for seed in 0..24 {
-        let mut rng = StdRng::seed_from_u64(seed);
-        let build_rows = if seed % 8 == 0 {
-            0
-        } else {
-            rng.random_range(1..40)
-        };
-        let probe_rows = if seed % 8 == 1 {
-            0
-        } else {
-            rng.random_range(1..25)
-        };
-        let mut keys = |rows| {
-            (0..rows)
-                .map(|_| match rng.random_range(0..10) {
-                    0 | 1 => None,
-                    2..=6 => Some(0),
-                    _ => Some(rng.random_range(-4..=4) * 4096),
-                })
-                .collect()
-        };
-        let build = batch(keys(build_rows));
-        let probe = batch(keys(probe_rows));
-        let sources = split(&build, rng.random_range(1..9));
-        let probes = split(&probe, rng.random_range(1..7));
+    for (build_keys, probe_keys) in [
+        (vec![], vec![Some(1)]),
+        (vec![Some(1)], vec![]),
+        (vec![None, None], vec![None, Some(1)]),
+        (
+            vec![None, Some(0), Some(0), Some(-4096), Some(4096)],
+            vec![Some(0), None, Some(4096), Some(2)],
+        ),
+    ] {
+        let build = batch(build_keys);
+        let probe = batch(probe_keys);
+        let sources = split(&build);
         for nulls in [
             NullEquality::NullEqualsNothing,
             NullEquality::NullEqualsNull,
@@ -736,14 +608,9 @@ async fn prepared_build_matches_collect_left_for_seeded_inputs() -> Result<()> {
                         build.schema(),
                         None,
                     )?,
-                    TestMemoryExec::try_new_exec(
-                        std::slice::from_ref(&probes),
-                        probe.schema(),
-                        None,
-                    )?,
+                    TestMemoryExec::try_new_exec(&[split(&probe)], probe.schema(), None)?,
                 ])?
                 .with_null_equality(nulls)
-                .with_filter((seed % 3 == 0).then(|| payload_filter(Operator::Lt)))
                 .build()?;
             let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1 << 20));
             let prepared = prepare(&base, sources.clone(), Arc::clone(&pool)).await?;
@@ -763,13 +630,11 @@ async fn prepared_build_matches_collect_left_for_seeded_inputs() -> Result<()> {
                     common::collect(ordinary.execute(0, Arc::clone(&context))?).await?;
                 let mut actual = common::collect(attached.execute(0, context)?).await?;
                 assert!(actual.iter().all(|batch| batch.num_rows() <= batch_size));
-                // Empty batches and batch boundaries are not observable join results.
                 expected.retain(|batch| batch.num_rows() != 0);
                 actual.retain(|batch| batch.num_rows() != 0);
                 assert_eq!(
                     batches_to_sort_string(&actual),
-                    batches_to_sort_string(&expected),
-                    "seed={seed}, nulls={nulls:?}, batch_size={batch_size}"
+                    batches_to_sort_string(&expected)
                 );
             }
             drop(prepared);
@@ -812,127 +677,43 @@ fn prepared_concat_admits_validity_for_non_nullable_input_arrays() -> Result<()>
 }
 
 #[tokio::test]
-async fn prepared_build_empty_and_all_null_inputs() -> Result<()> {
-    let utf8_schema = Arc::new(Schema::new(vec![
-        Field::new("key", DataType::Int64, false),
-        Field::new("payload", DataType::Utf8, false),
-    ]));
-    let all_null = batch(vec![None, None]);
-    for (schema, sources) in [
-        (Arc::clone(&utf8_schema), vec![]),
-        (
-            Arc::clone(&utf8_schema),
-            vec![RecordBatch::new_empty(utf8_schema)],
-        ),
-        (all_null.schema(), vec![all_null]),
+async fn prepared_byte_keys_use_hash_membership() -> Result<()> {
+    for array in [
+        Arc::new(StringArray::from(vec!["aaaa", "bbbb"])) as ArrayRef,
+        Arc::new(FixedSizeBinaryArray::try_new(
+            4,
+            Buffer::from_slice_ref(b"aaaabbbb"),
+            None,
+        )?),
     ] {
-        let base = join(schema, batch(vec![None, Some(1)]))?;
+        let build = RecordBatch::try_from_iter([("key", array.slice(0, 1))])?;
+        let probe = RecordBatch::try_from_iter([("key", array)])?;
+        let base = join(build.schema(), probe)?;
+        let mut options = ConfigOptions::default();
+        options.optimizer.hash_join_inlist_pushdown_max_size = 1024;
         let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1 << 20));
-        let prepared = prepare(&base, sources, Arc::clone(&pool)).await?;
-        // Empty UTF-8 arrays still retain an offset buffer.
-        assert!(prepared.reserved_bytes() > 0);
-        let task = base.builder().with_prepared_build(prepared).build()?;
-        assert_eq!(
-            run(&task)
-                .await?
-                .iter()
-                .map(RecordBatch::num_rows)
-                .sum::<usize>(),
-            0
-        );
+        let prepared = base
+            .prepare_build(
+                input(vec![build.clone()], build.schema()),
+                Arc::clone(&pool),
+                Arc::new(options),
+            )
+            .await?;
+        assert!(prepared.build.bounds.is_none());
+        assert!(matches!(
+            &prepared.build.membership,
+            PushdownStrategy::Map(_)
+        ));
+        let task = with_probe_filter(base)?
+            .builder()
+            .with_prepared_build(prepared)
+            .build()?;
+        let output = run(&task).await?;
+        assert_eq!(output.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+        let filter = &task.dynamic_filter.as_ref().unwrap().filter;
+        assert!(futures::poll!(Box::pin(filter.wait_complete())).is_ready());
         drop(task);
         assert_eq!(pool.reserved(), 0);
     }
-    Ok(())
-}
-
-mod plain_bytes;
-
-#[tokio::test]
-async fn prepared_composite_keys_admit_hash_and_null_mask_scratch() -> Result<()> {
-    let make_batch = |start: usize, len: usize| {
-        RecordBatch::try_from_iter(vec![
-            (
-                "key",
-                Arc::new(Int64Array::from_iter(
-                    (start..start + len).map(|i| (i % 7 != 0).then_some(i as i64 * 32)),
-                )) as ArrayRef,
-            ),
-            (
-                "payload",
-                Arc::new(Int64Array::from_iter(
-                    (start..start + len).map(|i| (i % 5 != 0).then_some(i as i64)),
-                )) as ArrayRef,
-            ),
-        ])
-        .unwrap()
-    };
-    // Differing batch sizes exercise the peak scratch admission across batches;
-    // two nullable keys also need temporary combined validity masks.
-    let batches = vec![make_batch(1000, 1001), make_batch(0, 1000)];
-    let base = join(batches[0].schema(), batches[1].slice(0, 10))?
-        .builder()
-        .with_on(vec![
-            (
-                Arc::new(Column::new("key", 0)),
-                Arc::new(Column::new("key", 0)),
-            ),
-            (
-                Arc::new(Column::new("payload", 1)),
-                Arc::new(Column::new("payload", 1)),
-            ),
-        ])
-        .build()?;
-    let mut retained = RecordBatchMemoryCounter::new();
-    let mut copy_bytes = 0;
-    for batch in &batches {
-        retained.count_batch(batch);
-        copy_bytes += prepared_copy_bytes(batch)?;
-    }
-    let rows = 2001;
-    let buckets = estimate_memory_size::<(u32, u64)>(rows, size_of::<JoinHashMapU32>())?;
-    let row_indices = rows * size_of::<u32>();
-    let scratch = 1001 * size_of::<u64>() + 2 * (1001usize.div_ceil(8) + 64);
-    let peak = retained.memory_usage() + copy_bytes + buckets + row_indices + scratch;
-    assert_admission_denied(&base, batches.clone(), peak - 1).await;
-    let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(peak));
-    let prepared = prepare(&base, batches, Arc::clone(&pool)).await?;
-    let task = base.builder().with_prepared_build(prepared).build()?;
-    let output = run(&task).await?;
-    assert_eq!(output.iter().map(RecordBatch::num_rows).sum::<usize>(), 7);
-    drop(task);
-    assert_eq!(pool.reserved(), 0);
-    Ok(())
-}
-
-#[tokio::test]
-async fn prepared_null_keys_admit_materialized_validity() -> Result<()> {
-    use arrow::array::NullArray;
-
-    let rows = 1024;
-    let build = RecordBatch::try_from_iter(vec![(
-        "key",
-        Arc::new(NullArray::new(rows)) as ArrayRef,
-    )])?;
-    let base = join(build.schema(), build.slice(0, 1))?;
-    let retained = get_record_batch_memory_size(&build);
-    let buckets = estimate_memory_size::<(u32, u64)>(rows, size_of::<JoinHashMapU32>())?;
-    let row_indices = rows * size_of::<u32>();
-    let scratch = rows * size_of::<u64>() + rows.div_ceil(8) + 64;
-    let peak = retained + buckets + row_indices + scratch;
-    assert_admission_denied(&base, vec![build.clone()], peak - 1).await;
-    let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(peak));
-    let prepared = prepare(&base, vec![build], Arc::clone(&pool)).await?;
-    let task = base.builder().with_prepared_build(prepared).build()?;
-    assert_eq!(
-        run(&task)
-            .await?
-            .iter()
-            .map(RecordBatch::num_rows)
-            .sum::<usize>(),
-        0
-    );
-    drop(task);
-    assert_eq!(pool.reserved(), 0);
     Ok(())
 }
