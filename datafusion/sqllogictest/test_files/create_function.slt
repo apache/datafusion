@@ -41,9 +41,42 @@ CREATE FUNCTION foo_subquery (DOUBLE) RETURNS DOUBLE RETURN $1 + (SELECT $9);
 statement error DataFusion error: Error during planning: Invalid placeholder, out of range: \$9
 CREATE FUNCTION foo_default (a DOUBLE, b DOUBLE DEFAULT $9) RETURNS DOUBLE RETURN $1 + $2;
 
-# out of range placeholder in a subquery's ORDER BY / LIMIT clauses
+# out of range placeholder in a subquery's LIMIT clause
 statement error DataFusion error: Error during planning: Invalid placeholder, out of range: \$9
 CREATE FUNCTION foo_limit (DOUBLE) RETURNS BOOLEAN RETURN $1 IN (SELECT v FROM (VALUES (1.0), (2.0)) AS t(v) ORDER BY v LIMIT $9);
+
+# Named arguments are resolved before placeholder validation
+statement error DataFusion error: Error during planning: Invalid placeholder, out of range: \$3
+CREATE FUNCTION foo_named (a DOUBLE, b DOUBLE) RETURNS DOUBLE RETURN $a + $3;
+
+statement error DataFusion error: Error during planning: Unknown placeholder: \$a
+CREATE FUNCTION foo_unknown () RETURNS DOUBLE RETURN $a;
+
+# Defaults use positional placeholders
+statement error DataFusion error: Error during planning: Unknown placeholder: \$a
+CREATE FUNCTION foo_named_default (a DOUBLE, b DOUBLE DEFAULT $a) RETURNS DOUBLE RETURN $1 + $2;
+
+statement error DataFusion error: Error during planning: Invalid placeholder, out of range: \$9
+CREATE FUNCTION foo_exists (DOUBLE) RETURNS BOOLEAN RETURN EXISTS (SELECT $9);
+
+statement error DataFusion error: Error during planning: Invalid placeholder, out of range: \$9
+CREATE FUNCTION foo_in (DOUBLE) RETURNS BOOLEAN RETURN $1 IN (SELECT $9);
+
+statement error DataFusion error: Error during planning: Invalid placeholder, out of range: \$9
+CREATE FUNCTION foo_any (DOUBLE) RETURNS BOOLEAN RETURN $1 = ANY (SELECT $9);
+
+statement error DataFusion error: Error during planning: Invalid placeholder, out of range: \$9
+CREATE FUNCTION foo_nested (DOUBLE) RETURNS BOOLEAN RETURN EXISTS (SELECT 1 WHERE (SELECT $9) > 0.0);
+
+# Valid definitions reach the function factory
+statement error DataFusion error: Invalid or Unsupported Configuration: Function factory has not been configured
+CREATE FUNCTION foo_valid (DOUBLE, DOUBLE) RETURNS DOUBLE RETURN $1 + $2;
+
+statement error DataFusion error: Invalid or Unsupported Configuration: Function factory has not been configured
+CREATE FUNCTION foo_valid_default (a DOUBLE, b DOUBLE DEFAULT $1) RETURNS DOUBLE RETURN $1 + $2;
+
+statement error DataFusion error: Invalid or Unsupported Configuration: Function factory has not been configured
+CREATE FUNCTION foo_valid_subquery (DOUBLE) RETURNS BOOLEAN RETURN $1 IN (SELECT v FROM (VALUES (1.0)) AS t(v) WHERE v > $1);
 
 # multi-part identifiers are not supported
 statement error DataFusion error: This feature is not implemented: Qualified functions are not supported

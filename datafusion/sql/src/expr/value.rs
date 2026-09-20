@@ -155,8 +155,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         };
         // Check if the placeholder is in the parameter list
-        // CREATE FUNCTION rejects out of range placeholders at the statement
-        // level; types stay permissive so PREPARE can defer inference to bind time
+        // CreateFunction::try_new validates function placeholders; types stay
+        // permissive so PREPARE can defer inference to bind time.
         let param_type = param_data_types.get(idx).and_then(|v| v.clone());
         // Data type of the parameter
         debug!("type of param {param} param_data_types[idx]: {param_type:?}");

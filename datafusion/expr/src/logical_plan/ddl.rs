@@ -24,13 +24,15 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use crate::expr::Sort;
+use crate::expr::{Exists, InSubquery, SetComparison, Sort};
 #[cfg(not(feature = "sql"))]
 use crate::sql::Ident;
 use arrow::datatypes::DataType;
-use datafusion_common::tree_node::{Transformed, TreeNodeContainer, TreeNodeRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
+};
 use datafusion_common::{
-    Constraints, DFSchemaRef, Result, SchemaReference, TableReference,
+    Constraints, DFSchema, DFSchemaRef, Result, SchemaReference, TableReference, plan_err,
 };
 #[cfg(feature = "sql")]
 use sqlparser::ast::Ident;
@@ -651,6 +653,94 @@ pub struct CreateFunction {
     pub schema: DFSchemaRef,
 }
 
+impl CreateFunction {
+    /// Creates a function definition, validating placeholders in its body and
+    /// argument defaults, including expressions inside subqueries.
+    ///
+    /// Placeholders must be positional (`$1`, `$2`, ...) and reference a
+    /// declared argument. SQL argument names must be resolved before calling
+    /// this constructor.
+    pub fn try_new(
+        or_replace: bool,
+        temporary: bool,
+        name: String,
+        args: Option<Vec<OperateFunctionArg>>,
+        return_type: Option<DataType>,
+        params: CreateFunctionBody,
+    ) -> Result<Self> {
+        let arg_count = args.as_ref().map_or(0, |declared| declared.len());
+        for default_expr in args
+            .iter()
+            .flatten()
+            .filter_map(|arg| arg.default_expr.as_ref())
+        {
+            validate_function_body_placeholders(default_expr, arg_count)?;
+        }
+        if let Some(body) = &params.function_body {
+            validate_function_body_placeholders(body, arg_count)?;
+        }
+        Ok(Self {
+            or_replace,
+            temporary,
+            name,
+            args,
+            return_type,
+            params,
+            schema: DFSchemaRef::new(DFSchema::empty()),
+        })
+    }
+}
+
+/// Rejects placeholders in a `CREATE FUNCTION` body or argument default
+/// expression that do not reference a declared argument (e.g. `$3` for a
+/// two-argument function) at definition time, instead of deferring the error
+/// to function invocation.
+fn validate_function_body_placeholders(expr: &Expr, arg_count: usize) -> Result<()> {
+    expr.apply(|expr| {
+        if let Expr::Placeholder(placeholder) = expr {
+            match placeholder
+                .id
+                .strip_prefix('$')
+                .and_then(|id| id.parse::<usize>().ok())
+            {
+                // In range, e.g. `$2` with two declared arguments
+                Some(idx) if (1..=arg_count).contains(&idx) => {}
+                // Out of range, e.g. `$3` with two declared arguments
+                Some(_) => {
+                    return plan_err!(
+                        "Invalid placeholder, out of range: {}",
+                        placeholder.id
+                    );
+                }
+                // Named or malformed placeholder
+                None => {
+                    return plan_err!("Unknown placeholder: {}", placeholder.id);
+                }
+            }
+        }
+        // `Expr::apply` does not descend into subqueries, so walk their
+        // plans explicitly to validate placeholders inside them
+        if let Some(subquery) = match expr {
+            Expr::ScalarSubquery(subquery) => Some(&subquery.subquery),
+            Expr::Exists(Exists { subquery, .. }) => Some(&subquery.subquery),
+            Expr::InSubquery(InSubquery { subquery, .. }) => Some(&subquery.subquery),
+            Expr::SetComparison(SetComparison { subquery, .. }) => {
+                Some(&subquery.subquery)
+            }
+            _ => None,
+        } {
+            subquery.apply_with_subqueries(|plan| {
+                plan.apply_expressions(|e| {
+                    validate_function_body_placeholders(e, arg_count)?;
+                    Ok(TreeNodeRecursion::Continue)
+                })
+            })?;
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(())
+}
+
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
 impl PartialOrd for CreateFunction {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -821,9 +911,47 @@ impl PartialOrd for CreateIndex {
 
 #[cfg(test)]
 mod test {
+    use super::{CreateFunction, CreateFunctionBody, OperateFunctionArg};
+    use crate::expr_fn::placeholder;
     use crate::{CreateCatalog, DdlStatement, DropView};
+    use arrow::datatypes::DataType;
     use datafusion_common::{DFSchema, DFSchemaRef, TableReference};
     use std::cmp::Ordering;
+
+    #[test]
+    fn create_function_try_new_validates_placeholders() {
+        let create = |body, default_expr| {
+            CreateFunction::try_new(
+                false,
+                false,
+                "f".to_string(),
+                Some(vec![OperateFunctionArg {
+                    name: None,
+                    data_type: DataType::Int64,
+                    default_expr,
+                }]),
+                Some(DataType::Int64),
+                CreateFunctionBody {
+                    language: None,
+                    behavior: None,
+                    function_body: body,
+                },
+            )
+        };
+
+        assert!(create(Some(placeholder("$1")), Some(placeholder("$1"))).is_ok());
+        assert!(create(None, None).is_ok());
+        for (body, default_expr) in [
+            (Some(placeholder("$2")), None),
+            (None, Some(placeholder("$2"))),
+        ] {
+            let err = create(body, default_expr).unwrap_err();
+            assert_eq!(
+                err.strip_backtrace(),
+                "Error during planning: Invalid placeholder, out of range: $2"
+            );
+        }
+    }
 
     #[test]
     fn test_partial_ord() {
