@@ -610,11 +610,9 @@ fn evaluate_with_range_value(
 /// an ascending split is already in the same partition as `xᵢ`, so checking it
 /// would not say anything about groups crossing that split.
 ///
-/// Descending ranges use the mirrored check with `successor(xᵢ)`, because their
-/// open side lies above the split; there, the predecessor is already in the
-/// same partition as `xᵢ`. Null preservation is also required so the transform
-/// cannot introduce a null group outside the source partition selected by null
-/// order.
+/// The argument is the same for descending ranges, but `successor(xᵢ)` must be
+/// used instead. Null preservation is also required so the transform cannot
+/// introduce a null group outside the source partition selected by null order.
 fn range_transform_keeps_keys_local(
     function: &Arc<dyn PhysicalExpr>,
     range_key: &Arc<dyn PhysicalExpr>,
