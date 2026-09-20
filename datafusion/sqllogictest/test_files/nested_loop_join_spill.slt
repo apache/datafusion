@@ -132,13 +132,12 @@ FULL JOIN generate_series(1, 200) AS t2(v2)
 # Multi-partition memory-limited correctness tests
 #
 # These exercise the cross-partition shared-state path of NLJ's spill
-# fallback: every right partition must observe the same per-chunk
-# `JoinLeftData` (visited bitmap + probe-thread counter) so that join
-# types which emit unmatched left rows (LEFT, LEFT SEMI, LEFT ANTI,
-# LEFT MARK, FULL) produce the same results as the single-pass and
-# single-partition paths. Without the coordinator, each partition would
-# independently emit unmatched left rows from its own bitmap, producing
-# duplicates.
+# fallback: every right partition must record its matches in the same
+# global visited-left bitmap so that join types which emit unmatched left
+# rows (LEFT, LEFT SEMI, LEFT ANTI, LEFT MARK, FULL) produce the same
+# results as the single-pass and single-partition paths. With a bitmap per
+# partition, each partition would independently emit unmatched left rows,
+# producing duplicates.
 # =============================================================================
 
 statement ok
@@ -163,9 +162,8 @@ LEFT JOIN generate_series(1, 100) AS t2(v2)
 5000
 
 # Verify the memory-limited fallback was actually taken (spill_count > 0)
-# under target_partitions=4. The fallback shares per-chunk `JoinLeftData`
-# across right partitions via `FallbackCoordinator`; without that path
-# the test would simply OOM rather than spill.
+# under target_partitions=4; without that path the test would simply OOM
+# rather than spill.
 query TT
 EXPLAIN ANALYZE
 SELECT count(*) as cnt
@@ -187,7 +185,7 @@ Plan with Metrics
 11)----------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100, batch_size=8192], metrics=[<slt:ignore>]
 
 # Same predicate, also asserts the unmatched-left count is correct
-# (would be 4950 * N where N is the partition count without coordination).
+# (would be 4950 * N where N is the partition count without a shared bitmap).
 query II nosort
 SELECT count(*) as cnt,
        sum(case when t2.v2 IS NULL then 1 else 0 end) as unmatched_left
