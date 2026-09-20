@@ -124,6 +124,13 @@ pub(in crate::aggregates) struct AggregateHashTable<AggrMode> {
     /// Lifecycle-specific state: building stage / outputting stage.
     pub(super) state: AggregateHashTableState,
 
+    /// Set by tables that are used for one set of groups after another (see
+    /// `AggregateHashTable::<FinalMarker>::restart`): when the output is
+    /// materialized, the emptied buffer is kept in `recycled_buffer` with
+    /// its allocations instead of being dropped.
+    pub(super) recycle_buffer: bool,
+    pub(super) recycled_buffer: Option<AggregateHashTableBuffer>,
+
     pub(super) _mode: PhantomData<AggrMode>,
 }
 
@@ -189,6 +196,8 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                 batch_group_indices: Default::default(),
                 accumulators,
             }),
+            recycle_buffer: false,
+            recycled_buffer: None,
             _mode: PhantomData,
         })
     }
@@ -311,6 +320,13 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
 
                     let batch = RecordBatch::try_new(output_schema, columns)?;
                     debug_assert!(batch.num_rows() > 0);
+                    if self.recycle_buffer {
+                        // Keep the hash table's capacity for as many groups
+                        // as it just held: the next set is likely as large.
+                        state.group_values.clear_shrink(batch.num_rows());
+                        state.batch_group_indices.clear();
+                        self.recycled_buffer = Some(state);
+                    }
                     MaterializedAggregateOutput::new(batch)
                 }
                 AggregateHashTableState::OutputtingMaterialized(output) => output,
@@ -332,23 +348,25 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     }
 
     pub(in crate::aggregates) fn memory_size(&self) -> usize {
-        match &self.state {
-            AggregateHashTableState::Building(state)
-            | AggregateHashTableState::Outputting(state) => {
-                let acc = state
-                    .accumulators
-                    .iter()
-                    .map(|acc| acc.accumulator.size())
-                    .sum::<usize>();
+        let buffer_size = |state: &AggregateHashTableBuffer| {
+            let acc = state
+                .accumulators
+                .iter()
+                .map(|acc| acc.accumulator.size())
+                .sum::<usize>();
 
-                acc + state.group_values.size()
-                    + state.batch_group_indices.allocated_size()
+            acc + state.group_values.size() + state.batch_group_indices.allocated_size()
+        };
+        let recycled = self.recycled_buffer.as_ref().map_or(0, buffer_size);
+        recycled
+            + match &self.state {
+                AggregateHashTableState::Building(state)
+                | AggregateHashTableState::Outputting(state) => buffer_size(state),
+                AggregateHashTableState::OutputtingMaterialized(output) => {
+                    output.memory_size()
+                }
+                AggregateHashTableState::Done => 0,
             }
-            AggregateHashTableState::OutputtingMaterialized(output) => {
-                output.memory_size()
-            }
-            AggregateHashTableState::Done => 0,
-        }
     }
 
     /// Returns the number of distinct groups accumulated so far.
@@ -364,6 +382,21 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     /// spilling without finalizing the same group more than once.
     pub(in crate::aggregates) fn take_state_batch(
         &mut self,
+    ) -> Result<Option<RecordBatch>> {
+        self.take_state_batch_inner(false)
+    }
+
+    /// Like [`Self::take_state_batch`], but keeps the table's capacity for as
+    /// many groups as it held, for a table that is filled again right away.
+    pub(in crate::aggregates) fn take_state_batch_keep_capacity(
+        &mut self,
+    ) -> Result<Option<RecordBatch>> {
+        self.take_state_batch_inner(true)
+    }
+
+    fn take_state_batch_inner(
+        &mut self,
+        keep_capacity: bool,
     ) -> Result<Option<RecordBatch>> {
         let state_schema = Arc::clone(&self.state_schema);
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
@@ -390,12 +423,17 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
 
         // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
         // key/index buffers and accumulator scratch too so the memory
-        // reservation can be released before the batch is sorted for spilling.
-        state.group_values.clear_shrink(0);
+        // reservation can be released before the batch is sorted for spilling,
+        // unless the table is about to be refilled.
+        state
+            .group_values
+            .clear_shrink(if keep_capacity { batch.num_rows() } else { 0 });
         state.batch_group_indices.clear();
         state.batch_group_indices.shrink_to_fit();
-        for acc in &mut state.accumulators {
-            acc.shrink_to_fit();
+        if !keep_capacity {
+            for acc in &mut state.accumulators {
+                acc.shrink_to_fit();
+            }
         }
 
         Ok(Some(batch))
