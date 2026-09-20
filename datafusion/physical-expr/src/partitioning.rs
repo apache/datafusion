@@ -820,10 +820,10 @@ impl Partitioning {
     /// cannot occur in different partitions.
     ///
     /// Unlike [`Self::satisfaction`], this does not claim a concrete partition
-    /// layout that can be compared with another input. It is sufficient for
-    /// operators such as grouped aggregation that process each key
-    /// independently, but must not establish co-partitioning between inputs.
-    /// Transform analysis is currently limited to single-key range partitioning.
+    /// layout. This weaker guarantee is sufficient for independent keyed
+    /// operations such as aggregation, but not for co-partitioning multiple
+    /// inputs. Transform analysis is currently limited to single-key range
+    /// partitioning.
     pub fn keeps_keys_local(
         &self,
         required_exprs: &[Arc<dyn PhysicalExpr>],

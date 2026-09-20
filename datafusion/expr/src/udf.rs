@@ -992,40 +992,24 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         Ok(inner(inputs))
     }
 
-    /// Returns whether this function and argument-type combination may be
-    /// analyzed to determine if transforming a range partition key keeps every
-    /// equal output key within one existing partition.
+    /// Returns whether this function and argument-type combination may
+    /// participate in range-partitioning locality analysis.
     ///
-    /// This property allows keyed operators such as grouped aggregation to
-    /// reuse range-partitioned input after transforming the key, provided the
-    /// concrete split points prove that no output group crosses a partition
-    /// boundary. It does not claim that the transformed keys have a particular
-    /// partition layout or that two inputs are compatibly partitioned for a
-    /// join.
+    /// Returning `true` asserts that, whenever the concrete expression reports
+    /// same-direction ordering with all other inputs singleton:
     ///
-    /// Ordinary [`SortProperties::Ordered`] metadata is not sufficient for this
-    /// analysis. A non-strictly ordered function can map values from opposite
-    /// sides of a range split to the same output, and successful evaluation of
-    /// some functions can produce null from non-null input. Either behavior can
-    /// place one transformed equality group in multiple partitions.
+    /// - the function is globally nondecreasing over its admitted non-null domain;
+    /// - successful evaluation preserves nullness.
     ///
-    /// Returning `true` asserts that this argument-type combination has been
-    /// audited with the following contract:
+    /// Callers may use this contract to prove key locality by evaluating values
+    /// on both sides of each concrete range split. Ordered metadata alone is
+    /// insufficient because a non-strict transform can collapse a split boundary.
     ///
-    /// - whenever the concrete expression reports same-direction ordering with
-    ///   all non-range inputs singleton, it is globally nondecreasing over the
-    ///   admitted non-null input domain;
-    /// - successful evaluation preserves nullness: null range inputs remain
-    ///   null and non-null range inputs do not produce null.
+    /// This does not claim a concrete partition layout or cross-input
+    /// co-partitioning compatibility. Boundary evaluation errors cause the
+    /// analysis to return `false`.
     ///
-    /// This method does not assert that a concrete range partitioning is
-    /// preserved. Callers must still identify the range input, establish
-    /// same-direction ordering and singleton arguments, verify exact split
-    /// types, and prove at every split that the images of adjacent partitions
-    /// do not overlap. Evaluation errors must fail closed.
-    ///
-    /// The default is `false`. This capability is not currently transported
-    /// across FFI, so foreign UDFs also remain denied by default.
+    /// The default is `false`. This capability is not transported across FFI.
     fn supports_range_partitioning_analysis(&self, _argument_types: &[DataType]) -> bool {
         false
     }
