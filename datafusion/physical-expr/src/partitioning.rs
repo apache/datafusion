@@ -581,10 +581,9 @@ fn evaluate_with_range_value(
 /// For one ascending range key, split points `x₁, ..., xₙ` define:
 ///
 /// ```text
-/// P₀           P₁                Pₙ
-/// (-∞, x₁)     [x₁, x₂)   ...   [xₙ, +∞)
-///        │      │          │      │
-///        └─ x₁ ─┘          └─ xₙ ─┘
+/// P₀ = (-∞, x₁)
+/// Pᵢ = [xᵢ, xᵢ₊₁) for 1 ≤ i < n
+/// Pₙ = [xₙ, +∞)
 /// ```
 ///
 /// Aggregation can reuse these partitions after applying `f` only if no output
