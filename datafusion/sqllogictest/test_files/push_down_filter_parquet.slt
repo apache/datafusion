@@ -346,24 +346,33 @@ COPY (
 ) TO 'test_files/scratch/push_down_filter_parquet/join_build.parquet'
 STORED AS PARQUET;
 
+# Three row groups: exact matches, Bloom-absent values within the min/max ranges,
+# and crossed pairs that survive per-column pruning but fail the tuple filter.
 statement ok
 COPY (
   SELECT * FROM (VALUES
     ('aa', 'ba', 1.0),
     ('ab', 'bb', 2.0),
-    ('ac', 'bc', 3.0),
-    ('ad', 'bd', 4.0)
+    ('aa', 'baz', 3.0),
+    ('ab', 'baz', 4.0),
+    ('aa', 'bb', 5.0),
+    ('ab', 'ba', 6.0)
   ) AS v(a, b, e)
 ) TO 'test_files/scratch/push_down_filter_parquet/join_probe.parquet'
-STORED AS PARQUET;
+STORED AS PARQUET
+OPTIONS (
+  'format.max_row_group_size' '2',
+  'format.bloom_filter_on_write' 'true',
+  'format.bloom_filter_fpp' '0.000001'
+);
 
 statement ok
-CREATE EXTERNAL TABLE join_build (a VARCHAR, b VARCHAR, c DOUBLE)
+CREATE EXTERNAL TABLE join_build (a VARCHAR NOT NULL, b VARCHAR NOT NULL, c DOUBLE)
 STORED AS PARQUET
 LOCATION 'test_files/scratch/push_down_filter_parquet/join_build.parquet';
 
 statement ok
-CREATE EXTERNAL TABLE join_probe (a VARCHAR, b VARCHAR, e DOUBLE)
+CREATE EXTERNAL TABLE join_probe (a VARCHAR NOT NULL, b VARCHAR NOT NULL, e DOUBLE)
 STORED AS PARQUET
 LOCATION 'test_files/scratch/push_down_filter_parquet/join_probe.parquet';
 
@@ -389,7 +398,7 @@ FROM join_probe p INNER JOIN join_build AS build
 Plan with Metrics
 01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)], projection=[a@3, b@4, c@2, e@5], metrics=[output_rows=2, output_batches=1, array_map_created_count=0, build_input_batches=1, build_input_rows=2, input_batches=1, input_rows=2, avg_fanout=100% (2/2), probe_hit_rate=100% (2/2)]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/join_build.parquet]]}, projection=[a, b, c], file_type=parquet, metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=0, pushdown_rows_pruned=0, predicate_cache_inner_records=0, predicate_cache_records=0, scan_efficiency_ratio=19.88% (196/986)]
-03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/join_probe.parquet]]}, projection=[a, b, e], file_type=parquet, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ], dynamic_rg_pruning=eligible, pruning_predicate=a_null_count@1 != row_count@2 AND a_max@0 >= aa AND a_null_count@1 != row_count@2 AND a_min@3 <= ab AND b_null_count@5 != row_count@2 AND b_max@4 >= ba AND b_null_count@5 != row_count@2 AND b_min@6 <= bb, required_guarantees=[a in (aa, ab), b in (ba, bb)], metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=1 total → 1 matched, row_groups_pruned_bloom_filter=1 total → 1 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=2, pushdown_rows_pruned=2, predicate_cache_inner_records=8, predicate_cache_records=4, scan_efficiency_ratio=22.37% (228/1.02 K)]
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/join_probe.parquet]]}, projection=[a, b, e], file_type=parquet, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ], dynamic_rg_pruning=eligible, pruning_predicate=a_null_count@1 != row_count@2 AND a_max@0 >= aa AND a_null_count@1 != row_count@2 AND a_min@3 <= ab AND b_null_count@5 != row_count@2 AND b_max@4 >= ba AND b_null_count@5 != row_count@2 AND b_min@6 <= bb, required_guarantees=[a in (aa, ab), b in (ba, bb)], metrics=[output_rows=2, output_batches=1, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=3 total → 3 matched, row_groups_pruned_bloom_filter=3 total → 2 matched, page_index_pages_pruned=0 total → 0 matched, page_index_rows_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=2, pushdown_rows_pruned=2, predicate_cache_inner_records=4, predicate_cache_records=4, scan_efficiency_ratio=23.61% (606/2.57 K)]
 
 statement ok
 reset datafusion.explain.analyze_categories;
