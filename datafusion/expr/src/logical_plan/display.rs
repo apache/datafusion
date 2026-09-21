@@ -342,7 +342,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 table_name,
                 filters,
                 fetch,
-                offset,
+                                       skip: offset,
                 ..
             }) => {
                 let mut object = json!({

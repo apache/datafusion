@@ -2585,7 +2585,7 @@ impl Unparser<'_> {
                     builder = builder.filter(filter)?;
                 }
 
-                match (table_scan.offset, table_scan.fetch) {
+                match (table_scan.skip, table_scan.fetch) {
                     (Some(offset), Some(fetch)) => {
                         builder = builder.limit(offset, Some(fetch))?
                     }

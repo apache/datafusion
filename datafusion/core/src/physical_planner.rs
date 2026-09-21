@@ -589,7 +589,7 @@ impl DefaultPhysicalPlanner {
                     projection,
                     filters,
                     fetch,
-                    offset,
+                    skip: offset,
                     projected_schema,
                     statistics_requests,
                     ..
@@ -607,7 +607,7 @@ impl DefaultPhysicalPlanner {
                         .with_projection(projection.as_deref())
                         .with_filters(Some(&filters_vec))
                         .with_limit(*fetch)
-                        .with_offset(*offset)
+                        .with_skip(*offset)
                         .with_statistics_requests(&stats_requests);
                     let res = source.scan_with_args(session_state, opts).await?;
                     Arc::clone(res.plan())

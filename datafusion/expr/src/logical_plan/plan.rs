@@ -2109,7 +2109,7 @@ impl LogicalPlan {
                         projection,
                         filters,
                         fetch,
-                        offset,
+                        skip,
                         ..
                     }) => {
                         let projected_fields = match projection {
@@ -2177,8 +2177,8 @@ impl LogicalPlan {
                             write!(f, ", fetch={n}")?;
                         }
 
-                        if let Some(n) = offset {
-                            write!(f, ", offset={n}")?;
+                        if let Some(n) = skip {
+                            write!(f, ", skip={n}")?;
                         }
 
                         Ok(())
@@ -3135,7 +3135,7 @@ pub struct TableScan {
     /// Optional number of rows to read
     pub fetch: Option<usize>,
     /// Optional number of rows to skip
-    pub offset: Option<usize>,
+    pub skip: Option<usize>,
     /// Statistics the planner would like the provider to answer for this
     /// scan, typically attached by a custom optimizer rule from the
     /// surrounding plan (e.g. Min/Max for sort keys).
@@ -3157,7 +3157,7 @@ impl Debug for TableScan {
             .field("projected_schema", &self.projected_schema)
             .field("filters", &self.filters)
             .field("fetch", &self.fetch)
-            .field("offset", &self.offset)
+            .field("skip", &self.skip)
             .finish_non_exhaustive()
     }
 }
@@ -3250,7 +3250,7 @@ pub struct TableScanBuilder {
     projection: Option<Vec<usize>>,
     filters: Vec<Expr>,
     fetch: Option<usize>,
-    offset: Option<usize>,
+    skip: Option<usize>,
     #[expect(clippy::box_collection)] // additional indirection for smaller size_of()
     statistics_requests: Box<BTreeSet<StatisticsRequest>>,
 }
@@ -3267,7 +3267,7 @@ impl TableScanBuilder {
             projection: None,
             filters: vec![],
             fetch: None,
-            offset: None,
+            skip: None,
             statistics_requests: Box::default(),
         }
     }
@@ -3291,8 +3291,8 @@ impl TableScanBuilder {
     }
 
     /// Set the number of rows to skip.
-    pub fn with_offset(mut self, offset: Option<usize>) -> Self {
-        self.offset = offset;
+    pub fn skip(mut self, skip: Option<usize>) -> Self {
+        self.skip = skip;
         self
     }
 
@@ -3315,7 +3315,7 @@ impl TableScanBuilder {
             projection,
             filters,
             fetch,
-            offset,
+            skip,
             statistics_requests,
         } = self;
 
@@ -3357,7 +3357,7 @@ impl TableScanBuilder {
             projected_schema,
             filters,
             fetch,
-            offset,
+            skip: skip,
             statistics_requests,
         })
     }
@@ -3371,7 +3371,7 @@ impl From<TableScan> for TableScanBuilder {
             projection: scan.projection,
             filters: scan.filters,
             fetch: scan.fetch,
-            offset: scan.offset,
+            skip: scan.skip,
             statistics_requests: scan.statistics_requests,
         }
     }
@@ -6433,7 +6433,7 @@ mod tests {
             projected_schema: Arc::clone(&schema),
             filters: vec![],
             fetch: None,
-            offset: None,
+            skip: None,
             statistics_requests: Box::default(),
         }));
         let col = schema.field_names()[0].clone();
@@ -6465,7 +6465,7 @@ mod tests {
             projected_schema: Arc::clone(&unique_schema),
             filters: vec![],
             fetch: None,
-            offset: None,
+            skip: None,
             statistics_requests: Box::default(),
         }));
         let col = schema.field_names()[0].clone();

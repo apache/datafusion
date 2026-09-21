@@ -106,7 +106,7 @@ message ListingTableScanNode {
   // Optional number of rows to read.
   optional uint64 fetch = 17;
   // Optional number of rows to skip.
-  optional uint64 offset = 18;
+  optional uint64 skip = 18;
 }
 
 message ViewTableScanNode {
@@ -119,7 +119,7 @@ message ViewTableScanNode {
   // Optional number of rows to read.
   optional uint64 fetch = 7;
   // Optional number of rows to skip.
-  optional uint64 offset = 8;
+  optional uint64 skip = 8;
 }
 
 // Logical Plan to Scan a CustomTableProvider registered at runtime
@@ -133,7 +133,7 @@ message CustomTableScanNode {
   // Optional number of rows to read.
   optional uint64 fetch = 7;
   // Optional number of rows to skip.
-  optional uint64 offset = 8;
+  optional uint64 skip = 8;
 }
 
 message ProjectionNode {

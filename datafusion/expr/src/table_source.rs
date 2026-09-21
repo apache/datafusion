@@ -117,9 +117,9 @@ pub trait TableSource: Any + Sync + Send {
     }
 
     /// Tests whether the underlying table provider can guarantee that a scan
-    /// omits *exactly* the first `offset` rows it would otherwise have
+    /// omits *exactly* the first `skip` rows it would otherwise have
     /// produced.
-    fn supports_offset_pushdown(&self) -> bool {
+    fn supports_skip_pushdown(&self) -> bool {
         false
     }
 

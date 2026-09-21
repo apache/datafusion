@@ -618,7 +618,7 @@ async fn roundtrip_logical_plan_sort() -> Result<()> {
 }
 
 #[tokio::test]
-async fn roundtrip_logical_plan_limit_offset() -> Result<()> {
+async fn roundtrip_logical_plan_limit_skip() -> Result<()> {
     let ctx = SessionContext::new();
 
     let schema = Schema::new(vec![
@@ -636,15 +636,15 @@ async fn roundtrip_logical_plan_limit_offset() -> Result<()> {
     let query = "SELECT a, b FROM t1 LIMIT 5 OFFSET 3";
     let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
-    // Sanity check that the offset was actually pushed into the `TableScan`
-    // (ListingTable opts into `supports_offset_pushdown`), so this test
-    // exercises the new `ListingTableScanNode.offset` wire field rather than
+    // Sanity check that the `skip` was actually pushed into the `TableScan`
+    // (ListingTable opts into `supports_skip_pushdown`), so this test
+    // exercises the new `ListingTableScanNode.skip` wire field rather than
     // trivially passing because nothing needed to round-trip.
     let plan_str = plan.to_string();
     assert_eq!(
         plan_str,
-        "Limit: skip=0, fetch=5\n  TableScan: t1 projection=[a, b], fetch=5, offset=3",
-        "expected 'fetch=5' and 'offset=3' to be pushed into the scan, got: {plan_str}"
+        "Limit: skip=0, fetch=5\n  TableScan: t1 projection=[a, b], fetch=5, skip=3",
+        "expected 'fetch=5' and 'skip=3' to be pushed into the scan, got: {plan_str}"
     );
 
     let bytes = logical_plan_to_bytes(&plan)?;

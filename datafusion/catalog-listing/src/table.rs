@@ -80,7 +80,7 @@ pub struct ListFilesResult {
 /// * Reading multiple files as a single table
 /// * Hive style partitioning (e.g., directories named `date=2024-06-01`)
 /// * Merges schemas from files with compatible but not identical schemas (see [`ListingTableConfig::file_schema`])
-/// * `limit`, `offset`, `filter` and `projection` pushdown for formats that support it (e.g.,
+/// * `limit`, `skip`, `filter` and `projection` pushdown for formats that support it (e.g.,
 ///   Parquet)
 /// * Statistics collection and pruning based on file metadata
 /// * Pre-existing sort order (see [`ListingOptions::file_sort_order`])
@@ -553,7 +553,7 @@ impl TableProvider for ListingTable {
             .collect()
     }
 
-    fn supports_offset_pushdown(&self) -> bool {
+    fn supports_skip_pushdown(&self) -> bool {
         true
     }
 
@@ -599,10 +599,10 @@ impl ListingTable {
         let projection = args.projection().map(|p| p.to_vec());
         let filters = args.filters().map(|f| f.to_vec()).unwrap_or_default();
         let limit = args.limit();
-        let offset = args.offset();
-        // The scan must read enough rows to satisfy `offset + limit`, not
+        let skip = args.skip();
+        // The scan must read enough rows to satisfy `skip + limit`, not
         // just `limit`, before any rows are skipped below.
-        let inflated_limit = limit.map(|l| l.saturating_add(offset.unwrap_or(0)));
+        let inflated_limit = limit.map(|l| l.saturating_add(skip.unwrap_or(0)));
 
         // extract types of partition columns
         let table_partition_cols = self
@@ -759,7 +759,7 @@ impl ListingTable {
             .create_physical_plan(state, scan_config)
             .await?;
 
-        let plan: Arc<dyn ExecutionPlan> = match offset {
+        let plan: Arc<dyn ExecutionPlan> = match skip {
             Some(skip) => Arc::new(GlobalLimitExec::new(plan, skip, limit)),
             None => plan,
         };

@@ -696,7 +696,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     projection = Some(column_indices);
                 }
 
-                LogicalPlanBuilder::scan_with_filters_fetch_offset(
+                LogicalPlanBuilder::scan_with_filters_fetch_skip(
                     table_name,
                     provider_as_source(Arc::new(provider)),
                     projection,
@@ -732,7 +732,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ctx,
                 )?;
 
-                LogicalPlanBuilder::scan_with_filters_fetch_offset(
+                LogicalPlanBuilder::scan_with_filters_fetch_skip(
                     table_name,
                     provider_as_source(provider),
                     projection,
@@ -1214,7 +1214,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let table_name =
                     from_table_reference(scan.table_name.as_ref(), "ViewScan")?;
 
-                LogicalPlanBuilder::scan_with_filters_fetch_offset(
+                LogicalPlanBuilder::scan_with_filters_fetch_skip(
                     table_name,
                     provider_as_source(Arc::new(provider)),
                     projection,
@@ -1416,7 +1416,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 filters,
                 projection,
                 fetch,
-                offset,
+                skip,
                 ..
             }) => {
                 let provider = source_as_provider(source)?;
@@ -1550,7 +1550,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 filters,
                                 file_sort_order: exprs_vec,
                                 fetch: fetch.map(|f| f as u64),
-                                offset: offset.map(|o| o as u64),
+                                offset: skip.map(|o| o as u64),
                             },
                         )),
                     })
@@ -1575,7 +1575,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     .map(|s| s.to_string())
                                     .unwrap_or_default(),
                                 fetch: fetch.map(|f| f as u64),
-                                offset: offset.map(|o| o as u64),
+                                offset: skip.map(|o| o as u64),
                             },
                         ))),
                     })
@@ -1624,7 +1624,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         filters,
                         custom_table_data: bytes,
                         fetch: fetch.map(|f| f as u64),
-                        offset: offset.map(|o| o as u64),
+                        offset: skip.map(|o| o as u64),
                     });
                     let node = LogicalPlanNode {
                         logical_plan_type: Some(scan),

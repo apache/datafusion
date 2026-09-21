@@ -317,7 +317,7 @@ mod tests {
 
     #[cfg(feature = "parquet")]
     #[tokio::test]
-    async fn scan_with_args_offset_skips_correct_rows() -> Result<()> {
+    async fn scan_with_args_skip_skips_correct_rows() -> Result<()> {
         for target_partition in [1_usize, 8, 16] {
             let ctx = SessionContext::new_with_config(
                 SessionConfig::new().with_target_partitions(target_partition),
@@ -325,7 +325,7 @@ mod tests {
 
             let table = load_table(&ctx, "alltypes_plain.parquet").await?;
 
-            // Full scan (no offset) establishes the expected row order.
+            // Full scan (no skip) establishes the expected row order.
             let full_exec = table
                 .scan_with_args(&ctx.state(), ScanArgs::default())
                 .await?
@@ -338,17 +338,17 @@ mod tests {
 
             // `LIMIT 3 OFFSET 2` should return exactly rows [2, 5), in order —
             // not just the first 3 rows.
-            let offset_exec = table
+            let skip_exec = table
                 .scan_with_args(
                     &ctx.state(),
-                    ScanArgs::default().with_limit(Some(3)).with_offset(Some(2)),
+                    ScanArgs::default().with_limit(Some(3)).with_skip(Some(2)),
                 )
                 .await?
                 .into_inner();
-            let offset_batches = collect(offset_exec, ctx.task_ctx()).await?;
+            let skip_batches = collect(skip_exec, ctx.task_ctx()).await?;
             let actual = arrow::compute::concat_batches(
-                &offset_batches[0].schema(),
-                &offset_batches,
+                &skip_batches[0].schema(),
+                &skip_batches,
             )?;
 
             assert_eq!(actual.num_rows(), 3);

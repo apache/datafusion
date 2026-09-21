@@ -126,12 +126,12 @@ fn rewrite_limit(mut limit: Limit) -> Result<Transformed<LogicalPlan>> {
 
     match Arc::unwrap_or_clone(limit.input) {
         LogicalPlan::TableScan(mut scan)
-            if skip > 0 && scan.source.supports_offset_pushdown() =>
+            if skip > 0 && scan.source.supports_skip_pushdown() =>
         {
             // The source guarantees it will omit exactly the first `skip`
             // rows itself, so the remaining `Limit` only needs to trim to
             // `fetch` — its skip becomes 0.
-            scan.offset = Some(scan.offset.unwrap_or(0).saturating_add(skip));
+            scan.skip = Some(scan.skip.unwrap_or(0).saturating_add(skip));
             let new_fetch = if fetch != 0 {
                 scan.fetch
                     .map(|existing_fetch| min(existing_fetch.saturating_sub(skip), fetch))
@@ -507,35 +507,35 @@ mod test {
         )
     }
 
-    /// A `TableSource` that declares it will honor `offset` exactly, so
-    /// `push_down_limit` is allowed to push `skip` into `TableScan::offset`
+    /// A `TableSource` that declares it will honor `skip` exactly, so
+    /// `push_down_limit` is allowed to push `skip` into `TableScan::skip`
     /// and elide the outer `Limit`'s skip.
     #[derive(Debug)]
-    struct OffsetPushdownTableSource {
+    struct SkipPushdownTableSource {
         schema: SchemaRef,
     }
 
-    impl TableSource for OffsetPushdownTableSource {
+    impl TableSource for SkipPushdownTableSource {
         fn schema(&self) -> SchemaRef {
             Arc::clone(&self.schema)
         }
 
-        fn supports_offset_pushdown(&self) -> bool {
+        fn supports_skip_pushdown(&self) -> bool {
             true
         }
     }
 
-    fn offset_pushdown_table_scan() -> Result<LogicalPlan> {
+    fn skip_pushdown_table_scan() -> Result<LogicalPlan> {
         let schema = Arc::new(Schema::new(test_table_scan_fields()));
-        let source = Arc::new(OffsetPushdownTableSource { schema });
+        let source = Arc::new(SkipPushdownTableSource { schema });
         Ok(LogicalPlan::TableScan(
             TableScanBuilder::new("test", source).build()?,
         ))
     }
 
     #[test]
-    fn limit_pushdown_offset_supported() -> Result<()> {
-        let table_scan = offset_pushdown_table_scan()?;
+    fn limit_pushdown_skip_supported() -> Result<()> {
+        let table_scan = skip_pushdown_table_scan()?;
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .limit(10, Some(1000))?
@@ -545,7 +545,7 @@ mod test {
             plan,
             @r"
         Limit: skip=0, fetch=1000
-          TableScan: test, fetch=1000, offset=10
+          TableScan: test, fetch=1000, skip=10
         "
         )
     }

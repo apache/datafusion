@@ -1,0 +1,752 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## skip pushdown tests
+##
+## `push_down_limit` pushes a `LIMIT ... skip ...` skip into
+## `TableScan::skip` whenever the underlying `TableSource` reports
+## `supports_skip_pushdown() == true` (today: `ListingTable`, i.e.
+## CSV/JSON/Parquet/Arrow files). Providers that do not opt in (e.g. the
+## in-memory `MemTable` created by `CREATE TABLE ... AS VALUES`) keep the
+## skip in a `Limit` node above the scan instead.
+##########
+
+# Source data: 20 rows, split into 5 files of 4 rows each so that skip
+# values can be chosen to land mid-file and to span a file boundary.
+statement ok
+CREATE TABLE skip_src AS
+SELECT i AS id, i * 10 AS val FROM generate_series(0, 19) t(i);
+
+query II
+SELECT id, val FROM skip_src ORDER BY id
+----
+0 0
+1 10
+2 20
+3 30
+4 40
+5 50
+6 60
+7 70
+8 80
+9 90
+10 100
+11 110
+12 120
+13 130
+14 140
+15 150
+16 160
+17 170
+18 180
+19 190
+
+# File 0: ids 0-3
+query I
+COPY (SELECT * FROM skip_src WHERE id BETWEEN 0 AND 3)
+TO 'test_files/scratch/skip_pushdown/csv/part-0.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+4
+
+query I
+COPY (SELECT * FROM skip_src WHERE id BETWEEN 0 AND 3)
+TO 'test_files/scratch/skip_pushdown/json/part-0.json'
+STORED AS JSON;
+----
+4
+
+query I
+COPY (SELECT * FROM skip_src WHERE id BETWEEN 0 AND 3)
+TO 'test_files/scratch/skip_pushdown/parquet/part-0.parquet'
+STORED AS PARQUET;
+----
+4
+
+query I
+COPY (SELECT * FROM skip_src WHERE id BETWEEN 0 AND 3)
+TO 'test_files/scratch/skip_pushdown/arrow/part-0.arrow'
+STORED AS ARROW;
+----
+4
+
+# File 1: ids 4-7
+query I
+COPY (SELECT * FROM skip_src WHERE id BETWEEN 4 AND 7)
+TO 'test_files/scratch/skip_pushdown/csv/part-1.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+4
+
+query I
+COPY (SELECT * FROM skip_src WHERE id BETWEEN 4 AND 7)
+TO 'test_files/scratch/skip_pushdown/json/part-1.json'
+STORED AS JSON;
+----
+4
+
+query I
+COPY (SELECT * FROM skip_src WHERE id BETWEEN 4 AND 7)
+TO 'test_files/scratch/skip_pushdown/parquet/part-1.parquet'
+STORED AS PARQUET;
+----
+4
+
+query I
+COPY (SELECT * FROM skip_src WHERE id BETWEEN 4 AND 7)
+TO 'test_files/scratch/skip_pushdown/arrow/part-1.arrow'
+STORED AS ARROW;
+----
+4
+
+# File 2: ids 8-11
+query I
+COPY (SELECT * FROM skip_src WHERE id BETWEEN 8 AND 11)
+TO 'test_files/scratch/skip_pushdown/csv/part-2.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+4
+
+query I
+COPY (SELECT * FROM skip_src WHERE id BETWEEN 8 AND 11)
+TO 'test_files/scratch/skip_pushdown/json/part-2.json'
+STORED AS JSON;
+----
+4
+
+query I
+COPY (SELECT * FROM skip_src WHERE id BETWEEN 8 AND 11)
+TO 'test_files/scratch/skip_pushdown/parquet/part-2.parquet'
+STORED AS PARQUET;
+----
+4
+
+query I
+COPY (SELECT * FROM skip_src WHERE id BETWEEN 8 AND 11)
+TO 'test_files/scratch/skip_pushdown/arrow/part-2.arrow'
+STORED AS ARROW;
+----
+4
+
+# File 3: ids 12-15
+query I
+COPY (SELECT * FROM skip_src WHERE id BETWEEN 12 AND 15)
+TO 'test_files/scratch/skip_pushdown/csv/part-3.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+4
+
+query I
+COPY (SELECT * FROM skip_src WHERE id BETWEEN 12 AND 15)
+TO 'test_files/scratch/skip_pushdown/json/part-3.json'
+STORED AS JSON;
+----
+4
+
+query I
+COPY (SELECT * FROM skip_src WHERE id BETWEEN 12 AND 15)
+TO 'test_files/scratch/skip_pushdown/parquet/part-3.parquet'
+STORED AS PARQUET;
+----
+4
+
+query I
+COPY (SELECT * FROM skip_src WHERE id BETWEEN 12 AND 15)
+TO 'test_files/scratch/skip_pushdown/arrow/part-3.arrow'
+STORED AS ARROW;
+----
+4
+
+# File 4: ids 16-19
+query I
+COPY (SELECT * FROM skip_src WHERE id BETWEEN 16 AND 19)
+TO 'test_files/scratch/skip_pushdown/csv/part-4.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+4
+
+query I
+COPY (SELECT * FROM skip_src WHERE id BETWEEN 16 AND 19)
+TO 'test_files/scratch/skip_pushdown/json/part-4.json'
+STORED AS JSON;
+----
+4
+
+query I
+COPY (SELECT * FROM skip_src WHERE id BETWEEN 16 AND 19)
+TO 'test_files/scratch/skip_pushdown/parquet/part-4.parquet'
+STORED AS PARQUET;
+----
+4
+
+query I
+COPY (SELECT * FROM skip_src WHERE id BETWEEN 16 AND 19)
+TO 'test_files/scratch/skip_pushdown/arrow/part-4.arrow'
+STORED AS ARROW;
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE skip_csv (id BIGINT, val BIGINT)
+STORED AS CSV
+LOCATION 'test_files/scratch/skip_pushdown/csv/'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE EXTERNAL TABLE skip_json (id BIGINT, val BIGINT)
+STORED AS JSON
+LOCATION 'test_files/scratch/skip_pushdown/json/';
+
+statement ok
+CREATE EXTERNAL TABLE skip_parquet (id BIGINT, val BIGINT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/skip_pushdown/parquet/';
+
+statement ok
+CREATE EXTERNAL TABLE skip_arrow (id BIGINT, val BIGINT)
+STORED AS ARROW
+LOCATION 'test_files/scratch/skip_pushdown/arrow/';
+
+####################
+# supports_skip_pushdown(): MemTable does not opt in, so the skip stays
+# on the `Limit` node and `TableScan` gets no `skip` attribute.
+####################
+
+query TT
+EXPLAIN SELECT id FROM skip_src skip 5 LIMIT 3
+----
+logical_plan
+01)Limit: skip=5, fetch=3
+02)--TableScan: skip_src projection=[id], fetch=8
+physical_plan
+01)GlobalLimitExec: skip=5, fetch=3
+02)--CoalescePartitionsExec: fetch=8
+03)----DataSourceExec: partitions=4, partition_sizes=[1, 0, 0, 0], fetch=8
+
+####################
+# supports_skip_pushdown(): ListingTable (CSV/JSON/Parquet/Arrow) opts
+# in, so the skip is folded into `TableScan::skip` and the outer `Limit`
+# no longer needs to skip anything.
+####################
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT id FROM skip_csv skip 5 LIMIT 3
+----
+logical_plan
+01)Limit: skip=0, fetch=3
+02)--TableScan: skip_csv projection=[id], fetch=3, skip=5
+
+query TT
+EXPLAIN SELECT id FROM skip_json skip 5 LIMIT 3
+----
+logical_plan
+01)Limit: skip=0, fetch=3
+02)--TableScan: skip_json projection=[id], fetch=3, skip=5
+
+query TT
+EXPLAIN SELECT id FROM skip_parquet skip 5 LIMIT 3
+----
+logical_plan
+01)Limit: skip=0, fetch=3
+02)--TableScan: skip_parquet projection=[id], fetch=3, skip=5
+
+query TT
+EXPLAIN SELECT id FROM skip_arrow skip 5 LIMIT 3
+----
+logical_plan
+01)Limit: skip=0, fetch=3
+02)--TableScan: skip_arrow projection=[id], fetch=3, skip=5
+
+statement ok
+reset datafusion.explain.logical_plan_only;
+
+# Physical plan with a single partition: the skip is applied by a
+# `GlobalLimitExec` wrapped directly around the file scan (built inside
+# `ListingTable::scan_with_args`).
+#
+# NB: `skip 15 LIMIT 10` is chosen so that `skip + limit` (25) exceeds
+# the table's 20 rows. `ListingTable` stops *listing* files once file-level
+# statistics show enough rows to satisfy a smaller limit (see
+# `get_files_with_limit`), and which files that leaves out is not
+# deterministic (files are discovered concurrently). Requiring all rows
+# keeps the file set -- and thus this plan -- deterministic.
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query TT
+EXPLAIN SELECT id FROM skip_parquet skip 15 LIMIT 10
+----
+logical_plan
+01)Limit: skip=0, fetch=10
+02)--TableScan: skip_parquet projection=[id], fetch=10, skip=15
+physical_plan
+01)GlobalLimitExec: skip=15, fetch=10
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/skip_pushdown/parquet/part-0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/skip_pushdown/parquet/part-1.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/skip_pushdown/parquet/part-2.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/skip_pushdown/parquet/part-3.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/skip_pushdown/parquet/part-4.parquet]]}, projection=[id], limit=25, file_type=parquet
+
+# Physical plan with multiple partitions: `GlobalLimitExec` requires a
+# single input partition, so a `CoalescePartitionsExec` is inserted below
+# it to merge the per-file partitions before the skip is applied.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+query TT
+EXPLAIN SELECT id FROM skip_parquet skip 15 LIMIT 10
+----
+logical_plan
+01)Limit: skip=0, fetch=10
+02)--TableScan: skip_parquet projection=[id], fetch=10, skip=15
+physical_plan
+01)GlobalLimitExec: skip=15, fetch=10
+02)--CoalescePartitionsExec: fetch=25
+03)----DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/skip_pushdown/parquet/part-0.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/skip_pushdown/parquet/part-1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/skip_pushdown/parquet/part-2.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/skip_pushdown/parquet/part-3.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/skip_pushdown/parquet/part-4.parquet]]}, projection=[id], limit=25, file_type=parquet
+
+statement ok
+reset datafusion.execution.target_partitions;
+
+####################
+# Correctness: skip must skip exactly the right number of rows, for
+# every source format and across a range of `target_partitions` settings
+# (1 = no parallelism, 8 = more partitions than files so some partitions
+# read no file at all).
+#
+# The `COUNT`-based checks below intentionally avoid asserting exact row
+# *values* without an `ORDER BY`: which of the 5 underlying files
+# `ListingTable` decides to read for a given `LIMIT` is not deterministic
+# (see the note above `get_files_with_limit`), so only counts, distinct
+# counts and set-membership are checked. The final `ORDER BY` query per
+# table cross-checks the actual values deterministically -- note that an
+# `ORDER BY` blocks skip pushdown into `TableScan` (a `Sort` sits
+# between the `Limit` and the scan), so it exercises the plain
+# `GlobalLimitExec` path rather than the pushdown path exercised above.
+####################
+
+# skip_csv
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_csv skip 0 LIMIT 3)
+----
+3
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_csv skip 7 LIMIT 6)
+----
+6
+
+query I
+SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_csv skip 7 LIMIT 6)
+----
+6
+
+query I
+SELECT COUNT(*) FROM ((SELECT id FROM skip_csv skip 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
+----
+0
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_csv skip 19 LIMIT 5)
+----
+1
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_csv skip 20)
+----
+0
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_csv skip 25 LIMIT 3)
+----
+0
+
+query II
+SELECT id, val FROM skip_csv ORDER BY id skip 7 LIMIT 6
+----
+7 70
+8 80
+9 90
+10 100
+11 110
+12 120
+
+statement ok
+set datafusion.execution.target_partitions = 8;
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_csv skip 0 LIMIT 3)
+----
+3
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_csv skip 7 LIMIT 6)
+----
+6
+
+query I
+SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_csv skip 7 LIMIT 6)
+----
+6
+
+query I
+SELECT COUNT(*) FROM ((SELECT id FROM skip_csv skip 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
+----
+0
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_csv skip 19 LIMIT 5)
+----
+1
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_csv skip 20)
+----
+0
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_csv skip 25 LIMIT 3)
+----
+0
+
+query II
+SELECT id, val FROM skip_csv ORDER BY id skip 7 LIMIT 6
+----
+7 70
+8 80
+9 90
+10 100
+11 110
+12 120
+
+# skip_json
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_json skip 0 LIMIT 3)
+----
+3
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_json skip 7 LIMIT 6)
+----
+6
+
+query I
+SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_json skip 7 LIMIT 6)
+----
+6
+
+query I
+SELECT COUNT(*) FROM ((SELECT id FROM skip_json skip 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
+----
+0
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_json skip 19 LIMIT 5)
+----
+1
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_json skip 20)
+----
+0
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_json skip 25 LIMIT 3)
+----
+0
+
+query II
+SELECT id, val FROM skip_json ORDER BY id skip 7 LIMIT 6
+----
+7 70
+8 80
+9 90
+10 100
+11 110
+12 120
+
+statement ok
+set datafusion.execution.target_partitions = 8;
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_json skip 0 LIMIT 3)
+----
+3
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_json skip 7 LIMIT 6)
+----
+6
+
+query I
+SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_json skip 7 LIMIT 6)
+----
+6
+
+query I
+SELECT COUNT(*) FROM ((SELECT id FROM skip_json skip 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
+----
+0
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_json skip 19 LIMIT 5)
+----
+1
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_json skip 20)
+----
+0
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_json skip 25 LIMIT 3)
+----
+0
+
+query II
+SELECT id, val FROM skip_json ORDER BY id skip 7 LIMIT 6
+----
+7 70
+8 80
+9 90
+10 100
+11 110
+12 120
+
+# skip_parquet
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet skip 0 LIMIT 3)
+----
+3
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet skip 7 LIMIT 6)
+----
+6
+
+query I
+SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_parquet skip 7 LIMIT 6)
+----
+6
+
+query I
+SELECT COUNT(*) FROM ((SELECT id FROM skip_parquet skip 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
+----
+0
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet skip 19 LIMIT 5)
+----
+1
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet skip 20)
+----
+0
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet skip 25 LIMIT 3)
+----
+0
+
+query II
+SELECT id, val FROM skip_parquet ORDER BY id skip 7 LIMIT 6
+----
+7 70
+8 80
+9 90
+10 100
+11 110
+12 120
+
+statement ok
+set datafusion.execution.target_partitions = 8;
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet skip 0 LIMIT 3)
+----
+3
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet skip 7 LIMIT 6)
+----
+6
+
+query I
+SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_parquet skip 7 LIMIT 6)
+----
+6
+
+query I
+SELECT COUNT(*) FROM ((SELECT id FROM skip_parquet skip 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
+----
+0
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet skip 19 LIMIT 5)
+----
+1
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet skip 20)
+----
+0
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet skip 25 LIMIT 3)
+----
+0
+
+query II
+SELECT id, val FROM skip_parquet ORDER BY id skip 7 LIMIT 6
+----
+7 70
+8 80
+9 90
+10 100
+11 110
+12 120
+
+# skip_arrow
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_arrow skip 0 LIMIT 3)
+----
+3
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_arrow skip 7 LIMIT 6)
+----
+6
+
+query I
+SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_arrow skip 7 LIMIT 6)
+----
+6
+
+query I
+SELECT COUNT(*) FROM ((SELECT id FROM skip_arrow skip 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
+----
+0
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_arrow skip 19 LIMIT 5)
+----
+1
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_arrow skip 20)
+----
+0
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_arrow skip 25 LIMIT 3)
+----
+0
+
+query II
+SELECT id, val FROM skip_arrow ORDER BY id skip 7 LIMIT 6
+----
+7 70
+8 80
+9 90
+10 100
+11 110
+12 120
+
+statement ok
+set datafusion.execution.target_partitions = 8;
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_arrow skip 0 LIMIT 3)
+----
+3
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_arrow skip 7 LIMIT 6)
+----
+6
+
+query I
+SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_arrow skip 7 LIMIT 6)
+----
+6
+
+query I
+SELECT COUNT(*) FROM ((SELECT id FROM skip_arrow skip 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
+----
+0
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_arrow skip 19 LIMIT 5)
+----
+1
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_arrow skip 20)
+----
+0
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_arrow skip 25 LIMIT 3)
+----
+0
+
+query II
+SELECT id, val FROM skip_arrow ORDER BY id skip 7 LIMIT 6
+----
+7 70
+8 80
+9 90
+10 100
+11 110
+12 120
+
+# Config reset
+# The SLT runner sets `target_partitions` to 4 instead of using the
+# default, so reset it explicitly.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+DROP TABLE skip_src;
+
+statement ok
+DROP TABLE skip_csv;
+
+statement ok
+DROP TABLE skip_json;
+
+statement ok
+DROP TABLE skip_parquet;
+
+statement ok
+DROP TABLE skip_arrow;

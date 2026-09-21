@@ -188,7 +188,7 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// # Note
     ///
     /// Overriding [`TableProvider::scan_with_args`] will give you access to more arguments,
-    /// e.g. [`ScanArgs::offset`]
+    /// e.g. [`ScanArgs::skip`]
     async fn scan(
         &self,
         state: &dyn Session,
@@ -236,14 +236,14 @@ pub trait TableProvider: Any + Debug + Sync + Send {
         Box::pin(async move { Ok(plan.await?.into()) })
     }
 
-    /// Specify if DataFusion should provide the offset to the
+    /// Specify if DataFusion should provide the offset/skip to the
     /// TableProvider to apply *during* the scan.
     ///
     /// # Note
     ///
     /// Make sure [`TableProvider::scan_with_args`] is overridden too
-    /// and [`ScanArgs::offset`] is used!
-    fn supports_offset_pushdown(&self) -> bool {
+    /// and [`ScanArgs::skip`] is used!
+    fn supports_skip_pushdown(&self) -> bool {
         false
     }
 
@@ -489,7 +489,7 @@ pub struct ScanArgs<'a> {
     filters: Option<&'a [Expr]>,
     projection: Option<&'a [usize]>,
     limit: Option<usize>,
-    offset: Option<usize>,
+    skip: Option<usize>,
     statistics_requests: &'a [StatisticsRequest],
 }
 
@@ -559,17 +559,17 @@ impl<'a> ScanArgs<'a> {
     /// used to optimize queries with `OFFSET` clauses.
     ///
     /// # Arguments
-    /// * `offset` - Optional number of rows to skip
-    pub fn with_offset(mut self, offset: Option<usize>) -> Self {
-        self.offset = offset;
+    /// * `skip` - Optional number of rows to skip
+    pub fn with_skip(mut self, skip: Option<usize>) -> Self {
+        self.skip = skip;
         self
     }
 
     /// Get the number of rows to skip from the scan.
     ///
-    /// Returns the row offset, or `None` if no offset was specified.
-    pub fn offset(&self) -> Option<usize> {
-        self.offset
+    /// Returns the row offsets/skip, or `None` if no such was specified.
+    pub fn skip(&self) -> Option<usize> {
+        self.skip
     }
 
     /// Specifies the statistics the caller may use when optimizing the query.

@@ -3164,7 +3164,7 @@ mod tests {
             projection,
             source: Arc::new(test_provider),
             fetch: None,
-            offset: None,
+            skip: None,
             statistics_requests: Box::default(),
         });
 
