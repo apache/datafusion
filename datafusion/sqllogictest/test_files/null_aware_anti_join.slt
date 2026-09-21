@@ -400,8 +400,10 @@ SELECT * FROM test_table WHERE (c1 NOT IN (SELECT c2 FROM test_table)) = true;
 # The correlated subquery version from issue #10583 creates a multi-column join
 # (correlation + NOT IN condition). It is supported now; see the correlated
 # sections below.
-query error DataFusion error: Error during planning: null_aware LeftAnti joins only support single column join key, got 2 columns
+query II rowsort
 SELECT * FROM test_table t1 WHERE c1 NOT IN (SELECT c2 FROM test_table t2 WHERE t1.c1 = t2.c1);
+----
+NULL 0
 
 #############
 ## Cleanup
@@ -683,8 +685,6 @@ SELECT z FROM naconst_corr_t3 WHERE 1 NOT IN (SELECT naconst_corr_t4.id FROM nac
 7
 10
 
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query I
 SELECT z FROM naconst_corr_t3 WHERE 2 NOT IN (SELECT naconst_corr_t4.id FROM naconst_corr_t4 WHERE naconst_corr_t4.z = naconst_corr_t3.z) ORDER BY z;
 ----
@@ -739,17 +739,17 @@ statement ok
 CREATE TABLE nai_res_t2(id INT, z INT) AS VALUES (1,5), (NULL,50);
 
 # The NULL row (z = 50) never passes `t2.z < t1.z`, so it does not affect the result.
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query I
 SELECT id FROM nai_res_t1 WHERE id NOT IN (SELECT nai_res_t2.id FROM nai_res_t2 WHERE nai_res_t2.z < nai_res_t1.z) ORDER BY id;
 ----
+2
+4
 
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query I
 SELECT id FROM nai_res_t1 WHERE NOT (id IN (SELECT nai_res_t2.id FROM nai_res_t2 WHERE nai_res_t2.z < nai_res_t1.z)) ORDER BY id;
 ----
+2
+4
 
 query I
 SELECT id FROM nai_res_t1 WHERE id IN (SELECT nai_res_t2.id FROM nai_res_t2 WHERE nai_res_t2.z < nai_res_t1.z) ORDER BY id;
@@ -790,49 +790,58 @@ CREATE TABLE nai_res_inner(id INT, z INT, g INT) AS VALUES
 
 # Per outer row, the residual decides which inner rows (NULL or not) are in
 # the subquery. A NULL outer value is TRUE only when that set is empty.
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query II rowsort
 SELECT id, z FROM nai_res_outer
 WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.z < nai_res_outer.z);
 ----
+5 1
+NULL 1
 
 query II rowsort
 SELECT id, z FROM nai_res_outer
 WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.z > nai_res_outer.z);
 ----
 
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query II rowsort
 SELECT id, z FROM nai_res_outer
 WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.z < nai_res_outer.z AND i.z > 3);
 ----
+2 20
+5 1
+NULL 1
 
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query II rowsort
 SELECT id, z FROM nai_res_outer
 WHERE id + 0 NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.z < nai_res_outer.z);
 ----
+5 1
+NULL 1
 
 # The residual references the subquery value itself.
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query II rowsort
 SELECT id, z FROM nai_res_outer
 WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.id + i.z > nai_res_outer.z);
 ----
+1 10
+2 20
+4 40
+5 1
 
 # Equality and non-equality correlation together.
-query error DataFusion error: Error during planning: null_aware LeftAnti joins only support single column join key, got 2 columns
+query II rowsort
 SELECT id, z FROM nai_res_outer
 WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.g = nai_res_outer.g AND i.z < nai_res_outer.z);
+----
+2 20
+5 1
+NULL 1
 
 # Equality correlation only.
-query error DataFusion error: Error during planning: null_aware LeftAnti joins only support single column join key, got 2 columns
+query II rowsort
 SELECT id, z FROM nai_res_outer
 WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.g = nai_res_outer.g);
+----
+5 1
 
 # NOT EXISTS uses two-valued logic and must not change.
 query II rowsort
@@ -849,16 +858,20 @@ NULL 30
 statement ok
 SET datafusion.execution.batch_size = 1;
 
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query II rowsort
 SELECT id, z FROM nai_res_outer
 WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.z < nai_res_outer.z);
 ----
+5 1
+NULL 1
 
-query error DataFusion error: Error during planning: null_aware LeftAnti joins only support single column join key, got 2 columns
+query II rowsort
 SELECT id, z FROM nai_res_outer
 WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.g = nai_res_outer.g AND i.z < nai_res_outer.z);
+----
+2 20
+5 1
+NULL 1
 
 statement ok
 RESET datafusion.execution.batch_size;
@@ -882,6 +895,9 @@ CREATE TABLE nai_res_ig(id INT) AS VALUES (1), (NULL);
 query II
 SELECT id, g FROM nai_res_og WHERE nai_res_og.id NOT IN (SELECT i.id FROM nai_res_ig i WHERE nai_res_og.g > 0) ORDER BY id;
 ----
+3 0
+4 NULL
+NULL 0
 
 # The shape must stay a single anti join that carries the correlation as a
 # filter. The alternative lowering materializes the mark of three joins, which

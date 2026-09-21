@@ -663,15 +663,11 @@ CREATE TABLE nam_res_inner(id INT, z INT, g INT) AS VALUES
 (4, 35, 2),
 (NULL, 2, 2);
 
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query II rowsort
 SELECT id, z FROM nam_res_outer
 WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < nam_res_outer.z)) IS NULL;
 ----
 
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query II rowsort
 SELECT id, z FROM nam_res_outer
 WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < nam_res_outer.z)) IS TRUE;
@@ -689,8 +685,6 @@ WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < nam_res_outer.z))
 4 40
 
 # `NOT mark` must stay NULL for UNKNOWN rows instead of turning into TRUE.
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query II rowsort
 SELECT id, z FROM nam_res_outer
 WHERE NOT (id IN (SELECT i.id FROM nam_res_inner i WHERE i.z < nam_res_outer.z)) OR id = 4;
@@ -702,23 +696,17 @@ NULL 1
 NULL 30
 
 # Positive IN goes through the same mark.
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query II rowsort
 SELECT id, z FROM nam_res_outer
 WHERE (id IN (SELECT i.id FROM nam_res_inner i WHERE i.z > nam_res_outer.z)) IS NULL;
 ----
 
 # Equality and non-equality correlation together.
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query II rowsort
 SELECT id, z FROM nam_res_outer
 WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.g = nam_res_outer.g AND i.z < nam_res_outer.z)) IS NULL;
 ----
 
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query II rowsort
 SELECT id, z FROM nam_res_outer
 WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.g = nam_res_outer.g AND i.z < nam_res_outer.z)) IS TRUE;
@@ -774,8 +762,6 @@ physical_plan
 
 # The negated form of the same query stays null-aware, because `NOT mark` tells
 # NULL from FALSE.
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query TT
 EXPLAIN SELECT id FROM nam_res_outer o
 WHERE o.z > 35 OR o.id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < o.z);
@@ -801,8 +787,6 @@ physical_plan
 statement ok
 SET datafusion.execution.batch_size = 1;
 
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query II rowsort
 SELECT id, z FROM nam_res_outer
 WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < nam_res_outer.z)) IS NULL;
@@ -925,8 +909,6 @@ CREATE TABLE nam_guard_inner(id INT, z INT) AS VALUES (1,5), (NULL,50);
 # A non-negated `IN` reached through `OR` keeps the same rows with a NULL mark
 # and with a FALSE mark, so the join must NOT be null-aware. It is then free to
 # swap sides to `RightMark` as well.
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query TT
 EXPLAIN SELECT id FROM nam_guard_outer
 WHERE id IN (SELECT i.id FROM nam_guard_inner i) OR z > 25;
@@ -950,8 +932,6 @@ physical_plan
 # two-valued, so its mark is never NULL and it cannot make the `IN` mark
 # observable. Treating it as negative cost this query the plain join and the
 # `RightMark` swap.
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query TT
 EXPLAIN SELECT id FROM nam_guard_outer
 WHERE id IN (SELECT i.id FROM nam_guard_inner i)
@@ -982,8 +962,6 @@ physical_plan
 # A constant value expression is projected as an outer column only when the
 # join ends up null-aware. This mark join does not, so the constant stays a
 # filter and no `__correlated_sq_*_value` column is produced.
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query TT
 EXPLAIN SELECT id FROM nam_guard_outer
 WHERE 3 IN (SELECT i.id FROM nam_guard_inner i) OR z > 25;
