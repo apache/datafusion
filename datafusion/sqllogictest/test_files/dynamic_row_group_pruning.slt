@@ -318,6 +318,33 @@ SELECT b FROM rgsel WHERE a >= 50 ORDER BY b ASC LIMIT 5;
 statement ok
 set datafusion.execution.parquet.pushdown_filters = true;
 
+# Regression test: a hash join's build side must get the same compact,
+# sorted-domain min/max pruning an ordinary large `IN (...)` list already
+# gets - and do better than the plain min/max *bounds* check every join
+# already gets for free. `dim`'s overall envelope [1000, 3050] spans RG 1
+# (b=2000..2099) entirely, so bounds alone cannot exclude it; only the
+# discrete check can prove none of {1000, 1050, 3050} falls inside it.
+# Force the hash-table-lookup path (rather than `InList`) regardless of size.
+statement ok
+CREATE TABLE dim AS VALUES (1000), (1050), (3050);
+
+statement ok
+set datafusion.optimizer.hash_join_inlist_pushdown_max_distinct_values = 0;
+
+query TT
+explain analyze select rgsel.b from dim join rgsel on dim.column1 = rgsel.b;
+----
+Plan with Metrics
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(column1@0, b@0)], projection=[b@1], metrics=[output_rows=3, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=1, build_mem_used=<slt:ignore>, array_map_created_count=0, build_input_batches=1, build_input_rows=3, input_batches=2, input_rows=3, build_time=<slt:ignore>, join_time=<slt:ignore>, avg_fanout=100% (3/3), probe_hit_rate=100% (3/3)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
+03)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_row_group_pruning/rgsel.parquet]]}, projection=[b], file_type=parquet, predicate=DynamicFilter [ b@1 >= 1000 AND b@1 <= 3050 AND hash_lookup ], dynamic_rg_pruning=eligible, pruning_predicate=b_null_count@1 != row_count@2 AND b_max@0 >= 1000 AND b_null_count@1 != row_count@2 AND b_min@3 <= 3050 AND b_null_count@1 != row_count@2 AND KEY_RANGE_BITMAP(b_min@3, b_max@0, 3/4096 buckets), required_guarantees=[], metrics=[output_rows=3, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=2, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=4 total → 2 matched, row_groups_pruned_bloom_filter=2 total → 2 matched, page_index_pages_pruned=20 total → 3 matched, page_index_rows_pruned=200 total → 30 matched, limit_pruned_row_groups=0 total → 0 matched, batches_split=0, bytes_processed=<slt:ignore>, bytes_scanned=<slt:ignore>, file_open_errors=0, file_scan_errors=0, files_opened=1, files_processed=1, num_predicate_creation_errors=0, predicate_evaluation_errors=0, pushdown_rows_matched=3, pushdown_rows_pruned=27, row_groups_pruned_dynamic_filter=0, predicate_cache_inner_records=200, predicate_cache_records=13, bloom_filter_eval_time=<slt:ignore>, metadata_load_time=<slt:ignore>, page_index_eval_time=<slt:ignore>, row_pushdown_eval_time=<slt:ignore>, statistics_eval_time=<slt:ignore>, time_elapsed_opening=<slt:ignore>, time_elapsed_processing=<slt:ignore>, time_elapsed_scanning_total=<slt:ignore>, time_elapsed_scanning_until_data=<slt:ignore>, output_rows_skew=<slt:ignore>, scan_efficiency_ratio=<slt:ignore>]
+
+statement ok
+RESET datafusion.optimizer.hash_join_inlist_pushdown_max_distinct_values;
+
+statement ok
+drop table dim;
+
 statement ok
 drop table rgsel;
 
