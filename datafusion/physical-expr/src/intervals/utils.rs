@@ -53,7 +53,11 @@ pub fn check_support(expr: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
             false
         }
     } else if let Some(cast) = expr.downcast_ref::<CastExpr>() {
-        check_support(cast.expr(), schema)
+        // The cast target type must itself be one we can reason about. Casting
+        // interval endpoints to a type with a different ordering (e.g. integers
+        // to strings) does not preserve the interval, so such expressions are
+        // left unanalyzed rather than producing bogus bounds.
+        is_datatype_supported(cast.cast_type()) && check_support(cast.expr(), schema)
     } else if let Some(negative) = expr.downcast_ref::<NegativeExpr>() {
         check_support(negative.arg(), schema)
     } else {
@@ -191,5 +195,54 @@ fn interval_dt_to_duration_ms(dt: &IntervalDayTime) -> Result<i64> {
         internal_err!(
             "The interval cannot have a non-zero day value for duration convertibility"
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::expressions::{cast, col};
+
+    use arrow::datatypes::{Field, Schema};
+
+    fn int32_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]))
+    }
+
+    #[test]
+    fn test_check_support_rejects_unsupported_cast_target() -> Result<()> {
+        let schema = int32_schema();
+        let id = col("id", schema.as_ref())?;
+
+        // Casting an interval-friendly column to a type interval arithmetic does
+        // not understand must not be analyzed: string ordering and numeric
+        // ordering are not interchangeable, so endpoint-wise casting can produce
+        // a reversed interval.
+        let to_utf8 = cast(Arc::clone(&id), schema.as_ref(), DataType::Utf8)?;
+        assert!(!check_support(&to_utf8, &schema));
+
+        // The same holds when the unsupported type only appears in the middle of
+        // a cast chain whose outermost type is supported.
+        let round_trip = cast(to_utf8, schema.as_ref(), DataType::Int32)?;
+        assert!(!check_support(&round_trip, &schema));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_check_support_allows_supported_cast_target() -> Result<()> {
+        let schema = int32_schema();
+        let id = col("id", schema.as_ref())?;
+
+        assert!(check_support(&id, &schema));
+
+        let to_int64 = cast(Arc::clone(&id), schema.as_ref(), DataType::Int64)?;
+        assert!(check_support(&to_int64, &schema));
+
+        let to_float64 = cast(to_int64, schema.as_ref(), DataType::Float64)?;
+        assert!(check_support(&to_float64, &schema));
+
+        Ok(())
     }
 }
