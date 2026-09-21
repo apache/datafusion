@@ -22,10 +22,11 @@ mod tests {
     use crate::cases::roundtrip_logical_plan::higher_order_function_ctx;
     use crate::utils::test::{add_plan_schemas_to_ctx, read_json};
     use datafusion::arrow::array::{ArrayRef, Int64Array, RecordBatch};
+    use datafusion::arrow::datatypes::{Field, Schema, SchemaRef};
     use datafusion::assert_batches_sorted_eq;
     use datafusion::common::test_util::format_batches;
     use datafusion::datasource::MemTable;
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
     use datafusion::common::Result;
@@ -270,7 +271,39 @@ mod tests {
             ),
         ];
 
-        for (file, expected_nullability, expected_rows) in [
+        // Schema and field metadata are no part of an input's nullability, so the
+        // result must not depend on whether the tables carry any. With metadata,
+        // every table describes itself and the secondary tables add keys the
+        // primary one lacks: the result has to keep the primary table's metadata
+        // where they disagree, including on the columns read from a secondary
+        // input, and the physical plan and the batches have to agree with it. The
+        // secondary tables share their metadata, as `INTERSECTION_PRIMARY` unions
+        // them, and a union of inputs with differing field metadata reports
+        // different metadata in its logical and in its physical schema.
+        let with_metadata = |schema: &SchemaRef, table: &str| -> SchemaRef {
+            let role = if table == "data" { "data" } else { "secondary" };
+            let tag = |mut metadata: HashMap<String, String>| {
+                if role == "secondary" {
+                    metadata.insert("only_in_secondary".to_string(), "yes".to_string());
+                }
+                metadata
+            };
+            let fields: Vec<Field> = schema
+                .fields()
+                .iter()
+                .map(|field| {
+                    let metadata = HashMap::from([(
+                        "column".to_string(),
+                        format!("{role}.{}", field.name()),
+                    )]);
+                    field.as_ref().clone().with_metadata(tag(metadata))
+                })
+                .collect();
+            let metadata = HashMap::from([("table".to_string(), role.to_string())]);
+            Arc::new(Schema::new_with_metadata(fields, tag(metadata)))
+        };
+
+        let cases = [
             // Nullable in the primary input and in at least one secondary input.
             (
                 "intersect_primary_mixed_nullability",
@@ -308,13 +341,23 @@ mod tests {
                     "+---+---+---+---+---+---+",
                 ][..],
             ),
-        ] {
+        ];
+
+        for ((file, expected_nullability, expected_rows), tagged) in cases
+            .into_iter()
+            .flat_map(|case| [(case, false), (case, true)])
+        {
             let proto_plan =
                 read_json(&format!("tests/testdata/test_plans/{file}.substrait.json"));
             let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
             // Give each table rows, so the batch schemas below come from real batches
             for (table, rows) in rows {
                 let schema = ctx.table_provider(table).await?.schema();
+                let schema = if tagged {
+                    with_metadata(&schema, table)
+                } else {
+                    schema
+                };
                 let columns = (0..schema.fields().len())
                     .map(|i| {
                         Arc::new(rows.iter().map(|row| row[i]).collect::<Int64Array>())
@@ -343,7 +386,28 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            assert_eq!(nullability, expected_nullability, "nullability of {file}");
+            assert_eq!(
+                nullability, expected_nullability,
+                "nullability of {file} (tagged: {tagged})"
+            );
+
+            if tagged {
+                // Where the inputs disagree, the primary table's metadata wins,
+                // also on the columns read from a secondary input
+                assert_eq!(
+                    plan.schema().metadata().get("table").map(String::as_str),
+                    Some("data"),
+                    "schema metadata of {file}"
+                );
+                for field in plan.schema().fields() {
+                    assert_eq!(
+                        field.metadata().get("column"),
+                        Some(&format!("data.{}", field.name())),
+                        "metadata of column {} of {file}",
+                        field.name()
+                    );
+                }
+            }
 
             // The physical plan and the batches it produces must carry the same
             // schema as the logical plan, not the left input's nullability

@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::logical_plan::consumer::SubstraitConsumer;
+use datafusion::common::metadata::FieldMetadata;
 use datafusion::common::{JoinType, NullEquality, not_impl_err, substrait_err};
 use datafusion::logical_expr::{
     Expr, LogicalPlan, LogicalPlanBuilder, requalify_sides_if_needed,
@@ -110,6 +111,15 @@ async fn intersect_rels(
 /// Joining against distinct right rows keeps each left row at most once, as the
 /// semi join does.
 ///
+/// Differing metadata does not change which path is taken, as it is no part of
+/// nullability. The result should describe the left input, as
+/// [`LogicalPlanBuilder::intersect`] does, so on conflicting keys the left's
+/// metadata wins: a column read from the right is aliased with the left field's
+/// metadata, and an inner join's schema already lets the left input's schema
+/// metadata win, in the logical and in the physical plan alike. Keys only the
+/// right input carries are merged in, and the physical plan and the batches
+/// carry the same metadata as the logical plan.
+///
 /// [Set Operation rules]: https://substrait.io/relations/logical_relations/#set-operation
 fn intersect_rel(
     left: LogicalPlan,
@@ -118,8 +128,9 @@ fn intersect_rel(
 ) -> datafusion::common::Result<LogicalPlan> {
     let left_fields = left.schema().fields();
     let right_fields = right.schema().fields();
-    // Only a field that differs from its right counterpart in nullability alone
-    // is read from the right side, so every other attribute stays the left's.
+    // A field is read from the right side when the left leaves it nullable and
+    // the right requires it. Its metadata does not matter here: it is read from
+    // the right with the left field's metadata layered over it.
     let from_right: Vec<bool> = left_fields
         .iter()
         .zip(right_fields.iter())
@@ -127,16 +138,11 @@ fn intersect_rel(
             left.is_nullable()
                 && !right.is_nullable()
                 && left.data_type() == right.data_type()
-                && left.metadata() == right.metadata()
         })
         .collect();
 
-    // `intersect` also reports inputs of different widths. The join would merge
-    // the right input's schema metadata into the result, so that must match too.
-    if left_fields.len() != right_fields.len()
-        || left.schema().metadata() != right.schema().metadata()
-        || !from_right.contains(&true)
-    {
+    // `intersect` also reports inputs of different widths.
+    if left_fields.len() != right_fields.len() || !from_right.contains(&true) {
         return LogicalPlanBuilder::intersect(left, right, is_all);
     }
 
@@ -149,14 +155,20 @@ fn intersect_rel(
 
     let left_columns = left.schema().columns();
     let right_columns = right.schema().columns();
-    let exprs = left_columns
+    let exprs = left
+        .schema()
+        .fields()
         .iter()
+        .zip(&left_columns)
         .zip(&right_columns)
         .zip(&from_right)
-        .map(|((left, right), from_right)| {
+        .map(|(((field, left), right), from_right)| {
             if *from_right {
-                Expr::Column(right.clone())
-                    .alias_qualified(left.relation.clone(), &left.name)
+                Expr::Column(right.clone()).alias_qualified_with_metadata(
+                    left.relation.clone(),
+                    &left.name,
+                    Some(FieldMetadata::from(field.metadata().clone())),
+                )
             } else {
                 Expr::Column(left.clone())
             }
