@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -90,6 +90,143 @@ select * from t0 where v0<1e100;
 statement ok
 drop table t0;
 
+# A timestamp ordering cannot satisfy a time-of-day ordering across midnight.
+# LIMIT keeps the inner sort as a required part of the input plan.
+statement ok
+CREATE VIEW cast_midnight AS
+SELECT column1 AS ts
+FROM (VALUES
+  (TIMESTAMP '1970-01-01 23:59:59'),
+  (TIMESTAMP '1970-01-02 00:00:00'),
+  (TIMESTAMP '1970-01-02 00:00:01'),
+  (CAST(NULL AS TIMESTAMP))
+);
+
+query PD
+SELECT ts, CAST(ts AS TIME) AS time_of_day
+FROM (SELECT ts FROM cast_midnight ORDER BY ts ASC NULLS FIRST LIMIT 4)
+ORDER BY time_of_day ASC NULLS FIRST;
+----
+NULL NULL
+1970-01-02T00:00:00 00:00:00
+1970-01-02T00:00:01 00:00:01
+1970-01-01T23:59:59 23:59:59
+
+query PD
+SELECT ts, CAST(ts AS TIME) AS time_of_day
+FROM (SELECT ts FROM cast_midnight ORDER BY ts ASC NULLS LAST LIMIT 4)
+ORDER BY time_of_day ASC NULLS LAST;
+----
+1970-01-02T00:00:00 00:00:00
+1970-01-02T00:00:01 00:00:01
+1970-01-01T23:59:59 23:59:59
+NULL NULL
+
+query PD
+SELECT ts, CAST(ts AS TIME) AS time_of_day
+FROM (SELECT ts FROM cast_midnight ORDER BY ts DESC NULLS FIRST LIMIT 4)
+ORDER BY time_of_day DESC NULLS FIRST;
+----
+NULL NULL
+1970-01-01T23:59:59 23:59:59
+1970-01-02T00:00:01 00:00:01
+1970-01-02T00:00:00 00:00:00
+
+query PD
+SELECT ts, CAST(ts AS TIME) AS time_of_day
+FROM (SELECT ts FROM cast_midnight ORDER BY ts DESC NULLS LAST LIMIT 4)
+ORDER BY time_of_day DESC NULLS LAST;
+----
+1970-01-01T23:59:59 23:59:59
+1970-01-02T00:00:01 00:00:01
+1970-01-02T00:00:00 00:00:00
+NULL NULL
+
+# A named timezone rollback can also reverse the local date.
+query ID
+SELECT arrow_cast(ts, 'Int64') AS epoch, CAST(ts AS DATE) AS d
+FROM (
+  SELECT arrow_cast(column1, 'Timestamp(Second, Some("America/Goose_Bay"))') AS ts
+  FROM (VALUES (562129259::bigint), (562129260::bigint))
+  ORDER BY ts LIMIT 2
+)
+ORDER BY d;
+----
+562129260 1987-10-24
+562129259 1987-10-25
+
+# Reducing timestamp precision remains order-preserving, even when values merge.
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT arrow_cast(ts, 'Timestamp(Second, None)') AS truncated
+FROM (
+  SELECT column1 AS ts
+  FROM (VALUES
+    (TIMESTAMP '1970-01-01 00:00:00.001'),
+    (TIMESTAMP '1970-01-01 00:00:00.002'),
+    (TIMESTAMP '1970-01-01 00:00:01.000')
+  )
+  ORDER BY ts LIMIT 3
+)
+ORDER BY truncated;
+----
+physical_plan
+01)ProjectionExec: expr=[CAST(column1@0 AS Timestamp(s)) as truncated]
+02)--SortExec: TopK(fetch=3), expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+SET datafusion.explain.physical_plan_only = false;
+
+# Regression for https://github.com/apache/datafusion/issues/25523.
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE TABLE lossy_cast (id INT, x DOUBLE, n BIGINT)
+AS VALUES (1, -0.5, 16777216), (2, 0.5, 16777217), (3, NULL, NULL);
+
+# A singleton cast result does not imply a singleton input.
+query I
+SELECT id FROM lossy_cast WHERE CAST(x AS INT) = 0 ORDER BY x DESC;
+----
+2
+1
+
+query I
+SELECT id FROM lossy_cast WHERE CAST(n AS REAL) = 16777216::REAL ORDER BY n DESC;
+----
+2
+1
+
+statement ok
+DROP TABLE lossy_cast;
+
+statement ok
+CREATE TABLE lossy_non_numeric (id INT, t TIMESTAMP, s VARCHAR)
+AS VALUES (1, TIMESTAMP '2026-01-01 01:00:00', '01'),
+          (2, TIMESTAMP '2026-01-01 02:00:00', '1');
+
+query I
+SELECT id FROM lossy_non_numeric
+WHERE CAST(t AS DATE) = DATE '2026-01-01' ORDER BY t DESC;
+----
+2
+1
+
+query I
+SELECT id FROM lossy_non_numeric WHERE CAST(s AS INT) = 1 ORDER BY s DESC;
+----
+2
+1
+
+statement ok
+DROP TABLE lossy_non_numeric;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
 
 # ensure that automatically casting with "datafusion.optimizer.expand_views_at_output" does not
 # change the column name

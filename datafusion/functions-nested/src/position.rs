@@ -40,7 +40,10 @@ use arrow::array::{
 use datafusion_common::cast::{
     as_generic_list_array, as_int64_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::{Result, exec_err, utils::take_function_args};
+use datafusion_common::utils::offset_span;
+use datafusion_common::{
+    Result, exec_datafusion_err, exec_err, utils::take_function_args,
+};
 use itertools::Itertools;
 
 use crate::utils::{compare_element_to_list, make_scalar_function};
@@ -198,6 +201,16 @@ fn array_position_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+fn resolve_zero_based_start_from(start_from: i64) -> Result<i64> {
+    start_from.checked_sub(1).ok_or_else(|| {
+        exec_datafusion_err!(
+            "start_from out of bounds: {start_from}, expected {} to {}",
+            i64::MIN + 1,
+            i64::MAX
+        )
+    })
+}
+
 /// Resolves the optional `start_from` argument into a `Vec<i64>` of
 /// 0-indexed starting positions.
 fn resolve_start_from(
@@ -207,14 +220,16 @@ fn resolve_start_from(
     match third_arg {
         None => Ok(vec![0i64; num_rows]),
         Some(ColumnarValue::Scalar(ScalarValue::Int64(Some(v)))) => {
-            Ok(vec![v - 1; num_rows])
+            Ok(vec![resolve_zero_based_start_from(*v)?; num_rows])
         }
         Some(ColumnarValue::Scalar(s)) => {
             exec_err!("array_position expected Int64 for start_from, got {s}")
         }
-        Some(ColumnarValue::Array(a)) => {
-            Ok(as_int64_array(a)?.values().iter().map(|&x| x - 1).collect())
-        }
+        Some(ColumnarValue::Array(a)) => as_int64_array(a)?
+            .values()
+            .iter()
+            .map(|&x| resolve_zero_based_start_from(x))
+            .collect(),
     }
 }
 
@@ -241,11 +256,8 @@ fn array_position_scalar<O: OffsetSizeTrait>(
     // ListArrays, values() returns the full underlying array but only
     // elements between the first and last offset are referenced.
     let offsets = haystack.offsets();
-    let first_offset = offsets[0].as_usize();
-    let last_offset = offsets[haystack.len()].as_usize();
-    let visible_values = haystack
-        .values()
-        .slice(first_offset, last_offset - first_offset);
+    let (first_offset, values_len) = offset_span(offsets);
+    let visible_values = haystack.values().slice(first_offset, values_len);
 
     // `not_distinct` treats NULL=NULL as true, matching the semantics of
     // `array_position`.
@@ -257,9 +269,9 @@ fn array_position_scalar<O: OffsetSizeTrait>(
 
     // Match positions are relative to visible_values (0-based), so
     // subtract first_offset from each offset when comparing.
-    for i in 0..haystack.len() {
-        let start = offsets[i].as_usize() - first_offset;
-        let end = offsets[i + 1].as_usize() - first_offset;
+    for (i, window) in offsets.windows(2).enumerate() {
+        let start = window[0].as_usize() - first_offset;
+        let end = window[1].as_usize() - first_offset;
 
         if validity.is_some_and(|v| v.is_null(i)) {
             // Null row -> null output; advance past matches in range
@@ -309,8 +321,8 @@ fn general_position_dispatch<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<Ar
         as_int64_array(&args[2])?
             .values()
             .iter()
-            .map(|&x| x - 1)
-            .collect::<Vec<_>>()
+            .map(|&x| resolve_zero_based_start_from(x))
+            .collect::<Result<Vec<_>>>()?
     } else {
         vec![0; haystack.len()]
     };
@@ -540,11 +552,8 @@ fn array_positions_scalar<O: OffsetSizeTrait>(
     // ListArrays, values() returns the full underlying array but only
     // elements between the first and last offset are referenced.
     let offsets = haystack.offsets();
-    let first_offset = offsets[0].as_usize();
-    let last_offset = offsets[num_rows].as_usize();
-    let visible_values = haystack
-        .values()
-        .slice(first_offset, last_offset - first_offset);
+    let (first_offset, values_len) = offset_span(offsets);
+    let visible_values = haystack.values().slice(first_offset, values_len);
 
     // `not_distinct` treats NULL=NULL as true, matching the semantics of
     // `array_positions`.
@@ -559,9 +568,9 @@ fn array_positions_scalar<O: OffsetSizeTrait>(
 
     // Match positions are relative to visible_values (0-based), so
     // subtract first_offset from each offset when comparing.
-    for i in 0..num_rows {
-        let start = offsets[i].as_usize() - first_offset;
-        let end = offsets[i + 1].as_usize() - first_offset;
+    for (i, window) in offsets.windows(2).enumerate() {
+        let start = window[0].as_usize() - first_offset;
+        let end = window[1].as_usize() - first_offset;
 
         if validity.is_some_and(|v| v.is_null(i)) {
             // Null row -> null output; advance past matches in range.

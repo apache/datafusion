@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fmt::Write as _;
 use std::{collections::HashMap, sync::Arc};
 
 use super::{
@@ -464,7 +465,6 @@ impl PostgreSqlDialect {
                     kind: ast::CastKind::Cast,
                     expr: Box::new(expr.clone()),
                     data_type: ast::DataType::Numeric(ast::ExactNumberInfo::None),
-                    array: false,
                     format: None,
                 };
             }
@@ -703,7 +703,7 @@ impl Dialect for BigQueryDialect {
             let mut encoded_name = String::new();
             for c in alias.chars() {
                 if special_chars.contains(&c) {
-                    encoded_name.push_str(&format!("_{}", c as u32));
+                    write!(encoded_name, "_{}", c as u32).ok();
                 } else {
                     encoded_name.push(c);
                 }

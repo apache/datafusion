@@ -376,7 +376,7 @@ impl PlannerContext {
         match self.outer_from_schema.as_mut() {
             Some(from_schema) => Arc::make_mut(from_schema).merge(schema),
             None => self.outer_from_schema = Some(Arc::clone(schema)),
-        };
+        }
         Ok(())
     }
 
@@ -838,7 +838,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .collect::<Result<Vec<_>>>()?;
                 Ok(DataType::Struct(Fields::from(fields)))
             }
-            SQLDataType::Map(key_type, value_type) => {
+            SQLDataType::Map(key_type, value_type, _) => {
                 let key_field = Arc::new(Field::new(
                     "key", self.convert_data_type_to_field(key_type)?.data_type().clone(), false
                 ));

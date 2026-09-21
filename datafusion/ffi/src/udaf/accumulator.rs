@@ -86,7 +86,7 @@ impl FFI_Accumulator {
     #[inline]
     unsafe fn inner_mut(&mut self) -> &mut Box<dyn Accumulator> {
         unsafe {
-            let private_data = self.private_data as *mut AccumulatorPrivateData;
+            let private_data = self.private_data.cast::<AccumulatorPrivateData>();
             &mut (*private_data).accumulator
         }
     }
@@ -195,7 +195,7 @@ unsafe extern "C" fn release_fn_wrapper(accumulator: &mut FFI_Accumulator) {
     unsafe {
         if !accumulator.private_data.is_null() {
             let private_data =
-                Box::from_raw(accumulator.private_data as *mut AccumulatorPrivateData);
+                Box::from_raw(accumulator.private_data.cast::<AccumulatorPrivateData>());
             drop(private_data);
             accumulator.private_data = null_mut();
         }
@@ -223,7 +223,7 @@ impl From<Box<dyn Accumulator>> for FFI_Accumulator {
             retract_batch: retract_batch_fn_wrapper,
             supports_retract_batch,
             release: release_fn_wrapper,
-            private_data: Box::into_raw(Box::new(private_data)) as *mut c_void,
+            private_data: Box::into_raw(Box::new(private_data)).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }
@@ -251,7 +251,7 @@ impl From<FFI_Accumulator> for Box<dyn Accumulator> {
         if (accumulator.library_marker_id)() == crate::get_library_marker_id() {
             unsafe {
                 let private_data = Box::from_raw(
-                    accumulator.private_data as *mut AccumulatorPrivateData,
+                    accumulator.private_data.cast::<AccumulatorPrivateData>(),
                 );
                 // We must set this to null to avoid a double free
                 accumulator.private_data = null_mut();
@@ -406,6 +406,8 @@ mod tests {
     }
 
     #[test]
+    // The pointer casts are aligned because the pointees are the concrete types.
+    #[expect(clippy::cast_ptr_alignment)]
     fn test_ffi_accumulator_local_bypass() -> Result<()> {
         let original_accum = AvgAccumulator::default();
         let boxed_accum: Box<dyn Accumulator> = Box::new(original_accum);
@@ -417,8 +419,8 @@ mod tests {
         let foreign_accum: Box<dyn Accumulator> = ffi_accum.into();
         unsafe {
             let concrete =
-                &*(std::ptr::from_ref::<dyn Accumulator>(foreign_accum.as_ref())
-                    as *const AvgAccumulator);
+                &*std::ptr::from_ref::<dyn Accumulator>(foreign_accum.as_ref())
+                    .cast::<AvgAccumulator>();
             assert_eq!(original_size, concrete.size());
         }
 
@@ -430,8 +432,8 @@ mod tests {
         let foreign_accum: Box<dyn Accumulator> = ffi_accum.into();
         unsafe {
             let concrete =
-                &*(std::ptr::from_ref::<dyn Accumulator>(foreign_accum.as_ref())
-                    as *const ForeignAccumulator);
+                &*std::ptr::from_ref::<dyn Accumulator>(foreign_accum.as_ref())
+                    .cast::<ForeignAccumulator>();
             assert_eq!(original_size, concrete.size());
         }
 

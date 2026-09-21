@@ -86,7 +86,7 @@ fn assert_valid_extension_nodes(plan: &LogicalPlan, check: InvariantLevel) -> Re
                         assert_valid_extension_nodes(&subquery.subquery, check)?;
                     }
                     _ => {}
-                };
+                }
                 Ok(TreeNodeRecursion::Continue)
             })
         })
@@ -139,7 +139,7 @@ fn assert_subqueries_are_valid(plan: &LogicalPlan) -> Result<()> {
                         check_subquery_expr(plan, &subquery.subquery, expr)?;
                     }
                     _ => {}
-                };
+                }
                 Ok(TreeNodeRecursion::Continue)
             })
         })
@@ -195,7 +195,12 @@ pub fn check_subquery_expr(
                 }
             }?;
             match outer_plan {
-                LogicalPlan::Projection(_) | LogicalPlan::Filter(_) => Ok(()),
+                LogicalPlan::Projection(_)
+                | LogicalPlan::Filter(_)
+                | LogicalPlan::Dml(DmlStatement {
+                    op: WriteOp::MergeInto(_),
+                    ..
+                }) => Ok(()),
                 LogicalPlan::Aggregate(Aggregate {
                     group_expr,
                     aggr_expr,
@@ -213,7 +218,7 @@ pub fn check_subquery_expr(
                 }
                 _ => plan_err!(
                     "Correlated scalar subquery can only be used in Projection, \
-                    Filter, Aggregate plan nodes"
+                    Filter, Aggregate and MERGE DML plan nodes"
                 ),
             }?;
         }

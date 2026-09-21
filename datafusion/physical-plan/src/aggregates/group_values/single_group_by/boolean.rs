@@ -21,7 +21,7 @@ use arrow::array::{
     ArrayRef, AsArray as _, BooleanArray, BooleanBufferBuilder, NullBufferBuilder,
 };
 use datafusion_common::Result;
-use datafusion_expr::EmitTo;
+use datafusion_expr::{EmitTo, GroupSelection};
 use std::{mem::size_of, sync::Arc};
 
 #[derive(Debug)]
@@ -143,6 +143,36 @@ impl GroupValues for GroupValuesBoolean {
         };
 
         Ok(vec![Arc::new(BooleanArray::new(values, nulls)) as _])
+    }
+
+    fn values_preserving(
+        &mut self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        let num_groups = self.len();
+        selection.validate_num_groups(num_groups)?;
+        let mut values = BooleanBufferBuilder::new(selection.len());
+        let mut nulls = NullBufferBuilder::new(selection.len());
+        for index in selection.iter() {
+            if self.null_group == Some(index) {
+                values.append(false);
+                nulls.append_null();
+            } else {
+                debug_assert!(
+                    self.false_group == Some(index) || self.true_group == Some(index)
+                );
+                values.append(self.true_group == Some(index));
+                nulls.append_non_null();
+            }
+        }
+        Ok(vec![Arc::new(BooleanArray::new(
+            values.finish(),
+            nulls.finish(),
+        ))])
+    }
+
+    fn supports_values_preserving(&self) -> bool {
+        true
     }
 
     fn clear_shrink(&mut self, _num_rows: usize) {

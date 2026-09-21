@@ -77,7 +77,7 @@ impl LogicalExtensionCodec for CsvLogicalExtensionCodec {
         let proto = CsvOptionsProto::decode(buf).map_err(|e| {
             exec_datafusion_err!("Failed to decode CsvOptionsProto: {e:?}")
         })?;
-        let options = CsvOptions::from(&proto);
+        let options = CsvOptions::try_from(&proto)?;
         Ok(Arc::new(CsvFormatFactory {
             options: Some(options),
         }))
@@ -155,7 +155,7 @@ impl LogicalExtensionCodec for JsonLogicalExtensionCodec {
         let proto = JsonOptionsProto::decode(buf).map_err(|e| {
             exec_datafusion_err!("Failed to decode JsonOptionsProto: {e:?}")
         })?;
-        let options = JsonOptions::from(&proto);
+        let options = JsonOptions::try_from(&proto)?;
         Ok(Arc::new(JsonFormatFactory {
             options: Some(options),
         }))
