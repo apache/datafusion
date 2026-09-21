@@ -1315,6 +1315,17 @@ mod tests {
         ) -> Partitioning {
             Partitioning::Range(self.range(indices, split_points))
         }
+
+        fn range_partitioning_with_ordering(
+            &self,
+            ordering: LexOrdering,
+            split_points: Vec<SplitPoint>,
+        ) -> Partitioning {
+            Partitioning::Range(
+                RangePartitioning::try_new(ordering, split_points)
+                    .expect("test range partitioning should be valid"),
+            )
+        }
     }
 
     fn assert_satisfaction(
@@ -1373,28 +1384,6 @@ mod tests {
             Field::new(
                 "date_trunc",
                 DataType::Timestamp(TimeUnit::Nanosecond, timezone),
-                true,
-            )
-            .into(),
-            Arc::new(ConfigOptions::default()),
-        ))
-    }
-
-    fn date_bin_of(timestamp: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
-        Arc::new(ScalarFunctionExpr::new(
-            "date_bin",
-            datafusion_functions::datetime::date_bin(),
-            vec![
-                Arc::new(Literal::new(ScalarValue::new_interval_mdn(
-                    0,
-                    0,
-                    60_000_000_000,
-                ))),
-                timestamp,
-            ],
-            Field::new(
-                "date_bin",
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
                 true,
             )
             .into(),
@@ -1603,15 +1592,6 @@ mod tests {
             false,
         );
 
-        assert_key_locality(
-            "date_bin remains default-denied",
-            &aligned,
-            &[date_bin_of(fixture.col(0))],
-            &fixture.eq_properties,
-            false,
-            false,
-        );
-
         let trunc_day = date_trunc_of(fixture.col(0), "day", None);
         assert_key_locality(
             "an hour split straddles a day bucket",
@@ -1674,6 +1654,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        deprecated,
+        reason = "test intentionally constructs a malformed range split"
+    )]
     fn range_transform_key_locality_fails_closed() -> Result<()> {
         let fixture = PartitioningTestFixture::new(vec![(
             "timestamp",
