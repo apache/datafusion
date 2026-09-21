@@ -346,10 +346,8 @@ mod tests {
                 .await?
                 .into_inner();
             let skip_batches = collect(skip_exec, ctx.task_ctx()).await?;
-            let actual = arrow::compute::concat_batches(
-                &skip_batches[0].schema(),
-                &skip_batches,
-            )?;
+            let actual =
+                arrow::compute::concat_batches(&skip_batches[0].schema(), &skip_batches)?;
 
             assert_eq!(actual.num_rows(), 3);
             assert_eq!(batches_to_string(&[expected]), batches_to_string(&[actual]));

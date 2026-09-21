@@ -40,7 +40,9 @@ pub fn from_limit(
         _ => None,
     };
     let skip_expr = match (limit.skip.as_deref(), scan_offset) {
-        (Some(limit_skip), Some(scan_skip)) => Some(limit_skip.clone() + lit(scan_skip as i64)),
+        (Some(limit_skip), Some(scan_skip)) => {
+            Some(limit_skip.clone() + lit(scan_skip as i64))
+        }
         (Some(skip), None) => Some(skip.clone()),
         (None, Some(skip)) => Some(lit(skip as i64)),
         (None, None) => None,

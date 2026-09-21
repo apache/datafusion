@@ -215,7 +215,7 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// A [`ScanResult`] containing the [`ExecutionPlan`] for scanning the table
     ///
     /// See [`Self::scan`] for detailed documentation about projection, filters, and limits.
-    /// 
+    ///
     /// # Evaluation Order
     ///
     /// The logical evaluation order is [`ScanArgs::filters`], then [`ScanArgs::skip`]
