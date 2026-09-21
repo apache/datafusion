@@ -7502,6 +7502,7 @@ mod tests {
             ArrayMap::estimate_memory_size(0, num_rows as u64 - 1, build_rows)
         } else {
             estimate_memory_size::<(u32, u64)>(build_rows, size_of::<JoinHashMapU32>())?
+                + build_rows * size_of::<u32>()
         };
 
         for (limit, fits) in [(map + inputs * 3 / 2, false), (map + inputs * 3, true)] {
@@ -7571,7 +7572,7 @@ mod tests {
             estimate_memory_size::<(u32, u64)>(
                 num_rows as usize,
                 size_of::<JoinHashMapU32>(),
-            )?
+            )? + num_rows as usize * size_of::<u32>()
         };
 
         for (computed_key, limit, fits) in [
