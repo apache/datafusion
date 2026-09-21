@@ -38,12 +38,15 @@ pub fn from_join(
     let right = producer.handle_plan(join.right.as_ref())?;
     let join_type = to_substrait_jointype(join.join_type);
 
-    let join_expr = match to_substrait_join_expr(
+    let join_expression = match to_substrait_join_expr(
         join.on.clone(),
         join.null_equality,
         join.filter.clone(),
     ) {
-        Some(expr) => expr,
+        Some(expr) => {
+            let in_join_schema = Arc::new(join.left.schema().join(join.right.schema())?);
+            producer.handle_expr(&expr, &in_join_schema)?
+        }
         None if join.join_type == JoinType::Inner => {
             return Ok(Box::new(Rel {
                 rel_type: Some(RelType::Cross(Box::new(CrossRel {
@@ -54,10 +57,10 @@ pub fn from_join(
                 }))),
             }));
         }
-        None => lit(true),
+        // The literal needs no input column resolution. Semi, anti, and mark joins
+        // can have overlapping input names that cannot form a combined schema.
+        None => producer.handle_expr(&lit(true), &join.schema)?,
     };
-    let in_join_schema = Arc::new(join.left.schema().join(join.right.schema())?);
-    let join_expression = producer.handle_expr(&join_expr, &in_join_schema)?;
 
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Join(Box::new(JoinRel {
@@ -115,7 +118,8 @@ mod tests {
     use datafusion::logical_expr::utils::conjunction;
     use datafusion::logical_expr::{Join, col, table_scan};
     use std::sync::Arc;
-    use substrait::proto::expression::{RexType, ScalarFunction};
+    use substrait::proto::expression::literal::LiteralType;
+    use substrait::proto::expression::{Literal, RexType, ScalarFunction};
     use substrait::proto::rel::RelType;
     use substrait::proto::{CrossRel, Expression, JoinRel, Rel, join_rel};
 
@@ -224,5 +228,57 @@ mod tests {
         };
 
         assert_eq!(producer.handle_join(&inner).unwrap(), Box::new(expected));
+    }
+
+    #[test]
+    fn conditionless_joins_with_overlapping_inputs() -> datafusion::common::Result<()> {
+        let state = SessionStateBuilder::default().build();
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let qualified = table_scan(Some("t1"), &schema, None)?.build()?;
+        let unqualified = table_scan(Some("t1"), &schema, None)?
+            .project(vec![col("t1.a").alias("a")])?
+            .build()?;
+
+        for input in [qualified, unqualified] {
+            let input = Arc::new(input);
+            for join_type in [
+                JoinType::LeftSemi,
+                JoinType::LeftAnti,
+                JoinType::RightSemi,
+                JoinType::RightAnti,
+                JoinType::LeftMark,
+                JoinType::RightMark,
+            ] {
+                let mut producer = DefaultSubstraitProducer::new(&state);
+                let join = Join::try_new(
+                    Arc::clone(&input),
+                    Arc::clone(&input),
+                    vec![],
+                    None,
+                    join_type,
+                    JoinConstraint::On,
+                    NullEquality::NullEqualsNothing,
+                    false,
+                )?;
+                let rel = producer.handle_join(&join)?;
+                let Some(RelType::Join(join_rel)) = rel.rel_type else {
+                    panic!("expected JoinRel for {join_type:?}");
+                };
+                assert_eq!(
+                    join_rel.r#type,
+                    super::to_substrait_jointype(join_type) as i32
+                );
+                assert!(matches!(
+                    join_rel.expression.as_deref(),
+                    Some(Expression {
+                        rex_type: Some(RexType::Literal(Literal {
+                            literal_type: Some(LiteralType::Boolean(true)),
+                            ..
+                        })),
+                    })
+                ));
+            }
+        }
+        Ok(())
     }
 }
