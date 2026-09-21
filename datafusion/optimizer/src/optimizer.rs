@@ -466,9 +466,7 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
                         Ok(plan)
                     })
                     .collect::<Result<Vec<_>>>()?;
-                if changed {
-                    *node = node.with_exprs_and_inputs(exprs, new_inputs)?;
-                }
+                *node = node.with_exprs_and_inputs(exprs, new_inputs)?;
                 changed
             }
         }
