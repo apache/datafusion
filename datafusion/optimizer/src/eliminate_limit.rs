@@ -301,4 +301,21 @@ mod tests {
         "
         )
     }
+
+    #[test]
+    fn remove_noop_limit_under_extension() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .limit(0, None)?
+            .build()?;
+        let plan = user_defined::new(plan);
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        TestUserDefined
+          TableScan: test
+        "
+        )
+    }
 }
