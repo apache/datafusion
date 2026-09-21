@@ -385,6 +385,31 @@ enum HandleInputResult {
     SwitchToSkipAggregation,
 }
 
+/// A final table whose input is [`BARELY_REDUCING`] moves into buckets once
+/// it holds this share of the bucket threshold.
+///
+/// Moving a table into buckets aggregates its groups a second time. An input
+/// of about one row per group never earns that back unless the table is
+/// small compared to the input, and such an input gains nothing from a larger
+/// first table either.
+const EARLY_BUCKETS_DIVISOR: usize = 4;
+
+/// Share of the rows seen so far that started a new group above which the
+/// input is taken to hold about one row per group, the same ratio as the
+/// default of `skip_partial_aggregation_probe_ratio_threshold`.
+const BARELY_REDUCING: f64 = 0.8;
+
+/// Whether a final table of `groups` groups built from `rows` rows moves into
+/// buckets.
+///
+/// An input that repeats its groups keeps its table up to the full threshold:
+/// the table reduces that input, which buckets only do by compacting.
+fn starts_buckets(groups: usize, rows: usize, threshold: usize) -> bool {
+    groups >= threshold
+        || (groups >= (threshold / EARLY_BUCKETS_DIVISOR).max(1)
+            && groups as f64 >= BARELY_REDUCING * rows as f64)
+}
+
 /// Number of flushed groups whose hashes are kept to detect recurring groups.
 const FLUSH_SAMPLE_SIZE: usize = 1024;
 
@@ -1128,7 +1153,11 @@ impl FinalHashAggregateStream {
             // bucketing only starts from a table that has never spilled.
             if let Some(bucketing) = &self.bucketing
                 && !spilled
-                && hash_table.building_group_count() >= bucketing.threshold()
+                && starts_buckets(
+                    hash_table.building_group_count(),
+                    table_rows,
+                    bucketing.threshold(),
+                )
             {
                 let kept =
                     hash_table.building_group_count() as f64 / table_rows.max(1) as f64;
@@ -2040,10 +2069,36 @@ mod tests {
         assert_eq!(splits, 1);
         assert_eq!(spills, 0);
 
-        // A table that never reaches the threshold is left alone
-        let (rows, splits, _) = run_final_hash_aggregate(50_000, 3, 50_001, None).await?;
+        // A table that does not reach a quarter of the threshold is left alone
+        let (rows, splits, _) =
+            run_final_hash_aggregate(50_000, 3, 200_004, None).await?;
         assert_eq!(rows, expected);
         assert_eq!(splits, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn starts_buckets_early_only_when_groups_do_not_repeat() {
+        // One row per group: a quarter of the threshold is enough
+        assert!(!starts_buckets(249, 249, 1_000));
+        assert!(starts_buckets(250, 250, 1_000));
+        // Groups repeat: only the full threshold
+        assert!(!starts_buckets(999, 10_000, 1_000));
+        assert!(starts_buckets(1_000, 10_000, 1_000));
+        // A threshold below the divisor
+        assert!(starts_buckets(1, 1, 2));
+    }
+
+    #[tokio::test]
+    async fn final_hash_aggregate_starts_buckets_early_for_unique_groups() -> Result<()> {
+        let (expected, _, _) = run_final_hash_aggregate(50_000, 1, 0, None).await?;
+
+        // Every group arrives once, so the table moves into buckets at a
+        // quarter of the threshold, which the 50,000 groups never reach.
+        // Buckets of ~780 groups are not split again.
+        let (rows, splits, _) = run_final_hash_aggregate(50_000, 1, 60_000, None).await?;
+        assert_eq!(rows, expected);
+        assert_eq!(splits, 1);
         Ok(())
     }
 
