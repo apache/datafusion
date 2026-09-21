@@ -30,7 +30,6 @@ use datafusion_common::{
     Result, ScalarValue, plan_err, validate_range_split_points,
 };
 use datafusion_expr::ColumnarValue;
-use datafusion_expr::interval_arithmetic::{checked_predecessor, checked_successor};
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 #[cfg(feature = "proto")]
@@ -564,6 +563,28 @@ fn evaluate_with_range_value(
     }
 }
 
+fn checked_adjacent_timestamp(
+    value: &ScalarValue,
+    is_successor: bool,
+) -> Option<ScalarValue> {
+    let offset = if is_successor { 1 } else { -1 };
+    match value {
+        ScalarValue::TimestampSecond(Some(value), None) => value
+            .checked_add(offset)
+            .map(|value| ScalarValue::TimestampSecond(Some(value), None)),
+        ScalarValue::TimestampMillisecond(Some(value), None) => value
+            .checked_add(offset)
+            .map(|value| ScalarValue::TimestampMillisecond(Some(value), None)),
+        ScalarValue::TimestampMicrosecond(Some(value), None) => value
+            .checked_add(offset)
+            .map(|value| ScalarValue::TimestampMicrosecond(Some(value), None)),
+        ScalarValue::TimestampNanosecond(Some(value), None) => value
+            .checked_add(offset)
+            .map(|value| ScalarValue::TimestampNanosecond(Some(value), None)),
+        _ => None,
+    }
+}
+
 /// Determines whether a nondecreasing transform keeps equal output keys local.
 ///
 /// For one ascending range key, split points `x₁, ..., xₙ` define:
@@ -630,12 +651,9 @@ fn range_transform_keeps_keys_local(
         if split_value.data_type() != range_type {
             return false;
         }
-        let adjacent = if sort_options.descending {
-            checked_successor(split_value)
-        } else {
-            checked_predecessor(split_value)
-        };
-        let Some(adjacent) = adjacent else {
+        let Some(adjacent) =
+            checked_adjacent_timestamp(split_value, sort_options.descending)
+        else {
             return false;
         };
         let Some(at_split) = evaluate_with_range_value(function, range_key, split_value)
@@ -1756,13 +1774,24 @@ mod tests {
         assert_key_locality(
             "the successor of the final nanosecond starts a new bucket",
             &fixture.range_partitioning_with_ordering(
-                ordering,
+                ordering.clone(),
                 vec![timestamp_split(Some(hour + 3_600_000_000_000 - 1), None)],
             ),
             &required,
             &fixture.eq_properties,
             true,
             true,
+        );
+        assert_key_locality(
+            "the maximum timestamp has no successor",
+            &fixture.range_partitioning_with_ordering(
+                ordering,
+                vec![timestamp_split(Some(i64::MAX), None)],
+            ),
+            &required,
+            &fixture.eq_properties,
+            false,
+            false,
         );
         Ok(())
     }
