@@ -1,0 +1,25 @@
+name Q09
+group asof_join
+
+expect_plan AsOfJoinExec
+
+run
+-- Both sides: 1M rows in 10K equality groups. The left predicate retains
+-- one group; mirroring it prunes the right input before sorting and broadcast.
+WITH left_input AS (
+    SELECT value % 10000 AS key,
+           value / 10000 + 1 AS ts,
+           value AS payload
+    FROM range(1000000)
+),
+right_input AS (
+    SELECT value % 10000 AS key,
+           value / 10000 AS ts,
+           value AS payload
+    FROM range(1000000)
+)
+SELECT l.key, l.ts, l.payload, r.payload AS right_payload
+FROM left_input l
+ASOF JOIN right_input r MATCH_CONDITION (l.ts >= r.ts)
+ON l.key = r.key
+WHERE l.key = 42;

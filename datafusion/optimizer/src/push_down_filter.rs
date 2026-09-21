@@ -40,7 +40,7 @@ use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    BinaryExpr, Distinct, Expr, Filter, Operator, Projection,
+    BinaryExpr, Distinct, Expr, ExprSchemable, Filter, Operator, Projection,
     TableProviderFilterPushDown, and, or,
 };
 
@@ -1155,6 +1155,48 @@ impl OptimizerRule for PushDownFilter {
                                     join.left.schema().is_column_from_schema(column)
                                 })
                         });
+
+                // A literal comparison on an equal, same-typed key has the
+                // same value for every matching pair. Mirroring it to the
+                // right can prune groups without changing the ASOF candidate.
+                let mut right_predicates = Vec::new();
+                for predicate in &push_predicates {
+                    let Expr::BinaryExpr(BinaryExpr {
+                        left,
+                        op: Operator::Eq,
+                        right,
+                    }) = predicate
+                    else {
+                        continue;
+                    };
+                    let ((Expr::Column(left_column), Expr::Literal(_, _))
+                    | (Expr::Literal(_, _), Expr::Column(left_column))) =
+                        (left.as_ref(), right.as_ref())
+                    else {
+                        continue;
+                    };
+                    for (left_key, right_key) in &join.on {
+                        let (Some(left_key_column), Some(right_key_column)) =
+                            (left_key.try_as_col(), right_key.try_as_col())
+                        else {
+                            continue;
+                        };
+                        if left_column == left_key_column
+                            && left_key.get_type(join.left.schema())?
+                                == right_key.get_type(join.right.schema())?
+                        {
+                            let replacements =
+                                HashMap::from([(left_key_column, right_key_column)]);
+                            right_predicates
+                                .push(replace_col(predicate.clone(), &replacements)?);
+                            break;
+                        }
+                    }
+                }
+                if let Some(predicate) = conjunction(right_predicates) {
+                    join.right =
+                        Arc::new(LogicalPlan::Filter(Filter::new(predicate, join.right)));
+                }
 
                 let result = if let Some(predicate) = conjunction(push_predicates) {
                     filter.predicate = predicate;
