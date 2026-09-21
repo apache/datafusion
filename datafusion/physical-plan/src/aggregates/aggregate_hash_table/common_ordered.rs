@@ -26,7 +26,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_common::assert_or_internal_err;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_expr::EmitTo;
+use datafusion_expr::{AggregateMetrics, EmitTo};
 
 use crate::InputOrderMode;
 use crate::PhysicalExpr;
@@ -34,7 +34,6 @@ use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     GroupByMetrics, GroupValues, new_group_values,
 };
-use crate::aggregates::grouped_hash_stream::create_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions,
@@ -44,7 +43,7 @@ use crate::aggregates::{
 use super::AggregateTableMetrics;
 use super::common::{
     AggregateAccumulator, AggregateBatchFn, AggregateHashTable, EvaluatedAggregateBatch,
-    MaterializeAccumulatorFn,
+    MaterializeAccumulatorFn, create_group_accumulator,
 };
 
 #[derive(Clone)]
@@ -52,6 +51,7 @@ pub(in crate::aggregates) struct OrderedAggregateTableMetrics {
     pub(super) group_by: GroupByMetrics,
     pub(super) aggregate_arguments: AggregateArgumentMetrics,
     pub(super) accumulator: Arc<AggregateAccumulatorMetrics>,
+    pub(super) submetrics: Vec<Arc<dyn AggregateMetrics>>,
 }
 
 impl OrderedAggregateTableMetrics {
@@ -61,6 +61,7 @@ impl OrderedAggregateTableMetrics {
             group_by: metrics.group_by,
             aggregate_arguments: metrics.aggregate_arguments,
             accumulator: metrics.accumulator,
+            submetrics: metrics.submetrics,
         }
     }
 
@@ -71,6 +72,7 @@ impl OrderedAggregateTableMetrics {
             group_by: table.group_by_metrics.clone(),
             aggregate_arguments: table.aggregate_argument_metrics.clone(),
             accumulator: Arc::clone(&table.aggregate_accumulator_metrics),
+            submetrics: table.aggregate_submetrics.clone(),
         }
     }
 }
@@ -137,6 +139,9 @@ pub(in crate::aggregates) struct OrderedAggregateTable<OrderedAggrMode> {
 
     /// Per-aggregate timing metrics for accumulator operations.
     pub(super) aggregate_accumulator_metrics: Arc<AggregateAccumulatorMetrics>,
+
+    /// Optional internal metrics owned by each aggregate expression.
+    pub(super) aggregate_submetrics: Vec<Arc<dyn AggregateMetrics>>,
 
     /// Group keys, ordering state, and accumulator states.
     pub(super) buffer: OrderedAggregateTableBuffer,
@@ -207,13 +212,16 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             .iter()
             .zip(aggregate_arguments)
             .zip(filters)
-            .map(|((agg_expr, arguments), filter)| {
-                let accumulator = create_group_accumulator(agg_expr)?;
+            .zip(metrics.submetrics.iter())
+            .map(|(((agg_expr, arguments), filter), submetrics)| {
+                let accumulator =
+                    create_group_accumulator(agg_expr, Arc::clone(submetrics))?;
                 Ok(AggregateAccumulator::new(
                     Arc::clone(agg_expr),
                     arguments,
                     filter,
                     accumulator,
+                    Arc::clone(submetrics),
                 ))
             })
             .collect::<Result<_>>()?;
@@ -225,6 +233,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             group_by_metrics: metrics.group_by,
             aggregate_argument_metrics: metrics.aggregate_arguments,
             aggregate_accumulator_metrics: metrics.accumulator,
+            aggregate_submetrics: metrics.submetrics,
             buffer: OrderedAggregateTableBuffer {
                 group_by: Arc::clone(agg.group_by()),
                 group_ordering,
@@ -308,6 +317,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             group_by: self.group_by_metrics.clone(),
             aggregate_arguments: self.aggregate_argument_metrics.clone(),
             accumulator: Arc::clone(&self.aggregate_accumulator_metrics),
+            submetrics: self.aggregate_submetrics.clone(),
         }
     }
 
@@ -350,24 +360,6 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         self.buffer.group_ordering.reset();
 
         Ok(Some(batch))
-    }
-
-    /// Returns the [`EmitTo`], clamped to the specified batch size
-    ///
-    /// Returns `(emit_to, should_remove_groups)`, where `emit_to` is the number
-    /// of groups to emit from `GroupValues` / accumulators, and
-    /// `should_remove_groups` indicates whether `GroupOrdering` must also shift
-    /// its tracked indexes.
-    pub(super) fn clamp_emit_to(
-        &self,
-        group_count: usize,
-        emit_to: EmitTo,
-    ) -> (EmitTo, bool) {
-        match emit_to {
-            EmitTo::First(n) => (EmitTo::First(n.min(self.batch_size)), true),
-            EmitTo::All if group_count <= self.batch_size => (EmitTo::All, false),
-            EmitTo::All => (EmitTo::First(self.batch_size), false),
-        }
     }
 
     /// Aggregates one evaluated input batch after selecting the mode-specific
@@ -445,20 +437,34 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         let Some(emit_to) = self.buffer.group_ordering.emit_to() else {
             return Ok(None);
         };
-        let (emit_to, should_remove_groups) =
-            self.clamp_emit_to(self.buffer.group_values.len(), emit_to);
+        let emit_to = match emit_to {
+            EmitTo::First(n) => EmitTo::First(n.min(self.batch_size)),
+            EmitTo::All if self.num_groups() > self.batch_size => {
+                EmitTo::First(self.batch_size)
+            }
+            EmitTo::All => EmitTo::All,
+        };
+        self.materialize_groups(emit_to, materialize_accumulator_fn, accumulator_phase)
+            .map(Some)
+    }
 
+    /// Removes the selected groups once and materializes their output columns.
+    /// The caller chooses the completed prefix and any output-size limit.
+    pub(super) fn materialize_groups(
+        &mut self,
+        emit_to: EmitTo,
+        materialize_accumulator_fn: MaterializeAccumulatorFn,
+        accumulator_phase: AccumulatorPhase,
+    ) -> Result<RecordBatch> {
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         let output = self.group_by_metrics.time_emitting(|| {
             let mut output = self.buffer.group_values.emit(emit_to)?;
-            if should_remove_groups {
-                match emit_to {
-                    EmitTo::First(n) => self.buffer.group_ordering.remove_groups(n),
-                    // `EmitTo::All` is only used after `input_done`, when all
-                    // buffered groups are known complete and the ordering state is
-                    // no longer needed.
-                    EmitTo::All => {}
-                }
+            // EOF can also emit a prefix when a caller limits its batch size,
+            // but the completed ordering state no longer tracks group indexes.
+            if let EmitTo::First(n) = emit_to
+                && matches!(self.buffer.group_ordering.emit_to(), Some(EmitTo::First(_)))
+            {
+                self.buffer.group_ordering.remove_groups(n);
             }
 
             for (idx, acc) in self.buffer.accumulators.iter_mut().enumerate() {
@@ -474,6 +480,6 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;
         debug_assert!(batch.num_rows() > 0);
 
-        Ok(Some(batch))
+        Ok(batch)
     }
 }

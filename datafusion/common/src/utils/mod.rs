@@ -1227,6 +1227,36 @@ pub fn take_function_args<const N: usize, T>(
     })
 }
 
+/// Returns the number of values covered by an offset buffer.
+///
+/// Slicing a variable-length array narrows its offsets but retains its entire
+/// values buffer. Use this span to size output buffers: it counts child elements
+/// for lists and bytes for strings/binary arrays, including values in null rows.
+/// An empty array still has one offset and therefore a span of zero.
+#[inline]
+pub fn offset_span_len<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> usize {
+    offset_span(offsets).1
+}
+
+/// Returns the start and length of the values covered by an offset buffer.
+///
+/// The returned pair can be passed to [`Array::slice`] to select the visible
+/// child values of a sliced list or map. For strings/binary arrays, the start
+/// and length are measured in bytes. Values in null rows are included.
+/// An empty array has a length of zero but may have a nonzero start.
+///
+/// ```
+/// # use arrow::buffer::OffsetBuffer;
+/// # use datafusion_common::utils::offset_span;
+/// let offsets = OffsetBuffer::new(vec![100_i32, 103, 108].into());
+/// assert_eq!(offset_span(&offsets), (100, 8));
+/// ```
+#[inline]
+pub fn offset_span<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> (usize, usize) {
+    let start = offsets.first().as_usize();
+    (start, offsets.last().as_usize() - start)
+}
+
 /// Returns the inner values of a list, or an error otherwise
 /// For [`ListArray`] and [`LargeListArray`], if it's sliced, it returns a
 /// sliced array too. Therefore, too reconstruct a list using it,
@@ -1244,15 +1274,10 @@ pub fn list_values(array: &dyn Array) -> Result<ArrayRef> {
 
 fn sliced_list_values<O: OffsetSizeTrait>(list: &GenericListArray<O>) -> ArrayRef {
     let values = list.values();
-    let offsets = list.offsets();
+    let (start, len) = offset_span(list.offsets());
 
-    if let (Some(first), Some(last)) = (offsets.first(), offsets.last()) {
-        let first = first.as_usize();
-        let last = last.as_usize();
-
-        if first != 0 || last != values.len() {
-            return values.slice(first, last - first);
-        }
+    if start != 0 || len != values.len() {
+        return values.slice(start, len);
     }
 
     Arc::clone(values)
@@ -1302,9 +1327,9 @@ fn truncate_list_nulls<O: OffsetSizeTrait>(
         if valid_or_empty.has_false() {
             let array_data = list.values().to_data();
             let offsets = list.offsets();
-            let capacity = offsets[offsets.len() - 1] - offsets[0];
+            let capacity = offset_span_len(offsets);
             let mut mutable_array_data =
-                MutableArrayData::new(vec![&array_data], false, capacity.as_usize());
+                MutableArrayData::new(vec![&array_data], false, capacity);
 
             let (valid_or_empty, _nulls) = valid_or_empty.into_parts();
 
@@ -1509,6 +1534,19 @@ mod tests {
     };
     #[cfg(feature = "sql")]
     use sqlparser::ast::Ident;
+
+    #[test]
+    fn test_offset_span() {
+        let offsets = OffsetBuffer::new(vec![0_i32, 5, 8, 8, 12].into());
+        assert_eq!(offset_span(&offsets), (0, 12));
+        assert_eq!(offset_span(&offsets.slice(1, 2)), (5, 3));
+        assert_eq!(offset_span_len(&offsets.slice(1, 2)), 3);
+        assert_eq!(offset_span(&offsets.slice(2, 1)), (8, 0));
+        assert_eq!(offset_span(&offsets.slice(4, 0)), (12, 0));
+        assert_eq!(offset_span(&OffsetBuffer::<i64>::new_empty()), (0, 0));
+        let large = OffsetBuffer::new(vec![i64::MAX - 10, i64::MAX].into());
+        assert_eq!(offset_span(&large), ((i64::MAX - 10) as usize, 10));
+    }
 
     #[test]
     fn test_usize_wire_conversions() {
