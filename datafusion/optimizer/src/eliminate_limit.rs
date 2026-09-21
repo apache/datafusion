@@ -78,7 +78,8 @@ impl OptimizerRule for EliminateLimit {
                     // If fetch is `None` and skip is 0, then Limit takes no effect and
                     // we can remove it. Its input also can be Limit, so we should apply again.
                     #[expect(clippy::used_underscore_binding)]
-                    let mut res = self.rewrite(Arc::unwrap_or_clone(limit.input), _config)?;
+                    let mut res =
+                        self.rewrite(Arc::unwrap_or_clone(limit.input), _config)?;
                     res.transformed = true;
                     return Ok(res);
                 }
