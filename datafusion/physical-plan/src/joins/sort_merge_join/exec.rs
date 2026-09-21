@@ -913,8 +913,9 @@ pub(crate) struct SortMergeJoinInputs {
 /// Joins two sorted inputs with the sort-merge join algorithm.
 ///
 /// Picks the streamed and buffered side by join type and the join stream
-/// implementation by join type family, exactly as [`SortMergeJoinExec`] does;
-/// the hash join's sort-merge fallback uses this too. The stream's metrics are
+/// implementation by join type family. [`SortMergeJoinExec::execute`] is the
+/// only caller today; it is a separate function so that an operator which
+/// already holds two sorted streams can reuse it. The stream's metrics are
 /// registered in `metrics`; its buffered side spills through the context's
 /// disk manager under the memory pool's control.
 pub(crate) fn sort_merge_join_stream(
