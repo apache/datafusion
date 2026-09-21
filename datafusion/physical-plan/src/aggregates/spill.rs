@@ -53,6 +53,56 @@ pub(super) struct AggregateSpill {
     /// and column-based group expressions rather than evaluating the raw input
     /// expressions a second time, so single-stage aggregates are rewritten to
     /// their final counterpart here.
+    ///
+    /// # Example walkthrough
+    ///
+    /// This example walks through two key APIs of [`AggregateSpill`]:
+    /// - [`AggregateSpill::spill`]
+    /// - [`AggregateSpill::into_replay_stream`]
+    ///
+    /// ```txt
+    /// SELECT k, SUM(v) FROM t GROUP BY k
+    ///
+    /// --------------------
+    /// Step 1: OOM round 1
+    /// --------------------
+    ///
+    /// First OOM: sort by k and write spill file 1 using `AggregateSpill::spill`.
+    ///
+    /// Buffered batch        Spill file 1 (sorted)
+    /// k  partial_sum        k  partial_sum
+    /// 1            3        1            3
+    /// 3            4   ->   2            5
+    /// 2            5        3            4
+    ///
+    /// --------------------
+    /// Step 2: OOM round 2
+    /// --------------------
+    /// After more input, a second OOM occurs: sort and spill similarly.
+    ///
+    /// Buffered batch        Spill file 2 (sorted)
+    /// k  partial_sum        k  partial_sum
+    /// 3            6   ->   1            2
+    /// 1            2        3            6
+    ///
+    /// ------------------------------------------
+    /// Step 3: Global sort and final aggregation
+    /// ------------------------------------------
+    /// 1. Construct a globally sorted aggregate stream via `SortPreservingMergeStream`
+    ///    using the two previously sorted spill files.
+    /// 2. Build a final aggregation stream:
+    ///     - The input is the SPM stream.
+    ///     - It reuses `OrderedFinalAggregateStream` for processing.
+    ///     - It returns the final aggregation result directly.
+    ///
+    /// SPM output            Final aggregate output
+    /// k  partial_sum        k  SUM(v)
+    /// 1            3        1       5
+    /// 1            2   ->   2       5
+    /// 2            5        3      10
+    /// 3            4
+    /// 3            6
+    /// ```
     replay_agg: AggregateExec,
     /// Task context.
     context: Arc<TaskContext>,
