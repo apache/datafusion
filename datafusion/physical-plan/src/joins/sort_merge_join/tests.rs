@@ -1061,6 +1061,82 @@ async fn join_right_with_filter_columns_right_before_left() -> Result<()> {
     Ok(())
 }
 
+/// A filter whose intermediate schema interleaves the two sides (Left, Right,
+/// Left), which neither "left columns first" nor "right columns first" produces
+#[tokio::test]
+async fn join_left_with_filter_columns_interleaved() -> Result<()> {
+    // select *
+    // from t1
+    // left join t2 on t1.b1 = t2.b1 and t1.a1 < t2.a2 and t2.a2 < t1.c1
+
+    let left = build_table(
+        ("a1", &vec![1, 2, 3]),
+        ("b1", &vec![4, 5, 6]), // 6 does not exist on the right
+        ("c1", &vec![10, 3, 30]),
+    );
+
+    // Grouping the filter columns by side would evaluate `a1 < c1 and c1 < a2`,
+    // which is false for b1 = 4 and true for b1 = 5: the opposite of the filter.
+    let right = build_table(
+        ("a2", &vec![5, 20, 7]), // 1 < 5 < 10, but 2 < 20 < 3 is false
+        ("b1", &vec![4, 5, 7]),
+        ("c2", &vec![70, 80, 90]),
+    );
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+    )];
+
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a1", 0)),
+                Operator::Lt,
+                Arc::new(Column::new("a2", 1)),
+            )),
+            Operator::And,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a2", 1)),
+                Operator::Lt,
+                Arc::new(Column::new("c1", 2)),
+            )),
+        )),
+        vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Left,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("a1", DataType::Int32, true),
+            Field::new("a2", DataType::Int32, true),
+            Field::new("c1", DataType::Int32, true),
+        ])),
+    );
+
+    let (_, batches) = join_collect_with_filter(left, right, on, filter, Left).await?;
+
+    assert_snapshot!(batches_to_string(&batches), @r"
+    +----+----+----+----+----+----+
+    | a1 | b1 | c1 | a2 | b1 | c2 |
+    +----+----+----+----+----+----+
+    | 1  | 4  | 10 | 5  | 4  | 70 |
+    | 2  | 5  | 3  |    |    |    |
+    | 3  | 6  | 30 |    |    |    |
+    +----+----+----+----+----+----+
+    ");
+    Ok(())
+}
+
 #[tokio::test]
 async fn join_left_mark_different_columns_count_with_filter() -> Result<()> {
     // select *
