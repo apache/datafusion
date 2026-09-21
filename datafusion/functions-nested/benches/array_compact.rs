@@ -17,12 +17,11 @@
 
 use arrow::array::{
     Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeListArray, Int32Array,
-    ListArray, MapArray, NullArray, PrimitiveRunBuilder, RunArray, StringArray,
-    StringViewArray, StructArray, UnionArray,
+    ListArray, MapArray, PrimitiveRunBuilder, StringArray, StringViewArray, StructArray,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::cast;
-use arrow::datatypes::{DataType, Field, Int32Type, UnionFields};
+use arrow::datatypes::{DataType, Field, Int32Type};
 use criterion::{
     BenchmarkGroup, Criterion, SamplingMode, criterion_group, criterion_main,
     measurement::WallTime,
@@ -54,85 +53,86 @@ fn criterion_benchmark(c: &mut Criterion) {
         }
     }
 
-    // Cover the primitive, gather, and span-copy paths, including nested types
-    // whose Arrow kernels can have different costs for mixed and sparse nulls.
-    for kind in [
-        "int64",
-        "decimal128",
-        "boolean",
-        "utf8",
-        "utf8_view",
-        "nested",
-        "nested_nonnull",
-        "map",
-        "dictionary_keys",
-        "run",
-        "struct",
-        "struct_nested",
-        "fixed",
-        "fixed_nested",
-        "union_sparse",
-        "union_dense",
-        "union_nested",
-        "dictionary_nested",
-        "run_nested",
-        "nested_long",
-        "map_long",
-    ] {
-        for pattern in ["mixed", "sparse"] {
+    // Vary null density for the common element types. Seeded random patterns
+    // avoid the predictable branches and copy spans of periodic null patterns.
+    // The four densities are 1%, 25%, 50%, and 95%, respectively.
+    for kind in ["primitive", "utf8", "utf8_view"] {
+        for pattern in ["random_sparse", "random", "random_half", "random_dense"] {
             bench_input(
                 &mut group,
-                &format!("types/{kind}/{pattern}"),
+                &format!("random/{kind}/{pattern}"),
                 fixed_width_input(kind, pattern),
             );
         }
     }
-    for pattern in [
-        "sparse",
-        "alternating",
-        "dense",
-        "clustered",
-        "random",
-        "all",
+
+    // At 25% nulls, contrast periodic and clustered patterns with random nulls.
+    // The periodic primitive case is already covered by mixed_nulls above.
+    bench_input(
+        &mut group,
+        "types/utf8/mixed",
+        fixed_width_input("utf8", "mixed"),
+    );
+    for (kind, name) in [
+        ("primitive", "nulls/clustered"),
+        ("utf8", "nulls/utf8/clustered"),
+    ] {
+        bench_input(&mut group, name, fixed_width_input(kind, "clustered"));
+    }
+
+    // Representative less common types: sparse nulls expose the cost of copying
+    // many surviving nested values. Avoid a full type-by-null-density matrix.
+    for (kind, pattern) in [
+        ("boolean", "mixed"),
+        ("decimal128", "mixed"),
+        ("nested", "sparse"),
+        ("struct_nested", "sparse"),
+        ("fixed_nested", "sparse"),
+        ("map", "sparse"),
+        ("run", "mixed"),
     ] {
         bench_input(
             &mut group,
-            &format!("nulls/{pattern}"),
-            fixed_width_input("primitive", pattern),
+            &format!("types/{kind}/{pattern}"),
+            fixed_width_input(kind, pattern),
         );
     }
-    for width in [1, 128, 2048] {
+
+    // Compare list lengths of 0–32 with lengths of 15–16 at both 25% and 1%
+    // random nulls. Each pair has 256 lists and the same 4,044 element slots;
+    // list_input's fixed seed gives the pair identical values and null bits.
+    let variable_lengths = (0..ROWS).map(|i| (i * 17) % 33).collect::<Vec<_>>();
+    let total = variable_lengths.iter().sum::<usize>();
+    let near_uniform_lengths = (0..ROWS)
+        .map(|i| total / ROWS + usize::from(i < total % ROWS))
+        .collect::<Vec<_>>();
+    for (pattern, name) in [("random", "utf8"), ("random_sparse", "utf8_sparse")] {
+        for (shape, lengths) in [
+            ("variable", &variable_lengths),
+            ("near_uniform", &near_uniform_lengths),
+        ] {
+            bench_input(
+                &mut group,
+                &format!("shape/{shape}/{name}"),
+                list_input("utf8", lengths.clone(), pattern, None, 0),
+            );
+        }
+    }
+    for kind in ["utf8_short", "utf8_long"] {
         bench_input(
             &mut group,
-            &format!("shape/width_{width}"),
-            list_input(
-                "primitive",
-                vec![width; ROWS * WIDTH / width],
-                "mixed",
-                None,
-                0,
-            ),
+            &format!("strings/{kind}"),
+            fixed_width_input(kind, "mixed"),
         );
     }
-    for kind in ["primitive", "utf8"] {
-        let lengths = (0..ROWS).map(|i| (i * 17) % 33).collect();
+    for (kind, pattern, name) in [
+        ("primitive", "mixed", "shape/width_128"),
+        ("utf8", "sparse", "shape/utf8/width_128"),
+    ] {
         bench_input(
             &mut group,
-            &format!("shape/variable/{kind}"),
-            list_input(kind, lengths, "random", None, 0),
-        );
-        bench_input(&mut group, &format!("large_list/{kind}"), {
-            let input = fixed_width_input(kind, "mixed");
-            let DataType::List(field) = input.data_type() else {
-                unreachable!()
-            };
-            cast(&input, &DataType::LargeList(Arc::clone(field))).unwrap()
-        });
-        // The child bitmap starts three bits into its backing buffer.
-        bench_input(
-            &mut group,
-            &format!("child_slice/{kind}"),
-            list_input(kind, vec![WIDTH; ROWS], "mixed", None, 3),
+            name,
+            list_input(kind, vec![128; ROWS * WIDTH / 128], pattern, None, 0),
         );
     }
     bench_input(
@@ -140,17 +140,22 @@ fn criterion_benchmark(c: &mut Criterion) {
         "shape/8192_rows",
         list_input("primitive", vec![WIDTH; 8192], "mixed", None, 0),
     );
-    for kind in ["primitive", "utf8", "dictionary", "nested"] {
-        for (name, stride, mostly_null) in [("some", 4, false), ("mostly", 100, true)] {
-            let nulls = NullBuffer::from_iter(
-                (0..ROWS).map(|i| (i % stride == 0) == mostly_null),
-            );
-            bench_input(
-                &mut group,
-                &format!("parent_nulls/{kind}/{name}"),
-                list_input(kind, vec![256; ROWS], "mixed", Some(nulls), 0),
-            );
-        }
+
+    // Null list rows still retain 256 element slots each. "some" makes 25% of
+    // lists null; "mostly" leaves only one list in every 100 valid.
+    for (kind, name, stride, mostly_null) in [
+        ("primitive", "mostly", 100, true),
+        ("utf8", "some", 4, false),
+        ("utf8", "mostly", 100, true),
+        ("nested", "mostly", 100, true),
+    ] {
+        let nulls =
+            NullBuffer::from_iter((0..ROWS).map(|i| (i % stride == 0) == mostly_null));
+        bench_input(
+            &mut group,
+            &format!("parent_nulls/{kind}/{name}"),
+            list_input(kind, vec![256; ROWS], "mixed", Some(nulls), 0),
+        );
     }
     for (name, lengths, nulls) in [
         ("zero_rows", vec![], None),
@@ -167,49 +172,23 @@ fn criterion_benchmark(c: &mut Criterion) {
             list_input("primitive", lengths, "mixed", nulls, 0),
         );
     }
-    for kind in ["utf8_short", "utf8_long"] {
-        bench_input(
-            &mut group,
-            &format!("strings/{kind}"),
-            fixed_width_input(kind, "mixed"),
-        );
+    for (kind, name) in [("primitive", "nulls/all"), ("utf8", "all_null/utf8")] {
+        bench_input(&mut group, name, fixed_width_input(kind, "all"));
     }
-    bench_input(&mut group, "types/null", fixed_width_input("null", "all"));
-    // Seeded random patterns supplement periodic fixtures: branch predictability
-    // and contiguous copy spans depend on the distribution as well as density.
-    for kind in [
-        "primitive",
-        "utf8",
-        "utf8_view",
-        "nested",
-        "map",
-        "dictionary",
-        "run",
-    ] {
-        for pattern in ["random_sparse", "random", "random_half", "random_dense"] {
-            bench_input(
-                &mut group,
-                &format!("random/{kind}/{pattern}"),
-                fixed_width_input(kind, pattern),
-            );
-        }
-    }
-    for kind in ["utf8", "nested", "dictionary", "run"] {
-        bench_input(
-            &mut group,
-            &format!("all_null/{kind}"),
-            fixed_width_input(kind, "all"),
-        );
-    }
-    for kind in ["nested", "map", "utf8"] {
-        for width in [1, 128] {
-            bench_input(
-                &mut group,
-                &format!("shape/{kind}/width_{width}"),
-                list_input(kind, vec![width; ROWS * WIDTH / width], "sparse", None, 0),
-            );
-        }
-    }
+
+    bench_input(&mut group, "large_list/utf8", {
+        let input = fixed_width_input("utf8", "mixed");
+        let DataType::List(field) = input.data_type() else {
+            unreachable!()
+        };
+        cast(&input, &DataType::LargeList(Arc::clone(field))).unwrap()
+    });
+    // The element bitmap starts three bits into its backing buffer.
+    bench_input(
+        &mut group,
+        "child_slice/utf8",
+        list_input("utf8", vec![WIDTH; ROWS], "mixed", None, 3),
+    );
     group.finish();
 }
 
@@ -231,7 +210,6 @@ fn bench_input(group: &mut BenchmarkGroup<WallTime>, name: &str, input: ArrayRef
 fn child(kind: &str, values: Vec<Option<i32>>) -> ArrayRef {
     match kind {
         "primitive" => Arc::new(Int32Array::from(values)),
-        "int64" => cast(&Int32Array::from(values), &DataType::Int64).unwrap(),
         "decimal128" => {
             cast(&Int32Array::from(values), &DataType::Decimal128(20, 4)).unwrap()
         }
@@ -252,30 +230,19 @@ fn child(kind: &str, values: Vec<Option<i32>>) -> ArrayRef {
                 Arc::new(StringArray::from_iter(strings))
             }
         }
-        "struct" | "struct_nested" => {
+        "struct_nested" => {
             let nulls = Some(NullBuffer::from_iter(values.iter().map(Option::is_some)));
-            let inner = child(
-                if kind == "struct" {
-                    "primitive"
-                } else {
-                    "nested"
-                },
-                values,
-            );
+            let inner = child("nested", values);
             Arc::new(StructArray::new(
                 vec![Field::new("value", inner.data_type().clone(), true)].into(),
                 vec![inner],
                 nulls,
             ))
         }
-        "fixed" | "fixed_nested" => {
+        "fixed_nested" => {
             let nulls = Some(NullBuffer::from_iter(values.iter().map(Option::is_some)));
             let inner = child(
-                if kind == "fixed" {
-                    "primitive"
-                } else {
-                    "nested"
-                },
+                "nested",
                 values.into_iter().flat_map(|v| [v, None, v]).collect(),
             );
             Arc::new(FixedSizeListArray::new(
@@ -285,81 +252,14 @@ fn child(kind: &str, values: Vec<Option<i32>>) -> ArrayRef {
                 nulls,
             ))
         }
-        "union_sparse" | "union_dense" | "union_nested" => {
-            let len = values.len();
-            let type_ids = (0..len).map(|i| (i % 2) as i8).collect::<Vec<_>>();
-            let dense = kind != "union_sparse";
-            let children = (0..2)
-                .map(|id| {
-                    child(
-                        if kind == "union_nested" {
-                            "nested"
-                        } else {
-                            "primitive"
-                        },
-                        values
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(i, v)| (!dense || i % 2 == id).then_some(*v))
-                            .collect(),
-                    )
-                })
-                .collect::<Vec<_>>();
-            let fields = UnionFields::try_new(
-                [0, 1],
-                children
-                    .iter()
-                    .enumerate()
-                    .map(|(i, c)| Field::new(i.to_string(), c.data_type().clone(), true)),
-            )
-            .unwrap();
-            let offsets = dense
-                .then(|| (0..len).map(|i| (i / 2) as i32).collect::<Vec<_>>().into());
-            Arc::new(
-                UnionArray::try_new(fields, type_ids.into(), offsets, children).unwrap(),
-            )
-        }
-        "dictionary_nested" => Arc::new(
-            DictionaryArray::<Int32Type>::try_new(
-                Int32Array::from_iter_values(0..values.len() as i32),
-                child("nested", values),
-            )
-            .unwrap(),
-        ),
-        "run_nested" => Arc::new(
-            RunArray::<Int32Type>::try_new(
-                &Int32Array::from_iter_values(1..=values.len() as i32),
-                child("nested", values).as_ref(),
-            )
-            .unwrap(),
-        ),
-        "nested_long" => Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
-            values.into_iter().map(|v| {
-                v.map(|v| {
-                    (0..128)
-                        .map(|i| if i % 4 == 0 { None } else { Some(v) })
-                        .collect::<Vec<_>>()
-                })
-            }),
+        "nested" => Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
+            values
+                .into_iter()
+                .map(|v| v.map(|v| vec![Some(v), None, Some(v + 1)])),
         )),
-        "nested" | "nested_nonnull" => {
-            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
-                values.into_iter().map(|v| {
-                    v.map(|v| {
-                        vec![
-                            Some(v),
-                            if kind == "nested" { None } else { Some(v + 2) },
-                            Some(v + 1),
-                        ]
-                    })
-                }),
-            ))
-        }
-        "map" | "map_long" => {
+        "map" => {
             let nulls = Some(NullBuffer::from_iter(values.iter().map(Option::is_some)));
             let rows = values.len();
-            let width = if kind == "map_long" { 128 } else { 1 };
-            let len = rows * width;
             let entries = StructArray::new(
                 vec![
                     Field::new("key", DataType::Int32, false),
@@ -367,20 +267,14 @@ fn child(kind: &str, values: Vec<Option<i32>>) -> ArrayRef {
                 ]
                 .into(),
                 vec![
-                    Arc::new(Int32Array::from_iter_values(
-                        (0..len).map(|i| (i % width + 1) as i32),
-                    )),
-                    Arc::new(Int32Array::from_iter(
-                        values
-                            .into_iter()
-                            .flat_map(|v| std::iter::repeat_n(v, width)),
-                    )),
+                    Arc::new(Int32Array::from_iter_values(std::iter::repeat_n(1, rows))),
+                    Arc::new(Int32Array::from(values)),
                 ],
                 None,
             );
             Arc::new(MapArray::new(
                 Arc::new(Field::new("entries", entries.data_type().clone(), false)),
-                OffsetBuffer::from_repeated_length(width, rows),
+                OffsetBuffer::from_repeated_length(1, rows),
                 entries,
                 nulls,
                 true,
@@ -395,19 +289,11 @@ fn child(kind: &str, values: Vec<Option<i32>>) -> ArrayRef {
             )
             .unwrap(),
         ),
-        "dictionary_keys" => Arc::new(
-            DictionaryArray::<Int32Type>::try_new(
-                Int32Array::from_iter(values.iter().map(|v| v.map(|_| 0))),
-                Arc::new(Int32Array::from(vec![42])),
-            )
-            .unwrap(),
-        ),
         "run" => {
             let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
             builder.extend(values);
             Arc::new(builder.finish())
         }
-        "null" => Arc::new(NullArray::new(values.len())),
         _ => unreachable!("unknown child type {kind}"),
     }
 }
@@ -431,8 +317,6 @@ fn list_input(
             let is_null = match pattern {
                 "mixed" => i % 4 == 0,
                 "sparse" => i % 100 == 0,
-                "alternating" => i % 2 == 0,
-                "dense" => i % 20 != 0,
                 "clustered" => i % 256 < 64,
                 "random" => rng.random_bool(0.25),
                 "random_sparse" => rng.random_bool(0.01),
