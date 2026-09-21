@@ -238,6 +238,14 @@ fn plan_fingerprint(plan: &dyn ExecutionPlan) -> String {
     // otherwise compare equal and one would be skipped as though it were the
     // other. Append them per node, in the same pre-order the rendering uses.
     //
+    // `equivalence_properties` is rendered with `Debug`, not `Display`: the
+    // latter prints the equivalence and ordering classes but omits the table
+    // constraints, which also factor into whether a requirement is satisfied.
+    // `EnsureRequirements` reads all of it when deciding whether a sort or a
+    // distribution requirement already holds, so a rule that updates only the
+    // omitted part would leave this fingerprint unchanged and have its work
+    // skipped by a later pass.
+    //
     // This is still short of a structural identity: anything a node neither
     // prints nor exposes through `PlanProperties` remains invisible. There is
     // no structural comparison for `ExecutionPlan` to use instead today.
@@ -246,13 +254,15 @@ fn plan_fingerprint(plan: &dyn ExecutionPlan) -> String {
         // Writing to a `String` cannot fail, so the result is discarded.
         let _ = write!(
             out,
-            "\n{:indent$}props[{}]: partitioning={:?} ordering={:?} emission={:?} boundedness={:?}",
+            "\n{:indent$}props[{}]: partitioning={:?} ordering={:?} \
+emission={:?} boundedness={:?} equivalence={:?}",
             "",
             plan.name(),
             props.output_partitioning(),
             props.output_ordering(),
             props.emission_type,
             props.boundedness,
+            props.equivalence_properties(),
             indent = depth * 2,
         );
         for child in plan.children() {
@@ -4445,6 +4455,60 @@ mod tests {
     /// Most nodes do not print their schema, so without asking for it two such
     /// plans render identically and one would be skipped as though it were the
     /// other.
+    /// Two plans alike in everything the other fields cover, differing only in
+    /// their equivalence group.
+    ///
+    /// `EnsureRequirements` decides whether a sort or distribution requirement
+    /// already holds by consulting the equivalence properties, so a rule that
+    /// updates only those has done real work. Were they left out of the
+    /// fingerprint, that work would look like no change at all and the next
+    /// pass would be skipped on a plan that is not the one recorded.
+    #[tokio::test]
+    async fn fingerprint_separates_plans_differing_only_in_equivalences() -> Result<()> {
+        let schema: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+        ]));
+        let plain = Arc::new(NoOpExecutionPlan::new(Arc::clone(&schema)))
+            as Arc<dyn ExecutionPlan>;
+        let with_equality = Arc::new(NoOpExecutionPlan::with_equal_columns(
+            Arc::clone(&schema),
+            "a",
+            "b",
+        )) as Arc<dyn ExecutionPlan>;
+
+        // Precondition: the rendering, schema included, cannot tell them apart.
+        assert_eq!(
+            displayable(plain.as_ref())
+                .set_show_schema(true)
+                .indent(true)
+                .to_string(),
+            displayable(with_equality.as_ref())
+                .set_show_schema(true)
+                .indent(true)
+                .to_string(),
+            "the node does not print its equivalences, so the rendering is the same",
+        );
+        // Nor can the other properties the fingerprint already covered: the
+        // ordering is absent on both, so this test fails unless the
+        // equivalences themselves are part of the fingerprint.
+        assert!(plain.properties().output_ordering().is_none());
+        assert!(with_equality.properties().output_ordering().is_none());
+        assert_eq!(
+            format!("{:?}", plain.properties().output_partitioning()),
+            format!("{:?}", with_equality.properties().output_partitioning()),
+        );
+
+        assert_ne!(
+            plan_fingerprint(plain.as_ref()),
+            plan_fingerprint(with_equality.as_ref()),
+            "a plan whose columns are known equal is not the plan without that \
+             knowledge, and skipping a rule on one as though it were the other \
+             would drop the rule's work",
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn fingerprint_separates_plans_differing_only_in_nullability() -> Result<()> {
         let nullable = Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![Field::new(
@@ -6074,6 +6138,29 @@ mod tests {
             )]) {
                 eq.add_orderings(vec![ordering.into_iter().collect::<Vec<_>>()]);
             }
+            Self {
+                cache: Arc::new(PlanProperties::new(
+                    eq,
+                    Partitioning::UnknownPartitioning(1),
+                    EmissionType::Incremental,
+                    Boundedness::Bounded,
+                )),
+            }
+        }
+
+        /// Same node again, but declaring two of its columns equal.
+        ///
+        /// Nothing else differs: the rendering, the schema, the partitioning
+        /// and the output ordering all match [`Self::new`]'s. Only the
+        /// equivalence group does, which is the part `EnsureRequirements`
+        /// consults when deciding whether a requirement is already satisfied.
+        fn with_equal_columns(schema: SchemaRef, left: &str, right: &str) -> Self {
+            let mut eq = EquivalenceProperties::new(Arc::clone(&schema));
+            eq.add_equal_conditions(
+                Arc::new(PhysColumn::new_with_schema(left, &schema).unwrap()),
+                Arc::new(PhysColumn::new_with_schema(right, &schema).unwrap()),
+            )
+            .unwrap();
             Self {
                 cache: Arc::new(PlanProperties::new(
                     eq,
