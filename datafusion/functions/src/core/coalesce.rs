@@ -106,6 +106,8 @@ impl ScalarUDFImpl for CoalesceFunc {
             ));
         }
 
+        let n = args.len();
+
         // The `CASE WHEN a IS NOT NULL THEN a ELSE b END` rewrite below mentions
         // every non-final argument *twice* (once in the `WHEN` predicate and once
         // in the `THEN` result). That is fine for deterministic arguments, but for
@@ -116,11 +118,14 @@ impl ScalarUDFImpl for CoalesceFunc {
         // See https://github.com/apache/datafusion/issues/25477. For volatile
         // arguments we keep `coalesce` intact and let the runtime kernel in
         // `invoke_with_args` evaluate each argument exactly once.
-        if args.iter().any(|arg| arg.is_volatile()) {
+        //
+        // Only the non-final arguments are duplicated: the last argument becomes
+        // the `ELSE` branch, which names it once, so a volatile last argument is
+        // safe to rewrite and keeps its laziness.
+        if args[..n - 1].iter().any(|arg| arg.is_volatile()) {
             return Ok(ExprSimplifyResult::Original(args));
         }
 
-        let n = args.len();
         let (init, last_elem) = args.split_at(n - 1);
         let whens = init
             .iter()
@@ -397,6 +402,20 @@ mod tests {
         match simplify(args.clone()) {
             ExprSimplifyResult::Original(original) => assert_eq!(original, args),
             other => panic!("expected the original coalesce args, got {other:?}"),
+        }
+    }
+
+    /// A volatile *last* argument is named once (it becomes the `ELSE` branch),
+    /// so the rewrite is safe and must still happen -- otherwise the other
+    /// arguments needlessly lose their laziness.
+    #[test]
+    fn simplify_volatile_last_arg_still_expands_to_case() {
+        let random = Expr::ScalarFunction(
+            datafusion_expr::expr::ScalarFunction::new_udf(crate::math::random(), vec![]),
+        );
+        match simplify(vec![lit(1.0f64), random]) {
+            ExprSimplifyResult::Simplified(Expr::Case(_)) => {}
+            other => panic!("expected a CASE expression, got {other:?}"),
         }
     }
 
