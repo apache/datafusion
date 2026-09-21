@@ -458,3 +458,78 @@ world
 
 statement ok
 drop table ree_t;
+
+##########
+# Volatile arguments must be evaluated exactly once
+# https://github.com/apache/datafusion/issues/25477
+##########
+
+# `coalesce` on a volatile argument must NOT be rewritten to
+# `CASE WHEN a IS NOT NULL THEN a ELSE b END`, because that names `a` twice and
+# therefore draws it twice. It must stay a `coalesce` call so the runtime kernel
+# evaluates each argument exactly once.
+query TT
+explain select coalesce(nullif(floor(random() * 2), 0), -1) as c;
+----
+logical_plan
+01)Projection: coalesce(nullif(floor(random() * Float64(2)), Float64(0)), Float64(-1)) AS c
+02)--EmptyRelation: rows=1
+physical_plan
+01)ProjectionExec: expr=[coalesce(nullif(floor(random() * 2), 0), -1) as c]
+02)--PlaceholderRowExec
+
+statement ok
+create table volatile_t as select * from generate_series(1, 100000) as t(i);
+
+# The fallback `-1` makes the result non-nullable, and with a single evaluation
+# per row the result really never is null: every row is either the non-null
+# volatile draw or the literal. Before the fix this both produced ~25% spurious
+# NULLs and tripped the non-nullable assertion in Arrow.
+query II
+select count(*), count(coalesce(nullif(floor(random() * 2), 0), -1))
+from volatile_t;
+----
+100000 100000
+
+# Every produced value must come from one of the two operands.
+query I
+select count(*)
+from (
+  select coalesce(nullif(floor(random() * 2), 0), -1) as c from volatile_t
+)
+where c not in (1, -1);
+----
+0
+
+# `nvl` delegates to `coalesce`, so it inherits the fix.
+query TT
+explain select nvl(nullif(floor(random() * 2), 0), -1) as c;
+----
+logical_plan
+01)Projection: nvl(nullif(floor(random() * Float64(2)), Float64(0)), Float64(-1)) AS c
+02)--EmptyRelation: rows=1
+physical_plan
+01)ProjectionExec: expr=[nvl(nullif(floor(random() * 2), 0), -1) as c]
+02)--PlaceholderRowExec
+
+query II
+select count(*), count(nvl(nullif(floor(random() * 2), 0), -1))
+from volatile_t;
+----
+100000 100000
+
+statement ok
+drop table volatile_t;
+
+# Non-volatile `coalesce` keeps the lazy CASE rewrite (see also
+# select.slt, which asserts `coalesce(1, y/x)` never divides by zero).
+query TT
+explain select coalesce(column1, column2) as c from (values (1, 2), (null, 3)) t;
+----
+logical_plan
+01)Projection: CASE WHEN t.column1 IS NOT NULL THEN t.column1 ELSE t.column2 END AS c
+02)--SubqueryAlias: t
+03)----Values: (Int64(1), Int64(2)), (Int64(NULL), Int64(3))
+physical_plan
+01)ProjectionExec: expr=[CASE WHEN column1@0 IS NOT NULL THEN column1@0 ELSE column2@1 END as c]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
