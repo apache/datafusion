@@ -40,6 +40,7 @@ use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
 };
 use crate::joins::join_hash_map::{JoinHashMapU32, JoinHashMapU64};
+use crate::joins::key_range_bitmap::KeyRangeBitmap;
 use crate::joins::utils::{
     OnceAsync, OnceFut, asymmetric_join_output_partitioning, emits_unmatched_left_rows,
     is_existence_join, reorder_output_after_swap, swap_join_projection, update_hash,
@@ -3221,19 +3222,41 @@ async fn collect_left_input(
             .iter()
             .map(|arr| arr.get_array_memory_size())
             .sum::<usize>();
-        if left_values.is_empty()
-            || left_values[0].is_empty()
-            || estimated_size > config.optimizer.hash_join_inlist_pushdown_max_size
-            || map.num_of_distinct_key()
-                > config
+
+        let pushdown_inlist = !left_values.is_empty()
+            && !left_values[0].is_empty()
+            && estimated_size <= config.optimizer.hash_join_inlist_pushdown_max_size
+            && map.num_of_distinct_key()
+                <= config
                     .optimizer
-                    .hash_join_inlist_pushdown_max_distinct_values
+                    .hash_join_inlist_pushdown_max_distinct_values;
+
+        if pushdown_inlist
+            && let Some(in_list_values) = build_struct_inlist_values(&left_values)?
         {
-            PushdownStrategy::Map(Arc::clone(&map))
-        } else if let Some(in_list_values) = build_struct_inlist_values(&left_values)? {
             PushdownStrategy::InList(in_list_values)
         } else {
-            PushdownStrategy::Map(Arc::clone(&map))
+            // Past the InList threshold use a bucket bitmap for container pruning.
+            let pruning_bitmap = match (left_values.as_slice(), bounds.as_ref()) {
+                ([keys], Some(bounds)) if !keys.is_empty() => bounds
+                    .get_column_bounds(0)
+                    .and_then(|b| {
+                        KeyRangeBitmap::try_new(
+                            keys,
+                            &b.min,
+                            &b.max,
+                            map.num_of_distinct_key(),
+                        )
+                    })
+                    .map(Arc::new),
+                _ => None,
+            };
+            if let Some(bitmap) = pruning_bitmap.as_ref() {
+                // Held for the join's lifetime, so charge it like the maps.
+                reservation.try_grow(bitmap.size())?;
+                metrics.build_mem_used.add(bitmap.size());
+            }
+            PushdownStrategy::Map(Arc::clone(&map), pruning_bitmap)
         }
     };
 
