@@ -61,9 +61,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return not_impl_err!("FETCH clause is not supported yet");
         }
 
-        if let Some(with) = with {
-            self.plan_with_clause(with, planner_context)?;
-        }
+        let materialized_ctes = match with {
+            Some(with) => self.plan_with_clause(with, planner_context)?,
+            None => vec![],
+        };
 
         let set_expr = *body;
         let plan = match set_expr {
@@ -96,7 +97,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }?;
 
-        self.pipe_operators(plan, pipe_operators, planner_context)
+        let plan = self.pipe_operators(plan, pipe_operators, planner_context)?;
+        if !materialized_ctes.is_empty() && matches!(plan, LogicalPlan::Ddl(_)) {
+            return not_impl_err!("MATERIALIZED CTEs are not supported with SELECT INTO");
+        }
+        // A later CTE may read an earlier one, so the first CTE is the outermost.
+        Ok(materialized_ctes
+            .into_iter()
+            .rev()
+            .fold(plan, |plan, cte| cte.wrap(plan)))
     }
 
     /// Apply pipe operators to a plan
