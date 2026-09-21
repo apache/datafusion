@@ -2053,9 +2053,18 @@ impl ExecutionPlan for RepartitionExec {
         new_properties.partitioning = match new_properties.partitioning {
             RoundRobinBatch(_) => RoundRobinBatch(target_partitions),
             Hash(hash, _) => Hash(hash, target_partitions),
-            Range(_) => {
-                // Number of partitions is constrained by the split points and cannot be changed
-                return Ok(None);
+            Range(range) => {
+                let Some(range) = range.scale(target_partitions) else {
+                    return Ok(None);
+                };
+                // A different layout needs its own channels, router, and metrics.
+                let mut repartition =
+                    Self::try_new(Arc::clone(&self.input), Range(range))?;
+                if self.preserve_order {
+                    repartition = repartition.with_preserve_order();
+                }
+                repartition.batch_size = self.batch_size;
+                return Ok(Some(Arc::new(repartition)));
             }
             UnknownPartitioning(_) => UnknownPartitioning(target_partitions),
         };
@@ -3081,6 +3090,112 @@ mod tests {
             collect_partition_u32_values(&output_partitions[2])
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn range_repartitioned_scales_with_fresh_execution_state() -> Result<()> {
+        let schema = test_schema(false);
+        let ordering =
+            LexOrdering::new([PhysicalSortExpr::new_default(col("c0", &schema)?)])
+                .unwrap();
+        let samples = [10, 20, 30]
+            .into_iter()
+            .map(|value| SplitPoint::new(vec![ScalarValue::UInt32(Some(value))]))
+            .collect::<Vec<_>>();
+        let partitions = [vec![5, 15, 25, 35], vec![6, 16, 26, 36]]
+            .into_iter()
+            .map(|values| -> Result<_> {
+                Ok(vec![RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(UInt32Array::from(values))],
+                )?])
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        for preserve_order in [false, true] {
+            let source = TestMemoryExec::try_new(&partitions, Arc::clone(&schema), None)?
+                .try_with_sort_information(vec![ordering.clone()])?;
+            let source = Arc::new(TestMemoryExec::update_cache(&Arc::new(source)));
+            let mut exec = Arc::new(
+                RepartitionExec::try_new(
+                    source,
+                    Partitioning::Range(RangePartitioning::try_new_with_samples(
+                        ordering.clone(),
+                        samples.clone(),
+                        2,
+                    )?),
+                )?
+                .with_batch_size(2)?,
+            );
+            if preserve_order {
+                exec = Arc::new(Arc::unwrap_or_clone(exec).with_preserve_order());
+            }
+            let context = Arc::new(TaskContext::default());
+
+            // Initialize the old exchange before resizing: its channels and router
+            // must not be reused for a different set of output boundaries.
+            let initial = crate::collect_partitioned(
+                Arc::<RepartitionExec>::clone(&exec),
+                Arc::clone(&context),
+            )
+            .await?;
+            assert_eq!(
+                initial
+                    .iter()
+                    .map(|p| partition_row_count(p))
+                    .sum::<usize>(),
+                8
+            );
+
+            for target in [4, 1, 4] {
+                let scaled = exec
+                    .repartitioned(target, &ConfigOptions::default())?
+                    .expect("retained samples support the requested partition count");
+                let repartition = scaled.downcast_ref::<RepartitionExec>().unwrap();
+                let range = expect_range_partitioning(repartition.partitioning());
+                assert_eq!(range.partition_count(), target);
+                assert_eq!(range.samples(), samples);
+                assert_eq!(range.ordering(), &ordering);
+                assert_eq!(repartition.preserve_order, preserve_order);
+                assert_eq!(repartition.batch_size, Some(2));
+                assert_eq!(
+                    repartition.properties().output_ordering(),
+                    exec.properties().output_ordering()
+                );
+                assert!(!Arc::ptr_eq(&repartition.state, &exec.state));
+                assert!(Arc::ptr_eq(&repartition.input, &exec.input));
+                assert_eq!(repartition.metrics().unwrap().output_rows(), None);
+
+                let output =
+                    crate::collect_partitioned(Arc::clone(&scaled), Arc::clone(&context))
+                        .await?;
+                assert_eq!(output.len(), target);
+                for (index, batches) in output.iter().enumerate() {
+                    let mut values = collect_partition_u32_values(batches);
+                    if !preserve_order {
+                        values.sort_unstable();
+                    }
+                    let expected = if target == 1 {
+                        vec![5, 6, 15, 16, 25, 26, 35, 36]
+                    } else {
+                        vec![index as u32 * 10 + 5, index as u32 * 10 + 6]
+                    };
+                    assert_eq!(
+                        values,
+                        expected.into_iter().map(Some).collect::<Vec<_>>()
+                    );
+                }
+                assert_eq!(repartition.metrics().unwrap().output_rows(), Some(8));
+                exec = Arc::new(repartition.clone());
+            }
+            for unsupported in [0, 5] {
+                assert!(
+                    exec.repartitioned(unsupported, &ConfigOptions::default())?
+                        .is_none()
+                );
+            }
+        }
         Ok(())
     }
 
@@ -5014,12 +5129,11 @@ mod test {
         })?;
         assert_eq!(expressions, ["c0@0"]);
 
-        // Range partition count is fixed by split points, so repartitioned()
-        // cannot change it to an arbitrary target.
+        // Scaling cannot exceed the retained sample capacity.
         let result = exec.repartitioned(10, &Default::default())?;
         assert!(
             result.is_none(),
-            "range repartitioning should not support changing partition count"
+            "range repartitioning should reject counts above sample capacity"
         );
         Ok(())
     }

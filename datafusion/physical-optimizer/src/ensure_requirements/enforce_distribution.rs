@@ -1599,9 +1599,6 @@ pub fn ensure_distribution_with_stats(
                     if should_add_repartition {
                         let partitioning = match child.plan.output_partitioning() {
                             Partitioning::Range(range) if partitioning_satisfied => {
-                                // A satisfying range layout remains useful to the
-                                // co-partitioning pass even when its samples cannot
-                                // support the preferred degree of parallelism.
                                 match range.scale(target_partitions) {
                                     Some(range) => {
                                         let scaled = Partitioning::Range(range);
@@ -1617,30 +1614,24 @@ pub fn ensure_distribution_with_stats(
                                         {
                                             scaled_native_range =
                                                 !child.plan.is::<RepartitionExec>();
-                                            Some(scaled)
+                                            scaled
                                         } else {
-                                            Some(
-                                                requirement.clone().create_partitioning(
-                                                    target_partitions,
-                                                ),
-                                            )
+                                            requirement
+                                                .clone()
+                                                .create_partitioning(target_partitions)
                                         }
                                     }
                                     // Insufficient samples are expected. Preserve
                                     // main's policy by falling back to key
                                     // repartitioning at the requested parallelism.
-                                    None => Some(
-                                        requirement
-                                            .clone()
-                                            .create_partitioning(target_partitions),
-                                    ),
+                                    None => requirement
+                                        .clone()
+                                        .create_partitioning(target_partitions),
                                 }
                             }
-                            _ => Some(
-                                requirement
-                                    .clone()
-                                    .create_partitioning(target_partitions),
-                            ),
+                            _ => {
+                                requirement.clone().create_partitioning(target_partitions)
+                            }
                         };
                         // When there is an existing ordering, we preserve ordering during
                         // repartition. This will be rolled back in the future if any of the
@@ -1649,15 +1640,13 @@ pub fn ensure_distribution_with_stats(
                         //   requirements.
                         // - Usage of order preserving variants is not desirable (per the flag
                         //   `config.optimizer.prefer_existing_sort`).
-                        if let Some(partitioning) = partitioning {
-                            let repartition = RepartitionExec::try_new(
-                                Arc::clone(&child.plan),
-                                partitioning,
-                            )?
-                            .with_preserve_order();
-                            let plan = Arc::new(repartition) as _;
-                            child = DistributionContext::new(plan, true, vec![child]);
-                        }
+                        let repartition = RepartitionExec::try_new(
+                            Arc::clone(&child.plan),
+                            partitioning,
+                        )?
+                        .with_preserve_order();
+                        let plan = Arc::new(repartition) as _;
+                        child = DistributionContext::new(plan, true, vec![child]);
                     }
                 }
                 Distribution::UnspecifiedDistribution => {
