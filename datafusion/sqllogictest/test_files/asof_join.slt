@@ -16,7 +16,7 @@
 # under the License.
 
 statement ok
-CREATE TABLE asof_left(id INT, grp TEXT, ts TIMESTAMP) AS VALUES
+CREATE TABLE asof_left(id INT PRIMARY KEY, grp TEXT, ts TIMESTAMP) AS VALUES
   (1, 'A', TIMESTAMP '2024-01-01 09:00:01'),
   (2, 'A', TIMESTAMP '2024-01-01 09:00:04'),
   (3, 'A', TIMESTAMP '2024-01-01 09:00:07'),
@@ -255,6 +255,61 @@ physical_plan
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 04)--SortExec: expr=[grp@0 ASC, ts@1 ASC], preserve_partitioning=[false]
 05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# An ASOF join emits each left row exactly once, so the primary key from
+# asof_left remains unique. Because the outer LEFT JOIN does not use columns
+# from the ASOF side, it can be removed entirely.
+statement ok
+CREATE TABLE asof_probe(id INT, payload TEXT) AS VALUES
+  (1, 'p1'),
+  (8, 'p8');
+
+query TT
+EXPLAIN SELECT p.payload
+FROM asof_probe p
+LEFT JOIN (
+  SELECT l.id
+  FROM asof_left l
+  ASOF JOIN asof_right r
+  MATCH_CONDITION (l.ts >= r.ts)
+  ON l.grp = r.grp
+) matched
+ON p.id = matched.id;
+----
+logical_plan
+01)SubqueryAlias: p
+02)--TableScan: asof_probe projection=[payload]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A right-side primary key still determines the other right columns after an
+# ASOF join, even though one right row may match multiple left rows. The
+# dependency is therefore retained as nullable and non-unique.
+statement ok
+CREATE TABLE asof_fd_left(id INT PRIMARY KEY, grp TEXT, ts INT) AS VALUES
+  (1, 'A', 1),
+  (2, 'A', 4),
+  (3, 'A', 7),
+  (4, 'B', 2),
+  (5, 'C', 1);
+
+statement ok
+CREATE TABLE asof_fd_right(id INT PRIMARY KEY, grp TEXT, ts INT, v INT) AS VALUES
+  (10, 'A', 0, 100),
+  (11, 'A', 5, 110),
+  (12, 'B', 1, 120);
+
+query II rowsort
+SELECT r.id, r.v
+FROM asof_fd_left l
+ASOF JOIN asof_fd_right r
+MATCH_CONDITION (l.ts >= r.ts)
+ON l.grp = r.grp
+GROUP BY r.id;
+----
+10 100
+11 110
+12 120
+NULL NULL
 
 query error ASOF MATCH_CONDITION requires <, <=, >, or >=
 SELECT *

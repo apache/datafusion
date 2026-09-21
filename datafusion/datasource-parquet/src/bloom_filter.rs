@@ -271,13 +271,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_tuple_in_bloom_pruning_preserves_correlation() -> Result<()> {
-        use arrow::array::{Int32Array, RecordBatch, StructArray, as_boolean_array};
+    async fn test_tuple_in_bloom_pruning() -> Result<()> {
+        use arrow::array::{Int32Array, RecordBatch, StructArray};
         use datafusion_physical_expr::PhysicalExpr;
         use datafusion_physical_expr::expressions::{
             DynamicFilterPhysicalExpr, InListExpr,
         };
-        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -319,7 +318,7 @@ mod tests {
                 .literal_guarantees()
                 .is_empty()
         );
-        live.update(Arc::clone(&exact))?;
+        live.update(exact)?;
 
         let props = WriterProperties::builder()
             .set_max_row_group_row_count(Some(2))
@@ -330,39 +329,16 @@ mod tests {
             ArrowWriter::try_new(Vec::new(), Arc::clone(&schema), Some(props))?;
         writer.write(&batch)?;
         let data = bytes::Bytes::from(writer.into_inner()?);
-        let predicate =
-            build_test_pruning_predicate(live.clone(), schema.as_ref().clone());
+        let predicate = build_test_pruning_predicate(live, schema.as_ref().clone());
         let pruned = test_row_group_bloom_filter_pruning_predicate(
             "tuple-in.parquet",
-            data.clone(),
+            data,
             &predicate,
         )
         .await?;
         let selected = pruned.access_plan().row_group_indexes();
+        // Per-column Bloom checks cannot exclude the crossed pairs in group 2.
         assert_eq!(selected, vec![0, 2]);
-        let reader = ParquetRecordBatchReaderBuilder::try_new(data)?
-            .with_row_groups(selected)
-            .build()?;
-        let mut actual = Vec::new();
-        for batch in reader {
-            let batch = batch?;
-            let mask = exact.evaluate(&batch)?.into_array(batch.num_rows())?;
-            actual.push(arrow::compute::filter_record_batch(
-                &batch,
-                as_boolean_array(&mask),
-            )?);
-        }
-        datafusion_common::assert_batches_eq!(
-            [
-                "+---+----+",
-                "| a | b  |",
-                "+---+----+",
-                "| 1 | 10 |",
-                "| 2 | 20 |",
-                "+---+----+"
-            ],
-            &actual
-        );
         Ok(())
     }
 

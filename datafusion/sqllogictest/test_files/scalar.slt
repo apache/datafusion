@@ -1128,7 +1128,7 @@ select arrow_typeof(round(cast(500 as decimal(10,-2)), -3)),
        round(cast(400 as decimal(10,-2)), -3),
        round(cast(-500 as decimal(10,-2)), -3);
 ----
-Decimal128(10, -3) 1000 0000 -1000
+Decimal128(10, -3) 1000 0 -1000
 
 # round decimal with negative scale and carry-over
 query TR
