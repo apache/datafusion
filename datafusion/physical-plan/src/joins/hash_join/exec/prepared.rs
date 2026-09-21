@@ -210,24 +210,27 @@ impl HashJoinExec {
 
 /// Bound copy allocations, including validity, offsets and alignment. Aliased
 /// columns count separately because concatenation materializes each column.
-pub(super) fn prepared_copy_bytes(batch: &RecordBatch) -> Result<usize> {
-    // Concat can materialize validity for an all-valid input when another input
-    // contains nulls. Arrow's slice measurement only counts existing bitmaps.
-    let missing_validity = batch
-        .columns()
-        .iter()
-        .filter(|array| array.nulls().is_none())
-        .count();
-    // These are flat arrays: allow one alignment unit for each physical buffer
-    // and a potential validity buffer, whether or not the input has one.
-    let buffers = batch
+pub(super) fn prepared_copy_bytes(batches: &[RecordBatch]) -> Result<usize> {
+    let mut bytes = 0;
+    for batch in batches {
+        // Concat can materialize validity for an all-valid input when another input
+        // contains nulls. Arrow's slice measurement only counts existing bitmaps.
+        let missing_validity = batch
+            .columns()
+            .iter()
+            .filter(|array| array.nulls().is_none())
+            .count();
+        bytes +=
+            batch.get_sliced_size()? + batch.num_rows().div_ceil(8) * missing_validity;
+    }
+    // These are flat arrays: allow one alignment unit per output buffer,
+    // including potential validity. Concat allocates each buffer only once.
+    let buffers = batches[0]
         .columns()
         .iter()
         .map(|array| array.to_data().buffers().len() + 1)
         .sum::<usize>();
-    Ok(batch.get_sliced_size()?
-        + batch.num_rows().div_ceil(8) * missing_validity
-        + buffers * 64)
+    Ok(bytes + buffers * 64)
 }
 
 impl HashJoinExecBuilder {

@@ -644,6 +644,28 @@ async fn prepared_build_matches_collect_left() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn prepared_concat_admission_with_small_batches() -> Result<()> {
+    let rows = 65_536;
+    let build = batch((0..rows).map(|i| Some(i as i64 * 32)).collect());
+    let base = join(build.schema(), batch(vec![Some(0)]))?;
+    for batch_rows in [32, 64, 8192] {
+        let batches = (0..rows)
+            .step_by(batch_rows)
+            .map(|offset| build.slice(offset, batch_rows))
+            .collect();
+        // Small input batches should not multiply concatenation's alignment charge.
+        let pool: Arc<dyn MemoryPool> =
+            Arc::new(GreedyMemoryPool::new(9 * 1024 * 1024 / 2));
+        let prepared = prepare(&base, batches, Arc::clone(&pool)).await?;
+        assert_eq!(prepared.num_rows(), rows);
+        assert_eq!(pool.reserved(), prepared.reserved_bytes());
+        drop(prepared);
+        assert_eq!(pool.reserved(), 0);
+    }
+    Ok(())
+}
+
 #[test]
 fn prepared_concat_admits_validity_for_non_nullable_input_arrays() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new(
@@ -665,7 +687,7 @@ fn prepared_concat_admits_validity_for_non_nullable_input_arrays() -> Result<()>
     ];
     assert!(batches[0].column(0).nulls().is_none());
     assert!(batches[1].column(0).nulls().is_some());
-    let admitted = prepared_copy_bytes(&batches[0])? + prepared_copy_bytes(&batches[1])?;
+    let admitted = prepared_copy_bytes(&batches)?;
     let copied = concat_batches(&schema, &batches)?;
     assert_eq!(copied.column(0).null_count(), 1);
     let allocated = copied.column(0).get_buffer_memory_size();

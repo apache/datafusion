@@ -3056,12 +3056,8 @@ async fn collect_left_input(
         should_compute_dynamic_filters || is_phj_candidate,
     )?;
 
-    let mut copy_bytes = 0usize;
     let mut max_batch_rows = 0;
     while let Some(batch) = left_stream.try_next().await? {
-        if prepared {
-            copy_bytes += prepared::prepared_copy_bytes(&batch)?;
-        }
         max_batch_rows = max_batch_rows.max(batch.num_rows());
         if let Some(accumulators) = &mut state.bounds_accumulators {
             for accumulator in accumulators {
@@ -3099,11 +3095,13 @@ async fn collect_left_input(
 
     // Admit concatenation copies while the original batches are retained.
     // Arrow keeps a single batch as an inexpensive slice.
-    if prepared && batches.len() > 1 {
+    let copy_bytes = if prepared && batches.len() > 1 {
+        let copy_bytes = prepared::prepared_copy_bytes(&batches)?;
         reservation.try_grow(copy_bytes)?;
+        copy_bytes
     } else {
-        copy_bytes = 0;
-    }
+        0
+    };
 
     // Compute bounds
     let mut bounds = match bounds_accumulators {
