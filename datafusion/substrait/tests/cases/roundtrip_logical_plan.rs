@@ -333,8 +333,67 @@ async fn simple_aggregate() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_distinct_with_having() -> Result<()> {
-    roundtrip("SELECT a, count(distinct b) FROM data GROUP BY a, c HAVING count(b) > 100")
-        .await
+    let ctx = create_context_without_single_distinct_to_group_by().await?;
+    roundtrip_with_ctx(
+        "SELECT a, count(distinct b) FROM data GROUP BY a, c HAVING count(b) > 100",
+        ctx,
+    )
+    .await?;
+    Ok(())
+}
+
+/// The query in [`aggregate_distinct_with_having`], through the default
+/// optimizer, where `single_distinct_aggregation_to_group_by` rewrites it into
+/// a two phase group by.
+///
+/// A rewritten plan does not round trip to an identical plan, so the identity
+/// test above turns the rule off. This one leaves it on and asserts what
+/// Substrait does carry: the output schema and the rows. The `HAVING` threshold
+/// is lowered from the identity test's so that there are rows to compare.
+#[tokio::test]
+async fn aggregate_distinct_with_having_rewritten() -> Result<()> {
+    let ctx = create_context().await?;
+    let plan = ctx
+        .sql("SELECT a, count(distinct b) FROM data GROUP BY a, c HAVING count(b) > 0")
+        .await?
+        .into_optimized_plan()?;
+
+    // The rule applied: the distinct argument is a grouping key of an inner
+    // aggregate, and the non-distinct `count` became a `sum` of its partial
+    // counts. Without this the test would keep passing over an unrewritten
+    // plan, which the identity test already covers.
+    assert_snapshot!(
+        plan,
+        @r"
+    Projection: data.a, count(alias1) AS count(DISTINCT data.b)
+      Filter: CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END > Int64(0)
+        Projection: data.a, count(alias1), sum(alias2)
+          Aggregate: groupBy=[[data.a, data.c]], aggr=[[count(alias1), sum(alias2)]]
+            Aggregate: groupBy=[[data.a, data.c, data.b AS alias1]], aggr=[[count(data.b) AS alias2]]
+              TableScan: data projection=[a, b, c]
+    "
+    );
+
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    let plan2 = ctx.state().optimize(&plan2)?;
+
+    assert_eq!(plan.schema(), plan2.schema());
+
+    let results = DataFrame::new(ctx.state(), plan2).collect().await?;
+    datafusion::assert_batches_sorted_eq!(
+        [
+            "+---+------------------------+",
+            "| a | count(DISTINCT data.b) |",
+            "+---+------------------------+",
+            "| 1 | 1                      |",
+            "| 3 | 1                      |",
+            "+---+------------------------+",
+        ],
+        &results
+    );
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -1623,6 +1682,94 @@ async fn self_referential_except_all() -> Result<()> {
 #[tokio::test]
 async fn simple_window_function() -> Result<()> {
     roundtrip("SELECT RANK() OVER (PARTITION BY a ORDER BY b), d, sum(b) OVER (PARTITION BY a) FROM data;").await
+}
+
+#[tokio::test]
+async fn stacked_windows_with_same_default_name_via_builder() -> Result<()> {
+    // Substrait projections are positional and drop DataFusion's aliases, so the
+    // inherited `rn1` column and the new window both come back under the same
+    // default name. The consumer must keep them apart.
+    // See https://github.com/apache/datafusion/issues/23007
+    use datafusion::arrow::util::pretty::pretty_format_batches;
+    use datafusion::functions_window::expr_fn::row_number;
+    use datafusion::logical_expr::ExprFunctionExt;
+
+    let ctx = create_context().await?;
+    let scan = ctx.table("data").await?.into_optimized_plan()?;
+    let row_number_by_a = || {
+        row_number()
+            .order_by(vec![col("a").sort(true, false)])
+            .build()
+    };
+    // The filter between the two windows makes `rn1` and `rn2` differ for the
+    // surviving row. A consumer that resolved `rn2` to the inherited window
+    // column would then return wrong values instead of passing unnoticed.
+    let plan = LogicalPlanBuilder::from(scan)
+        .window(vec![row_number_by_a()?.alias("rn1")])?
+        .filter(col("a").gt(lit(1i64)))?
+        .window(vec![row_number_by_a()?.alias("rn2")])?
+        .build()?;
+
+    let plan2 = substrait_roundtrip(&plan, &ctx).await?;
+    // Compare output fields; qualifiers and functional dependencies
+    // can differ after a Substrait round trip.
+    assert_eq!(plan.schema().as_arrow(), plan2.schema().as_arrow());
+
+    let expected = DataFrame::new(ctx.state(), plan)
+        .select_columns(&["a", "rn1", "rn2"])?
+        .collect()
+        .await?;
+    let actual = DataFrame::new(ctx.state(), plan2)
+        .select_columns(&["a", "rn1", "rn2"])?
+        .collect()
+        .await?;
+    let actual = pretty_format_batches(&actual)?.to_string();
+    assert_eq!(pretty_format_batches(&expected)?.to_string(), actual);
+    assert_snapshot!(
+        actual,
+        @r"
+    +---+-----+-----+
+    | a | rn1 | rn2 |
+    +---+-----+-----+
+    | 3 | 2   | 1   |
+    +---+-----+-----+
+    "
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn chained_windows_with_same_default_name() -> Result<()> {
+    // SQL form from https://github.com/apache/datafusion/issues/23007. The two
+    // `avg` windows differ only by aliases that Substrait does not carry. As in
+    // roundtrip_self_join, the consumer must synthesize an alias, so the plan
+    // text differs; verify schema and executability instead.
+    let ctx = create_context().await?;
+    let plan = ctx
+        .sql(
+            "SELECT a, b, avg1, avg2 FROM (
+                SELECT a, b, avg1,
+                       row_number() OVER () AS seq2,
+                       avg(b) OVER (PARTITION BY a ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS avg2
+                FROM (
+                    SELECT a, b, avg1 FROM (
+                        SELECT a, b,
+                               row_number() OVER () AS seq1,
+                               avg(b) OVER (PARTITION BY a ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS avg1
+                        FROM data
+                    ) t1 ORDER BY seq1
+                ) t2
+            ) t3 ORDER BY seq2",
+        )
+        .await?
+        .into_optimized_plan()?;
+
+    let plan2 = substrait_roundtrip(&plan, &ctx).await?;
+    // Compare output fields; qualifiers and functional dependencies
+    // can differ after a Substrait round trip.
+    assert_eq!(plan.schema().as_arrow(), plan2.schema().as_arrow());
+    DataFrame::new(ctx.state(), plan2).show().await?;
+    Ok(())
 }
 
 #[tokio::test]
@@ -2933,6 +3080,34 @@ async fn roundtrip_all_types(sql: &str) -> Result<()> {
 
 async fn create_context() -> Result<SessionContext> {
     create_context_with_dialect(None).await
+}
+
+/// [`create_context`] with `single_distinct_aggregation_to_group_by` removed from
+/// the optimizer.
+///
+/// That rule rewrites a single `AGG(DISTINCT x)` into a two phase group by whose
+/// inner aggregate aliases its grouping and measure expressions (`alias1`,
+/// `alias2`). Substrait carries no names for those expressions, so the consumer
+/// derives them from the expressions themselves and a rewritten plan does not
+/// round trip to an identical plan. That holds for every output of the rule, not
+/// only for the query under test.
+///
+/// What a rewritten plan does carry through Substrait is covered by
+/// [`aggregate_distinct_with_having_rewritten`], on the default context.
+async fn create_context_without_single_distinct_to_group_by() -> Result<SessionContext> {
+    let ctx = create_context().await?;
+    let rules = ctx
+        .state()
+        .optimizer()
+        .rules
+        .iter()
+        .filter(|rule| rule.name() != "single_distinct_aggregation_to_group_by")
+        .cloned()
+        .collect();
+    let state = SessionStateBuilder::new_from_existing(ctx.state())
+        .with_optimizer_rules(rules)
+        .build();
+    Ok(SessionContext::new_with_state(state))
 }
 
 async fn create_context_with_dialect(dialect: Option<Dialect>) -> Result<SessionContext> {

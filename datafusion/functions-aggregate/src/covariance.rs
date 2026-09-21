@@ -21,6 +21,7 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_float64_array, as_uint64_array};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, Signature, Volatility,
     function::{AccumulatorArgs, StateFieldsArgs},
@@ -128,6 +129,13 @@ impl AggregateUDFImpl for CovarianceSample {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // Duplicate-sensitive, but the accumulator does not read
+        // `is_distinct` and today silently returns the non-distinct answer.
+        // The tag records the intent; enforcement is a follow-up change.
+        DistinctHandling::Unsupported
+    }
 }
 
 #[user_doc(
@@ -205,6 +213,13 @@ impl AggregateUDFImpl for CovariancePopulation {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // Duplicate-sensitive, but the accumulator does not read
+        // `is_distinct` and today silently returns the non-distinct answer.
+        // The tag records the intent; enforcement is a follow-up change.
+        DistinctHandling::Unsupported
     }
 }
 

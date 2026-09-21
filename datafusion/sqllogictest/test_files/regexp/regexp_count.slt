@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -91,16 +91,13 @@ SELECT regexp_count('abc', 'x*', 4);
 ----
 1
 
-statement error
-External error: query failed: DataFusion error: Arrow error: Compute error: regexp_count() requires start to be 1 based
+statement error DataFusion error: Execution error: regexp_count\(\) requires start to be 1 based
 SELECT regexp_count('123123123123', '123', 0);
 
-statement error
-External error: query failed: DataFusion error: Arrow error: Compute error: regexp_count() requires start to be 1 based
+statement error DataFusion error: Execution error: regexp_count\(\) requires start to be 1 based
 SELECT regexp_count('123123123123', '123', -3);
 
-statement error
-External error: statement failed: DataFusion error: Arrow error: Compute error: regexp_count() does not support global flag
+statement error DataFusion error: Error during planning: regexp_count\(\) does not support the "global" option
 SELECT regexp_count('123123123123', '123', 1, 'g');
 
 query I
@@ -393,6 +390,32 @@ NULL
 NULL
 NULL
 NULL
+
+#
+# Invalid patterns and flags report the reason from the regex parser
+#
+
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error:
+SELECT regexp_count(str, 'a(b') from empty_table;
+
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error:
+SELECT regexp_count('abc', 'a(b');
+
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error:
+SELECT regexp_count('abc', 'a', 1, 'z');
+
+query error DataFusion error: Error during planning: regexp_count\(\) does not support the "global" option
+SELECT regexp_count('abc', 'a', 1, 'g');
+
+# A pattern that varies per row is reported in the same way.
+statement ok
+CREATE TABLE t_invalid_pattern(str varchar, pattern varchar) AS VALUES ('abc', 'a(b');
+
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error:
+SELECT regexp_count(str, pattern) FROM t_invalid_pattern;
+
+statement ok
+DROP TABLE t_invalid_pattern;
 
 statement ok
 drop table t_stringview;

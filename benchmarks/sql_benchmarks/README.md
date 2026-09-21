@@ -29,6 +29,7 @@ in the community:
 
 | Benchmark Suite       | Description                                                        |
 |-----------------------|--------------------------------------------------------------------|
+| `asof_join`           | ASOF join benchmarks across size, ordering, grouping, match direction, and payload width |
 | `clickbench`          | ClickBench benchmark                                               |
 | `clickbench extended` | 12 additional, more complex queries against the Clickbench dataset |
 | `clickbench_sorted`   | ClickBench benchmark using a pre-sorted hits file.                 |
@@ -36,6 +37,7 @@ in the community:
 | `hj`                  | Hash join benchmark                                                |
 | `imdb`                | IMDb benchmark                                                     |
 | `nlj`                 | Nested‑loop join benchmark                                         |
+| `null_aware_join`     | Null-aware (`NOT IN`) hash join micro-benchmarks. Q01-Q03 are uncorrelated `NOT IN` across NULL fractions and are linear in the table size (`NAJ_LARGE_ROWS`, default `1000000`). Q04-Q08 are correlated, so the correlation predicate stays behind as a join filter that the join applies per candidate (build row × probe row) pair while deciding which outer rows are UNKNOWN; without an equality correlation there are no scope keys to narrow those pairs, so their cost grows with the square of `NAJ_ROWS` (default `10000`). Q08 adds an equality correlation, which turns those pairs into a hash lookup. All tables are built inline from `range()`, so there is no data step. |
 | `push_down_topk`      | `ORDER BY ... LIMIT` over outer joins (TPC-H data); exercises pushing a TopK through a join |
 | `smj`                 | Sort‑merge join benchmark                                          |
 | `sort tpch`           | Sorting benchmarks against the TPC-H lineitem table                |
@@ -45,6 +47,7 @@ in the community:
 | `wide_schema`         | Small-projection queries on a wide (1024-col, 256-file) synthetic dataset; runs `wide` + `narrow` subgroups for comparison |
 | `predicate_eval`      | Conjunctive (AND) filter-evaluation micro-benchmarks; each subgroup is a different predicate pattern, to test how an adaptive predicate-ordering system behaves across them ([#11262](https://github.com/apache/datafusion/issues/11262)). Subgroups (`--subgroup`): `costsel`, `cost`, `selectivity`, `cardinality`, `width`, `scale`, `neutral`, `correlation`, `drift`, `nulls`. The suite sets no engine config of its own, so by default it measures DataFusion's built-in left-deep `AND` short-circuit; point it at a system under test by exporting that system's own DataFusion setting (the harness builds its `SessionConfig` with `SessionConfig::from_env`). Every query is a `count(*)`, and the counts are checked in under `predicate_eval/results/`, so `--result-mode validate` also checks that a reordering under test still returns the same rows; the checked-in counts were persisted at the suite defaults (`PRED_ROWS=1000000`, `PRED_FILL=30`), so validation assumes those (the `scale` and `width` subgroups pin their own values per query and validate at any setting). |
 | `parquet_row_filter_skip` | Micro-benchmark for the per-row-group fully-matched RowFilter skip on Parquet scans ([#23696](https://github.com/apache/datafusion/issues/23696)). Subgroups (`--subgroup`): `skip` (clustered key, most row groups fully matched by statistics so the per-row filter is skipped), `control` (scrambled key, no row group is ever fully matched). Size the data with `PRED_ROWS` and the row-group size with `RG_SIZE`. |
+| `projection_subquery` | `IN`, `NOT IN` and `EXISTS` subqueries that sit in the `SELECT` list instead of a filter ([#25341](https://github.com/apache/datafusion/issues/25341)). Every query projects the boolean subquery result and aggregates it, so the measured cost is the decorrelation plan and not the size of the output. `q07` correlates on `<` instead of `=`, so it keeps the nested-loop plan and is the control that must not change. Size the two inline tables with `PSQ_ROWS` (default `30000`). The counts are checked in under `projection_subquery/results/`, so `--result-mode validate` also proves that a change to the decorrelation still returns the same rows; the checked-in counts were persisted at the default `PSQ_ROWS`, so validation assumes that value. |
 
 # Running Benchmarks
 
@@ -172,6 +175,7 @@ Some benchmarks use custom environment variables as outlined below:
 | PRED_ROWS                    | Used in the predicate_eval benchmark to size the synthetic table (the `scale` subgroup overrides this per query), and in the parquet_row_filter_skip benchmark to size the generated Parquet datasets (default `10000000` there). | `1000000`     |
 | PRED_FILL                    | Used in the predicate_eval benchmark as the string-column width knob (filler chars per marker).                          | `30`          |
 | RG_SIZE                      | Used in the parquet_row_filter_skip benchmark as the Parquet `max_row_group_size` for the generated datasets.            | `1000000`     |
+| PSQ_ROWS                     | Used in the projection_subquery benchmark to size the two inline tables.                                                 | `30000`       |
 
 ## How it works
 
@@ -324,7 +328,9 @@ DROP TABLE test;
 <td>
 
 The expect_plan directive will check the physical plan for the string provided on the same line. This
-can be used to validate that a particular join was used. <br/> <br/> Example:<br/>
+can be used to validate that a particular join was used. The plan is rendered as <code>EXPLAIN</code>
+displays it, and the check runs once per benchmark, not once per iteration, so it adds no cost to the
+measured region. <br/> <br/> Example:<br/>
 <blockquote>expect_plan NestedLoopJoinExec</blockquote>
 
 </td>

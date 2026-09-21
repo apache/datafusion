@@ -87,7 +87,7 @@ pub trait GroupColumn: Send + Sync {
     /// And if found nth result in `equal_to_results` is already
     /// `false`, the check for nth row will be skipped.
     fn vectorized_equal_to(
-        &self,
+        &mut self,
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
@@ -664,7 +664,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
         equal_to_results.truncate(0);
         equal_to_results.append_n(n, true);
 
-        for (col_idx, group_col) in self.group_values.iter().enumerate() {
+        for (col_idx, group_col) in self.group_values.iter_mut().enumerate() {
             group_col.vectorized_equal_to(
                 &self.vectorized_operation_buffers.equal_to_group_indices,
                 &cols[col_idx],
@@ -930,67 +930,17 @@ macro_rules! instantiate_primitive {
     }};
 }
 
-/// Returns true if the specified data type has a specialized
-/// [`GroupColumn`] builder in [`make_group_column`].
+/// Returns true if [`make_group_column`] can build a [`GroupColumn`] for the
+/// specified data type.
 ///
-/// This is the allow-list that gates the `GroupValuesRows` fallback in
-/// [`crate::aggregates::group_values::new_group_values`]: it must accept
-/// exactly the set of types that [`make_group_column`] constructs a
-/// builder for. The `group_column_supported_type_matches_make_group_column`
-/// test below pins this biconditional.
+/// This gates the `GroupValuesRows` fallback in
+/// [`crate::aggregates::group_values::new_group_values`], so it must accept
+/// exactly the types [`make_group_column`] accepts. It asks the factory itself
+/// rather than keeping a second list of types in step with it; building a
+/// column only creates empty buffers, and this runs once per stream.
 fn group_column_supported_type(data_type: &DataType) -> bool {
-    match data_type {
-        DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Float16
-            | DataType::Float32
-            | DataType::Float64
-            | DataType::Decimal128(_, _)
-            | DataType::Decimal256(_, _)
-            | DataType::Utf8
-            | DataType::LargeUtf8
-            | DataType::Binary
-            | DataType::LargeBinary
-            // Only non-negative widths: a negative width is not a valid
-            // Arrow type (no array can be constructed for it), and the
-            // dispatcher in `make_group_column` rejects it. Keep the two
-            // in lockstep.
-            | DataType::FixedSizeBinary(0..)
-            | DataType::Date32
-            | DataType::Date64
-            // Only the semantically valid Time variants per the Arrow spec.
-            // The dispatcher in `make_group_column` returns NotImpl for the
-            // other unit combinations, so accepting them here would cause a
-            // schema to be routed into GroupValuesColumn and then fail at
-            // intern. Keep these two arms in lockstep with the dispatcher.
-            | DataType::Time32(TimeUnit::Second)
-            | DataType::Time32(TimeUnit::Millisecond)
-            | DataType::Time64(TimeUnit::Microsecond)
-            | DataType::Time64(TimeUnit::Nanosecond)
-            | DataType::Timestamp(_, _)
-            | DataType::Duration(_)
-            | DataType::Interval(_)
-            | DataType::Utf8View
-            | DataType::BinaryView
-            | DataType::Boolean => true,
-        DataType::List(child_field) | DataType::LargeList(child_field)
-            if group_column_supported_type(child_field.data_type()) => true,
-        DataType::Dictionary(_, v) if group_column_supported_type(v) => true,
-        // Nested types (Struct / List / LargeList / FixedSizeList, recursively)
-        // that have no type-specialized `GroupColumn` as per the above are handled by the generic
-        // row-backed fallback in `make_group_column` whenever arrow's row format can
-        // encode them. Gate the fallback to nested types so intentionally-excluded
-        // scalar types (e.g. Float16, Decimal256) stay on `GroupValuesRows` and the
-        // `group_column_supported_type` ⇔ `make_group_column` invariant holds.
-        dt if dt.is_nested() => RowsGroupColumn::supports_type(dt),
-        _ => false,
-    }
+    // Whether a type is supported does not depend on its nullability
+    make_group_column(&Field::new("", data_type.clone(), true)).is_ok()
 }
 
 /// Build a [`GroupColumn`] for a single schema field.
@@ -1002,12 +952,9 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
 /// specializations (e.g. `Struct`, `List`, `LargeList`) plug into without
 /// having to enumerate every combination inline.
 ///
-/// Returns `Err(not_impl_err!(...))` for any type not in the supported set;
-/// callers (`GroupValues::intern`) propagate that error so the
-/// `GroupValuesRows` fallback can take over upstream of this builder.
-///
-/// The allow-list that gates this dispatcher lives in
-/// [`group_column_supported_type`] directly above.
+/// Returns `Err(not_impl_err!(...))` for any type not in the supported set.
+/// [`group_column_supported_type`] reports exactly that, which is how
+/// `new_group_values` knows to use the `GroupValuesRows` fallback instead.
 fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
     let nullable = field.is_nullable();
     let data_type = field.data_type();
@@ -1033,8 +980,7 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
                 instantiate_primitive!(nullable, Time32MillisecondType, data_type)
             }
             // Time32 with Microsecond / Nanosecond is not a valid Arrow type
-            // combination; reject explicitly so group_column_supported_type
-            // and this dispatcher stay in lockstep (see consistency fuzz below).
+            // combination; reject explicitly.
             _ => None,
         },
         DataType::Time64(t) => match t {
@@ -1107,8 +1053,8 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
         DataType::LargeBinary => Some(Box::new(ByteGroupValueBuilder::<i64>::new(
             OutputType::Binary,
         ))),
-        // A negative width is not a valid Arrow type; it falls to the `_`
-        // arm below, matching `group_column_supported_type`.
+        // A negative width is not a valid Arrow type (no array can be
+        // constructed for it); it falls to the `_` arm below.
         DataType::FixedSizeBinary(byte_width @ 0..) => {
             Some(Box::new(FixedSizeBinaryGroupValueBuilder::new(*byte_width)))
         }
@@ -1645,19 +1591,14 @@ mod tests {
         assert_eq!(col_rest.len(), schema.fields().len());
     }
 
-    /// CRITICAL invariant: if `group_column_supported_type(t)` returns true
-    /// the dispatcher must accept that type at intern time, and conversely
-    /// if `group_column_supported_type(t)` returns false the planner must
-    /// NOT route it through `GroupValuesColumn`. A divergence here would
-    /// let the planner select `GroupValuesColumn` for a type whose
-    /// dispatcher arm is missing, producing a runtime `not_impl_err` after
-    /// the field reaches the builder factory.
+    /// Pins which types take the `GroupValuesColumn` path and which fall back
+    /// to `GroupValuesRows`.
     ///
-    /// This test fuzzes a representative cross-section of types and asserts
-    /// both directions of the biconditional. When a new specialization is
-    /// added (`Float16`, `FixedSizeList`, `Struct`, ...) it should be added
-    /// to the supported_cases vector; when a type is intentionally rejected
-    /// it should be added to unsupported_cases.
+    /// `group_column_supported_type` is derived from `make_group_column`, so
+    /// the two cannot disagree; what this test guards is the set itself. When
+    /// a new specialization is added (`Float16`, `FixedSizeList`, `Struct`,
+    /// ...) it should be added to the supported_cases vector; when a type is
+    /// intentionally rejected it should be added to unsupported_cases.
     #[test]
     fn group_column_supported_type_matches_make_group_column() {
         let utf8 = || Field::new("v", DataType::Utf8, true);
@@ -1776,6 +1717,8 @@ mod tests {
             // A negative width is representable in the DataType but is not
             // a valid Arrow type; no array can be constructed for it.
             DataType::FixedSizeBinary(-5),
+            // Likewise a dictionary whose keys are not integers.
+            DataType::Dictionary(Box::new(DataType::Utf8), Box::new(DataType::Int32)),
         ];
 
         for dt in &unsupported_cases {

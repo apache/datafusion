@@ -248,7 +248,7 @@ impl ConcatBuilder for ConcatBinaryViewBuilder {
         let array = unsafe {
             BinaryViewArray::new_unchecked(
                 ScalarBuffer::from(self.views),
-                buffers,
+                buffers.into(),
                 null_buffer,
             )
         };
