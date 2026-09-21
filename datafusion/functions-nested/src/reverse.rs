@@ -32,6 +32,7 @@ use datafusion_common::cast::{
     as_fixed_size_list_array, as_large_list_array, as_large_list_view_array,
     as_list_array, as_list_view_array,
 };
+use datafusion_common::utils::offset_span_len;
 use datafusion_common::{Result, exec_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -149,7 +150,7 @@ fn general_array_reverse<O: OffsetSizeTrait>(
 ) -> Result<ArrayRef> {
     let values = array.values();
     let mut offsets = vec![O::usize_as(0)];
-    let mut indices: Vec<O> = Vec::with_capacity(values.len());
+    let mut indices: Vec<O> = Vec::with_capacity(offset_span_len(array.offsets()));
 
     for (row_index, (&start, &end)) in array.offsets().iter().tuple_windows().enumerate()
     {

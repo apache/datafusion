@@ -284,31 +284,68 @@ impl CastExpr {
     }
 }
 
-pub(crate) fn is_order_preserving_cast_family(
-    source_type: &DataType,
-    target_type: &DataType,
-) -> bool {
-    (source_type.is_numeric() || *source_type == Boolean) && target_type.is_numeric()
-        || source_type.is_temporal() && target_type.is_temporal()
-        || source_type.eq(target_type)
+/// UTC and fixed offsets have no timezone transitions.
+fn is_fixed_offset(tz: &str) -> bool {
+    tz == "UTC" || tz.starts_with(['+', '-'])
+}
+
+/// Whether successful casts preserve order when conversion failures return errors.
+/// Unlike `check_bigger_cast`, this allows precision loss and is not sufficient
+/// for propagating distinct counts or the ordering of subsequent sort keys.
+fn is_order_preserving_cast(source_type: &DataType, target_type: &DataType) -> bool {
+    use arrow::datatypes::TimeUnit::*;
+    if source_type == target_type
+        || (source_type.is_numeric() || *source_type == Boolean)
+            && target_type.is_numeric()
+    {
+        return true;
+    }
+    // Temporal casts are not generally monotonic: extracting time-of-day wraps
+    // at midnight, and timezone transitions can reverse the local date.
+    match (source_type, target_type) {
+        (Date32 | Date64, Date32 | Date64)
+        | (Date32 | Date64, Timestamp(_, None))
+        | (Timestamp(_, None), Date32) => true,
+        (Timestamp(_, Some(tz)), Date32) => is_fixed_offset(tz),
+        // Arrow converts timestamps to Date64 by scaling the epoch value,
+        // whereas Date32 extracts the date in the timestamp's timezone.
+        (Timestamp(_, _), Date64) => true,
+        // Only admit scaling that cannot wrap on overflow. Time64 widening
+        // and narrowing to Time32 do not currently check overflow in Arrow.
+        (Time32(Second | Millisecond), Time32(Second | Millisecond))
+        | (Time32(Second | Millisecond), Time64(Microsecond | Nanosecond))
+        | (Time64(Nanosecond), Time64(Microsecond))
+        | (Duration(_), Duration(_)) => true,
+        (Timestamp(_, from_tz), Timestamp(_, to_tz)) => {
+            // Adding a timezone to naive timestamps interprets local times;
+            // other timezone changes only change metadata on the epoch value.
+            from_tz.is_some() || to_tz.as_deref().is_none_or(is_fixed_offset)
+        }
+        _ => false,
+    }
 }
 
 pub(crate) fn cast_expr_properties(
     child: &ExprProperties,
     target_type: &DataType,
+    null_on_failure: bool,
 ) -> Result<ExprProperties> {
     let unbounded = Interval::make_unbounded(target_type)?;
     let source_type = child.range.data_type();
     // A lossless cast recognized by check_bigger_cast is one-to-one, so it is
     // strictly order-preserving; a narrowing cast may collapse distinct values,
     // breaking the ordering of subsequent sort keys.
-    let lossless_cast = CastExpr::check_bigger_cast(target_type, &source_type);
-    if is_order_preserving_cast_family(&source_type, target_type) || lossless_cast {
+    let bigger_cast = CastExpr::check_bigger_cast(target_type, &source_type);
+    // New NULLs from failed conversions may violate NULLS FIRST/LAST, even
+    // if the successfully converted values remain ordered.
+    if bigger_cast
+        || (!null_on_failure && is_order_preserving_cast(&source_type, target_type))
+    {
         Ok(child
             .clone()
             .with_range(unbounded)
             .with_strictly_order_preserving(
-                child.strictly_order_preserving && lossless_cast,
+                child.strictly_order_preserving && bigger_cast,
             ))
     } else {
         Ok(ExprProperties::new_unknown().with_range(unbounded))
@@ -387,18 +424,19 @@ impl PhysicalExpr for CastExpr {
         interval: &Interval,
         children: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
-        let child_interval = children[0];
-        // Get child's datatype:
-        let cast_type = child_interval.data_type();
+        let source_type = children[0].data_type();
+        let target_type = self.cast_type();
+        if !can_propagate_cast_constraints(&source_type, target_type) {
+            return Ok(Some(vec![]));
+        }
         Ok(Some(vec![
-            interval.cast_to(&cast_type, &DEFAULT_SAFE_CAST_OPTIONS)?,
+            interval.cast_to(&source_type, &DEFAULT_SAFE_CAST_OPTIONS)?,
         ]))
     }
 
-    /// A [`CastExpr`] preserves the ordering of its child if the cast is done
-    /// under the same datatype family.
+    /// Propagate ordering only for supported order-preserving conversions.
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
-        cast_expr_properties(&children[0], self.cast_type())
+        cast_expr_properties(&children[0], self.cast_type(), self.cast_options.safe)
     }
 
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -426,6 +464,19 @@ impl PhysicalExpr for CastExpr {
             ))),
         }))
     }
+}
+
+/// Whether output bounds can be cast back to `source` without excluding valid inputs.
+///
+/// Used for reverse constraint propagation through a cast from `source` to `target`.
+/// Many-to-one casts, such as Float64 to Int32, cannot generally be inverted this way:
+/// an output of 0 does not imply an input of 0.0.
+/// Returns false for unrecognized conversions so the input range remains unchanged.
+fn can_propagate_cast_constraints(source: &DataType, target: &DataType) -> bool {
+    CastExpr::check_bigger_cast(target, source)
+        || (source.is_integer() && target.is_integer())
+        // NaN bounds are unbounded; finite Float32 values widen exactly.
+        || (*source == Float32 && *target == Float64)
 }
 
 #[cfg(feature = "proto")]
@@ -596,9 +647,119 @@ mod tests {
         as_boolean_array, as_int64_array, as_string_array, as_struct_array,
         as_uint8_array,
     };
+    use datafusion_common::rounding::{next_down, next_up};
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
     use insta::assert_snapshot;
     use std::collections::HashMap;
+
+    #[test]
+    fn test_cast_constraint_propagation() -> Result<()> {
+        for (source, target, propagates) in [
+            (Utf8, Int32, false),
+            (Utf8View, Int32, false),
+            (Timestamp(TimeUnit::Nanosecond, None), Date32, false),
+            (Int32, Date32, true),
+            (Date32, Int32, true),
+            (Utf8, LargeUtf8, true),
+            (Utf8, Utf8, true),
+            (Float64, Int32, false),
+            (Int64, Float32, false),
+            (Float64, Float32, false),
+            (Decimal128(4, 1), Decimal128(4, 0), false),
+            (Decimal128(4, 1), Int32, false),
+            (Float64, Decimal128(4, 1), false),
+            (Int8, Int64, true),
+            (Int64, Int8, true),
+            (Int32, UInt32, true),
+            (UInt32, Int32, true),
+            (Int32, Float64, true),
+            (Float32, Float64, true),
+            (Decimal128(4, 1), Decimal128(4, 1), true),
+        ] {
+            let schema = Schema::new(vec![Field::new("x", source.clone(), true)]);
+            let expr = CastExpr::new(col("x", &schema)?, target.clone(), None);
+            let input = Interval::make_unbounded(&source)?;
+            let value = ScalarValue::Int32(Some(0)).cast_to(&target)?;
+            let output = Interval::from(&value);
+            let expected = if propagates {
+                vec![Interval::from(&value.cast_to(&source)?)]
+            } else {
+                vec![]
+            };
+            assert_eq!(
+                expr.propagate_constraints(&output, &[&input])?,
+                Some(expected),
+                "{source} -> {target}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_float_widening_constraint_boundaries() -> Result<()> {
+        let mut values = vec![
+            f32::NEG_INFINITY,
+            -f32::MAX,
+            -1.0,
+            -f32::MIN_POSITIVE,
+            -f32::from_bits(1),
+            -0.0,
+            0.0,
+            f32::from_bits(1),
+            f32::MIN_POSITIVE,
+            1.0,
+            f32::MAX,
+            f32::INFINITY,
+        ];
+        // Include both signs of signaling and quiet NaNs with distinct payloads.
+        values.extend(
+            [0x7f800001, 0x7f800002, 0x7fc00001, 0xff800001, 0xffc00001]
+                .map(f32::from_bits),
+        );
+        values.extend([next_down(1.0f32), next_up(1.0f32)]);
+        let schema = Arc::new(Schema::new(vec![Field::new("x", Float32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Float32Array::from(values.clone()))],
+        )?;
+        let expr = CastExpr::new(col("x", &schema)?, Float64, None);
+        let array = expr.evaluate(&batch)?.into_array(values.len())?;
+        let widened = array.as_any().downcast_ref::<Float64Array>().unwrap();
+        let mut bounds = vec![-f64::MAX, f64::MAX];
+        for value in widened.values() {
+            bounds.extend([next_down(*value), *value, next_up(*value)]);
+        }
+        // Midpoints exercise rounding back to Float32 in both directions.
+        bounds.extend([
+            f64::from(f32::from_bits(1)) / 2.0,
+            -f64::from(f32::from_bits(1)) / 2.0,
+            f64::midpoint(1.0, f64::from(next_up(1.0f32))),
+        ]);
+        bounds.sort_by(f64::total_cmp);
+        bounds.dedup_by(|a, b| a.to_bits() == b.to_bits());
+        let input = Interval::make_unbounded(&Float32)?;
+        for (i, lower) in bounds.iter().enumerate() {
+            for upper in &bounds[i..] {
+                let output = Interval::make(Some(*lower), Some(*upper))?;
+                let propagated = expr.propagate_constraints(&output, &[&input])?.unwrap();
+                assert_eq!(propagated.len(), 1);
+                for (index, value) in values.iter().enumerate() {
+                    if output.contains_value(ScalarValue::Float64(Some(
+                        widened.value(index),
+                    )))? {
+                        assert!(
+                            propagated[0]
+                                .contains_value(ScalarValue::Float32(Some(*value)))?,
+                            "input bits={:08x}, output={output}, propagated={:?}",
+                            value.to_bits(),
+                            propagated[0]
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 
     fn make_struct_array(fields: Fields, arrays: Vec<ArrayRef>) -> StructArray {
         StructArray::new(fields, arrays, None)
@@ -1737,6 +1898,171 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_temporal_cast_ordering() {
+        use TimeUnit::*;
+        use arrow::compute::SortOptions;
+        use datafusion_expr_common::sort_properties::SortProperties;
+
+        let timezone = Some("America/Goose_Bay".into());
+        // Expected ordering is independent of strictness: discarding precision
+        // may merge values, but must not reverse them.
+        let cases = [
+            (Date32, Date64, true),
+            (Date64, Date32, true),
+            (Date32, Timestamp(Nanosecond, None), true),
+            (Date64, Timestamp(Second, None), true),
+            (Timestamp(Second, None), Date32, true),
+            (Timestamp(Second, Some("UTC".into())), Date32, true),
+            (Timestamp(Second, Some("+08:00".into())), Date32, true),
+            (Timestamp(Second, timezone.clone()), Date32, false),
+            (Timestamp(Second, timezone.clone()), Date64, true),
+            (Timestamp(Second, None), Timestamp(Nanosecond, None), true),
+            (Timestamp(Nanosecond, None), Timestamp(Second, None), true),
+            (
+                Timestamp(Second, None),
+                Timestamp(Second, timezone.clone()),
+                false,
+            ),
+            (
+                Timestamp(Second, None),
+                Timestamp(Second, Some("+08:00".into())),
+                true,
+            ),
+            (
+                Timestamp(Second, timezone.clone()),
+                Timestamp(Second, None),
+                true,
+            ),
+            (
+                Timestamp(Second, timezone.clone()),
+                Timestamp(Millisecond, Some("UTC".into())),
+                true,
+            ),
+            (Timestamp(Second, None), Time32(Second), false),
+            (Timestamp(Nanosecond, timezone), Time64(Nanosecond), false),
+            (Time32(Second), Time32(Millisecond), true),
+            (Time32(Millisecond), Time32(Second), true),
+            (Time32(Second), Time64(Nanosecond), true),
+            (Time64(Nanosecond), Time64(Microsecond), true),
+            (Time64(Microsecond), Time64(Nanosecond), false),
+            (Time64(Nanosecond), Time32(Second), false),
+            (Duration(Second), Duration(Nanosecond), true),
+            (Duration(Nanosecond), Duration(Second), true),
+            (Null, Timestamp(Second, None), false),
+        ];
+        for (source, target, preserves_order) in cases {
+            let schema = Schema::new(vec![Field::new("a", source.clone(), true)]);
+            let expr = CastExpr::new(
+                col("a", &schema).expect("column exists"),
+                target.clone(),
+                None,
+            );
+            for descending in [false, true] {
+                for nulls_first in [false, true] {
+                    let ordered = SortProperties::Ordered(SortOptions {
+                        descending,
+                        nulls_first,
+                    });
+                    let child = ExprProperties::new_unknown()
+                        .with_range(
+                            Interval::make_unbounded(&source)
+                                .expect("supported interval type"),
+                        )
+                        .with_order(ordered)
+                        .with_strictly_order_preserving(true);
+                    let properties =
+                        expr.get_properties(&[child]).expect("cast properties");
+                    assert_eq!(
+                        properties.sort_properties,
+                        if preserves_order {
+                            ordered
+                        } else {
+                            SortProperties::Unordered
+                        },
+                        "{source} -> {target}, descending={descending}, nulls_first={nulls_first}"
+                    );
+                    assert_eq!(properties.range.data_type(), target);
+                    assert!(!properties.strictly_order_preserving);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_cast_ordering_with_null_on_failure() {
+        use arrow::array::TimestampSecondArray;
+        use arrow::compute::SortOptions;
+        use datafusion_expr_common::sort_properties::SortProperties;
+
+        // Overflow introduces a trailing NULL even though the input satisfies
+        // ASC NULLS FIRST. Successful values alone are still in order.
+        let source = Timestamp(TimeUnit::Second, None);
+        let target = Timestamp(TimeUnit::Nanosecond, None);
+        let schema = Arc::new(Schema::new(vec![Field::new("a", source.clone(), true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(TimestampSecondArray::from(vec![
+                None,
+                Some(0),
+                Some(i64::MAX),
+            ]))],
+        )
+        .expect("valid input batch");
+        let child = ExprProperties::new_unknown()
+            .with_range(
+                Interval::make_unbounded(&source).expect("supported interval type"),
+            )
+            .with_order(SortProperties::Ordered(SortOptions::default()))
+            .with_strictly_order_preserving(true);
+        let expr = CastExpr::new(
+            col("a", &schema).expect("column exists"),
+            target.clone(),
+            Some(DEFAULT_SAFE_CAST_OPTIONS),
+        );
+        let actual = expr
+            .evaluate(&batch)
+            .expect("safe cast succeeds")
+            .into_array(batch.num_rows())
+            .expect("array result");
+        let expected = TimestampNanosecondArray::from(vec![None, Some(0), None]);
+        assert_eq!(actual.as_ref(), &expected);
+        let properties = expr
+            .get_properties(std::slice::from_ref(&child))
+            .expect("safe cast properties");
+        assert_eq!(properties.sort_properties, SortProperties::Unordered);
+        assert_eq!(properties.range.data_type(), target);
+        assert!(!properties.strictly_order_preserving);
+
+        let expr = CastExpr::new(col("a", &schema).expect("column exists"), target, None);
+        assert!(expr.evaluate(&batch).is_err());
+        assert_eq!(
+            expr.get_properties(&[child])
+                .expect("cast properties")
+                .sort_properties,
+            SortProperties::Ordered(SortOptions::default())
+        );
+
+        // A lossless cast preserves ordering even in NULL-on-failure mode.
+        let schema = Schema::new(vec![Field::new("a", Int32, true)]);
+        let child = ExprProperties::new_unknown()
+            .with_range(
+                Interval::make_unbounded(&Int32).expect("supported interval type"),
+            )
+            .with_order(SortProperties::Ordered(SortOptions::default()))
+            .with_strictly_order_preserving(true);
+        let expr = CastExpr::new(
+            col("a", &schema).expect("column exists"),
+            Int64,
+            Some(DEFAULT_SAFE_CAST_OPTIONS),
+        );
+        let properties = expr
+            .get_properties(std::slice::from_ref(&child))
+            .expect("safe lossless cast properties");
+        assert_eq!(properties.sort_properties, child.sort_properties);
+        assert!(properties.strictly_order_preserving);
     }
 
     #[test]
