@@ -55,12 +55,13 @@ fn roundtrip_projection_metadata() -> Result<()> {
         DataType::Int32,
         false,
     )]));
-    let projected_schema = Schema::new_with_metadata(
-        vec![Field::new("value", DataType::Int32, false).with_metadata(
-            [("field-key".to_string(), "field-value".to_string())].into(),
-        )],
-        [("schema-key".to_string(), "schema-value".to_string())].into(),
-    );
+    let projected_schema =
+        Schema::new_with_metadata(
+            vec![Field::new("value", DataType::Int32, false).with_metadata(
+                HashMap::from([("field-key".to_string(), "field-value".to_string())]),
+            )],
+            HashMap::from([("schema-key".to_string(), "schema-value".to_string())]),
+        );
     let plan = Arc::new(ProjectionExec::try_new_with_schema_metadata(
         vec![(col("value", &input_schema)?, "value".to_string())],
         Arc::new(EmptyExec::new(input_schema)),
@@ -122,12 +123,13 @@ fn roundtrip_projection_metadata_overrides() -> Result<()> {
 
 #[test]
 fn roundtrip_projection_without_schema() -> Result<()> {
-    let input_schema = Arc::new(Schema::new_with_metadata(
-        vec![Field::new("value", DataType::Int32, false).with_metadata(
-            [("field-key".to_string(), "field-value".to_string())].into(),
-        )],
-        HashMap::from([("schema-key".to_string(), "schema-value".to_string())]),
-    ));
+    let input_schema =
+        Arc::new(Schema::new_with_metadata(
+            vec![Field::new("value", DataType::Int32, false).with_metadata(
+                HashMap::from([("field-key".to_string(), "field-value".to_string())]),
+            )],
+            HashMap::from([("schema-key".to_string(), "schema-value".to_string())]),
+        ));
     let plan = Arc::new(ProjectionExec::try_new(
         vec![(col("value", &input_schema)?, "value".to_string())],
         Arc::new(EmptyExec::new(Arc::clone(&input_schema))),
