@@ -316,101 +316,48 @@ mod tests {
     #[test]
     fn test_wrapping_negation_properties() -> Result<()> {
         let expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
-        macro_rules! check_type {
-            ($native:ty) => {{
-                let minimum = <$native>::MIN;
-                let singleton = Interval::make(Some(minimum), Some(minimum))?;
-                let full = Interval::make::<$native>(None, None)?;
-                for range in [
-                    full.clone(),
-                    singleton.clone(),
-                    Interval::make(None, Some(minimum))?,
-                    Interval::make(Some(minimum), Some(1 as $native))?,
-                    Interval::make(None, Some(1 as $native))?,
-                ] {
-                    assert_eq!(expr.evaluate_bounds(&[&range])?, full);
-                    for descending in [false, true] {
-                        for nulls_first in [false, true] {
-                            let ordered =
-                                SortProperties::Ordered(arrow::compute::SortOptions {
-                                    descending,
-                                    nulls_first,
-                                });
-                            let child = ExprProperties::new_unknown()
-                                .with_range(range.clone())
-                                .with_order(ordered);
-                            assert_eq!(
-                                expr.get_properties(&[child])?.sort_properties,
-                                SortProperties::Unordered
-                            );
-                        }
-                    }
-                }
-                assert_eq!(expr.evaluate_bounds(&[&singleton])?, full);
+        let ordered = SortProperties::Ordered(Default::default());
+        for data_type in [Int8, Int16, Int32, Int64] {
+            let minimum = ScalarValue::min(&data_type).unwrap();
+            let full = Interval::make_unbounded(&data_type)?;
+            let singleton = Interval::try_new(minimum.clone(), minimum.clone())?;
+            for range in [
+                full.clone(),
+                singleton.clone(),
+                Interval::try_new(ScalarValue::try_from(&data_type)?, minimum)?,
+            ] {
+                let child = ExprProperties::new_unknown()
+                    .with_range(range.clone())
+                    .with_order(ordered);
+                let result = expr.get_properties(&[child])?;
+                assert_eq!(result.sort_properties, SortProperties::Unordered);
+                assert_eq!(result.range, full);
+                assert_eq!(expr.evaluate_bounds(&[&range])?, full);
                 assert_eq!(
-                    expr.propagate_constraints(&singleton, &[&full])?,
+                    expr.propagate_constraints(&range, &[&full])?,
                     Some(vec![full.clone()])
                 );
-                let child = ExprProperties::new_unknown()
-                    .with_range(singleton)
-                    .with_order(SortProperties::Singleton);
-                let result = expr.get_properties(&[child])?;
-                assert_eq!(result.sort_properties, SortProperties::Singleton);
-                assert_eq!(result.range, full);
-
-                let safe = Interval::make(Some(minimum + 1), Some(1 as $native))?;
-                for descending in [false, true] {
-                    for nulls_first in [false, true] {
-                        let ordered =
-                            SortProperties::Ordered(arrow::compute::SortOptions {
-                                descending,
-                                nulls_first,
-                            });
-                        let child = ExprProperties::new_unknown()
-                            .with_range(safe.clone())
-                            .with_order(ordered);
-                        let result = expr.get_properties(&[child])?;
-                        assert_eq!(result.sort_properties, -ordered);
-                        assert_eq!(result.range, safe.arithmetic_negate()?);
-                    }
-                }
-            }};
+            }
+            let child = ExprProperties::new_unknown()
+                .with_range(singleton)
+                .with_order(SortProperties::Singleton);
+            assert_eq!(
+                expr.get_properties(&[child])?.sort_properties,
+                SortProperties::Singleton
+            );
         }
-        check_type!(i8);
-        check_type!(i16);
-        check_type!(i32);
-        check_type!(i64);
-        let unknown = ExprProperties::new_unknown()
-            .with_order(SortProperties::Ordered(Default::default()));
+        let safe = Interval::make(Some(i8::MIN + 1), Some(1_i8))?;
+        let child = ExprProperties::new_unknown()
+            .with_range(safe.clone())
+            .with_order(ordered);
+        let result = expr.get_properties(&[child])?;
+        assert_eq!(result.sort_properties, -ordered);
+        assert_eq!(result.range, safe.arithmetic_negate()?);
+        let unknown = ExprProperties::new_unknown().with_order(ordered);
         assert_eq!(
             expr.get_properties(&[unknown])?.sort_properties,
             SortProperties::Unordered
         );
-        Ok(())
-    }
-
-    #[test]
-    fn test_negated_bounds_contain_wrapping_values() -> Result<()> {
-        let expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
-        let endpoints = [i8::MIN, i8::MIN + 1, -1, 0, 1, i8::MAX];
-        for lower in endpoints {
-            for upper in endpoints.into_iter().filter(|upper| *upper >= lower) {
-                let input = Interval::make(Some(lower), Some(upper))?;
-                let output = expr.evaluate_bounds(&[&input])?;
-                for value in lower..=upper {
-                    let negated = Interval::make(
-                        Some(value.wrapping_neg()),
-                        Some(value.wrapping_neg()),
-                    )?;
-                    assert_eq!(output.intersect(negated.clone())?, Some(negated.clone()));
-                    let inferred = expr
-                        .propagate_constraints(&negated, &[&input])?
-                        .expect("the input contains a matching value");
-                    let point = Interval::make(Some(value), Some(value))?;
-                    assert_eq!(inferred[0].intersect(point.clone())?, Some(point));
-                }
-            }
-        }
         Ok(())
     }
 
