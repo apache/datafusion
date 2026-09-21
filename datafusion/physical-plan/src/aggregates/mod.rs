@@ -1670,14 +1670,14 @@ impl AggregateExec {
             AggregateMode::Partial
                 | AggregateMode::SinglePartitioned
                 | AggregateMode::FinalPartitioned
-        ) || self.group_by.is_empty()
-            || self.group_by.has_grouping_set()
+        ) || self.group_by().is_empty()
+            || self.group_by().has_grouping_set()
         {
             return false;
         }
 
         if input.output_partitioning().keeps_keys_local(
-            &self.group_by.input_exprs(),
+            &self.group_by().input_exprs(),
             input.equivalence_properties(),
             allow_subset,
         ) {
@@ -1691,7 +1691,7 @@ impl AggregateExec {
                     partial.mode == AggregateMode::Partial
                         && datafusion_physical_expr::physical_exprs_equal(
                             &partial.output_group_expr(),
-                            &self.group_by.input_exprs(),
+                            &self.group_by().input_exprs(),
                         )
                         && partial.groups_are_partition_local(
                             partial.input.as_ref(),

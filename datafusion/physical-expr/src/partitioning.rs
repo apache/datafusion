@@ -26,9 +26,7 @@ use crate::{
 use arrow::datatypes::Schema;
 pub use datafusion_common::SplitPoint;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{
-    Result, ScalarValue, plan_err, validate_range_split_points,
-};
+use datafusion_common::{Result, ScalarValue, plan_err, validate_range_split_points};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
