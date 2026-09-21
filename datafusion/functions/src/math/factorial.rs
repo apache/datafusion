@@ -28,6 +28,7 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
 };
+use datafusion_expr_common::sort_properties::{ExprProperties, SortProperties};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -76,6 +77,10 @@ impl ScalarUDFImpl for FactorialFunc {
         Ok(Int64)
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [arg] = take_function_args(self.name(), args.args)?;
 
@@ -110,6 +115,16 @@ impl ScalarUDFImpl for FactorialFunc {
                 }
             },
         }
+    }
+
+    fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {
+        // Keep the same ordering as the input
+        Ok(inputs[0].sort_properties)
+    }
+
+    fn strictly_order_preserving(&self, _inputs: &[ExprProperties]) -> Result<bool> {
+        // factorial(0) == factorial(1) == 1 so ordering is not preserved
+        Ok(false)
     }
 
     fn documentation(&self) -> Option<&Documentation> {

@@ -21,10 +21,10 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::{
-    Aggregate, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr, Filter, Join,
-    Limit, LogicalPlan, Partitioning, Projection, RecursiveQuery, Repartition, Sort,
-    Subquery, SubqueryAlias, TableProviderFilterPushDown, TableScan, Unnest, Values,
-    Window, expr_vec_fmt,
+    Aggregate, AsOfJoin, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr, Filter,
+    Join, Limit, LogicalPlan, Partitioning, Projection, RecursiveQuery, Repartition,
+    Sort, Subquery, SubqueryAlias, TableProviderFilterPushDown, TableScan, Unnest,
+    Values, Window, expr_vec_fmt,
 };
 
 use crate::dml::CopyTo;
@@ -380,7 +380,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     if !full_filter.is_empty() {
                         object["Full Filters"] =
                             serde_json::Value::String(expr_vec_fmt!(full_filter));
-                    };
+                    }
                     if !partial_filter.is_empty() {
                         object["Partial Filters"] =
                             serde_json::Value::String(expr_vec_fmt!(partial_filter));
@@ -426,7 +426,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 json!({
                     "Node Type": "CopyTo",
                     "Output URL": output_url,
-                    "File Type": format!("{}", file_type.get_ext()),
+                    "File Type": file_type.get_ext(),
                     "Options": op_str
                 })
             }
@@ -490,7 +490,22 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Node Type": format!("{} Join", join_type),
                     "Join Constraint": format!("{:?}", join_constraint),
                     "Join Keys": join_expr.join(", "),
-                    "Filter": format!("{}", filter_expr)
+                    "Filter": filter_expr.to_string()
+                })
+            }
+            LogicalPlan::AsOfJoin(AsOfJoin {
+                on,
+                match_condition,
+                join_constraint,
+                ..
+            }) => {
+                let join_expr: Vec<String> =
+                    on.iter().map(|(l, r)| format!("{l} = {r}")).collect();
+                json!({
+                    "Node Type": "AsOf Join",
+                    "Join Constraint": format!("{join_constraint:?}"),
+                    "Join Keys": join_expr.join(", "),
+                    "Match Condition": match_condition.to_string(),
                 })
             }
             LogicalPlan::Repartition(Repartition {
@@ -550,10 +565,10 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 );
                 if let Some(s) = skip {
                     object["Skip"] = s.to_string().into()
-                };
+                }
                 if let Some(f) = fetch {
                     object["Fetch"] = f.to_string().into()
-                };
+                }
                 object
             }
             LogicalPlan::Subquery(Subquery { .. }) => {
@@ -634,11 +649,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 let list_type_columns = list_col_indices
                     .iter()
                     .map(|(i, unnest_info)| {
-                        format!(
-                            "{}|depth={:?}",
-                            &input_columns[*i].to_string(),
-                            unnest_info.depth
-                        )
+                        format!("{}|depth={:?}", input_columns[*i], unnest_info.depth)
                     })
                     .collect::<Vec<String>>();
                 let struct_type_columns = struct_col_indices
@@ -677,7 +688,7 @@ impl<'n> TreeNodeVisitor<'n> for PgJsonVisitor<'_, '_> {
                     .map(serde_json::Value::String)
                     .collect(),
             );
-        };
+        }
 
         self.objects.insert(id, object);
         self.parent_ids.push(id);

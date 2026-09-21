@@ -21,8 +21,7 @@ use crate::metrics;
 
 /// Tracks if the aggregate should skip partial aggregations
 ///
-/// See "partial aggregation" discussion on
-/// [`crate::aggregates::row_hash::GroupedHashAggregateStream`].
+/// Used by [`crate::aggregates::hash_stream::PartialHashAggregateStream`].
 pub(super) struct SkipAggregationProbe {
     // ========================================================================
     // PROPERTIES:
@@ -40,7 +39,7 @@ pub(super) struct SkipAggregationProbe {
     // ========================================================================
     // STATES:
     // Fields changes during execution. Can be buffer, or state flags that
-    // influence the execution in parent `GroupedHashAggregateStream`
+    // influence the execution in the parent aggregate stream
     // ========================================================================
     /// Number of processed input rows (updated during probing)
     input_rows: usize,
@@ -117,7 +116,7 @@ impl SkipAggregationProbe {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::aggregates::row_hash::GroupedHashAggregateStream;
+    use crate::aggregates::grouped_hash_stream::GroupedHashAggregateStream;
     use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
     use crate::execution_plan::ExecutionPlan;
     use crate::test::TestMemoryExec;
@@ -134,7 +133,7 @@ mod tests {
     use datafusion_physical_expr::expressions::col;
     use futures::StreamExt;
 
-    // Migrated to PartialHashAggregateStream coverage in hash_aggregate.rs;
+    // Migrated to PartialHashAggregateStream coverage in hash_stream.rs;
     // kept here for the legacy GroupedHashAggregateStream implementation.
     #[tokio::test]
     async fn test_skip_aggregation_probe_not_locked_until_skip() -> Result<()> {

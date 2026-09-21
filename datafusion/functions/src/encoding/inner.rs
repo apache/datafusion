@@ -33,7 +33,10 @@ use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
     not_impl_err, plan_err,
     types::{NativeType, logical_string},
-    utils::take_function_args,
+    utils::{
+        hex::{HexCase, encode_bytes, encode_bytes_to_slice},
+        offset_span_len, take_function_args,
+    },
 };
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -269,19 +272,13 @@ fn decode_scalar(value: &ScalarValue, encoding: Encoding) -> Result<ColumnarValu
     }
 }
 
-/// Estimate how many bytes are actually represented by the array; in case the
-/// the array slices it's internal buffer, this returns the byte size of that slice
-/// but not the byte size of the entire buffer.
+/// Estimates the number of input bytes covered by the array's visible rows.
 ///
-/// This is an estimation only as it can estimate higher if null slots are non-zero
-/// sized.
+/// Sliced arrays exclude bytes outside their visible offset span. This can
+/// overestimate the bytes processed because null rows may cover nonempty byte
+/// ranges.
 fn estimate_byte_data_size<O: OffsetSizeTrait>(array: &GenericBinaryArray<O>) -> usize {
-    let offsets = array.value_offsets();
-    // Unwraps are safe as should always have 1 element in offset buffer
-    let start = *offsets.first().unwrap();
-    let end = *offsets.last().unwrap();
-    let data_size = end - start;
-    data_size.as_usize()
+    offset_span_len(array.offsets())
 }
 
 fn decode_array(array: &ArrayRef, encoding: Encoding) -> Result<ColumnarValue> {
@@ -292,9 +289,10 @@ fn decode_array(array: &ArrayRef, encoding: Encoding) -> Result<ColumnarValue> {
         }
         DataType::BinaryView => {
             let array = array.as_binary_view();
-            // Don't know if there is a more strict upper bound we can infer
-            // for view arrays byte data size.
-            encoding.decode_array::<_, i32>(&array, array.get_buffer_memory_size())
+            encoding.decode_array::<_, i32>(
+                &array,
+                array.lengths().map(|l| l as usize).sum::<usize>(),
+            )
         }
         DataType::LargeBinary => {
             let array = array.as_binary::<i64>();
@@ -369,7 +367,7 @@ impl Encoding {
         match self {
             Self::Base64 => BASE64_ENGINE.encode(value),
             Self::Base64Padded => BASE64_ENGINE_PADDED.encode(value),
-            Self::Hex => hex::encode(value),
+            Self::Hex => encode_bytes(value, HexCase::Lower),
         }
     }
 
@@ -410,11 +408,7 @@ impl Encoding {
                     .collect();
                 Ok(Arc::new(array))
             }
-            Self::Hex => {
-                let array: GenericStringArray<OutputOffset> =
-                    array.iter().map(|x| x.map(hex::encode)).collect();
-                Ok(Arc::new(array))
-            }
+            Self::Hex => hex_encode_array::<_, OutputOffset>(array),
         }
     }
 
@@ -459,6 +453,41 @@ impl Encoding {
     }
 }
 
+/// Hex-encode a binary array into a string array, writing the lowercase hex
+/// digits directly into a single pre-sized value buffer. Each input byte maps
+/// to exactly two hex characters, so the output size is known up front and no
+/// per-element `String` is allocated.
+fn hex_encode_array<'a, InputBinaryArray, OutputOffset>(
+    array: &InputBinaryArray,
+) -> Result<ArrayRef>
+where
+    InputBinaryArray: BinaryArrayType<'a>,
+    OutputOffset: OffsetSizeTrait,
+{
+    let total_input_bytes: usize = array.iter().flatten().map(|v| v.len()).sum();
+
+    let mut values = vec![0u8; total_input_bytes * 2];
+    let mut offsets = Vec::<OutputOffset>::with_capacity(array.len() + 1);
+    offsets.push(OutputOffset::zero());
+
+    let mut pos = 0usize;
+    for v in array.iter() {
+        if let Some(v) = v {
+            let out_len = v.len() * 2;
+            encode_bytes_to_slice(v, HexCase::Lower, &mut values[pos..pos + out_len])?;
+            pos += out_len;
+        }
+        offsets.push(OutputOffset::usize_as(pos));
+    }
+
+    let array = GenericStringArray::<OutputOffset>::try_new(
+        OffsetBuffer::new(offsets.into()),
+        Buffer::from_vec(values),
+        array.nulls().cloned(),
+    )?;
+    Ok(Arc::new(array))
+}
+
 fn delegated_decode<'a, DecodeFunction, InputBinaryArray, OutputOffset>(
     decode: DecodeFunction,
     input: &InputBinaryArray,
@@ -493,7 +522,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::BinaryArray;
+    use arrow::array::{ArrayBuilder, BinaryArray, BinaryViewBuilder};
     use arrow_buffer::OffsetBuffer;
 
     use super::*;
@@ -509,7 +538,7 @@ mod tests {
         let size = estimate_byte_data_size(&array);
         assert_eq!(size, 15);
 
-        // Offsets starting at 0, but don't count entire data buffer size
+        // Nonzero starting offset, including bytes covered by null slots
         let array = BinaryArray::new(
             OffsetBuffer::new(vec![50, 51, 51, 60, 80, 81].into()),
             vec![0; 100].into(),
@@ -517,5 +546,15 @@ mod tests {
         );
         let size = estimate_byte_data_size(&array);
         assert_eq!(size, 31);
+    }
+
+    #[test]
+    fn test_estimate_view_size() {
+        let mut builder = BinaryViewBuilder::new().with_deduplicate_strings();
+        for _ in 0..1000 {
+            builder.append_value([65u8; 64]);
+        }
+        let arr = ArrayBuilder::finish(&mut builder);
+        decode_array(&arr, Encoding::Base64).unwrap();
     }
 }

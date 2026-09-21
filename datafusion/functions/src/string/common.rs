@@ -21,16 +21,17 @@ use std::sync::Arc;
 
 use crate::strings::{
     GenericStringArrayBuilder, STRING_VIEW_INIT_BLOCK_SIZE, STRING_VIEW_MAX_BLOCK_SIZE,
-    StringViewArrayBuilder, append_view,
+    StringViewArrayBuilder, StringWriter, append_view,
 };
 use arrow::array::{
-    Array, ArrayRef, GenericStringArray, NullBufferBuilder, OffsetSizeTrait,
+    Array, ArrayRef, AsArray, GenericStringArray, NullBufferBuilder, OffsetSizeTrait,
     StringViewArray, new_null_array,
 };
-use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
+use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
+use datafusion_common::utils::{offset_span, offset_span_len};
 use datafusion_common::{ScalarValue, exec_err};
 use datafusion_expr::ColumnarValue;
 
@@ -228,7 +229,7 @@ fn string_view_trim<Tr: Trimmer>(args: &[ArrayRef]) -> Result<ArrayRef> {
     unsafe {
         let array = StringViewArray::new_unchecked(
             views_buf,
-            string_view_array.data_buffers().to_vec(),
+            Arc::clone(string_view_array.data_buffers()),
             nulls_buf,
         );
         Ok(Arc::new(array) as ArrayRef)
@@ -262,6 +263,61 @@ fn trim_and_append_view<Tr: Trimmer>(
     }
 }
 
+/// Builds the trimmed output array by writing the trimmed slices straight into
+/// the value buffer, rather than collecting through a string builder.
+///
+/// Every trimmed value is a substring of its input, so the byte range the input
+/// spans bounds the output's. Reserving that much up front means one allocation
+/// and no growth during the copy, and it also guarantees the running offset stays
+/// within `T` (the input array's own offsets already fit).
+///
+/// `nulls` becomes the output null buffer; null rows contribute no bytes.
+/// `trim_row` is called only for non-null rows, with the row index and its value,
+/// and must return a subslice of the value it is given.
+fn build_trimmed<T: OffsetSizeTrait, F>(
+    string_array: &GenericStringArray<T>,
+    nulls: Option<NullBuffer>,
+    mut trim_row: F,
+) -> ArrayRef
+where
+    F: for<'a> FnMut(usize, &'a str) -> &'a str,
+{
+    let len = string_array.len();
+    let mut values: Vec<u8> = Vec::with_capacity(offset_span_len(string_array.offsets()));
+    let mut offsets: Vec<T> = Vec::with_capacity(len + 1);
+    offsets.push(T::usize_as(0));
+
+    match &nulls {
+        // Keeping the null check out of the all-valid path leaves it branch-free.
+        None => {
+            for i in 0..len {
+                // SAFETY: `i` is in bounds.
+                let s = unsafe { string_array.value_unchecked(i) };
+                values.extend_from_slice(trim_row(i, s).as_bytes());
+                offsets.push(T::usize_as(values.len()));
+            }
+        }
+        Some(validity) => {
+            for i in 0..len {
+                if validity.is_valid(i) {
+                    // SAFETY: `i` is in bounds.
+                    let s = unsafe { string_array.value_unchecked(i) };
+                    values.extend_from_slice(trim_row(i, s).as_bytes());
+                }
+                offsets.push(T::usize_as(values.len()));
+            }
+        }
+    }
+
+    let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
+    // SAFETY: trimming splits `s` on char boundaries, so the value buffer is a
+    // concatenation of valid UTF-8; the offsets are monotonic and end at its length.
+    let array = unsafe {
+        GenericStringArray::<T>::new_unchecked(offsets, Buffer::from_vec(values), nulls)
+    };
+    Arc::new(array)
+}
+
 /// Applies the trim function to the given string array(s)
 /// and returns a new string array with the trimmed values.
 ///
@@ -273,12 +329,11 @@ fn string_trim<T: OffsetSizeTrait, Tr: Trimmer>(args: &[ArrayRef]) -> Result<Arr
     match args.len() {
         1 => {
             // Trim spaces by default
-            let result = string_array
-                .iter()
-                .map(|string| string.map(|s| Tr::trim_ascii_char(s, b' ').0))
-                .collect::<GenericStringArray<T>>();
-
-            Ok(Arc::new(result) as ArrayRef)
+            Ok(build_trimmed(
+                string_array,
+                string_array.nulls().cloned(),
+                |_, s| Tr::trim_ascii_char(s, b' ').0,
+            ))
         }
         2 => {
             let characters_array = as_generic_string_array::<T>(&args[1])?;
@@ -293,29 +348,31 @@ fn string_trim<T: OffsetSizeTrait, Tr: Trimmer>(args: &[ArrayRef]) -> Result<Arr
                 }
 
                 let pattern: Vec<char> = characters_array.value(0).chars().collect();
-                let result = string_array
-                    .iter()
-                    .map(|item| item.map(|s| Tr::trim(s, &pattern).0))
-                    .collect::<GenericStringArray<T>>();
-                return Ok(Arc::new(result) as ArrayRef);
+                return Ok(build_trimmed(
+                    string_array,
+                    string_array.nulls().cloned(),
+                    |_, s| Tr::trim(s, &pattern).0,
+                ));
             }
+
+            // Indexing `characters_array` per row below requires the two arguments
+            // to line up.
+            if characters_array.len() != string_array.len() {
+                return exec_err!(
+                    "Function TRIM was called with mismatched argument lengths"
+                );
+            }
+
+            // A row is null if either argument is null.
+            let nulls = NullBuffer::union(string_array.nulls(), characters_array.nulls());
 
             // Per-row pattern - must compute pattern chars for each row
             let mut pattern: Vec<char> = Vec::new();
-            let result = string_array
-                .iter()
-                .zip(characters_array.iter())
-                .map(|(string, characters)| match (string, characters) {
-                    (Some(s), Some(c)) => {
-                        pattern.clear();
-                        pattern.extend(c.chars());
-                        Some(Tr::trim(s, &pattern).0)
-                    }
-                    _ => None,
-                })
-                .collect::<GenericStringArray<T>>();
-
-            Ok(Arc::new(result) as ArrayRef)
+            Ok(build_trimmed(string_array, nulls, |i, s| {
+                pattern.clear();
+                pattern.extend(characters_array.value(i).chars());
+                Tr::trim(s, &pattern).0
+            }))
         }
         other => {
             exec_err!(
@@ -342,91 +399,99 @@ fn unicode_case(s: &str, lower: bool) -> String {
     }
 }
 
+/// Writes the case-converted form of `s` directly into `w`.
+///
+/// Uppercasing is a context-free character mapping, so each character is
+/// mapped and streamed straight into the output buffer, avoiding the
+/// intermediate `String` that `str::to_uppercase` allocates per row.
+///
+/// Lowercasing is *not* context-free — `str::to_lowercase` applies the
+/// special Greek final-sigma rule (Σ becomes ς at the end of a word but σ
+/// elsewhere), which a per-character mapping cannot reproduce — so it keeps
+/// using `str::to_lowercase`.
+#[inline]
+fn write_unicode_case(w: &mut impl StringWriter, s: &str, lower: bool) {
+    if lower {
+        w.write_str(&s.to_lowercase());
+    } else {
+        for c in s.chars() {
+            for upper in c.to_uppercase() {
+                w.write_char(upper);
+            }
+        }
+    }
+}
+
 fn case_conversion(
     args: &[ColumnarValue],
     lower: bool,
     name: &str,
 ) -> Result<ColumnarValue> {
     match &args[0] {
-        ColumnarValue::Array(array) => match array.data_type() {
-            DataType::Utf8 => Ok(ColumnarValue::Array(case_conversion_array::<i32>(
-                array, lower,
-            )?)),
-            DataType::LargeUtf8 => Ok(ColumnarValue::Array(
-                case_conversion_array::<i64>(array, lower)?,
-            )),
-            DataType::Utf8View => {
-                let string_array = as_string_view_array(array)?;
-                if string_array.is_ascii() {
-                    return Ok(ColumnarValue::Array(Arc::new(
-                        case_conversion_utf8view_ascii(string_array, lower),
-                    )));
-                }
-                let item_len = string_array.len();
-                // Null-preserving: reuse the input null buffer as the output null buffer.
-                let nulls = string_array.nulls().cloned();
-                let mut builder = StringViewArrayBuilder::with_capacity(item_len);
-
-                if let Some(ref n) = nulls {
-                    for i in 0..item_len {
-                        if n.is_null(i) {
-                            builder.try_append_placeholder()?;
-                        } else {
-                            // SAFETY: `n.is_null(i)` was false in the branch above.
-                            let s = unsafe { string_array.value_unchecked(i) };
-                            builder.try_append_value(&unicode_case(s, lower))?;
-                        }
-                    }
-                } else {
-                    for i in 0..item_len {
-                        // SAFETY: no null buffer means every index is valid.
-                        let s = unsafe { string_array.value_unchecked(i) };
-                        builder.try_append_value(&unicode_case(s, lower))?;
-                    }
-                }
-
-                Ok(ColumnarValue::Array(Arc::new(builder.finish(nulls)?)))
-            }
-            other => exec_err!("Unsupported data type {other:?} for function {name}"),
-        },
-        ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(a) => {
-                let result = a.as_ref().map(|x| unicode_case(x, lower));
-                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(result)))
-            }
-            ScalarValue::LargeUtf8(a) => {
-                let result = a.as_ref().map(|x| unicode_case(x, lower));
-                Ok(ColumnarValue::Scalar(ScalarValue::LargeUtf8(result)))
-            }
-            ScalarValue::Utf8View(a) => {
-                let result = a.as_ref().map(|x| unicode_case(x, lower));
-                Ok(ColumnarValue::Scalar(ScalarValue::Utf8View(result)))
-            }
-            other => exec_err!("Unsupported data type {other:?} for function {name}"),
-        },
+        ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
+            case_conversion_columnar_array(array, lower, name)?,
+        )),
+        ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
+            case_conversion_scalar(scalar, lower, name)?,
+        )),
     }
 }
 
-fn case_conversion_array<O: OffsetSizeTrait>(
+fn case_conversion_scalar(
+    scalar: &ScalarValue,
+    lower: bool,
+    name: &str,
+) -> Result<ScalarValue> {
+    match scalar {
+        ScalarValue::Utf8(a) => {
+            let result = a.as_ref().map(|x| unicode_case(x, lower));
+            Ok(ScalarValue::Utf8(result))
+        }
+        ScalarValue::LargeUtf8(a) => {
+            let result = a.as_ref().map(|x| unicode_case(x, lower));
+            Ok(ScalarValue::LargeUtf8(result))
+        }
+        ScalarValue::Utf8View(a) => {
+            let result = a.as_ref().map(|x| unicode_case(x, lower));
+            Ok(ScalarValue::Utf8View(result))
+        }
+        ScalarValue::Dictionary(key_type, value) => {
+            let converted = case_conversion_scalar(value.as_ref(), lower, name)?;
+            Ok(ScalarValue::Dictionary(
+                key_type.clone(),
+                Box::new(converted),
+            ))
+        }
+        other => exec_err!("Unsupported data type {other:?} for function {name}"),
+    }
+}
+
+fn case_conversion_columnar_array(
     array: &ArrayRef,
     lower: bool,
+    name: &str,
 ) -> Result<ArrayRef> {
-    const PRE_ALLOC_BYTES: usize = 8;
-
-    let string_array = as_generic_string_array::<O>(array)?;
-    if string_array.is_ascii() {
-        return case_conversion_ascii_array::<O>(string_array, lower);
+    match array.data_type() {
+        DataType::Utf8 => case_conversion_array::<i32>(array, lower),
+        DataType::LargeUtf8 => case_conversion_array::<i64>(array, lower),
+        DataType::Utf8View => case_conversion_utf8view(array, lower),
+        DataType::Dictionary(_, _) => case_conversion_dictionary(array, lower, name),
+        other => exec_err!("Unsupported data type {other:?} for function {name}"),
     }
+}
 
-    // Values contain non-ASCII.
+fn case_conversion_utf8view(array: &ArrayRef, lower: bool) -> Result<ArrayRef> {
+    let string_array = as_string_view_array(array)?;
+    if string_array.is_ascii() {
+        return Ok(Arc::new(case_conversion_utf8view_ascii(
+            string_array,
+            lower,
+        )));
+    }
     let item_len = string_array.len();
-    let offsets = string_array.value_offsets();
-    let start = offsets.first().unwrap().as_usize();
-    let end = offsets.last().unwrap().as_usize();
-    let capacity = (end - start) + PRE_ALLOC_BYTES;
     // Null-preserving: reuse the input null buffer as the output null buffer.
     let nulls = string_array.nulls().cloned();
-    let mut builder = GenericStringArrayBuilder::<O>::with_capacity(item_len, capacity);
+    let mut builder = StringViewArrayBuilder::with_capacity(item_len);
 
     if let Some(ref n) = nulls {
         for i in 0..item_len {
@@ -443,6 +508,55 @@ fn case_conversion_array<O: OffsetSizeTrait>(
             // SAFETY: no null buffer means every index is valid.
             let s = unsafe { string_array.value_unchecked(i) };
             builder.try_append_value(&unicode_case(s, lower))?;
+        }
+    }
+
+    Ok(Arc::new(builder.finish(nulls)?))
+}
+
+fn case_conversion_dictionary(
+    array: &ArrayRef,
+    lower: bool,
+    name: &str,
+) -> Result<ArrayRef> {
+    let dictionary = array.as_any_dictionary();
+    let converted = case_conversion_columnar_array(dictionary.values(), lower, name)?;
+    Ok(dictionary.with_values(converted))
+}
+
+fn case_conversion_array<O: OffsetSizeTrait>(
+    array: &ArrayRef,
+    lower: bool,
+) -> Result<ArrayRef> {
+    const PRE_ALLOC_BYTES: usize = 8;
+
+    let string_array = as_generic_string_array::<O>(array)?;
+    if string_array.is_ascii() {
+        return case_conversion_ascii_array::<O>(string_array, lower);
+    }
+
+    // Values contain non-ASCII.
+    let item_len = string_array.len();
+    let capacity = offset_span_len(string_array.offsets()) + PRE_ALLOC_BYTES;
+    // Null-preserving: reuse the input null buffer as the output null buffer.
+    let nulls = string_array.nulls().cloned();
+    let mut builder = GenericStringArrayBuilder::<O>::with_capacity(item_len, capacity);
+
+    if let Some(ref n) = nulls {
+        for i in 0..item_len {
+            if n.is_null(i) {
+                builder.try_append_placeholder()?;
+            } else {
+                // SAFETY: `n.is_null(i)` was false in the branch above.
+                let s = unsafe { string_array.value_unchecked(i) };
+                builder.try_append_with(|w| write_unicode_case(w, s, lower))?;
+            }
+        }
+    } else {
+        for i in 0..item_len {
+            // SAFETY: no null buffer means every index is valid.
+            let s = unsafe { string_array.value_unchecked(i) };
+            builder.try_append_with(|w| write_unicode_case(w, s, lower))?;
         }
     }
     Ok(Arc::new(builder.finish(nulls)?))
@@ -504,7 +618,6 @@ fn case_conversion_utf8view_ascii_inner<F: Fn(&u8) -> u8>(
             for b in &mut bytes[4..4 + len] {
                 *b = convert(b);
             }
-            new_views.push(u128::from_le_bytes(bytes));
         } else {
             // Long: input view points into shared `data_buffers` we can't
             // mutate, so copy-convert into our own buffer and rewrite the
@@ -556,8 +669,8 @@ fn case_conversion_utf8view_ascii_inner<F: Fn(&u8) -> u8>(
             bytes[4..8].copy_from_slice(&prefix);
             bytes[8..12].copy_from_slice(&buffer_index.to_le_bytes());
             bytes[12..16].copy_from_slice(&new_offset.to_le_bytes());
-            new_views.push(u128::from_le_bytes(bytes));
         }
+        new_views.push(u128::from_le_bytes(bytes));
     }
 
     if !in_progress.is_empty() {
@@ -572,7 +685,7 @@ fn case_conversion_utf8view_ascii_inner<F: Fn(&u8) -> u8>(
     unsafe {
         StringViewArray::new_unchecked(
             ScalarBuffer::from(new_views),
-            completed,
+            completed.into(),
             array.nulls().cloned(),
         )
     }
@@ -586,10 +699,8 @@ fn case_conversion_ascii_array<O: OffsetSizeTrait>(
     string_array: &GenericStringArray<O>,
     lower: bool,
 ) -> Result<ArrayRef> {
-    let value_offsets = string_array.value_offsets();
-    let start = value_offsets.first().unwrap().as_usize();
-    let end = value_offsets.last().unwrap().as_usize();
-    let relevant = &string_array.value_data()[start..end];
+    let (start, len) = offset_span(string_array.offsets());
+    let relevant = &string_array.value_data()[start..start + len];
 
     let converted: Vec<u8> = if lower {
         relevant.iter().map(u8::to_ascii_lowercase).collect()
@@ -599,15 +710,10 @@ fn case_conversion_ascii_array<O: OffsetSizeTrait>(
     let values = Buffer::from_vec(converted);
 
     // Shift offsets from `start`-based to 0-based so they index into `values`.
-    let offsets = if start == 0 {
-        string_array.offsets().clone()
-    } else {
-        let s = O::usize_as(start);
-        let rebased: Vec<O> = value_offsets.iter().map(|&o| o - s).collect();
-        // SAFETY: subtracting a constant from monotonic offsets preserves
-        // monotonicity, and `start` is the minimum offset, so no underflow.
-        unsafe { OffsetBuffer::new_unchecked(ScalarBuffer::from(rebased)) }
-    };
+    let offsets = string_array
+        .offsets()
+        .clone()
+        .subtract(string_array.offsets()[0]);
 
     let nulls = string_array.nulls().cloned();
     // SAFETY: offsets are monotonic and in-bounds for `values`; nulls

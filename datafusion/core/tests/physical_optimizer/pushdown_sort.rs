@@ -24,18 +24,26 @@
 //! 4. Early termination is enabled for TopK queries
 //! 5. Prefix matching works correctly
 
+use arrow::array::{ArrayRef, Int64Array};
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
+use datafusion::prelude::SessionContext;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::{Result, assert_batches_eq};
 use datafusion_physical_expr::expressions;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::pushdown_sort::PushdownSort;
+use datafusion_physical_plan::collect;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    OptimizationTest, TestScan, coalesce_partitions_exec, parquet_exec,
-    parquet_exec_with_sort, projection_exec, projection_exec_with_alias,
+    OptimizationTest, TestScan, coalesce_partitions_exec, inexact_memory_exec,
+    parquet_exec, parquet_exec_with_sort, projection_exec, projection_exec_with_alias,
     repartition_exec, schema, simple_projection_exec, sort_exec, sort_exec_with_fetch,
-    sort_expr, sort_expr_named, test_scan_with_ordering,
+    sort_exec_with_fetch_and_preserve_partitioning, sort_expr, sort_expr_named,
+    test_scan_with_ordering,
 };
 
 #[test]
@@ -117,6 +125,91 @@ fn test_sort_with_limit_phase1() {
           -   DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet, sort_order_for_reorder=[a@0 DESC NULLS LAST], reverse_row_groups=true
     "
     );
+}
+
+#[test]
+fn test_standalone_inexact_partitioned_topk_adds_global_merge() {
+    // Inexact pushdown keeps the SortExec. If that SortExec is a
+    // partition-preserving TopK, it still needs a final merge across partitions
+    // to preserve the global ORDER BY ... LIMIT semantics.
+    let schema = schema();
+    let a = sort_expr("a", &schema);
+    let source = Arc::new(TestScan::new(schema.clone(), vec![]).with_partition_count(2));
+
+    let ordering = LexOrdering::new(vec![a]).unwrap();
+    let plan = sort_exec_with_fetch_and_preserve_partitioning(ordering, Some(10), source);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[true]
+        -   TestScan
+      output:
+        Ok:
+          - SortPreservingMergeExec: [a@0 ASC], fetch=10
+          -   SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[true]
+          -     TestScan: requested_ordering=[a@0 ASC]
+    "
+    );
+}
+
+#[test]
+fn test_standalone_inexact_single_partition_topk_no_global_merge() {
+    let schema = schema();
+    let a = sort_expr("a", &schema);
+    let source = Arc::new(TestScan::new(schema.clone(), vec![]).with_partition_count(1));
+
+    let ordering = LexOrdering::new(vec![a]).unwrap();
+    let plan = sort_exec_with_fetch_and_preserve_partitioning(ordering, Some(10), source);
+
+    insta::assert_snapshot!(
+        OptimizationTest::new(plan, PushdownSort::new(), true),
+        @r"
+    OptimizationTest:
+      input:
+        - SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[true]
+        -   TestScan
+      output:
+        Ok:
+          - SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[true]
+          -   TestScan: requested_ordering=[a@0 ASC]
+    "
+    );
+}
+
+#[tokio::test]
+async fn test_standalone_inexact_partitioned_topk_returns_global_limit() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let partition_0 = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int64Array::from(vec![1, 100])) as ArrayRef],
+    )?;
+    let partition_1 = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int64Array::from(vec![2, 3])) as ArrayRef],
+    )?;
+    let source = inexact_memory_exec(
+        &[vec![partition_0], vec![partition_1]],
+        Arc::clone(&schema),
+    )?;
+
+    let ordering = LexOrdering::new(vec![sort_expr("a", &schema)]).unwrap();
+    let plan = sort_exec_with_fetch_and_preserve_partitioning(ordering, Some(3), source);
+
+    let mut config = ConfigOptions::new();
+    config.optimizer.enable_sort_pushdown = true;
+    let optimized = PushdownSort::new().optimize(plan, &config)?;
+
+    let ctx = SessionContext::new();
+    let batches = collect(optimized, ctx.task_ctx()).await?;
+
+    let expected = [
+        "+---+", "| a |", "+---+", "| 1 |", "| 2 |", "| 3 |", "+---+",
+    ];
+    assert_batches_eq!(expected, &batches);
+    Ok(())
 }
 
 #[test]

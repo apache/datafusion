@@ -1,0 +1,31 @@
+name Q23
+group hj
+
+init sql_benchmarks/hj/init/set_config_no_stats.sql
+
+load sql_benchmarks/hj/init/load.sql
+
+assert I
+SELECT count(*) > 0 FROM lineitem
+----
+true
+
+expect_plan HashJoinExec
+
+run
+-- Q23: high-fanout string-key inner join.
+-- Build ~32K rows / ~415 distinct keys (fanout ~78), probe ~2.3M rows
+-- (all carrying the dominant key), output ~176M pairs. Long keys (~28 chars)
+-- make per-pair key comparison expensive; count(*) isolates the match path.
+-- Thresholds zeroed to force Partitioned mode (simulates absent row-count stats).
+SELECT count(*)
+FROM (
+  SELECT 'high_fanout_string_join_key_' || CAST((s_suppkey % 415) + 1 AS VARCHAR) as k
+  FROM supplier
+  WHERE s_suppkey <= 32340
+) s
+JOIN (
+  SELECT 'high_fanout_string_join_key_1' as k
+  FROM lineitem
+  WHERE l_orderkey % 265 = 0
+) l ON s.k = l.k;

@@ -47,12 +47,12 @@ use arrow::array::{
 };
 use arrow::datatypes::{
     DataType, Field, Fields, IntervalDayTime, IntervalMonthDayNano, IntervalUnit,
-    TimeUnit, UnionFields, UnionMode, i256,
+    Metadata, TimeUnit, UnionFields, UnionMode, i256,
 };
 use chrono::{DateTime, Utc};
 use half::f16;
 use hashbrown::HashSet;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -74,6 +74,12 @@ pub trait DFHeapSize {
 #[derive(Default)]
 pub struct DFHeapSizeCtx {
     seen: HashSet<usize>,
+}
+
+impl DFHeapSizeCtx {
+    fn count_allocation_once(&mut self, ptr: usize) -> bool {
+        self.seen.insert(ptr)
+    }
 }
 
 impl DFHeapSize for Statistics {
@@ -281,11 +287,21 @@ impl<K: DFHeapSize, V: DFHeapSize> DFHeapSize for HashMap<K, V> {
     }
 }
 
+fn arc_ptr<T>(arc: &Arc<T>) -> usize {
+    Arc::as_ptr(arc) as usize
+}
+
+/// For unsized types, `Arc::as_ptr` returns the data address + metadata - we only need the thin address
+/// Casting through `*const i32` gets us the thin pointer
+fn arc_unsized_ptr<T: ?Sized>(arc: &Arc<T>) -> usize {
+    Arc::as_ptr(arc).cast::<i32>() as usize
+}
+
 impl<T: DFHeapSize> DFHeapSize for Arc<T> {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
-        let ptr = Arc::as_ptr(self) as usize;
+        let ptr = arc_ptr(self);
 
-        if !ctx.seen.insert(ptr) {
+        if !ctx.count_allocation_once(ptr) {
             return 0;
         }
 
@@ -296,9 +312,9 @@ impl<T: DFHeapSize> DFHeapSize for Arc<T> {
 
 impl DFHeapSize for Arc<str> {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
-        let ptr = Arc::as_ptr(self) as *const i32 as usize;
+        let ptr = arc_unsized_ptr(self);
 
-        if !ctx.seen.insert(ptr) {
+        if !ctx.count_allocation_once(ptr) {
             return 0;
         }
 
@@ -309,9 +325,9 @@ impl DFHeapSize for Arc<str> {
 
 impl DFHeapSize for Arc<dyn DFHeapSize> {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
-        let ptr = Arc::as_ptr(self) as *const i32 as usize;
+        let ptr = arc_unsized_ptr(self);
 
-        if !ctx.seen.insert(ptr) {
+        if !ctx.count_allocation_once(ptr) {
             return 0;
         }
 
@@ -348,6 +364,17 @@ where
     }
 }
 
+impl<A, B, C> DFHeapSize for (A, B, C)
+where
+    A: DFHeapSize,
+    B: DFHeapSize,
+    C: DFHeapSize,
+{
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        self.0.heap_size(ctx) + self.1.heap_size(ctx) + self.2.heap_size(ctx)
+    }
+}
+
 impl DFHeapSize for String {
     fn heap_size(&self, _: &mut DFHeapSizeCtx) -> usize {
         self.capacity()
@@ -366,6 +393,24 @@ impl DFHeapSize for UnionFields {
         self.iter()
             .map(|f| f.0.heap_size(ctx) + f.1.heap_size(ctx))
             .sum()
+    }
+}
+
+impl<K: DFHeapSize, V: DFHeapSize> DFHeapSize for BTreeMap<K, V> {
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        // BTreeMap does not provide a way to get its heap size, so this
+        // approximates it as the entries' sizes, ignoring node overhead.
+        self.iter()
+            .map(|(k, v)| size_of::<(K, V)>() + k.heap_size(ctx) + v.heap_size(ctx))
+            .sum()
+    }
+}
+
+impl DFHeapSize for Metadata {
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        // `as_arc` returns `None` when the metadata is empty; the `Arc` impl
+        // dedupes instances that share the same allocation.
+        self.as_arc().map_or(0, |map| map.heap_size(ctx))
     }
 }
 

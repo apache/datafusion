@@ -44,6 +44,7 @@ use datafusion_expr::{
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_lateral_join::DecorrelateLateralJoin;
 use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
+use crate::eliminate_aggregate_distinct::EliminateAggregateDistinct;
 use crate::eliminate_cross_join::EliminateCrossJoin;
 use crate::eliminate_duplicated_expr::EliminateDuplicatedExpr;
 use crate::eliminate_filter::EliminateFilter;
@@ -308,6 +309,7 @@ impl Optimizer {
             // Filters can't be pushed down past Limits, we should do PushDownFilter after PushDownLimit
             Arc::new(PushDownLimit::new()),
             Arc::new(PushDownFilter::new()),
+            Arc::new(EliminateAggregateDistinct::new()),
             Arc::new(SingleDistinctToGroupBy::new()),
             // The previous optimizations added expressions and projections,
             // that might benefit from the following rules
@@ -409,6 +411,11 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
         LogicalPlan::Join(Join { left, right, .. }) => {
             let l = f(Arc::make_mut(left))?;
             let r = f(Arc::make_mut(right))?;
+            l || r
+        }
+        LogicalPlan::AsOfJoin(join) => {
+            let l = f(Arc::make_mut(&mut join.left))?;
+            let r = f(Arc::make_mut(&mut join.right))?;
             l || r
         }
         LogicalPlan::Union(Union { inputs, .. }) => {
@@ -518,10 +525,23 @@ fn rewrite_plan_in_place(
         }
     }
 
-    // Recurse into children using Arc::make_mut (zero-cost when refcount == 1)
-    changed |= map_children_mut(plan, |child| {
-        rewrite_plan_in_place(child, apply_order, rule, config)
+    let mut child_schema_changed = false;
+    let children_changed = map_children_mut(plan, |child| {
+        let old_schema = Arc::clone(child.schema());
+        let child_changed = rewrite_plan_in_place(child, apply_order, rule, config)?;
+        if child_changed && old_schema.as_ref() != child.schema().as_ref() {
+            child_schema_changed = true;
+        }
+        Ok(child_changed)
     })?;
+    changed |= children_changed;
+
+    if child_schema_changed {
+        // Child rewrites can change their output schemas. Recompute the current
+        // node before later rules use positional requirements from that schema.
+        let owned = std::mem::take(plan);
+        *plan = owned.recompute_schema()?;
+    }
 
     // f_up phase
     if apply_order == ApplyOrder::BottomUp {
@@ -604,13 +624,11 @@ impl Optimizer {
         while i < options.optimizer.max_passes {
             log_plan(&format!("Optimizer input (pass {i})"), &new_plan);
 
-            // Check once per pass whether the plan contains subquery
-            // expressions. When there are no subqueries, we use the
-            // cheaper `rewrite` traversal instead of
-            // `rewrite_with_subqueries`, avoiding the per-node
-            // map_subqueries call that walks all expression trees
-            // via ownership-based transform_down.
-            let has_subqueries = plan_has_subqueries(&new_plan);
+            // Track subquery presence across the pass. Refresh after changed
+            // rules so decorrelation can move later rules onto the in-place
+            // path; that path refreshes parent schemas after child schemas
+            // change.
+            let mut has_subqueries = plan_has_subqueries(&new_plan);
 
             for rule in &self.rules {
                 // If skipping failed rules, copy plan before attempting to rewrite
@@ -690,6 +708,7 @@ impl Optimizer {
                         new_plan = data;
                         observer(&new_plan, rule.as_ref());
                         if transformed {
+                            has_subqueries = plan_has_subqueries(&new_plan);
                             log_plan(rule.name(), &new_plan);
                         } else {
                             debug!(
@@ -771,15 +790,19 @@ fn assert_valid_optimization(
 mod tests {
     use std::sync::{Arc, Mutex};
 
+    use arrow::datatypes::Metadata;
+
     use datafusion_common::tree_node::Transformed;
     use datafusion_common::{
-        DFSchema, DFSchemaRef, DataFusionError, Result, assert_contains, plan_err,
+        Column, DFSchema, DFSchemaRef, DataFusionError, Result, assert_contains, plan_err,
     };
     use datafusion_expr::logical_plan::EmptyRelation;
-    use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, Projection, col, lit};
+    use datafusion_expr::{
+        Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Projection, col, lit,
+    };
 
     use crate::optimizer::Optimizer;
-    use crate::test::test_table_scan;
+    use crate::test::{test_table_scan, test_table_scan_with_name};
     use crate::{OptimizerConfig, OptimizerContext, OptimizerRule};
 
     use super::ApplyOrder;
@@ -864,6 +887,34 @@ mod tests {
     }
 
     #[test]
+    fn in_place_rewrite_recomputes_parent_schema_when_child_schema_changes() -> Result<()>
+    {
+        let left = LogicalPlanBuilder::from(test_table_scan_with_name("left")?)
+            .project(vec![col("left.a"), col("left.b"), col("left.c")])?
+            .build()?;
+        let right = LogicalPlanBuilder::from(test_table_scan_with_name("right")?)
+            .project(vec![col("right.a"), col("right.b"), col("right.c")])?
+            .build()?;
+        let mut plan = LogicalPlanBuilder::from(left)
+            .join_on(right, JoinType::Inner, [col("left.a").eq(col("right.a"))])?
+            .build()?;
+
+        assert_eq!(plan.schema().fields().len(), 6);
+
+        let changed = super::rewrite_plan_in_place(
+            &mut plan,
+            ApplyOrder::TopDown,
+            &KeepOnlyAProjectionRule {},
+            &OptimizerContext::new(),
+        )?;
+
+        assert!(changed);
+        assert_eq!(plan.schema().fields().len(), 2);
+        assert!(plan.schema().has_column_with_unqualified_name("a"));
+        Ok(())
+    }
+
+    #[test]
     fn optimizer_detects_plan_equal_to_the_initial() -> Result<()> {
         // Run a goofy optimizer, which rotates projection columns
         // [1, 2, 3] -> [2, 3, 1] -> [3, 1, 2] -> [1, 2, 3]
@@ -920,8 +971,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, (qualifier, field))| {
-                let metadata =
-                    [("key".into(), format!("value {i}"))].into_iter().collect();
+                let metadata = Metadata::new().with("key", format!("value {i}"));
 
                 let new_arrow_field = field.as_ref().clone().with_metadata(metadata);
                 (qualifier.cloned(), Arc::new(new_arrow_field))
@@ -977,6 +1027,39 @@ mod tests {
             Ok(Transformed::yes(
                 LogicalPlanBuilder::from(table_scan).build()?,
             ))
+        }
+    }
+
+    #[derive(Default, Debug)]
+    struct KeepOnlyAProjectionRule {}
+
+    impl OptimizerRule for KeepOnlyAProjectionRule {
+        fn name(&self) -> &str {
+            "keep_only_a_projection"
+        }
+
+        fn apply_order(&self) -> Option<ApplyOrder> {
+            Some(ApplyOrder::TopDown)
+        }
+
+        fn supports_rewrite(&self) -> bool {
+            true
+        }
+
+        fn rewrite(
+            &self,
+            plan: LogicalPlan,
+            _config: &dyn OptimizerConfig,
+        ) -> Result<Transformed<LogicalPlan>> {
+            let LogicalPlan::Projection(projection) = plan else {
+                return Ok(Transformed::no(plan));
+            };
+
+            let expr = Expr::from(Column::from(projection.schema.qualified_field(0)));
+
+            Ok(Transformed::yes(LogicalPlan::Projection(
+                Projection::try_new(vec![expr], Arc::clone(&projection.input))?,
+            )))
         }
     }
 

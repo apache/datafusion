@@ -23,13 +23,20 @@ use datafusion_common::{Result, internal_err};
 use datafusion_expr::EmitTo;
 
 use crate::aggregates::AggregateExec;
+use crate::aggregates::group_values::AccumulatorPhase;
 
 use super::common::{
     AggregateHashTable, AggregateHashTableBuffer, AggregateHashTableState, FinalMarker,
-    MaterializedAggregateOutput,
+    HashAggregateAccumulator, MaterializedAggregateOutput,
 };
 
-/// Methods specific to the aggregate hash table used in the final aggregation stage.
+/// Implementation specific to final aggregation, where the table stores partial
+/// aggregate states and the input rows are also partial states.
+///
+/// Example: `AVG(x) GROUP BY k`
+///
+/// - Aggregate table stores: `k, sum(x), count(x)`
+/// - Input rows: `k, sum(x), count(x)`
 impl AggregateHashTable<FinalMarker> {
     pub(in crate::aggregates) fn new(
         agg: &AggregateExec,
@@ -41,6 +48,7 @@ impl AggregateHashTable<FinalMarker> {
             agg,
             partition,
             output_schema,
+            Arc::clone(&agg.input().schema()),
             batch_size,
             vec![None; agg.aggr_expr.len()],
         )
@@ -57,14 +65,11 @@ impl AggregateHashTable<FinalMarker> {
     ) -> Result<Option<RecordBatch>> {
         let output_schema = Arc::clone(&self.output_schema);
         let batch_size = self.batch_size;
-        // Take ownership of the output state. `emit_next_materialized_batch`
-        // restores `self.state` to `OutputtingMaterialized` or `Done`.
         match std::mem::replace(&mut self.state, AggregateHashTableState::Done) {
             AggregateHashTableState::Outputting(state) => {
                 if state.group_values.is_empty() {
                     return Ok(None);
                 }
-
                 let output = self.materialize_final_output(state, output_schema)?;
                 Ok(self.emit_next_materialized_batch(output, batch_size))
             }
@@ -83,25 +88,24 @@ impl AggregateHashTable<FinalMarker> {
         mut state: AggregateHashTableBuffer,
         output_schema: SchemaRef,
     ) -> Result<MaterializedAggregateOutput> {
-        // Final aggregate evaluation consumes accumulator state. Evaluate all
-        // groups once, then slice the materialized batch on subsequent polls.
         let emit_to = EmitTo::All;
-        let timer = self.group_by_metrics.emitting_time.timer();
-        let mut output = state.group_values.emit(emit_to)?;
-
-        for acc in state.accumulators.iter_mut() {
-            output.push(acc.evaluate(emit_to)?);
-        }
-        drop(timer);
-
+        let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
+        let output = self.group_by_metrics.time_emitting(|| {
+            let mut output = state.group_values.emit(emit_to)?;
+            for (idx, accumulator) in state.accumulators.iter_mut().enumerate() {
+                output.extend(accumulator_metrics.time(
+                    idx,
+                    AccumulatorPhase::Evaluate,
+                    || accumulator.evaluate_to_columns(emit_to),
+                )?);
+            }
+            Ok::<_, datafusion_common::DataFusionError>(output)
+        })?;
         let batch = RecordBatch::try_new(output_schema, output)?;
-        debug_assert!(batch.num_rows() > 0);
-
         let num_rows = batch.num_rows();
         state.group_values.clear_shrink(num_rows);
         state.batch_group_indices.clear();
         state.batch_group_indices.shrink_to(num_rows);
-
         Ok(MaterializedAggregateOutput::new_with_reusable_buffer(
             batch, state,
         ))
@@ -124,32 +128,17 @@ impl AggregateHashTable<FinalMarker> {
         batch
     }
 
+    /// Final aggregation consumes partial aggregate states and merges them into
+    /// the table's partial-state accumulators.
     pub(in crate::aggregates) fn aggregate_batch(
         &mut self,
         batch: &RecordBatch,
     ) -> Result<()> {
-        let evaluated_batch = self.evaluate_batch(batch)?;
-        let state = self.state.building_mut();
-
-        let timer = self.group_by_metrics.aggregation_time.timer();
-        for group_values in &evaluated_batch.grouping_set_args {
-            state
-                .group_values
-                .intern(group_values, &mut state.batch_group_indices)?;
-            let group_indices = &state.batch_group_indices;
-            let total_num_groups = state.group_values.len();
-
-            for (acc, values) in state
-                .accumulators
-                .iter_mut()
-                .zip(evaluated_batch.accumulator_args.iter())
-            {
-                acc.merge_batch(values, group_indices, total_num_groups)?;
-            }
-        }
-        drop(timer);
-
-        Ok(())
+        self.aggregate_batch_inner(
+            batch,
+            HashAggregateAccumulator::merge_batch,
+            AccumulatorPhase::Merge,
+        )
     }
 
     pub(in crate::aggregates) fn start_output(&mut self) -> Result<()> {

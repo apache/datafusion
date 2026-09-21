@@ -104,7 +104,7 @@ async fn test_async_udf_metrics() -> Result<()> {
 
     let explain_analyze_str = format_batches(&result)?.to_string();
     let async_func_exec_without_metrics =
-        explain_analyze_str.split("\n").any(|metric_line| {
+        explain_analyze_str.split('\n').any(|metric_line| {
             metric_line.contains("AsyncFuncExec")
                 && !metric_line.contains("output_rows=3")
         });
@@ -267,6 +267,7 @@ impl AsyncScalarUDFImpl for TestAsyncUDFImpl {
 }
 
 /// Simulates calling an async external service
+#[expect(clippy::unused_async)]
 async fn call_external_service(arg1: ColumnarValue) -> Result<ColumnarValue> {
     Ok(arg1)
 }

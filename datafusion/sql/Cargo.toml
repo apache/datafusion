@@ -44,7 +44,7 @@ name = "datafusion_sql"
 default = ["unicode_expressions", "unparser"]
 unicode_expressions = []
 unparser = []
-recursive_protection = ["dep:recursive"]
+recursive_protection = ["dep:recursive", "dep:stacker"]
 
 # Note the sql planner should not depend directly on the datafusion-function packages
 # so that it can be used in a standalone manner with other function implementations.
@@ -62,6 +62,7 @@ log = { workspace = true }
 recursive = { workspace = true, optional = true }
 regex = { workspace = true }
 sqlparser = { workspace = true }
+stacker = { workspace = true, optional = true }
 
 [dev-dependencies]
 ctor = { workspace = true }

@@ -51,6 +51,37 @@ select cardinality(arrow_cast([[1, 2], [3, 4], [5, 6]], 'FixedSizeList(3, List(I
 ----
 6
 
+# cardinality counts actual leaf elements in ragged nested arrays
+query III
+select cardinality([[1], [2, 3]]),
+       cardinality([[1, 2, 3], []]),
+       cardinality([[], [1, 2]]);
+----
+3 3 2
+
+query IIII
+select cardinality(arrow_cast([[1], [2, 3]], 'ListView(List(Int64))')),
+       cardinality(arrow_cast([[1], [2, 3]], 'LargeListView(List(Int64))')),
+       cardinality(arrow_cast([[1, 2], [3, 4]], 'List(FixedSizeList(2, Int64))')),
+       cardinality(arrow_cast([[1], [2, 3]], 'LargeList(List(Int64))'));
+----
+3 3 4 3
+
+query III
+select cardinality(arrow_cast([[[1]], [[2, 3], []]], 'List(ListView(List(Int64)))')),
+       cardinality(arrow_cast([[[1]], [[2, 3], []]], 'List(LargeListView(List(Int64)))')),
+       cardinality(arrow_cast([[[1, 2]], [[3, 4]]], 'List(List(FixedSizeList(2, Int64)))'));
+----
+3 3 4
+
+query IIII
+select cardinality([[NULL], [1, 2]]),
+       cardinality([[[1]], [[2, 3], []]]),
+       cardinality(arrow_cast([[], [1, 2]], 'LargeList(List(Int64))')),
+       cardinality(make_array(NULL::int[], [1, 2]));
+----
+3 3 2 2
+
 # cardinality scalar function #3
 query II
 select cardinality(make_array()), cardinality(make_array(make_array()))
@@ -67,12 +98,10 @@ select cardinality(arrow_cast(make_array(), 'LargeList(Int64)')), cardinality(ar
 ----
 0 0
 
-#TODO
-#https://github.com/apache/datafusion/issues/9158
-#query II
-#select cardinality(arrow_cast(make_array(), 'FixedSizeList(1, Null)')), cardinality(arrow_cast(make_array(make_array()), 'FixedSizeList(1, List(Int64))'))
-#----
-#NULL 0
+query II
+select cardinality(arrow_cast(make_array(null), 'FixedSizeList(1, Null)')), cardinality(arrow_cast(make_array(make_array()), 'FixedSizeList(1, List(Int64))'))
+----
+1 0
 
 # cardinality of NULL arrays should return NULL
 query II

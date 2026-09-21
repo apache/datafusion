@@ -23,8 +23,9 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{Result, internal_datafusion_err};
-use datafusion_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
+use datafusion_expr::physical_planning_context::{ScalarSubqueryResults, SubqueryIndex};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -36,8 +37,8 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 /// simply reads from that container at the appropriate index.
 #[derive(Debug)]
 pub struct ScalarSubqueryExpr {
-    data_type: DataType,
-    nullable: bool,
+    /// Output field of the scalar subquery, including Arrow extension metadata.
+    field: FieldRef,
     /// Index of this subquery in the shared results container.
     index: SubqueryIndex,
     /// Shared results container populated by `ScalarSubqueryExec`.
@@ -51,29 +52,56 @@ impl ScalarSubqueryExpr {
         index: SubqueryIndex,
         results: ScalarSubqueryResults,
     ) -> Self {
+        Self::new_with_metadata(data_type, nullable, None, index, results)
+    }
+
+    /// Create a scalar subquery expression, preserving optional field metadata
+    /// from the logical subquery output (for example Arrow extension type names).
+    pub fn new_with_metadata(
+        data_type: DataType,
+        nullable: bool,
+        metadata: Option<FieldMetadata>,
+        index: SubqueryIndex,
+        results: ScalarSubqueryResults,
+    ) -> Self {
+        let mut field = Field::new("scalar_subquery", data_type, nullable);
+        if let Some(metadata) = metadata {
+            field = metadata.add_to_field(field);
+        }
         Self {
-            data_type,
-            nullable,
+            field: Arc::new(field),
             index,
             results,
         }
     }
 
-    pub fn data_type(&self) -> &DataType {
-        &self.data_type
+    pub fn results(&self) -> &ScalarSubqueryResults {
+        &self.results
     }
 
+    #[deprecated(
+        since = "55.0.0",
+        note = "was only used for proto serialization, which no longer needs it; use `return_field` for type/nullability. It will be removed in 61.0.0 or 6 months after 55.0.0 is released, whichever is longer."
+    )]
+    pub fn data_type(&self) -> &DataType {
+        self.field.data_type()
+    }
+
+    #[deprecated(
+        since = "55.0.0",
+        note = "was only used for proto serialization, which no longer needs it; use `return_field` for type/nullability. It will be removed in 61.0.0 or 6 months after 55.0.0 is released, whichever is longer."
+    )]
     pub fn nullable(&self) -> bool {
-        self.nullable
+        self.field.is_nullable()
     }
 
     /// Returns the index of this subquery in the shared results container.
+    #[deprecated(
+        since = "55.0.0",
+        note = "was only used for proto serialization, which no longer needs it. It will be removed in 61.0.0 or 6 months after 55.0.0 is released, whichever is longer."
+    )]
     pub fn index(&self) -> SubqueryIndex {
         self.index
-    }
-
-    pub fn results(&self) -> &ScalarSubqueryResults {
-        &self.results
     }
 }
 
@@ -105,11 +133,7 @@ impl Eq for ScalarSubqueryExpr {}
 
 impl PhysicalExpr for ScalarSubqueryExpr {
     fn return_field(&self, _input_schema: &Schema) -> Result<FieldRef> {
-        Ok(Arc::new(Field::new(
-            "scalar_subquery",
-            self.data_type.clone(),
-            self.nullable,
-        )))
+        Ok(Arc::clone(&self.field))
     }
 
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
@@ -138,6 +162,86 @@ impl PhysicalExpr for ScalarSubqueryExpr {
 
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "(scalar subquery)")
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        _ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
+        use datafusion_common::utils::usize_to_wire;
+        use datafusion_proto_models::protobuf;
+
+        let Self {
+            field,
+            index,
+            results: _, // Runtime state, supplied by ScalarSubqueryExec on decode.
+        } = self;
+
+        Ok(Some(protobuf::PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarSubquery(
+                protobuf::PhysicalScalarSubqueryExprNode {
+                    data_type: Some(field.data_type().try_into()?),
+                    nullable: field.is_nullable(),
+                    index: usize_to_wire(
+                        index.as_usize(),
+                        "ScalarSubqueryExpr",
+                        "index",
+                    )?,
+                    metadata: field.metadata().into(),
+                },
+            )),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl ScalarSubqueryExpr {
+    /// Reconstruct a [`ScalarSubqueryExpr`] from its protobuf representation.
+    ///
+    /// Unlike other expressions, this takes a third argument: the shared
+    /// [`ScalarSubqueryResults`] container. That container is a runtime-only
+    /// `Arc` shared with the surrounding `ScalarSubqueryExec` and is not part of
+    /// the wire format, so it cannot be reconstructed here or carried on the
+    /// decode context (which lives in a crate that cannot depend on
+    /// `datafusion-expr`). The match arm in `from_proto.rs` fetches it from the
+    /// plan-level decode context and passes it in.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalExprNode,
+        _ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+        results: &ScalarSubqueryResults,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        use datafusion_physical_expr_common::expect_expr_variant;
+        use datafusion_physical_expr_common::physical_expr::proto_decode::require_proto_field;
+        use datafusion_proto_models::protobuf;
+
+        let sq = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::ScalarSubquery,
+            "ScalarSubqueryExpr",
+        );
+        let protobuf::PhysicalScalarSubqueryExprNode {
+            data_type,
+            nullable,
+            index,
+            metadata,
+        } = sq;
+        let data_type =
+            require_proto_field(data_type.as_ref(), "ScalarSubqueryExpr", "data_type")?
+                .try_into()?;
+        let metadata = if metadata.is_empty() {
+            None
+        } else {
+            Some(FieldMetadata::from(metadata.clone()))
+        };
+        Ok(Arc::new(ScalarSubqueryExpr::new_with_metadata(
+            data_type,
+            *nullable,
+            metadata,
+            SubqueryIndex::new(*index as usize),
+            results.clone(),
+        )))
     }
 }
 
@@ -236,5 +340,163 @@ mod tests {
             other_results,
         );
         assert_ne!(e1a, e3);
+    }
+
+    #[test]
+    fn return_field_preserves_extension_metadata() -> Result<()> {
+        let metadata = FieldMetadata::from(std::collections::HashMap::from([(
+            "ARROW:extension:name".to_string(),
+            "example.extension".to_string(),
+        )]));
+        let expr = ScalarSubqueryExpr::new_with_metadata(
+            DataType::Utf8,
+            true,
+            Some(metadata),
+            SubqueryIndex::new(0),
+            ScalarSubqueryResults::new(1),
+        );
+
+        let field = expr.return_field(&Schema::empty())?;
+        assert_eq!(field.name(), "scalar_subquery");
+        assert_eq!(field.data_type(), &DataType::Utf8);
+        assert!(field.is_nullable());
+        assert_eq!(
+            field.metadata().get("ARROW:extension:name"),
+            Some(&"example.extension".to_string())
+        );
+        Ok(())
+    }
+}
+
+/// Tests for the `try_to_proto` / `try_from_proto` hooks.
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use super::*;
+    use crate::proto_test_util::{StubEncoder, UnreachableDecoder, column_node};
+    use datafusion_common::DataFusionError;
+    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
+    use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_proto_models::protobuf::{
+        PhysicalExprNode, PhysicalScalarSubqueryExprNode, physical_expr_node,
+    };
+
+    /// Build a `ScalarSubquery` proto node directly, with control over each
+    /// field, so the decode error paths can be exercised independently.
+    fn proto_scalar_subquery_node(
+        data_type: Option<datafusion_proto_models::datafusion_common::ArrowType>,
+        nullable: bool,
+        index: u32,
+    ) -> PhysicalExprNode {
+        PhysicalExprNode {
+            expr_id: None,
+            expr_type: Some(physical_expr_node::ExprType::ScalarSubquery(
+                PhysicalScalarSubqueryExprNode {
+                    data_type,
+                    nullable,
+                    index,
+                    metadata: Default::default(),
+                },
+            )),
+        }
+    }
+
+    #[test]
+    fn round_trips_through_proto() {
+        // A three-slot results container so index 2 is meaningful.
+        let results = ScalarSubqueryResults::new(3);
+        let expr = ScalarSubqueryExpr::new_with_metadata(
+            DataType::Int32,
+            true,
+            Some(FieldMetadata::from(std::collections::HashMap::from([(
+                "ARROW:extension:name".to_string(),
+                "example.extension".to_string(),
+            )]))),
+            SubqueryIndex::new(2),
+            results.clone(),
+        );
+
+        // Encode: the expression serializes itself via try_to_proto.
+        let encoder = StubEncoder::ok();
+        let enc_ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let node = expr
+            .try_to_proto(&enc_ctx)
+            .unwrap()
+            .expect("ScalarSubqueryExpr should encode to Some(node)");
+
+        assert!(node.expr_id.is_none());
+        let sq = match &node.expr_type {
+            Some(physical_expr_node::ExprType::ScalarSubquery(sq)) => sq,
+            other => panic!("expected a ScalarSubquery node, got {other:?}"),
+        };
+        assert!(sq.nullable);
+        assert_eq!(sq.index, 2);
+        let encoded_type: DataType = sq
+            .data_type
+            .as_ref()
+            .expect("data_type encoded")
+            .try_into()
+            .unwrap();
+        assert_eq!(encoded_type, DataType::Int32);
+        assert_eq!(
+            sq.metadata.get("ARROW:extension:name").map(String::as_str),
+            Some("example.extension")
+        );
+
+        // Decode: reconstruct from the proto node, threading in the shared
+        // results container the surrounding exec would provide.
+        let decoder = UnreachableDecoder;
+        let schema = Schema::empty();
+        let dec_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let decoded =
+            ScalarSubqueryExpr::try_from_proto(&node, &dec_ctx, &results).unwrap();
+        let decoded = decoded
+            .downcast_ref::<ScalarSubqueryExpr>()
+            .expect("decoded expr should be a ScalarSubqueryExpr");
+
+        // data_type + nullable survive the round-trip (observed via return_field).
+        let field = decoded.return_field(&Schema::empty()).unwrap();
+        assert_eq!(field.data_type(), &DataType::Int32);
+        assert!(field.is_nullable());
+        assert_eq!(
+            field.metadata().get("ARROW:extension:name"),
+            Some(&"example.extension".to_string())
+        );
+
+        // Same shared container + same index → equal to the original.
+        assert_eq!(decoded, &expr);
+    }
+
+    #[test]
+    fn rejects_non_scalar_subquery_node() {
+        let node = column_node("a");
+        let results = ScalarSubqueryResults::new(1);
+        let decoder = UnreachableDecoder;
+        let schema = Schema::empty();
+        let dec_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err =
+            ScalarSubqueryExpr::try_from_proto(&node, &dec_ctx, &results).unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg)
+                if msg.contains("PhysicalExprNode is not a ScalarSubqueryExpr")
+        ));
+    }
+
+    #[test]
+    fn rejects_missing_data_type() {
+        let node = proto_scalar_subquery_node(None, false, 0);
+        let results = ScalarSubqueryResults::new(1);
+        let decoder = UnreachableDecoder;
+        let schema = Schema::empty();
+        let dec_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+
+        let err =
+            ScalarSubqueryExpr::try_from_proto(&node, &dec_ctx, &results).unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::Internal(msg)
+                if msg.contains("ScalarSubqueryExpr is missing required field 'data_type'")
+        ));
     }
 }

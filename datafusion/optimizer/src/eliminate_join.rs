@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! [`EliminateJoin`] rewrites inner joins to simpler forms to make them cheaper
-//! to evaluate. We implement two distinct rewrites:
+//! [`EliminateJoin`] rewrites joins to simpler forms to make them cheaper
+//! to evaluate. We implement three distinct rewrites:
 //!
 //! * An inner join can be rewritten to an empty relation if the join condition
 //!   is trivially false.
@@ -28,9 +28,22 @@
 //!
 //!     1. None of R's columns are referenced above the join.
 //!     2. R does not observably multiply L's rows. This holds when either the
-//!        join's ancestors are duplicate-insensitive (e.g., DISTINCT) or we can use
-//!        functional dependencies to prove that each L row matches at most one R
-//!        row (R is provably unique on the join keys).
+//!        join's ancestors are duplicate-insensitive (e.g., DISTINCT) and its
+//!        conditions are repeatable, or we can use functional dependencies to
+//!        prove that each L row matches at most one R row (R is provably unique
+//!        on the join keys).
+//!
+//! * A left outer join `L ⟕ R` can be removed entirely, i.e. replaced by `L`,
+//!   under the same two conditions. Unlike an inner join, a left join
+//!   preserves every row of L whether or not it has a match in R, so when R's
+//!   columns are unused and R cannot multiply L's rows the join has no
+//!   observable effect at all. Such joins commonly appear in generated SQL
+//!   and in queries over views that join in lookup tables the query does not
+//!   read. A repeatable join filter does not prevent this rewrite: for a left
+//!   join it only decides whether a left row is matched or null-padded, and
+//!   either way the row is emitted. Symmetrically, a right outer join `L ⟖ R`
+//!   can be replaced by `R` when L's columns are unused and L cannot multiply
+//!   R's rows.
 //!
 //! # Overview
 //!
@@ -44,19 +57,24 @@
 //!   set across its two inputs.
 //! * `duplicate_insensitive` — whether emitting each row once instead of many
 //!   times will not change the output. A duplicate-collapsing node (e.g.,
-//!   DISTINCT, GROUP BY with no aggregate functions, or the existence side of a
-//!   semi/anti/mark join) sets it `true` for its subtree, and it propagates
-//!   downward until a node that makes the row count observable again (a `LIMIT`,
-//!   a top-N sort, ...) clears it. It is therefore fixed by the nearest such
-//!   node, not by the whole ancestor chain: a collapsing node shields its subtree,
+//!   DISTINCT, an `Aggregate` plan node whose aggregate expressions all ignore
+//!   duplicate input rows, or the existence side of a semi/anti/mark join) sets
+//!   it `true` for its subtree, and it propagates downward until a node that
+//!   makes the row count observable again (a `LIMIT`, a top-N sort, an
+//!   expression that is not repeatable such as `random()` or a subquery, ...)
+//!   clears it. It is therefore fixed by the nearest such node, not by the
+//!   whole ancestor chain: a collapsing node shields its subtree,
 //!   so a duplicate-sensitive node further above does not matter.
 //!
 //! At each join, `rewritten_join_type` combines this context with the side's
-//! functional dependencies to choose `Inner`, `LeftSemi`, or `RightSemi`. Most
+//! functional dependencies to choose `Inner`, `LeftSemi`, or `RightSemi`, or
+//! to eliminate the join entirely in favor of its preserved input. Most
 //! node types just forward the context to their single child via
 //! `rewrite_single_input`; nodes that alter column requirements or
 //! duplicate-sensitivity (projection, aggregate, sort, ...) adjust it first.
-use crate::utils::for_each_referenced_index;
+use crate::utils::{
+    for_each_referenced_index, is_duplicate_insensitive_aggregate, is_repeatable,
+};
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
@@ -142,8 +160,10 @@ impl LiveColumns {
     }
 }
 
-/// Rewrites an inner join to a semi join when one input only filters the other,
-/// and replaces an always-false inner join with an empty relation.
+/// Rewrites an inner join to a semi join when one input only filters the
+/// other, removes an outer join whose non-preserved side is unused and cannot
+/// multiply the preserved side's rows, and replaces an always-false inner join
+/// with an empty relation.
 #[derive(Default, Debug)]
 pub struct EliminateJoin;
 
@@ -204,11 +224,18 @@ fn rewrite_node(
         }) => {
             // Narrows `live` to the columns the projection's expressions reference.
             let child_live = LiveColumns::try_new(&expr, input.schema())?;
-            rewrite_single_input(input, child_live, duplicate_insensitive, |input| {
-                Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-                    expr, input, schema,
-                )?))
-            })
+            let child_duplicate_insensitive =
+                duplicate_insensitive && expr.iter().all(is_repeatable);
+            rewrite_single_input(
+                input,
+                child_live,
+                child_duplicate_insensitive,
+                |input| {
+                    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+                        expr, input, schema,
+                    )?))
+                },
+            )
         }
         LogicalPlan::Filter(Filter {
             predicate, input, ..
@@ -216,9 +243,14 @@ fn rewrite_node(
             // Adds the predicate's columns to `live` (a side used only by the filter stays live).
             let mut child_live = live;
             child_live.extend_from([&predicate], input.schema())?;
-            rewrite_single_input(input, child_live, duplicate_insensitive, |input| {
-                Ok(LogicalPlan::Filter(Filter::new(predicate, input)))
-            })
+            let child_duplicate_insensitive =
+                duplicate_insensitive && is_repeatable(&predicate);
+            rewrite_single_input(
+                input,
+                child_live,
+                child_duplicate_insensitive,
+                |input| Ok(LogicalPlan::Filter(Filter::new(predicate, input))),
+            )
         }
         LogicalPlan::Aggregate(Aggregate {
             input,
@@ -233,12 +265,15 @@ fn rewrite_node(
                 input.schema(),
             )?;
 
-            // A grouping aggregate with no aggregate functions (`GROUP BY` with
-            // an empty `aggr_expr`) only observes which group-key values exist,
-            // not how many rows produced them, so its input is duplicate-
-            // insensitive.
+            // The input can ignore repeated rows when grouping expressions are
+            // repeatable and every aggregate ignores duplicates, either by
+            // nature (`min`) or because it deduplicates its own input
+            // (`count(DISTINCT x)`). This covers grouping-only and global
+            // aggregates. One sensitive aggregate makes input multiplicity
+            // observable, even beneath an insensitive ancestor.
             let child_duplicate_insensitive =
-                !group_expr.is_empty() && aggr_expr.is_empty();
+                aggr_expr.iter().all(is_duplicate_insensitive_aggregate)
+                    && group_expr.iter().all(is_repeatable);
 
             rewrite_single_input(
                 input,
@@ -271,22 +306,28 @@ fn rewrite_node(
             // `GROUP BY` on the columns it reads, so its input is duplicate-
             // insensitive; the live columns are exactly those of the
             // ON/SELECT/ORDER BY expressions.
-            let mut child_live =
-                LiveColumns::try_new(on_expr.iter().chain(&select_expr), input.schema())?;
-            if let Some(sort_expr) = &sort_expr {
-                child_live
-                    .extend_from(sort_expr.iter().map(|s| &s.expr), input.schema())?;
-            }
-
-            rewrite_single_input(input, child_live, true, |input| {
-                Ok(LogicalPlan::Distinct(Distinct::On(DistinctOn {
-                    on_expr,
-                    select_expr,
-                    sort_expr,
-                    input,
-                    schema,
-                })))
-            })
+            let exprs = || {
+                on_expr
+                    .iter()
+                    .chain(&select_expr)
+                    .chain(sort_expr.iter().flatten().map(|sort| &sort.expr))
+            };
+            let child_live = LiveColumns::try_new(exprs(), input.schema())?;
+            let child_duplicate_insensitive = exprs().all(is_repeatable);
+            rewrite_single_input(
+                input,
+                child_live,
+                child_duplicate_insensitive,
+                |input| {
+                    Ok(LogicalPlan::Distinct(Distinct::On(DistinctOn {
+                        on_expr,
+                        select_expr,
+                        sort_expr,
+                        input,
+                        schema,
+                    })))
+                },
+            )
         }
         LogicalPlan::Sort(Sort { expr, input, fetch }) => {
             // Adds the sort-key columns to `live`.
@@ -295,7 +336,9 @@ fn rewrite_node(
 
             // A `fetch` (top-N) makes the row count observable, so duplicate-
             // insensitivity does not survive past it.
-            let child_duplicate_insensitive = duplicate_insensitive && fetch.is_none();
+            let child_duplicate_insensitive = duplicate_insensitive
+                && fetch.is_none()
+                && expr.iter().all(|sort| is_repeatable(&sort.expr));
             rewrite_single_input(
                 input,
                 child_live,
@@ -394,8 +437,41 @@ fn rewrite_join(
 
     let (visible_left, visible_right) = split_join_output_columns(&join, live);
 
-    let rewritten_join_type =
-        rewritten_join_type(&join, &visible_left, &visible_right, duplicate_insensitive);
+    // A semi join may stop evaluating conditions after finding a match.
+    // If the conditions are not repeatable, skipping evaluations can change
+    // later matches. Removing duplicate input rows can have the same effect.
+    // Require repeatable conditions for this join and rewrites of its inputs.
+    let repeatable = join
+        .on
+        .iter()
+        .all(|(left, right)| is_repeatable(left) && is_repeatable(right))
+        && join.filter.iter().all(is_repeatable);
+    let duplicate_insensitive = duplicate_insensitive && repeatable;
+
+    let rewritten_join_type = match rewritten_join_type(
+        &join,
+        &visible_left,
+        &visible_right,
+        duplicate_insensitive,
+    ) {
+        JoinRewrite::ReplaceWithLeft => {
+            let left = rewrite_subtree(
+                Arc::unwrap_or_clone(join.left),
+                visible_left,
+                duplicate_insensitive,
+            )?;
+            return Ok(Transformed::yes(left.data));
+        }
+        JoinRewrite::ReplaceWithRight => {
+            let right = rewrite_subtree(
+                Arc::unwrap_or_clone(join.right),
+                visible_right,
+                duplicate_insensitive,
+            )?;
+            return Ok(Transformed::yes(right.data));
+        }
+        JoinRewrite::Join(join_type) => join_type,
+    };
 
     let (mut left_live, mut right_live) = match rewritten_join_type {
         JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
@@ -409,8 +485,11 @@ fn rewrite_join(
 
     add_join_condition_columns(&join, &mut left_live, &mut right_live)?;
 
-    let (left_dup_insensitive, right_dup_insensitive) =
-        child_duplicate_insensitivity(rewritten_join_type, duplicate_insensitive);
+    let (left_dup_insensitive, right_dup_insensitive) = child_duplicate_insensitivity(
+        rewritten_join_type,
+        duplicate_insensitive,
+        repeatable,
+    );
 
     let left = rewrite_subtree(
         Arc::unwrap_or_clone(join.left),
@@ -460,57 +539,90 @@ fn rewrite_join(
 
 /// Returns which join inputs can safely ignore duplicate rows from their own
 /// descendants. For semi/anti/mark joins, duplicates from the existence side do
-/// not change the result even when the parent itself is duplicate-sensitive.
+/// not change the result even when the parent itself is duplicate-sensitive,
+/// provided the join conditions are `repeatable`: removing duplicate rows
+/// changes how often the conditions are evaluated.
 fn child_duplicate_insensitivity(
     join_type: JoinType,
     duplicate_insensitive: bool,
+    repeatable: bool,
 ) -> (bool, bool) {
     match join_type {
         JoinType::Inner => (duplicate_insensitive, duplicate_insensitive),
         JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
-            (duplicate_insensitive, true)
+            (duplicate_insensitive, repeatable)
         }
         JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
-            (true, duplicate_insensitive)
+            (repeatable, duplicate_insensitive)
         }
         JoinType::Left | JoinType::Right | JoinType::Full => (false, false),
     }
 }
 
-/// Rewrites an inner join to a semi join when the removed side has no
-/// parent-visible columns and either the parent ignores duplicate output rows or
-/// the removed side is unique on the join keys.
+/// The rewrite chosen for a join by [`rewritten_join_type`].
+enum JoinRewrite {
+    /// Keep the join, with this (possibly rewritten) join type.
+    Join(JoinType),
+    /// The join has no observable effect; replace it with its left input.
+    ReplaceWithLeft,
+    /// The join has no observable effect; replace it with its right input.
+    ReplaceWithRight,
+}
+
+/// Chooses a cheaper form for a join: removes an outer join whose non-preserved
+/// side is redundant, or rewrites an inner join to a semi join when the
+/// removed side has no parent-visible columns and either the parent ignores
+/// duplicate output rows or the removed side is unique on the join keys.
 fn rewritten_join_type(
     join: &Join,
     visible_left: &LiveColumns,
     visible_right: &LiveColumns,
     duplicate_insensitive: bool,
-) -> JoinType {
+) -> JoinRewrite {
+    // A side is redundant when nothing above the join references its columns
+    // and it cannot multiply the other side's rows (the ancestors are
+    // duplicate-insensitive, or the side is unique on the join keys).
+    let can_remove_right = visible_right.is_empty()
+        && (duplicate_insensitive
+            || side_unique_on_join(
+                join.right.schema(),
+                join.on.iter().map(|(_, right)| right),
+                join.null_equality,
+            ));
+
+    // A LEFT JOIN preserves every left row, so with a redundant right side the
+    // join has no observable effect and can be replaced by its left input.
+    // A filter only decides whether a row is matched or null-padded. When
+    // relying on duplicate-insensitivity, the caller has already required
+    // repeatable join conditions.
+    if join.join_type == JoinType::Left && can_remove_right {
+        return JoinRewrite::ReplaceWithLeft;
+    }
+    let can_remove_left = visible_left.is_empty()
+        && (duplicate_insensitive
+            || side_unique_on_join(
+                join.left.schema(),
+                join.on.iter().map(|(left, _)| left),
+                join.null_equality,
+            ));
+
+    // Symmetrical rule for RIGHT JOIN removal (same explanation as above for the left-join case)
+    if join.join_type == JoinType::Right && can_remove_left {
+        return JoinRewrite::ReplaceWithRight;
+    }
+
     if join.join_type != JoinType::Inner || join.on.is_empty() {
-        return join.join_type;
+        return JoinRewrite::Join(join.join_type);
     }
 
-    let can_remove_right = duplicate_insensitive
-        || side_unique_on_join(
-            join.right.schema(),
-            join.on.iter().map(|(_, right)| right),
-            join.null_equality,
-        );
-    if visible_right.is_empty() && can_remove_right {
-        return JoinType::LeftSemi;
+    if can_remove_right {
+        return JoinRewrite::Join(JoinType::LeftSemi);
+    }
+    if can_remove_left {
+        return JoinRewrite::Join(JoinType::RightSemi);
     }
 
-    let can_remove_left = duplicate_insensitive
-        || side_unique_on_join(
-            join.left.schema(),
-            join.on.iter().map(|(left, _)| left),
-            join.null_equality,
-        );
-    if visible_left.is_empty() && can_remove_left {
-        return JoinType::RightSemi;
-    }
-
-    JoinType::Inner
+    JoinRewrite::Join(JoinType::Inner)
 }
 
 fn add_join_condition_columns(
@@ -575,21 +687,27 @@ fn side_unique_on_join<'a>(
 #[cfg(test)]
 mod tests {
     use crate::OptimizerContext;
+    use crate::OptimizerRule;
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::eliminate_join::EliminateJoin;
+    use crate::test::udfs::{DistinctHandlingTestUDAF, PlacementTestUDF};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::tree_node::Transformed;
     use datafusion_common::{
         Constraint, Constraints, NullEquality, Result, ScalarValue, SplitPoint,
     };
     use datafusion_expr::JoinType::Inner;
     use datafusion_expr::{
-        Expr, JoinType, Partitioning, RangePartitioning, col, exists, lit,
+        AggregateUDF, DistinctHandling, Expr, ExprFunctionExt, JoinType, LogicalPlan,
+        Partitioning, RangePartitioning, ScalarUDF, Volatility, col, exists, lit,
         logical_plan::builder::{
             LogicalPlanBuilder, table_scan, table_source_with_constraints,
         },
-        out_ref_col,
+        out_ref_col, scalar_subquery,
     };
-    use datafusion_functions_aggregate::expr_fn::count;
+    use datafusion_functions_aggregate::expr_fn::{
+        corr, count, count_distinct, max, min, regr_count, stddev,
+    };
     use std::sync::Arc;
 
     macro_rules! assert_optimized_plan_equal {
@@ -606,6 +724,20 @@ mod tests {
                 @ $expected,
             )
         }};
+    }
+
+    fn rewrite(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+        EliminateJoin::new().rewrite(plan, &OptimizerContext::new())
+    }
+
+    fn assert_not_rewritten(plan: LogicalPlan) -> Result<()> {
+        assert!(!rewrite(plan)?.transformed);
+        Ok(())
+    }
+
+    /// A scalar UDF with the given volatility.
+    fn test_udf(volatility: Volatility) -> ScalarUDF {
+        ScalarUDF::from(PlacementTestUDF::new().with_volatility(volatility))
     }
 
     #[test]
@@ -686,9 +818,8 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_with_aggregates_is_not_duplicate_insensitive() -> Result<()> {
-        // A `GROUP BY` *with* aggregate functions observes how many rows fall in
-        // each group, so its input is not duplicate-insensitive. With a non-unique
+    fn count_is_not_duplicate_insensitive() -> Result<()> {
+        // COUNT observes how many rows fall in each group. With a non-unique
         // right side the join must stay an inner join: collapsing it to a semi
         // join would drop matching duplicates and undercount `count(l.id)`.
         let plan = left_join_right()?
@@ -701,6 +832,383 @@ mod tests {
             TableScan: l
             TableScan: r
         ")
+    }
+
+    #[test]
+    fn insensitive_aggregates_enable_semi_joins() -> Result<()> {
+        for column in ["l.x", "r.x"] {
+            let aggr_expr = vec![
+                min(col(column)).alias("minimum"),
+                max(col(column)).distinct().build()?,
+            ];
+            // Both global and grouped aggregates ignore duplicate input rows.
+            for group_expr in [vec![], vec![col(column)]] {
+                let plan = left_join_right()?
+                    .aggregate(group_expr, aggr_expr.clone())?
+                    .build()?;
+                let result = rewrite(plan)?;
+                assert!(result.transformed);
+                let LogicalPlan::Aggregate(aggregate) = result.data else {
+                    panic!("expected aggregate");
+                };
+                assert_eq!(aggregate.aggr_expr, aggr_expr);
+                let LogicalPlan::Join(join) = aggregate.input.as_ref() else {
+                    panic!("expected join");
+                };
+                assert_eq!(
+                    join.join_type,
+                    if column == "l.x" {
+                        JoinType::LeftSemi
+                    } else {
+                        JoinType::RightSemi
+                    }
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn global_min_removes_unused_outer_join() -> Result<()> {
+        for (join_type, column, table) in
+            [(JoinType::Left, "l.x", "l"), (JoinType::Right, "r.x", "r")]
+        {
+            let left = scan("l", &test_schema(), Constraints::default())?;
+            let right = scan("r", &test_schema(), Constraints::default())?;
+            let plan = LogicalPlanBuilder::from(left)
+                .join(right, join_type, (vec!["l.id"], vec!["r.id"]), None)?
+                .aggregate(Vec::<Expr>::new(), vec![min(col(column))])?
+                .build()?;
+            let optimized = rewrite(plan)?.data;
+            let expected = LogicalPlanBuilder::from(scan(
+                table,
+                &test_schema(),
+                Constraints::default(),
+            )?)
+            .aggregate(Vec::<Expr>::new(), vec![min(col(column))])?
+            .build()?;
+            assert_eq!(optimized, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_sensitive_aggregates_enable_semi_joins() -> Result<()> {
+        // A `Sensitive` function called with DISTINCT deduplicates its own
+        // input, so it cannot observe rows repeated by the join.
+        for aggr_expr in [
+            vec![count_distinct(col("l.x"))],
+            vec![count_distinct(col("l.x")), count_distinct(col("l.y"))],
+            vec![
+                min(col("l.x")),
+                count(col("l.x"))
+                    .distinct()
+                    .filter(col("l.y").gt(lit(0)))
+                    .build()?,
+            ],
+        ] {
+            let plan = left_join_right()?
+                .aggregate(vec![col("l.id")], aggr_expr)?
+                .build()?;
+            let result = rewrite(plan)?;
+            assert!(result.transformed);
+            let LogicalPlan::Aggregate(aggregate) = result.data else {
+                panic!("expected aggregate");
+            };
+            let LogicalPlan::Join(join) = aggregate.input.as_ref() else {
+                panic!("expected join");
+            };
+            assert_eq!(join.join_type, JoinType::LeftSemi);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_sensitive_aggregates_block_rewrite() -> Result<()> {
+        // One aggregate that observes repeated rows keeps the join, even
+        // beside aggregates that do not. DISTINCT does not qualify an
+        // `Unsupported` function: its accumulator does not deduplicate, and
+        // may silently compute the non-distinct answer.
+        for sensitive in [
+            count(col("l.x")),
+            stddev(col("l.x")).distinct().build()?,
+            corr(col("l.x"), col("l.y")).distinct().build()?,
+            regr_count(col("l.x"), col("l.y")).distinct().build()?,
+        ] {
+            let plan = left_join_right()?
+                .aggregate(
+                    Vec::<Expr>::new(),
+                    vec![min(col("l.x")), count_distinct(col("l.x")), sensitive],
+                )?
+                .build()?;
+            assert_not_rewritten(plan)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn sensitive_aggregate_blocks_insensitive_ancestor() -> Result<()> {
+        let plan = left_join_right()?
+            .aggregate(vec![col("l.x")], vec![count(col("l.id")).alias("n")])?
+            .aggregate(Vec::<Expr>::new(), vec![min(col("n"))])?
+            .build()?;
+        assert_not_rewritten(plan)?;
+        Ok(())
+    }
+
+    #[test]
+    fn subquery_aggregate_argument_blocks_rewrite() -> Result<()> {
+        // Expr's usual volatility check does not descend into a subquery plan.
+        let volatile = test_udf(Volatility::Volatile).call(vec![lit(1)]);
+        let subquery = LogicalPlanBuilder::empty(true)
+            .project(vec![volatile])?
+            .build()?;
+        let plan = left_join_right()?
+            .aggregate(
+                vec![col("l.x")],
+                vec![min(scalar_subquery(Arc::new(subquery)))],
+            )?
+            .build()?;
+        assert_not_rewritten(plan)?;
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_filter_and_ordering_keep_columns_live() -> Result<()> {
+        for aggr in [
+            min(col("l.x")).filter(col("r.y").gt(lit(0))).build()?,
+            min(col("l.x"))
+                .order_by(vec![col("r.y").sort(true, false)])
+                .build()?,
+        ] {
+            let plan = left_join_right()?
+                .aggregate(Vec::<Expr>::new(), vec![aggr])?
+                .build()?;
+            assert_not_rewritten(plan)?;
+        }
+
+        let plan = left_join_right()?
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![min(col("l.x")).filter(col("l.y").gt(lit(0))).build()?],
+            )?
+            .build()?;
+        assert_optimized_plan_equal!(plan, @r"
+        Aggregate: groupBy=[[]], aggr=[[min(l.x) FILTER (WHERE l.y > Int32(0))]]
+          LeftSemi Join: l.id = r.id
+            TableScan: l
+            TableScan: r
+        ")
+    }
+
+    #[test]
+    fn volatile_aggregate_expressions_block_rewrite() -> Result<()> {
+        // `Stable` is the control: the same plan with a repeatable expression
+        // is rewritten.
+        for volatility in [Volatility::Stable, Volatility::Volatile] {
+            let expr = test_udf(volatility).call(vec![col("l.x")]);
+            for (group_expr, aggr) in [
+                (vec![], min(expr.clone())),
+                (vec![expr.clone()], min(col("l.x"))),
+                (
+                    vec![],
+                    min(col("l.x"))
+                        .filter(expr.clone().gt(lit(0_u32)))
+                        .build()?,
+                ),
+                (
+                    vec![],
+                    min(col("l.x"))
+                        .order_by(vec![expr.clone().sort(true, false)])
+                        .build()?,
+                ),
+            ] {
+                let plan = left_join_right()?
+                    .aggregate(group_expr, vec![aggr])?
+                    .build()?;
+                let result = rewrite(plan.clone())?;
+                assert_eq!(
+                    result.transformed,
+                    volatility != Volatility::Volatile,
+                    "{volatility:?}: {}",
+                    plan.display_indent(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn volatile_intervening_expressions_block_rewrite() -> Result<()> {
+        // `Stable` is the control: the same plan with a repeatable expression
+        // is rewritten.
+        for volatility in [Volatility::Stable, Volatility::Volatile] {
+            let expr = test_udf(volatility).call(vec![col("l.x")]);
+            for input in [
+                left_join_right()?.project(vec![col("l.x"), expr.clone().alias("v")])?,
+                left_join_right()?.filter(expr.clone().gt(lit(0_u32)))?,
+                left_join_right()?.sort(vec![expr.clone().sort(true, false)])?,
+            ] {
+                let plan = input
+                    .aggregate(Vec::<Expr>::new(), vec![min(col("l.x"))])?
+                    .build()?;
+                let result = rewrite(plan.clone())?;
+                assert_eq!(
+                    result.transformed,
+                    volatility != Volatility::Volatile,
+                    "{volatility:?}: {}",
+                    plan.display_indent(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn join_conditions_must_be_repeatable() -> Result<()> {
+        for volatility in [Volatility::Stable, Volatility::Volatile] {
+            let udf = test_udf(volatility);
+            for (left_key, right_key, filter) in [
+                (udf.call(vec![col("l.id")]), col("r.id"), None),
+                (col("l.id"), udf.call(vec![col("r.id")]), None),
+                (
+                    col("l.id"),
+                    col("r.id"),
+                    Some(udf.call(vec![col("l.x")]).gt(lit(0_u32))),
+                ),
+            ] {
+                let plan = LogicalPlanBuilder::from(scan(
+                    "l",
+                    &test_schema(),
+                    Constraints::default(),
+                )?)
+                .join_with_expr_keys(
+                    scan("r", &test_schema(), Constraints::default())?,
+                    Inner,
+                    (vec![left_key], vec![right_key]),
+                    filter,
+                )?
+                .aggregate(Vec::<Expr>::new(), vec![min(col("l.x"))])?
+                .build()?;
+                let result = rewrite(plan.clone())?;
+                assert_eq!(
+                    result.transformed,
+                    volatility != Volatility::Volatile,
+                    "{volatility:?}: {}",
+                    plan.display_indent(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn existence_side_rewrites_require_repeatable_join_conditions() -> Result<()> {
+        // There is no duplicate-insensitive ancestor. Only the semi join's
+        // existence side can make the nested inner join eligible for rewriting.
+        for join_type in [JoinType::LeftSemi, JoinType::RightSemi] {
+            for volatility in [Volatility::Stable, Volatility::Volatile] {
+                let inner = left_join_right()?.build()?;
+                let other = scan("s", &test_schema(), Constraints::default())?;
+                let (left, right, keys) = if join_type == JoinType::LeftSemi {
+                    (other, inner, (vec!["s.id"], vec!["l.id"]))
+                } else {
+                    (inner, other, (vec!["l.id"], vec!["s.id"]))
+                };
+                let predicate =
+                    test_udf(volatility).call(vec![col("l.x")]).gt(lit(0_u32));
+                let plan = LogicalPlanBuilder::from(left)
+                    .join(right, join_type, keys, Some(predicate))?
+                    .build()?;
+                let result = rewrite(plan)?;
+                let repeatable = volatility != Volatility::Volatile;
+                assert_eq!(
+                    result.transformed, repeatable,
+                    "{join_type:?}, {volatility:?}"
+                );
+                let LogicalPlan::Join(join) = result.data else {
+                    panic!("expected semi join");
+                };
+                assert_eq!(join.join_type, join_type);
+                let existence_side = if join_type == JoinType::LeftSemi {
+                    join.right
+                } else {
+                    join.left
+                };
+                let LogicalPlan::Join(nested) = existence_side.as_ref() else {
+                    panic!("expected nested join");
+                };
+                assert_eq!(
+                    nested.join_type,
+                    if repeatable {
+                        JoinType::LeftSemi
+                    } else {
+                        Inner
+                    },
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_only_qualifies_sensitive_udaf() -> Result<()> {
+        for (distinct_handling, distinct, expect_rewrite) in [
+            (DistinctHandling::Insensitive, false, true),
+            (DistinctHandling::Insensitive, true, true),
+            (DistinctHandling::Sensitive, false, false),
+            // The accumulator deduplicates its own input.
+            (DistinctHandling::Sensitive, true, true),
+            (DistinctHandling::Unsupported, false, false),
+            // The accumulator does not implement DISTINCT, so the input's
+            // repeated rows stay observable.
+            (DistinctHandling::Unsupported, true, false),
+        ] {
+            let udf = AggregateUDF::from(DistinctHandlingTestUDAF::new(
+                "custom_udaf",
+                distinct_handling,
+            ));
+            let mut aggr = udf.call(vec![col("l.x")]);
+            if distinct {
+                aggr = aggr.distinct().build()?;
+            }
+            let plan = left_join_right()?
+                .aggregate(Vec::<Expr>::new(), vec![aggr])?
+                .build()?;
+            let result = rewrite(plan)?;
+            assert_eq!(
+                result.transformed, expect_rewrite,
+                "{distinct_handling:?}, distinct={distinct}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn aliased_udaf_uses_declared_handling() -> Result<()> {
+        for volatility in [
+            Volatility::Immutable,
+            Volatility::Stable,
+            Volatility::Volatile,
+        ] {
+            let udf = AggregateUDF::from(
+                DistinctHandlingTestUDAF::new(
+                    "custom_udaf",
+                    DistinctHandling::Insensitive,
+                )
+                .with_volatility(volatility),
+            )
+            .with_aliases(["custom_alias"]);
+            let plan = left_join_right()?
+                .aggregate(
+                    Vec::<Expr>::new(),
+                    vec![udf.call(vec![col("l.x")]).alias("result")],
+                )?
+                .build()?;
+            let result = rewrite(plan)?;
+            assert_eq!(result.transformed, volatility != Volatility::Volatile);
+        }
+        Ok(())
     }
 
     #[test]
@@ -801,18 +1309,16 @@ mod tests {
 
     #[test]
     fn correlated_subquery_outer_ref_prevents_rewrite() -> Result<()> {
-        // The aggregate makes the parent duplicate-insensitive, so absent any
-        // other use of the right side the join would collapse to a semi join.
-        // But the `EXISTS` subquery correlates on `r.y`, so the right side is
-        // still needed and the join must stay an inner join. Otherwise the
-        // semi join would drop `r`, orphaning the correlated `r.y` reference.
+        // The right side is unique, so the subquery's repeatability barrier
+        // alone cannot prevent a semi-join rewrite. Tracking the correlated
+        // `r.y` reference must keep the right side live and the join inner.
         let subquery =
             LogicalPlanBuilder::from(scan("s", &test_schema(), Constraints::default())?)
                 .filter(col("s.id").eq(out_ref_col(DataType::Int32, "r.y")))?
                 .project(vec![lit(1)])?
                 .build()?;
 
-        let plan = left_join_right()?
+        let plan = left_join_right_with_constraints(primary_key_on_id())?
             .filter(exists(Arc::new(subquery)))?
             .aggregate(vec![col("l.x")], Vec::<Expr>::new())?
             .build()?;
@@ -1111,6 +1617,34 @@ mod tests {
     }
 
     #[test]
+    fn distinct_on_expressions_must_be_repeatable() -> Result<()> {
+        for volatility in [Volatility::Stable, Volatility::Volatile] {
+            let expr = test_udf(volatility).call(vec![col("l.x")]);
+            for (on_expr, select_expr, sort_expr) in [
+                (vec![expr.clone()], vec![col("l.x")], None),
+                (vec![col("l.x")], vec![expr.clone()], None),
+                (
+                    vec![col("l.x")],
+                    vec![col("l.x")],
+                    Some(vec![col("l.x").sort(true, false), expr.sort(true, false)]),
+                ),
+            ] {
+                let plan = left_join_right()?
+                    .distinct_on(on_expr, select_expr, sort_expr)?
+                    .build()?;
+                let result = rewrite(plan.clone())?;
+                assert_eq!(
+                    result.transformed,
+                    volatility != Volatility::Volatile,
+                    "{volatility:?}: {}",
+                    plan.display_indent(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn existing_semi_join_passes_through_unchanged() -> Result<()> {
         // A join that is already a semi join is threaded through unchanged: the rule
         // only rewrites inner joins. This exercises the context-propagation paths for
@@ -1171,7 +1705,7 @@ mod tests {
         name: &str,
         schema: &Schema,
         constraints: Constraints,
-    ) -> Result<datafusion_expr::logical_plan::LogicalPlan> {
+    ) -> Result<LogicalPlan> {
         if constraints.is_empty() {
             table_scan(Some(name), schema, None)?.build()
         } else {

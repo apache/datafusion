@@ -21,8 +21,7 @@
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::Float64Array;
-    use datafusion::common::record_batch;
+    use arrow::array::{Float64Array, record_batch};
     use datafusion::error::Result;
     use datafusion::logical_expr::{AggregateUDF, AggregateUDFImpl};
     use datafusion::prelude::{SessionContext, col};
@@ -63,6 +62,22 @@ mod tests {
         )?;
 
         assert_eq!(result[0], expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_supports_null_handling_clause() -> Result<()> {
+        let module = get_module()?;
+
+        let ffi_first_value_func = (module.create_first_value_udaf)();
+        let foreign_first_value_func: Arc<dyn AggregateUDFImpl> =
+            (&ffi_first_value_func).into();
+        assert!(foreign_first_value_func.supports_null_handling_clause());
+
+        let ffi_sum_func = (module.create_sum_udaf)();
+        let foreign_sum_func: Arc<dyn AggregateUDFImpl> = (&ffi_sum_func).into();
+        assert!(!foreign_sum_func.supports_null_handling_clause());
 
         Ok(())
     }

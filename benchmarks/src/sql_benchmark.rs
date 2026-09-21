@@ -21,7 +21,8 @@ use arrow::error::ArrowError;
 use arrow::util::display::{ArrayFormatter, FormatOptions};
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::datasource::MemTable;
-use datafusion::physical_plan::execute_stream;
+use datafusion::physical_plan::display::DisplayableExecutionPlan;
+use datafusion::physical_plan::{ExecutionPlan, execute_stream};
 use datafusion::prelude::{CsvReadOptions, DataFrame, SessionContext};
 use datafusion_common::config::CsvOptions;
 use datafusion_common::{DataFusionError, Result, exec_datafusion_err};
@@ -63,6 +64,11 @@ pub struct SqlBenchmark {
     assert_queries: Vec<BenchmarkQuery>,
     /// Flag indicating whether the benchmark has been fully loaded
     is_loaded: bool,
+    /// Flag indicating whether the `expect` strings were checked against the
+    /// physical plan. The plan does not change between iterations, so the
+    /// check runs on the first iteration only and is not repeated in the
+    /// measured region.
+    plans_validated: bool,
     /// Stores the last run results if needed so they can be compared or persisted.
     last_results: Option<Vec<RecordBatch>>,
     /// echo statements
@@ -75,6 +81,20 @@ impl SqlBenchmark {
         full_path: impl AsRef<Path>,
         benchmark_directory: impl AsRef<Path>,
     ) -> Result<Self> {
+        Self::new_with_replacements(ctx, full_path, benchmark_directory, HashMap::new())
+            .await
+    }
+
+    /// Creates a benchmark using caller-provided template replacements.
+    ///
+    /// Caller values take precedence over environment variables during
+    /// `${...}` substitution; `BENCHMARK_DIR` is still set internally.
+    pub async fn new_with_replacements(
+        ctx: &SessionContext,
+        full_path: impl AsRef<Path>,
+        benchmark_directory: impl AsRef<Path>,
+        replacement_mapping: HashMap<String, String>,
+    ) -> Result<Self> {
         let full_path = full_path.as_ref();
         let benchmark_directory = benchmark_directory.as_ref();
         let group_name = parse_group_from_path(full_path, benchmark_directory);
@@ -83,8 +103,9 @@ impl SqlBenchmark {
             group: group_name,
             subgroup: String::new(),
             benchmark_path: full_path.to_path_buf(),
-            replacement_mapping: HashMap::new(),
+            replacement_mapping,
             expect: vec![],
+            plans_validated: false,
             queries: HashMap::new(),
             result_queries: vec![],
             assert_queries: vec![],
@@ -201,7 +222,11 @@ impl SqlBenchmark {
     /// # Errors
     /// Returns an error if a `run` query fails or if expected plan strings
     /// are not found.
-    pub async fn run(&mut self, ctx: &SessionContext, save_results: bool) -> Result<()> {
+    pub async fn run(
+        &mut self,
+        ctx: &SessionContext,
+        save_results: bool,
+    ) -> Result<usize> {
         let run_queries = self
             .queries
             .get(&QueryDirective::Run)
@@ -221,19 +246,15 @@ impl SqlBenchmark {
                         );
 
                         let df = ctx.sql(query).await?;
-                        if !self.expect.is_empty() {
+                        if !self.expect.is_empty() && !self.plans_validated {
                             let physical_plan = df.create_physical_plan().await?;
                             self.validate_expected_plan(&physical_plan)?;
                         }
 
                         let result_schema = Arc::new(df.schema().as_arrow().clone());
                         let mut batches = df.collect().await?;
-                        let trimmed = query.trim_start();
-
                         // save the output for select/with queries
-                        if starts_with_ignore_ascii_case(trimmed, "select")
-                            || starts_with_ignore_ascii_case(trimmed, "with")
-                        {
+                        if is_result_statement(query) {
                             if batches.is_empty() {
                                 batches.push(RecordBatch::new_empty(result_schema));
                             }
@@ -255,9 +276,17 @@ impl SqlBenchmark {
                             self.group, self.subgroup
                         );
 
-                        result_count = self
-                            .execute_sql_without_result_buffering(query, ctx)
+                        let row_count = self
+                            .execute_sql_without_result_buffering(
+                                query,
+                                ctx,
+                                !self.plans_validated,
+                            )
                             .await?;
+
+                        if is_result_statement(query) {
+                            result_count = row_count;
+                        }
                     }
                 }
             }
@@ -267,10 +296,14 @@ impl SqlBenchmark {
 
         debug!("Results have {result_count} rows");
 
+        // Every `run` query was planned and checked above, and a plan does not
+        // change between iterations, so later iterations skip the check.
+        self.plans_validated = true;
+
         // Store results for verification
         self.last_results = Some(result);
 
-        Ok(())
+        Ok(result_count)
     }
 
     /// Calls run and persists results to disk as a CSV file.
@@ -283,7 +316,7 @@ impl SqlBenchmark {
     /// Returns an error if no results are available or if writing to the
     /// target path fails.
     pub async fn persist(&mut self, ctx: &SessionContext) -> Result<()> {
-        self.run(ctx, true).await?;
+        let _ = self.run(ctx, true).await?;
 
         // Check if we have result queries to persist for
         if self.result_queries.is_empty() {
@@ -554,12 +587,22 @@ impl SqlBenchmark {
         Ok(())
     }
 
-    fn validate_expected_plan(&self, physical_plan: &impl Debug) -> Result<()> {
+    /// Checks the `expect` strings against the plan as `EXPLAIN` displays it.
+    ///
+    /// `{:#?}` would dump every `RecordBatch` an in-memory source holds, which
+    /// is megabytes for a benchmark that builds its tables with `CREATE TABLE
+    /// ... AS SELECT`.
+    fn validate_expected_plan(
+        &self,
+        physical_plan: &Arc<dyn ExecutionPlan>,
+    ) -> Result<()> {
         if self.expect.is_empty() {
             return Ok(());
         }
 
-        let plan_string = format!("{physical_plan:#?}");
+        let plan_string = DisplayableExecutionPlan::new(physical_plan.as_ref())
+            .indent(true)
+            .to_string();
 
         for exp_str in &self.expect {
             if !plan_string.contains(exp_str) {
@@ -576,13 +619,16 @@ impl SqlBenchmark {
         &self,
         sql: &str,
         ctx: &SessionContext,
+        validate_plan: bool,
     ) -> Result<usize> {
         let mut row_count = 0;
 
         let df = ctx.sql(sql).await?;
         let physical_plan = df.create_physical_plan().await?;
 
-        self.validate_expected_plan(&physical_plan)?;
+        if validate_plan {
+            self.validate_expected_plan(&physical_plan)?;
+        }
         let mut stream = execute_stream(physical_plan, ctx.task_ctx())?;
 
         while let Some(batch) = stream.next().await {
@@ -837,10 +883,14 @@ impl BenchmarkDirective {
                 ));
             }
 
-            debug!("Processing {} file: {}", splits[0], splits[1]);
+            let query_path = resolve_benchmark_file_path(splits[1]);
+            debug!("Processing {} file: {}", splits[0], query_path.display());
 
-            let query_file = fs::read_to_string(splits[1]).map_err(|e| {
-                exec_datafusion_err!("Failed to read query file {}: {e}", splits[1])
+            let query_file = fs::read_to_string(&query_path).map_err(|e| {
+                exec_datafusion_err!(
+                    "Failed to read query file {}: {e}",
+                    query_path.display()
+                )
             })?;
             let query_file = query_file.replace("\r\n", "\n");
 
@@ -1121,7 +1171,8 @@ impl BenchmarkDirective {
         }
 
         // restart the load from the template file
-        Box::pin(bench.process_file(ctx, Path::new(splits[1]))).await
+        let path = resolve_benchmark_file_path(splits[1]);
+        Box::pin(bench.process_file(ctx, &path)).await
     }
 
     async fn process_include(
@@ -1137,7 +1188,8 @@ impl BenchmarkDirective {
             ));
         }
 
-        Box::pin(bench.process_file(ctx, Path::new(splits[1]))).await
+        let path = resolve_benchmark_file_path(splits[1]);
+        Box::pin(bench.process_file(ctx, &path)).await
     }
 
     fn process_echo(
@@ -1283,6 +1335,12 @@ fn starts_with_ignore_ascii_case(input: &str, prefix: &str) -> bool {
     input
         .get(..prefix.len())
         .is_some_and(|value| value.eq_ignore_ascii_case(prefix))
+}
+
+fn is_result_statement(statement: &str) -> bool {
+    let statement = statement.trim_start();
+    starts_with_ignore_ascii_case(statement, "select")
+        || starts_with_ignore_ascii_case(statement, "with")
 }
 
 fn split_query_statements(sql: &str) -> impl Iterator<Item = &str> {
@@ -1552,6 +1610,15 @@ fn make_array_formatter<'a>(
     }
 }
 
+fn resolve_benchmark_file_path(path: &str) -> PathBuf {
+    let path = PathBuf::from(path);
+    if path.is_absolute() || path.exists() {
+        path
+    } else {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1635,6 +1702,55 @@ mod tests {
         replacements
     }
 
+    #[test]
+    fn resolves_sql_benchmarks_paths_from_manifest_directory() {
+        let path =
+            resolve_benchmark_file_path("sql_benchmarks/clickbench/init/set_config.sql");
+
+        assert!(path.exists(), "resolved path should exist: {path:?}");
+    }
+
+    #[tokio::test]
+    async fn run_returns_row_count_when_not_saving_results() {
+        let contents = "name Q01\n\nrun\nSELECT * FROM (VALUES (1), (2), (3)) AS t(v)\n";
+        let mut benchmark = parse_benchmark(contents).await.unwrap();
+        let ctx = SessionContext::new();
+
+        benchmark.initialize(&ctx).await.unwrap();
+        let row_count = benchmark.run(&ctx, false).await.unwrap();
+
+        assert_eq!(row_count, 3);
+    }
+
+    #[tokio::test]
+    async fn streaming_run_reports_last_select_row_count_after_ddl() {
+        let contents = "name Q15\n\nrun\nCREATE VIEW v AS SELECT 1 AS value;\nSELECT * FROM v;\nDROP VIEW v;\n";
+        let mut benchmark = parse_benchmark(contents).await.unwrap();
+        let ctx = SessionContext::new();
+
+        benchmark.initialize(&ctx).await.unwrap();
+        let row_count = benchmark.run(&ctx, false).await.unwrap();
+
+        assert_eq!(row_count, 1);
+        assert!(ctx.table("v").await.is_err(), "trailing DDL should execute");
+    }
+
+    #[tokio::test]
+    async fn run_returns_row_count_when_saving_results() {
+        let contents = "name Q01\n\nrun\nSELECT * FROM (VALUES (1), (2)) AS t(v)\n";
+        let mut benchmark = parse_benchmark(contents).await.unwrap();
+        let ctx = SessionContext::new();
+
+        benchmark.initialize(&ctx).await.unwrap();
+        let row_count = benchmark.run(&ctx, true).await.unwrap();
+
+        assert_eq!(row_count, 2);
+        assert_eq!(
+            formatted_last_results(&benchmark),
+            vec![vec!["1"], vec!["2"]]
+        );
+    }
+
     fn env_map(entries: &[(&str, &str)]) -> HashMap<String, String> {
         entries
             .iter()
@@ -1692,6 +1808,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::literal_string_with_formatting_args,
+        reason = "The `${VAR:-default}` braces are shell-style placeholders, not format args"
+    )]
     fn process_replacements_uses_default_for_missing_variable() {
         let replacements = HashMap::new();
 
@@ -2231,6 +2351,10 @@ NULL|(empty)
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::literal_string_with_formatting_args,
+        reason = "The `${VAR:-default}` braces are shell-style placeholders, not format args"
+    )]
     async fn parser_applies_data_dir_replacement_in_load_query_file() {
         let temp_dir = tempdir().expect("failed to create benchmark test directory");
         let data_dir = temp_dir.path().join("non_default_data");
@@ -3235,6 +3359,31 @@ SELECT 1;
             streaming.run(&ctx, false).await,
             "does not contain the expected string 'definitely_not_in_plan'",
         );
+    }
+
+    #[tokio::test]
+    async fn run_checks_expect_plan_once_per_benchmark() {
+        let ctx = SessionContext::new();
+        let benchmark_text = "expect_plan PlaceholderRowExec\nrun\nSELECT 1\n";
+
+        let mut benchmark = parse_benchmark(benchmark_text)
+            .await
+            .expect("benchmark should parse");
+        assert!(!benchmark.plans_validated);
+
+        benchmark
+            .run(&ctx, false)
+            .await
+            .expect("first run should accept the matching plan");
+        assert!(
+            benchmark.plans_validated,
+            "the first run should mark the plans as checked"
+        );
+
+        benchmark
+            .run(&ctx, false)
+            .await
+            .expect("later runs should not repeat the check");
     }
 
     #[tokio::test]

@@ -159,21 +159,6 @@ select array_distance([2], [3]), list_distance([1], [2]), list_distance([1], [-2
 query error
 select list_distance([1], [1, 2]);
 
-query R
-select array_distance([[1, 1]], [1, 2]);
-----
-1
-
-query R
-select array_distance([[1, 1]], [[1, 2]]);
-----
-1
-
-query R
-select array_distance([[1, 1]], [[1, 2]]);
-----
-1
-
 query RR
 select array_distance([1, 1, 0, 0], [2, 2, 1, 1]), list_distance([1, 2, 3], [1, 2, 3]);
 ----
@@ -203,6 +188,57 @@ query R
 select list_distance([1, 2, 3], [1, 2, 3]) AS distance;
 ----
 0
+
+# array_distance with null outer arrays
+query RR
+select
+  array_distance(arrow_cast(NULL, 'List(Float64)'), [1, 2]),
+  array_distance([1, 2], arrow_cast(NULL, 'List(Float64)'));
+----
+NULL NULL
+
+# array_distance scales the differences before squaring them, so finite
+# inputs whose squares overflow or underflow still give the correct distance
+query RR
+select
+  array_distance([CAST(1e-200 AS DOUBLE)], [CAST(0 AS DOUBLE)]) / 1e-200,
+  array_distance([CAST(3e200 AS DOUBLE)], [CAST(-1e200 AS DOUBLE)]) / 1e200;
+----
+1 4
+
+# non-finite inputs propagate as before
+query RR
+select
+  array_distance([CAST('Infinity' AS DOUBLE)], [CAST(0 AS DOUBLE)]),
+  array_distance([CAST('NaN' AS DOUBLE)], [CAST(0 AS DOUBLE)]);
+----
+Infinity NaN
+
+# invalid argument count and types
+query error DataFusion error: Error during planning: Execution error: Function 'array_distance' user-defined coercion failed with: Execution error: array_distance function requires 2 arguments
+select array_distance();
+
+query error DataFusion error: Error during planning: Execution error: Function 'array_distance' user-defined coercion failed with: Execution error: array_distance function requires 2 arguments
+select array_distance([1]);
+
+query error DataFusion error: Error during planning: Execution error: Function 'array_distance' user-defined coercion failed with: Execution error: array_distance function requires 2 arguments
+select array_distance([1], [2], [3]);
+
+query error array_distance does not support type Int64
+select array_distance(1, [1]);
+
+query error array_distance does not support types
+select array_distance([1], arrow_cast([1], 'LargeList(Float64)'));
+
+query error array_distance only supports one-dimensional arrays
+select array_distance([[1, 1]], [1, 2]);
+
+query error array_distance only supports one-dimensional arrays
+select array_distance([[1, 1]], [[1, 2]]);
+
+query error array_distance only supports one-dimensional arrays
+select array_distance([[1, 2], [100, 100]], [[1, 4], [0, 0]]);
+
 
 # array_distance with columns
 query RRR

@@ -314,12 +314,7 @@ mod tests {
 
         // Read the dataframe from 'output1.parquet' with the default file extension.
         let read_df = ctx
-            .read_parquet(
-                &path1,
-                ParquetReadOptions {
-                    ..Default::default()
-                },
-            )
+            .read_parquet(&path1, ParquetReadOptions::default())
             .await?;
 
         let results = read_df.collect().await?;
@@ -342,12 +337,7 @@ mod tests {
 
         // Read the dataframe from 'output3.parquet.snappy.parquet' with the wrong file extension.
         let read_df = ctx
-            .read_parquet(
-                &path2,
-                ParquetReadOptions {
-                    ..Default::default()
-                },
-            )
+            .read_parquet(&path2, ParquetReadOptions::default())
             .await;
         let binding = DataFilePaths::to_urls(&path2).unwrap();
         let expected_path = binding[0].as_str();
@@ -360,12 +350,7 @@ mod tests {
 
         // Read the dataframe from 'output3.parquet.snappy.parquet' with the correct file extension.
         let read_df = ctx
-            .read_parquet(
-                &path3,
-                ParquetReadOptions {
-                    ..Default::default()
-                },
-            )
+            .read_parquet(&path3, ParquetReadOptions::default())
             .await?;
 
         let results = read_df.collect().await?;
@@ -376,12 +361,7 @@ mod tests {
         // errors on an empty location instead of producing a 0-column table.
         std::fs::create_dir(&path4)?;
         let err = ctx
-            .read_parquet(
-                &path4,
-                ParquetReadOptions {
-                    ..Default::default()
-                },
-            )
+            .read_parquet(&path4, ParquetReadOptions::default())
             .await
             .expect_err("read_parquet on an empty folder should error");
         assert!(
@@ -391,12 +371,7 @@ mod tests {
 
         // Read the dataframe from double dot folder;
         let read_df = ctx
-            .read_parquet(
-                &path5,
-                ParquetReadOptions {
-                    ..Default::default()
-                },
-            )
+            .read_parquet(&path5, ParquetReadOptions::default())
             .await?;
 
         let results = read_df.collect().await?;

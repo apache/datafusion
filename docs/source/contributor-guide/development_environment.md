@@ -108,7 +108,7 @@ DataFusion is written in Rust and it uses a standard rust toolkit:
 
 - `rustup update stable` DataFusion generally uses the latest stable release of Rust, though it may lag when new Rust toolchains release
   - See which toolchain is currently pinned in the [`rust-toolchain.toml`](https://github.com/apache/datafusion/blob/main/rust-toolchain.toml) file
-  - This can cause issues such as not having the rust-analyzer component installed for the specified toolchain, in which case just install it manually, e.g. `rustup component add --toolchain 1.96.0 rust-analyzer`
+  - This can cause issues such as not having the rust-analyzer component installed for the specified toolchain, in which case just install it manually, e.g. `rustup component add --toolchain 1.98.1 rust-analyzer`
 - `cargo build`
 - `cargo fmt` to format the code
 - etc.
@@ -130,3 +130,17 @@ Formatting instructions:
 or run them all at once:
 
 - [dev/rust_lint.sh](../../../dev/rust_lint.sh)
+
+Debugging:
+
+The standard dev profile, used by cargo build and cargo test, disables variable-level DWARF debug information that is required by interactive debuggers.
+
+If you need to step through the code with a debugger, build with:
+
+`CARGO_PROFILE_DEV_DEBUG=2 cargo build`
+
+Alternatively, you can set `CARGO_PROFILE_DEV_DEBUG=2` as an environment variable in your IDE.
+
+This enables the additional debug information required for source-level debugging.
+
+For more details, see the DataFusion [Cargo.toml](https://github.com/apache/datafusion/blob/main/Cargo.toml#L329) configuration.

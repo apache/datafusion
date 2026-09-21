@@ -30,19 +30,21 @@ use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
 use crate::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+    RecordBatchStream, ReplaceChildrenOptions, SendableRecordBatchStream,
 };
 use arrow::array::{BooleanArray, BooleanBuilder};
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     Result, exec_datafusion_err, internal_datafusion_err, not_impl_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
 use futures::{Stream, StreamExt, ready};
@@ -153,6 +155,13 @@ impl ExecutionPlan for RecursiveQueryExec {
         vec![&self.static_term, &self.recursive_term]
     }
 
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
     // TODO: control these hints and see whether we can
     // infer some from the child plans (static/recursive terms).
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -164,15 +173,20 @@ impl ExecutionPlan for RecursiveQueryExec {
     }
 
     fn required_input_distribution(&self) -> Vec<crate::Distribution> {
-        vec![
-            crate::Distribution::SinglePartition,
-            crate::Distribution::SinglePartition,
-        ]
+        self.input_distribution_requirements().into_per_child()
     }
 
-    fn with_new_children(
+    fn input_distribution_requirements(&self) -> crate::InputDistributionRequirements {
+        crate::InputDistributionRequirements::new(vec![
+            crate::Distribution::SinglePartition,
+            crate::Distribution::SinglePartition,
+        ])
+    }
+
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         RecursiveQueryExec::try_new(
             self.name.clone(),
@@ -182,6 +196,16 @@ impl ExecutionPlan for RecursiveQueryExec {
             self.is_distinct,
         )
         .map(|e| Arc::new(e) as _)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(

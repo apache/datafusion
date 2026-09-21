@@ -158,7 +158,7 @@ fn make_string_view_column(
 
 fn group_value(row_idx: usize, col_idx: usize, num_groups: usize) -> usize {
     let group_idx = row_idx % num_groups;
-    let per_col_card = (num_groups as f64).powf(1.0 / 3.0).ceil() as usize;
+    let per_col_card = (num_groups as f64).cbrt().ceil() as usize;
     let divisor = per_col_card.pow(col_idx as u32);
     (group_idx / divisor) % per_col_card
 }

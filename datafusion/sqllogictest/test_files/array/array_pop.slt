@@ -22,10 +22,8 @@ include ./init_data.slt.part
 # array_pop_back scalar function with null
 #TODO: https://github.com/apache/datafusion/issues/7142
 # follow clickhouse and duckdb
-#query ?
-#select array_pop_back(null);
-#----
-#NULL
+query error array_pop_back does not support type: Null
+select array_pop_back(null);
 
 # array_pop_back scalar function #1
 query ??
@@ -201,10 +199,8 @@ NULL
 #TODO:https://github.com/apache/datafusion/issues/7142
 # array_pop_front scalar function with null
 # follow clickhouse and duckdb
-#query ?
-#select array_pop_front(null);
-#----
-#NULL
+query error array_pop_front does not support type: Null
+select array_pop_front(null);
 
 # array_pop_front scalar function #1
 query ??
@@ -321,6 +317,39 @@ query ?
 select array_pop_front(arrow_cast([1, 2], 'LargeListView(Int64)'));
 ----
 [2]
+
+# maintains inner nullability
+query ??TT
+select
+  array_pop_front(column1),
+  array_pop_back(column1),
+  arrow_typeof(array_pop_front(column1)),
+  arrow_typeof(array_pop_back(column1))
+from values
+  (arrow_cast([], 'List(non-null Int32)')),
+  (arrow_cast(NULL, 'List(non-null Int32)')),
+  (arrow_cast([1, 3, 5, -5], 'List(non-null Int32)'))
+;
+----
+[] [] List(non-null Int32) List(non-null Int32)
+NULL NULL List(non-null Int32) List(non-null Int32)
+[3, 5, -5] [1, 3, 5] List(non-null Int32) List(non-null Int32)
+
+query ??TT
+select
+  array_pop_front(column1),
+  array_pop_back(column1),
+  arrow_typeof(array_pop_front(column1)),
+  arrow_typeof(array_pop_back(column1))
+from values
+  (arrow_cast([], 'LargeList(non-null Int32)')),
+  (arrow_cast(NULL, 'LargeList(non-null Int32)')),
+  (arrow_cast([1, 3, 5, -5], 'LargeList(non-null Int32)'))
+;
+----
+[] [] LargeList(non-null Int32) LargeList(non-null Int32)
+NULL NULL LargeList(non-null Int32) LargeList(non-null Int32)
+[3, 5, -5] [1, 3, 5] LargeList(non-null Int32) LargeList(non-null Int32)
 
 
 include ./cleanup.slt.part

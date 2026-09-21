@@ -25,7 +25,7 @@ use arrow::array::{
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::utils::ListCoercion;
+use datafusion_common::utils::{ListCoercion, offset_span, offset_span_len};
 use datafusion_common::{
     Result, ScalarValue, exec_err, internal_err, utils::take_function_args,
 };
@@ -57,11 +57,11 @@ make_udf_expr_and_func!(
 +----------------------------------------------+
 
 > select array_remove([1, 2, NULL, 2, 4], 2);
-+---------------------------------------------------+
++---------------------------------------------+
 | array_remove(List([1,2,NULL,2,4]),Int64(2)) |
-+---------------------------------------------------+
-| [1, NULL, 2, 4]                              |
-+---------------------------------------------------+
++---------------------------------------------+
+| [1, NULL, 2, 4]                             |
++---------------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -167,11 +167,11 @@ make_udf_expr_and_func!(
 +---------------------------------------------------------+
 
 > select array_remove_n([1, 2, NULL, 2, 4], 2, 2);
-+----------------------------------------------------------+
++--------------------------------------------------------+
 | array_remove_n(List([1,2,NULL,2,4]),Int64(2),Int64(2)) |
-+----------------------------------------------------------+
-| [1, NULL, 4]                                            |
-+----------------------------------------------------------+
++--------------------------------------------------------+
+| [1, NULL, 4]                                           |
++--------------------------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -296,11 +296,11 @@ make_udf_expr_and_func!(
 +--------------------------------------------------+
 
 > select array_remove_all([1, 2, NULL, 2, 4], 2);
-+-----------------------------------------------------+
++-------------------------------------------------+
 | array_remove_all(List([1,2,NULL,2,4]),Int64(2)) |
-+-----------------------------------------------------+
-| [1, NULL, 4]                                     |
-+-----------------------------------------------------+
++-------------------------------------------------+
+| [1, NULL, 4]                                    |
++-------------------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -454,14 +454,13 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
     element_array: &ArrayRef,
     arr_n: &[Option<i64>],
 ) -> Result<ArrayRef> {
-    let list_field = match list_array.data_type() {
-        DataType::List(field) | DataType::LargeList(field) => field,
-        _ => {
-            return exec_err!(
-                "Expected List or LargeList data type, got {:?}",
-                list_array.data_type()
-            );
-        }
+    let (DataType::List(list_field) | DataType::LargeList(list_field)) =
+        list_array.data_type()
+    else {
+        return exec_err!(
+            "Expected List or LargeList data type, got {:?}",
+            list_array.data_type()
+        );
     };
     let original_data = list_array.values().to_data();
     // Build up the offsets for the final output array
@@ -471,7 +470,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
     let mut mutable = MutableArrayData::with_capacities(
         vec![&original_data],
         false,
-        Capacities::Array(original_data.len()),
+        Capacities::Array(offset_span_len(list_array.offsets())),
     );
     let mut valid = NullBufferBuilder::new(list_array.len());
 
@@ -508,7 +507,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
 
         // Fast path: no elements to remove, copy entire row
         if num_to_remove == 0 {
-            mutable.extend(0, start, end);
+            mutable.try_extend(0, start, end)?;
             offsets.push(offsets[row_index] + OffsetSize::usize_as(end - start));
             valid.append_non_null();
             continue;
@@ -524,7 +523,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
             if keep == Some(false) && removed < max_removals {
                 // Flush pending batch before skipping this element
                 if let Some(bs) = pending_batch_to_retain {
-                    mutable.extend(0, start + bs, start + i);
+                    mutable.try_extend(0, start + bs, start + i)?;
                     copied += i - bs;
                     pending_batch_to_retain = None;
                 }
@@ -536,7 +535,7 @@ fn general_remove<OffsetSize: OffsetSizeTrait>(
 
         // Flush remaining batch
         if let Some(bs) = pending_batch_to_retain {
-            mutable.extend(0, start + bs, start + eq_array.len());
+            mutable.try_extend(0, start + bs, start + eq_array.len())?;
             copied += eq_array.len() - bs;
         }
 
@@ -567,20 +566,17 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
         return Ok(Arc::new(list_array.clone()));
     }
 
-    let list_field = match list_array.data_type() {
-        DataType::List(field) | DataType::LargeList(field) => field,
-        _ => {
-            return exec_err!(
-                "Expected List or LargeList data type, got {:?}",
-                list_array.data_type()
-            );
-        }
+    let (DataType::List(list_field) | DataType::LargeList(list_field)) =
+        list_array.data_type()
+    else {
+        return exec_err!(
+            "Expected List or LargeList data type, got {:?}",
+            list_array.data_type()
+        );
     };
 
     let list_offsets = list_array.offsets();
-    let first_offset = list_offsets[0].to_usize().unwrap();
-    let last_offset = list_offsets[list_offsets.len() - 1].to_usize().unwrap();
-    let values_range_len = last_offset - first_offset;
+    let (first_offset, values_range_len) = offset_span(list_offsets);
     let values_slice = list_array.values().slice(first_offset, values_range_len);
     let original_data = values_slice.to_data();
     let mut offsets = Vec::<OffsetSize>::with_capacity(list_array.len() + 1);
@@ -610,7 +606,7 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
         let num_to_remove = row_remove_bits.count_set_bits();
 
         if num_to_remove == 0 {
-            mutable.extend(0, start, end);
+            mutable.try_extend(0, start, end)?;
             offsets.push(offsets[row_index] + OffsetSize::usize_as(row_len));
             continue;
         }
@@ -626,7 +622,7 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
         for remove_pos in row_remove_bits.set_indices() {
             let abs_pos = start + remove_pos;
             if abs_pos > prev_end {
-                mutable.extend(0, prev_end, abs_pos);
+                mutable.try_extend(0, prev_end, abs_pos)?;
                 copied += abs_pos - prev_end;
             }
             prev_end = abs_pos + 1;
@@ -637,7 +633,7 @@ fn general_remove_with_scalar<OffsetSize: OffsetSizeTrait>(
         }
         // Copy the remaining tail after the last removal
         if prev_end < end {
-            mutable.extend(0, prev_end, end);
+            mutable.try_extend(0, prev_end, end)?;
             copied += end - prev_end;
         }
 
@@ -1170,5 +1166,14 @@ mod tests {
             }
             _ => panic!("Expected ColumnarValue::Array"),
         }
+    }
+
+    #[test]
+    fn test_sliced_capacity() -> datafusion_common::Result<()> {
+        crate::utils::tests::check_sliced_list_behavior(|input| {
+            let element: ArrayRef =
+                Arc::new(arrow::array::Float64Array::from(vec![3.0; input.len()]));
+            super::array_remove_internal(input, &element, &vec![Some(1); input.len()])
+        })
     }
 }

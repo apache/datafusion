@@ -73,9 +73,15 @@ async fn explain_analyze_baseline_metrics() {
     );
 
     {
-        let expected_batch_count_after_repartition =
+        let expected_repartition_batch_count =
             if cfg!(not(feature = "force_hash_collisions")) {
                 "output_batches=3"
+            } else {
+                "output_batches=1"
+            };
+        let expected_final_aggregate_batch_count =
+            if cfg!(not(feature = "force_hash_collisions")) {
+                "output_batches=4"
             } else {
                 "output_batches=1"
             };
@@ -85,7 +91,7 @@ async fn explain_analyze_baseline_metrics() {
             "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
             "metrics=[output_rows=5, elapsed_compute=",
             "output_bytes=",
-            expected_batch_count_after_repartition
+            expected_final_aggregate_batch_count
         );
 
         assert_metrics!(
@@ -93,7 +99,7 @@ async fn explain_analyze_baseline_metrics() {
             "RepartitionExec: partitioning=Hash([c1@0], 3), input_partitions=3",
             "metrics=[output_rows=5, elapsed_compute=",
             "output_bytes=",
-            expected_batch_count_after_repartition
+            expected_repartition_batch_count
         );
 
         assert_metrics!(
@@ -101,7 +107,7 @@ async fn explain_analyze_baseline_metrics() {
             "ProjectionExec: expr=[]",
             "metrics=[output_rows=5, elapsed_compute=",
             "output_bytes=",
-            expected_batch_count_after_repartition
+            expected_final_aggregate_batch_count
         );
     }
 
@@ -772,12 +778,12 @@ async fn test_physical_plan_display_indent() {
 
     assert_snapshot!(
         actual,
-        @r"
+        @"
     SortPreservingMergeExec: [the_min@2 DESC], fetch=10
-      SortExec: TopK(fetch=10), expr=[the_min@2 DESC], preserve_partitioning=[true]
-        ProjectionExec: expr=[c1@0 as c1, max(aggregate_test_100.c12)@1 as max(aggregate_test_100.c12), min(aggregate_test_100.c12)@2 as the_min]
+      ProjectionExec: expr=[c1@0 as c1, max(aggregate_test_100.c12)@1 as max(aggregate_test_100.c12), min(aggregate_test_100.c12)@2 as the_min]
+        SortExec: TopK(fetch=10), expr=[min(aggregate_test_100.c12)@2 DESC], preserve_partitioning=[true]
           AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)]
-            RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000
+            RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000, max_aggr_partition_factor=16
               AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)]
                 FilterExec: c12@1 < 10
                   RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1
@@ -827,7 +833,7 @@ async fn test_physical_plan_display_indent_multi_children() {
 }
 
 #[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
+#[cfg_attr(coverage, ignore)]
 async fn csv_explain_analyze() {
     // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
     let ctx = SessionContext::new();
@@ -849,7 +855,7 @@ async fn csv_explain_analyze() {
 }
 
 #[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
+#[cfg_attr(coverage, ignore)]
 async fn csv_explain_analyze_order_by() {
     let ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&ctx).await;
@@ -866,7 +872,7 @@ async fn csv_explain_analyze_order_by() {
 }
 
 #[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
+#[cfg_attr(coverage, ignore)]
 async fn parquet_explain_analyze() {
     let ctx = SessionContext::new();
     register_alltypes_parquet(&ctx).await;
@@ -889,6 +895,7 @@ async fn parquet_explain_analyze() {
     );
     assert_contains!(&formatted, "output_rows_skew=0%");
     assert_contains!(&formatted, "scan_efficiency_ratio=13.99%");
+    assert_contains!(&formatted, "bytes_processed=");
 
     // The order of metrics is expected to be the same as the actual pruning order
     // (file-> row-group -> page)
@@ -907,13 +914,71 @@ async fn parquet_explain_analyze() {
     );
 }
 
+/// The Parquet scan's `elapsed_compute` must cover decoding, which dominates a
+/// full scan, and not only the projection of batches that are already decoded.
+/// See <https://github.com/apache/datafusion/issues/18195>.
+#[tokio::test]
+async fn parquet_scan_elapsed_compute_includes_decoding() -> Result<()> {
+    use datafusion::datasource::source::DataSourceExec;
+    use datafusion_common::instant::Instant;
+    use std::time::Duration;
+
+    // A single partition keeps the scan on one thread, so its compute time
+    // cannot exceed the wall time of the query.
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
+    let tmp_dir = TempDir::new()?;
+    let path = tmp_dir.path().join("data.parquet");
+    let path = path.to_str().unwrap();
+    ctx.sql(&format!(
+        "COPY (SELECT value AS a, value % 1000 AS b, cast(value AS varchar) AS c \
+         FROM generate_series(1, 1000000)) TO '{path}' STORED AS PARQUET"
+    ))
+    .await?
+    .collect()
+    .await?;
+    ctx.register_parquet("t", path, ParquetReadOptions::default())
+        .await?;
+
+    let plan = ctx
+        .sql("SELECT * FROM t")
+        .await?
+        .create_physical_plan()
+        .await?;
+    let start = Instant::now();
+    collect(Arc::clone(&plan), ctx.task_ctx()).await?;
+    let wall_time = start.elapsed();
+
+    assert!(
+        plan.is::<DataSourceExec>(),
+        "expected a bare scan, got:\n{}",
+        DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
+    );
+    let elapsed_compute = Duration::from_nanos(
+        plan.metrics()
+            .unwrap()
+            .aggregate_by_name()
+            .elapsed_compute()
+            .unwrap() as u64,
+    );
+
+    // Reading a local file is cheap next to decoding it, so compute should be
+    // most of the wall time. A timer that misses decoding reports well under 1%.
+    assert!(
+        elapsed_compute * 4 > wall_time,
+        "elapsed_compute {elapsed_compute:?} should be at least a quarter of the \
+         scan's wall time {wall_time:?}"
+    );
+    Ok(())
+}
+
 // This test reproduces the behavior described in
 // https://github.com/apache/datafusion/issues/16684 where projection
 // pushdown with recursive CTEs could fail to remove unused columns
 // (e.g. nested/recursive expansion causing full schema to be scanned).
 // Keeping this test ensures we don't regress that behavior.
 #[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
+#[cfg_attr(coverage, ignore)]
 async fn parquet_recursive_projection_pushdown() -> Result<()> {
     use parquet::arrow::arrow_writer::ArrowWriter;
     use parquet::file::properties::WriterProperties;
@@ -1030,7 +1095,7 @@ async fn parquet_recursive_projection_pushdown() -> Result<()> {
 }
 
 #[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
+#[cfg_attr(coverage, ignore)]
 async fn parquet_explain_analyze_verbose() {
     let ctx = SessionContext::new();
     register_alltypes_parquet(&ctx).await;
@@ -1047,7 +1112,7 @@ async fn parquet_explain_analyze_verbose() {
 }
 
 #[tokio::test]
-#[cfg_attr(tarpaulin, ignore)]
+#[cfg_attr(coverage, ignore)]
 async fn csv_explain_analyze_verbose() {
     // This test uses the execute function to run an actual plan under EXPLAIN VERBOSE ANALYZE
     let ctx = SessionContext::new();
@@ -1061,6 +1126,47 @@ async fn csv_explain_analyze_verbose() {
 
     let verbose_needle = "Output Rows";
     assert_contains!(formatted, verbose_needle);
+}
+
+#[tokio::test]
+#[cfg_attr(coverage, ignore)]
+async fn explain_analyze_aggregate_metrics_map_indices_to_expressions() {
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
+    register_aggregate_csv_by_sql(&ctx).await;
+
+    let query =
+        "SELECT c1, SUM(c5), SUM(c6), COUNT(c7) FROM aggregate_test_100 GROUP BY c1";
+    let normal = execute_to_batches(&ctx, &format!("EXPLAIN ANALYZE {query}")).await;
+    let normal = arrow::util::pretty::pretty_format_batches(&normal)
+        .unwrap()
+        .to_string();
+    assert_contains!(
+        normal.as_str(),
+        "aggr=[sum(aggregate_test_100.c5), sum(aggregate_test_100.c6), count(aggregate_test_100.c7)]"
+    );
+    assert_contains!(normal.as_str(), "agg_expr_0_arguments_time");
+    assert_contains!(normal.as_str(), "agg_expr_1_arguments_time");
+    assert_contains!(normal.as_str(), "agg_expr_2_arguments_time");
+    assert!(!normal.contains("aggregate="));
+
+    let verbose =
+        execute_to_batches(&ctx, &format!("EXPLAIN ANALYZE VERBOSE {query}")).await;
+    let verbose = arrow::util::pretty::pretty_format_batches(&verbose)
+        .unwrap()
+        .to_string();
+    assert_contains!(
+        verbose.as_str(),
+        "agg_expr_0_arguments_time{partition=0, aggregate=sum(aggregate_test_100.c5)}"
+    );
+    assert_contains!(
+        verbose.as_str(),
+        "agg_expr_1_arguments_time{partition=0, aggregate=sum(aggregate_test_100.c6)}"
+    );
+    assert_contains!(
+        verbose.as_str(),
+        "agg_expr_2_arguments_time{partition=0, aggregate=count(aggregate_test_100.c7)}"
+    );
 }
 
 #[tokio::test]

@@ -18,7 +18,6 @@
 //! This module contains computation kernels that are specific to
 //! datafusion and not (yet) targeted to  port upstream to arrow
 use arrow::array::*;
-use arrow::buffer::{MutableBuffer, NullBuffer};
 use arrow::compute::kernels::bitwise::{
     bitwise_and, bitwise_and_scalar, bitwise_or, bitwise_or_scalar, bitwise_shift_left,
     bitwise_shift_left_scalar, bitwise_shift_right, bitwise_shift_right_scalar,
@@ -27,9 +26,9 @@ use arrow::compute::kernels::bitwise::{
 use arrow::compute::kernels::boolean::not;
 use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scalar};
 use arrow::datatypes::DataType;
-use arrow::error::ArrowError;
 use datafusion_common::{Result, ScalarValue};
-use datafusion_common::{internal_err, plan_err};
+use datafusion_common::{exec_err, internal_err, plan_err};
+use datafusion_physical_expr_common::regex::explain_regexp_kernel_error;
 
 use std::sync::Arc;
 
@@ -161,111 +160,53 @@ create_left_integral_dyn_scalar_kernel!(
     bitwise_shift_left_scalar
 );
 
-/// Concatenates two `StringViewArray`s element-wise.
-/// If either element is `Null`, the result element is also `Null`.
-///
-/// # Errors
-/// - Returns an error if the input arrays have different lengths.
-/// - Returns an error if any concatenated string exceeds `u32::MAX` (≈4 GB) in length.
-pub fn concat_elements_utf8view(
-    left: &StringViewArray,
-    right: &StringViewArray,
-) -> std::result::Result<StringViewArray, ArrowError> {
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(format!(
-            "Arrays must have the same length: {} != {}",
-            left.len(),
-            right.len()
-        )));
+/// The SQL spelling of the operator, for error messages.
+fn operator_name(not_match: bool, case_insensitive: bool) -> &'static str {
+    match (not_match, case_insensitive) {
+        (false, false) => "~",
+        (false, true) => "~*",
+        (true, false) => "!~",
+        (true, true) => "!~*",
     }
-    let mut result = StringViewBuilder::with_capacity(left.len());
-
-    // Avoid reallocations by writing to a reused buffer (note we could be even
-    // more efficient by creating the view directly here and avoid the buffer
-    // but that would be more complex)
-    let mut buffer = String::new();
-
-    // Pre-compute combined null bitmap, so the per-row NULL check is more
-    // efficient
-    let nulls = NullBuffer::union(left.nulls(), right.nulls());
-
-    for i in 0..left.len() {
-        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
-            result.append_null();
-        } else {
-            let l = left.value(i);
-            let r = right.value(i);
-            buffer.clear();
-            buffer.push_str(l);
-            buffer.push_str(r);
-            result.try_append_value(&buffer)?;
-        }
-    }
-    Ok(result.finish())
-}
-
-/// Concatenates two `BinaryViewArray`s element-wise.
-/// If either element is `Null`, the result element is also `Null`.
-///
-/// # Errors
-/// - Returns an error if the input arrays have different lengths.
-/// - Returns an error if any concatenated string exceeds `u32::MAX` in length.
-pub fn concat_elements_binary_view_array(
-    left: &BinaryViewArray,
-    right: &BinaryViewArray,
-) -> std::result::Result<BinaryViewArray, ArrowError> {
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(format!(
-            "Arrays must have the same length: {} != {}",
-            left.len(),
-            right.len()
-        )));
-    }
-    let mut result = BinaryViewBuilder::with_capacity(left.len());
-
-    // Avoid reallocations by writing to a reused buffer (note we could be even
-    // more efficient by creating the view directly here and avoid the buffer
-    // but that would be more complex)
-    let mut buffer = MutableBuffer::new(0);
-
-    // Pre-compute combined null bitmap, so the per-row NULL check is more
-    // efficient
-    let nulls = NullBuffer::union(left.nulls(), right.nulls());
-
-    for i in 0..left.len() {
-        if nulls.as_ref().is_some_and(|n| n.is_null(i)) {
-            result.append_null();
-        } else {
-            let l = left.value(i);
-            let r = right.value(i);
-            buffer.clear();
-            buffer.extend_from_slice(l);
-            buffer.extend_from_slice(r);
-            // No try-version of append_value
-            result.try_append_value(&buffer)?;
-        }
-    }
-    Ok(result.finish())
 }
 
 /// Invoke a compute kernel on a pair of binary data arrays with flags
 macro_rules! regexp_is_match_flag {
     ($LEFT:expr, $RIGHT:expr, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$ARRAYTYPE>()
-            .expect("failed to downcast array");
-        let rr = $RIGHT
-            .as_any()
-            .downcast_ref::<$ARRAYTYPE>()
-            .expect("failed to downcast array");
+        // The analyzer coerces both operands to a common string type, but
+        // expressions that bypass it may still reach here with mismatched
+        // types, which must surface as an error rather than a panic.
+        let Some(ll) = $LEFT.as_any().downcast_ref::<$ARRAYTYPE>() else {
+            return exec_err!(
+                "failed to downcast array to {} for operation 'regex_match_dyn'",
+                stringify!($ARRAYTYPE)
+            );
+        };
+        let Some(rr) = $RIGHT.as_any().downcast_ref::<$ARRAYTYPE>() else {
+            return exec_err!(
+                "failed to downcast array to {} for operation 'regex_match_dyn'",
+                stringify!($ARRAYTYPE)
+            );
+        };
 
         let flag = if $FLAG {
             Some($ARRAYTYPE::from(vec!["i"; ll.len()]))
         } else {
             None
         };
-        let mut array = regexp_is_match(ll, rr, flag.as_ref())?;
+        // The kernel compiles the pattern of each row. A pattern that does
+        // not compile is explained only after the kernel has failed.
+        let mut array = regexp_is_match(ll, rr, flag.as_ref()).map_err(|error| {
+            explain_regexp_kernel_error(
+                operator_name($NOT, $FLAG),
+                error,
+                // The kernel compiles the pattern of a row only if that row
+                // has a value.
+                Some(ll as &dyn Array),
+                rr,
+                flag.as_ref().map(|flag| flag as &dyn Array),
+            )
+        })?;
         if $NOT {
             array = not(&array).unwrap();
         }
@@ -299,10 +240,12 @@ pub(crate) fn regex_match_dyn(
 /// Invoke a compute kernel on a data array and a scalar value with flag
 macro_rules! regexp_is_match_flag_scalar {
     ($LEFT:expr, $RIGHT:expr, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$ARRAYTYPE>()
-            .expect("failed to downcast array");
+        let Some(ll) = $LEFT.as_any().downcast_ref::<$ARRAYTYPE>() else {
+            return Some(exec_err!(
+                "failed to downcast array to {} for operation 'regex_match_dyn_scalar'",
+                stringify!($ARRAYTYPE)
+            ));
+        };
 
         if let Some(Some(string_value)) = $RIGHT.try_as_str() {
             let flag = $FLAG.then_some("i");
@@ -313,7 +256,22 @@ macro_rules! regexp_is_match_flag_scalar {
                     }
                     Ok(Arc::new(array))
                 }
-                Err(e) => internal_err!("failed to call 'regex_match_dyn_scalar' {}", e),
+                Err(error) => {
+                    // Describe the scalar pattern and flags as arrays of one
+                    // value, so that the failure is explained the same way as
+                    // on the paths that pass arrays.
+                    let patterns = StringArray::from(vec![string_value]);
+                    let flags = flag.map(|flag| StringArray::from(vec![flag]));
+                    Err(explain_regexp_kernel_error(
+                        operator_name($NOT, $FLAG),
+                        error,
+                        // The kernel compiles the one pattern up front,
+                        // whatever the values are.
+                        None,
+                        &patterns,
+                        flags.as_ref().map(|flags| flags as &dyn Array),
+                    ))
+                }
             }
         } else {
             internal_err!(
@@ -341,7 +299,8 @@ pub(crate) fn regex_match_dyn_scalar(
             regexp_is_match_flag_scalar!(left, right, LargeStringArray, not_match, flag)
         }
         DataType::Dictionary(_, _) => {
-            let values = left.as_any_dictionary().values();
+            let dictionary = left.as_any_dictionary();
+            let values = dictionary.values();
 
             match values.data_type() {
                 DataType::Utf8 => regexp_is_match_flag_scalar!(values, right, StringArray, not_match, flag),
@@ -351,16 +310,15 @@ pub(crate) fn regex_match_dyn_scalar(
                     "Data type {} not supported as a dictionary value type for operation 'regex_match_dyn_scalar' on string array",
                     other
                 ),
-            }.map(
-                // downcast_dictionary_array duplicates code per possible key type, so we aim to do all prep work before
-                |evaluated_values| downcast_dictionary_array! {
-                    left => {
-                        let unpacked_dict = evaluated_values.take_iter(left.keys().iter().map(|opt| opt.map(|v| v as _))).collect::<BooleanArray>();
-                        Arc::new(unpacked_dict) as ArrayRef
-                    },
-                    _ => unreachable!(),
-                }
-            )
+            }
+            .and_then(|evaluated_values| {
+                // Expand back to rows while preserving nulls from both keys and values.
+                Ok(arrow::compute::take(
+                    evaluated_values.as_ref(),
+                    dictionary.keys(),
+                    None,
+                )?)
+            })
         }
         other => internal_err!(
             "Data type {} not supported for operation 'regex_match_dyn_scalar' on string array",

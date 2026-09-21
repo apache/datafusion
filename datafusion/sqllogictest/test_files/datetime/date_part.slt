@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -287,6 +287,15 @@ query I
 SELECT date_part('QUARTER', CAST('2000-01-01' AS DATE))
 ----
 1
+
+query IIII
+SELECT
+  date_part('QUARTERS', CAST('2000-01-01' AS DATE)),
+  date_part('ISOWEEK', CAST('2000-01-01' AS DATE)),
+  date_part('DAYOFYEAR', CAST('2000-01-01' AS DATE)),
+  date_part('DAYOFWEEK', CAST('2000-01-01' AS DATE))
+----
+1 52 1 6
 
 query I
 SELECT EXTRACT(quarter FROM to_timestamp('2020-09-08T12:00:00+00:00'))
@@ -837,6 +846,40 @@ query I
 SELECT extract(millisecond from arrow_cast('23:32:50.123456789'::time, 'Time64(Nanosecond)'))
 ----
 50123
+
+# date32 and date64
+
+statement ok
+CREATE TABLE source_dt AS
+with t as (values
+  ('1970-01-01'),
+  ('2020-06-02'),
+  ('2026-02-28'),
+  (NULL)
+)
+SELECT
+  arrow_cast(column1, 'Date32') as date32,
+  arrow_cast(column1, 'Date64') as date64,
+FROM t;
+
+query IIIIIIIIII
+SELECT date_part('year', date32), date_part('month', date32), date_part('week', date32), date_part('day', date32), date_part('hour', date32), date_part('minute', date32), date_part('second', date32), date_part('millisecond', date32), date_part('microsecond', date32), date_part('nanosecond', date32) FROM source_dt;
+----
+1970 1 1 1 0 0 0 0 0 0
+2020 6 23 2 0 0 0 0 0 0
+2026 2 9 28 0 0 0 0 0 0
+NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL
+
+query IIIIIIIIII
+SELECT date_part('year', date64), date_part('month', date64), date_part('week', date64), date_part('day', date64), date_part('hour', date64), date_part('minute', date64), date_part('second', date64), date_part('millisecond', date64), date_part('microsecond', date64), date_part('nanosecond', date64) FROM source_dt;
+----
+1970 1 1 1 0 0 0 0 0 0
+2020 6 23 2 0 0 0 0 0 0
+2026 2 9 28 0 0 0 0 0 0
+NULL NULL NULL NULL NULL NULL NULL NULL NULL NULL
+
+statement ok
+drop table source_dt;
 
 # just some floating point stuff happening in the result here
 query I
@@ -1816,3 +1859,81 @@ logical_plan
 physical_plan
 01)FilterExec: c@0 >= 2024-01-01 AND c@0 < 2025-01-01
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A bound whose January 1 falls outside the timestamp unit's range must leave the
+# predicate alone rather than rewriting it against a NULL bound.
+
+statement ok
+CREATE VIEW year_bound AS SELECT * FROM (VALUES
+  ('2020-06-01T12:00:00'::timestamp),
+  ('1995-06-01T12:00:00'::timestamp)) s(ts);
+
+query I
+SELECT count(*) FROM year_bound WHERE EXTRACT(YEAR FROM ts) < 9999;
+----
+2
+
+query I
+SELECT count(*) FROM year_bound WHERE EXTRACT(YEAR FROM ts) <= 2262;
+----
+2
+
+query I
+SELECT count(*) FROM year_bound WHERE EXTRACT(YEAR FROM ts) >= 1000 OR EXTRACT(YEAR FROM ts) = 2020;
+----
+2
+
+query IB rowsort
+SELECT EXTRACT(YEAR FROM ts), EXTRACT(YEAR FROM ts) < 9999 FROM year_bound;
+----
+1995 true
+2020 true
+
+# A bound inside the nanosecond range still rewrites as before.
+
+query I
+SELECT count(*) FROM year_bound WHERE EXTRACT(YEAR FROM ts) >= 1678;
+----
+2
+
+statement ok
+DROP VIEW year_bound;
+
+# Lima skipped midnight on 1994-01-01.
+statement ok
+CREATE TABLE year_bound_lima AS
+SELECT
+  arrow_cast(ts, 'Timestamp(Second, Some("America/Lima"))') AS ts_sec,
+  arrow_cast(ts, 'Timestamp(Millisecond, Some("America/Lima"))') AS ts_milli,
+  arrow_cast(ts, 'Timestamp(Microsecond, Some("America/Lima"))') AS ts_micro,
+  arrow_cast(ts, 'Timestamp(Nanosecond, Some("America/Lima"))') AS ts_nano
+FROM (VALUES
+  (NULL),
+  ('1994-01-01T04:59:59Z'),
+  ('1994-01-01T05:00:00Z')) AS input(ts);
+
+query PBBBB
+SELECT ts_nano,
+       EXTRACT(YEAR FROM ts_sec) = 1994,
+       EXTRACT(YEAR FROM ts_milli) = 1994,
+       EXTRACT(YEAR FROM ts_micro) = 1994,
+       EXTRACT(YEAR FROM ts_nano) = 1994
+FROM year_bound_lima
+ORDER BY ts_nano NULLS FIRST;
+----
+NULL NULL NULL NULL NULL
+1993-12-31T23:59:59-05:00 false false false false
+1994-01-01T01:00:00-04:00 true true true true
+
+query P
+SELECT ts_nano FROM year_bound_lima WHERE EXTRACT(YEAR FROM ts_nano) = 1994;
+----
+1994-01-01T01:00:00-04:00
+
+query I
+SELECT count(*) FROM year_bound_lima WHERE EXTRACT(YEAR FROM ts_nano) = 1993;
+----
+1
+
+statement ok
+DROP TABLE year_bound_lima;

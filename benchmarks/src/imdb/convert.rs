@@ -82,7 +82,7 @@ impl ConvertOpt {
 
             println!(
                 "Converting '{}' to {} files in directory '{}'",
-                &input_path, self.file_format, &output_path
+                input_path, self.file_format, output_path
             );
             match self.file_format.as_str() {
                 "csv" => {

@@ -67,12 +67,23 @@ pub trait PruningStatistics {
     /// returned array should have `null` in that row. If the minimum value is
     /// not known for any row, return `None`.
     ///
+    /// Each non-null entry must be a conservative lower bound for all non-null
+    /// values in its container, using Arrow's comparison order for the column
+    /// type. For strings, this is unsigned lexicographic UTF-8 byte order.
+    /// Bounds that cannot satisfy this contract must be reported as unknown.
+    /// Pruning relies on providers to uphold this contract; it does not validate
+    /// the ordering or bound guarantees of arbitrary statistics sources.
+    ///
     /// Note: the returned array must contain [`Self::num_containers`] rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef>;
 
     /// Return the maximum values for the named column, if known.
     ///
     /// See [`Self::min_values`] for when to return `None` and null values.
+    ///
+    /// Each non-null entry must be a conservative upper bound for all non-null
+    /// values in its container, using the comparison order described in
+    /// [`Self::min_values`].
     ///
     /// Note: the returned array must contain [`Self::num_containers`] rows
     fn max_values(&self, column: &Column) -> Option<ArrayRef>;
@@ -305,7 +316,7 @@ impl PruningStatistics for PartitionPruningStatistics {
 /// that has statistics of its columns.
 ///
 /// It is up to the caller to decide what each container represents. For
-/// example, they can come from a file (e.g. [`PartitionedFile`]) or a set of of
+/// example, they can come from a file (e.g. [`PartitionedFile`]) or a set of
 /// files (e.g. [`FileGroup`])
 ///
 /// [`PartitionedFile`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.PartitionedFile.html

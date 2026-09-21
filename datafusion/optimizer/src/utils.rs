@@ -29,7 +29,10 @@ use datafusion_common::{Column, DFSchema, Result, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{Exists, InSubquery, SetComparison};
 use datafusion_expr::expr_rewriter::replace_col;
-use datafusion_expr::{ColumnarValue, Expr, logical_plan::LogicalPlan};
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
+use datafusion_expr::{
+    ColumnarValue, DistinctHandling, Expr, Volatility, WriteOp, logical_plan::LogicalPlan,
+};
 use datafusion_physical_expr::create_physical_expr;
 use log::{debug, trace};
 use std::sync::Arc;
@@ -37,6 +40,62 @@ use std::sync::Arc;
 /// Re-export of `NamesPreserver` for backwards compatibility,
 /// as it was initially placed here and then moved elsewhere.
 pub use datafusion_expr::expr_rewriter::NamePreserver;
+
+/// Whether an expression is free of volatile scalar functions and subqueries.
+/// Subqueries are conservative barriers because their plans may contain
+/// volatile expressions that [`Expr::is_volatile`] does not visit.
+pub(crate) fn is_repeatable(expr: &Expr) -> bool {
+    !expr
+        .exists(|expr| {
+            Ok(expr.is_volatile_node()
+                || matches!(
+                    expr,
+                    Expr::Exists(_)
+                        | Expr::InSubquery(_)
+                        | Expr::SetComparison(_)
+                        | Expr::ScalarSubquery(_)
+                ))
+        })
+        .expect("expression traversal is infallible")
+}
+
+/// Whether an aggregate can safely ignore repeated input rows. This holds when
+/// the function declares [`DistinctHandling::Insensitive`], or when it is
+/// called with `DISTINCT` and declares [`DistinctHandling::Sensitive`], so that
+/// its accumulator removes the repeated rows itself. Arguments, FILTER, and
+/// ORDER BY must also be repeatable: MIN(random()) still observes repetitions.
+pub(crate) fn is_duplicate_insensitive_aggregate(mut expr: &Expr) -> bool {
+    while let Expr::Alias(alias) = expr {
+        expr = &alias.expr;
+    }
+    let Expr::AggregateFunction(aggregate) = expr else {
+        return false;
+    };
+    let ignores_duplicates = match aggregate.func.distinct_handling() {
+        DistinctHandling::Insensitive => true,
+        DistinctHandling::Sensitive => aggregate.params.distinct,
+        // The accumulator does not implement `DISTINCT` and may silently
+        // compute the non-distinct answer, so the flag proves nothing.
+        // Variants added in the future are treated the same way.
+        _ => false,
+    };
+    // Expr::is_volatile checks scalar functions only; check the aggregate
+    // function's own volatility separately.
+    ignores_duplicates
+        && aggregate.func.signature().volatility != Volatility::Volatile
+        && is_repeatable(expr)
+}
+
+/// Return the expression schema for a MERGE DML node.
+pub(crate) fn merge_into_schema(plan: &LogicalPlan) -> Result<Option<DFSchema>> {
+    let LogicalPlan::Dml(dml) = plan else {
+        return Ok(None);
+    };
+    let WriteOp::MergeInto(_) = &dml.op else {
+        return Ok(None);
+    };
+    dml.merge_schema().map(Some)
+}
 
 /// Invokes `f` with the index, within `schema`, of every column referenced by
 /// `expr` — including columns reached through a correlated subquery's outer
@@ -140,7 +199,7 @@ impl<'a> ColumnReference<'a> {
 }
 
 /// Returns references to all columns in the schema
-pub(crate) fn schema_columns<'a>(schema: &'a DFSchema) -> HashSet<ColumnReference<'a>> {
+pub(crate) fn schema_columns(schema: &DFSchema) -> HashSet<ColumnReference<'_>> {
     schema
         .iter()
         .flat_map(|(qualifier, field)| {
@@ -233,8 +292,13 @@ fn evaluate_expr_with_null_column<'a>(
 
     let replaced_predicate = replace_col(predicate, &join_cols_to_replace)?;
     let coerced_predicate = coerce(replaced_predicate, &input_schema)?;
-    create_physical_expr(&coerced_predicate, &input_schema, &execution_props)?
-        .evaluate(&input_batch)
+    create_physical_expr(
+        &coerced_predicate,
+        &input_schema,
+        &execution_props,
+        &PhysicalPlanningContext::default(),
+    )?
+    .evaluate(&input_batch)
 }
 
 fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
@@ -245,7 +309,34 @@ fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_expr::{Operator, binary_expr, case, col, in_list, is_null, lit};
+    use crate::test::test_table_scan_with_name;
+    use datafusion_common::Spans;
+    use datafusion_expr::expr::SetQuantifier;
+    use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
+    use datafusion_expr::{
+        Operator, Subquery, binary_expr, case, col, in_list, is_null, lit,
+    };
+
+    #[test]
+    fn set_comparison_is_not_repeatable() {
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_name("t2").unwrap())
+            .project(vec![col("b")])
+            .unwrap()
+            .build()
+            .unwrap();
+        let expr = Expr::SetComparison(SetComparison::new(
+            Box::new(col("a")),
+            Subquery {
+                subquery: Arc::new(subquery),
+                outer_ref_columns: vec![],
+                spans: Spans::new(),
+            },
+            Operator::Gt,
+            SetQuantifier::Any,
+        ));
+
+        assert!(!is_repeatable(&expr));
+    }
 
     #[test]
     fn expr_is_restrict_null_predicate() -> Result<()> {

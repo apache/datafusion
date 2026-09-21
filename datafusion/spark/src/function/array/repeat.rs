@@ -74,9 +74,11 @@ impl ScalarUDFImpl for SparkArrayRepeat {
 
         // Coerce the second argument to Int64/UInt64 if it's a numeric type
         let second = match second_type {
-            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
-                DataType::Int64
-            }
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Null => DataType::Int64,
             DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
                 DataType::UInt64
             }

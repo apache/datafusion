@@ -123,6 +123,8 @@ impl PhysicalExpr for Literal {
             sort_properties: SortProperties::Singleton,
             range: Interval::try_new(self.value().clone(), self.value().clone())?,
             preserves_lex_ordering: true,
+            // Vacuously true: a literal has no ordered inputs.
+            strictly_order_preserving: true,
         })
     }
 

@@ -21,6 +21,7 @@ use arrow::array::{
     Array, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, AsArray, GenericListArray,
     OffsetSizeTrait, PrimitiveBuilder, downcast_primitive,
 };
+use arrow::buffer::NullBuffer;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeList, List};
 use datafusion_common::Result;
@@ -263,7 +264,7 @@ fn primitive_array_min_max<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
             match len {
                 0 => None,
                 _ if len < ARROW_COMPUTE_THRESHOLD => {
-                    scalar_min_max::<T>(values_slice, values_nulls, start, end, is_min)
+                    scalar_min_max(values_slice, values_nulls, start, end, is_min)
                 }
                 _ => {
                     let slice = values_array.slice(start, len);
@@ -285,14 +286,14 @@ fn primitive_array_min_max<O: OffsetSizeTrait, T: ArrowPrimitiveType>(
 /// Computes min or max for a single list row by directly scanning a slice of
 /// the flat values buffer.
 #[inline]
-fn scalar_min_max<T: ArrowPrimitiveType>(
-    values_slice: &[T::Native],
-    values_nulls: Option<&arrow::buffer::NullBuffer>,
+fn scalar_min_max<N: ArrowNativeTypeOp>(
+    values_slice: &[N],
+    values_nulls: Option<&NullBuffer>,
     start: usize,
     end: usize,
     is_min: bool,
-) -> Option<T::Native> {
-    let mut best: Option<T::Native> = None;
+) -> Option<N> {
+    let mut best: Option<N> = None;
     for (i, &val) in values_slice[start..end].iter().enumerate() {
         if let Some(nulls) = values_nulls
             && !nulls.is_valid(start + i)

@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field, Fields};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
 use arrow::array::{
     Array, ArrayRef, BooleanArray, Float64Array, GenericListArray, NullBufferBuilder,
@@ -30,10 +30,62 @@ use datafusion_common::cast::{
     as_fixed_size_list_array, as_float64_array, as_generic_list_array,
     as_large_list_array, as_large_list_view_array, as_list_array, as_list_view_array,
 };
+use datafusion_common::utils::offset_span_len;
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 
 use datafusion_expr::ColumnarValue;
 use itertools::Itertools as _;
+
+/// Computes the return type of a function that produces a list with the same
+/// inner field as `array_type`, plus an element that may be null when
+/// `element_nullable` is set.
+///
+/// The inner field is carried over from `array_type` verbatim — name, metadata
+/// and all — so that the type promised at planning time is the one the kernel
+/// can actually build. Its nullability is widened when `element_nullable` is
+/// set, because a nullable new element may introduce nulls into a list whose
+/// elements were previously declared non-nullable.
+///
+/// Types other than `List`/`LargeList` are returned unchanged; callers handle
+/// `Null` themselves and the kernels reject anything else at execution time.
+pub(crate) fn list_type_with_element(
+    array_type: &DataType,
+    element_nullable: bool,
+) -> DataType {
+    match array_type {
+        DataType::List(field) => {
+            DataType::List(widen_nullability(field, element_nullable))
+        }
+        DataType::LargeList(field) => {
+            DataType::LargeList(widen_nullability(field, element_nullable))
+        }
+        other => other.clone(),
+    }
+}
+
+fn widen_nullability(field: &FieldRef, nullable: bool) -> FieldRef {
+    if nullable && !field.is_nullable() {
+        Arc::new(field.as_ref().clone().with_nullable(true))
+    } else {
+        Arc::clone(field)
+    }
+}
+
+/// Extracts the inner field of a `List`/`LargeList` type, so that a kernel can
+/// build a list array carrying exactly that field.
+///
+/// Used both on an input's type and on the type promised by
+/// [`ScalarUDFImpl::return_field_from_args`]. Anything else is a bug in the
+/// caller's dispatch, hence the internal error; `context` names the kernel so
+/// that error identifies where the bad dispatch happened.
+///
+/// [`ScalarUDFImpl::return_field_from_args`]: datafusion_expr::ScalarUDFImpl::return_field_from_args
+pub(crate) fn list_inner_field(context: &str, data_type: &DataType) -> Result<FieldRef> {
+    match data_type {
+        DataType::List(field) | DataType::LargeList(field) => Ok(Arc::clone(field)),
+        other => internal_err!("{context} got unexpected data type: {other}"),
+    }
+}
 
 pub(crate) fn check_datatypes(name: &str, args: &[&ArrayRef]) -> Result<()> {
     let data_type = args[0].data_type();
@@ -226,9 +278,8 @@ pub(crate) fn compare_element_to_list(
 pub(crate) fn compute_array_dims(
     arr: Option<ArrayRef>,
 ) -> Result<Option<Vec<Option<u64>>>> {
-    let mut value = match arr {
-        Some(arr) => arr,
-        None => return Ok(None),
+    let Some(mut value) = arr else {
+        return Ok(None);
     };
     if value.is_empty() {
         return Ok(None);
@@ -359,8 +410,9 @@ where
 
     let row_nulls = NullBuffer::union(lhs.nulls(), rhs.nulls());
 
-    let mut out_values: Vec<f64> = Vec::with_capacity(lhs_values.len());
-    let mut out_inner_nulls = NullBufferBuilder::new(lhs_values.len());
+    let capacity = offset_span_len(lhs.offsets());
+    let mut out_values: Vec<f64> = Vec::with_capacity(capacity);
+    let mut out_inner_nulls = NullBufferBuilder::new(capacity);
     let mut out_offsets = Vec::<O>::with_capacity(lhs.len() + 1);
     out_offsets.push(O::zero());
 
@@ -413,8 +465,51 @@ where
     )?))
 }
 
+/// Returns a power of two that brings the largest magnitude in `values` close
+/// to 1, so that squaring the scaled values neither overflows nor underflows.
+///
+/// Squaring a large finite value overflows (`1e200 * 1e200` is infinity) and
+/// squaring a small one underflows (`1e-200 * 1e-200` is zero), even when the
+/// norm itself is representable. The factor is a power of two, so scaling is
+/// exact whenever the scaled value is normal. A value that becomes subnormal is
+/// rounded, so an `array_normalize` element that is itself subnormal can differ
+/// from the unscaled result in its last bit.
+///
+/// Returns `None` when `values` is empty, all zero, or contains an infinity.
+/// The unscaled computation already gives the expected result for those inputs.
+/// NaN values are ignored, and the scaled computation still produces NaN.
+pub(crate) fn norm_scale(values: impl IntoIterator<Item = f64>) -> Option<f64> {
+    // No early return inside the loop, so that it vectorizes. `f64::max` skips
+    // NaN, so only an infinity can make `max` non-finite.
+    let mut max = 0.0_f64;
+    for value in values {
+        max = max.max(value.abs());
+    }
+    if max == 0.0 || !max.is_finite() {
+        return None;
+    }
+    // Unbiased exponent of `max`. Subnormal values store a biased exponent of 0,
+    // so clamp them to the smallest normal exponent.
+    let exponent = ((max.to_bits() >> 52) as i32 - 1023).max(-1022);
+    Some(2.0_f64.powi(-exponent))
+}
+
+/// Returns whether a sum of `len` squares computed without scaling may be
+/// wrong because a square overflowed or underflowed, in which case it should be
+/// recomputed with the factor from [`norm_scale`].
+///
+/// An overflowing square makes the sum infinite. An underflowing square is off
+/// by at most half the smallest subnormal value, so `len` of them move the sum
+/// by at most `len * 2^-1075`. A sum of at least `len * 2^-1012` is therefore
+/// off by less than `2^-63` of itself, far below its rounding precision.
+pub(crate) fn needs_norm_scale(sum_of_squares: f64, len: usize) -> bool {
+    // 2^-1012 = 2^10 * f64::MIN_POSITIVE
+    let min_unscaled = 1024.0 * len as f64 * f64::MIN_POSITIVE;
+    !(min_unscaled..f64::INFINITY).contains(&sum_of_squares)
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use arrow::array::ListArray;
     use arrow::datatypes::Int64Type;
@@ -467,5 +562,94 @@ mod tests {
             datafusion_common::utils::list_ndims(res[0].data_type()),
             expected_dim
         );
+    }
+
+    #[test]
+    fn norm_scale_brings_largest_magnitude_close_to_one() {
+        assert_eq!(norm_scale([3e200, -4e200]), Some(2.0_f64.powi(-666)));
+        assert_eq!(norm_scale([3.0, 4.0]), Some(0.25));
+        // 2^-1023 and 2^1022, pinned by bit pattern rather than computed
+        assert_eq!(norm_scale([f64::MAX]), Some(f64::from_bits(1 << 51)));
+        assert_eq!(
+            norm_scale([f64::MIN_POSITIVE / 4.0]),
+            Some(f64::from_bits(2045 << 52))
+        );
+        // NaN is ignored; the scaled computation still produces NaN
+        assert_eq!(norm_scale([f64::NAN, 3.0, 4.0]), Some(0.25));
+    }
+
+    #[test]
+    fn norm_scale_skips_inputs_the_unscaled_computation_handles() {
+        assert_eq!(norm_scale([]), None);
+        assert_eq!(norm_scale([0.0, -0.0]), None);
+        assert_eq!(norm_scale([f64::NAN, 0.0]), None);
+        assert_eq!(norm_scale([f64::INFINITY, 1.0]), None);
+        assert_eq!(norm_scale([1.0, f64::NAN, f64::NEG_INFINITY]), None);
+    }
+
+    #[test]
+    fn needs_norm_scale_only_for_sums_that_may_have_overflowed_or_underflowed() {
+        assert!(!needs_norm_scale(1.0, 1));
+        assert!(!needs_norm_scale(f64::MAX, 1));
+        // The square of 1e-100 is 1e-200, which is far from underflowing.
+        assert!(!needs_norm_scale(1e-200, 1));
+        assert!(!needs_norm_scale(1e-200, 1536));
+
+        let min_unscaled = 1024.0 * f64::MIN_POSITIVE;
+        assert!(!needs_norm_scale(min_unscaled, 1));
+        assert!(needs_norm_scale(min_unscaled, 2));
+        assert!(needs_norm_scale(min_unscaled / 2.0, 1));
+
+        assert!(needs_norm_scale(0.0, 1));
+        assert!(needs_norm_scale(f64::INFINITY, 1));
+        assert!(needs_norm_scale(f64::NAN, 1));
+    }
+
+    /// Tests the array function supplied via `run` on small slices of a large
+    /// list, checking two independent properties:
+    ///
+    /// 1. Correctness: results match those from equivalent inputs with compact
+    ///    child storage.
+    /// 2. Capacity: output buffers retain little memory, catching reservations
+    ///    based on the full backing child array rather than the visible slice.
+    pub(crate) fn check_sliced_list_behavior(
+        run: impl Fn(&ArrayRef) -> Result<ArrayRef>,
+    ) -> Result<()> {
+        let padding = 8192;
+        let visible = vec![Some(3.0), None, Some(4.0), Some(9.0), Some(9.0)];
+        let values = Float64Array::from_iter(
+            std::iter::repeat_n(Some(1.0), padding)
+                .chain(visible.iter().copied())
+                .chain(std::iter::repeat_n(Some(1.0), padding)),
+        );
+        let field = Arc::new(Field::new_list_field(DataType::Float64, true));
+        let input = ListArray::new(
+            Arc::clone(&field),
+            OffsetBuffer::from_lengths([padding, 3, 0, 2, padding]),
+            Arc::new(values),
+            Some(NullBuffer::from(vec![true, true, true, false, true])),
+        );
+        let compact = ListArray::new(
+            Arc::clone(&field),
+            OffsetBuffer::from_lengths([3, 0, 2]),
+            Arc::new(Float64Array::from(visible)),
+            Some(NullBuffer::from(vec![true, true, false])),
+        );
+        for data_type in [input.data_type().clone(), DataType::LargeList(field)] {
+            let input = arrow::compute::cast(&input, &data_type)?;
+            let compact = arrow::compute::cast(&compact, &data_type)?;
+            // Middle slice, empty slice, empty row, and null row with child data.
+            for (offset, len) in [(0, 3), (0, 0), (1, 1), (2, 1)] {
+                let result = run(&input.slice(1 + offset, len))?;
+                let expected = run(&compact.slice(offset, len))?;
+                assert_eq!(result.as_ref(), expected.as_ref());
+                assert!(
+                    result.get_buffer_memory_size() < 1024,
+                    "{data_type}: {} bytes for {len} rows",
+                    result.get_buffer_memory_size()
+                );
+            }
+        }
+        Ok(())
     }
 }

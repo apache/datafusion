@@ -275,7 +275,9 @@ fn reorder_array_by_source_runs(
     let array_data = array.to_data();
     let mut mutable = MutableArrayData::new(vec![&array_data], false, num_rows);
     for run in source_runs {
-        mutable.extend(0, run.start, run.start + run.len);
+        mutable
+            .try_extend(0, run.start, run.start + run.len)
+            .expect("validated partition run must fit the source array");
     }
     make_array(mutable.freeze())
 }

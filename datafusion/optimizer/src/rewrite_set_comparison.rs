@@ -19,6 +19,7 @@
 //! `> ALL`) into boolean expressions built from `EXISTS` subqueries
 //! that capture SQL three-valued logic.
 
+use crate::utils::merge_into_schema;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, ExprSchema, Result, ScalarValue, plan_err};
@@ -44,7 +45,10 @@ impl RewriteSetComparison {
     }
 
     fn rewrite_plan(&self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
-        let schema = merge_schema(&plan.inputs());
+        let mut schema = merge_schema(&plan.inputs());
+        if let Some(merge_schema) = merge_into_schema(&plan)? {
+            schema = merge_schema;
+        }
         plan.map_expressions(|expr| {
             expr.transform_up(|expr| rewrite_set_comparison(expr, &schema))
         })

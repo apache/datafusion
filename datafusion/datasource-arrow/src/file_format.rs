@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
-use arrow::ipc::convert::fb_to_schema;
+use arrow::ipc::convert::try_fb_to_schema;
 use arrow::ipc::reader::{FileReader, StreamReader};
 use arrow::ipc::writer::IpcWriteOptions;
 use arrow::ipc::{CompressionType, root_as_message};
@@ -350,13 +350,13 @@ impl DisplayAs for ArrowFileSink {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "ArrowFileSink(file_groups=",)?;
+                write!(f, "ArrowFileSink(file_groups=")?;
                 FileGroupDisplay(&self.config.file_group).fmt_as(t, f)?;
                 write!(f, ")")
             }
             DisplayFormatType::TreeRender => {
                 writeln!(f, "format: arrow")?;
-                write!(f, "file={}", &self.config.original_url)
+                write!(f, "file={}", self.config.original_url)
             }
         }
     }
@@ -380,7 +380,7 @@ impl DataSink for ArrowFileSink {
 // Custom implementation of inferring schema. Should eventually be moved upstream to arrow-rs.
 // See <https://github.com/apache/arrow-rs/issues/5021>
 
-const ARROW_MAGIC: [u8; 6] = [b'A', b'R', b'R', b'O', b'W', b'1'];
+const ARROW_MAGIC: [u8; 6] = *b"ARROW1";
 const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
 
 async fn infer_stream_schema(
@@ -481,7 +481,9 @@ async fn infer_stream_schema(
     let fb_schema = message.header_as_schema().ok_or_else(|| {
         ArrowError::IpcError("Unable to read IPC message schema".to_string())
     })?;
-    let schema = fb_to_schema(fb_schema);
+    let schema = try_fb_to_schema(fb_schema).map_err(|err| {
+        ArrowError::IpcError(format!("Unable to convert IPC schema: {err:?}"))
+    })?;
 
     Ok(Arc::new(schema))
 }
@@ -548,6 +550,7 @@ mod tests {
         AggregateUDF, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF,
     };
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_session::{CatalogProviderList, EmptyCatalogProviderList};
     use object_store::{chunked::ChunkedStore, memory::InMemory};
 
     struct MockSession {
@@ -572,6 +575,10 @@ mod tests {
 
         fn config(&self) -> &SessionConfig {
             &self.config
+        }
+
+        fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
+            Arc::new(EmptyCatalogProviderList)
         }
 
         async fn create_physical_plan(

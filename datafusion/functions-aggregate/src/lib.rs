@@ -65,6 +65,7 @@
 #[macro_use]
 pub mod macros;
 
+pub mod any_value;
 pub mod approx_distinct;
 pub mod approx_median;
 pub mod approx_percentile_cont;
@@ -102,6 +103,7 @@ use std::sync::Arc;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
+    pub use super::any_value::any_value;
     pub use super::approx_distinct::approx_distinct;
     pub use super::approx_median::approx_median;
     pub use super::approx_percentile_cont::approx_percentile_cont;
@@ -147,6 +149,7 @@ pub mod expr_fn {
 /// Returns all default aggregate functions
 pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
     vec![
+        any_value::any_value_udaf(),
         array_agg::array_agg_udaf(),
         first_last::first_value_udaf(),
         first_last::last_value_udaf(),

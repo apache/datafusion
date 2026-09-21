@@ -235,12 +235,12 @@ impl PruningJoinHashMap {
             .collect::<Vec<_>>();
 
         // Remove the keys from the map.
-        removable_keys.into_iter().for_each(|hash_value| {
+        for hash_value in removable_keys {
             self.map
                 .find_entry(hash_value, |(hash, _)| hash_value == *hash)
                 .unwrap()
                 .remove();
-        });
+        }
 
         // Shrink the map if necessary.
         self.shrink_if_necessary(shrink_factor);
@@ -727,9 +727,8 @@ impl StreamJoinMetrics {
             input_rows,
         };
 
-        let stream_memory_usage = MetricBuilder::new(metrics)
-            .with_category(MetricCategory::Bytes)
-            .gauge("stream_memory_usage", partition);
+        let stream_memory_usage =
+            MetricBuilder::new(metrics).bytes_gauge("stream_memory_usage", partition);
 
         Self {
             left,

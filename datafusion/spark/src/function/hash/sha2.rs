@@ -15,11 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, AsArray, BinaryArrayType, Int32Array, StringArray};
+use arrow::array::{
+    ArrayRef, AsArray, BinaryArrayType, BinaryBuilder, Int32Array, StringArray,
+};
 use arrow::datatypes::{DataType, Int32Type};
 use datafusion_common::types::{
     NativeType, logical_binary, logical_int32, logical_string,
 };
+use datafusion_common::utils::hex::{HexCase, encode_bytes_into};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::{
@@ -112,22 +115,58 @@ impl ScalarUDFImpl for SparkSha2 {
                     224 => {
                         let mut digest = sha2::Sha224::default();
                         digest.update(bytes);
-                        Some(hex_encode(digest.finalize()))
+                        let mut hex_bytes = Vec::with_capacity(56);
+                        encode_bytes_into(
+                            &digest.finalize(),
+                            HexCase::Lower,
+                            &mut hex_bytes,
+                        );
+                        Some(
+                            String::from_utf8(hex_bytes)
+                                .expect("ASCII hex is valid UTF-8"),
+                        )
                     }
                     0 | 256 => {
                         let mut digest = sha2::Sha256::default();
                         digest.update(bytes);
-                        Some(hex_encode(digest.finalize()))
+                        let mut hex_bytes = Vec::with_capacity(64);
+                        encode_bytes_into(
+                            &digest.finalize(),
+                            HexCase::Lower,
+                            &mut hex_bytes,
+                        );
+                        Some(
+                            String::from_utf8(hex_bytes)
+                                .expect("ASCII hex is valid UTF-8"),
+                        )
                     }
                     384 => {
                         let mut digest = sha2::Sha384::default();
                         digest.update(bytes);
-                        Some(hex_encode(digest.finalize()))
+                        let mut hex_bytes = Vec::with_capacity(96);
+                        encode_bytes_into(
+                            &digest.finalize(),
+                            HexCase::Lower,
+                            &mut hex_bytes,
+                        );
+                        Some(
+                            String::from_utf8(hex_bytes)
+                                .expect("ASCII hex is valid UTF-8"),
+                        )
                     }
                     512 => {
                         let mut digest = sha2::Sha512::default();
                         digest.update(bytes);
-                        Some(hex_encode(digest.finalize()))
+                        let mut hex_bytes = Vec::with_capacity(128);
+                        encode_bytes_into(
+                            &digest.finalize(),
+                            HexCase::Lower,
+                            &mut hex_bytes,
+                        );
+                        Some(
+                            String::from_utf8(hex_bytes)
+                                .expect("ASCII hex is valid UTF-8"),
+                        )
                     }
                     _ => None,
                 };
@@ -215,49 +254,52 @@ where
     BinaryArrType: BinaryArrayType<'a>,
     I: Iterator<Item = Option<i32>>,
 {
-    let array = values
+    let mut byte_builder = BinaryBuilder::with_capacity(values.len(), values.len() * 2);
+    let mut hex_bytes = Vec::with_capacity(128);
+
+    values
         .iter()
         .zip(bit_lengths)
-        .map(|(value, bit_length)| match (value, bit_length) {
-            (Some(value), Some(224)) => {
-                let mut digest = sha2::Sha224::default();
-                digest.update(value);
-                Some(hex_encode(digest.finalize()))
+        .for_each(|(value, bit_length)| {
+            match (value, bit_length) {
+                (Some(value), Some(224)) => {
+                    let mut digest = sha2::Sha224::default();
+                    digest.update(value);
+                    hex_bytes.clear();
+                    encode_bytes_into(&digest.finalize(), HexCase::Lower, &mut hex_bytes);
+                    byte_builder.append_value(&hex_bytes);
+                }
+                (Some(value), Some(0 | 256)) => {
+                    let mut digest = sha2::Sha256::default();
+                    digest.update(value);
+                    hex_bytes.clear();
+                    encode_bytes_into(&digest.finalize(), HexCase::Lower, &mut hex_bytes);
+                    byte_builder.append_value(&hex_bytes);
+                }
+                (Some(value), Some(384)) => {
+                    let mut digest = sha2::Sha384::default();
+                    digest.update(value);
+                    hex_bytes.clear();
+                    encode_bytes_into(&digest.finalize(), HexCase::Lower, &mut hex_bytes);
+                    byte_builder.append_value(&hex_bytes);
+                }
+                (Some(value), Some(512)) => {
+                    let mut digest = sha2::Sha512::default();
+                    digest.update(value);
+                    hex_bytes.clear();
+                    encode_bytes_into(&digest.finalize(), HexCase::Lower, &mut hex_bytes);
+                    byte_builder.append_value(&hex_bytes);
+                }
+                // Unknown bit-lengths go to null, same as in Spark
+                _ => byte_builder.append_null(),
             }
-            (Some(value), Some(0 | 256)) => {
-                let mut digest = sha2::Sha256::default();
-                digest.update(value);
-                Some(hex_encode(digest.finalize()))
-            }
-            (Some(value), Some(384)) => {
-                let mut digest = sha2::Sha384::default();
-                digest.update(value);
-                Some(hex_encode(digest.finalize()))
-            }
-            (Some(value), Some(512)) => {
-                let mut digest = sha2::Sha512::default();
-                digest.update(value);
-                Some(hex_encode(digest.finalize()))
-            }
-            // Unknown bit-lengths go to null, same as in Spark
-            _ => None,
-        })
-        .collect::<StringArray>();
-    Arc::new(array)
-}
+        });
 
-const HEX_CHARS: [u8; 16] = *b"0123456789abcdef";
-
-#[inline]
-fn hex_encode<T: AsRef<[u8]>>(data: T) -> String {
-    let bytes = data.as_ref();
-    let mut out = Vec::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        let hi = b >> 4;
-        let lo = b & 0x0F;
-        out.push(HEX_CHARS[hi as usize]);
-        out.push(HEX_CHARS[lo as usize]);
-    }
-    // SAFETY: out contains only ASCII
-    unsafe { String::from_utf8_unchecked(out) }
+    let str_array = unsafe {
+        let binary_array = byte_builder.finish();
+        let (offsets, values, nulls) = binary_array.into_parts();
+        // Safe: `encode_bytes_into` only writes ASCII hex digits, so the bytes are valid UTF-8.
+        StringArray::new_unchecked(offsets, values, nulls)
+    };
+    Arc::new(str_array)
 }

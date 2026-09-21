@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -76,22 +76,34 @@ SELECT regexp_count('abc', '', 5);
 ----
 0
 
-statement error
-External error: query failed: DataFusion error: Arrow error: Compute error: regexp_count() requires start to be 1 based
+query I
+SELECT regexp_count('', '');
+----
+1
+
+query I
+SELECT regexp_count('😀', '', 2);
+----
+1
+
+query I
+SELECT regexp_count('abc', 'x*', 4);
+----
+1
+
+statement error DataFusion error: Execution error: regexp_count\(\) requires start to be 1 based
 SELECT regexp_count('123123123123', '123', 0);
 
-statement error
-External error: query failed: DataFusion error: Arrow error: Compute error: regexp_count() requires start to be 1 based
+statement error DataFusion error: Execution error: regexp_count\(\) requires start to be 1 based
 SELECT regexp_count('123123123123', '123', -3);
 
-statement error
-External error: statement failed: DataFusion error: Arrow error: Compute error: regexp_count() does not support global flag
+statement error DataFusion error: Error during planning: regexp_count\(\) does not support the "global" option
 SELECT regexp_count('123123123123', '123', 1, 'g');
 
 query I
 SELECT regexp_count(str, '\w') from regexp_test_data;
 ----
-0
+NULL
 3
 3
 3
@@ -107,7 +119,7 @@ SELECT regexp_count(str, '\w') from regexp_test_data;
 query I
 SELECT regexp_count(str, '\w{2}', start) from regexp_test_data;
 ----
-0
+NULL
 1
 1
 1
@@ -123,7 +135,7 @@ SELECT regexp_count(str, '\w{2}', start) from regexp_test_data;
 query I
 SELECT regexp_count(str, 'ab', 1, 'i') from regexp_test_data;
 ----
-0
+NULL
 1
 1
 1
@@ -140,7 +152,7 @@ SELECT regexp_count(str, 'ab', 1, 'i') from regexp_test_data;
 query I
 SELECT regexp_count(str, pattern) from regexp_test_data;
 ----
-0
+NULL
 1
 1
 0
@@ -156,7 +168,7 @@ SELECT regexp_count(str, pattern) from regexp_test_data;
 query I
 SELECT regexp_count(str, pattern, start) from regexp_test_data;
 ----
-0
+NULL
 1
 1
 0
@@ -172,35 +184,35 @@ SELECT regexp_count(str, pattern, start) from regexp_test_data;
 query I
 SELECT regexp_count(str, pattern, start, flags) from regexp_test_data;
 ----
-0
+NULL
 1
 1
 1
-0
-0
-0
-0
-1
-1
-1
-1
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
 
 # test type coercion
 query I
 SELECT regexp_count(arrow_cast(str, 'Utf8'), arrow_cast(pattern, 'LargeUtf8'),  arrow_cast(start, 'Int32'), flags) from regexp_test_data;
 ----
-0
+NULL
 1
 1
 1
-0
-0
-0
-0
-1
-1
-1
-1
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
 
 # test string views
 
@@ -211,7 +223,7 @@ SELECT arrow_cast(str, 'Utf8View') as str, arrow_cast(pattern, 'Utf8View') as pa
 query I
 SELECT regexp_count(str, '\w') from t_stringview;
 ----
-0
+NULL
 3
 3
 3
@@ -227,7 +239,7 @@ SELECT regexp_count(str, '\w') from t_stringview;
 query I
 SELECT regexp_count(str, '\w{2}', start) from t_stringview;
 ----
-0
+NULL
 1
 1
 1
@@ -243,7 +255,7 @@ SELECT regexp_count(str, '\w{2}', start) from t_stringview;
 query I
 SELECT regexp_count(str, 'ab', 1, 'i') from t_stringview;
 ----
-0
+NULL
 1
 1
 1
@@ -260,7 +272,7 @@ SELECT regexp_count(str, 'ab', 1, 'i') from t_stringview;
 query I
 SELECT regexp_count(str, pattern) from t_stringview;
 ----
-0
+NULL
 1
 1
 0
@@ -276,7 +288,7 @@ SELECT regexp_count(str, pattern) from t_stringview;
 query I
 SELECT regexp_count(str, pattern, start) from t_stringview;
 ----
-0
+NULL
 1
 1
 0
@@ -292,57 +304,74 @@ SELECT regexp_count(str, pattern, start) from t_stringview;
 query I
 SELECT regexp_count(str, pattern, start, flags) from t_stringview;
 ----
-0
+NULL
 1
 1
 1
-0
-0
-0
-0
-1
-1
-1
-1
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
 
 # test type coercion
 query I
 SELECT regexp_count(arrow_cast(str, 'Utf8'), arrow_cast(pattern, 'LargeUtf8'),  arrow_cast(start, 'Int32'), flags) from t_stringview;
 ----
-0
+NULL
 1
 1
 1
-0
-0
-0
-0
-1
-1
-1
-1
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
 
-# NULL tests
+# NULL tests: like PostgreSQL, a NULL in any argument produces a NULL result
 
 query I
 SELECT regexp_count(NULL, NULL);
 ----
-0
+NULL
 
 query I
 SELECT regexp_count(NULL, 'a');
 ----
-0
+NULL
 
 query I
 SELECT regexp_count('a', NULL);
 ----
-0
+NULL
 
 query I
 SELECT regexp_count(NULL, NULL, NULL, NULL);
 ----
-0
+NULL
+
+query I
+SELECT regexp_count('abc', 'b', NULL);
+----
+NULL
+
+query I
+SELECT regexp_count('abc', 'b', 1, NULL);
+----
+NULL
+
+# NULL start position in one row of a column
+query I
+SELECT regexp_count(v, 'b', s) FROM (VALUES ('abc', 1), ('abcb', NULL)) AS t(v, s);
+----
+1
+NULL
 
 statement ok
 CREATE TABLE empty_table (str varchar, pattern varchar, start int, flags varchar);
@@ -357,10 +386,36 @@ INSERT INTO empty_table VALUES ('a', NULL, 1, 'i'), (NULL, 'a', 1, 'i'), (NULL, 
 query I
 SELECT regexp_count(str, pattern, start, flags) from empty_table;
 ----
-0
-0
-0
-0
+NULL
+NULL
+NULL
+NULL
+
+#
+# Invalid patterns and flags report the reason from the regex parser
+#
+
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error:
+SELECT regexp_count(str, 'a(b') from empty_table;
+
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error:
+SELECT regexp_count('abc', 'a(b');
+
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error:
+SELECT regexp_count('abc', 'a', 1, 'z');
+
+query error DataFusion error: Error during planning: regexp_count\(\) does not support the "global" option
+SELECT regexp_count('abc', 'a', 1, 'g');
+
+# A pattern that varies per row is reported in the same way.
+statement ok
+CREATE TABLE t_invalid_pattern(str varchar, pattern varchar) AS VALUES ('abc', 'a(b');
+
+query error DataFusion error: Execution error: Regular expression did not compile: regex parse error:
+SELECT regexp_count(str, pattern) FROM t_invalid_pattern;
+
+statement ok
+DROP TABLE t_invalid_pattern;
 
 statement ok
 drop table t_stringview;

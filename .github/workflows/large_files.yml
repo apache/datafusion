@@ -32,14 +32,10 @@ jobs:
   check-files:
     runs-on: ubuntu-slim
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
       - name: Check size of new Git objects
-        env:
-          # 1.5 MB ought to be enough for anybody.
-          # TODO in case we may want to consciously commit a bigger file to the repo without using Git LFS we may disable the check e.g. with a label
-          MAX_FILE_SIZE_BYTES: 1572864
         shell: bash
         run: |
           if [ "${{ github.event_name }}" = "merge_group" ]; then
@@ -51,18 +47,4 @@ jobs:
             base_sha="${{ github.event.pull_request.base.sha }}"
             head_sha="${{ github.event.pull_request.head.sha }}"
           fi
-          git rev-list --objects ${base_sha}..${head_sha} \
-            > pull-request-objects.txt
-          exit_code=0
-          while read -r id path; do
-            # Skip objects which are not files (commits, trees)
-            if [ ! -z "${path}" ]; then
-              size="$(git cat-file -s "${id}")"
-              if [ "${size}" -gt "${MAX_FILE_SIZE_BYTES}" ]; then
-                exit_code=1
-                echo "Object ${id} [${path}] has size ${size}, exceeding ${MAX_FILE_SIZE_BYTES} limit." >&2
-                echo "::error file=${path}::File ${path} has size ${size}, exceeding ${MAX_FILE_SIZE_BYTES} limit."
-              fi
-            fi
-          done < pull-request-objects.txt
-          exit "${exit_code}"
+          ./ci/scripts/check_large_files.sh --base "${base_sha}" --head "${head_sha}"

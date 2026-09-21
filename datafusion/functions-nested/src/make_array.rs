@@ -37,6 +37,7 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
 };
+use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_macros::user_doc;
 use itertools::Itertools as _;
 
@@ -50,7 +51,7 @@ make_udf_expr_and_func!(
 #[user_doc(
     doc_section(label = "Array Functions"),
     description = "Returns an array using the specified input expressions.",
-    syntax_example = "make_array(expression1[, ..., expression_n])",
+    syntax_example = "make_array([expression1, ..., expression_n])",
     sql_example = r#"```sql
 > select make_array(1, 2, 3, 4, 5);
 +----------------------------------------------------------+
@@ -111,6 +112,11 @@ impl ScalarUDFImpl for MakeArray {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
+    }
+
+    fn strictly_order_preserving(&self, _inputs: &[ExprProperties]) -> Result<bool> {
+        // Not strictly order preserving since null input does not correspond to null output
+        Ok(false)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -224,9 +230,9 @@ pub fn array_array<O: OffsetSizeTrait>(
                 && !arg.is_null(row_idx)
                 && arg.is_valid(row_idx)
             {
-                mutable.extend(arr_idx, row_idx, row_idx + 1);
+                mutable.try_extend(arr_idx, row_idx, row_idx + 1)?;
             } else {
-                mutable.extend_nulls(1);
+                mutable.try_extend_nulls(1)?;
             }
         }
         offsets.push(O::usize_as(mutable.len()));

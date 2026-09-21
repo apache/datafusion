@@ -43,9 +43,11 @@ use datafusion_physical_plan::joins::utils::{
     ColumnIndex, calculate_join_output_ordering,
 };
 use datafusion_physical_plan::joins::{HashJoinExec, SortMergeJoinExec};
-use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
@@ -77,10 +79,45 @@ impl Default for ParentRequirements {
 
 pub type SortPushDown = PlanContext<ParentRequirements>;
 
+/// Number of input rows `plan` needs from its children in order to produce
+/// the rows its parent will consume.
+///
+/// `parent_fetch` is the fetch a parent imposes on `plan`'s *output*
+/// (`ParentRequirements::fetch`). It bounds `plan.fetch()` directly because
+/// both count output rows, so the effective output fetch is
+/// `min(plan.fetch(), parent_fetch)`.
+///
+/// The input fetch is that output fetch for every operator except
+/// [`GlobalLimitExec`], which discards `skip` rows first and therefore needs
+/// `skip` more input rows. `skip` must be added *after* taking the minimum:
+/// `min(fetch + skip, parent_fetch)` would be too small whenever the parent
+/// fetch is the tighter bound. Using the bare `fetch` would be wrong too, as
+/// it would turn `LIMIT 10 OFFSET 5` into `TopK(10)` below the limit, i.e. 5
+/// result rows.
+///
+/// `skip` and `fetch` are independent `usize`s, so their sum can overflow. Like
+/// [`combine_limit`], we saturate: `usize::MAX` input rows is never a smaller
+/// bound than the real one, so the pushed-down fetch stays correct.
+///
+/// [`combine_limit`]: datafusion_common::utils::combine_limit
+fn input_fetch(
+    plan: &Arc<dyn ExecutionPlan>,
+    parent_fetch: Option<usize>,
+) -> Option<usize> {
+    let fetch = min_fetch(plan.fetch(), parent_fetch)?;
+    let skip = plan
+        .downcast_ref::<GlobalLimitExec>()
+        .map_or(0, |limit| limit.skip());
+    Some(fetch.saturating_add(skip))
+}
+
 /// Assigns the ordering requirement of the root node to the its children.
 pub fn assign_initial_requirements(sort_push_down: &mut SortPushDown) {
     let reqs = sort_push_down.plan.required_input_ordering();
-    let dists = sort_push_down.plan.required_input_distribution();
+    let dists = sort_push_down
+        .plan
+        .input_distribution_requirements()
+        .into_per_child();
     for (idx, (child, requirement)) in
         sort_push_down.children.iter_mut().zip(reqs).enumerate()
     {
@@ -111,15 +148,91 @@ fn min_fetch(f1: Option<usize>, f2: Option<usize>) -> Option<usize> {
     }
 }
 
+/// Returns whether a fetch on `plan` can also be applied to each child.
+fn can_push_fetch_through(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.supports_limit_pushdown()
+        && matches!(plan.cardinality_effect(), CardinalityEffect::Equal)
+}
+
+/// Returns a plan when the fast path for an already-satisfied ordering can also
+/// preserve `parent_fetch` at the current node.
+fn try_preserve_fetch_for_satisfied_plan(
+    plan: &Arc<dyn ExecutionPlan>,
+    parent_fetch: Option<usize>,
+) -> Option<Arc<dyn ExecutionPlan>> {
+    let Some(parent_fetch) = parent_fetch else {
+        return Some(Arc::clone(plan));
+    };
+    let fetch = min_fetch(plan.fetch(), Some(parent_fetch));
+
+    if plan.fetch() == fetch {
+        return Some(Arc::clone(plan));
+    }
+
+    plan.with_fetch(fetch)
+}
+
+/// Preserves a fetch above an already ordered plan while satisfying the
+/// required distribution.
+fn preserve_fetch_above_ordered_plan(
+    mut node: SortPushDown,
+    ordering: LexOrdering,
+    fetch: usize,
+    required_distribution: &Distribution,
+) -> SortPushDown {
+    // The new limit carries the fetch, so it is no longer pending on the
+    // wrapped plan.
+    node.data.fetch = None;
+
+    let input_has_multiple_partitions =
+        node.plan.output_partitioning().partition_count() > 1;
+    let input = Arc::clone(&node.plan);
+
+    let limit: Arc<dyn ExecutionPlan> = if input_has_multiple_partitions {
+        let mut limit = LocalLimitExec::new(input, fetch);
+        limit.set_required_ordering(Some(ordering.clone()));
+        Arc::new(limit)
+    } else {
+        let mut limit = GlobalLimitExec::new(input, 0, Some(fetch));
+        limit.set_required_ordering(Some(ordering.clone()));
+        Arc::new(limit)
+    };
+    let limit_node = PlanContext::new(limit, ParentRequirements::default(), vec![node]);
+
+    if input_has_multiple_partitions
+        && matches!(required_distribution, Distribution::SinglePartition)
+    {
+        let merge = SortPreservingMergeExec::new(ordering, Arc::clone(&limit_node.plan))
+            .with_fetch(Some(fetch));
+        PlanContext::new(
+            Arc::new(merge),
+            ParentRequirements::default(),
+            vec![limit_node],
+        )
+    } else {
+        limit_node
+    }
+}
+
 /// Returns the stricter of two distribution requirements.
 /// `SinglePartition` is the strictest.
+#[expect(
+    deprecated,
+    reason = "HashPartitioned is accepted during the KeyPartitioned migration"
+)]
 fn stronger_distribution(a: &Distribution, b: &Distribution) -> Distribution {
     match (a, b) {
         (Distribution::SinglePartition, _) | (_, Distribution::SinglePartition) => {
             Distribution::SinglePartition
         }
-        (Distribution::HashPartitioned(_), _) => a.clone(),
-        (_, Distribution::HashPartitioned(_)) => b.clone(),
+        (Distribution::HashPartitioned(exprs), _)
+        | (Distribution::KeyPartitioned(exprs), _) => {
+            Distribution::KeyPartitioned(exprs.clone())
+        }
+        (_, Distribution::HashPartitioned(exprs))
+        | (_, Distribution::KeyPartitioned(exprs)) => {
+            Distribution::KeyPartitioned(exprs.clone())
+        }
         _ => Distribution::UnspecifiedDistribution,
     }
 }
@@ -155,7 +268,10 @@ fn pushdown_sorts_helper(
         }
         sort_push_down.plan = plan;
         // No ordering is being pushed; use each child's own distribution requirement
-        let dists = sort_push_down.plan.required_input_distribution();
+        let dists = sort_push_down
+            .plan
+            .input_distribution_requirements()
+            .into_per_child();
         for (idx, child) in sort_push_down.children.iter_mut().enumerate() {
             child.data.distribution_requirement = dists
                 .get(idx)
@@ -228,11 +344,21 @@ fn pushdown_sorts_helper(
         }
     }
 
+    let can_push_fetch_to_children = can_push_fetch_through(&plan);
     sort_push_down.plan = plan;
-    if satisfy_parent {
+    let plan_with_preserved_fetch = if satisfy_parent {
+        try_preserve_fetch_for_satisfied_plan(&sort_push_down.plan, parent_fetch)
+    } else {
+        None
+    };
+    if let Some(plan) = plan_with_preserved_fetch {
+        sort_push_down.plan = plan;
         // For non-sort operators which satisfy ordering:
         let reqs = sort_push_down.plan.required_input_ordering();
-        let dists = sort_push_down.plan.required_input_distribution();
+        let dists = sort_push_down
+            .plan
+            .input_distribution_requirements()
+            .into_per_child();
 
         // If this node already outputs single partition, don't push SinglePartition
         // requirement to children (they're below the merge point).
@@ -242,12 +368,19 @@ fn pushdown_sorts_helper(
             } else {
                 parent_distribution.clone()
             };
+        // A fetch retained by the current node is the pushdown boundary unless
+        // the original node can safely pass the limit through.
+        let child_fetch = if can_push_fetch_to_children {
+            parent_fetch
+        } else {
+            None
+        };
 
         for (idx, (child, order)) in
             sort_push_down.children.iter_mut().zip(reqs).enumerate()
         {
             child.data.ordering_requirement = order;
-            child.data.fetch = min_fetch(parent_fetch, child.data.fetch);
+            child.data.fetch = min_fetch(child_fetch, child.data.fetch);
             child.data.distribution_requirement = stronger_distribution(
                 &effective_parent_dist,
                 dists
@@ -263,8 +396,11 @@ fn pushdown_sorts_helper(
         // For operators that can take a sort pushdown, continue with updated
         // requirements. If this node already outputs single partition (e.g. SPM),
         // don't push SinglePartition to children.
-        let current_fetch = sort_push_down.plan.fetch();
-        let dists = sort_push_down.plan.required_input_distribution();
+        let current_fetch = input_fetch(&sort_push_down.plan, parent_fetch);
+        let dists = sort_push_down
+            .plan
+            .input_distribution_requirements()
+            .into_per_child();
         let effective_dist =
             if sort_push_down.plan.output_partitioning().partition_count() == 1 {
                 Distribution::UnspecifiedDistribution
@@ -275,7 +411,7 @@ fn pushdown_sorts_helper(
             sort_push_down.children.iter_mut().zip(adjusted).enumerate()
         {
             child.data.ordering_requirement = order;
-            child.data.fetch = min_fetch(current_fetch, parent_fetch);
+            child.data.fetch = current_fetch;
             child.data.distribution_requirement = stronger_distribution(
                 &effective_dist,
                 dists
@@ -284,6 +420,22 @@ fn pushdown_sorts_helper(
             );
         }
         sort_push_down.data.ordering_requirement = None;
+    } else if satisfy_parent && let Some(fetch) = parent_fetch {
+        // Use the plan's concrete ordering when the requirement leaves sort
+        // options unspecified. If there is none, the requirement is satisfied
+        // by constants, so either direction is valid.
+        let ordering = sort_push_down
+            .plan
+            .output_ordering()
+            .cloned()
+            .unwrap_or_else(|| parent_requirement.into_single().into());
+        sort_push_down = preserve_fetch_above_ordered_plan(
+            sort_push_down,
+            ordering,
+            fetch,
+            &parent_distribution,
+        );
+        assign_initial_requirements(&mut sort_push_down);
     } else {
         // Can not push down requirements, add new `SortExec` (distribution-aware):
         sort_push_down = add_sort_above_with_distribution(
@@ -304,14 +456,13 @@ fn pushdown_requirement_to_children(
     parent_required: OrderingRequirements,
     parent_fetch: Option<usize>,
 ) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
-    // If there is a limit on the parent plan we cannot push it down through operators that change the cardinality.
-    // E.g. consider if LIMIT 2 is applied below a FilteExec that filters out 1/2 of the rows we'll end up with 1 row instead of 2.
-    // If the LIMIT is applied after the FilterExec and the FilterExec returns > 2 rows we'll end up with 2 rows (correct).
-    if parent_fetch.is_some() && !plan.supports_limit_pushdown() {
-        return Ok(None);
-    }
-    // Note: we still need to check the cardinality effect of the plan here, because the
-    // limit pushdown is not always safe, even if the plan supports it. Here's an example:
+    // A parent fetch can be pushed through a plan only if the plan explicitly
+    // supports limit pushdown and does not change cardinality. For example, if
+    // LIMIT 2 is applied below a FilterExec that removes half the rows, only one
+    // row may remain. Applied after the filter, it correctly returns two rows
+    // when at least two are available.
+    //
+    // Checking `supports_limit_pushdown()` alone is not enough. For example:
     //
     // UnionExec advertises `supports_limit_pushdown() == true` because it can
     // forward a LIMIT k to each of its children—i.e. apply “LIMIT k” separately
@@ -325,16 +476,11 @@ fn pushdown_requirement_to_children(
     //   — Global LIMIT: take the first 3 rows from (A ∪ B) after merging.
     //   — Pushed down: take 3 from A, 3 from B, then merge → up to 6 rows!
     //
-    // That’s why we still block on cardinality: even though UnionExec can
+    // That’s why we also require equal cardinality: even though UnionExec can
     // push a LIMIT to its children, its GreaterEqual effect means it cannot
     // preserve the global TopK semantics.
-    if parent_fetch.is_some() {
-        match plan.cardinality_effect() {
-            CardinalityEffect::Equal => {
-                // safe: only true sources (e.g. CoalesceBatchesExec, ProjectionExec) pass
-            }
-            _ => return Ok(None),
-        }
+    if parent_fetch.is_some() && !can_push_fetch_through(plan) {
+        return Ok(None);
     }
 
     let maintains_input_order = plan.maintains_input_order();
@@ -346,7 +492,20 @@ fn pushdown_requirement_to_children(
             return Ok(None);
         };
         match determine_children_requirement(&parent_required, &child_req, child_plan) {
-            RequirementsCompatibility::Satisfy => Ok(Some(vec![Some(child_req)])),
+            RequirementsCompatibility::Satisfy => {
+                // Window input requirements may be empty or constant-only.
+                // Such requirements do not guarantee the parent's output ordering, so
+                // keep the sort above the window unless the window output is known
+                // to satisfy it.
+                if !plan
+                    .equivalence_properties()
+                    .ordering_satisfy_requirement(parent_required.first().clone())?
+                {
+                    return Ok(None);
+                }
+
+                Ok(Some(vec![Some(child_req)]))
+            }
             RequirementsCompatibility::Compatible(adjusted) => {
                 // If parent requirements are more specific than output ordering
                 // of the window plan, then we can deduce that the parent expects
@@ -354,7 +513,7 @@ fn pushdown_requirement_to_children(
                 // that's the case, we block the pushdown of sort operation.
                 if !plan
                     .equivalence_properties()
-                    .ordering_satisfy_requirement(parent_required.into_single())?
+                    .ordering_satisfy_requirement(parent_required.first().clone())?
                 {
                     return Ok(None);
                 }
@@ -387,14 +546,34 @@ fn pushdown_requirement_to_children(
         // Push down through operator with fetch when:
         // - requirement is aligned with output ordering
         // - it preserves ordering during execution
+        //
+        // A `ProjectionExec` reports a `fetch()` forwarded from its input and
+        // can renumber/reorder columns, so the requirement (expressed in the
+        // projection's output schema) must be remapped into the child schema
+        // before being pushed down — forwarding it unchanged would let a key
+        // such as `score@1` (valid in the output schema) refer to a different
+        // column in the child schema, producing a `SortExec` whose key points
+        // at the wrong column ("does not satisfy order requirements ...
+        // Child-0 order: []"). If a required column maps to a computed
+        // (non-`Column`) projection expression it cannot be expressed below the
+        // projection, so the sort is kept above it.
+        let child_required =
+            if let Some(projection) = plan.downcast_ref::<ProjectionExec>() {
+                match remap_requirement_through_projection(projection, &parent_required) {
+                    Some(remapped) => remapped,
+                    None => return Ok(None),
+                }
+            } else {
+                parent_required.clone()
+            };
         let Some(ordering) = plan.properties().output_ordering() else {
-            return Ok(Some(vec![Some(parent_required)]));
+            return Ok(Some(vec![Some(child_required)]));
         };
         if plan.properties().eq_properties.requirements_compatible(
             parent_required.first().clone(),
             ordering.clone().into(),
         ) {
-            Ok(Some(vec![Some(parent_required)]))
+            Ok(Some(vec![Some(child_required)]))
         } else {
             Ok(None)
         }
@@ -439,12 +618,12 @@ fn pushdown_requirement_to_children(
         }
     } else if let Some(aggregate_exec) = plan.downcast_ref::<AggregateExec>() {
         handle_aggregate_pushdown(aggregate_exec, parent_required)
+    } else if let Some(projection_exec) = plan.downcast_ref::<ProjectionExec>() {
+        handle_projection_pushdown(projection_exec, &parent_required)
     } else if maintains_input_order.is_empty()
         || !maintains_input_order.iter().any(|o| *o)
         || plan.is::<RepartitionExec>()
         || plan.is::<FilterExec>()
-        // TODO: Add support for Projection push down
-        || plan.is::<ProjectionExec>()
         || pushdown_would_violate_requirements(&parent_required, plan.as_ref())
     {
         // If the current plan is a leaf node or can not maintain any of the input ordering, can not pushed down requirements.
@@ -471,7 +650,51 @@ fn pushdown_requirement_to_children(
     } else {
         handle_custom_pushdown(plan, parent_required, &maintains_input_order)
     }
-    // TODO: Add support for Projection push down
+}
+
+/// Remap an ordering requirement expressed in a [`ProjectionExec`]'s output
+/// schema into its child (input) schema.
+///
+/// Every alternative requirement is remapped independently, and the
+/// hard/soft-ness of the original [`OrderingRequirements`] is preserved. An
+/// alternative that references a computed (non-[`Column`]) projection
+/// expression cannot be expressed in the child schema and is dropped; if every
+/// alternative drops out, this returns `None` (and pushdown is declined, i.e.
+/// the sort is kept above the projection).
+fn remap_requirement_through_projection(
+    projection: &ProjectionExec,
+    parent_required: &OrderingRequirements,
+) -> Option<OrderingRequirements> {
+    let exprs = projection.expr();
+    let (alternatives, soft) = parent_required.clone().into_alternatives();
+    let remapped = alternatives
+        .iter()
+        .filter_map(|req| remap_lex_requirement_through_projection(exprs, req));
+    OrderingRequirements::new_alternatives(remapped, soft)
+}
+
+/// Remap a single [`LexRequirement`] expressed in a [`ProjectionExec`]'s output
+/// schema into its child (input) schema.
+///
+/// Each requirement column at output index `i` is rewritten to the column the
+/// projection produces at that index (`projection.expr()[i]`). Returns `None`
+/// if any required column maps to a computed (non-[`Column`]) projection
+/// expression, since that ordering cannot be expressed in the child schema.
+fn remap_lex_requirement_through_projection(
+    exprs: &[ProjectionExpr],
+    req: &LexRequirement,
+) -> Option<LexRequirement> {
+    let mut child_reqs = Vec::with_capacity(req.len());
+    for sort_req in req.iter() {
+        let col = sort_req.expr.downcast_ref::<Column>()?;
+        let proj_expr = exprs.get(col.index())?;
+        let child_col = proj_expr.expr.downcast_ref::<Column>()?;
+        child_reqs.push(PhysicalSortRequirement::new(
+            Arc::new(child_col.clone()),
+            sort_req.options,
+        ));
+    }
+    LexRequirement::new(child_reqs)
 }
 
 /// Try to push sorting through  [`AggregateExec`]
@@ -717,7 +940,7 @@ fn expr_source_side(
                         }
                         false
                     });
-                };
+                }
                 if !(valid_left || valid_right) {
                     return None;
                 }
@@ -855,7 +1078,7 @@ fn handle_custom_pushdown(
 }
 
 // For hash join we only maintain the input order for the right child
-// for join type: Inner, Right, RightSemi, RightAnti
+// for join type: Inner, Right, RightSemi, RightAnti, RightMark
 fn handle_hash_join(
     plan: &HashJoinExec,
     parent_required: OrderingRequirements,
@@ -884,12 +1107,11 @@ fn handle_hash_join(
     } else {
         column_indices.iter().collect()
     };
-    let len_of_left_fields = projected_indices
-        .iter()
-        .filter(|ci| ci.side == JoinSide::Left)
-        .count();
-
-    let all_from_right_child = all_indices.iter().all(|i| *i >= len_of_left_fields);
+    let all_from_right_child = all_indices.iter().all(|i| {
+        projected_indices
+            .get(*i)
+            .is_some_and(|ci| ci.side == JoinSide::Right)
+    });
 
     let plan_children = plan.children();
 
@@ -947,7 +1169,7 @@ fn build_join_column_index(plan: &HashJoinExec) -> Vec<ColumnIndex> {
                 .chain(map_fields(plan.right().schema(), JoinSide::Right))
                 .collect::<Vec<_>>()
         }
-        JoinType::RightSemi | JoinType::RightAnti => {
+        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
             map_fields(plan.right().schema(), JoinSide::Right)
         }
         _ => unreachable!("unexpected join type: {}", plan.join_type()),
@@ -963,4 +1185,273 @@ enum RequirementsCompatibility {
     Compatible(Option<OrderingRequirements>),
     /// Requirements not compatible
     NonCompatible,
+}
+
+/// Attempts to push parent ordering requirements through a [`ProjectionExec`].
+///
+/// This is safe when every required sort expression refers to a projected output
+/// column that is backed by a simple input column. In that case, the requirement
+/// can be remapped from the projection output schema to the projection input
+/// schema while preserving the original sort options.
+///
+/// For example, a parent requirement on `a@2` over:
+///
+/// ```text
+/// ProjectionExec: expr=[c@2 as c, b@1 as b, a@0 as a]
+/// ```
+///
+/// is remapped to a child requirement on `a@0`.
+///
+/// The implementation is intentionally conservative: computed projection
+/// expressions and non-column sort expressions are not pushed down. Returning
+/// `Ok(None)` leaves sorting above the projection, preserving correctness.
+fn handle_projection_pushdown(
+    projection_exec: &ProjectionExec,
+    parent_required: &OrderingRequirements,
+) -> Result<Option<Vec<Option<OrderingRequirements>>>> {
+    // Only push sorting through pure column projections. Source-dependent
+    // expressions must stay close enough to the scan to be rewritten
+    // by the source and cannot be evaluated by [`ProjectionExec`].
+    if projection_exec
+        .expr()
+        .iter()
+        .any(|expr| !expr.expr.is::<Column>())
+    {
+        return Ok(None);
+    }
+
+    Ok(
+        remap_requirement_through_projection(projection_exec, parent_required)
+            .map(|requirements| vec![Some(requirements)]),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::PhysicalExpr;
+    use datafusion_physical_expr::expressions::{BinaryExpr, col};
+    use datafusion_physical_plan::empty::EmptyExec;
+    use datafusion_physical_plan::limit::GlobalLimitExec;
+
+    const DESC: SortOptions = SortOptions {
+        descending: true,
+        nulls_first: false,
+    };
+    const ASC: SortOptions = SortOptions {
+        descending: false,
+        nulls_first: true,
+    };
+
+    #[test]
+    fn input_fetch_adds_skip_for_global_limit() {
+        let input = Arc::new(EmptyExec::new(child_schema()));
+        let limit: Arc<dyn ExecutionPlan> =
+            Arc::new(GlobalLimitExec::new(input, 5, Some(10)));
+
+        assert_eq!(input_fetch(&limit, None), Some(15));
+    }
+
+    /// A parent fetch bounds the limit's *output*, so it is applied before
+    /// `skip` is added: `min(10, 3) + 5 = 8`, not `min(10 + 5, 3) = 3`.
+    #[test]
+    fn input_fetch_applies_parent_fetch_before_adding_skip() {
+        let input = Arc::new(EmptyExec::new(child_schema()));
+        let limit: Arc<dyn ExecutionPlan> =
+            Arc::new(GlobalLimitExec::new(input, 5, Some(10)));
+
+        assert_eq!(input_fetch(&limit, Some(3)), Some(8));
+        // A looser parent fetch changes nothing.
+        assert_eq!(input_fetch(&limit, Some(20)), Some(15));
+    }
+
+    /// `OFFSET` without `LIMIT` has no fetch of its own, but a parent fetch
+    /// still needs `skip` extra input rows.
+    #[test]
+    fn input_fetch_adds_skip_to_parent_fetch_without_own_fetch() {
+        let input = Arc::new(EmptyExec::new(child_schema()));
+        let limit: Arc<dyn ExecutionPlan> =
+            Arc::new(GlobalLimitExec::new(input, 5, None));
+
+        assert_eq!(input_fetch(&limit, None), None);
+        assert_eq!(input_fetch(&limit, Some(3)), Some(8));
+    }
+
+    /// `skip` and `fetch` are unrelated `usize`s, so `skip + fetch` can exceed
+    /// `usize::MAX`. Saturating keeps this at an (unreachable) upper bound
+    /// instead of panicking in debug builds or wrapping to a too-small fetch --
+    /// wrapping to 0 would push down a `TopK(fetch=0)` and drop every row.
+    #[test]
+    fn input_fetch_saturates_instead_of_overflowing() {
+        let input = Arc::new(EmptyExec::new(child_schema()));
+        let limit: Arc<dyn ExecutionPlan> =
+            Arc::new(GlobalLimitExec::new(input, usize::MAX, Some(1)));
+
+        assert_eq!(input_fetch(&limit, None), Some(usize::MAX));
+    }
+
+    /// Child (input) schema fed to the projections under test: `[a, b, c]`.
+    fn child_schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]))
+    }
+
+    /// A projection over `[a, b, c]` whose output is `[a@0, c@2 as score,
+    /// b@1 as value]` — i.e. it *reorders* (`c` moves index 2 -> 1) and renames.
+    fn reordering_projection() -> Arc<ProjectionExec> {
+        let schema = child_schema();
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        Arc::new(
+            ProjectionExec::try_new(
+                vec![
+                    (col("a", &schema).unwrap(), "a".to_string()),
+                    (col("c", &schema).unwrap(), "score".to_string()),
+                    (col("b", &schema).unwrap(), "value".to_string()),
+                ],
+                input,
+            )
+            .unwrap(),
+        )
+    }
+
+    /// A projection over `[a, b, c]` whose output is `[a@0, b + c as computed]`,
+    /// so output column index 1 maps to a *computed* (non-`Column`) expression.
+    fn computed_projection() -> Arc<ProjectionExec> {
+        let schema = child_schema();
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let b_plus_c = Arc::new(BinaryExpr::new(
+            col("b", &schema).unwrap(),
+            Operator::Plus,
+            col("c", &schema).unwrap(),
+        )) as Arc<dyn PhysicalExpr>;
+        Arc::new(
+            ProjectionExec::try_new(
+                vec![
+                    (col("a", &schema).unwrap(), "a".to_string()),
+                    (b_plus_c, "computed".to_string()),
+                ],
+                input,
+            )
+            .unwrap(),
+        )
+    }
+
+    /// `PhysicalSortRequirement` for `<name>@<index> <options>` in `schema`.
+    fn req(name: &str, schema: &Schema, options: SortOptions) -> PhysicalSortRequirement {
+        PhysicalSortRequirement::new(col(name, schema).unwrap(), Some(options))
+    }
+
+    fn lex(reqs: impl IntoIterator<Item = PhysicalSortRequirement>) -> LexRequirement {
+        LexRequirement::new(reqs).unwrap()
+    }
+
+    #[test]
+    fn remap_single_hard_requirement_through_reordering_projection() {
+        let projection = reordering_projection();
+        let out = projection.schema();
+        let child = child_schema();
+
+        // `score@1 DESC, a@0 ASC` in the output schema.
+        let required = OrderingRequirements::new(lex([
+            req("score", &out, DESC),
+            req("a", &out, ASC),
+        ]));
+
+        let remapped =
+            remap_requirement_through_projection(&projection, &required).unwrap();
+
+        // `score@1` -> `c@2`, `a@0` -> `a@0`; still a single hard requirement.
+        let expected = OrderingRequirements::new(lex([
+            req("c", &child, DESC),
+            req("a", &child, ASC),
+        ]));
+        assert_eq!(remapped, expected);
+    }
+
+    #[test]
+    fn remap_preserves_softness() {
+        let projection = reordering_projection();
+        let out = projection.schema();
+        let child = child_schema();
+
+        let required = OrderingRequirements::new_soft(lex([req("score", &out, DESC)]));
+        let remapped =
+            remap_requirement_through_projection(&projection, &required).unwrap();
+
+        let expected = OrderingRequirements::new_soft(lex([req("c", &child, DESC)]));
+        assert_eq!(remapped, expected);
+        // Hardness/softness is preserved through the remap.
+        assert!(matches!(remapped, OrderingRequirements::Soft(_)));
+    }
+
+    #[test]
+    fn remap_preserves_all_hard_alternatives() {
+        let projection = reordering_projection();
+        let out = projection.schema();
+        let child = child_schema();
+
+        // Two alternatives: `score@1 DESC` or `a@0 ASC, value@2 ASC`.
+        let mut required = OrderingRequirements::new(lex([req("score", &out, DESC)]));
+        required.add_alternative(lex([req("a", &out, ASC), req("value", &out, ASC)]));
+
+        let remapped =
+            remap_requirement_through_projection(&projection, &required).unwrap();
+
+        // Both alternatives survive and are remapped; hardness preserved.
+        let (alts, soft) = remapped.into_alternatives();
+        assert!(!soft);
+        assert_eq!(alts.len(), 2);
+        assert_eq!(alts[0], lex([req("c", &child, DESC)]));
+        // `value@2` -> `b@1`, `a@0` -> `a@0`.
+        assert_eq!(alts[1], lex([req("a", &child, ASC), req("b", &child, ASC)]));
+    }
+
+    #[test]
+    fn remap_drops_unsatisfiable_alternative_but_keeps_others() {
+        let projection = computed_projection();
+        let out = projection.schema();
+        let child = child_schema();
+
+        // Alt 1 (`a@0 ASC`) is expressible below the projection; alt 2
+        // (`computed@1 DESC`) maps to `b + c` and is not.
+        let mut required = OrderingRequirements::new(lex([req("a", &out, ASC)]));
+        required.add_alternative(lex([req("computed", &out, DESC)]));
+
+        let remapped =
+            remap_requirement_through_projection(&projection, &required).unwrap();
+
+        // Only the satisfiable alternative is kept; hardness preserved.
+        let (alts, soft) = remapped.into_alternatives();
+        assert!(!soft);
+        assert_eq!(alts.len(), 1);
+        assert_eq!(alts[0], lex([req("a", &child, ASC)]));
+    }
+
+    #[test]
+    fn remap_declines_when_required_column_is_computed() {
+        let projection = computed_projection();
+        let out = projection.schema();
+
+        // The only required column maps to a computed expression -> decline.
+        let required = OrderingRequirements::new(lex([req("computed", &out, DESC)]));
+        assert!(remap_requirement_through_projection(&projection, &required).is_none());
+    }
+
+    #[test]
+    fn remap_declines_when_all_alternatives_are_computed() {
+        let projection = computed_projection();
+        let out = projection.schema();
+
+        let mut required = OrderingRequirements::new(lex([req("computed", &out, DESC)]));
+        required.add_alternative(lex([req("computed", &out, ASC)]));
+
+        assert!(remap_requirement_through_projection(&projection, &required).is_none());
+    }
 }

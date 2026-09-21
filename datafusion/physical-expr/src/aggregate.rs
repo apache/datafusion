@@ -51,8 +51,9 @@ use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{
     AggregateFunction, AggregateFunctionParams, NullTreatment, physical_name,
 };
+use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{AggregateUDF, Expr, ReversedUDAF, SetMonotonicity};
-use datafusion_expr_common::accumulator::Accumulator;
+use datafusion_expr_common::accumulator::{Accumulator, AggregateMetrics};
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use datafusion_expr_common::type_coercion::aggregates::check_arg_count;
 use datafusion_functions_aggregate_common::accumulator::{
@@ -263,6 +264,15 @@ impl AggregateExprBuilder {
         } = self;
         assert_or_internal_err!(!args.is_empty(), "args should not be empty");
 
+        // An order-insensitive aggregate ignores its ORDER BY, so drop it here.
+        // Everything derived from `order_bys` below, such as the ordering fields
+        // in the aggregate's state, then agrees that there is no ordering.
+        let order_bys = if fun.order_sensitivity().is_insensitive() {
+            vec![]
+        } else {
+            order_bys
+        };
+
         let ordering_types = order_bys
             .iter()
             .map(|e| e.expr.data_type(&schema))
@@ -286,13 +296,10 @@ impl AggregateExprBuilder {
             return_field = output_metadata.add_to_field_ref(return_field);
         }
         let is_nullable = fun.is_nullable();
-        let name = match alias {
-            None => {
-                return internal_err!(
-                    "AggregateExprBuilder::alias must be provided prior to calling build"
-                );
-            }
-            Some(alias) => alias,
+        let Some(name) = alias else {
+            return internal_err!(
+                "AggregateExprBuilder::alias must be provided prior to calling build"
+            );
         };
 
         let human_display =
@@ -423,6 +430,7 @@ pub struct LoweredAggregateBuilder<'a> {
     logical_input_schema: &'a DFSchema,
     physical_input_schema: &'a Schema,
     execution_props: &'a ExecutionProps,
+    planning_ctx: &'a PhysicalPlanningContext,
 }
 
 impl<'a> LoweredAggregateBuilder<'a> {
@@ -430,12 +438,17 @@ impl<'a> LoweredAggregateBuilder<'a> {
     ///
     /// `logical_input_schema` is used to resolve logical expressions such as
     /// columns, while `physical_input_schema` is the input schema used by the
-    /// physical aggregate expression.
+    /// physical aggregate expression. `planning_ctx` is used when creating
+    /// physical expressions that reference uncorrelated scalar subqueries.
+    /// Callers creating physical aggregates outside of physical planning should
+    /// pass `&PhysicalPlanningContext::default()`, in which case converting a
+    /// scalar-subquery expression returns a planning error.
     pub fn new(
         expr: &'a Expr,
         logical_input_schema: &'a DFSchema,
         physical_input_schema: &'a Schema,
         execution_props: &'a ExecutionProps,
+        planning_ctx: &'a PhysicalPlanningContext,
     ) -> Self {
         Self {
             expr,
@@ -446,6 +459,7 @@ impl<'a> LoweredAggregateBuilder<'a> {
             logical_input_schema,
             physical_input_schema,
             execution_props,
+            planning_ctx,
         }
     }
 
@@ -484,6 +498,7 @@ impl<'a> LoweredAggregateBuilder<'a> {
             logical_input_schema,
             physical_input_schema,
             execution_props,
+            planning_ctx,
         } = self;
 
         let (name, human_display, output_metadata, expr) = lower_aggregate_display(
@@ -515,16 +530,29 @@ impl<'a> LoweredAggregateBuilder<'a> {
             physical_name(&expr)?
         };
 
-        let physical_args =
-            create_physical_exprs(args, logical_input_schema, execution_props)?;
+        let physical_args = create_physical_exprs(
+            args,
+            logical_input_schema,
+            execution_props,
+            planning_ctx,
+        )?;
         let filter = filter
             .as_ref()
             .map(|filter| {
-                create_physical_expr(filter, logical_input_schema, execution_props)
+                create_physical_expr(
+                    filter,
+                    logical_input_schema,
+                    execution_props,
+                    planning_ctx,
+                )
             })
             .transpose()?;
-        let order_bys =
-            create_physical_sort_exprs(order_by, logical_input_schema, execution_props)?;
+        let order_bys = create_physical_sort_exprs(
+            order_by,
+            logical_input_schema,
+            execution_props,
+            planning_ctx,
+        )?;
         let ignore_nulls = null_treatment.unwrap_or(NullTreatment::RespectNulls)
             == NullTreatment::IgnoreNulls;
 
@@ -728,6 +756,16 @@ impl AggregateFunctionExpr {
         self.fun.accumulator(acc_args)
     }
 
+    /// Creates an accumulator and supplies optional aggregate-owned metrics.
+    pub fn create_accumulator_with_metrics(
+        &self,
+        metrics: Arc<dyn AggregateMetrics>,
+    ) -> Result<Box<dyn Accumulator>> {
+        let mut accumulator = self.create_accumulator()?;
+        accumulator.set_metrics(metrics);
+        Ok(accumulator)
+    }
+
     /// the field of the final result of this aggregation.
     pub fn state_fields(&self) -> Result<Vec<FieldRef>> {
         let args = StateFieldsArgs {
@@ -743,11 +781,7 @@ impl AggregateFunctionExpr {
 
     /// Returns the ORDER BY expressions for the aggregate function.
     pub fn order_bys(&self) -> &[PhysicalSortExpr] {
-        if self.order_sensitivity().is_insensitive() {
-            &[]
-        } else {
-            &self.order_bys
-        }
+        &self.order_bys
     }
 
     /// Indicates whether aggregator can produce the correct result with any
@@ -858,7 +892,7 @@ impl AggregateFunctionExpr {
         // `retract_batch` method will not be called. In this case
         // having retract_batch is not a requirement.
         //
-        // This approach is a a bit different than window function
+        // This approach is a bit different than window function
         // approach. In window function (when they use a window frame)
         // they get all the desired range during evaluation.
         if !accumulator.supports_retract_batch() {
@@ -909,29 +943,59 @@ impl AggregateFunctionExpr {
         self.fun.create_groups_accumulator(args)
     }
 
+    /// Creates a groups accumulator and supplies optional aggregate-owned metrics.
+    pub fn create_groups_accumulator_with_metrics(
+        &self,
+        metrics: Arc<dyn AggregateMetrics>,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
+        let mut accumulator = self.create_groups_accumulator()?;
+        accumulator.set_metrics(metrics);
+        Ok(accumulator)
+    }
+
     /// Construct an expression that calculates the aggregate in reverse.
     /// Typically the "reverse" expression is itself (e.g. SUM, COUNT).
     /// For aggregates that do not support calculation in reverse,
     /// returns None (which is the default value).
     pub fn reverse_expr(&self) -> Option<AggregateFunctionExpr> {
+        self.reverse_expr_inner(false)
+    }
+
+    /// Same as [`Self::reverse_expr`], but the output `name` is always carried
+    /// over unchanged.
+    ///
+    /// Window execs derive their output schema from `WindowExpr::field()`, which
+    /// for aggregate-backed window expressions is this expression's `name`. If
+    /// reversal renamed it, the rebuilt window exec would expose a differently
+    /// named column while parent plan nodes still reference the old one. This
+    /// mirrors `WindowUDFExpr::reverse_expr`, which preserves its name for the
+    /// same reason. `AggregateExec`, by contrast, pins its schema at
+    /// construction, so it can use [`Self::reverse_expr`] and let the name
+    /// reflect the function actually being evaluated.
+    pub(crate) fn reverse_expr_preserving_name(&self) -> Option<AggregateFunctionExpr> {
+        self.reverse_expr_inner(true)
+    }
+
+    fn reverse_expr_inner(&self, preserve_name: bool) -> Option<AggregateFunctionExpr> {
         match self.fun.reverse_udf() {
             ReversedUDAF::NotSupported => None,
             ReversedUDAF::Identical => Some(self.clone()),
             ReversedUDAF::Reversed(reverse_udf) => {
-                let was_aliased = self.human_display_alias().is_some();
+                let keep_name = preserve_name || self.human_display_alias().is_some();
                 let mut name = self.name().to_string();
                 let mut human_display = self.human_display.clone();
                 // Reversing display follows two paths:
-                // - aliased display keeps the output `name` unchanged and rewrites only
-                //   the lowered expression in `human_display`.
+                // - aliased display (or an explicit request to keep the name) keeps
+                //   the output `name` unchanged and rewrites only the lowered
+                //   expression in `human_display`.
                 // - non-aliased display rewrites the canonical `name`, and rewrites
                 //   `human_display` only when present.
                 // If the function is changed, we need to reverse order_by clause as well
                 // i.e. First(a order by b asc null first) -> Last(a order by b desc null last)
-                if !was_aliased && self.fun().name() != reverse_udf.name() {
+                if !keep_name && self.fun().name() != reverse_udf.name() {
                     replace_order_by_clause(&mut name);
                 }
-                if !was_aliased {
+                if !keep_name {
                     replace_fn_name_clause(
                         &mut name,
                         self.fun.name(),
@@ -993,10 +1057,7 @@ impl AggregateFunctionExpr {
         args: Vec<Arc<dyn PhysicalExpr>>,
         order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Option<AggregateFunctionExpr> {
-        if args.len() != self.args.len()
-            || (self.order_sensitivity() != AggregateOrderSensitivity::Insensitive
-                && order_by_exprs.len() != self.order_bys.len())
-        {
+        if args.len() != self.args.len() || order_by_exprs.len() != self.order_bys.len() {
             return None;
         }
 
@@ -1133,7 +1194,9 @@ mod tests {
 
     use arrow::datatypes::Field;
     use datafusion_common::metadata::FieldMetadata;
-    use datafusion_expr::{col, test::function_stub::sum};
+    use datafusion_expr::{
+        AggregateUDFImpl, Signature, Volatility, col, test::function_stub::sum,
+    };
 
     fn aggregate_test_schema() -> Result<(Schema, DFSchema)> {
         let schema = Schema::new(vec![Field::new("column1", DataType::Int64, true)]);
@@ -1162,6 +1225,7 @@ mod tests {
             &logical_schema,
             &schema,
             &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
         )
         .build()?;
 
@@ -1185,6 +1249,7 @@ mod tests {
             &logical_schema,
             &schema,
             &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
         )
         .with_human_display(expr.human_display().to_string())
         .build()?;
@@ -1199,6 +1264,100 @@ mod tests {
                 .get("some_key")
                 .is_none()
         );
+
+        Ok(())
+    }
+
+    /// An aggregate that uses the default `AggregateUDFImpl::state_fields`,
+    /// which appends the ordering fields to the state.
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct DefaultStateUdaf {
+        signature: Signature,
+        order_insensitive: bool,
+    }
+
+    impl DefaultStateUdaf {
+        fn new(order_insensitive: bool) -> Self {
+            Self {
+                signature: Signature::any(1, Volatility::Immutable),
+                order_insensitive,
+            }
+        }
+    }
+
+    impl AggregateUDFImpl for DefaultStateUdaf {
+        fn name(&self) -> &str {
+            "default_state_udaf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+            Ok(arg_types[0].clone())
+        }
+
+        /// Always fails, reporting how many ORDER BY expressions it was given.
+        fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+            not_impl_err!("accumulator with {} order_bys", acc_args.order_bys.len())
+        }
+
+        fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+            if self.order_insensitive {
+                AggregateOrderSensitivity::Insensitive
+            } else {
+                AggregateOrderSensitivity::HardRequirement
+            }
+        }
+    }
+
+    /// Builds `default_state_udaf(v ORDER BY k)`.
+    fn build_with_order_by(order_insensitive: bool) -> Result<AggregateFunctionExpr> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("v", DataType::Int64, true),
+            Field::new("k", DataType::Int64, true),
+        ]));
+        let fun = AggregateUDF::from(DefaultStateUdaf::new(order_insensitive));
+        AggregateExprBuilder::new(Arc::new(fun), vec![Arc::new(Column::new("v", 0))])
+            .order_by(vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("k", 1)),
+                options: SortOptions::default(),
+            }])
+            .schema(schema)
+            .alias("default_state_udaf(v) ORDER BY [k ASC NULLS LAST]")
+            .build()
+    }
+
+    #[test]
+    fn order_insensitive_aggregate_discards_order_by() -> Result<()> {
+        let expr = build_with_order_by(true)?;
+        assert!(expr.order_bys().is_empty());
+        assert!(expr.all_expressions().order_by_exprs.is_empty());
+        // Only the value: the default `state_fields` has no ordering fields to append
+        assert_eq!(expr.state_fields()?.len(), 1);
+        let err = expr.create_accumulator().unwrap_err();
+        assert!(err.message().contains("accumulator with 0 order_bys"));
+
+        // Rewriting the expressions does not bring the ORDER BY back
+        let rewritten = expr
+            .with_new_expressions(expr.expressions(), vec![])
+            .expect("rewrite is supported");
+        assert!(rewritten.order_bys().is_empty());
+        assert_eq!(rewritten.state_fields()?.len(), 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn order_sensitive_aggregate_keeps_order_by() -> Result<()> {
+        let expr = build_with_order_by(false)?;
+        assert_eq!(expr.order_bys().len(), 1);
+        assert_eq!(expr.all_expressions().order_by_exprs.len(), 1);
+        // The value, followed by the ordering field
+        assert_eq!(expr.state_fields()?.len(), 2);
+        let err = expr.create_accumulator().unwrap_err();
+        assert!(err.message().contains("accumulator with 1 order_bys"));
 
         Ok(())
     }

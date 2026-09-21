@@ -311,7 +311,7 @@ mod tests {
     use crate::equivalence::tests::{create_test_schema, parse_sort_expr};
     use crate::expressions::col;
 
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion_common::ScalarValue;
 
     use itertools::Itertools;
@@ -895,6 +895,36 @@ mod tests {
             const_a.across_partitions,
             AcrossPartitions::Uniform(Some(literal_10))
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_union_drops_unrepresentable_constant_value_after_schema_rewrite() -> Result<()>
+    {
+        let input_schema = Arc::new(Schema::new(vec![Field::new(
+            "ticker",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            true,
+        )]));
+        let output_schema = Arc::new(Schema::new(vec![Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            true,
+        )]));
+
+        let ticker = col("ticker", &input_schema)?;
+        let stale_value = ScalarValue::Utf8(Some("ESU6".to_owned()));
+        let const_expr = ConstExpr::new(
+            Arc::clone(&ticker),
+            AcrossPartitions::Uniform(Some(stale_value)),
+        );
+
+        let mut input = EquivalenceProperties::new(input_schema);
+        input.add_constants(vec![const_expr])?;
+
+        let union_props = calculate_union(vec![input], output_schema)?;
+        assert!(union_props.constants().is_empty());
 
         Ok(())
     }

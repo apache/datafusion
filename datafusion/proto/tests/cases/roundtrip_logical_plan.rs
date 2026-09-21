@@ -21,8 +21,8 @@ use arrow::array::{
 };
 use arrow::datatypes::{
     DECIMAL256_MAX_PRECISION, DataType, Field, FieldRef, Fields, Int32Type,
-    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef,
-    TimeUnit, UnionFields, UnionMode,
+    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Metadata, Schema,
+    SchemaRef, TimeUnit, UnionFields, UnionMode,
 };
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
@@ -74,8 +74,9 @@ use datafusion_common::format::{
 };
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
-    DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, SplitPoint,
-    TableReference, internal_datafusion_err, internal_err, not_impl_err, plan_err,
+    Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
+    SplitPoint, TableReference, internal_datafusion_err, internal_err, not_impl_err,
+    plan_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::CopyTo;
@@ -83,17 +84,17 @@ use datafusion_expr::dml::{
     MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
 };
 use datafusion_expr::expr::{
-    self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, NullTreatment,
-    ScalarFunction, Unnest, WildcardOptions,
+    self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, LambdaVariable, Like,
+    NullTreatment, ScalarFunction, Unnest, WildcardOptions,
 };
 use datafusion_expr::logical_plan::{
     ExplainOption, Extension, UserDefinedLogicalNodeCore,
 };
 use datafusion_expr::{
     Accumulator, AggregateUDF, ColumnarValue, DmlStatement, ExprFunctionExt,
-    ExprSchemable, LimitEffect, Literal, LogicalPlan, LogicalPlanBuilder, Operator,
-    PartitionEvaluator, RangePartitioning, Repartition, ScalarUDF, Signature, TryCast,
-    Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    ExprSchemable, HigherOrderUDF, LimitEffect, Literal, LogicalPlan, LogicalPlanBuilder,
+    Operator, PartitionEvaluator, RangePartitioning, Repartition, ScalarUDF, Signature,
+    TryCast, Volatility, WindowFrame, WindowFrameBound, WindowFrameUnits,
     WindowFunctionDefinition, WindowUDF, WindowUDFImpl, WriteOp,
 };
 use datafusion_functions_aggregate::average::avg_udaf;
@@ -118,7 +119,10 @@ use datafusion_proto::logical_plan::{
 };
 use datafusion_proto::protobuf;
 
-use crate::cases::{MyAggregateUDF, MyAggregateUdfNode, MyRegexUdf, MyRegexUdfNode};
+use crate::cases::{
+    MyAggregateUDF, MyAggregateUdfNode, MyHigherOrderUDF, MyHigherOrderUdfNode,
+    MyRegexUdf, MyRegexUdfNode,
+};
 
 #[cfg(feature = "json")]
 fn roundtrip_json_test(proto: &protobuf::LogicalExprNode) {
@@ -147,7 +151,7 @@ fn roundtrip_expr_test_with_codec(
     let round_trip: Expr =
         from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), codec).unwrap();
 
-    assert_eq!(format!("{:?}", &initial_struct), format!("{round_trip:?}"));
+    assert_eq!(format!("{initial_struct:?}"), format!("{round_trip:?}"));
 
     roundtrip_json_test(&proto);
 }
@@ -406,6 +410,129 @@ async fn roundtrip_custom_listing_tables() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_create_external_table_multiple_locations() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Planning a CREATE EXTERNAL TABLE does not read the referenced files, so
+    // the paths need not exist. Multiple locations must survive the round-trip
+    // through the `repeated locations` proto field.
+    let query = "CREATE EXTERNAL TABLE t (a INTEGER, b INTEGER)
+            STORED AS CSV
+            LOCATION ('file_a.csv', 'file_b.csv')
+            OPTIONS ('format.has_header' 'true')";
+
+    let plan = ctx.state().create_logical_plan(query).await?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let protobuf_plan = protobuf::LogicalPlanNode::decode(bytes.as_ref())
+        .expect("failed to decode CreateExternalTable proto");
+    #[cfg(feature = "json")]
+    {
+        let json = serde_json::to_string(&protobuf_plan).unwrap();
+        assert!(!json.contains("\"location\":"));
+        assert!(json.contains("\"locations\":[\"file_a.csv\",\"file_b.csv\"]"));
+    }
+    let Some(protobuf::logical_plan_node::LogicalPlanType::CreateExternalTable(
+        create_external_table,
+    )) = protobuf_plan.logical_plan_type
+    else {
+        panic!("expected a CreateExternalTable proto");
+    };
+    assert!(create_external_table.location.is_empty());
+    assert_eq!(
+        create_external_table.locations,
+        vec!["file_a.csv".to_string(), "file_b.csv".to_string()]
+    );
+
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(plan, logical_round_trip);
+
+    let LogicalPlan::Ddl(datafusion_expr::DdlStatement::CreateExternalTable(rt)) =
+        logical_round_trip
+    else {
+        panic!("expected a CreateExternalTable plan");
+    };
+    assert_eq!(
+        rt.locations,
+        vec!["file_a.csv".to_string(), "file_b.csv".to_string()]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_create_external_table_single_location_legacy_field() -> Result<()> {
+    let ctx = SessionContext::new();
+    let query = "CREATE EXTERNAL TABLE t (a INTEGER)
+            STORED AS CSV
+            LOCATION 'file.csv'";
+
+    let plan = ctx.state().create_logical_plan(query).await?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let protobuf_plan = protobuf::LogicalPlanNode::decode(bytes.as_ref())
+        .expect("failed to decode CreateExternalTable proto");
+    #[cfg(feature = "json")]
+    {
+        let json = serde_json::to_string(&protobuf_plan).unwrap();
+        assert!(json.contains("\"location\":\"file.csv\""));
+        assert!(!json.contains("\"locations\""));
+    }
+    let Some(protobuf::logical_plan_node::LogicalPlanType::CreateExternalTable(
+        create_external_table,
+    )) = protobuf_plan.logical_plan_type
+    else {
+        panic!("expected a CreateExternalTable proto");
+    };
+    assert_eq!(create_external_table.location, "file.csv");
+    assert!(create_external_table.locations.is_empty());
+
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(plan, logical_round_trip);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_create_external_table_legacy_location() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = DFSchema::empty();
+    let create_external_table = protobuf::CreateExternalTableNode {
+        name: Some(protobuf::TableReference::from(TableReference::bare("t"))),
+        location: "legacy.csv".to_string(),
+        locations: vec![],
+        file_type: "CSV".to_string(),
+        schema: Some((&schema).try_into()?),
+        table_partition_cols: vec![],
+        if_not_exists: false,
+        or_replace: false,
+        temporary: false,
+        definition: String::new(),
+        order_exprs: vec![],
+        unbounded: false,
+        options: HashMap::new(),
+        constraints: Some(Constraints::default().into()),
+        column_defaults: HashMap::new(),
+    };
+    let protobuf_plan = protobuf::LogicalPlanNode {
+        logical_plan_type: Some(
+            protobuf::logical_plan_node::LogicalPlanType::CreateExternalTable(
+                create_external_table,
+            ),
+        ),
+    };
+    let bytes = protobuf_plan.encode_to_vec();
+
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    let LogicalPlan::Ddl(datafusion_expr::DdlStatement::CreateExternalTable(rt)) =
+        logical_round_trip
+    else {
+        panic!("expected a CreateExternalTable plan");
+    };
+    assert_eq!(rt.locations, vec!["legacy.csv".to_string()]);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_logical_plan_aggregation_with_pk() -> Result<()> {
     let ctx = SessionContext::new();
 
@@ -549,9 +676,10 @@ async fn roundtrip_logical_plan_dml_merge_into() -> Result<()> {
         other => panic!("expected TableScan, got {other:?}"),
     };
 
-    let merge = WriteOp::MergeInto(Box::new(MergeIntoOp {
-        on: col("a").eq(lit(1_i64)),
-        clauses: vec![
+    let merge = WriteOp::MergeInto(Box::new(MergeIntoOp::new(
+        "target_alias",
+        col("target_alias.a").eq(lit(1_i64)),
+        vec![
             MergeIntoClause {
                 kind: MergeIntoClauseKind::Matched,
                 predicate: Some(col("b").gt(lit(ScalarValue::Decimal128(
@@ -583,7 +711,7 @@ async fn roundtrip_logical_plan_dml_merge_into() -> Result<()> {
                 action: MergeIntoAction::Delete,
             },
         ],
-    }));
+    )));
 
     let plan = LogicalPlan::Dml(DmlStatement::new(
         "t1".into(),
@@ -595,6 +723,16 @@ async fn roundtrip_logical_plan_dml_merge_into() -> Result<()> {
     let bytes = logical_plan_to_bytes(&plan)?;
     let round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{round_trip}"));
+    let LogicalPlan::Dml(round_trip) = round_trip else {
+        panic!("expected DML plan")
+    };
+    let WriteOp::MergeInto(round_trip) = round_trip.op else {
+        panic!("expected MERGE operation")
+    };
+    assert_eq!(
+        round_trip.target_qualifier(),
+        &TableReference::bare("target_alias")
+    );
     Ok(())
 }
 
@@ -619,6 +757,9 @@ fn parse_write_op_merge_into_without_payload_errors() {
 fn dml_node_with_merge_payload(payload: protobuf::MergeIntoOpNode) -> protobuf::DmlNode {
     protobuf::DmlNode {
         dml_type: protobuf::dml_node::Type::MergeInto.into(),
+        table_name: Some(protobuf::TableReference::from(TableReference::bare(
+            "target",
+        ))),
         merge_into: Some(Box::new(payload)),
         ..Default::default()
     }
@@ -631,10 +772,29 @@ fn parse_merge_into_op_missing_on_errors() {
     let node = dml_node_with_merge_payload(protobuf::MergeIntoOpNode {
         on: None,
         clauses: vec![],
+        target_qualifier: None,
     });
     let err = from_proto::parse_write_op(&node, ctx.task_ctx().as_ref(), &codec)
         .expect_err("missing `on` must fail");
     assert!(err.to_string().contains("`on`"), "unexpected error: {err}");
+}
+
+#[test]
+fn parse_merge_into_op_without_target_qualifier_uses_table_name() {
+    let ctx = SessionContext::new();
+    let codec = DefaultLogicalExtensionCodec {};
+    let on = serialize_expr(&lit(true), &codec).unwrap();
+    let node = dml_node_with_merge_payload(protobuf::MergeIntoOpNode {
+        on: Some(Box::new(on)),
+        clauses: vec![],
+        target_qualifier: None,
+    });
+
+    let op = from_proto::parse_write_op(&node, ctx.task_ctx().as_ref(), &codec).unwrap();
+    let WriteOp::MergeInto(op) = op else {
+        panic!("expected MERGE operation")
+    };
+    assert_eq!(op.target_qualifier(), &TableReference::bare("target"));
 }
 
 #[test]
@@ -653,6 +813,7 @@ fn parse_merge_into_clause_unknown_kind_errors() {
                 )),
             }),
         }],
+        target_qualifier: None,
     });
     let err = from_proto::parse_write_op(&node, ctx.task_ctx().as_ref(), &codec)
         .expect_err("unknown clause kind tag must fail");
@@ -674,6 +835,7 @@ fn parse_merge_into_clause_missing_action_errors() {
             predicate: None,
             action: None,
         }],
+        target_qualifier: None,
     });
     let err = from_proto::parse_write_op(&node, ctx.task_ctx().as_ref(), &codec)
         .expect_err("missing clause `action` must fail");
@@ -695,6 +857,7 @@ fn parse_merge_into_action_missing_oneof_errors() {
             predicate: None,
             action: Some(protobuf::MergeIntoActionNode { action: None }),
         }],
+        target_qualifier: None,
     });
     let err = from_proto::parse_write_op(&node, ctx.task_ctx().as_ref(), &codec)
         .expect_err("missing action oneof must fail");
@@ -1550,9 +1713,7 @@ async fn roundtrip_logical_plan_prepared_statement_with_metadata() -> Result<()>
             "".to_string(),
             vec![
                 Field::new("", DataType::Int32, true)
-                    .with_metadata(
-                        [("some_key".to_string(), "some_value".to_string())].into(),
-                    )
+                    .with_metadata(Metadata::new().with("some_key", "some_value"))
                     .into(),
             ],
         )
@@ -1576,7 +1737,7 @@ pub mod proto {
         pub expr: Option<datafusion_proto::protobuf::LogicalExprNode>,
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     #[derive(Clone, PartialEq, Eq, ::prost::Message)]
     pub struct TopKExecProto {
         #[prost(uint64, tag = "1")]
@@ -1804,6 +1965,41 @@ impl LogicalExtensionCodec for UDFExtensionCodec {
         proto
             .encode(buf)
             .map_err(|err| internal_datafusion_err!("failed to encode udf: {err}"))?;
+        Ok(())
+    }
+
+    fn try_decode_higher_order_function(
+        &self,
+        name: &str,
+        buf: &[u8],
+    ) -> Result<Arc<HigherOrderUDF>> {
+        if name == "higher_order_udf" {
+            let proto = MyHigherOrderUdfNode::decode(buf).map_err(|err| {
+                internal_datafusion_err!("failed to decode higher_order_udf: {err}")
+            })?;
+
+            Ok(Arc::new(HigherOrderUDF::new_from_impl(
+                MyHigherOrderUDF::new(proto.payload),
+            )))
+        } else {
+            not_impl_err!("unrecognized higher order UDF implementation, cannot decode")
+        }
+    }
+
+    fn try_encode_higher_order_function(
+        &self,
+        node: &HigherOrderUDF,
+        buf: &mut Vec<u8>,
+    ) -> Result<()> {
+        let hof = (node.inner().as_ref() as &dyn Any)
+            .downcast_ref::<MyHigherOrderUDF>()
+            .unwrap();
+        let proto = MyHigherOrderUdfNode {
+            payload: hof.payload.clone(),
+        };
+        proto
+            .encode(buf)
+            .map_err(|err| internal_datafusion_err!("failed to encode hof: {err}"))?;
         Ok(())
     }
 }
@@ -2053,7 +2249,7 @@ fn round_trip_scalar_values_and_data_types() {
                 Arc::new(Field::new(
                     "entries",
                     DataType::Struct(Fields::from(vec![
-                        Field::new("key", DataType::Int32, true),
+                        Field::new("key", DataType::Int32, false),
                         Field::new("value", DataType::Utf8, false),
                     ])),
                     false,
@@ -2065,7 +2261,7 @@ fn round_trip_scalar_values_and_data_types() {
                 Arc::new(Field::new(
                     "entries",
                     DataType::Struct(Fields::from(vec![
-                        Field::new("key", DataType::Int32, true),
+                        Field::new("key", DataType::Int32, false),
                         Field::new("value", DataType::Utf8, true),
                     ])),
                     false,
@@ -2354,7 +2550,7 @@ fn roundtrip_null_scalar_values() {
     for test_case in test_types.into_iter() {
         let proto_scalar: protobuf::ScalarValue = (&test_case).try_into().unwrap();
         let returned_scalar: ScalarValue = (&proto_scalar).try_into().unwrap();
-        assert_eq!(format!("{:?}", &test_case), format!("{returned_scalar:?}"));
+        assert_eq!(format!("{test_case:?}"), format!("{returned_scalar:?}"));
     }
 }
 
@@ -2532,12 +2728,38 @@ fn roundtrip_cast() {
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
+
+    let field =
+        Field::new("", DataType::Boolean, false).with_metadata(HashMap::from([(
+            String::from("key"),
+            String::from("value"),
+        )]));
+    let test_expr = Expr::Cast(Cast::new_from_field(
+        Box::new(lit(1.0_f32)),
+        Arc::new(field),
+    ));
+
+    let ctx = SessionContext::new();
+    roundtrip_expr_test(test_expr, ctx);
 }
 
 #[test]
 fn roundtrip_try_cast() {
     let test_expr =
         Expr::TryCast(TryCast::new(Box::new(lit(1.0_f32)), DataType::Boolean));
+
+    let ctx = SessionContext::new();
+    roundtrip_expr_test(test_expr, ctx);
+
+    let field =
+        Field::new("", DataType::Boolean, false).with_metadata(HashMap::from([(
+            String::from("key"),
+            String::from("value"),
+        )]));
+    let test_expr = Expr::TryCast(TryCast::new_from_field(
+        Box::new(lit(1.0_f32)),
+        Arc::new(field),
+    ));
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -2573,6 +2795,18 @@ fn roundtrip_inlist() {
 fn roundtrip_unnest() {
     let test_expr = Expr::Unnest(Unnest {
         expr: Box::new(col("col")),
+        outer: false,
+    });
+
+    let ctx = SessionContext::new();
+    roundtrip_expr_test(test_expr, ctx);
+}
+
+#[test]
+fn roundtrip_unnest_outer() {
+    let test_expr = Expr::Unnest(Unnest {
+        expr: Box::new(col("col")),
+        outer: true,
     });
 
     let ctx = SessionContext::new();
@@ -2849,7 +3083,7 @@ fn roundtrip_scalar_udf_extension_codec() {
         from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), &UDFExtensionCodec)
             .expect("parse expr");
 
-    assert_eq!(format!("{:?}", &test_expr), format!("{round_trip:?}"));
+    assert_eq!(format!("{test_expr:?}"), format!("{round_trip:?}"));
     roundtrip_json_test(&proto);
 }
 
@@ -2863,7 +3097,116 @@ fn roundtrip_aggregate_udf_extension_codec() {
         from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), &UDFExtensionCodec)
             .expect("parse expr");
 
-    assert_eq!(format!("{:?}", &test_expr), format!("{round_trip:?}"));
+    assert_eq!(format!("{test_expr:?}"), format!("{round_trip:?}"));
+    roundtrip_json_test(&proto);
+}
+
+fn dummy_higher_order_function_args() -> Vec<Expr> {
+    let list = ScalarValue::List(ScalarValue::new_list_nullable(
+        &[ScalarValue::Int32(Some(1))],
+        &DataType::Int32,
+    ));
+    let lambda_var_with_field = Expr::LambdaVariable(LambdaVariable::new(
+        "x".to_string(),
+        Some(Arc::new(Field::new("x", DataType::Int32, true))),
+    ));
+    let lambda_var_without_field =
+        Expr::LambdaVariable(LambdaVariable::new("x".into(), None));
+    let lambda = lambda(["x"], lambda_var_with_field + lambda_var_without_field);
+    vec![Expr::Literal(list, None), lambda]
+}
+
+#[test]
+fn roundtrip_higher_order_function() {
+    let hof = Arc::new(HigherOrderUDF::new_from_impl(MyHigherOrderUDF::new(
+        "payload".to_string(),
+    )));
+
+    let test_expr = Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
+        Arc::clone(&hof),
+        dummy_higher_order_function_args(),
+    ));
+
+    let ctx = SessionContext::new();
+    ctx.register_higher_order_function(hof);
+
+    roundtrip_expr_test(test_expr.clone(), ctx);
+
+    // Now test loading the HOF without registering it in the context, but rather creating it
+    // in the extension codec.
+    #[derive(Debug)]
+    struct DummyHigherOrderUDFExtensionCodec;
+
+    impl LogicalExtensionCodec for DummyHigherOrderUDFExtensionCodec {
+        fn try_decode(
+            &self,
+            _buf: &[u8],
+            _inputs: &[LogicalPlan],
+            _ctx: &TaskContext,
+        ) -> Result<Extension> {
+            not_impl_err!("LogicalExtensionCodec is not provided")
+        }
+
+        fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<()> {
+            not_impl_err!("LogicalExtensionCodec is not provided")
+        }
+
+        fn try_decode_table_provider(
+            &self,
+            _buf: &[u8],
+            _table_ref: &TableReference,
+            _schema: SchemaRef,
+            _ctx: &TaskContext,
+        ) -> Result<Arc<dyn TableProvider>> {
+            not_impl_err!("LogicalExtensionCodec is not provided")
+        }
+
+        fn try_encode_table_provider(
+            &self,
+            _table_ref: &TableReference,
+            _node: Arc<dyn TableProvider>,
+            _buf: &mut Vec<u8>,
+        ) -> Result<()> {
+            not_impl_err!("LogicalExtensionCodec is not provided")
+        }
+
+        fn try_decode_higher_order_function(
+            &self,
+            name: &str,
+            _buf: &[u8],
+        ) -> Result<Arc<HigherOrderUDF>> {
+            if name == "higher_order_udf" {
+                Ok(Arc::new(HigherOrderUDF::new_from_impl(
+                    MyHigherOrderUDF::new("payload".to_string()),
+                )))
+            } else {
+                Err(internal_datafusion_err!("HOF {name} not found"))
+            }
+        }
+    }
+
+    let ctx = SessionContext::new();
+    roundtrip_expr_test_with_codec(test_expr, ctx, &DummyHigherOrderUDFExtensionCodec)
+}
+
+#[test]
+fn roundtrip_higher_order_udf_extension_codec() {
+    let hof = Arc::new(HigherOrderUDF::new_from_impl(MyHigherOrderUDF::new(
+        "payload".to_string(),
+    )));
+
+    let test_expr = Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
+        hof,
+        dummy_higher_order_function_args(),
+    ));
+
+    let ctx = SessionContext::new();
+    let proto = serialize_expr(&test_expr, &UDFExtensionCodec).expect("serialize expr");
+    let round_trip =
+        from_proto::parse_expr(&proto, ctx.task_ctx().as_ref(), &UDFExtensionCodec)
+            .expect("parse expr");
+
+    assert_eq!(format!("{test_expr:?}"), format!("{round_trip:?}"));
     roundtrip_json_test(&proto);
 }
 
@@ -3277,6 +3620,50 @@ async fn roundtrip_custom_listing_tables_schema() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn logical_values_reject_nonempty_rows_with_zero_columns() {
+    let node = protobuf::LogicalPlanNode {
+        logical_plan_type: Some(protobuf::logical_plan_node::LogicalPlanType::Values(
+            protobuf::ValuesNode {
+                n_cols: 0,
+                values_list: vec![protobuf::LogicalExprNode::default()],
+            },
+        )),
+    };
+    let ctx = SessionContext::new();
+    let err =
+        logical_plan_from_bytes(&node.encode_to_vec(), &ctx.task_ctx()).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("ValuesNode n_cols must be greater than 0")
+    );
+}
+
+#[test]
+fn roundtrip_logical_limit_without_fetch() -> Result<()> {
+    let plan = LogicalPlanBuilder::empty(false).limit(7, None)?.build()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let ctx = SessionContext::new();
+    let round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+    assert_eq!(plan, round_trip);
+    Ok(())
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn roundtrip_logical_limit_at_i64_max() -> Result<()> {
+    let plan = LogicalPlanBuilder::empty(false)
+        .limit(0, Some(i64::MAX as usize))?
+        .build()?;
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let ctx = SessionContext::new();
+    let round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+
+    assert_eq!(plan, round_trip);
+    Ok(())
+}
+
 #[tokio::test]
 async fn roundtrip_custom_listing_tables_schema_table_scan_projection() -> Result<()> {
     let ctx = SessionContext::new();
@@ -3498,6 +3885,39 @@ async fn roundtrip_join_null_equality() -> Result<()> {
     let rt = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{join:?}"), format!("{rt:?}"));
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_asof_join() -> Result<()> {
+    let ctx = SessionContext::new();
+    let left_schema = Arc::new(Schema::new(vec![
+        Field::new("symbol", DataType::Utf8, true),
+        Field::new("ts", DataType::Int64, true),
+        Field::new("id", DataType::Int32, false),
+    ]));
+    let right_schema = Arc::new(Schema::new(vec![
+        Field::new("symbol", DataType::Utf8, true),
+        Field::new("ts", DataType::Int64, true),
+        Field::new("price", DataType::Int32, false),
+    ]));
+    ctx.register_table("trades", Arc::new(EmptyTable::new(left_schema)))?;
+    ctx.register_table("prices", Arc::new(EmptyTable::new(right_schema)))?;
+
+    let left = ctx.table("trades").await?.into_optimized_plan()?;
+    let right = ctx.table("prices").await?.into_optimized_plan()?;
+    for op in [Operator::Lt, Operator::LtEq, Operator::Gt, Operator::GtEq] {
+        let plan = LogicalPlanBuilder::from(left.clone())
+            .asof_join_using(
+                right.clone(),
+                vec![Column::from_name("symbol")],
+                binary_expr(col("trades.ts"), op, col("prices.ts")),
+            )?
+            .build()?;
+        let bytes = logical_plan_to_bytes(&plan)?;
+        let round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+        assert_eq!(format!("{plan:?}"), format!("{round_trip:?}"));
+    }
     Ok(())
 }
 

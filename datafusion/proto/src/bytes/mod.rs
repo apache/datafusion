@@ -16,7 +16,7 @@
 // under the License.
 
 //! Serialization / Deserialization to Bytes
-use crate::logical_plan::to_proto::serialize_expr;
+use crate::logical_plan::to_proto::{serialize_expr, serialize_exprs};
 use crate::logical_plan::{
     self, AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec,
 };
@@ -107,6 +107,37 @@ impl Serializeable for Expr {
     }
 }
 
+/// Serialize logical expressions as protobuf bytes using the provided
+/// extension codec.
+pub fn logical_exprs_to_bytes_with_extension_codec<'a>(
+    exprs: impl IntoIterator<Item = &'a Expr>,
+    extension_codec: &dyn LogicalExtensionCodec,
+) -> Result<Bytes> {
+    Ok(protobuf::LogicalExprList {
+        expr: serialize_exprs(exprs, extension_codec)?,
+    }
+    .encode_to_vec()
+    .into())
+}
+
+/// Deserialize logical expressions from protobuf bytes using the provided
+/// extension codec.
+pub fn logical_exprs_from_bytes_with_extension_codec(
+    bytes: &[u8],
+    ctx: &TaskContext,
+    extension_codec: &dyn LogicalExtensionCodec,
+) -> Result<Vec<Expr>> {
+    let protobuf = protobuf::LogicalExprList::decode(bytes).map_err(|e| {
+        plan_datafusion_err!("Error decoding expressions as protobuf: {e}")
+    })?;
+
+    Ok(logical_plan::from_proto::parse_exprs(
+        protobuf.expr.iter(),
+        ctx,
+        extension_codec,
+    )?)
+}
+
 /// Serialize a LogicalPlan as bytes
 pub fn logical_plan_to_bytes(plan: &LogicalPlan) -> Result<Bytes> {
     let extension_codec = DefaultLogicalExtensionCodec {};
@@ -192,6 +223,10 @@ pub fn physical_plan_to_bytes(plan: Arc<dyn ExecutionPlan>) -> Result<Bytes> {
 
 /// Serialize a PhysicalPlan as JSON
 #[cfg(feature = "json")]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Preserve the existing public API"
+)]
 pub fn physical_plan_to_json(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
     let extension_codec = DefaultPhysicalExtensionCodec {};
     let proto_converter = DefaultPhysicalProtoConverter {};
@@ -213,6 +248,7 @@ pub fn physical_plan_to_bytes_with_extension_codec(
 
 /// Serialize a PhysicalPlan as bytes, using the provided extension codec
 /// and protobuf converter.
+#[expect(clippy::needless_pass_by_value)] // Taking the plan by value is part of the public API
 pub fn physical_plan_to_bytes_with_proto_converter(
     plan: Arc<dyn ExecutionPlan>,
     extension_codec: &dyn PhysicalExtensionCodec,

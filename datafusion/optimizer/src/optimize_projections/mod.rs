@@ -282,7 +282,7 @@ fn optimize_projections(
         }
         // Other node types are handled below
         _ => {}
-    };
+    }
 
     // For other plan node types, calculate indices for columns they use and
     // try to rewrite their children
@@ -386,12 +386,42 @@ fn optimize_projections(
             let right_len = join.right.schema().fields().len();
             let (left_req_indices, right_req_indices) =
                 split_join_requirements(left_len, right_len, indices, &join.join_type);
-            let left_indices =
+            let mut left_indices =
                 left_req_indices.with_plan_exprs(&plan, join.left.schema())?;
-            let right_indices =
+            let mut right_indices =
                 right_req_indices.with_plan_exprs(&plan, join.right.schema())?;
+            // Ensure an empty mark join still has a column to qualify mark
+            match join.join_type {
+                JoinType::LeftMark if right_indices.indices().is_empty() => {
+                    right_indices = right_indices.append(&[0]);
+                }
+                JoinType::RightMark if left_indices.indices().is_empty() => {
+                    left_indices = left_indices.append(&[0]);
+                }
+                _ => {}
+            }
             // Joins benefit from "small" input tables (lower memory usage).
             // Therefore, each child benefits from projection:
+            vec![
+                left_indices.with_projection_beneficial(),
+                right_indices.with_projection_beneficial(),
+            ]
+        }
+        LogicalPlan::AsOfJoin(join) => {
+            let left_len = join.left.schema().fields().len();
+            let mut left_required = Vec::new();
+            let mut right_required = Vec::new();
+            for index in indices.indices() {
+                if *index < left_len {
+                    left_required.push(*index);
+                } else {
+                    right_required.push(*index - left_len);
+                }
+            }
+            let left_indices = RequiredIndices::new_from_indices(left_required)
+                .with_plan_exprs(&plan, join.left.schema())?;
+            let right_indices = RequiredIndices::new_from_indices(right_required)
+                .with_plan_exprs(&plan, join.right.schema())?;
             vec![
                 left_indices.with_projection_beneficial(),
                 right_indices.with_projection_beneficial(),
@@ -546,21 +576,11 @@ fn merge_consecutive_projections_one_level(
         return Projection::try_new_with_schema(expr, input, schema).map(Transformed::no);
     };
 
-    // A fast path: if the previous projection is same as the current projection
-    // we can directly remove the current projection and return child projection.
-    if prev_projection.expr == expr {
-        return Projection::try_new_with_schema(
-            expr,
-            Arc::clone(&prev_projection.input),
-            schema,
-        )
-        .map(Transformed::yes);
-    }
-
     // Count usages (referrals) of each projection expression in its input fields:
     let mut column_referral_map = HashMap::<&Column, usize>::new();
-    expr.iter()
-        .for_each(|expr| expr.add_column_ref_counts(&mut column_referral_map));
+    for expr in &expr {
+        expr.add_column_ref_counts(&mut column_referral_map);
+    }
 
     // If an expression is non-trivial (KeepInPlace) and appears more than once, do not merge
     // them as consecutive projections will benefit from a compute-once approach.
@@ -1197,6 +1217,69 @@ mod tests {
           TableScan: test projection=[a]
         "
         )
+    }
+
+    #[test]
+    fn merge_structurally_equal_non_idempotent_projections() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("i", DataType::Int32, false)]);
+        let projection = || col("i").add(lit(1)).alias("i");
+        let plan = table_scan(TableReference::none(), &schema, None)?
+            .project(vec![projection()])?
+            .project(vec![projection()])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: ?table?.i + Int32(1) + Int32(1) AS i
+          TableScan: ?table? projection=[i]
+        "
+        )
+    }
+
+    #[test]
+    fn merge_deep_projection_chain_in_one_pass() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("i", DataType::Int32, false)]);
+        let mut plan = table_scan(TableReference::none(), &schema, None)?
+            .project(vec![col("i").add(lit(1)).alias("i")])?
+            .build()?;
+        for _ in 1..12 {
+            plan = LogicalPlanBuilder::from(plan)
+                .project(vec![col("i").add(lit(1)).alias("i")])?
+                .build()?;
+        }
+
+        let optimizer = Optimizer::with_rules(vec![Arc::new(OptimizeProjections::new())]);
+        let optimized = optimizer.optimize(
+            plan,
+            &OptimizerContext::new().with_max_passes(1),
+            observe,
+        )?;
+        let plan_string = format!("{optimized}");
+        assert_eq!(12, plan_string.matches("Int32(1)").count());
+        assert_eq!(1, plan_string.matches("Projection:").count());
+        Ok(())
+    }
+
+    #[test]
+    fn merge_columns_and_metadata_alias() -> Result<()> {
+        let metadata =
+            datafusion_common::metadata::FieldMetadata::from(HashMap::from([(
+                "key".to_string(),
+                "value".to_string(),
+            )]));
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a")])?
+            .project(vec![col("a").alias_with_metadata("a", Some(metadata))])?
+            .build()?;
+
+        let optimized = optimize(plan)?;
+        assert_eq!(
+            "value",
+            optimized.schema().field(0).metadata().get("key").unwrap()
+        );
+        assert_eq!(1, format!("{optimized}").matches("Projection:").count());
+        Ok(())
     }
 
     #[test]
@@ -2384,6 +2467,62 @@ mod tests {
               TableScan: a projection=[a, b, c]
               TableScan: b projection=[a]
           TableScan: c projection=[a, b, c]
+        "
+        )
+    }
+
+    // Stacked filter-less LeftMark joins (from `= ANY` / `<> ALL`) must keep
+    // each `mark` qualified so they don't collide.
+    #[test]
+    fn optimize_projections_stacked_mark_joins_keep_qualified_mark() -> Result<()> {
+        let person = test_table_scan_with_name("person")?;
+
+        let aliased_scan = |table: &str, alias: &str| -> Result<LogicalPlan> {
+            LogicalPlanBuilder::from(test_table_scan_with_name(table)?)
+                .project(vec![col(format!("{table}.a"))])?
+                .alias(alias)?
+                .build()
+        };
+
+        let plan = LogicalPlanBuilder::from(person)
+            .join_on(
+                aliased_scan("s1", "__correlated_sq_1")?,
+                JoinType::LeftMark,
+                vec![lit(true)],
+            )?
+            .join_on(
+                aliased_scan("s2", "__correlated_sq_2")?,
+                JoinType::LeftMark,
+                vec![lit(true)],
+            )?
+            .join_on(
+                aliased_scan("s3", "__correlated_sq_3")?,
+                JoinType::LeftMark,
+                vec![lit(true)],
+            )?
+            .filter(
+                col("__correlated_sq_1.mark")
+                    .or(col("__correlated_sq_2.mark"))
+                    .and(not(col("__correlated_sq_3.mark"))),
+            )?
+            .project(vec![col("person.a")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: person.a
+          Filter: (__correlated_sq_1.mark OR __correlated_sq_2.mark) AND NOT __correlated_sq_3.mark
+            LeftMark Join:  Filter: Boolean(true)
+              LeftMark Join:  Filter: Boolean(true)
+                LeftMark Join:  Filter: Boolean(true)
+                  TableScan: person projection=[a]
+                  SubqueryAlias: __correlated_sq_1
+                    TableScan: s1 projection=[a]
+                SubqueryAlias: __correlated_sq_2
+                  TableScan: s2 projection=[a]
+              SubqueryAlias: __correlated_sq_3
+                TableScan: s3 projection=[a]
         "
         )
     }

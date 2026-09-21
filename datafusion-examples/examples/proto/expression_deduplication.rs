@@ -72,7 +72,7 @@ use prost::Message;
 /// In real scenarios, expressions can be much more complex, e.g. a large InList
 /// expression could be megabytes in size, so deduplication can save significant memory
 /// in addition to more correctly representing the original plan structure.
-pub async fn expression_deduplication() -> Result<()> {
+pub fn expression_deduplication() -> Result<()> {
     println!("=== Expression Deduplication Example ===\n");
 
     // Create a schema for our test expressions

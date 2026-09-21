@@ -33,7 +33,9 @@ use datafusion_common::utils::{
 use datafusion_common::{
     Result, exec_err, internal_err, plan_err, types::NativeType, utils::list_ndims,
 };
-use datafusion_expr_common::signature::ArrayFunctionArgument;
+use datafusion_expr_common::signature::{
+    ArrayFunctionArgument, EncodingPreservation, TypeSignatureClass,
+};
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 use datafusion_expr_common::{
     signature::{ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
@@ -363,7 +365,7 @@ pub fn value_fields_with_higher_order_udf_and_lambdas(
                 ValueOrLambda::Lambda(_) => {}
             }
         }
-    };
+    }
 
     Ok(new_fields)
 }
@@ -686,7 +688,7 @@ fn get_valid_types(
 
         if !fixed_size {
             list_sizes.clear()
-        };
+        }
 
         let mut list_sizes = list_sizes.into_iter();
         let valid_types = arguments
@@ -814,13 +816,21 @@ fn get_valid_types(
         TypeSignature::Numeric(number) => {
             function_length_check(function_name, current_types.len(), *number)?;
 
+            let non_nulls = current_types
+                .iter()
+                .filter(|&t| NativeType::from(t) != NativeType::Null)
+                .collect::<Vec<_>>();
+            let mut valid_type = non_nulls
+                .first()
+                .copied()
+                .cloned()
+                // Fallback to default type if we don't know which type to coerced to
+                // f64 is chosen since most of the math functions utilize Signature::numeric,
+                // and their default type is double precision
+                .unwrap_or(DataType::Float64);
             // Find common numeric type among given types except string
-            let mut valid_type = current_types.first().unwrap().to_owned();
-            for t in current_types.iter().skip(1) {
+            for &t in non_nulls.iter().skip(1) {
                 let logical_data_type: NativeType = t.into();
-                if logical_data_type == NativeType::Null {
-                    continue;
-                }
 
                 if !logical_data_type.is_numeric() {
                     return plan_err!(
@@ -838,12 +848,7 @@ fn get_valid_types(
             }
 
             let logical_data_type: NativeType = valid_type.clone().into();
-            // Fallback to default type if we don't know which type to coerced to
-            // f64 is chosen since most of the math functions utilize Signature::numeric,
-            // and their default type is double precision
-            if logical_data_type == NativeType::Null {
-                valid_type = DataType::Float64;
-            } else if !logical_data_type.is_numeric() {
+            if !logical_data_type.is_numeric() {
                 return plan_err!(
                     "Function '{function_name}' expects Numeric but received {logical_data_type}"
                 );
@@ -873,9 +878,56 @@ fn get_valid_types(
         TypeSignature::Coercible(param_types) => {
             function_length_check(function_name, current_types.len(), param_types.len())?;
 
+            fn coercion_value_type<'a>(
+                current_type: &'a DataType,
+                desired_type: &TypeSignatureClass,
+            ) -> &'a DataType {
+                if matches!(desired_type, TypeSignatureClass::Any) {
+                    return current_type;
+                }
+
+                match current_type {
+                    DataType::Dictionary(_, value_type) => {
+                        coercion_value_type(value_type, desired_type)
+                    }
+                    _ => current_type,
+                }
+            }
+
+            fn preserve_encoding(
+                current_type: &DataType,
+                casted_type: DataType,
+                desired_type: &TypeSignatureClass,
+                encoding_preservation: EncodingPreservation,
+            ) -> DataType {
+                if matches!(desired_type, TypeSignatureClass::Any) {
+                    return casted_type;
+                }
+
+                match current_type {
+                    DataType::Dictionary(key_type, value_type) => {
+                        let casted_type = preserve_encoding(
+                            value_type,
+                            casted_type,
+                            desired_type,
+                            encoding_preservation,
+                        );
+                        if encoding_preservation.preserve_dictionary() {
+                            DataType::Dictionary(key_type.clone(), Box::new(casted_type))
+                        } else {
+                            casted_type
+                        }
+                    }
+                    _ => casted_type,
+                }
+            }
+
             let mut new_types = Vec::with_capacity(current_types.len());
             for (current_type, param) in current_types.iter().zip(param_types.iter()) {
                 let current_native_type: NativeType = current_type.into();
+                let encoding_preservation = param.encoding_preservation();
+                let coercion_value_type =
+                    coercion_value_type(current_type, param.desired_type());
 
                 if param
                     .desired_type()
@@ -883,9 +935,14 @@ fn get_valid_types(
                 {
                     let casted_type = param
                         .desired_type()
-                        .default_casted_type(&current_native_type, current_type)?;
+                        .default_casted_type(&current_native_type, coercion_value_type)?;
 
-                    new_types.push(casted_type);
+                    new_types.push(preserve_encoding(
+                        current_type,
+                        casted_type,
+                        param.desired_type(),
+                        encoding_preservation,
+                    ));
                 } else if param
                     .allowed_source_types()
                     .iter()
@@ -894,8 +951,13 @@ fn get_valid_types(
                     // If the condition is met which means `implicit coercion`` is provided so we can safely unwrap
                     let default_casted_type = param.default_casted_type().unwrap();
                     let casted_type =
-                        default_casted_type.default_cast_for(current_type)?;
-                    new_types.push(casted_type);
+                        default_casted_type.default_cast_for(coercion_value_type)?;
+                    new_types.push(preserve_encoding(
+                        current_type,
+                        casted_type,
+                        param.desired_type(),
+                        encoding_preservation,
+                    ));
                 } else {
                     let hint = if matches!(current_native_type, NativeType::Binary) {
                         "\n\nHint: Binary types are not automatically coerced to String. Use CAST(column AS VARCHAR) to convert Binary data to String."
@@ -1025,12 +1087,8 @@ fn maybe_data_types(
             // attempt to coerce.
             // TODO: Replace with `can_cast_types` after failing cases are resolved
             // (they need new signature that returns exactly valid types instead of list of possible valid types).
-            if let Some(coerced_type) = coerced_from(valid_type, current_type) {
-                new_type.push(coerced_type)
-            } else {
-                // not possible
-                return None;
-            }
+            let coerced_type = coerced_from(valid_type, current_type)?;
+            new_type.push(coerced_type)
         }
     }
     Some(new_type)
@@ -1103,6 +1161,16 @@ fn coerced_from<'a>(
         {
             Some(type_into.clone())
         }
+        (_, RunEndEncoded(_, value_type))
+            if coerced_from(type_into, value_type.data_type()).is_some() =>
+        {
+            Some(type_into.clone())
+        }
+        (RunEndEncoded(_, value_type), _)
+            if coerced_from(value_type.data_type(), type_from).is_some() =>
+        {
+            Some(type_into.clone())
+        }
         // coerced into type_into
         (Int8, Null | Int8) => Some(type_into.clone()),
         (Int16, Null | Int8 | Int16 | UInt8) => Some(type_into.clone()),
@@ -1143,13 +1211,11 @@ fn coerced_from<'a>(
         ) => Some(type_into.clone()),
         (
             Timestamp(TimeUnit::Nanosecond, None),
-            Null | Timestamp(_, None) | Date32 | Utf8 | LargeUtf8,
+            Null | Timestamp(_, None) | Date32 | Date64 | Utf8 | LargeUtf8 | Utf8View,
         ) => Some(type_into.clone()),
-        (Interval(_), Null | Utf8 | LargeUtf8) => Some(type_into.clone()),
-        // We can go into a Utf8View from a Utf8 or LargeUtf8
-        (Utf8View, Utf8 | LargeUtf8 | Null) => Some(type_into.clone()),
+        (Interval(_), Null | Utf8 | LargeUtf8 | Utf8View) => Some(type_into.clone()),
         // Any type can be coerced into strings
-        (Utf8 | LargeUtf8, _) => Some(type_into.clone()),
+        (Utf8 | LargeUtf8 | Utf8View, _) => Some(type_into.clone()),
         // We can go into a BinaryView from a Binary or LargeBinary
         (BinaryView, Binary | LargeBinary | Null) => Some(type_into.clone()),
         (Null, _) if can_cast_types(type_from, type_into) => Some(type_into.clone()),
@@ -1214,11 +1280,11 @@ mod tests {
     use arrow::datatypes::IntervalUnit;
     use datafusion_common::{
         assert_contains,
-        types::{logical_binary, logical_int64},
+        types::{logical_binary, logical_int64, logical_string},
     };
     use datafusion_expr_common::{
         columnar_value::ColumnarValue,
-        signature::{Coercion, TypeSignatureClass},
+        signature::{Coercion, EncodingPreservation, TypeSignatureClass},
     };
 
     #[test]
@@ -1388,6 +1454,13 @@ mod tests {
         );
         assert_eq!(got, [DataType::Float64]);
 
+        let got = get_valid_types_flatten(
+            "test",
+            &TypeSignature::Numeric(2),
+            &[DataType::Null, DataType::Null],
+        );
+        assert_eq!(got, [DataType::Float64, DataType::Float64]);
+
         // Rejects non-numeric arg.
         let got = get_valid_types(
             "test",
@@ -1399,6 +1472,21 @@ mod tests {
             got.to_string(),
             "Function 'test' expects Numeric but received Timestamp(s)"
         );
+
+        // Nulls should get ignored among other valid types
+        let got = get_valid_types_flatten(
+            "test",
+            &TypeSignature::Numeric(2),
+            &[DataType::Null, DataType::Int32],
+        );
+        assert_eq!(got, [DataType::Int32, DataType::Int32]);
+
+        let got = get_valid_types_flatten(
+            "test",
+            &TypeSignature::Numeric(2),
+            &[DataType::Int32, DataType::Null],
+        );
+        assert_eq!(got, [DataType::Int32, DataType::Int32]);
 
         Ok(())
     }
@@ -1558,6 +1646,50 @@ mod tests {
         let type_from =
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::UInt32));
         let type_into = DataType::Int64;
+        assert_eq!(
+            coerced_from(&type_into, &type_from),
+            Some(type_into.clone())
+        );
+    }
+
+    #[test]
+    fn test_coerced_from_run_end_encoded() {
+        let run_end_encoded_of = |value_type: DataType| {
+            DataType::RunEndEncoded(
+                Field::new("run_ends", DataType::Int32, false).into(),
+                Field::new("values", value_type, true).into(),
+            )
+        };
+
+        let type_into = run_end_encoded_of(DataType::UInt32);
+        let type_from = DataType::Int64;
+        assert_eq!(coerced_from(&type_into, &type_from), None);
+
+        let type_from = run_end_encoded_of(DataType::UInt32);
+        let type_into = DataType::Int64;
+        assert_eq!(
+            coerced_from(&type_into, &type_from),
+            Some(type_into.clone())
+        );
+
+        // Signature candidates for functions like `date_bin` are plain
+        // Timestamp, but a REE-encoded column (e.g. a segment written with
+        // REE-dict encoding for that field) should still coerce against
+        // them via the wrapped value type.
+        let type_from =
+            run_end_encoded_of(DataType::Timestamp(TimeUnit::Nanosecond, None));
+        let type_into = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        assert_eq!(
+            coerced_from(&type_into, &type_from),
+            Some(type_into.clone())
+        );
+
+        // The reverse direction: a plain type coercing into an REE target
+        // (e.g. a signature that happens to require RunEndEncoded) should
+        // succeed whenever the plain type coerces into the wrapped value
+        // type.
+        let type_into = run_end_encoded_of(DataType::Int64);
+        let type_from = DataType::Int32;
         assert_eq!(
             coerced_from(&type_into, &type_from),
             Some(type_into.clone())
@@ -1817,16 +1949,196 @@ mod tests {
         ))?;
         assert_eq!(vec![DataType::Int64], output);
 
-        // Dictionary gets passed through if we use TypeSignatureClass apart from Native
-        let output = dictionary_input(Coercion::new_exact(TypeSignatureClass::Integer))?;
+        // Any always preserves the original physical type
+        let output = dictionary_input(Coercion::new_exact(TypeSignatureClass::Any))?;
         assert_eq!(vec![dictionary.clone()], output);
+
+        let output = dictionary_input(
+            Coercion::new_exact(TypeSignatureClass::Any)
+                .with_encoding_preservation(EncodingPreservation::dictionary()),
+        )?;
+        assert_eq!(vec![dictionary.clone()], output);
+
+        // Typed non-Native classes materialize dictionaries by default
+        let output = dictionary_input(Coercion::new_exact(TypeSignatureClass::Integer))?;
+        assert_eq!(vec![DataType::Int64], output);
 
         let output = dictionary_input(Coercion::new_implicit(
             TypeSignatureClass::Integer,
             vec![],
             NativeType::Int64,
         ))?;
-        assert_eq!(vec![dictionary.clone()], output);
+        assert_eq!(vec![DataType::Int64], output);
+
+        // Typed non-Native classes preserve dictionaries only when requested
+        let output = dictionary_input(
+            Coercion::new_exact(TypeSignatureClass::Integer)
+                .with_encoding_preservation(EncodingPreservation::dictionary()),
+        )?;
+        assert_eq!(vec![dictionary], output);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_coercible_dictionary_preserves_encoding() -> Result<()> {
+        fn dictionary_input(
+            value_type: DataType,
+            coercion: Coercion,
+        ) -> Result<Vec<DataType>> {
+            fields_with_udf(
+                &[Field::new(
+                    "field",
+                    DataType::Dictionary(Box::new(DataType::Int8), Box::new(value_type)),
+                    true,
+                )
+                .into()],
+                &MockUdf(Signature::coercible(vec![coercion], Volatility::Immutable)),
+            )
+            .map(|v| v.into_iter().map(|f| f.data_type().clone()).collect())
+        }
+
+        let coercion = Coercion::new_exact(TypeSignatureClass::Native(logical_string()))
+            .with_encoding_preservation(EncodingPreservation::dictionary());
+
+        assert_eq!(
+            dictionary_input(DataType::LargeUtf8, coercion.clone())?,
+            vec![DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::LargeUtf8),
+            )]
+        );
+        assert_eq!(
+            dictionary_input(
+                DataType::BinaryView,
+                Coercion::new_implicit(
+                    TypeSignatureClass::Native(logical_string()),
+                    vec![TypeSignatureClass::Native(logical_binary())],
+                    NativeType::String,
+                )
+                .with_encoding_preservation(EncodingPreservation::dictionary()),
+            )?,
+            vec![DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Utf8View),
+            )]
+        );
+        // Contrast: without encoding_preservation, Native strips dictionary entirely
+        assert_eq!(
+            dictionary_input(
+                DataType::Int32,
+                Coercion::new_implicit(
+                    TypeSignatureClass::Native(logical_int64()),
+                    vec![TypeSignatureClass::Integer],
+                    NativeType::Int64,
+                ),
+            )?,
+            vec![DataType::Int64]
+        );
+        // With encoding_preservation, dictionary wrapper is preserved, value coerced
+        assert_eq!(
+            dictionary_input(
+                DataType::Int32,
+                Coercion::new_implicit(
+                    TypeSignatureClass::Native(logical_int64()),
+                    vec![TypeSignatureClass::Integer],
+                    NativeType::Int64,
+                )
+                .with_encoding_preservation(EncodingPreservation::dictionary()),
+            )?,
+            vec![DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Int64),
+            )]
+        );
+        // Without encoding_preservation, non-Native classes materialize dictionaries
+        assert_eq!(
+            dictionary_input(
+                DataType::Int32,
+                Coercion::new_implicit(
+                    TypeSignatureClass::Integer,
+                    vec![],
+                    NativeType::Int64,
+                ),
+            )?,
+            vec![DataType::Int32]
+        );
+        // With encoding_preservation, non-Native classes preserve dictionaries
+        assert_eq!(
+            dictionary_input(
+                DataType::Int32,
+                Coercion::new_implicit(
+                    TypeSignatureClass::Integer,
+                    vec![],
+                    NativeType::Int64,
+                )
+                .with_encoding_preservation(EncodingPreservation::dictionary()),
+            )?,
+            vec![DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Int32),
+            )]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_coercible_nested_dictionary() -> Result<()> {
+        let nested_dictionary = DataType::Dictionary(
+            Box::new(DataType::Int8),
+            Box::new(DataType::Dictionary(
+                Box::new(DataType::Int16),
+                Box::new(DataType::Int32),
+            )),
+        );
+        let nested_dictionary_input = |coercion| -> Result<Vec<DataType>> {
+            fields_with_udf(
+                &[Field::new("field", nested_dictionary.clone(), true).into()],
+                &MockUdf(Signature::coercible(vec![coercion], Volatility::Immutable)),
+            )
+            .map(|v| v.into_iter().map(|f| f.data_type().clone()).collect())
+        };
+
+        // Without preservation, recursively unwrap dictionaries to the unchanged leaf.
+        let output =
+            nested_dictionary_input(Coercion::new_exact(TypeSignatureClass::Integer))?;
+        assert_eq!(vec![DataType::Int32], output);
+
+        // With preservation, restore the complete dictionary stack around the leaf.
+        let output = nested_dictionary_input(
+            Coercion::new_exact(TypeSignatureClass::Integer)
+                .with_encoding_preservation(EncodingPreservation::dictionary()),
+        )?;
+        assert_eq!(vec![nested_dictionary.clone()], output);
+
+        let int64_coercion = || {
+            Coercion::new_implicit(
+                TypeSignatureClass::Native(logical_int64()),
+                vec![TypeSignatureClass::Integer],
+                NativeType::Int64,
+            )
+        };
+
+        // Without preservation, materialize the coerced leaf type.
+        let output = nested_dictionary_input(int64_coercion())?;
+        assert_eq!(vec![DataType::Int64], output);
+
+        // With preservation, restore the complete dictionary stack around the coerced leaf.
+        let output = nested_dictionary_input(
+            int64_coercion()
+                .with_encoding_preservation(EncodingPreservation::dictionary()),
+        )?;
+        assert_eq!(
+            vec![DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(DataType::Dictionary(
+                    Box::new(DataType::Int16),
+                    Box::new(DataType::Int64),
+                )),
+            )],
+            output
+        );
 
         Ok(())
     }

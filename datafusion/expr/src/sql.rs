@@ -38,7 +38,7 @@ pub struct IlikeSelectItem {
 
 impl Display for IlikeSelectItem {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "ILIKE '{}'", &self.pattern)?;
+        write!(f, "ILIKE '{}'", self.pattern)?;
         Ok(())
     }
 }

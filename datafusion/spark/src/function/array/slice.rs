@@ -157,7 +157,7 @@ fn calculate_start_end(args: &[ArrayRef]) -> Result<(ArrayRef, ArrayRef)> {
         }
         let start = start.value(row);
         let length = length.value(row);
-        let value_length = values.value(row).len() as i64;
+        let value_length = values.value_length(row) as i64;
 
         if start == 0 {
             return exec_err!("Start index must not be zero");

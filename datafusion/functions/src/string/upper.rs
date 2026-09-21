@@ -16,12 +16,12 @@
 // under the License.
 
 use crate::string::common::to_upper;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::Result;
 use datafusion_common::types::logical_string;
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, EncodingPreservation, ReturnFieldArgs,
+    ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -56,9 +56,10 @@ impl UpperFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::coercible(
-                vec![Coercion::new_exact(TypeSignatureClass::Native(
-                    logical_string(),
-                ))],
+                vec![
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string()))
+                        .with_encoding_preservation(EncodingPreservation::dictionary()),
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -78,6 +79,14 @@ impl ScalarUDFImpl for UpperFunc {
         Ok(arg_types[0].clone())
     }
 
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let input = &args.arg_fields[0];
+        Ok(
+            Field::new(self.name(), input.data_type().clone(), input.is_nullable())
+                .into(),
+        )
+    }
+
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         to_upper(&args.args, "upper")
     }
@@ -94,6 +103,21 @@ mod tests {
     use arrow::datatypes::Field;
     use datafusion_common::config::ConfigOptions;
     use std::sync::Arc;
+
+    #[test]
+    fn preserves_input_nullability() -> Result<()> {
+        let func = UpperFunc::new();
+        for nullable in [false, true] {
+            let input = Field::new("input", DataType::Utf8, nullable);
+            let result = func.return_field_from_args(ReturnFieldArgs {
+                arg_fields: &[input.into()],
+                scalar_arguments: &[None],
+            })?;
+            assert_eq!(result.data_type(), &DataType::Utf8);
+            assert_eq!(result.is_nullable(), nullable);
+        }
+        Ok(())
+    }
 
     fn invoke_upper(input: ArrayRef) -> Result<ArrayRef> {
         let func = UpperFunc::new();

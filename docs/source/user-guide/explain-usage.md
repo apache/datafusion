@@ -169,7 +169,7 @@ debugging to see why and when DataFusion added and removed operators from a plan
 
 During execution, DataFusion operators collect detailed metrics. You can access
 them programmatically via [`ExecutionPlan::metrics`] as well as with the
-`EXPLAIN ANALYZE` command. For example here is the same query query as
+`EXPLAIN ANALYZE` command. For example here is the same query as
 above but with `EXPLAIN ANALYZE` (note the output is edited for clarity)
 
 [`executionplan::metrics`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#method.metrics
@@ -207,6 +207,7 @@ Again, reading from bottom up:
 - `DataSourceExec`
   - `output_rows=99997497`: A total 99.9M rows were produced
   - `bytes_scanned=3703192723`: Of the 14GB file, 3.7GB were actually read (due to projection pushdown)
+  - `bytes_processed=14779976446`: All 14GB were accounted for: the 3.7GB read, plus the bytes of row groups that pruning ruled out. Comparing this against the total size of the files in the plan tells you how far along a scan is
   - `time_elapsed_opening=308.203002ms`: It took 300ms to open the file and prepare to read it
   - `time_elapsed_scanning_total=8.350342183s`: It took 8.3 seconds of CPU time (across 16 cores) to actually decode the parquet data
 - `FilterExec`
@@ -232,6 +233,7 @@ When predicate pushdown is enabled, `DataSourceExec` with `ParquetSource` gains 
 - `row_groups_pruned_bloom_filter`: number of row groups evaluated by Bloom Filters, reporting both total checked groups and groups that matched.
 - `row_groups_pruned_statistics`: number of row groups evaluated by row-group statistics (min/max), reporting both total checked groups and groups that matched.
 - `limit_pruned_row_groups`: number of row groups pruned by the limit.
+- `limit_pruned_rows`: number of rows skipped by limit pruning when fully matched page ranges contain enough rows to satisfy the limit.
 - `pushdown_rows_matched`: rows that were tested by any of the above filters, and passed all of them.
 - `pushdown_rows_pruned`: rows that were tested by any of the above filters, and did not pass at least one of them.
 - `predicate_evaluation_errors`: number of times evaluating the filter expression failed (expected to be zero in normal operation)
@@ -365,7 +367,7 @@ For this query, let's again read the plan from the bottom to the top:
   - `gby=[UserID@0 as UserID]`: Represents `GROUP BY` in the [physical plan] and groups together the same values of `UserID`.
   - `aggr=[count(*)]`: Applies the `COUNT` aggregate on all rows for each group.
 - `RepartitionExec`
-  - `partitioning=Hash([UserID@0], 10)`: Divides the input into into 10 (new) output partitions based on the value of `hash(UserID)`. You can read more about this in the [partitioning] documentation.
+  - `partitioning=Hash([UserID@0], 10)`: Divides the input into 10 (new) output partitions based on the value of `hash(UserID)`. You can read more about this in the [partitioning] documentation.
   - `input_partitions=10`: Number of input partitions.
 - `CoalesceBatchesExec`
   - `target_batch_size=8192`: Combines smaller batches in to larger batches. In this case approximately 8192 rows in each batch.

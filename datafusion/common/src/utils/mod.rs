@@ -19,12 +19,15 @@
 
 pub(crate) mod aggregate;
 pub mod expr;
+pub mod hex;
 pub mod memory;
 pub mod proxy;
 pub mod string_utils;
 
 use crate::assert_or_internal_err;
-use crate::error::{_exec_datafusion_err, _exec_err, _internal_datafusion_err};
+use crate::error::{
+    _exec_datafusion_err, _exec_err, _internal_datafusion_err, _plan_datafusion_err,
+};
 use crate::{Result, ScalarValue};
 use arrow::array::{
     Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
@@ -79,9 +82,9 @@ use std::thread::available_parallelism;
 ///
 /// assert_eq!(projected_schema, expected_schema);
 /// ```
-pub fn project_schema(
+pub fn project_schema<T: AsRef<[usize]> + ?Sized>(
     schema: &SchemaRef,
-    projection: Option<&impl AsRef<[usize]>>,
+    projection: Option<&T>,
 ) -> Result<SchemaRef> {
     let schema = match projection {
         Some(columns) => Arc::new(schema.project(columns.as_ref())?),
@@ -613,7 +616,8 @@ impl SingleRowListArrayBuilder {
     /// Build a single element [`FixedSizeListArray`]
     pub fn build_fixed_size_list_array(self, list_size: usize) -> FixedSizeListArray {
         let (field, arr) = self.into_field_and_arr();
-        FixedSizeListArray::new(field, list_size as i32, arr, None)
+        FixedSizeListArray::try_new_with_length(field, list_size as i32, arr, None, 1)
+            .unwrap()
     }
 
     /// Build a single element [`FixedSizeListArray`] and wrap as [`ScalarValue::FixedSizeList`]
@@ -948,7 +952,7 @@ pub mod datafusion_strsim {
             let mut distance_b = i;
 
             for (j, b_elem) in b.into_iter().enumerate() {
-                let cost = if a_elem == b_elem { 0usize } else { 1usize };
+                let cost = usize::from(a_elem != b_elem);
                 let distance_a = distance_b + cost;
                 distance_b = cache[j];
                 result = min(result + 1, min(distance_a, distance_b + 1));
@@ -1030,7 +1034,7 @@ pub fn merge_and_order_indices<T: Borrow<usize>, S: Borrow<usize>>(
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-    result.sort();
+    result.sort_unstable();
     result
 }
 
@@ -1140,6 +1144,32 @@ pub fn combine_limit(
     (combined_skip, combined_fetch)
 }
 
+/// Converts a wire integer to `usize`, rejecting out-of-range values.
+/// `context` and `field` identify the value in the error message.
+pub fn usize_from_wire<T>(value: T, context: &str, field: &str) -> Result<usize>
+where
+    T: TryInto<usize> + std::fmt::Display + Copy,
+{
+    value.try_into().map_err(|_| {
+        _plan_datafusion_err!(
+            "{context}: {field} wire value {value} is out of range for usize"
+        )
+    })
+}
+
+/// Converts a `usize` to a wire integer, rejecting out-of-range values.
+pub fn usize_to_wire<T: TryFrom<usize>>(
+    value: usize,
+    context: &str,
+    field: &str,
+) -> Result<T> {
+    T::try_from(value).map_err(|_| {
+        _plan_datafusion_err!(
+            "{context}: {field} value {value} is out of range for the plan wire format"
+        )
+    })
+}
+
 /// Returns the estimated number of threads available for parallel execution.
 ///
 /// This is a wrapper around `std::thread::available_parallelism`, providing a default value
@@ -1197,6 +1227,36 @@ pub fn take_function_args<const N: usize, T>(
     })
 }
 
+/// Returns the number of values covered by an offset buffer.
+///
+/// Slicing a variable-length array narrows its offsets but retains its entire
+/// values buffer. Use this span to size output buffers: it counts child elements
+/// for lists and bytes for strings/binary arrays, including values in null rows.
+/// An empty array still has one offset and therefore a span of zero.
+#[inline]
+pub fn offset_span_len<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> usize {
+    offset_span(offsets).1
+}
+
+/// Returns the start and length of the values covered by an offset buffer.
+///
+/// The returned pair can be passed to [`Array::slice`] to select the visible
+/// child values of a sliced list or map. For strings/binary arrays, the start
+/// and length are measured in bytes. Values in null rows are included.
+/// An empty array has a length of zero but may have a nonzero start.
+///
+/// ```
+/// # use arrow::buffer::OffsetBuffer;
+/// # use datafusion_common::utils::offset_span;
+/// let offsets = OffsetBuffer::new(vec![100_i32, 103, 108].into());
+/// assert_eq!(offset_span(&offsets), (100, 8));
+/// ```
+#[inline]
+pub fn offset_span<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> (usize, usize) {
+    let start = offsets.first().as_usize();
+    (start, offsets.last().as_usize() - start)
+}
+
 /// Returns the inner values of a list, or an error otherwise
 /// For [`ListArray`] and [`LargeListArray`], if it's sliced, it returns a
 /// sliced array too. Therefore, too reconstruct a list using it,
@@ -1214,15 +1274,10 @@ pub fn list_values(array: &dyn Array) -> Result<ArrayRef> {
 
 fn sliced_list_values<O: OffsetSizeTrait>(list: &GenericListArray<O>) -> ArrayRef {
     let values = list.values();
-    let offsets = list.offsets();
+    let (start, len) = offset_span(list.offsets());
 
-    if let (Some(first), Some(last)) = (offsets.first(), offsets.last()) {
-        let first = first.as_usize();
-        let last = last.as_usize();
-
-        if first != 0 || last != values.len() {
-            return values.slice(first, last - first);
-        }
+    if start != 0 || len != values.len() {
+        return values.slice(start, len);
     }
 
     Arc::clone(values)
@@ -1235,16 +1290,7 @@ pub fn adjust_offsets_for_slice<O: OffsetSizeTrait>(
 ) -> OffsetBuffer<O> {
     let offsets = list.offsets();
 
-    if let (Some(first), Some(last)) = (offsets.first(), offsets.last())
-        && (!first.is_zero() || last.as_usize() != list.values().len())
-    {
-        let offsets = offsets.iter().map(|offset| *offset - *first).collect();
-
-        //todo: use unsafe Offset::new_unchecked?
-        return OffsetBuffer::new(offsets);
-    }
-
-    offsets.clone()
+    offsets.clone().subtract(offsets[0])
 }
 
 /// For lists and large lists, truncates the sublist of null values
@@ -1281,18 +1327,18 @@ fn truncate_list_nulls<O: OffsetSizeTrait>(
         if valid_or_empty.has_false() {
             let array_data = list.values().to_data();
             let offsets = list.offsets();
-            let capacity = offsets[offsets.len() - 1] - offsets[0];
+            let capacity = offset_span_len(offsets);
             let mut mutable_array_data =
-                MutableArrayData::new(vec![&array_data], false, capacity.as_usize());
+                MutableArrayData::new(vec![&array_data], false, capacity);
 
             let (valid_or_empty, _nulls) = valid_or_empty.into_parts();
 
             for (start, end) in valid_or_empty.set_slices() {
-                mutable_array_data.extend(
+                mutable_array_data.try_extend(
                     0,
                     offsets[start].as_usize(),
                     offsets[end].as_usize(),
-                );
+                )?;
             }
 
             let lengths = std::iter::zip(offsets.lengths(), nulls)
@@ -1488,6 +1534,43 @@ mod tests {
     };
     #[cfg(feature = "sql")]
     use sqlparser::ast::Ident;
+
+    #[test]
+    fn test_offset_span() {
+        let offsets = OffsetBuffer::new(vec![0_i32, 5, 8, 8, 12].into());
+        assert_eq!(offset_span(&offsets), (0, 12));
+        assert_eq!(offset_span(&offsets.slice(1, 2)), (5, 3));
+        assert_eq!(offset_span_len(&offsets.slice(1, 2)), 3);
+        assert_eq!(offset_span(&offsets.slice(2, 1)), (8, 0));
+        assert_eq!(offset_span(&offsets.slice(4, 0)), (12, 0));
+        assert_eq!(offset_span(&OffsetBuffer::<i64>::new_empty()), (0, 0));
+        let large = OffsetBuffer::new(vec![i64::MAX - 10, i64::MAX].into());
+        assert_eq!(offset_span(&large), ((i64::MAX - 10) as usize, 10));
+    }
+
+    #[test]
+    fn test_usize_wire_conversions() {
+        assert_eq!(usize_from_wire(42_u64, "SomeExec", "fetch").unwrap(), 42);
+        let err = usize_from_wire(-1_i64, "SomeExec", "skip").unwrap_err();
+        assert_eq!(
+            err.strip_backtrace(),
+            "Error during planning: SomeExec: skip wire value -1 is out of range for usize"
+        );
+
+        assert_eq!(usize_to_wire::<u32>(42, "SomeExec", "fetch").unwrap(), 42);
+        let err = usize_to_wire::<u8>(256, "SomeExec", "fetch").unwrap_err();
+        assert_eq!(
+            err.strip_backtrace(),
+            "Error during planning: SomeExec: fetch value 256 is out of range for the plan wire format"
+        );
+
+        let max = usize_from_wire(u64::MAX, "SomeExec", "fetch");
+        if usize::BITS >= u64::BITS {
+            assert_eq!(max.unwrap(), usize::MAX);
+        } else {
+            assert!(max.is_err());
+        }
+    }
 
     #[test]
     fn test_bisect_linear_left_and_right() -> Result<()> {

@@ -15,16 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::{make_scalar_function, utf8_to_int_type};
+use crate::utils::{
+    make_scalar_function, transform_leaf_type_preserving_encoding, utf8_to_int_type,
+};
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, AsArray, OffsetSizeTrait, PrimitiveArray,
     StringArrayType,
 };
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
 use datafusion_common::Result;
+use datafusion_common::types::{NativeType, logical_string};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::sync::Arc;
@@ -59,11 +62,16 @@ impl Default for CharacterLengthFunc {
 
 impl CharacterLengthFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![Utf8, LargeUtf8, Utf8View],
+            signature: Signature::coercible(
+                vec![
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_string()),
+                        vec![TypeSignatureClass::Any],
+                        NativeType::String,
+                    )
+                    .with_encoding_preservation(EncodingPreservation::dictionary()),
+                ],
                 Volatility::Immutable,
             ),
             aliases: vec![String::from("length"), String::from("char_length")],
@@ -81,7 +89,9 @@ impl ScalarUDFImpl for CharacterLengthFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_int_type(&arg_types[0], "character_length")
+        transform_leaf_type_preserving_encoding(&arg_types[0], &|data_type| {
+            utf8_to_int_type(data_type, "character_length")
+        })
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -113,6 +123,11 @@ fn character_length(args: &[ArrayRef]) -> Result<ArrayRef> {
         DataType::Utf8View => {
             let string_array = args[0].as_string_view();
             character_length_general::<Int32Type, _>(&string_array)
+        }
+        DataType::Dictionary(_, _) => {
+            let dictionary = args[0].as_any_dictionary();
+            let converted = character_length(&[Arc::clone(dictionary.values())])?;
+            Ok(dictionary.with_values(converted))
         }
         _ => unreachable!("CharacterLengthFunc"),
     }

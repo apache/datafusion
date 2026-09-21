@@ -18,7 +18,7 @@
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
@@ -32,6 +32,19 @@ use std::sync::Arc;
 // - ignores NULL inputs
 // - returns an empty list when all inputs are NULL
 // - does not support ordering
+
+/// Build an empty list `ScalarValue` for a `List(element_type)` data type.
+/// Used as the result for empty window frames and for groups whose inputs
+/// were all NULL, matching Spark's `collect_list` / `collect_set` semantics.
+fn empty_list_scalar(list_type: &DataType) -> Result<ScalarValue> {
+    let DataType::List(field) = list_type else {
+        return internal_err!(
+            "collect_list/collect_set expected List return type, got {list_type:?}"
+        );
+    };
+    let empty = arrow::array::new_empty_array(field.data_type());
+    Ok(SingleRowListArrayBuilder::new(empty).build_list_scalar())
+}
 
 // <https://spark.apache.org/docs/latest/api/sql/index.html#collect_list>
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -81,13 +94,16 @@ impl AggregateUDFImpl for SparkCollectList {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let field = &acc_args.expr_fields[0];
-        let data_type = field.data_type().clone();
+        let element_type = acc_args.expr_fields[0].data_type().clone();
         let ignore_nulls = true;
         Ok(Box::new(NullToEmptyListAccumulator::new(
-            ArrayAggAccumulator::try_new(&data_type, ignore_nulls)?,
-            data_type,
+            ArrayAggAccumulator::try_new(&element_type, ignore_nulls)?,
+            acc_args.return_type().clone(),
         )))
+    }
+
+    fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
+        empty_list_scalar(data_type)
     }
 }
 
@@ -139,13 +155,16 @@ impl AggregateUDFImpl for SparkCollectSet {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        let field = &acc_args.expr_fields[0];
-        let data_type = field.data_type().clone();
+        let element_type = acc_args.expr_fields[0].data_type().clone();
         let ignore_nulls = true;
         Ok(Box::new(NullToEmptyListAccumulator::new(
-            DistinctArrayAggAccumulator::try_new(&data_type, None, ignore_nulls)?,
-            data_type,
+            DistinctArrayAggAccumulator::try_new(&element_type, None, ignore_nulls)?,
+            acc_args.return_type().clone(),
         )))
+    }
+
+    fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
+        empty_list_scalar(data_type)
     }
 }
 
@@ -154,12 +173,12 @@ impl AggregateUDFImpl for SparkCollectSet {
 #[derive(Debug)]
 struct NullToEmptyListAccumulator<T: Accumulator> {
     inner: T,
-    data_type: DataType,
+    list_type: DataType,
 }
 
 impl<T: Accumulator> NullToEmptyListAccumulator<T> {
-    pub fn new(inner: T, data_type: DataType) -> Self {
-        Self { inner, data_type }
+    pub fn new(inner: T, list_type: DataType) -> Self {
+        Self { inner, list_type }
     }
 }
 
@@ -179,14 +198,21 @@ impl<T: Accumulator> Accumulator for NullToEmptyListAccumulator<T> {
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let result = self.inner.evaluate()?;
         if result.is_null() {
-            let empty_array = arrow::array::new_empty_array(&self.data_type);
-            Ok(SingleRowListArrayBuilder::new(empty_array).build_list_scalar())
+            empty_list_scalar(&self.list_type)
         } else {
             Ok(result)
         }
     }
 
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.inner.retract_batch(values)
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        self.inner.supports_retract_batch()
+    }
+
     fn size(&self) -> usize {
-        self.inner.size() + self.data_type.size()
+        self.inner.size() + self.list_type.size()
     }
 }

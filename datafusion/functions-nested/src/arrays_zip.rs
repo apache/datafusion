@@ -280,15 +280,15 @@ fn arrays_zip_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                     let end = v.offsets[row_idx + 1];
                     let len = end - start;
                     let builder = builders[col_idx].as_mut().unwrap();
-                    builder.extend(0, start, end);
+                    builder.try_extend(0, start, end)?;
                     if len < max_len {
-                        builder.extend_nulls(max_len - len);
+                        builder.try_extend_nulls(max_len - len)?;
                     }
                 }
                 _ => {
                     // Null list entry or None (Null-typed) arg — all nulls.
                     if let Some(builder) = builders[col_idx].as_mut() {
-                        builder.extend_nulls(max_len);
+                        builder.try_extend_nulls(max_len)?;
                     }
                 }
             }

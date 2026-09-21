@@ -25,7 +25,8 @@ use arrow::array::{
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Date32Type, Date64Type, Decimal32Type, Decimal64Type,
-    Decimal128Type, Decimal256Type, Field, FieldRef, Int32Type, Int64Type,
+    Decimal128Type, Decimal256Type, DurationMicrosecondType, DurationMillisecondType,
+    DurationNanosecondType, DurationSecondType, Field, FieldRef, Int32Type, Int64Type,
     IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
     Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
     TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
@@ -37,6 +38,7 @@ use datafusion_common::{
     DataFusionError, Result, downcast_value, internal_datafusion_err, internal_err,
     not_impl_err,
 };
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -358,9 +360,8 @@ impl GroupHll {
                 );
             }
             let mut delta = 0;
-            for chunk in bytes.chunks_exact(size_of::<u64>()) {
-                let h = u64::from_le_bytes(chunk.try_into().unwrap());
-                delta += self.add_hash(h);
+            for chunk in bytes.as_chunks::<{ size_of::<u64>() }>().0 {
+                delta += self.add_hash(u64::from_le_bytes(*chunk));
             }
             Ok(delta)
         }
@@ -582,6 +583,38 @@ impl GroupsAccumulator for HllGroupsAccumulator {
         Ok(vec![Arc::new(builder.finish())])
     }
 
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        assert_eq!(values.len(), 1, "single argument to convert_to_state");
+        let array = values[0].as_ref();
+        let mut hashes = vec![0; array.len()];
+        create_hashes([array], &HLL_HASH_STATE, &mut hashes)?;
+
+        let filter_nulls = opt_filter.map(filter_to_nulls);
+        let value_nulls = array.logical_nulls();
+        let combined_nulls =
+            NullBuffer::union(filter_nulls.as_ref(), value_nulls.as_ref());
+
+        let mut builder = BinaryBuilder::new();
+        let mut scratch = Vec::new();
+        for (row, hash) in hashes.into_iter().enumerate() {
+            if combined_nulls
+                .as_ref()
+                .is_none_or(|nulls| nulls.is_valid(row))
+            {
+                scratch.clear();
+                scratch.extend_from_slice(&hash.to_le_bytes());
+                builder.append_value(&scratch);
+            } else {
+                builder.append_value([]);
+            }
+        }
+
+        Ok(vec![Arc::new(builder.finish())])
+    }
     fn size(&self) -> usize {
         self.groups.capacity() * size_of::<GroupHll>()
             + self.allocated_bytes
@@ -702,11 +735,9 @@ impl AggregateUDFImpl for ApproxDistinct {
                 )
                 .into(),
             ]),
-            DataType::Boolean
-            | DataType::UInt8
-            | DataType::Int8
-            | DataType::UInt16
-            | DataType::Int16 => get_fixed_domain_state_field(args.name, data_type),
+            _ if is_fixed_domain_type(data_type) => {
+                get_fixed_domain_state_field(args.name, data_type)
+            }
             _ => Ok(vec![
                 Field::new(
                     format_state_name(args.name, "hll_registers"),
@@ -723,11 +754,7 @@ impl AggregateUDFImpl for ApproxDistinct {
 
         // For primitive types, use specialized accumulators for better performance.
         let accumulator: Box<dyn Accumulator> = match data_type {
-            DataType::Boolean
-            | DataType::UInt8
-            | DataType::Int8
-            | DataType::UInt16
-            | DataType::Int16 => {
+            _ if is_fixed_domain_type(data_type) => {
                 return get_fixed_domain_approx_accumulator(data_type);
             }
             DataType::UInt32 => Box::new(NumericHLLAccumulator::<UInt32Type>::new()),
@@ -781,11 +808,36 @@ impl AggregateUDFImpl for ApproxDistinct {
             DataType::Decimal256(_, _) => {
                 Box::new(NumericHLLAccumulator::<Decimal256Type>::new())
             }
+            DataType::Duration(TimeUnit::Second) => {
+                Box::new(NumericHLLAccumulator::<DurationSecondType>::new())
+            }
+            DataType::Duration(TimeUnit::Millisecond) => {
+                Box::new(NumericHLLAccumulator::<DurationMillisecondType>::new())
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                Box::new(NumericHLLAccumulator::<DurationMicrosecondType>::new())
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                Box::new(NumericHLLAccumulator::<DurationNanosecondType>::new())
+            }
             DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Utf8View
             | DataType::Binary
+            | DataType::BinaryView
+            | DataType::FixedSizeBinary(_)
+            | DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)
+            | DataType::Map(_, _)
+            | DataType::Struct(_)
+            | DataType::Union(_, _)
             | DataType::LargeBinary => Box::new(HLLAccumulator::new()),
+            DataType::Dictionary(_, _) if is_supported_type(data_type) => {
+                Box::new(HLLAccumulator::new())
+            }
             DataType::Null => {
                 Box::new(NoopAccumulator::new(ScalarValue::UInt64(Some(0))))
             }
@@ -819,12 +871,47 @@ impl AggregateUDFImpl for ApproxDistinct {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // Updating an HLL register with a value already seen is a no-op.
+        DistinctHandling::Insensitive
+    }
+}
+
+fn is_fixed_domain_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Boolean
+            | DataType::UInt8
+            | DataType::Int8
+            | DataType::UInt16
+            | DataType::Int16
+    )
+}
+
+fn is_supported_type(data_type: &DataType) -> bool {
+    let value_type = dictionary_value_type(data_type);
+    matches!(value_type, DataType::Null)
+        || is_fixed_domain_type(value_type)
+        || is_hll_groups_type(value_type)
+}
+
+fn dictionary_value_type(data_type: &DataType) -> &DataType {
+    let mut value_type = data_type;
+    while let DataType::Dictionary(_, inner) = value_type {
+        value_type = inner;
+    }
+    value_type
 }
 
 /// Returns true for the data types backed by the HyperLogLog
 /// [`HllGroupsAccumulator`]. The fixed-domain types (booleans / small ints) and
 /// `Null` fall back to the per-group [`Accumulator`] path.
 fn is_hll_groups_type(data_type: &DataType) -> bool {
+    if matches!(data_type, DataType::Dictionary(_, _)) {
+        return is_supported_type(data_type);
+    }
+
     matches!(
         data_type,
         DataType::UInt32
@@ -848,11 +935,22 @@ fn is_hll_groups_type(data_type: &DataType) -> bool {
             | DataType::Decimal64(_, _)
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _)
+            | DataType::Duration(_)
             | DataType::Utf8
             | DataType::LargeUtf8
             | DataType::Utf8View
             | DataType::Binary
+            | DataType::BinaryView
+            | DataType::FixedSizeBinary(_)
             | DataType::LargeBinary
+            | DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)
+            | DataType::Map(_, _)
+            | DataType::Struct(_)
+            | DataType::Union(_, _)
     )
 }
 
@@ -860,6 +958,52 @@ fn is_hll_groups_type(data_type: &DataType) -> bool {
 mod tests {
     use super::*;
     use std::hash::BuildHasher;
+
+    #[test]
+    fn dictionary_support() {
+        for value_type in [
+            DataType::Boolean,
+            DataType::UInt8,
+            DataType::Int8,
+            DataType::UInt16,
+            DataType::Int16,
+            DataType::Int64,
+            DataType::Null,
+            DataType::Utf8,
+            DataType::Binary,
+        ] {
+            let dict_type = DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(value_type.clone()),
+            );
+            assert!(is_hll_groups_type(&dict_type));
+        }
+
+        // Nested dictionaries resolve to the innermost value
+        assert!(is_hll_groups_type(&DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(DataType::Utf8)
+            ))
+        )));
+
+        // Unsupported value types are rejected
+        for value_type in [DataType::Float16, DataType::Float32, DataType::Float64] {
+            let dict_type = DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(value_type.clone()),
+            );
+            let nested_dict_type = DataType::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(dict_type.clone()),
+            );
+            assert!(!is_hll_groups_type(&value_type));
+            assert!(!is_supported_type(&dict_type));
+            assert!(!is_hll_groups_type(&dict_type));
+            assert!(!is_hll_groups_type(&nested_dict_type));
+        }
+    }
 
     #[cfg(not(feature = "force_hash_collisions"))]
     mod real_hash_test {
@@ -1061,6 +1205,98 @@ mod tests {
             // reference: hash 1 and 5 into a dense sketch
             let expected = reference_count(&[h(1), h(5)]);
             assert_eq!(counts.value(0), expected);
+        }
+
+        #[test]
+        fn groups_convert_to_state_roundtrips_through_merge() {
+            let values: ArrayRef = Arc::new(Int64Array::from(vec![
+                Some(1),
+                Some(2),
+                Some(2),
+                None,
+                Some(3),
+            ]));
+            let filter = BooleanArray::from(vec![
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(true),
+                None,
+            ]);
+            let group_indices = vec![0usize, 1, 0, 1, 0];
+
+            let mut direct = HllGroupsAccumulator::new();
+            direct
+                .update_batch(
+                    std::slice::from_ref(&values),
+                    &group_indices,
+                    Some(&filter),
+                    2,
+                )
+                .unwrap();
+            let direct = direct
+                .evaluate(EmitTo::All)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap()
+                .clone();
+
+            let converter = HllGroupsAccumulator::new();
+            let state = converter
+                .convert_to_state(std::slice::from_ref(&values), Some(&filter))
+                .unwrap();
+            assert_eq!(state[0].null_count(), 0);
+            let mut merged = HllGroupsAccumulator::new();
+            merged.merge_batch(&state, &group_indices, 2).unwrap();
+            let merged = merged
+                .evaluate(EmitTo::All)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap()
+                .clone();
+
+            assert_eq!(direct, merged);
+        }
+
+        #[test]
+        fn groups_convert_to_state_preserves_empty_and_filtered_rows() {
+            let converter = HllGroupsAccumulator::new();
+            let empty_values: ArrayRef =
+                Arc::new(Int64Array::from(Vec::<Option<i64>>::new()));
+            let state = converter
+                .convert_to_state(std::slice::from_ref(&empty_values), None)
+                .unwrap();
+            assert_eq!(state[0].len(), 0);
+            assert_eq!(state[0].null_count(), 0);
+
+            let values: ArrayRef =
+                Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
+            let filter = BooleanArray::from(vec![Some(false), None, Some(false)]);
+            let group_indices = vec![0usize, 1, 0];
+            let state = converter
+                .convert_to_state(std::slice::from_ref(&values), Some(&filter))
+                .unwrap();
+            assert_eq!(state[0].len(), values.len());
+            assert_eq!(state[0].null_count(), 0);
+            let state = state[0].as_any().downcast_ref::<BinaryArray>().unwrap();
+            for row in 0..state.len() {
+                assert_eq!(state.value(row), b"");
+            }
+
+            let mut merged = HllGroupsAccumulator::new();
+            merged
+                .merge_batch(&[Arc::new(state.clone())], &group_indices, 2)
+                .unwrap();
+            let result = merged
+                .evaluate(EmitTo::All)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .unwrap()
+                .clone();
+            assert_eq!(result, UInt64Array::from(vec![0, 0]));
         }
 
         /// Regression: a short (≤ 12-byte) Utf8View string must hash identically

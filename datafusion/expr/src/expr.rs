@@ -32,7 +32,7 @@ use crate::type_coercion::functions::value_fields_with_higher_order_udf;
 use crate::{AggregateUDF, LambdaParametersProgress, ValueOrLambda, Volatility};
 use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Metadata};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::metadata::format_type_and_metadata;
@@ -622,7 +622,7 @@ impl<'a> TreeNodeContainer<'a, Self> for Expr {
 /// See the [default_column_values.rs] example implementation.
 ///
 /// [default_column_values.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs
-pub type SchemaFieldMetadata = std::collections::HashMap<String, String>;
+pub type SchemaFieldMetadata = Metadata;
 
 /// Intersects multiple metadata instances for UNION operations.
 ///
@@ -671,22 +671,43 @@ pub fn intersect_metadata_for_union<'a>(
 }
 
 /// UNNEST expression.
+///
+/// When `outer` is `true`, the unnest should preserve `NULL` and empty input
+/// lists by emitting a single `NULL` output row for each. When `false` (the
+/// historical default), the behavior is identical to the plain `UNNEST(col)`
+/// SQL form: `NULL` and empty input lists are dropped from the output.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct Unnest {
     pub expr: Box<Expr>,
+    /// Outer-unnest behavior: also expand empty input lists into a single
+    /// `NULL` output row (in addition to preserving `NULL` input rows).
+    pub outer: bool,
 }
 
 impl Unnest {
-    /// Create a new Unnest expression.
+    /// Create a new Unnest expression with default (non-outer) semantics.
     pub fn new(expr: Expr) -> Self {
         Self {
             expr: Box::new(expr),
+            outer: false,
         }
     }
 
-    /// Create a new Unnest expression.
+    /// Create a new Unnest expression with default (non-outer) semantics.
     pub fn new_boxed(boxed: Box<Expr>) -> Self {
-        Self { expr: boxed }
+        Self {
+            expr: boxed,
+            outer: false,
+        }
+    }
+
+    /// Create a new Unnest expression with outer-unnest semantics: `NULL`
+    /// and empty input lists each produce a single `NULL` output row.
+    pub fn new_outer(expr: Expr) -> Self {
+        Self {
+            expr: Box::new(expr),
+            outer: true,
+        }
     }
 }
 
@@ -2191,26 +2212,23 @@ impl Expr {
                     subquery,
                     negated: _,
                 }) => {
-                    let subquery_schema = subquery.subquery.schema();
-                      match &subquery_schema.fields()[..] {
-                          [subquery_field] => {
-                              let column = Expr::Column(Column::new_unqualified(
-                                  subquery_field.name().clone(),
-                              ));
-                              rewrite_placeholder(
-                                  expr.as_mut(),
-                                  &column,
-                                  subquery_schema,
-                              )?;
-                          }
-                          _ => {
-                              return plan_err!(
-                                  "InSubquery should only return one column, but found {}: {}",
-                                  subquery_schema.fields().len(),
-                                  subquery_schema.field_names().join(", ")
-                              );
-                          }
-                      }
+                    rewrite_placeholder_from_subquery(
+                        "InSubquery",
+                        expr.as_mut(),
+                        subquery,
+                    )?;
+                }
+                Expr::SetComparison(SetComparison {
+                    expr,
+                    subquery,
+                    op: _,
+                    quantifier: _,
+                }) => {
+                    rewrite_placeholder_from_subquery(
+                        "SetComparison",
+                        expr.as_mut(),
+                        subquery,
+                    )?;
                 }
                 Expr::Like(Like { expr, pattern, .. })
                 | Expr::SimilarTo(Like { expr, pattern, .. }) => {
@@ -2434,11 +2452,19 @@ impl NormalizeEq for Expr {
             | (Expr::IsNotTrue(self_expr), Expr::IsNotTrue(other_expr))
             | (Expr::IsNotFalse(self_expr), Expr::IsNotFalse(other_expr))
             | (Expr::IsNotUnknown(self_expr), Expr::IsNotUnknown(other_expr))
-            | (Expr::Negative(self_expr), Expr::Negative(other_expr))
-            | (
-                Expr::Unnest(Unnest { expr: self_expr }),
-                Expr::Unnest(Unnest { expr: other_expr }),
-            ) => self_expr.normalize_eq(other_expr),
+            | (Expr::Negative(self_expr), Expr::Negative(other_expr)) => {
+                self_expr.normalize_eq(other_expr)
+            }
+            (
+                Expr::Unnest(Unnest {
+                    expr: self_expr,
+                    outer: self_outer,
+                }),
+                Expr::Unnest(Unnest {
+                    expr: other_expr,
+                    outer: other_outer,
+                }),
+            ) => self_outer == other_outer && self_expr.normalize_eq(other_expr),
             (
                 Expr::Between(Between {
                     expr: self_expr,
@@ -2488,7 +2514,7 @@ impl NormalizeEq for Expr {
                     args: other_args,
                 }),
             ) => {
-                self_func.name() == other_func.name()
+                self_func == other_func
                     && self_args.len() == other_args.len()
                     && self_args
                         .iter()
@@ -2519,7 +2545,7 @@ impl NormalizeEq for Expr {
                         },
                 }),
             ) => {
-                self_func.name() == other_func.name()
+                self_func == other_func
                     && self_distinct == other_distinct
                     && self_null_treatment == other_null_treatment
                     && self_args.len() == other_args.len()
@@ -2572,7 +2598,7 @@ impl NormalizeEq for Expr {
                         },
                 } = other.as_ref();
 
-                self_fun.name() == other_fun.name()
+                self_fun == other_fun
                     && self_window_frame == other_window_frame
                     && match (self_filter, other_filter) {
                         (Some(a), Some(b)) => a.normalize_eq(b),
@@ -2585,10 +2611,12 @@ impl NormalizeEq for Expr {
                         .iter()
                         .zip(other_args.iter())
                         .all(|(a, b)| a.normalize_eq(b))
+                    && self_partition_by.len() == other_partition_by.len()
                     && self_partition_by
                         .iter()
                         .zip(other_partition_by.iter())
                         .all(|(a, b)| a.normalize_eq(b))
+                    && self_order_by.len() == other_order_by.len()
                     && self_order_by
                         .iter()
                         .zip(other_order_by.iter())
@@ -2886,7 +2914,9 @@ impl HashNode for Expr {
                 field.hash(state);
                 column.hash(state);
             }
-            Expr::Unnest(Unnest { expr: _expr }) => {}
+            Expr::Unnest(Unnest { expr: _expr, outer }) => {
+                outer.hash(state);
+            }
             Expr::HigherOrderFunction(HigherOrderFunction { func, args: _args }) => {
                 func.hash(state);
             }
@@ -2901,7 +2931,7 @@ impl HashNode for Expr {
                 name.hash(state);
                 field.hash(state);
             }
-        };
+        }
     }
 }
 
@@ -2924,7 +2954,7 @@ fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Resu
                 *field = Some(other_field.as_ref().clone().with_nullable(true).into());
             }
         }
-    };
+    }
     Ok(())
 }
 
@@ -2937,6 +2967,26 @@ macro_rules! expr_vec_fmt {
             .collect::<Vec<String>>()
             .join(", ")
     }};
+}
+/// Infer an untyped placeholder on the left of a single-column subquery predicate from the subquery projection
+fn rewrite_placeholder_from_subquery(
+    kind: &str,
+    expr: &mut Expr,
+    subquery: &Subquery,
+) -> Result<()> {
+    let subquery_schema = subquery.subquery.schema();
+    match &subquery_schema.fields()[..] {
+        [subquery_field] => {
+            let column =
+                Expr::Column(Column::new_unqualified(subquery_field.name().clone()));
+            rewrite_placeholder(expr, &column, subquery_schema)
+        }
+        _ => plan_err!(
+            "{kind} should only return one column, but found {}: {}",
+            subquery_schema.fields().len(),
+            subquery_schema.field_names().join(", ")
+        ),
+    }
 }
 
 struct SchemaDisplay<'a>(&'a Expr);
@@ -2975,26 +3025,17 @@ impl Display for SchemaDisplay<'_> {
                 low,
                 high,
             }) => {
-                if *negated {
-                    write!(
-                        f,
-                        "{} NOT BETWEEN {} AND {}",
-                        SchemaDisplay(expr),
-                        SchemaDisplay(low),
-                        SchemaDisplay(high),
-                    )
-                } else {
-                    write!(
-                        f,
-                        "{} BETWEEN {} AND {}",
-                        SchemaDisplay(expr),
-                        SchemaDisplay(low),
-                        SchemaDisplay(high),
-                    )
-                }
+                let not = if *negated { "NOT " } else { "" };
+                write!(
+                    f,
+                    "{} {not}BETWEEN {} AND {}",
+                    SchemaDisplay(expr),
+                    SchemaDisplay(low),
+                    SchemaDisplay(high),
+                )
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{} {op} {}", SchemaDisplay(left), SchemaDisplay(right),)
+                write!(f, "{} {op} {}", SchemaDisplay(left), SchemaDisplay(right))
             }
             Expr::Case(Case {
                 expr,
@@ -3106,8 +3147,9 @@ impl Display for SchemaDisplay<'_> {
             }
             Expr::Negative(expr) => write!(f, "(- {})", SchemaDisplay(expr)),
             Expr::Not(expr) => write!(f, "NOT {}", SchemaDisplay(expr)),
-            Expr::Unnest(Unnest { expr }) => {
-                write!(f, "UNNEST({})", SchemaDisplay(expr))
+            Expr::Unnest(Unnest { expr, outer }) => {
+                let name = if *outer { "UNNEST_OUTER" } else { "UNNEST" };
+                write!(f, "{name}({})", SchemaDisplay(expr))
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
                 match func.schema_name(args) {
@@ -3213,7 +3255,7 @@ impl Display for SchemaDisplay<'_> {
                                 " ORDER BY [{}]",
                                 schema_name_from_sorts(order_by)?
                             )?;
-                        };
+                        }
 
                         write!(f, " {window_frame}")
                     }
@@ -3256,26 +3298,17 @@ impl Display for SqlDisplay<'_> {
                 low,
                 high,
             }) => {
-                if *negated {
-                    write!(
-                        f,
-                        "{} NOT BETWEEN {} AND {}",
-                        SqlDisplay(expr),
-                        SqlDisplay(low),
-                        SqlDisplay(high),
-                    )
-                } else {
-                    write!(
-                        f,
-                        "{} BETWEEN {} AND {}",
-                        SqlDisplay(expr),
-                        SqlDisplay(low),
-                        SqlDisplay(high),
-                    )
-                }
+                let not = if *negated { "NOT " } else { "" };
+                write!(
+                    f,
+                    "{} {not}BETWEEN {} AND {}",
+                    SqlDisplay(expr),
+                    SqlDisplay(low),
+                    SqlDisplay(high),
+                )
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{} {op} {}", SqlDisplay(left), SqlDisplay(right),)
+                write!(f, "{} {op} {}", SqlDisplay(left), SqlDisplay(right))
             }
             Expr::Case(Case {
                 expr,
@@ -3289,7 +3322,7 @@ impl Display for SqlDisplay<'_> {
                 }
 
                 for (when, then) in when_then_expr {
-                    write!(f, "WHEN {} THEN {} ", SqlDisplay(when), SqlDisplay(then),)?;
+                    write!(f, "WHEN {} THEN {} ", SqlDisplay(when), SqlDisplay(then))?;
                 }
 
                 if let Some(e) = else_expr {
@@ -3381,8 +3414,9 @@ impl Display for SqlDisplay<'_> {
             }
             Expr::Negative(expr) => write!(f, "(- {})", SqlDisplay(expr)),
             Expr::Not(expr) => write!(f, "NOT {}", SqlDisplay(expr)),
-            Expr::Unnest(Unnest { expr }) => {
-                write!(f, "UNNEST({})", SqlDisplay(expr))
+            Expr::Unnest(Unnest { expr, outer }) => {
+                let name = if *outer { "UNNEST_OUTER" } else { "UNNEST" };
+                write!(f, "{name}({})", SqlDisplay(expr))
             }
             Expr::SimilarTo(Like {
                 negated,
@@ -3735,7 +3769,7 @@ impl Display for Expr {
                 }
             },
             Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
-            Expr::Unnest(Unnest { expr }) => {
+            Expr::Unnest(Unnest { expr, .. }) => {
                 write!(f, "{UNNEST_COLUMN_PREFIX}({expr})")
             }
             Expr::HigherOrderFunction(fun) => {
@@ -3781,6 +3815,7 @@ pub fn physical_name(expr: &Expr) -> Result<String> {
 #[cfg(test)]
 mod test {
     use crate::expr_fn::col;
+    use crate::test::function_stub::max_udaf;
     use crate::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility, case,
         lit, placeholder, qualified_wildcard, wildcard, wildcard_with_options,
@@ -3851,7 +3886,7 @@ mod test {
         let subquery_schema = Arc::new(
             DFSchema::from_unqualified_fields(
                 vec![subquery_field].into(),
-                Default::default(),
+                Metadata::new(),
             )
             .unwrap(),
         );
@@ -3899,7 +3934,7 @@ mod test {
         let subquery_schema = Arc::new(
             DFSchema::from_unqualified_fields(
                 vec![subquery_field].into(),
-                Default::default(),
+                Metadata::new(),
             )
             .unwrap(),
         );
@@ -3943,6 +3978,112 @@ mod test {
                 }
             }
             _ => panic!("Expected InSubquery expression"),
+        }
+    }
+
+    #[test]
+    fn infer_placeholder_set_comparison_any() {
+        // WHERE $1 = ANY (SELECT a FROM t) -- parallel to infer_placeholder_in_subquery
+        let subquery_field = Field::new("a", DataType::Int32, false);
+        let subquery_schema = Arc::new(
+            DFSchema::from_unqualified_fields(
+                vec![subquery_field].into(),
+                Metadata::new(),
+            )
+            .unwrap(),
+        );
+        let subquery = Subquery {
+            subquery: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: subquery_schema,
+            })),
+            outer_ref_columns: vec![],
+            spans: Spans::new(),
+        };
+
+        let set_cmp = Expr::SetComparison(SetComparison {
+            expr: Box::new(Expr::Placeholder(Placeholder {
+                id: "$1".to_string(),
+                field: None,
+            })),
+            subquery,
+            op: Operator::Eq,
+            quantifier: SetQuantifier::Any,
+        });
+
+        let outer_schema = DFSchema::empty();
+        let (inferred_expr, contains_placeholder) =
+            set_cmp.infer_placeholder_types(&outer_schema).unwrap();
+
+        assert!(contains_placeholder);
+
+        match inferred_expr {
+            Expr::SetComparison(sc) => {
+                assert_eq!(sc.quantifier, SetQuantifier::Any);
+                match *sc.expr {
+                    Expr::Placeholder(p) => {
+                        let inferred =
+                            p.field.expect("placeholder field should be Int32");
+                        assert_eq!(inferred.data_type(), &DataType::Int32);
+                        assert!(inferred.is_nullable());
+                    }
+                    _ => panic!("Expected Placeholder expression in SetComparison"),
+                }
+            }
+            _ => panic!("Expected SetComparison expression"),
+        }
+    }
+
+    #[test]
+    fn infer_placeholder_set_comparison_all() {
+        // WHERE $1 <> ALL (SELECT a FROM t)
+        let subquery_field = Field::new("a", DataType::Int32, false);
+        let subquery_schema = Arc::new(
+            DFSchema::from_unqualified_fields(
+                vec![subquery_field].into(),
+                Metadata::new(),
+            )
+            .unwrap(),
+        );
+        let subquery = Subquery {
+            subquery: Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: subquery_schema,
+            })),
+            outer_ref_columns: vec![],
+            spans: Spans::new(),
+        };
+
+        let set_cmp = Expr::SetComparison(SetComparison {
+            expr: Box::new(Expr::Placeholder(Placeholder {
+                id: "$1".to_string(),
+                field: None,
+            })),
+            subquery,
+            op: Operator::NotEq,
+            quantifier: SetQuantifier::All,
+        });
+
+        let outer_schema = DFSchema::empty();
+        let (inferred_expr, contains_placeholder) =
+            set_cmp.infer_placeholder_types(&outer_schema).unwrap();
+
+        assert!(contains_placeholder);
+
+        match inferred_expr {
+            Expr::SetComparison(sc) => {
+                assert_eq!(sc.quantifier, SetQuantifier::All);
+                match *sc.expr {
+                    Expr::Placeholder(p) => {
+                        let inferred =
+                            p.field.expect("placeholder field should be Int32");
+                        assert_eq!(inferred.data_type(), &DataType::Int32);
+                        assert!(inferred.is_nullable());
+                    }
+                    _ => panic!("Expected Placeholder expression in SetComparison"),
+                }
+            }
+            _ => panic!("Expected SetComparison expression"),
         }
     }
 
@@ -4001,9 +4142,8 @@ mod test {
     fn infer_placeholder_with_metadata() {
         // name == $1, where name is a non-nullable string
         let schema = Arc::new(Schema::new(vec![
-            Field::new("name", DataType::Utf8, false).with_metadata(
-                [("some_key".to_string(), "some_value".to_string())].into(),
-            ),
+            Field::new("name", DataType::Utf8, false)
+                .with_metadata(Metadata::new().with("some_key", "some_value")),
         ]));
         let df_schema = DFSchema::try_from(schema).unwrap();
 
@@ -4188,6 +4328,32 @@ mod test {
 
     use super::*;
     use crate::logical_plan::{EmptyRelation, LogicalPlan};
+
+    #[test]
+    fn normalize_eq_window_function_over_clause_lengths() {
+        let window = |partition_by: Vec<Expr>, order_by: Vec<Sort>| {
+            let mut window = WindowFunction::new(max_udaf(), vec![col("value")]);
+            window.params.partition_by = partition_by;
+            window.params.order_by = order_by;
+            Expr::from(window)
+        };
+        let base = window(vec![col("a")], vec![Sort::new(col("a"), true, true)]);
+
+        let extra_partition = window(
+            vec![col("a"), col("b")],
+            vec![Sort::new(col("a"), true, true)],
+        );
+        assert!(!base.normalize_eq(&extra_partition));
+
+        let extra_order = window(
+            vec![col("a")],
+            vec![
+                Sort::new(col("a"), true, true),
+                Sort::new(col("b"), true, true),
+            ],
+        );
+        assert!(!base.normalize_eq(&extra_order));
+    }
 
     #[test]
     fn test_display_wildcard() {
@@ -4437,53 +4603,53 @@ mod test {
 
     mod intersect_metadata_tests {
         use super::super::intersect_metadata_for_union;
-        use std::collections::HashMap;
+        use arrow::datatypes::Metadata;
 
         #[test]
         fn all_branches_same_metadata() {
-            let m1 = HashMap::from([("key".into(), "val".into())]);
-            let m2 = HashMap::from([("key".into(), "val".into())]);
+            let m1 = Metadata::new().with("key", "val");
+            let m2 = Metadata::new().with("key", "val");
             let result = intersect_metadata_for_union([&m1, &m2]);
-            assert_eq!(result, HashMap::from([("key".into(), "val".into())]));
+            assert_eq!(result, Metadata::new().with("key", "val"));
         }
 
         #[test]
         fn conflicting_metadata_dropped() {
-            let m1 = HashMap::from([("key".into(), "a".into())]);
-            let m2 = HashMap::from([("key".into(), "b".into())]);
+            let m1 = Metadata::new().with("key", "a");
+            let m2 = Metadata::new().with("key", "b");
             let result = intersect_metadata_for_union([&m1, &m2]);
             assert!(result.is_empty());
         }
 
         #[test]
         fn empty_metadata_branch_skipped() {
-            let m1 = HashMap::from([("key".into(), "val".into())]);
-            let m2 = HashMap::new(); // e.g. NULL literal
+            let m1 = Metadata::new().with("key", "val");
+            let m2 = Metadata::new(); // e.g. NULL literal
             let result = intersect_metadata_for_union([&m1, &m2]);
-            assert_eq!(result, HashMap::from([("key".into(), "val".into())]));
+            assert_eq!(result, Metadata::new().with("key", "val"));
         }
 
         #[test]
         fn empty_metadata_first_branch_skipped() {
-            let m1 = HashMap::new();
-            let m2 = HashMap::from([("key".into(), "val".into())]);
+            let m1 = Metadata::new();
+            let m2 = Metadata::new().with("key", "val");
             let result = intersect_metadata_for_union([&m1, &m2]);
-            assert_eq!(result, HashMap::from([("key".into(), "val".into())]));
+            assert_eq!(result, Metadata::new().with("key", "val"));
         }
 
         #[test]
         fn all_branches_empty_metadata() {
-            let m1: HashMap<String, String> = HashMap::new();
-            let m2: HashMap<String, String> = HashMap::new();
+            let m1 = Metadata::new();
+            let m2 = Metadata::new();
             let result = intersect_metadata_for_union([&m1, &m2]);
             assert!(result.is_empty());
         }
 
         #[test]
         fn mixed_empty_and_conflicting() {
-            let m1 = HashMap::from([("key".into(), "a".into())]);
-            let m2 = HashMap::new();
-            let m3 = HashMap::from([("key".into(), "b".into())]);
+            let m1 = Metadata::new().with("key", "a");
+            let m2 = Metadata::new();
+            let m3 = Metadata::new().with("key", "b");
             let result = intersect_metadata_for_union([&m1, &m2, &m3]);
             // m2 is skipped; m1 and m3 conflict → dropped
             assert!(result.is_empty());
@@ -4491,9 +4657,7 @@ mod test {
 
         #[test]
         fn no_inputs() {
-            let result = intersect_metadata_for_union(std::iter::empty::<
-                &HashMap<String, String>,
-            >());
+            let result = intersect_metadata_for_union(std::iter::empty::<&Metadata>());
             assert!(result.is_empty());
         }
     }
