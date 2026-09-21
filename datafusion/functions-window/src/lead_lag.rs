@@ -311,10 +311,7 @@ impl WindowUDFImpl for WindowShift {
     }
 
     fn limit_effect(&self, args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
-        if self.kind == WindowShiftKind::Lag {
-            return LimitEffect::None;
-        }
-        match args {
+        let amount = match args {
             [_, expr, ..] => {
                 let Some(lit) = expr.downcast_ref::<expressions::Literal>() else {
                     return LimitEffect::Unknown;
@@ -322,10 +319,16 @@ impl WindowUDFImpl for WindowShift {
                 let ScalarValue::Int64(Some(amount)) = lit.value() else {
                     return LimitEffect::Unknown; // we should only get int64 from the parser
                 };
-                LimitEffect::Relative((*amount).max(0) as usize)
+                *amount
             }
-            [_] => LimitEffect::Relative(1), // default value
-            _ => LimitEffect::Unknown,       // invalid arguments
+            [_] => 1,                         // default value
+            _ => return LimitEffect::Unknown, // invalid arguments
+        };
+        let shift_offset = self.kind.shift_offset(Some(amount));
+        if shift_offset < 0 {
+            LimitEffect::Relative(offset_magnitude(shift_offset))
+        } else {
+            LimitEffect::None
         }
     }
 }
