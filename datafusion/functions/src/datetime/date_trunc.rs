@@ -1508,6 +1508,7 @@ mod tests {
         let seconds = 10_000_000_000;
         let utc: Option<Arc<str>> = Some("UTC".into());
         let cases = [
+            // Seconds, truncated to a minute, an hour and a day
             (
                 ScalarValue::TimestampSecond(Some(seconds + 59), None),
                 "minute",
@@ -1517,11 +1518,14 @@ mod tests {
                 "hour",
             ),
             (ScalarValue::TimestampSecond(Some(seconds + 1), None), "day"),
+            // The granularity is the input's own unit
             (ScalarValue::TimestampSecond(Some(seconds), None), "second"),
+            // With a time zone
             (
                 ScalarValue::TimestampSecond(Some(seconds + 59), utc.clone()),
                 "minute",
             ),
+            // Milliseconds and microseconds, truncated to a coarser unit
             (
                 ScalarValue::TimestampMillisecond(Some(seconds * 1_000 + 999), None),
                 "second",
@@ -1530,6 +1534,7 @@ mod tests {
                 ScalarValue::TimestampMicrosecond(Some(seconds * 1_000_000 + 999), None),
                 "millisecond",
             ),
+            // Before the epoch, with a time zone
             (
                 ScalarValue::TimestampMicrosecond(Some(-seconds * 1_000_000 - 1), utc),
                 "second",
