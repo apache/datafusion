@@ -1091,7 +1091,7 @@ mod tests {
     };
     use arrow::record_batch::RecordBatch;
     use arrow::util::display::array_value_to_string;
-    use datafusion::prelude::SessionContext;
+    use datafusion::prelude::{SessionConfig, SessionContext};
     use datafusion_expr::AggregateUDF;
     use std::collections::HashMap;
 
@@ -2500,6 +2500,13 @@ mod tests {
 
     #[tokio::test]
     async fn collect_list_dictionary_grouped_and_window_sql() -> Result<()> {
+        for target_partitions in [1, 4] {
+            check_collect_list_dictionary_sql(target_partitions).await?;
+        }
+        Ok(())
+    }
+
+    async fn check_collect_list_dictionary_sql(target_partitions: usize) -> Result<()> {
         let keys = Int8Array::new(
             ScalarBuffer::from(vec![0_i8, 0, 1, 1]),
             Some(NullBuffer::new_valid(4)),
@@ -2513,7 +2520,9 @@ mod tests {
         let element_type = values.data_type().clone();
         assert!(values.nulls().is_some());
 
-        let ctx = SessionContext::new();
+        let ctx = SessionContext::new_with_config(
+            SessionConfig::new().with_target_partitions(target_partitions),
+        );
         ctx.register_udaf(AggregateUDF::new_from_impl(SparkCollectList::new()));
         ctx.register_batch(
             "dictionary_input",
@@ -2560,6 +2569,30 @@ mod tests {
         let expected = [vec!["a"], vec!["a", "a"], vec!["a", "b"], vec!["b", "b"]];
         for (row, expected) in expected.iter().enumerate() {
             let value = ScalarValue::try_from_array(window.column(1), row)?;
+            assert_list_values(&value, &element_type, expected)?;
+        }
+
+        let outer = ctx
+            .sql(
+                "SELECT array_agg(values ORDER BY g) FROM (\
+                   SELECT g, collect_list(x) AS values \
+                   FROM dictionary_input GROUP BY g\
+                 )",
+            )
+            .await?
+            .collect()
+            .await?;
+        let outer = arrow::compute::concat_batches(&outer[0].schema(), outer.iter())?;
+        assert_eq!(outer.num_rows(), 1);
+        let value = ScalarValue::try_from_array(outer.column(0), 0)?.compacted();
+        let ScalarValue::List(array) = value else {
+            panic!("expected ordered outer list")
+        };
+        array.to_data().validate_full()?;
+        let values = array.value(0);
+        assert_eq!(values.len(), 2);
+        for (row, expected) in [["a", "a"], ["b", "b"]].iter().enumerate() {
+            let value = ScalarValue::try_from_array(&values, row)?.compacted();
             assert_list_values(&value, &element_type, expected)?;
         }
 
