@@ -219,10 +219,6 @@ name = "aggregate_query_sql"
 
 [[bench]]
 harness = false
-name = "range_date_trunc"
-
-[[bench]]
-harness = false
 name = "csv_load"
 
 [[bench]]
