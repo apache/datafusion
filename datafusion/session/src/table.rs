@@ -46,7 +46,8 @@ use datafusion_physical_plan::ExecutionPlan;
 ///
 /// 1. [`Self::schema`]: The schema (columns and their types) of the table
 /// 2. [`Self::supports_filters_pushdown`]: Should filters be pushed into this scan
-/// 2. [`Self::scan`]: An [`ExecutionPlan`] that can read data
+/// 3. [`Self::supports_skip_pushdown`]: Should `skip` (offset) be pushed into this scan
+/// 4. [`Self::scan`]: An [`ExecutionPlan`] that can read data
 ///
 /// [`RecordBatch`]: https://docs.rs/arrow/latest/arrow/record_batch/struct.RecordBatch.html
 /// [`CatalogProvider`]: super::CatalogProvider
@@ -214,6 +215,30 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// A [`ScanResult`] containing the [`ExecutionPlan`] for scanning the table
     ///
     /// See [`Self::scan`] for detailed documentation about projection, filters, and limits.
+    /// 
+    /// # Evaluation Order
+    ///
+    /// The logical evaluation order is [`ScanArgs::filters`], then [`ScanArgs::skip`]
+    /// and [`ScanArgs::limit`], and finally `projection`.
+    ///
+    /// Note that `limit` and `skip` apply to the filtered result, not to the unfiltered
+    /// input, and `projection` affects only which columns are returned, not which rows qualify.
+    ///
+    /// For example, if a scan receives:
+    ///
+    /// - `projection = [a]`
+    /// - `filters = [b > 5]`
+    /// - `limit = Some(3)`
+    /// - `skip = Some(5)`
+    ///
+    /// It must logically produce results equivalent to:
+    ///
+    /// ```text
+    /// PROJECTION a (OFFSET 5 LIMIT 3 (SCAN WHERE b > 5))
+    /// ```
+    ///
+    /// As noted above, columns referenced only by pushed-down filters may be
+    /// absent from `projection`.
     // Hand-written `#[async_trait]` expansion to reduce compile time. See
     // <https://github.com/apache/datafusion/issues/13814>.
     fn scan_with_args<'a, 'life0, 'life1, 'async_trait>(
