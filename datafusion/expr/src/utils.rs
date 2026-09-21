@@ -83,6 +83,13 @@ impl NameTracker {
         }
     }
 
+    /// Reserve every field name in `schema` without changing the schema.
+    pub fn reserve_schema(&mut self, schema: &DFSchema) {
+        for (qualifier, field) in schema.iter() {
+            self.insert(&Expr::Column(Column::from((qualifier, field))));
+        }
+    }
+
     fn would_conflict(&self, expr: &Expr) -> bool {
         let (qualifier, name) = expr.qualified_name();
         let schema_name = expr.schema_name().to_string();
@@ -720,28 +727,45 @@ pub fn compare_sort_expr(
     Ordering::Equal
 }
 
-/// Group a slice of window expression expr by their order by expressions
+/// Group window expressions by their sort keys, preserving any outer alias.
 pub fn group_window_expr_by_sort_keys(
     window_expr: impl IntoIterator<Item = Expr>,
 ) -> Result<Vec<(WindowSortKey, Vec<Expr>)>> {
     let mut result = vec![];
-    window_expr.into_iter().try_for_each(|expr| match &expr {
-        Expr::WindowFunction(window_fun) => {
-            let WindowFunctionParams{ partition_by, order_by, ..} = &window_fun.as_ref().params;
-            let sort_key = generate_sort_key(partition_by, order_by)?;
-            if let Some((_, values)) = result.iter_mut().find(
-                |group: &&mut (WindowSortKey, Vec<Expr>)| matches!(group, (key, _) if *key == sort_key),
-            ) {
-                values.push(expr);
-            } else {
-                result.push((sort_key, vec![expr]))
-            }
-            Ok(())
+
+    window_expr.into_iter().try_for_each(|expr| {
+        // Read the window's settings through one alias.
+        // Keep `expr` intact so its output name is preserved.
+        let inner = match &expr {
+            Expr::Alias(alias) => alias.expr.as_ref(),
+            _ => &expr,
+        };
+
+        let Expr::WindowFunction(window_fun) = inner else {
+            return internal_err!("Impossibly got non-window expr {expr:?}");
+        };
+
+        let WindowFunctionParams {
+            partition_by,
+            order_by,
+            ..
+        } = &window_fun.as_ref().params;
+
+        let sort_key = generate_sort_key(partition_by, order_by)?;
+
+        if let Some((_, values)) = result.iter_mut().find(
+            |group: &&mut (WindowSortKey, Vec<Expr>)| {
+                matches!(group, (key, _) if *key == sort_key)
+            },
+        ) {
+            values.push(expr);
+        } else {
+            result.push((sort_key, vec![expr]));
         }
-        other => internal_err!(
-            "Impossibly got non-window expr {other:?}"
-        ),
+
+        Ok(())
     })?;
+
     Ok(result)
 }
 
@@ -1762,6 +1786,23 @@ mod tests {
     }
 
     #[test]
+    fn name_tracker_reserves_schema_names() -> Result<()> {
+        let schema = DFSchema::try_from(Schema::new(vec![Field::new(
+            "a",
+            DataType::Int32,
+            false,
+        )]))?;
+        let mut tracker = NameTracker::new();
+        tracker.reserve_schema(&schema);
+
+        assert_eq!(
+            tracker.get_uniquely_named_expr(col("a"))?,
+            col("a").alias("a__temp__0")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_group_window_expr_by_sort_keys_empty_case() -> Result<()> {
         let result = group_window_expr_by_sort_keys(vec![])?;
         let expected: Vec<(WindowSortKey, Vec<Expr>)> = vec![];
@@ -1796,6 +1837,31 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_group_window_expr_by_sort_keys_aliased_window_expr() -> Result<()> {
+        let age_asc = Sort::new(col("age"), true, true);
+        let max1 = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::AggregateUDF(max_udaf()),
+            vec![col("name")],
+        ))
+        .order_by(vec![age_asc.clone()])
+        .build()
+        .unwrap();
+        // The same window function under an alias, as the Substrait consumer
+        // produces when a window column's default name collides with an
+        // input column. It must be grouped by the inner function's sort key
+        // and kept aliased.
+        let max1_aliased = max1.clone().alias("max_name");
+
+        let result =
+            group_window_expr_by_sort_keys(vec![max1.clone(), max1_aliased.clone()])?;
+
+        let key = vec![(age_asc, false)];
+        let expected: Vec<(WindowSortKey, Vec<Expr>)> =
+            vec![(key, vec![max1, max1_aliased])];
+        assert_eq!(expected, result);
+        Ok(())
+    }
     #[test]
     fn test_group_window_expr_by_sort_keys() -> Result<()> {
         let age_asc = Sort::new(col("age"), true, true);

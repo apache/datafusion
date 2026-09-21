@@ -259,6 +259,15 @@ SELECT * FROM generate_series(DATE '2262-04-10', DATE '2262-04-11', INTERVAL '2'
 ----
 2262-04-10T00:00:00
 
+# Mixed-sign interval components do not have a stable direction because month
+# arithmetic depends on the current calendar date. Reject them rather than
+# returning an empty series or failing to make progress.
+statement error DataFusion error: Error during planning: Step interval cannot have mixed signs
+SELECT * FROM generate_series(TIMESTAMP '2024-01-31', TIMESTAMP '2024-02-01', INTERVAL '1 MONTH -29 DAY')
+
+statement error DataFusion error: Error during planning: Step interval cannot have mixed signs
+SELECT * FROM range(DATE '2024-02-01', DATE '2024-01-01', INTERVAL '-1 MONTH 29 DAY')
+
 #
 # Timestamp bounds of every precision
 # https://github.com/apache/datafusion/issues/25169

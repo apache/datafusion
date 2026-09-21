@@ -99,7 +99,7 @@ impl AggregateTableMetrics {
 
 pub(super) use common::{
     AggregateHashTable, FinalMarker, PartialMarker, PartialReduceMarker,
-    PartialSkipMarker, SingleMarker,
+    PartialSkipMarker, SingleMarker, create_group_accumulator,
 };
 pub(super) use common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetrics};
 
