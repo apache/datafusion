@@ -1216,7 +1216,67 @@ enum ShortCircuitStrategy {
 /// the side that cannot short-circuit the operator is rare:
 /// - for `AND`, when the proportion of `true` is less than or equal to 0.2
 /// - for `OR`, when the proportion of `false` is less than or equal to 0.2
-const PRE_SELECTION_THRESHOLD: f32 = 0.2;
+///
+/// Public only so that crates modelling this behaviour can share the
+/// definition; not part of the API surface DataFusion advertises.
+#[doc(hidden)]
+pub const PRE_SELECTION_THRESHOLD: f32 = 0.2;
+
+/// How much of the batch an `AND`'s right-hand side is evaluated on, given the
+/// shape of its left-hand side's result.
+///
+/// This is the observable consequence of `check_short_circuit` for `AND`,
+/// exposed so that consumers modelling the cost of a conjunction share one
+/// definition with the code that implements it. See [`and_rhs_evaluation`].
+///
+/// Public only so that crates modelling this behaviour can share the
+/// definition; not part of the API surface DataFusion advertises.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AndRhsEvaluation {
+    /// The left-hand side is `false` on every row, so the right-hand side is
+    /// not evaluated at all.
+    Skipped,
+    /// The left-hand side has no nulls and is `true` on few enough rows
+    /// ([`PRE_SELECTION_THRESHOLD`]), so the right-hand side is evaluated only
+    /// on the rows where it is `true`.
+    PreSelected,
+    /// The right-hand side is evaluated on the whole batch. This is the case
+    /// whenever the left-hand side produces a null, however selective it looks.
+    FullBatch,
+}
+
+/// What an `AND` does with its right-hand side, given its left-hand side's
+/// `true` count, null count and length.
+///
+/// `true_count` counts non-null `true`s; it is only consulted when
+/// `null_count` is zero, where the two conventions coincide.
+///
+/// `check_short_circuit` decides by this function, so a caller that models
+/// conjunction cost cannot drift away from what evaluation actually does.
+///
+/// Public only so that crates modelling this behaviour can share the
+/// definition; not part of the API surface DataFusion advertises.
+#[doc(hidden)]
+pub fn and_rhs_evaluation(
+    true_count: usize,
+    null_count: usize,
+    len: usize,
+) -> AndRhsEvaluation {
+    // A null makes `AND` fall through to a plain full-batch evaluation: it can
+    // neither skip the right-hand side nor build a pre-selection mask from a
+    // left-hand side it cannot interpret row by row.
+    if null_count > 0 || len == 0 {
+        return AndRhsEvaluation::FullBatch;
+    }
+    if true_count == 0 {
+        return AndRhsEvaluation::Skipped;
+    }
+    if true_count < len && true_count as f32 / len as f32 <= PRE_SELECTION_THRESHOLD {
+        return AndRhsEvaluation::PreSelected;
+    }
+    AndRhsEvaluation::FullBatch
+}
 
 /// Checks if a logical operator (`AND`/`OR`) can short-circuit evaluation based on the left-hand side (lhs) result.
 ///
@@ -1254,35 +1314,41 @@ fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrate
         ColumnarValue::Array(array) => {
             // Fast path for arrays - try to downcast to boolean array
             if let Ok(bool_array) = as_boolean_array(array) {
-                // Arrays with nulls can't be short-circuited
-                if bool_array.null_count() > 0 {
-                    return ShortCircuitStrategy::None;
-                }
-
                 let len = bool_array.len();
                 if len == 0 {
                     return ShortCircuitStrategy::None;
                 }
 
+                let null_count = bool_array.null_count();
                 let true_count = bool_array.values().count_set_bits();
                 if is_and {
-                    if true_count == 0 {
-                        return ShortCircuitStrategy::ReturnLeft;
-                    }
-
-                    if true_count == len {
-                        return ShortCircuitStrategy::ReturnRight;
-                    }
-
-                    if true_count as f32 / len as f32 <= PRE_SELECTION_THRESHOLD {
-                        // Select rows where the LHS is true; rows where the LHS
-                        // is false are false regardless of the RHS.
-                        return ShortCircuitStrategy::PreSelection {
-                            mask: bool_array.clone(),
-                            fill_value: false,
-                        };
+                    // Decided by `and_rhs_evaluation` so that consumers
+                    // modelling this behaviour cannot drift away from it.
+                    match and_rhs_evaluation(true_count, null_count, len) {
+                        AndRhsEvaluation::Skipped => {
+                            return ShortCircuitStrategy::ReturnLeft;
+                        }
+                        AndRhsEvaluation::PreSelected => {
+                            // Select rows where the LHS is true; rows where the
+                            // LHS is false are false regardless of the RHS.
+                            return ShortCircuitStrategy::PreSelection {
+                                mask: bool_array.clone(),
+                                fill_value: false,
+                            };
+                        }
+                        // All true: the RHS alone decides. Otherwise fall
+                        // through to a plain full-batch evaluation.
+                        AndRhsEvaluation::FullBatch => {
+                            if null_count == 0 && true_count == len {
+                                return ShortCircuitStrategy::ReturnRight;
+                            }
+                        }
                     }
                 } else {
+                    // Arrays with nulls can't be short-circuited
+                    if null_count > 0 {
+                        return ShortCircuitStrategy::None;
+                    }
                     if true_count == len {
                         return ShortCircuitStrategy::ReturnLeft;
                     }
