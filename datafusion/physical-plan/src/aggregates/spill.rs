@@ -57,7 +57,7 @@ pub(super) struct AggregateSpill {
     /// # Example walkthrough
     ///
     /// This example walks through two key APIs of [`AggregateSpill`]:
-    /// - [`AggregateSpill::spill`]
+    /// - [`AggregateSpill::sort_and_spill`]
     /// - [`AggregateSpill::into_replay_stream`]
     ///
     /// ```txt
@@ -67,7 +67,7 @@ pub(super) struct AggregateSpill {
     /// Step 1: OOM round 1
     /// --------------------
     ///
-    /// First OOM: sort by k and write spill file 1 using `AggregateSpill::spill`.
+    /// First OOM: sort by k and write spill file 1 using `AggregateSpill::sort_and_spill`.
     ///
     /// Buffered batch        Spill file 1 (sorted)
     /// k  partial_sum        k  partial_sum
@@ -211,7 +211,10 @@ impl AggregateSpill {
     /// Sorts `state_batch`, the intermediate state of all currently buffered
     /// groups (`None` if there are no groups), and writes it as one spill file.
     /// Memory reservation should be updated by the caller.
-    pub(super) fn spill(&mut self, state_batch: Option<RecordBatch>) -> Result<()> {
+    pub(super) fn sort_and_spill(
+        &mut self,
+        state_batch: Option<RecordBatch>,
+    ) -> Result<()> {
         let Some(state_batch) = state_batch else {
             return Ok(());
         };

@@ -410,7 +410,7 @@ impl OrderedSingleAggregateStream {
         let timer = elapsed_compute.timer();
         let mut result = table
             .take_state_batch()
-            .and_then(|batch| spill_context.spill(batch));
+            .and_then(|batch| spill_context.sort_and_spill(batch));
 
         // Spilling shrinks the aggregate table and releases its accumulated
         // memory. Update the reservation accordingly.
@@ -457,7 +457,7 @@ impl OrderedSingleAggregateStream {
         let timer = elapsed_compute.timer();
         let replay = match table
             .take_state_batch()
-            .and_then(|batch| spill_context.spill(batch))
+            .and_then(|batch| spill_context.sort_and_spill(batch))
         {
             Ok(()) => {
                 let metrics = table.metrics();
