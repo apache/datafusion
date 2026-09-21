@@ -21,7 +21,6 @@ use arrow::{
     compute::{concat, concat_batches},
 };
 use arrow_schema::{SchemaRef, SortOptions};
-use datafusion_common::not_impl_err;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{JoinSide, Result, internal_datafusion_err, internal_err};
 use datafusion_common_runtime::SpawnedTask;
@@ -50,9 +49,7 @@ use crate::joins::piecewise_merge_join::existence_join::{
     ExistencePWMJStream, extreme_key,
 };
 use crate::joins::piecewise_merge_join::right_existence_join::RightExistencePWMJStream;
-use crate::joins::piecewise_merge_join::utils::{
-    is_existence_join, is_supported_existence_join, is_supported_right_existence_join,
-};
+use crate::joins::piecewise_merge_join::utils::is_right_existence_join;
 use crate::joins::utils::asymmetric_join_output_partitioning;
 use crate::metrics::MetricsSet;
 use crate::{
@@ -164,14 +161,15 @@ use crate::{
 /// ```
 ///
 /// ## Existence Joins (Semi, Anti, Mark)
-/// Every Semi/Anti join is supported; the Mark joins are rejected in [`Self::try_new`], as they
-/// need an extra boolean column rather than a subset of one side's rows. The two sides are
-/// served by different streams, because a single range predicate makes them different problems.
+/// Every Semi/Anti/Mark join is supported. The two sides are served by different streams,
+/// because a single range predicate makes them different problems.
 ///
-/// `LeftSemi`/`LeftAnti` mark the buffered (left) side, which is `ExistencePWMJStream` (see
-/// `existence_join.rs`). Instead of materializing row pairs it records the matched set as a
-/// single index -- the start of the matched suffix of the buffered side -- and slices the
-/// buffered batch at that index once every streamed partition has been consumed.
+/// `LeftSemi`/`LeftAnti`/`LeftMark` mark the buffered (left) side, which is
+/// `ExistencePWMJStream` (see `existence_join.rs`). Instead of materializing row pairs it
+/// records the matched set as a single index -- the start of the matched suffix of the
+/// buffered side -- and, once every streamed partition has been consumed, either slices the
+/// buffered batch at that index (`LeftSemi`/`LeftAnti`) or emits the whole batch with a `mark`
+/// column built from it (`LeftMark`).
 ///
 /// ```text
 /// // Using the example of a less than `<` operation
@@ -213,13 +211,14 @@ use crate::{
 ///             min value: 200
 /// ```
 ///
-/// `RightSemi`/`RightAnti` mark the streamed (right) side, which is
+/// `RightSemi`/`RightAnti`/`RightMark` mark the streamed (right) side, which is
 /// `RightExistencePWMJStream` (see `right_existence_join.rs`). Asking whether any buffered
 /// row matches a given streamed row is, for a single range predicate, decided by one buffered
 /// key -- the minimum for `<`/`<=`, the maximum for `>`/`>=`. So the buffered side is folded
 /// down to that key as it arrives and never materialized, and each streamed batch is compared
-/// against it, filtered, and emitted straight away rather than at the end. These are the only
-/// join types here that require no ordered input and hold `O(1)` state.
+/// against it and emitted straight away rather than at the end -- filtered for
+/// `RightSemi`/`RightAnti`, kept whole with a `mark` column appended for `RightMark`. These
+/// are the only join types here that require no ordered input and hold `O(1)` state.
 ///
 /// ```text
 /// // Using the example of a less than `<` operation
@@ -230,8 +229,8 @@ use crate::{
 ///         output stream_row
 /// ```
 ///
-/// Except for `RightSemi`/`RightAnti`, the buffered side must be sorted ascending for
-/// `Operator::Lt` (<) or `Operator::LtEq` (<=) and descending for `Operator::Gt` (>) or
+/// Except for `RightSemi`/`RightAnti`/`RightMark`, the buffered side must be sorted ascending
+/// for `Operator::Lt` (<) or `Operator::LtEq` (<=) and descending for `Operator::Gt` (>) or
 /// `Operator::GtEq` (>=).
 ///
 /// # Partitioning Logic
@@ -240,10 +239,11 @@ use crate::{
 /// for processing the rest of the unmatched rows for Left and Full joins. The last partition that finishes
 /// execution will be responsible for outputting the unmatched rows.
 ///
-/// `RightSemi`/`RightAnti` need no such coordination: each streamed row is decided on its own,
-/// so every partition emits its own output and none has a final pass to run. They also place no
-/// single-partition requirement on the buffered side -- a min/max combines across partitions, so
-/// each is folded on its own task rather than funnelled through a `CoalescePartitionsExec`.
+/// `RightSemi`/`RightAnti`/`RightMark` need no such coordination: each streamed row is decided
+/// on its own, so every partition emits its own output and none has a final pass to run. They
+/// also place no single-partition requirement on the buffered side -- a min/max combines across
+/// partitions, so each is folded on its own task rather than funnelled through a
+/// `CoalescePartitionsExec`.
 ///
 /// # Performance Explanation (cost)
 /// Piecewise Merge Join is used over Nested Loop Join due to its superior performance. Here is the breakdown:
@@ -320,14 +320,13 @@ impl PiecewiseMergeJoinExec {
         join_type: JoinType,
         num_partitions: usize,
     ) -> Result<Self> {
-        // Semi/Anti joins are handled by the existence streams; Mark joins are not
-        // supported yet.
-        if is_existence_join(join_type) && !is_supported_existence_join(join_type) {
-            return not_impl_err!(
-                "Existence join {join_type} is currently not supported for PiecewiseMergeJoin"
-            );
-        }
-
+        // There is no `null_aware` parameter here, unlike `HashJoinExec::try_new`:
+        // `mark_streamed_batch`/`emit_matched` always build a non-nullable `mark` column.
+        // That is sound because `join_on` is guaranteed non-empty whenever `null_aware` is
+        // set (see `ExtractEquijoinPredicate`, which moves the hash-equality predicate that
+        // makes a mark join null-aware into `on`), and the PWMJ branch in
+        // `physical_planner.rs` is only reached when `join_on` is empty.
+        //
         // Take the operator and enforce a sort order on the streamed + buffered side based on
         // the operator type.
         let sort_options = match operator {
@@ -467,11 +466,13 @@ impl PiecewiseMergeJoinExec {
     fn maintains_input_order(join_type: JoinType) -> Vec<bool> {
         match join_type {
             // One output batch per streamed batch, in arrival order, with rows only ever
-            // *removed* by a filter, so each output partition keeps its streamed partition's
-            // order. The buffered side contributes no output column, hence `false` there.
-            // `RightMark` is excluded: it adds a `mark` column, so its orderings would not
-            // map across unchanged.
-            JoinType::RightSemi | JoinType::RightAnti => vec![false, true],
+            // *removed* by a filter (`RightSemi`/`RightAnti`) or left in place with a `mark`
+            // column appended (`RightMark`) -- neither reorders a surviving row relative to
+            // the others, so each output partition keeps its streamed partition's order. The
+            // buffered side contributes no output column of its own, hence `false` there.
+            JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
+                vec![false, true]
+            }
             // Unlike the right existence joins above, output here is gated on a watermark
             // shared across every streamed partition (see `ExistencePWMJStream`) and emitted
             // only from whichever partition finishes last, so no streamed partition's output
@@ -479,7 +480,6 @@ impl PiecewiseMergeJoinExec {
             JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
                 vec![false, false]
             }
-            JoinType::RightMark => vec![false, false],
             // Left, Right, Full, Inner Join is not guaranteed to maintain
             // input order as the streamed side will be sorted during
             // execution for `PiecewiseMergeJoin`
@@ -555,7 +555,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         // partitions, so that side keeps whatever parallelism the plan gave it -- no
         // `CoalescePartitionsExec` funnelling every buffered row through one thread. Every
         // other join type walks the buffered side as a single sorted run and does need it.
-        let buffered = if is_supported_right_existence_join(self.join_type) {
+        let buffered = if is_right_existence_join(self.join_type) {
             Distribution::UnspecifiedDistribution
         } else {
             Distribution::SinglePartition
@@ -578,7 +578,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         // One deviation: right existence joins ask for `UnspecifiedDistribution` on the buffered
         // side, which that rule reads as "worth fanning out". Folding a batch is one linear scan,
         // which does not pay for a channel hop, so decline the round-robin `RepartitionExec`.
-        if is_supported_right_existence_join(self.join_type)
+        if is_right_existence_join(self.join_type)
             && let Some(buffered) = benefits.first_mut()
         {
             *buffered = false;
@@ -594,7 +594,7 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         //
         // The streamed side never carries a requirement: the classic and left existence
         // streams sort each batch in memory, and the right existence stream needs no order.
-        if is_supported_right_existence_join(self.join_type) {
+        if is_right_existence_join(self.join_type) {
             vec![None, None]
         } else {
             vec![
@@ -702,51 +702,54 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
         let streamed_partitions = self.streamed.output_partitioning().partition_count();
 
         let batch_size = context.session_config().batch_size();
+        // Right existence joins never read a buffered *row*, only a single min/max over the
+        // whole side, so they fold the buffered input away as it arrives instead of
+        // collecting it. `RightMark` decides its `mark` column with the exact same
+        // comparison as `RightSemi`/`RightAnti` -- it just keeps every row instead of
+        // filtering by it -- so it takes the same path.
+        if is_right_existence_join(self.join_type) {
+            // `∃b. b < s` is decided by the smallest buffered key, `∃b. b > s` by the
+            // largest, so the operator alone picks the extreme.
+            let descending = matches!(self.operator, Operator::Gt | Operator::GtEq);
+            let extreme_fut = self.buffered_extreme_fut.try_once(|| {
+                let reservation =
+                    MemoryConsumer::new("PiecewiseMergeJoinBufferedExtreme")
+                        .register(context.memory_pool());
+
+                // Every buffered partition, not just partition 0: this join type does not
+                // require the buffered side coalesced, so it must consume all of it.
+                let buffered_partitions =
+                    self.buffered.output_partitioning().partition_count();
+                let buffered_streams = (0..buffered_partitions)
+                    .map(|p| self.buffered.execute(p, Arc::clone(&context)))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(build_buffered_extreme(
+                    buffered_streams,
+                    self.buffered.schema(),
+                    Arc::clone(&on_buffered),
+                    metrics.clone(),
+                    reservation,
+                    Arc::clone(context.memory_pool()),
+                    descending,
+                ))
+            })?;
+
+            let streamed = self.streamed.execute(partition, Arc::clone(&context))?;
+
+            return Ok(Box::pin(RightExistencePWMJStream::try_new(
+                Arc::clone(&self.schema),
+                on_streamed,
+                self.join_type,
+                self.operator,
+                streamed,
+                extreme_fut,
+                metrics,
+                batch_size,
+            )));
+        }
+
         match self.join_type {
-            // Right existence joins never read a buffered *row*, only a single min/max over
-            // the whole side, so they fold the buffered input away as it arrives instead of
-            // collecting it.
-            JoinType::RightSemi | JoinType::RightAnti => {
-                // `∃b. b < s` is decided by the smallest buffered key, `∃b. b > s` by the
-                // largest, so the operator alone picks the extreme.
-                let descending = matches!(self.operator, Operator::Gt | Operator::GtEq);
-                let extreme_fut = self.buffered_extreme_fut.try_once(|| {
-                    let reservation =
-                        MemoryConsumer::new("PiecewiseMergeJoinBufferedExtreme")
-                            .register(context.memory_pool());
-
-                    // Every buffered partition, not just partition 0: this join type does not
-                    // require the buffered side coalesced, so it must consume all of it.
-                    let buffered_partitions =
-                        self.buffered.output_partitioning().partition_count();
-                    let buffered_streams = (0..buffered_partitions)
-                        .map(|p| self.buffered.execute(p, Arc::clone(&context)))
-                        .collect::<Result<Vec<_>>>()?;
-                    Ok(build_buffered_extreme(
-                        buffered_streams,
-                        self.buffered.schema(),
-                        Arc::clone(&on_buffered),
-                        metrics.clone(),
-                        reservation,
-                        Arc::clone(context.memory_pool()),
-                        descending,
-                    ))
-                })?;
-
-                let streamed = self.streamed.execute(partition, Arc::clone(&context))?;
-
-                Ok(Box::pin(RightExistencePWMJStream::try_new(
-                    Arc::clone(&self.schema),
-                    on_streamed,
-                    self.join_type,
-                    self.operator,
-                    streamed,
-                    extreme_fut,
-                    metrics,
-                    batch_size,
-                )))
-            }
-            JoinType::LeftSemi | JoinType::LeftAnti => {
+            JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
                 let buffered_side = self.buffered_side(
                     &context,
                     &on_buffered,
@@ -767,10 +770,6 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                     batch_size,
                 )))
             }
-            JoinType::LeftMark | JoinType::RightMark => internal_err!(
-                "PiecewiseMergeJoin does not support existence join {} (should have been rejected in try_new)",
-                self.join_type
-            ),
             JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
                 let buffered_side = self.buffered_side(
                     &context,
@@ -792,6 +791,12 @@ impl ExecutionPlan for PiecewiseMergeJoinExec {
                     metrics,
                     batch_size,
                 )))
+            }
+            JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
+                unreachable!(
+                    "is_right_existence_join returned false for {:?}, which the `if` above handles",
+                    self.join_type
+                )
             }
         }
     }

@@ -17,21 +17,20 @@
 
 //! PiecewiseMergeJoin stream specialized for right existence joins.
 //!
-//! Instantiated by [`PiecewiseMergeJoinExec`] when the join type is `RightSemi` or
-//! `RightAnti`. `LeftSemi`/`LeftAnti` are served by `ExistencePWMJStream` (see
-//! `existence_join.rs`); the Mark joins are still rejected in
-//! `PiecewiseMergeJoinExec::try_new`.
+//! Instantiated by [`PiecewiseMergeJoinExec`] when the join type is `RightSemi`, `RightAnti`,
+//! or `RightMark`. `LeftSemi`/`LeftAnti`/`LeftMark` are served by `ExistencePWMJStream` (see
+//! `existence_join.rs`).
 //!
 //! # Algorithm
 //!
 //! Left and right existence joins mark opposite sides, and for a single range predicate
 //! that difference is not symmetric — it collapses the work.
 //!
-//! `LeftSemi`/`LeftAnti` ask, for each *buffered* row, whether any streamed row matches, so
-//! the answer depends on the whole streamed side and can only be emitted once it has all
-//! been read. `RightSemi`/`RightAnti` ask the mirror question — for each *streamed* row,
-//! does any buffered row match? — and with only `buffered_key OP streamed_key` to satisfy,
-//! that is decided by a single buffered key:
+//! `LeftSemi`/`LeftAnti`/`LeftMark` ask, for each *buffered* row, whether any streamed row
+//! matches, so the answer depends on the whole streamed side and can only be emitted once it
+//! has all been read. `RightSemi`/`RightAnti`/`RightMark` ask the mirror question — for each
+//! *streamed* row, does any buffered row match? — and with only `buffered_key OP
+//! streamed_key` to satisfy, that is decided by a single buffered key:
 //!
 //! ```text
 //!   ∃b. b <  s   ⟺   min(b) <  s          ∃b. b >  s   ⟺   max(b) >  s
@@ -53,8 +52,9 @@
 //! child and no `SortExec` is planned.
 //!
 //! Every streamed row is then decided by comparing it against that one key, which is a
-//! vectorized `cmp` kernel per batch and a filter. Nothing about a streamed row depends on
-//! any other, so:
+//! vectorized `cmp` kernel per batch, followed by a filter (`RightSemi`/`RightAnti`) or a
+//! `mark` column appended to the batch unfiltered (`RightMark`). Nothing about a streamed row
+//! depends on any other, so:
 //!
 //! * output is produced per batch as it arrives — no watermark, no final pass, and no
 //!   election among the streamed partitions,
@@ -64,9 +64,11 @@
 //! Rows whose join key is NULL never satisfy a comparison predicate. `min_batch`/`max_batch`
 //! ignore NULLs, so the reduced key is null only when *every* buffered key is (or the buffered
 //! side is empty) — and then no streamed row can match at all, which makes `RightSemi` empty
-//! without reading the streamed side and `RightAnti` a passthrough of it. A NULL streamed key
-//! makes its comparison NULL rather than false, which is "no match" — dropped by `RightSemi`,
-//! kept by `RightAnti`.
+//! without reading the streamed side, and `RightAnti`/`RightMark` a passthrough of it (`mark`
+//! false on every row for the latter). A NULL streamed key makes its comparison NULL rather
+//! than false, which is "no match" — dropped by `RightSemi`, kept by `RightAnti`, and folded
+//! to `false` rather than left NULL for `RightMark`, matching the `mark` column's documented
+//! never-NULL semantics (see `JoinType::LeftMark`).
 //!
 //! Picking the extreme and comparing against it must agree on ordering. `min_batch`/`max_batch`
 //! order floats by `total_cmp` (`arrow-arith`'s `MinAccumulator` compares with
@@ -75,13 +77,13 @@
 //! actually evaluates to: any `BinaryExpr` comparison, including the one the
 //! `NestedLoopJoinExec` oracle in the differential fuzz test builds its filter from, normalizes
 //! `-0.0` to `+0.0` first (see `apply_cmp` in `datafusion-physical-expr-common`, which
-//! [`filter_streamed_batch`](RightExistencePWMJStream::filter_streamed_batch) calls to compare
-//! the extreme against each streamed batch). `apply_cmp` normalizes both operands itself, so
-//! nothing here has to: the reduction can order `-0.0` below `+0.0` as `min`/`max` do, and the
-//! comparison it feeds into still agrees with SQL semantics. `NaN` needs no such fix-up: every
-//! kernel involved orders it as the maximum, so it is treated identically on both sides already.
-//! `apply_cmp` also dispatches to the nested-aware comparator for List/Struct keys, which the
-//! raw arrow `lt`/`lt_eq`/`gt`/`gt_eq` kernels reject outright.
+//! [`matched_mask`](RightExistencePWMJStream::matched_mask) calls to compare the extreme
+//! against each streamed batch). `apply_cmp` normalizes both operands itself, so nothing here
+//! has to: the reduction can order `-0.0` below `+0.0` as `min`/`max` do, and the comparison it
+//! feeds into still agrees with SQL semantics. `NaN` needs no such fix-up: every kernel involved
+//! orders it as the maximum, so it is treated identically on both sides already. `apply_cmp`
+//! also dispatches to the nested-aware comparator for List/Struct keys, which the raw arrow
+//! `lt`/`lt_eq`/`gt`/`gt_eq` kernels reject outright.
 //!
 //! # Cost
 //!
@@ -99,7 +101,8 @@
 use std::sync::Arc;
 use std::task::{Poll, ready};
 
-use arrow::array::{AsArray, RecordBatch};
+use arrow::array::{ArrayRef, AsArray, BooleanArray, RecordBatch};
+use arrow::buffer::BooleanBuffer;
 use arrow::compute::BatchCoalescer;
 use arrow::compute::filter_record_batch;
 use arrow::compute::kernels::boolean::not;
@@ -122,7 +125,7 @@ pub(super) enum RightExistencePWMJStreamState {
     /// Await the buffered side's reduction to a single key.
     WaitBufferedExtreme,
     /// Fetch streamed batches and emit the rows that do (`RightSemi`) or do not
-    /// (`RightAnti`) have a buffered match.
+    /// (`RightAnti`) have a buffered match, or every row with `mark` appended (`RightMark`).
     ScanStreamBatches,
     /// Streamed side exhausted; drain whatever `output_batches` still holds.
     Draining,
@@ -130,12 +133,13 @@ pub(super) enum RightExistencePWMJStreamState {
 }
 
 pub(super) struct RightExistencePWMJStream {
-    /// Output schema, which for `RightSemi`/`RightAnti` is the streamed side's schema
+    /// Output schema, which for `RightSemi`/`RightAnti` is the streamed side's schema, and for
+    /// `RightMark` is that schema plus a trailing `mark` column
     schema: SchemaRef,
     /// Physical expression evaluated on the streamed side. The buffered side's
     /// equivalent is already evaluated when the buffered side is collected.
     on_streamed: PhysicalExprRef,
-    /// `RightSemi` or `RightAnti`
+    /// `RightSemi`, `RightAnti`, or `RightMark`
     join_type: JoinType,
     /// Comparison operator
     operator: Operator,
@@ -214,13 +218,13 @@ impl RightExistencePWMJStream {
 
         // Null exactly when no buffered key is non-null, and NULLs match nothing. `apply_cmp`
         // normalizes `-0.0`/`+0.0` on both operands when it compares this against the streamed
-        // key in `filter_streamed_batch`, so no normalization is needed here.
+        // key in `matched_mask`, so no normalization is needed here.
         let extreme = ScalarValue::try_from_array(buffered_extreme.extreme(), 0)?;
         self.buffered_extreme = (!extreme.is_null()).then_some(extreme);
 
         // With no non-null buffered key nothing matches, so `RightSemi` outputs nothing
-        // and does not need to read a single streamed batch. `RightAnti` still has to,
-        // since it outputs all of them.
+        // and does not need to read a single streamed batch. `RightAnti`/`RightMark` still
+        // have to, since they output all of them (the latter with `mark` false throughout).
         self.state = match (&self.buffered_extreme, self.join_type) {
             (None, JoinType::RightSemi) => {
                 let streamed_schema = self.streamed.schema();
@@ -233,7 +237,7 @@ impl RightExistencePWMJStream {
         Poll::Ready(Ok(StatefulStreamResult::Continue))
     }
 
-    /// Fetches one streamed batch, filters it, and pushes the survivors into
+    /// Fetches one streamed batch, filters or marks it, and pushes the result into
     /// `output_batches`. Once the streamed side is exhausted, flushes the coalescer's
     /// partial batch and hands off to [`Self::drain_output`].
     fn scan_stream_batch(
@@ -253,7 +257,10 @@ impl RightExistencePWMJStream {
                 self.join_metrics.input_batches.add(1);
                 self.join_metrics.input_rows.add(batch.num_rows());
 
-                let output = self.filter_streamed_batch(&batch)?;
+                let output = match self.join_type {
+                    JoinType::RightMark => self.mark_streamed_batch(&batch)?,
+                    _ => self.filter_streamed_batch(&batch)?,
+                };
                 if output.num_rows() > 0 {
                     self.output_batches.push_batch(output)?;
                 }
@@ -277,43 +284,52 @@ impl RightExistencePWMJStream {
         }
     }
 
+    /// Compares a streamed batch's key against the single buffered extreme, on the same
+    /// `buffered OP streamed` orientation the predicate has. `None` when the buffered side has
+    /// no non-null key, in which case no streamed row can match anything.
+    fn matched_mask(&self, batch: &RecordBatch) -> Result<Option<BooleanArray>> {
+        let Some(extreme) = &self.buffered_extreme else {
+            return Ok(None);
+        };
+
+        let stream_values = ColumnarValue::Array(
+            self.on_streamed
+                .evaluate(batch)?
+                .into_array(batch.num_rows())?,
+        );
+
+        // `extreme` is the buffered key, so it goes on the left of the operator, matching the
+        // `buffered OP streamed` orientation of the predicate. `apply_cmp` dispatches to the
+        // nested-aware comparator for List/Struct keys, unlike the raw arrow
+        // `lt`/`lt_eq`/`gt`/`gt_eq` kernels, which reject those types outright.
+        let matched = apply_cmp(
+            self.operator,
+            &ColumnarValue::Scalar(extreme.clone()),
+            &stream_values,
+        )?
+        .into_array(batch.num_rows())?;
+
+        Ok(Some(matched.as_boolean().clone()))
+    }
+
     /// Keeps the streamed rows that have a buffered match (`RightSemi`) or that have none
     /// (`RightAnti`), by comparing each against the single buffered extreme.
     fn filter_streamed_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
-        let columns = match &self.buffered_extreme {
+        let columns = match self.matched_mask(batch)? {
             // No non-null buffered key, so no streamed row matches and `RightAnti` keeps
             // the batch whole. `RightSemi` never gets here: it completed without reading
             // the streamed side.
             None => batch.columns().to_vec(),
-            Some(extreme) => {
-                let stream_values = ColumnarValue::Array(
-                    self.on_streamed
-                        .evaluate(batch)?
-                        .into_array(batch.num_rows())?,
-                );
-
-                // `extreme` is the buffered key, so it goes on the left of the operator,
-                // matching the `buffered OP streamed` orientation of the predicate. `apply_cmp`
-                // dispatches to the nested-aware comparator for List/Struct keys, unlike the
-                // raw arrow `lt`/`lt_eq`/`gt`/`gt_eq` kernels this used to call directly, which
-                // reject those types outright.
-                let matched = apply_cmp(
-                    self.operator,
-                    &ColumnarValue::Scalar(extreme.clone()),
-                    &stream_values,
-                )?
-                .into_array(batch.num_rows())?;
-                let matched = matched.as_boolean();
-
+            Some(matched) => {
                 let predicate = match self.join_type {
                     // A NULL streamed key compares NULL rather than false, and `filter`
                     // already treats NULL as "not selected" -- which is what a
                     // non-matching row is.
-                    JoinType::RightSemi => matched.clone(),
+                    JoinType::RightSemi => matched,
                     // Anti needs the complement, so those NULLs have to be folded into
                     // false first: `not(NULL)` is NULL, which would drop a row that
                     // matched nothing.
-                    _ => not(&boolean_mask_from_filter(matched))?,
+                    _ => not(&boolean_mask_from_filter(&matched))?,
                 };
 
                 filter_record_batch(batch, &predicate)?.columns().to_vec()
@@ -323,6 +339,29 @@ impl RightExistencePWMJStream {
         // Right existence joins output the streamed columns only. The streamed child's
         // schema is field-for-field equal to the join's own, but rebuild against the
         // latter so the stream's declared schema is what it yields.
+        Ok(RecordBatch::try_new(Arc::clone(&self.schema), columns)?)
+    }
+
+    /// Keeps every streamed row -- nothing is filtered -- and appends the comparison against
+    /// the single buffered extreme as a `mark` column: `true` where some buffered row
+    /// matches, `false` everywhere else, including where the streamed key is NULL (the `mark`
+    /// column is documented never to be NULL; see `JoinType::LeftMark`).
+    fn mark_streamed_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
+        let mark: ArrayRef = match self.matched_mask(batch)? {
+            None => Arc::new(BooleanArray::new(
+                BooleanBuffer::new_unset(batch.num_rows()),
+                None,
+            )),
+            Some(matched) => Arc::new(boolean_mask_from_filter(&matched)),
+        };
+
+        let mut columns = batch.columns().to_vec();
+        columns.push(mark);
+
+        // Right existence joins output the streamed columns (plus `mark` for `RightMark`)
+        // only. The streamed child's schema is field-for-field equal to the join's own for
+        // those columns, but rebuild against the latter so the stream's declared schema is
+        // what it yields.
         Ok(RecordBatch::try_new(Arc::clone(&self.schema), columns)?)
     }
 }
@@ -355,7 +394,9 @@ mod tests {
         ExecutionPlan, ExecutionPlanProperties, common, joins::PiecewiseMergeJoinExec,
         test::TestMemoryExec,
     };
-    use arrow::array::{DictionaryArray, Int32Array, ListArray, StructArray};
+    use arrow::array::{
+        DictionaryArray, Float64Array, Int32Array, ListArray, StructArray,
+    };
     use arrow::compute::SortOptions;
     use arrow::datatypes::Int32Type;
     use arrow_schema::{DataType, Field, Schema};
@@ -503,6 +544,106 @@ mod tests {
         | 20 | 5 |
         | 30 | 6 |
         +----+---+
+        ");
+        Ok(())
+    }
+
+    /// `RightMark` keeps every streamed row -- unlike `RightSemi`/`RightAnti`, none is
+    /// dropped -- and appends a `mark` column: `true` for exactly the rows `RightSemi` would
+    /// have kept.
+    #[tokio::test]
+    async fn join_right_mark() -> Result<()> {
+        let join = join(
+            kv_exec(&[vec![kv_batch(&[(1, Some(5)), (2, Some(1)), (3, Some(2))])]]),
+            kv_exec(&[vec![kv_batch(&[
+                (10, Some(4)),
+                (20, Some(5)),
+                (30, Some(6)),
+            ])]]),
+            Operator::Gt,
+            JoinType::RightMark,
+        )?;
+
+        let stream = join.execute(0, Arc::new(TaskContext::default()))?;
+        let batches = common::collect(stream).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+---+-------+
+        | id | k | mark  |
+        +----+---+-------+
+        | 10 | 4 | true  |
+        | 20 | 5 | false |
+        | 30 | 6 | false |
+        +----+---+-------+
+        ");
+        Ok(())
+    }
+
+    fn kv_float_schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("k", DataType::Float64, true),
+        ]))
+    }
+
+    fn kv_float_batch(rows: &[(i32, Option<f64>)]) -> RecordBatch {
+        let ids: Vec<i32> = rows.iter().map(|(id, _)| *id).collect();
+        let keys: Vec<Option<f64>> = rows.iter().map(|(_, k)| *k).collect();
+        RecordBatch::try_new(
+            kv_float_schema(),
+            vec![
+                Arc::new(Int32Array::from(ids)),
+                Arc::new(Float64Array::from(keys)),
+            ],
+        )
+        .unwrap()
+    }
+
+    fn kv_float_exec(partitions: &[Vec<RecordBatch>]) -> Arc<dyn ExecutionPlan> {
+        TestMemoryExec::try_new_exec(partitions, kv_float_schema(), None).unwrap()
+    }
+
+    /// `matched_mask` compares against the buffered extreme with `apply_cmp`, the same total
+    /// order (`f64::total_cmp`) `min`/`max` used to fold that extreme in the first place. Under
+    /// that order NaN is the largest float, so the buffered max here is NaN and every non-NaN
+    /// streamed key marks `true` -- `-Inf`, `0.0`, `-0.0`, and `2.0` are all `< NaN` -- while
+    /// NaN itself marks `false` (`NaN < NaN` is false under `total_cmp`, unlike an unordered
+    /// IEEE comparison, which would make it incomparable rather than false). `0.0` and `-0.0`
+    /// both marking `true` here also confirms they compare equal to each other and to every
+    /// ordinary float on this path, not just relative to a `-0.0` buffered key as in the
+    /// `LeftMark` case (see the `pwmj.slt` `-0.0` coverage under `LeftMark`). Same data as the
+    /// `RIGHT SEMI`/`RIGHT ANTI` NaN coverage in `pwmj.slt`, through `RightMark` instead.
+    #[tokio::test]
+    async fn join_right_mark_supports_nan_and_negative_zero() -> Result<()> {
+        let join = join(
+            kv_float_exec(&[vec![kv_float_batch(&[
+                (1, Some(1.0)),
+                (2, Some(f64::NAN)),
+            ])]]),
+            kv_float_exec(&[vec![kv_float_batch(&[
+                (1, Some(f64::NEG_INFINITY)),
+                (2, Some(0.0)),
+                (3, Some(-0.0)),
+                (4, Some(f64::NAN)),
+                (5, Some(2.0)),
+            ])]]),
+            Operator::Gt,
+            JoinType::RightMark,
+        )?;
+
+        let stream = join.execute(0, Arc::new(TaskContext::default()))?;
+        let batches = common::collect(stream).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+------+-------+
+        | id | k    | mark  |
+        +----+------+-------+
+        | 1  | -inf | true  |
+        | 2  | 0.0  | true  |
+        | 3  | -0.0 | true  |
+        | 4  | NaN  | false |
+        | 5  | 2.0  | true  |
+        +----+------+-------+
         ");
         Ok(())
     }
@@ -692,8 +833,8 @@ mod tests {
     ///
     /// The buffered side is sorted descending with NULLs first, as `<` requires, so the key
     /// this operator needs -- the minimum, 5 -- is the last row and the NULL is nowhere near
-    /// it. On the streamed side the NULL-keyed row matches nothing, so `RightSemi` drops it
-    /// and `RightAnti` keeps it.
+    /// it. On the streamed side the NULL-keyed row matches nothing, so `RightSemi` drops it,
+    /// `RightAnti` keeps it, and `RightMark` keeps it with `mark` folded to `false`.
     #[tokio::test]
     async fn null_keys_match_nothing() -> Result<()> {
         let buffered =
@@ -729,6 +870,27 @@ mod tests {
         | 10 | 5 |
         | 30 |   |
         +----+---+
+        ");
+
+        // `RightMark`'s NULL-keyed row (id 30) takes a different code path from
+        // `all_null_buffered_side_marks_every_row_false`: the buffered extreme here is a real,
+        // non-null 5, so `matched_mask` returns `Some` and the NULL streamed key compares NULL
+        // rather than short-circuiting on a `None` extreme. `mark_streamed_batch` must still
+        // fold that NULL to `false` via `boolean_mask_from_filter`, the same as `RightAnti`
+        // folds it to "keep" above -- this is the one test that exercises that fold for `mark`
+        // outside of the differential fuzzer's random NULLs.
+        let mark = join(buffered(), streamed(), Operator::Lt, JoinType::RightMark)?;
+        let batches =
+            common::collect(mark.execute(0, Arc::new(TaskContext::default()))?).await?;
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+-----+-------+
+        | id | k   | mark  |
+        +----+-----+-------+
+        | 10 | 5   | false |
+        | 20 | 6   | true  |
+        | 30 |     | false |
+        | 40 | 100 | true  |
+        +----+-----+-------+
         ");
         Ok(())
     }
@@ -788,6 +950,39 @@ mod tests {
         Ok(())
     }
 
+    /// The same all-NULL buffered side as the `RightSemi` test above, but for `RightMark`:
+    /// nothing can ever match, so every streamed row's `mark` is `false` -- never NULL, even
+    /// though the streamed keys include one. `RightMark` still has to read every batch, since
+    /// (unlike `RightSemi`) it outputs one row per streamed row regardless of its mark.
+    #[tokio::test]
+    async fn all_null_buffered_side_marks_every_row_false() -> Result<()> {
+        let join = join(
+            kv_exec(&[vec![kv_batch(&[(1, None), (2, None)])]]),
+            kv_exec(&[vec![
+                kv_batch(&[(10, Some(4))]),
+                kv_batch(&[(20, None)]),
+                kv_batch(&[(30, Some(6))]),
+            ]]),
+            Operator::Gt,
+            JoinType::RightMark,
+        )?;
+
+        let stream = join.execute(0, Arc::new(TaskContext::default()))?;
+        let batches = common::collect(stream).await?;
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+---+-------+
+        | id | k | mark  |
+        +----+---+-------+
+        | 10 | 4 | false |
+        | 20 |   | false |
+        | 30 | 6 | false |
+        +----+---+-------+
+        ");
+        assert_eq!(input_batches(&join), 3, "RightMark must read every batch");
+        Ok(())
+    }
+
     /// The streamed side's ordering survives this join -- one output batch per streamed batch, in
     /// order, with rows only removed -- so `maintains_input_order` claims it and the operator
     /// advertises the streamed child's ordering as its own. That lets a downstream operator skip
@@ -803,7 +998,11 @@ mod tests {
         .unwrap();
         let streamed = Arc::new(SortExec::new(ordering.clone(), streamed_input));
 
-        for join_type in [JoinType::RightSemi, JoinType::RightAnti] {
+        for join_type in [
+            JoinType::RightSemi,
+            JoinType::RightAnti,
+            JoinType::RightMark,
+        ] {
             let join = join(
                 kv_exec(&[vec![kv_batch(&[(1, Some(5))])]]),
                 Arc::clone(&streamed) as _,
@@ -840,11 +1039,15 @@ mod tests {
 
     /// A zero-row streamed batch still reaches the comparison kernel, which yields an empty
     /// mask rather than erroring, so the batch is filtered away and the surrounding batches
-    /// are unaffected. Covered for both join types since only anti also runs `not` over it.
+    /// are unaffected. Covered for all three join types since only anti also runs `not` over
+    /// it, and mark keeps every row regardless.
     #[tokio::test]
     async fn empty_streamed_batch_is_skipped() -> Result<()> {
-        for (join_type, expected) in [(JoinType::RightSemi, 1), (JoinType::RightAnti, 1)]
-        {
+        for (join_type, expected) in [
+            (JoinType::RightSemi, 1),
+            (JoinType::RightAnti, 1),
+            (JoinType::RightMark, 2),
+        ] {
             let join = join(
                 kv_exec(&[vec![kv_batch(&[(1, Some(5)), (2, Some(1))])]]),
                 kv_exec(&[vec![
@@ -859,8 +1062,8 @@ mod tests {
             let stream = join.execute(0, Arc::new(TaskContext::default()))?;
             let batches = common::collect(stream).await?;
 
-            // Buffered maximum is 5, so `>` keeps 4 for semi and 9 for anti -- one row each,
-            // and no empty batch in between.
+            // Buffered maximum is 5, so `>` keeps 4 for semi and 9 for anti -- one row each --
+            // and `RightMark` keeps both, with no empty batch in between for any of them.
             assert_eq!(
                 batches.iter().map(|b| b.num_rows()).sum::<usize>(),
                 expected,
@@ -973,6 +1176,74 @@ mod tests {
             vec![2, 2, 1],
             "5 surviving rows packed to batch_size = 2 confirms the coalescer, not a \
              pass-through, produced this shape"
+        );
+        Ok(())
+    }
+
+    /// The `RightMark` sibling of the test above: `mark_streamed_batch` never filters, so
+    /// every row (not a subset) has to stay in the streamed side's sorted order once the
+    /// coalescer repacks across the original `SortExec` batch boundaries, and each row's
+    /// `mark` has to travel with the right `id` through that repacking.
+    #[tokio::test]
+    async fn coalescing_does_not_reorder_a_sorted_streamed_side_for_mark() -> Result<()> {
+        let streamed_input = kv_exec(&[vec![kv_batch(&[
+            (50, Some(5)),
+            (10, Some(199)),
+            (90, Some(6)),
+            (30, Some(200)),
+            (20, Some(7)),
+            (70, Some(8)),
+            (40, Some(199)),
+            (60, Some(9)),
+        ])]]);
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+            Arc::new(Column::new_with_schema("id", &streamed_input.schema())?),
+            SortOptions::new(false, false),
+        )])
+        .unwrap();
+        let streamed = Arc::new(SortExec::new(ordering, streamed_input));
+
+        // Buffered max is 100, so `mark` is true for k < 100 -- ids 10, 30, 40 (k in the
+        // 100s) are false, unevenly across the sorted id order, so the coalescer must not
+        // only preserve order but keep each id's mark paired with it while repacking.
+        let join = join(
+            kv_exec(&[vec![kv_batch(&[(1, Some(100))])]]),
+            streamed as _,
+            Operator::Gt,
+            JoinType::RightMark,
+        )?;
+
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(2)),
+        );
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        let ids: Vec<i32> = batches
+            .iter()
+            .flat_map(|b| b.column(0).as_primitive::<Int32Type>().values().to_vec())
+            .collect();
+        let marks: Vec<bool> = batches
+            .iter()
+            .flat_map(|b| b.column(2).as_boolean().values().iter())
+            .collect();
+        assert_eq!(
+            ids,
+            vec![10, 20, 30, 40, 50, 60, 70, 90],
+            "coalescing must not disturb the streamed side's sorted order, even though \
+             RightMark keeps every row rather than a subset"
+        );
+        assert_eq!(
+            marks,
+            vec![false, true, false, false, true, true, true, true],
+            "each id's mark must travel with it through the coalescer's repacking"
+        );
+        assert_eq!(
+            batches.iter().map(|b| b.num_rows()).collect::<Vec<_>>(),
+            vec![2, 2, 2, 2],
+            "8 rows packed to batch_size = 2 confirms the coalescer, not a pass-through, \
+             produced this shape"
         );
         Ok(())
     }

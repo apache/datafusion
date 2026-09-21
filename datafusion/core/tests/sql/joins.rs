@@ -28,6 +28,71 @@ use datafusion_sql::unparser::plan_to_sql;
 use super::*;
 
 #[tokio::test]
+async fn volatile_join_filter_preserves_evaluations_below_min() -> Result<()> {
+    use arrow::array::record_batch;
+    use datafusion::logical_expr::{ColumnarValue, Volatility, create_udf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Request sort-merge joins; these small inputs remain in a single partition.
+    let mut config = SessionConfig::new().with_target_partitions(2);
+    config.options_mut().optimizer.prefer_hash_join = false;
+    let ctx = SessionContext::new_with_config(config);
+
+    // Return true, false, true, ... across successive input rows, including
+    // across batches. Both arguments keep the predicate at the join.
+    let evaluations = AtomicUsize::new(0);
+    ctx.register_udf(create_udf(
+        "alternating",
+        vec![DataType::Int32, DataType::Int32],
+        DataType::Boolean,
+        Volatility::Volatile,
+        Arc::new(move |args| {
+            let args = ColumnarValue::values_to_arrays(args)?;
+            let len = args[0].len();
+            let first = evaluations.fetch_add(len, Ordering::Relaxed);
+            let values = BooleanArray::from_iter(
+                (first..first + len).map(|i| Some(i.is_multiple_of(2))),
+            );
+            Ok(ColumnarValue::Array(Arc::new(values)))
+        }),
+    ));
+
+    ctx.register_batch(
+        "l",
+        record_batch!(("id", Int32, vec![1, 2]), ("x", Int32, vec![20, 10]))?,
+    )?;
+    ctx.register_batch(
+        "r",
+        record_batch!(("id", Int32, vec![1, 1, 2]), ("y", Int32, vec![0, 0, 0]))?,
+    )?;
+
+    // The inner join evaluates both pairs for id=1, so id=2 receives the
+    // third (true) result. A semi join would stop after the first match for
+    // id=1, give id=2 the second (false) result, and incorrectly return 20.
+    let df = ctx
+        .sql(
+            "SELECT MIN(l.x) AS minimum FROM l JOIN r \
+             ON l.id = r.id AND alternating(l.x, r.y)",
+        )
+        .await?;
+    let plan = df.create_physical_plan().await?;
+    let formatted = displayable(plan.as_ref()).indent(true).to_string();
+    assert_contains!(formatted, "SortMergeJoinExec: join_type=Inner");
+    let batches = collect(plan, ctx.task_ctx()).await?;
+    assert_batches_eq!(
+        [
+            "+---------+",
+            "| minimum |",
+            "+---------+",
+            "| 10      |",
+            "+---------+",
+        ],
+        &batches
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn join_change_in_planner() -> Result<()> {
     let config = SessionConfig::new().with_target_partitions(8);
     let ctx = SessionContext::new_with_config(config);
