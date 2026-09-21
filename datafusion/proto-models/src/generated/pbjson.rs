@@ -5707,7 +5707,7 @@ impl serde::Serialize for CustomTableScanNode {
         if self.fetch.is_some() {
             len += 1;
         }
-        if self.offset.is_some() {
+        if self.skip.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.CustomTableScanNode", len)?;
@@ -5733,10 +5733,10 @@ impl serde::Serialize for CustomTableScanNode {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("fetch", ToString::to_string(&v).as_str())?;
         }
-        if let Some(v) = self.offset.as_ref() {
+        if let Some(v) = self.skip.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("offset", ToString::to_string(&v).as_str())?;
+            struct_ser.serialize_field("skip", ToString::to_string(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -5756,7 +5756,7 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
             "custom_table_data",
             "customTableData",
             "fetch",
-            "offset",
+            "skip",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -5767,7 +5767,7 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
             Filters,
             CustomTableData,
             Fetch,
-            Offset,
+            Skip,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -5795,7 +5795,7 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
                             "filters" => Ok(GeneratedField::Filters),
                             "customTableData" | "custom_table_data" => Ok(GeneratedField::CustomTableData),
                             "fetch" => Ok(GeneratedField::Fetch),
-                            "offset" => Ok(GeneratedField::Offset),
+                            "skip" => Ok(GeneratedField::Skip),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -5821,7 +5821,7 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
                 let mut filters__ = None;
                 let mut custom_table_data__ = None;
                 let mut fetch__ = None;
-                let mut offset__ = None;
+                let mut skip__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::TableName => {
@@ -5864,11 +5864,11 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
-                        GeneratedField::Offset => {
-                            if offset__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("offset"));
+                        GeneratedField::Skip => {
+                            if skip__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("skip"));
                             }
-                            offset__ = 
+                            skip__ = 
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
@@ -5881,7 +5881,7 @@ impl<'de> serde::Deserialize<'de> for CustomTableScanNode {
                     filters: filters__.unwrap_or_default(),
                     custom_table_data: custom_table_data__.unwrap_or_default(),
                     fetch: fetch__,
-                    offset: offset__,
+                    skip: skip__,
                 })
             }
         }
@@ -13132,7 +13132,7 @@ impl serde::Serialize for ListingTableScanNode {
         if self.fetch.is_some() {
             len += 1;
         }
-        if self.offset.is_some() {
+        if self.skip.is_some() {
             len += 1;
         }
         if self.file_format_type.is_some() {
@@ -13168,10 +13168,10 @@ impl serde::Serialize for ListingTableScanNode {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("fetch", ToString::to_string(&v).as_str())?;
         }
-        if let Some(v) = self.offset.as_ref() {
+        if let Some(v) = self.skip.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("offset", ToString::to_string(&v).as_str())?;
+            struct_ser.serialize_field("skip", ToString::to_string(&v).as_str())?;
         }
         if let Some(v) = self.file_format_type.as_ref() {
             match v {
@@ -13215,7 +13215,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
             "file_sort_order",
             "fileSortOrder",
             "fetch",
-            "offset",
+            "skip",
             "csv",
             "parquet",
             "avro",
@@ -13234,7 +13234,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
             TablePartitionCols,
             FileSortOrder,
             Fetch,
-            Offset,
+            Skip,
             Csv,
             Parquet,
             Avro,
@@ -13270,7 +13270,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                             "tablePartitionCols" | "table_partition_cols" => Ok(GeneratedField::TablePartitionCols),
                             "fileSortOrder" | "file_sort_order" => Ok(GeneratedField::FileSortOrder),
                             "fetch" => Ok(GeneratedField::Fetch),
-                            "offset" => Ok(GeneratedField::Offset),
+                            "skip" => Ok(GeneratedField::Skip),
                             "csv" => Ok(GeneratedField::Csv),
                             "parquet" => Ok(GeneratedField::Parquet),
                             "avro" => Ok(GeneratedField::Avro),
@@ -13304,7 +13304,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                 let mut table_partition_cols__ = None;
                 let mut file_sort_order__ = None;
                 let mut fetch__ = None;
-                let mut offset__ = None;
+                let mut skip__ = None;
                 let mut file_format_type__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -13364,11 +13364,11 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
-                        GeneratedField::Offset => {
-                            if offset__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("offset"));
+                        GeneratedField::Skip => {
+                            if skip__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("skip"));
                             }
-                            offset__ = 
+                            skip__ = 
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
@@ -13419,7 +13419,7 @@ impl<'de> serde::Deserialize<'de> for ListingTableScanNode {
                     table_partition_cols: table_partition_cols__.unwrap_or_default(),
                     file_sort_order: file_sort_order__.unwrap_or_default(),
                     fetch: fetch__,
-                    offset: offset__,
+                    skip: skip__,
                     file_format_type: file_format_type__,
                 })
             }
@@ -29307,7 +29307,7 @@ impl serde::Serialize for ViewTableScanNode {
         if self.fetch.is_some() {
             len += 1;
         }
-        if self.offset.is_some() {
+        if self.skip.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion.ViewTableScanNode", len)?;
@@ -29331,10 +29331,10 @@ impl serde::Serialize for ViewTableScanNode {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("fetch", ToString::to_string(&v).as_str())?;
         }
-        if let Some(v) = self.offset.as_ref() {
+        if let Some(v) = self.skip.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("offset", ToString::to_string(&v).as_str())?;
+            struct_ser.serialize_field("skip", ToString::to_string(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -29353,7 +29353,7 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
             "projection",
             "definition",
             "fetch",
-            "offset",
+            "skip",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -29364,7 +29364,7 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
             Projection,
             Definition,
             Fetch,
-            Offset,
+            Skip,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -29392,7 +29392,7 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
                             "projection" => Ok(GeneratedField::Projection),
                             "definition" => Ok(GeneratedField::Definition),
                             "fetch" => Ok(GeneratedField::Fetch),
-                            "offset" => Ok(GeneratedField::Offset),
+                            "skip" => Ok(GeneratedField::Skip),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -29418,7 +29418,7 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
                 let mut projection__ = None;
                 let mut definition__ = None;
                 let mut fetch__ = None;
-                let mut offset__ = None;
+                let mut skip__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::TableName => {
@@ -29459,11 +29459,11 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
-                        GeneratedField::Offset => {
-                            if offset__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("offset"));
+                        GeneratedField::Skip => {
+                            if skip__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("skip"));
                             }
-                            offset__ = 
+                            skip__ = 
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
@@ -29476,7 +29476,7 @@ impl<'de> serde::Deserialize<'de> for ViewTableScanNode {
                     projection: projection__,
                     definition: definition__.unwrap_or_default(),
                     fetch: fetch__,
-                    offset: offset__,
+                    skip: skip__,
                 })
             }
         }

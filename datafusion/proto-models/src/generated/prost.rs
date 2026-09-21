@@ -128,7 +128,7 @@ pub struct ListingTableScanNode {
     pub fetch: ::core::option::Option<u64>,
     /// Optional number of rows to skip.
     #[prost(uint64, optional, tag = "18")]
-    pub offset: ::core::option::Option<u64>,
+    pub skip: ::core::option::Option<u64>,
     #[prost(
         oneof = "listing_table_scan_node::FileFormatType",
         tags = "10, 11, 12, 15, 16"
@@ -170,7 +170,7 @@ pub struct ViewTableScanNode {
     pub fetch: ::core::option::Option<u64>,
     /// Optional number of rows to skip.
     #[prost(uint64, optional, tag = "8")]
-    pub offset: ::core::option::Option<u64>,
+    pub skip: ::core::option::Option<u64>,
 }
 /// Logical Plan to Scan a CustomTableProvider registered at runtime
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -190,7 +190,7 @@ pub struct CustomTableScanNode {
     pub fetch: ::core::option::Option<u64>,
     /// Optional number of rows to skip.
     #[prost(uint64, optional, tag = "8")]
-    pub offset: ::core::option::Option<u64>,
+    pub skip: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProjectionNode {
