@@ -158,7 +158,7 @@ impl<'a> StreamingMergeBuilder<'a> {
     }
 
     /// Keep spill workspace until the final merge pass selects its buffer budget.
-    pub(super) fn with_merge_pool(mut self, pool: Arc<MergeMemoryPool>) -> Self {
+    pub(crate) fn with_merge_pool(mut self, pool: Arc<MergeMemoryPool>) -> Self {
         self.merge_pool = Some(pool);
         self
     }
