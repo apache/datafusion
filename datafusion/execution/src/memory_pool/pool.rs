@@ -246,11 +246,14 @@ impl MemoryPool for FairSpillPool {
                     .checked_div(state.num_spill)
                     .unwrap_or(spill_available);
 
-                if reservation.size() + additional > available {
+                let total_available = spill_available.saturating_sub(state.spillable);
+                if reservation.size() + additional > available
+                    || additional > total_available
+                {
                     return Err(insufficient_capacity_err(
                         reservation,
                         additional,
-                        available,
+                        available.min(total_available),
                         self,
                     ));
                 }
@@ -652,6 +655,22 @@ mod tests {
             "$1#[ID](can spill: $2)",
         );
         settings
+    }
+
+    #[test]
+    fn test_fair_sibling_reservations_respect_pool_limit() {
+        let pool = Arc::new(FairSpillPool::new(100)) as _;
+        let reservation = MemoryConsumer::new("spillable")
+            .with_can_spill(true)
+            .register(&pool);
+        reservation.try_grow(60).unwrap();
+
+        let sibling = reservation.new_empty();
+        sibling.try_grow(40).unwrap();
+        assert!(sibling.try_grow(1).is_err());
+        assert_eq!(reservation.size(), 60);
+        assert_eq!(sibling.size(), 40);
+        assert_eq!(pool.reserved(), 100);
     }
 
     #[test]
