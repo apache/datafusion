@@ -85,7 +85,6 @@ struct AggregateStreamInner {
 }
 
 impl AggregateStreamInner {
-    // TODO: check if we get Null handling correct
     /// # Examples
     /// - Example 1
     ///   Accumulators: min(c1)
@@ -113,11 +112,12 @@ impl AggregateStreamInner {
             Vec::with_capacity(filter_state.accumulator_dyn_filter_info.len());
 
         for acc_info in &filter_state.accumulator_dyn_filter_info {
-            // Skip if we don't yet have a meaningful bound
+            // Every aggregate needs a bound before we can prune rows. Otherwise,
+            // another aggregate's predicate could discard its first non-NULL value.
             let bound = {
                 let guard = acc_info.shared_bound.lock();
                 if (*guard).is_null() {
-                    continue;
+                    return Ok(lit(true));
                 }
                 guard.clone()
             };
@@ -263,9 +263,9 @@ fn scalar_cmp_null_short_circuit(
     v1: &ScalarValue,
     v2: &ScalarValue,
 ) -> Option<ScalarValue> {
-    match (v1, v2) {
-        (ScalarValue::Null, ScalarValue::Null) => Some(ScalarValue::Null),
-        (ScalarValue::Null, other) | (other, ScalarValue::Null) => Some(other.clone()),
+    match (v1.is_null(), v2.is_null()) {
+        (true, _) => Some(v2.clone()),
+        (_, true) => Some(v1.clone()),
         _ => None,
     }
 }
