@@ -1504,6 +1504,12 @@ config_namespace! {
         /// default parquet writer setting
         pub bloom_filter_ndv: Option<u64>, default = None
 
+        /// (writing) Write the number of distinct values (NDV) for each column
+        /// in row group statistics when creating parquet files. Enabling this
+        /// improves NDV-based query optimizations at the cost of hashing every
+        /// non-null value during write.
+        pub write_row_group_number_distinct_values: bool, default = false
+
         /// (writing) Controls whether DataFusion will attempt to speed up writing
         /// parquet files by serializing them in parallel. Each column
         /// in each row group in each output file are serialized in parallel

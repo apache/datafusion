@@ -867,6 +867,9 @@ pub struct ParquetOptions {
     /// default = false
     #[prost(bool, tag = "30")]
     pub skip_arrow_metadata: bool,
+    /// default = false
+    #[prost(bool, tag = "39")]
+    pub write_row_group_number_distinct_values: bool,
     #[prost(uint64, tag = "12")]
     pub dictionary_page_size_limit: u64,
     #[prost(uint64, tag = "18")]

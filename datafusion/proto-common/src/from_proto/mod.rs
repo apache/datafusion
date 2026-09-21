@@ -1278,6 +1278,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 protobuf::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(v) => Some(v),
             }).unwrap_or(None),
             skip_arrow_metadata: value.skip_arrow_metadata,
+            write_row_group_number_distinct_values: value.write_row_group_number_distinct_values,
             max_predicate_cache_size: value.max_predicate_cache_size_opt.map(|opt| match opt {
                 protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v) => {
                     to_usize(v, "max_predicate_cache_size")
