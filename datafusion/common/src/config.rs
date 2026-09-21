@@ -1146,8 +1146,14 @@ config_namespace! {
         /// table. The groups seen so far and all further input are instead
         /// split into hash buckets, which are aggregated one after another so
         /// that each bucket's hash table stays small enough to be cache
-        /// friendly, and can be spilled and released independently. Set to 0
-        /// to disable.
+        /// friendly, and can be spilled and released independently. A table
+        /// whose input holds about one row per group is split at a quarter of
+        /// this number. Aggregations of millions of groups per partition run
+        /// faster and with less memory. Moving rows into buckets has a cost of
+        /// its own, so aggregations that end at a few times this number of
+        /// groups, string keys in particular, can run a few percent slower, and
+        /// input that repeats its groups can use more memory. Set to 0 to
+        /// disable.
         pub hash_aggregate_bucket_threshold: usize, default = 0
 
         /// Should DataFusion use row number estimates at the input to decide
