@@ -966,9 +966,6 @@ fn summarize_distinct_counts(
     }
 
     Ok(match max_distinct_count {
-        Some(distinct_count) if num_row_groups == 1 => {
-            Precision::Exact(distinct_count as usize)
-        }
         Some(distinct_count) => Precision::Inexact(distinct_count as usize),
         None => Precision::Absent,
     })
