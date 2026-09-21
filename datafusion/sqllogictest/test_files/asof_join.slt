@@ -285,6 +285,34 @@ physical_plan
 07)----SortExec: expr=[grp@0 ASC, ts@1 ASC], preserve_partitioning=[false]
 08)------DataSourceExec: partitions=1, partition_sizes=[1]
 
+# Filtering the right input before matching would select a4 for id 3 instead
+# of filtering out its actual match, a6.
+query IT
+SELECT l.id, r.val
+FROM asof_left l
+ASOF JOIN asof_right r
+MATCH_CONDITION (l.ts >= r.ts)
+ON l.grp = r.grp
+WHERE l.id > 1 AND r.val <> 'a6' AND l.id <> length(r.val)
+ORDER BY l.id;
+----
+4 b1
+5 b6
+
+# Left-only disjunctions retain unmatched rows with NULL equality or match keys.
+query IT
+SELECT l.id, r.val
+FROM asof_left l
+ASOF JOIN asof_right r
+MATCH_CONDITION (l.ts >= r.ts)
+ON l.grp = r.grp
+WHERE l.grp IS NULL OR l.ts IS NULL OR l.id = 1
+ORDER BY l.id;
+----
+1 NULL
+6 NULL
+7 NULL
+
 # Volatile predicates retain their evaluation point even when they reference
 # only the left input, while independent deterministic conjuncts still move.
 query TT
