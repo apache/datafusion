@@ -26,7 +26,7 @@ use std::sync::Arc;
 use crate::dml::CopyTo;
 use crate::expr::{Alias, PlannedReplaceSelectItem, Sort as SortExpr};
 use crate::expr_rewriter::{
-    coerce_plan_expr_for_schema, normalize_col,
+    ColumnNormalizer, coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
     rewrite_sort_cols_by_aggs,
 };
@@ -56,8 +56,8 @@ use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
-    Column, Constraints, DFSchema, DFSchemaRef, NullEquality, Result, ScalarValue,
-    TableReference, ToDFSchema, UnnestOptions, exec_err,
+    Column, Constraints, DFSchema, DFSchemaRef, FunctionalDependencies, NullEquality,
+    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions, exec_err,
     get_target_functional_dependencies, internal_datafusion_err, plan_datafusion_err,
     plan_err,
 };
@@ -1161,18 +1161,7 @@ impl LogicalPlanBuilder {
     }
 
     pub(crate) fn normalize(plan: &LogicalPlan, column: Column) -> Result<Column> {
-        if column.relation.is_some() {
-            // column is already normalized
-            return Ok(column);
-        }
-
-        let schema = plan.schema();
-        let fallback_schemas = plan.fallback_normalize_schemas();
-        let using_columns = plan.using_columns()?;
-        column.normalize_with_schemas_and_ambiguity_check(
-            &[&[schema], &fallback_schemas],
-            &using_columns,
-        )
+        ColumnNormalizer::new(plan).normalize_column(column)
     }
 
     /// Apply a join with on constraint and specified null equality.
@@ -1739,7 +1728,7 @@ impl ValuesFields {
         let name = format!("column{}", self.inner.len() + 1);
         let mut field = Field::new(name, data_type, nullable);
         if let Some(metadata) = metadata {
-            field.set_metadata(metadata.to_hashmap());
+            field.set_metadata(metadata.into_inner());
         }
         self.inner.push(field);
     }
@@ -1911,12 +1900,8 @@ pub fn build_join_schema(
         _ => (right, left),
     };
 
-    let metadata = schema1
-        .metadata()
-        .clone()
-        .into_iter()
-        .chain(schema2.metadata().clone())
-        .collect();
+    let mut metadata = schema1.metadata().clone();
+    metadata.extend(schema2.metadata().clone());
 
     let dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
     dfschema.with_functional_dependencies(func_dependencies)
@@ -1927,7 +1912,20 @@ pub fn build_join_schema(
 /// Both `ON` and `USING` preserve all qualified input fields. SQL wildcard
 /// expansion handles the unqualified `USING` key as a single column.
 pub fn build_asof_join_schema(left: &DFSchema, right: &DFSchema) -> Result<DFSchema> {
-    build_join_schema(left, right, &JoinType::Left)
+    // ASOF emits exactly one output row for each left row. Unlike a general
+    // left join, it cannot duplicate left rows, so left dependencies retain
+    // their modes. Right dependencies remain valid but not unique because one
+    // right row may match multiple left rows.
+    let schema = build_join_schema(left, right, &JoinType::Left)?;
+    // `build_join_schema` places the downgraded left dependencies before the
+    // nullable, non-unique right dependencies. Replace only the left prefix.
+    let left_dependencies_len = left.functional_dependencies().len();
+    let right_dependencies =
+        schema.functional_dependencies()[left_dependencies_len..].to_vec();
+    let mut dependencies = left.functional_dependencies().clone();
+    dependencies.extend_target_indices(schema.fields().len());
+    dependencies.extend(FunctionalDependencies::new(right_dependencies));
+    schema.with_functional_dependencies(dependencies)
 }
 
 /// (Re)qualify the sides of a join if needed, i.e. if the columns from one side would otherwise
@@ -2115,6 +2113,7 @@ fn project_with_validation(
 ) -> Result<LogicalPlan> {
     let mut projected_expr = vec![];
     let mut has_wildcard = false;
+    let mut normalizer = ColumnNormalizer::new(&plan);
     for (e, validate) in expr {
         let e = e.into();
         match e {
@@ -2133,7 +2132,7 @@ fn project_with_validation(
                 for e in expanded {
                     if validate {
                         projected_expr
-                            .push(columnize_expr(normalize_col(e, &plan)?, &plan)?)
+                            .push(columnize_expr(normalizer.normalize(e)?, &plan)?)
                     } else {
                         projected_expr.push(e)
                     }
@@ -2155,7 +2154,7 @@ fn project_with_validation(
                 for e in expanded {
                     if validate {
                         projected_expr
-                            .push(columnize_expr(normalize_col(e, &plan)?, &plan)?)
+                            .push(columnize_expr(normalizer.normalize(e)?, &plan)?)
                     } else {
                         projected_expr.push(e)
                     }
@@ -2163,7 +2162,7 @@ fn project_with_validation(
             }
             SelectExpr::Expression(e) => {
                 if validate {
-                    projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?)
+                    projected_expr.push(columnize_expr(normalizer.normalize(e)?, &plan)?)
                 } else {
                     projected_expr.push(e)
                 }
@@ -2487,7 +2486,8 @@ mod tests {
 
     use crate::test::function_stub::sum;
     use datafusion_common::{
-        Constraint, DataFusionError, RecursionUnnestOption, SchemaError,
+        Constraint, DataFusionError, Dependency, FunctionalDependence,
+        FunctionalDependencies, RecursionUnnestOption, SchemaError,
     };
     use insta::assert_snapshot;
 
@@ -3250,6 +3250,45 @@ mod tests {
             &HashMap::from([("key".to_string(), "right".to_string())])
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn asof_join_schema_preserves_dependencies() -> Result<()> {
+        let left = DFSchema::try_from_qualified_schema(
+            "left",
+            &Schema::new(vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new("value", DataType::Utf8, false),
+            ]),
+        )?
+        .with_functional_dependencies(FunctionalDependencies::new(vec![
+            FunctionalDependence::new(vec![0], vec![0, 1], false)
+                .with_mode(Dependency::Single),
+        ]))?;
+        let right = DFSchema::try_from_qualified_schema(
+            "right",
+            &Schema::new(vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new("value", DataType::Utf8, false),
+            ]),
+        )?
+        .with_functional_dependencies(FunctionalDependencies::new(vec![
+            FunctionalDependence::new(vec![0], vec![0, 1], false)
+                .with_mode(Dependency::Single),
+        ]))?;
+
+        let schema = build_asof_join_schema(&left, &right)?;
+
+        assert_eq!(
+            schema.functional_dependencies(),
+            &FunctionalDependencies::new(vec![
+                FunctionalDependence::new(vec![0], vec![0, 1, 2, 3], false)
+                    .with_mode(Dependency::Single),
+                FunctionalDependence::new(vec![2], vec![2, 3], true)
+                    .with_mode(Dependency::Multi),
+            ])
+        );
         Ok(())
     }
 
