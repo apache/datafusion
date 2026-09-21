@@ -401,15 +401,15 @@ impl GroupedHashAggregateStream {
     ) -> Result<Self> {
         debug!("Creating GroupedHashAggregateStream");
         let agg_schema = Arc::clone(&agg.schema);
-        let agg_group_by = Arc::clone(&agg.group_by);
-        let agg_filter_expr = Arc::clone(&agg.filter_expr);
+        let agg_group_by = Arc::clone(agg.group_by());
+        let agg_filter_expr = agg.clone_filter_exprs();
 
         let batch_size = context.session_config().batch_size();
         let input = agg.input.execute(partition, Arc::clone(context))?;
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let group_by_metrics = GroupByMetrics::new(&agg.metrics, partition);
         let aggregate_labels = agg
-            .aggr_expr
+            .aggr_expr()
             .iter()
             .map(|agg_expr| aggregate_metric_label(agg_expr))
             .collect::<Vec<_>>();
@@ -427,25 +427,25 @@ impl GroupedHashAggregateStream {
 
         let timer = baseline_metrics.elapsed_compute().timer();
 
-        let aggregate_exprs = Arc::clone(&agg.aggr_expr);
+        let aggregate_exprs = agg.clone_aggr_exprs();
 
         // arguments for each aggregate, one vec of expressions per
         // aggregate
         let aggregate_arguments = aggregates::aggregate_expressions(
-            &agg.aggr_expr,
+            agg.aggr_expr(),
             &agg.mode,
             agg_group_by.num_group_exprs(),
         )?;
         // arguments for aggregating spilled data is the same as the one for final aggregation
         let merging_aggregate_arguments = aggregates::aggregate_expressions(
-            &agg.aggr_expr,
+            agg.aggr_expr(),
             &AggregateMode::Final,
             agg_group_by.num_group_exprs(),
         )?;
 
         let filter_expressions = match agg.mode.input_mode() {
             AggregateInputMode::Raw => agg_filter_expr,
-            AggregateInputMode::Partial => vec![None; agg.aggr_expr.len()].into(),
+            AggregateInputMode::Partial => vec![None; agg.aggr_expr().len()].into(),
         };
 
         // Instantiate the accumulators

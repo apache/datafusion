@@ -136,7 +136,7 @@ impl OrderedFinalSpillContext {
         spill_schema: &SchemaRef,
         spill_metrics: SpillMetrics,
     ) -> Result<Self> {
-        let group_schema = agg.group_by.group_schema(spill_schema)?;
+        let group_schema = agg.group_by().group_schema(spill_schema)?;
         let output_ordering = agg.cache.output_ordering();
         let InputOrderMode::PartiallySorted(order_indices) = input_order_mode else {
             return internal_err!("Ordered final spill requires partially ordered input");

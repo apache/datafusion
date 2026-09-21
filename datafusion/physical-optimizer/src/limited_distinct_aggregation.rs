@@ -20,7 +20,7 @@
 
 use std::sync::Arc;
 
-use datafusion_physical_plan::aggregates::{AggregateExec, LimitOptions};
+use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
@@ -47,16 +47,15 @@ impl LimitedDistinctAggregation {
     fn transform_agg(
         aggr: &AggregateExec,
         limit: usize,
-    ) -> Option<Arc<dyn ExecutionPlan>> {
+    ) -> Option<Transformed<Arc<dyn ExecutionPlan>>> {
         // rules for transforming this Aggregate are held in this method
         if !aggr.is_unordered_unfiltered_group_by_distinct() {
             return None;
         }
 
-        // We found what we want: clone, copy the limit down, and return modified node
-        let new_aggr = aggr.with_new_limit_options(Some(LimitOptions::new(limit)));
-
-        Some(Arc::new(new_aggr))
+        let new_aggr = aggr.clone().try_optimize_distinct_soft_limit(limit).ok()?;
+        // An already limited aggregate still permits optimizing its partial child.
+        Some(new_aggr.update_data(|aggr| Arc::new(aggr) as Arc<dyn ExecutionPlan>))
     }
 
     /// transform_limit matches an `AggregateExec` as the child of a `LocalLimitExec`
@@ -119,14 +118,18 @@ impl LimitedDistinctAggregation {
                     Some(new_aggr) => {
                         match_aggr = plan;
                         found_match_aggr = true;
-                        return Ok(Transformed::yes(new_aggr));
+                        return Ok(new_aggr);
                     }
                 }
             }
             rewrite_applicable = false;
             Ok(Transformed::no(plan))
         };
-        let child = child.to_owned().transform_down(closure).data().ok()?;
+        let child = child.to_owned().transform_down(closure).ok()?;
+        if !child.transformed {
+            return None;
+        }
+        let child = child.data;
         if is_global_limit {
             return Some(Arc::new(GlobalLimitExec::new(
                 child,

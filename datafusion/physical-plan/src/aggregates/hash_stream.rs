@@ -239,7 +239,7 @@ impl FinalSpillContext {
         spill_schema: &SchemaRef,
         spill_metrics: SpillMetrics,
     ) -> Result<Self> {
-        let group_schema = agg.group_by.group_schema(&agg.input().schema())?;
+        let group_schema = agg.group_by().group_schema(&agg.input().schema())?;
         let output_ordering = agg.cache.output_ordering();
         let spill_sort_exprs =
             group_schema
@@ -401,7 +401,7 @@ impl PartialHashAggregateStream {
             Arc::clone(&schema),
             batch_size,
         )?;
-        let skip_aggregation_probe = if agg.group_by.is_single() {
+        let skip_aggregation_probe = if agg.group_by().is_single() {
             let options = &context.session_config().options().execution;
             let probe_ratio_threshold =
                 options.skip_partial_aggregation_probe_ratio_threshold;

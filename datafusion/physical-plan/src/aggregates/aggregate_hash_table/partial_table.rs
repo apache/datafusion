@@ -51,7 +51,7 @@ impl AggregateHashTable<PartialMarker> {
             Arc::clone(&output_schema),
             output_schema,
             batch_size,
-            agg.filter_expr.iter().cloned().collect(),
+            agg.filter_expr().to_vec(),
         )
     }
 

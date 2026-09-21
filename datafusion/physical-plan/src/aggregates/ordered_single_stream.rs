@@ -179,7 +179,7 @@ impl OrderedSingleSpillContext {
         spill_schema: &SchemaRef,
         spill_metrics: SpillMetrics,
     ) -> Result<Self> {
-        let group_schema = agg.group_by.group_schema(&agg.input().schema())?;
+        let group_schema = agg.group_by().group_schema(&agg.input().schema())?;
         let output_ordering = agg.cache.output_ordering();
         let InputOrderMode::PartiallySorted(order_indices) = input_order_mode else {
             return internal_err!(
@@ -220,7 +220,7 @@ impl OrderedSingleSpillContext {
                 );
             }
         };
-        final_agg.group_by = Arc::new(agg.group_by.as_final());
+        *final_agg.group_by_mut() = Arc::new(agg.group_by().as_final());
         final_agg.input_order_mode = InputOrderMode::Sorted;
 
         Ok(Self {
@@ -339,8 +339,8 @@ impl OrderedSingleAggregateStream {
         let spill_metrics = SpillMetrics::new(&agg.metrics, partition);
         let state_schema = Arc::new(create_schema(
             input_schema.as_ref(),
-            &agg.group_by,
-            &agg.aggr_expr,
+            agg.group_by(),
+            agg.aggr_expr(),
             AggregateMode::Partial,
         )?);
 
