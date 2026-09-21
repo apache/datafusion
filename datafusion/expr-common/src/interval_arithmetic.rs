@@ -1239,9 +1239,10 @@ fn prev_value(value: ScalarValue) -> ScalarValue {
 }
 
 /// Returns the previous distinct value, or `None` for nulls, non-finite
-/// floats, type minima, and types without a discrete predecessor.
+/// floats, composite intervals, type minima, and types without a discrete
+/// predecessor.
 pub fn checked_predecessor(value: &ScalarValue) -> Option<ScalarValue> {
-    if !is_finite_non_null(value) {
+    if !is_supported_adjacent_value(value) {
         return None;
     }
 
@@ -1250,9 +1251,9 @@ pub fn checked_predecessor(value: &ScalarValue) -> Option<ScalarValue> {
 }
 
 /// Returns the next distinct value, or `None` for nulls, non-finite floats,
-/// type maxima, and types without a discrete successor.
+/// composite intervals, type maxima, and types without a discrete successor.
 pub fn checked_successor(value: &ScalarValue) -> Option<ScalarValue> {
-    if !is_finite_non_null(value) {
+    if !is_supported_adjacent_value(value) {
         return None;
     }
 
@@ -1260,10 +1261,14 @@ pub fn checked_successor(value: &ScalarValue) -> Option<ScalarValue> {
     (!successor.is_null() && successor != *value).then_some(successor)
 }
 
-fn is_finite_non_null(value: &ScalarValue) -> bool {
+fn is_supported_adjacent_value(value: &ScalarValue) -> bool {
     match value {
         ScalarValue::Float32(Some(value)) => value.is_finite(),
         ScalarValue::Float64(Some(value)) => value.is_finite(),
+        // A component can reach its bound before the composite value reaches MIN
+        // or MAX (see #25573). Reject these until adjacent values carry between
+        // components.
+        ScalarValue::IntervalDayTime(_) | ScalarValue::IntervalMonthDayNano(_) => false,
         _ => !value.is_null(),
     }
 }
@@ -2687,6 +2692,16 @@ mod tests {
         let unsupported = ScalarValue::Utf8(Some("a".into()));
         assert_eq!(checked_predecessor(&unsupported), None);
         assert_eq!(checked_successor(&unsupported), None);
+
+        for value in [
+            ScalarValue::new_interval_dt(0, i32::MIN),
+            ScalarValue::new_interval_dt(0, i32::MAX),
+            ScalarValue::new_interval_mdn(0, 0, i64::MIN),
+            ScalarValue::new_interval_mdn(0, 0, i64::MAX),
+        ] {
+            assert_eq!(checked_predecessor(&value), None);
+            assert_eq!(checked_successor(&value), None);
+        }
     }
 
     #[test]
