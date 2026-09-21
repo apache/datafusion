@@ -45,6 +45,9 @@ use crate::physical_plan::joins::{
     PartitionMode, SortMergeJoinExec,
 };
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use crate::physical_plan::materialized_cte::{
+    MaterializedCteBuffer, MaterializedCteExec, MaterializedCteScanExec,
+};
 use crate::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
@@ -216,9 +219,43 @@ impl DefaultPhysicalPlanner {
         let plan = self
             .create_initial_plan(logical_plan, session_state)
             .await?;
+        let plan = bind_materialized_cte_scans(plan)?;
 
         self.optimize_physical_plan(plan, session_state, |_, _| {})
     }
+}
+
+/// Point every [`MaterializedCteScanExec`] at the buffer of the
+/// [`MaterializedCteExec`] with the same id.
+///
+/// Scans are planned before the node that owns their CTE, and a scan inside a
+/// scalar subquery is planned in a separate subtree, so the binding is done
+/// once on the whole initial plan.
+fn bind_materialized_cte_scans(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let mut buffers = HashMap::new();
+    plan.apply(|node| {
+        if let Some(cte) = node.downcast_ref::<MaterializedCteExec>() {
+            buffers.insert(cte.buffer().id(), Arc::clone(cte.buffer()));
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    if buffers.is_empty() {
+        return Ok(plan);
+    }
+    plan.transform_up(|node| {
+        let Some(scan) = node.downcast_ref::<MaterializedCteScanExec>() else {
+            return Ok(Transformed::no(node));
+        };
+        let Some(buffer) = buffers.get(&scan.id()) else {
+            return internal_err!("MaterializedCteScanExec {} has no CTE", scan.id());
+        };
+        Ok(Transformed::yes(
+            Arc::new(scan.bind(Arc::clone(buffer))) as Arc<dyn ExecutionPlan>
+        ))
+    })
+    .map(|t| t.data)
 }
 
 #[derive(Debug)]
@@ -1857,6 +1894,33 @@ impl DefaultPhysicalPlanner {
 
             // N Children
             LogicalPlan::Union(_) => UnionExec::try_new(children.vec())?,
+            LogicalPlan::Extension(Extension { node })
+                if node.as_any().is::<datafusion_expr::MaterializedCte>() =>
+            {
+                let cte = node
+                    .as_any()
+                    .downcast_ref::<datafusion_expr::MaterializedCte>()
+                    .unwrap();
+                let [body, continuation] = children.two()?;
+                let buffer =
+                    Arc::new(MaterializedCteBuffer::new(cte.id.as_u64(), &cte.name));
+                Arc::new(MaterializedCteExec::new(body, continuation, buffer))
+            }
+            LogicalPlan::Extension(Extension { node })
+                if node.as_any().is::<datafusion_expr::MaterializedCteScan>() =>
+            {
+                let scan = node
+                    .as_any()
+                    .downcast_ref::<datafusion_expr::MaterializedCteScan>()
+                    .unwrap();
+                // Unbound until `bind_materialized_cte_scans` runs on the whole plan.
+                Arc::new(MaterializedCteScanExec::new(
+                    scan.id.as_u64(),
+                    &scan.name,
+                    Arc::clone(scan.schema.inner()),
+                    session_state.config().target_partitions(),
+                ))
+            }
             LogicalPlan::Extension(Extension { node }) => {
                 let mut maybe_plan = None;
                 let children = children.vec();

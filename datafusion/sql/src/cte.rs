@@ -24,16 +24,42 @@ use datafusion_common::{
     Result, TableReference, not_impl_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
 };
-use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, TableSource};
-use sqlparser::ast::{Ident, Query, SetExpr, SetOperator, With};
+use datafusion_expr::{
+    Extension, LogicalPlan, LogicalPlanBuilder, MaterializedCte, MaterializedCteId,
+    MaterializedCteScan, TableSource,
+};
+use sqlparser::ast::{CteAsMaterialized, Ident, Query, SetExpr, SetOperator, With};
+
+/// A `WITH x AS MATERIALIZED (...)` CTE whose body must wrap the query that
+/// declared it. See [`MaterializedCte`].
+pub(crate) struct PendingMaterializedCte {
+    id: MaterializedCteId,
+    name: String,
+    cte: LogicalPlan,
+}
+
+impl PendingMaterializedCte {
+    /// Wrap `continuation` so that its scans of this CTE read one shared result.
+    pub(crate) fn wrap(self, continuation: LogicalPlan) -> LogicalPlan {
+        LogicalPlan::Extension(Extension {
+            node: Arc::new(MaterializedCte {
+                id: self.id,
+                name: self.name,
+                cte: self.cte,
+                continuation,
+            }),
+        })
+    }
+}
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn plan_with_clause(
         &self,
         with: With,
         planner_context: &mut PlannerContext,
-    ) -> Result<()> {
+    ) -> Result<Vec<PendingMaterializedCte>> {
         let is_recursive = with.recursive;
+        let mut materialized = vec![];
         // Process CTEs from top to bottom
         for cte in with.cte_tables {
             // A `WITH` block can't use the same name more than once
@@ -55,6 +81,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // Each `WITH` block can change the column names in the last projection
             // (e.g. "WITH table(t1, t2) AS SELECT 1, 2"). Recursive CTEs apply those
             // to the static term in recursive_cte(), so only the relation name here.
+            let is_materialized =
+                cte.materialized == Some(CteAsMaterialized::Materialized);
             let final_plan = if is_recursive {
                 LogicalPlanBuilder::from(cte_plan)
                     .alias(TableReference::bare(
@@ -64,10 +92,29 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } else {
                 self.apply_table_alias(cte_plan, cte.alias)?
             };
+            if is_materialized && !is_recursive {
+                // Every reference reads the shared result instead of a copy
+                // of the body.
+                let id = MaterializedCteId::next();
+                let scan = LogicalPlan::Extension(Extension {
+                    node: Arc::new(MaterializedCteScan {
+                        id,
+                        name: cte_name.clone(),
+                        schema: Arc::clone(final_plan.schema()),
+                    }),
+                });
+                materialized.push(PendingMaterializedCte {
+                    id,
+                    name: cte_name.clone(),
+                    cte: final_plan,
+                });
+                planner_context.insert_cte(cte_name, scan);
+                continue;
+            }
             // Export the CTE to the outer query
             planner_context.insert_cte(cte_name, final_plan);
         }
-        Ok(())
+        Ok(materialized)
     }
 
     fn non_recursive_cte(
