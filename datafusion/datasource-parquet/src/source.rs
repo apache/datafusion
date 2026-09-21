@@ -42,6 +42,8 @@ use arrow::datatypes::TimeUnit;
 use datafusion_common::DataFusionError;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
+#[cfg(feature = "proto")]
+use datafusion_common::utils::{usize_from_wire, usize_to_wire};
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -396,12 +398,6 @@ impl ParquetSource {
     /// Options passed to the parquet reader for this scan
     pub fn table_parquet_options(&self) -> &TableParquetOptions {
         &self.table_parquet_options
-    }
-
-    /// Optional predicate.
-    #[deprecated(since = "50.2.0", note = "use `filter` instead")]
-    pub fn predicate(&self) -> Option<&Arc<dyn PhysicalExpr>> {
-        self.predicate.as_ref()
     }
 
     /// return the optional file reader factory
@@ -1109,16 +1105,38 @@ impl FileSource for ParquetSource {
         use datafusion_proto_models::protobuf;
         use protobuf::physical_plan_node::PhysicalPlanType;
 
-        if self.schema_provider.is_some() {
+        let Self {
+            table_parquet_options,
+            // Runtime metrics are recreated when the source is decoded.
+            metrics: _,
+            // Carried by `base`.
+            table_schema: _,
+            predicate,
+            // Rebuilt from the decode context.
+            parquet_file_reader_factory: _,
+            // Requires a custom codec for serialization.
+            schema_provider,
+            // Applied by `FileScanConfig` before execution.
+            batch_size: _,
+            metadata_size_hint,
+            // Carried by `base` as projection expressions.
+            projection: _,
+            // Not serialized or restored by the default decoder.
+            #[cfg(feature = "parquet_encryption")]
+                encryption_factory: _,
+            reverse_row_groups,
+            sort_order_for_reorder,
+        } = self;
+
+        if schema_provider.is_some() {
             return Ok(None);
         }
 
-        let predicate = self
-            .filter()
-            .map(|pred| ctx.encode_expr(&pred))
+        let predicate = predicate
+            .as_ref()
+            .map(|pred| ctx.encode_expr(pred))
             .transpose()?;
-        let sort_order_for_reorder = self
-            .sort_order_for_reorder
+        let sort_order_for_reorder = sort_order_for_reorder
             .as_ref()
             .map(|ordering| -> datafusion_common::Result<_> {
                 Ok(protobuf::PhysicalSortExprNodeCollection {
@@ -1129,13 +1147,17 @@ impl FileSource for ParquetSource {
                 })
             })
             .transpose()?;
+        let metadata_size_hint = metadata_size_hint
+            .map(|hint| usize_to_wire(hint, "ParquetSource", "metadata_size_hint"))
+            .transpose()?;
 
         let node = protobuf::ParquetScanExecNode {
             base_conf: Some(base.try_to_proto(ctx)?),
             predicate,
-            parquet_options: Some(self.table_parquet_options().try_into()?),
+            parquet_options: Some(table_parquet_options.try_into()?),
             sort_order_for_reorder,
-            reverse_row_groups: self.reverse_row_groups,
+            reverse_row_groups: *reverse_row_groups,
+            metadata_size_hint,
         };
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::ParquetScan(node)),
@@ -1148,6 +1170,8 @@ impl ParquetSource {
     /// Reconstructs a `DataSourceExec` from a protobuf `ParquetScan`.
     ///
     /// Rebuilds the reader factory from the decode context because it is not serialized.
+    /// Encryption factories and crypto options are not serialized or restored;
+    /// plans that rely on them require custom handling.
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
@@ -1168,7 +1192,16 @@ impl ParquetSource {
             );
         };
 
-        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
+        let protobuf::ParquetScanExecNode {
+            base_conf,
+            predicate,
+            parquet_options,
+            sort_order_for_reorder,
+            reverse_row_groups,
+            metadata_size_hint,
+        } = scan;
+
+        let base_conf = base_conf.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "ParquetScanExecNode is missing required field 'base_conf'"
             )
@@ -1200,13 +1233,11 @@ impl ParquetSource {
             schema
         };
 
-        let predicate = scan
-            .predicate
+        let predicate = predicate
             .as_ref()
             .map(|expr| ctx.decode_expr(expr, predicate_schema.as_ref()))
             .transpose()?;
-        let sort_order_for_reorder = scan
-            .sort_order_for_reorder
+        let sort_order_for_reorder = sort_order_for_reorder
             .as_ref()
             .map(|ordering| {
                 optional_ordering_try_from_proto(
@@ -1216,9 +1247,12 @@ impl ParquetSource {
             })
             .transpose()?
             .flatten();
+        let metadata_size_hint = metadata_size_hint
+            .map(|hint| usize_from_wire(hint, "ParquetSource", "metadata_size_hint"))
+            .transpose()?;
 
         let mut options = TableParquetOptions::default();
-        if let Some(table_options) = scan.parquet_options.as_ref() {
+        if let Some(table_options) = parquet_options.as_ref() {
             options = table_options.try_into()?;
         }
 
@@ -1243,7 +1277,8 @@ impl ParquetSource {
             .with_parquet_file_reader_factory(reader_factory)
             .with_table_parquet_options(options);
         source.sort_order_for_reorder = sort_order_for_reorder;
-        source.reverse_row_groups = scan.reverse_row_groups;
+        source.reverse_row_groups = *reverse_row_groups;
+        source.metadata_size_hint = metadata_size_hint;
 
         if let Some(predicate) = predicate {
             source = source.with_predicate(predicate);
@@ -1322,17 +1357,6 @@ mod tests {
     use super::*;
     use arrow::datatypes::Schema;
     use datafusion_physical_expr::expressions::lit;
-
-    #[test]
-    #[expect(deprecated)]
-    fn test_parquet_source_predicate_same_as_filter() {
-        let predicate = lit(true);
-
-        let parquet_source =
-            ParquetSource::new(Arc::new(Schema::empty())).with_predicate(predicate);
-        // same value. but filter() call Arc::clone internally
-        assert_eq!(parquet_source.predicate(), parquet_source.filter().as_ref());
-    }
 
     #[test]
     fn test_reverse_scan_default_value() {

@@ -465,7 +465,6 @@ impl PostgreSqlDialect {
                     kind: ast::CastKind::Cast,
                     expr: Box::new(expr.clone()),
                     data_type: ast::DataType::Numeric(ast::ExactNumberInfo::None),
-                    array: false,
                     format: None,
                 };
             }
