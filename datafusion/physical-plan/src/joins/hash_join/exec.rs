@@ -3300,8 +3300,9 @@ mod tests {
     };
 
     use arrow::array::{
-        Array, ArrayRef, AsArray, Date32Array, DictionaryArray, Int32Array, Int64Array,
-        StringArray, StringViewArray, StructArray, UInt32Array, UInt64Array,
+        Array, ArrayRef, AsArray, BinaryViewArray, Date32Array, DictionaryArray,
+        Int32Array, Int64Array, StringArray, StringViewArray, StructArray, UInt32Array,
+        UInt64Array,
     };
     use arrow::buffer::NullBuffer;
     use arrow::datatypes::{DataType, Field, Int32Type};
@@ -7250,12 +7251,13 @@ mod tests {
     }
 
     /// Build side batches of `num_batches` x `num_rows` rows with distinct
-    /// buffers: an Int32 key, a Utf8 and a Utf8View payload.
+    /// buffers: an Int32 key, a Utf8, a Utf8View and a BinaryView payload.
     fn concat_test_batches(num_batches: usize, num_rows: usize) -> Vec<RecordBatch> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("k", DataType::Int32, false),
             Field::new("s", DataType::Utf8, true),
             Field::new("v", DataType::Utf8View, true),
+            Field::new("bv", DataType::BinaryView, true),
         ]));
         (0..num_batches)
             .map(|b| {
@@ -7269,9 +7271,19 @@ mod tests {
                         (i % 5 != 0).then(|| format!("a long string view value {b}-{i}"))
                     })
                     .collect::<StringViewArray>();
+                let binary_views = (0..num_rows)
+                    .map(|i| {
+                        (i % 3 != 0).then(|| format!("a long binary view value {b}-{i}"))
+                    })
+                    .collect::<BinaryViewArray>();
                 RecordBatch::try_new(
                     Arc::clone(&schema),
-                    vec![Arc::new(keys), Arc::new(strings), Arc::new(views)],
+                    vec![
+                        Arc::new(keys),
+                        Arc::new(strings),
+                        Arc::new(views),
+                        Arc::new(binary_views),
+                    ],
                 )
                 .unwrap()
             })
@@ -7381,11 +7393,15 @@ mod tests {
     }
 
     /// Only the views of a view array are copied, its data buffers stay shared.
-    #[test]
-    fn concat_build_batches_view_data_not_reserved_twice() -> Result<()> {
-        let batches = concat_test_batches(4, 1000)
+    #[rstest]
+    fn concat_build_batches_view_data_not_reserved_twice(
+        #[values("v", "bv")] column: &str,
+    ) -> Result<()> {
+        let batches = concat_test_batches(4, 1000);
+        let column = batches[0].schema().index_of(column)?;
+        let batches = batches
             .into_iter()
-            .map(|batch| batch.project(&[2]))
+            .map(|batch| batch.project(&[column]))
             .collect::<Result<Vec<_>, _>>()?;
         let schema = batches[0].schema();
         let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
