@@ -1966,11 +1966,13 @@ EXPLAIN SELECT * from ordered ORDER BY (a + b);
 ----
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[a, b], output_ordering=[a@0 + b@1 ASC NULLS LAST], file_type=csv, has_header=true
 
-# Order equivalence handling should make this query a simple table scan
+# Negation may wrap at BIGINT's minimum, so the declared ordering is insufficient.
 query TT
 EXPLAIN SELECT * from ordered ORDER BY -(a + b) desc nulls last;
 ----
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[a, b], output_ordering=[a@0 + b@1 ASC NULLS LAST], file_type=csv, has_header=true
+physical_plan
+01)SortExec: expr=[(- a@0 + b@1) DESC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/data/composite_order.csv]]}, projection=[a, b], output_ordering=[a@0 + b@1 ASC NULLS LAST], file_type=csv, has_header=true
 
 # Ordering by another column requires a sort
 query TT
@@ -2159,3 +2161,214 @@ DROP TABLE sort_key_sink;
 
 statement ok
 DROP TABLE t2;
+
+# Regression for #24683: signed minimum negation wraps.
+query II
+SELECT i, -i AS n
+FROM (
+  SELECT i FROM (VALUES
+    (CAST(-128 AS TINYINT)), (CAST(-1 AS TINYINT)),
+    (CAST(0 AS TINYINT)), (CAST(1 AS TINYINT))
+  ) AS v(i)
+  ORDER BY i DESC LIMIT 4
+) AS t
+ORDER BY n ASC;
+----
+-128 -128
+1 -1
+0 0
+-1 1
+
+query II
+SELECT i, -i AS n
+FROM (
+  SELECT i FROM (VALUES
+    (CAST(-32768 AS SMALLINT)), (CAST(-1 AS SMALLINT)),
+    (CAST(0 AS SMALLINT)), (CAST(1 AS SMALLINT))
+  ) AS v(i)
+  ORDER BY i DESC LIMIT 4
+) AS t
+ORDER BY n ASC;
+----
+-32768 -32768
+1 -1
+0 0
+-1 1
+
+query II
+SELECT i, -i AS n
+FROM (
+  SELECT i FROM (VALUES
+    (CAST(-2147483648 AS INT)), (CAST(-1 AS INT)),
+    (CAST(0 AS INT)), (CAST(1 AS INT))
+  ) AS v(i)
+  ORDER BY i DESC LIMIT 4
+) AS t
+ORDER BY n ASC;
+----
+-2147483648 -2147483648
+1 -1
+0 0
+-1 1
+
+query II
+SELECT i, -i AS n
+FROM (
+  SELECT i FROM (VALUES
+    (CAST(-9223372036854775808 AS BIGINT)), (CAST(-1 AS BIGINT)),
+    (CAST(0 AS BIGINT)), (CAST(1 AS BIGINT))
+  ) AS v(i)
+  ORDER BY i DESC LIMIT 4
+) AS t
+ORDER BY n ASC;
+----
+-9223372036854775808 -9223372036854775808
+1 -1
+0 0
+-1 1
+
+# Filtering on the negation must retain the wrapped minimum.
+statement ok
+CREATE TABLE negative_values (i TINYINT) AS VALUES (-128), (-1), (0), (1);
+
+query I
+SELECT i FROM negative_values WHERE -i < 0 ORDER BY i;
+----
+-128
+1
+
+query I
+SELECT i FROM negative_values WHERE -i = CAST(-128 AS TINYINT);
+----
+-128
+
+# Double negation remains the identity, including at the minimum.
+query II
+SELECT i, -(-i) FROM negative_values ORDER BY i;
+----
+-128 -128
+-1 -1
+0 0
+1 1
+
+statement ok
+DROP TABLE negative_values;
+
+query II
+SELECT i, -i AS n FROM (
+  SELECT i FROM (VALUES (CAST(-128 AS TINYINT)), (CAST(-1 AS TINYINT)), (CAST(0 AS TINYINT)), (CAST(1 AS TINYINT)), (CAST(NULL AS TINYINT))) AS v(i)
+  ORDER BY i DESC NULLS FIRST LIMIT 5
+) AS t ORDER BY n ASC NULLS FIRST;
+----
+NULL NULL
+-128 -128
+1 -1
+0 0
+-1 1
+
+query II
+SELECT i, -i AS n FROM (
+  SELECT i FROM (VALUES (CAST(-128 AS TINYINT)), (CAST(-1 AS TINYINT)), (CAST(0 AS TINYINT)), (CAST(1 AS TINYINT)), (CAST(NULL AS TINYINT))) AS v(i)
+  ORDER BY i DESC NULLS LAST LIMIT 5
+) AS t ORDER BY n ASC NULLS LAST;
+----
+-128 -128
+1 -1
+0 0
+-1 1
+NULL NULL
+
+query II
+SELECT i, -i AS n FROM (
+  SELECT i FROM (VALUES (CAST(-128 AS TINYINT)), (CAST(-1 AS TINYINT)), (CAST(0 AS TINYINT)), (CAST(1 AS TINYINT)), (CAST(NULL AS TINYINT))) AS v(i)
+  ORDER BY i ASC NULLS FIRST LIMIT 5
+) AS t ORDER BY n DESC NULLS FIRST;
+----
+NULL NULL
+-1 1
+0 0
+1 -1
+-128 -128
+
+query II
+SELECT i, -i AS n FROM (
+  SELECT i FROM (VALUES (CAST(-128 AS TINYINT)), (CAST(-1 AS TINYINT)), (CAST(0 AS TINYINT)), (CAST(1 AS TINYINT)), (CAST(NULL AS TINYINT))) AS v(i)
+  ORDER BY i ASC NULLS LAST LIMIT 5
+) AS t ORDER BY n DESC NULLS LAST;
+----
+-1 1
+0 0
+1 -1
+-128 -128
+NULL NULL
+
+# The outer sort is necessary even though the child is sorted.
+query TT
+EXPLAIN SELECT i, -i AS n FROM (
+  SELECT i FROM (VALUES (CAST(-128 AS TINYINT)), (CAST(1 AS TINYINT))) AS v(i)
+  ORDER BY i DESC LIMIT 2
+) AS t ORDER BY n ASC;
+----
+logical_plan
+01)Sort: n ASC NULLS LAST
+02)--Projection: t.i, (- t.i) AS n
+03)----SubqueryAlias: t
+04)------Sort: v.i DESC NULLS FIRST, fetch=2
+05)--------SubqueryAlias: v
+06)----------Projection: column1 AS i
+07)------------Values: (Int8(-128) AS Int64(-128)), (Int8(1) AS Int64(1))
+physical_plan
+01)SortExec: expr=[n@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[column1@0 as i, (- column1@0) as n]
+03)----SortExec: TopK(fetch=2), expr=[column1@0 DESC], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Logical double-negation simplification keeps the original ordering.
+query TT
+EXPLAIN SELECT i FROM (
+  SELECT i FROM (VALUES (CAST(-128 AS TINYINT)), (CAST(1 AS TINYINT))) AS v(i)
+  ORDER BY i ASC LIMIT 2
+) AS t ORDER BY -(-i) ASC;
+----
+logical_plan
+01)Sort: t.i AS (- (- t.i)) ASC NULLS LAST
+02)--SubqueryAlias: t
+03)----Sort: v.i ASC NULLS LAST, fetch=2
+04)------SubqueryAlias: v
+05)--------Projection: column1 AS i
+06)----------Values: (Int8(-128) AS Int64(-128)), (Int8(1) AS Int64(1))
+physical_plan
+01)ProjectionExec: expr=[column1@0 as i]
+02)--SortExec: TopK(fetch=2), expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE negative_stream (i INT)
+STORED AS CSV WITH ORDER (i ASC)
+LOCATION '../core/tests/data/empty.csv'
+OPTIONS ('format.has_header' 'true');
+
+# Double negation must not require sorting an unbounded stream.
+query TT
+EXPLAIN SELECT i FROM negative_stream ORDER BY -(-i) ASC;
+----
+logical_plan
+01)Sort: negative_stream.i AS (- (- negative_stream.i)) ASC NULLS LAST
+02)--TableScan: negative_stream projection=[i]
+physical_plan StreamingTableExec: partition_sizes=1, projection=[i], infinite_source=true, output_ordering=[i@0 ASC NULLS LAST]
+
+statement ok
+DROP TABLE negative_stream;
+
+# Equal non-null values do not remove the need to order NULLs.
+query II
+SELECT i, -i AS n FROM (
+  SELECT i FROM (VALUES
+    (CAST(-128 AS TINYINT)), (CAST(NULL AS TINYINT)), (CAST(-128 AS TINYINT))
+  ) AS v(i)
+  ORDER BY i DESC NULLS FIRST LIMIT 3
+) AS t ORDER BY n ASC NULLS LAST;
+----
+-128 -128
+-128 -128
+NULL NULL
