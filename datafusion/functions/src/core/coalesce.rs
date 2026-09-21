@@ -32,7 +32,7 @@ use itertools::Itertools;
 
 #[user_doc(
     doc_section(label = "Conditional Functions"),
-    description = "Returns the first of its arguments that is not _null_. Returns _null_ if all arguments are _null_. This function is often used to substitute a default value for _null_ values.",
+    description = "Returns the first of its arguments that is not _null_. Returns _null_ if all arguments are _null_. Arguments after the first non-_null_ one are normally not evaluated, but when any argument other than the last is volatile every argument is evaluated, so that each is evaluated exactly once. This function is often used to substitute a default value for _null_ values.",
     syntax_example = "coalesce(expression1[, ..., expression_n])",
     sql_example = r#"```sql
 > select coalesce(null, null, 'datafusion');
