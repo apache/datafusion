@@ -1,0 +1,97 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Roundtrip test for write_row_group_number_distinct_values.
+#
+# Writes a parquet file with NDV tracking enabled and verifies that
+# DataFusion reads back the distinct count from the parquet statistics.
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+statement ok
+set datafusion.explain.show_statistics = true;
+
+statement ok
+set datafusion.execution.collect_statistics = true;
+
+######
+# Without the option (default), distinct counts are absent.
+######
+
+query I
+COPY (VALUES (1), (2), (3), (1))
+TO 'test_files/scratch/parquet_ndv_write/no_ndv.parquet'
+STORED AS PARQUET;
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE no_ndv
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_ndv_write/no_ndv.parquet';
+
+# Distinct count should be absent (no NDV written to the file)
+query TT
+EXPLAIN SELECT * FROM no_ndv;
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_ndv_write/no_ndv.parquet]]}, projection=[column1], file_type=parquet, statistics=[Rows=Exact(4), Bytes=Exact(32), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(3)) Null=Exact(0) ScanBytes=Exact(32))]]
+
+statement ok
+DROP TABLE no_ndv;
+
+######
+# With write_row_group_number_distinct_values = true, distinct count is written
+# and read back as Exact (single row group).
+######
+
+statement ok
+set datafusion.execution.parquet.write_row_group_number_distinct_values = true;
+
+query I
+COPY (VALUES (1), (2), (3), (1))
+TO 'test_files/scratch/parquet_ndv_write/with_ndv.parquet'
+STORED AS PARQUET;
+----
+4
+
+statement ok
+CREATE EXTERNAL TABLE with_ndv
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_ndv_write/with_ndv.parquet';
+
+# Distinct count should now be Exact(3) — 3 distinct values among 4 rows
+query TT
+EXPLAIN SELECT * FROM with_ndv;
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_ndv_write/with_ndv.parquet]]}, projection=[column1], file_type=parquet, statistics=[Rows=Exact(4), Bytes=Exact(32), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(3)) Null=Exact(0) Distinct=Exact(3) ScanBytes=Exact(32))]]
+
+statement ok
+DROP TABLE with_ndv;
+
+# Reset settings
+statement ok
+RESET datafusion.execution.parquet.write_row_group_number_distinct_values;
+
+statement ok
+RESET datafusion.explain.show_statistics;
+
+statement ok
+RESET datafusion.explain.physical_plan_only;
+
+statement ok
+RESET datafusion.execution.collect_statistics;
