@@ -1794,6 +1794,7 @@ mod tests {
             // demuxer). Their batches must be larger than that buffer for
             // rotation to be observable.
             payload_size: usize,
+            high_entropy: bool,
         }
 
         let test_cases = [
@@ -1801,44 +1802,64 @@ mod tests {
                 format: "csv",
                 options: "",
                 payload_size: 32 * 1024,
+                high_entropy: true,
             },
             TestCase {
                 format: "csv",
                 options: "OPTIONS ('format.compression' 'gzip')",
                 payload_size: 32 * 1024,
+                high_entropy: true,
+            },
+            TestCase {
+                format: "csv",
+                options: "OPTIONS ('format.compression' 'gzip')",
+                payload_size: 32 * 1024,
+                high_entropy: false,
             },
             TestCase {
                 format: "json",
                 options: "",
                 payload_size: 32 * 1024,
+                high_entropy: true,
             },
             TestCase {
                 format: "json",
                 options: "OPTIONS ('format.compression' 'zstd')",
                 payload_size: 32 * 1024,
+                high_entropy: true,
+            },
+            TestCase {
+                format: "json",
+                options: "OPTIONS ('format.compression' 'zstd')",
+                payload_size: 32 * 1024,
+                high_entropy: false,
             },
             TestCase {
                 format: "arrow",
                 options: "",
                 payload_size: 1536 * 1024,
+                high_entropy: true,
             },
             #[cfg(feature = "parquet")]
             TestCase {
                 format: "parquet",
                 options: "OPTIONS ('format.compression' 'uncompressed', 'format.max_row_group_size' '1', 'format.allow_single_file_parallelism' 'false')",
                 payload_size: 32 * 1024,
+                high_entropy: true,
             },
             #[cfg(feature = "parquet")]
             TestCase {
                 format: "parquet",
                 options: "OPTIONS ('format.compression' 'zstd(3)', 'format.max_row_group_size' '1')",
                 payload_size: 1536 * 1024,
+                high_entropy: true,
             },
             #[cfg(feature = "avro")]
             TestCase {
                 format: "avro",
                 options: "",
                 payload_size: 1536 * 1024,
+                high_entropy: true,
             },
         ];
 
@@ -1866,19 +1887,21 @@ mod tests {
             let config = SessionConfig::from_string_hash_map(&config_map)?;
             let ctx = SessionContext::new_with_config(config);
 
-            // A deterministic high-entropy payload avoids compression reducing
-            // a large batch below the format's intermediate flush threshold.
-            let alphabet =
-                b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-            let mut state = 0x4d595df4d0f33173_u64;
-            let payload = (0..test_case.payload_size)
-                .map(|_| {
-                    state ^= state << 13;
-                    state ^= state >> 7;
-                    state ^= state << 17;
-                    alphabet[state as usize % alphabet.len()] as char
-                })
-                .collect::<String>();
+            let payload = if test_case.high_entropy {
+                let alphabet =
+                    b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+                let mut state = 0x4d595df4d0f33173_u64;
+                (0..test_case.payload_size)
+                    .map(|_| {
+                        state ^= state << 13;
+                        state ^= state >> 7;
+                        state ^= state << 17;
+                        alphabet[state as usize % alphabet.len()] as char
+                    })
+                    .collect::<String>()
+            } else {
+                "a".repeat(test_case.payload_size)
+            };
             let schema = Arc::new(Schema::new(vec![
                 Field::new("id", DataType::Int32, false),
                 Field::new("payload", DataType::Utf8, false),
@@ -1920,15 +1943,25 @@ mod tests {
                 .path()
                 .read_dir()?
                 .collect::<std::io::Result<Vec<_>>>()?;
-            assert!(
-                files.len() > 1,
-                "{} {} did not rotate after reaching the byte limit; files: {:?}",
-                test_case.format,
-                test_case.options,
-                files.iter().map(|entry| entry.path()).collect::<Vec<_>>(),
-            );
+            if test_case.high_entropy {
+                assert!(
+                    files.len() > 1,
+                    "{} {} did not rotate after reaching the byte limit; files: {:?}",
+                    test_case.format,
+                    test_case.options,
+                    files.iter().map(|entry| entry.path()).collect::<Vec<_>>(),
+                );
+            } else {
+                assert_eq!(
+                    files.len(),
+                    1,
+                    "{} {} rotated despite compressed output remaining below the byte limit; files: {:?}",
+                    test_case.format,
+                    test_case.options,
+                    files.iter().map(|entry| entry.path()).collect::<Vec<_>>(),
+                );
+            }
         }
-
         Ok(())
     }
 
