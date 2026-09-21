@@ -354,6 +354,8 @@ impl MultiLevelMergeBuilder {
                         true,
                         true,
                         self.batch_size,
+                        None,
+                        None,
                     )?,
                     batch_size_limit: self.batch_size,
                 })
@@ -416,7 +418,13 @@ impl MultiLevelMergeBuilder {
                 // intermediate run stays shrunk and won't rebuild an oversized batch on
                 // a later pass.
                 let mut output_batch_size = self.batch_size;
+                let mut target_batch_bytes = None;
                 for (spill, batch_size_limit) in sorted_spill_files {
+                    target_batch_bytes = Some(
+                        target_batch_bytes
+                            .unwrap_or(0)
+                            .max(spill.max_record_batch_memory),
+                    );
                     let stream = self
                         .spill_manager
                         .clone()
@@ -434,6 +442,9 @@ impl MultiLevelMergeBuilder {
                     self.sorted_spill_files.is_empty(),
                     is_only_merging_memory_streams,
                     output_batch_size,
+                    target_batch_bytes,
+                    (!is_only_merging_memory_streams)
+                        .then(|| memory_reservation.new_empty()),
                 )?;
 
                 // If we're only merging memory streams, we don't need to attach the memory reservation
@@ -470,11 +481,15 @@ impl MultiLevelMergeBuilder {
         is_output: bool,
         all_in_memory: bool,
         output_batch_size: usize,
+        target_batch_bytes: Option<usize>,
+        output_construction_reservation: Option<MemoryReservation>,
     ) -> Result<SendableRecordBatchStream> {
         let mut builder = StreamingMergeBuilder::new()
             .with_schema(Arc::clone(&self.schema))
             .with_expressions(&self.expr)
             .with_batch_size(output_batch_size)
+            .with_target_batch_bytes(target_batch_bytes)
+            .with_output_construction_reservation(output_construction_reservation)
             .with_fetch(self.fetch)
             .with_metrics(if is_output {
                 // Only add the metrics to the last run
@@ -911,7 +926,8 @@ mod tests {
     use super::*;
 
     use crate::expressions::PhysicalSortExpr;
-    use arrow::array::{AsArray, Int64Array};
+    use crate::spill::get_record_batch_memory_size;
+    use arrow::array::{Array, AsArray, BinaryArray, Int64Array};
     use arrow::compute::concat_batches;
     use arrow::datatypes::{DataType, Field, Int64Type, Schema};
     use datafusion_execution::memory_pool::{
@@ -925,6 +941,10 @@ mod tests {
 
     fn test_schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, false)]))
+    }
+
+    fn binary_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new("x", DataType::Binary, false)]))
     }
 
     fn build_spill_manager(env: &Arc<RuntimeEnv>, schema: &SchemaRef) -> SpillManager {
@@ -952,6 +972,37 @@ mod tests {
             .spill_record_batch_iter_and_return_max_batch_memory(
                 batches.into_iter(),
                 "test input run",
+            )
+            .unwrap()
+            .expect("spill should produce a file");
+        SortedSpillFile {
+            file,
+            max_record_batch_memory,
+        }
+    }
+
+    fn make_binary_value(value: usize, width: usize) -> Vec<u8> {
+        let prefix = format!("{value:04}-");
+        let mut bytes = prefix.into_bytes();
+        bytes.resize(width, b'x');
+        bytes
+    }
+
+    fn make_sorted_binary_spill_file(
+        spill_manager: &SpillManager,
+        schema: &SchemaRef,
+        values: Vec<Vec<u8>>,
+    ) -> SortedSpillFile {
+        let batch = RecordBatch::try_new(
+            Arc::clone(schema),
+            vec![Arc::new(BinaryArray::from_iter_values(values))],
+        )
+        .unwrap();
+        let batches: Vec<Result<RecordBatch>> = vec![Ok(batch)];
+        let (file, max_record_batch_memory) = spill_manager
+            .spill_record_batch_iter_and_return_max_batch_memory(
+                batches.into_iter(),
+                "test binary input run",
             )
             .unwrap()
             .expect("spill should produce a file");
@@ -1164,9 +1215,7 @@ mod tests {
             let batch = batch?;
             // Short input runs must not rebuild a larger output batch than
             // the attached merge reservation can hold.
-            assert!(
-                crate::spill::get_record_batch_memory_size(&batch) <= pool.reserved()
-            );
+            assert!(get_record_batch_memory_size(&batch) <= pool.reserved());
             batches.push(batch);
             assert!(pool.reserved() <= merge_limit);
         }
@@ -1192,7 +1241,9 @@ mod tests {
             .map(|value| make_sorted_spill_file(&spill_manager, &schema, vec![value]))
             .collect::<Vec<_>>();
         let batch_memory = spills[0].max_record_batch_memory;
-        let pool_size = 6 * batch_memory;
+        // Leave enough room for the one-row output-construction reservation in
+        // addition to the minimum spill read buffers.
+        let pool_size = 6 * batch_memory + 64 + size_of::<i64>();
         let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(pool_size));
         let mut builder =
             build_merge_builder(spill_manager, Arc::clone(&schema), spills, &pool, 8192)
@@ -1281,6 +1332,157 @@ mod tests {
         let error = stream.next().await.unwrap().unwrap_err();
         assert!(error.to_string().contains("cannot be split further"));
         drop(stream);
+        assert_eq!(pool.reserved(), 0);
+        assert_eq!(env.disk_manager.spilling_progress().current_bytes, 0);
+        assert_eq!(env.disk_manager.spilling_progress().active_files_count, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn spill_merge_output_construction_uses_the_real_pool() -> Result<()> {
+        let output_budget = 64 + size_of::<i64>();
+
+        let run_once = |pool_extra: usize| -> Result<(
+            SendableRecordBatchStream,
+            Arc<dyn MemoryPool>,
+            Arc<RuntimeEnv>,
+            SchemaRef,
+        )> {
+            let env = Arc::new(RuntimeEnv::default());
+            let schema = test_schema();
+            let spill_manager = build_spill_manager(&env, &schema);
+            let first = make_sorted_spill_file(&spill_manager, &schema, vec![1]);
+            let second = make_sorted_spill_file(&spill_manager, &schema, vec![2]);
+            let read_reservation = [&first, &second]
+                .into_iter()
+                .map(|spill| {
+                    get_reserved_bytes_for_record_batch_size(
+                        spill.max_record_batch_memory,
+                        spill.max_record_batch_memory,
+                    ) * 2
+                })
+                .sum::<usize>();
+            let pool: Arc<dyn MemoryPool> =
+                Arc::new(GreedyMemoryPool::new(read_reservation + pool_extra));
+            let builder = build_merge_builder(
+                spill_manager,
+                Arc::clone(&schema),
+                vec![first, second],
+                &pool,
+                8192,
+            );
+            Ok((builder.create_spillable_merge_stream(), pool, env, schema))
+        };
+
+        let (mut stream, pool, env, _) = run_once(output_budget - 1)?;
+        let err = stream
+            .next()
+            .await
+            .expect("merge should attempt to produce a batch")
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Resources exhausted"),
+            "expected output reservation to fail against the real pool, got: {err}"
+        );
+        drop(stream);
+        assert_eq!(pool.reserved(), 0);
+        assert_eq!(env.disk_manager.spilling_progress().current_bytes, 0);
+        assert_eq!(env.disk_manager.spilling_progress().active_files_count, 0);
+
+        let (stream, pool, env, schema) = run_once(output_budget)?;
+        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+        let merged = concat_batches(&schema, &batches)?;
+        let values = merged.column(0).as_primitive::<Int64Type>();
+        assert_eq!(values.values(), &[1, 2]);
+        assert_eq!(pool.reserved(), 0);
+        assert_eq!(env.disk_manager.spilling_progress().current_bytes, 0);
+        assert_eq!(env.disk_manager.spilling_progress().active_files_count, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn spill_merge_applies_byte_target_to_wide_binary_output() -> Result<()> {
+        const ROWS_PER_RUN: usize = 8;
+        const VALUE_WIDTH: usize = 16 * 1024;
+
+        let env = Arc::new(RuntimeEnv::default());
+        let schema = binary_schema();
+        let spill_manager = build_spill_manager(&env, &schema);
+        let first = make_sorted_binary_spill_file(
+            &spill_manager,
+            &schema,
+            (0..ROWS_PER_RUN)
+                .map(|row| make_binary_value(row * 2, VALUE_WIDTH))
+                .collect(),
+        );
+        let second = make_sorted_binary_spill_file(
+            &spill_manager,
+            &schema,
+            (0..ROWS_PER_RUN)
+                .map(|row| make_binary_value(row * 2 + 1, VALUE_WIDTH))
+                .collect(),
+        );
+        let target = first
+            .max_record_batch_memory
+            .max(second.max_record_batch_memory);
+        let unbounded_output = get_record_batch_memory_size(&RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(BinaryArray::from_iter_values(
+                (0..2 * ROWS_PER_RUN).map(|row| make_binary_value(row, VALUE_WIDTH)),
+            ))],
+        )?);
+        assert!(
+            unbounded_output > target,
+            "test setup must distinguish unbounded merge output from the byte target"
+        );
+
+        let read_reservation = [&first, &second]
+            .into_iter()
+            .map(|spill| {
+                get_reserved_bytes_for_record_batch_size(
+                    spill.max_record_batch_memory,
+                    spill.max_record_batch_memory,
+                ) * 2
+            })
+            .sum::<usize>();
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(
+            read_reservation + unbounded_output * 2,
+        ));
+        let stream = build_merge_builder(
+            spill_manager,
+            Arc::clone(&schema),
+            vec![first, second],
+            &pool,
+            8192,
+        )
+        .create_spillable_merge_stream();
+        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+
+        assert!(
+            batches.len() > 1,
+            "wide binary output must be split into byte-targeted batches"
+        );
+        for batch in &batches {
+            assert!(
+                get_record_batch_memory_size(batch) <= target,
+                "output batch has {} bytes, above target {target}",
+                get_record_batch_memory_size(batch),
+            );
+        }
+
+        let merged = concat_batches(&schema, &batches)?;
+        let values = merged
+            .column(0)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        let actual = (0..values.len())
+            .map(|row| values.value(row).to_vec())
+            .collect::<Vec<_>>();
+        let expected = (0..2 * ROWS_PER_RUN)
+            .map(|row| make_binary_value(row, VALUE_WIDTH))
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
         assert_eq!(pool.reserved(), 0);
         assert_eq!(env.disk_manager.spilling_progress().current_bytes, 0);
         assert_eq!(env.disk_manager.spilling_progress().active_files_count, 0);
