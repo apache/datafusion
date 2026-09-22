@@ -217,9 +217,9 @@ fn general_left_right_view<F: LeftRightSlicer>(
 
     let views = ScalarBuffer::from(new_views);
     let data_buffers = if has_out_of_line {
-        string_view_array.data_buffers().to_vec()
+        Arc::clone(string_view_array.data_buffers())
     } else {
-        vec![]
+        Arc::from([])
     };
 
     // SAFETY:

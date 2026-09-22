@@ -492,7 +492,11 @@ impl ExecutionPlan for ProjectionExec {
         Ok(Arc::new(
             self.projector
                 .projection()
-                .project_statistics(input_stats, &output_schema)?,
+                .project_statistics_with_input_schema(
+                    input_stats,
+                    self.input.schema().as_ref(),
+                    &output_schema,
+                )?,
         ))
     }
 
@@ -1570,7 +1574,8 @@ mod tests {
     use datafusion_functions::core::arrow_metadata::ArrowMetadataFunc;
     use datafusion_physical_expr::ScalarFunctionExpr;
     use datafusion_physical_expr::expressions::{
-        BinaryExpr, Column, DynamicFilterPhysicalExpr, Literal, binary, col, is_null, lit,
+        BinaryExpr, CastExpr, Column, DynamicFilterPhysicalExpr, Literal, binary, col,
+        is_null, lit,
     };
 
     #[test]
@@ -2146,6 +2151,37 @@ mod tests {
             "Expected 2 columns in projection statistics"
         );
         assert!(stats.total_byte_size.is_exact().unwrap_or(false));
+    }
+
+    #[test]
+    fn test_projection_statistics_safe_cast_without_extrema() {
+        let input_schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let mut input_statistics = Statistics::new_unknown(&input_schema);
+        input_statistics.column_statistics[0].null_count = Precision::Exact(3);
+        input_statistics.column_statistics[0].distinct_count = Precision::Exact(2);
+        let input = Arc::new(StatisticsExec::new(input_statistics, input_schema));
+        let projection = ProjectionExec::try_new(
+            vec![ProjectionExpr::new(
+                Arc::new(CastExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    DataType::Int64,
+                    None,
+                )),
+                "a",
+            )],
+            input,
+        )
+        .unwrap();
+
+        let stats = StatisticsContext::new()
+            .compute(&projection, &StatisticsArgs::new())
+            .unwrap();
+
+        assert_eq!(stats.column_statistics[0].null_count, Precision::Exact(3));
+        assert_eq!(
+            stats.column_statistics[0].distinct_count,
+            Precision::Exact(2)
+        );
     }
 
     #[test]

@@ -7129,6 +7129,12 @@ select count(*) over (order by x) from (values (map(['a'], [1])), (map(['a'], [2
 statement error Error during planning: RANGE window frames are not supported for ORDER BY type Map
 select count(*) over (order by d, m) from (values (arrow_cast(1, 'Duration(Second)'), map(['a'], [1])), (arrow_cast(1, 'Duration(Second)'), map(['a'], [2]))) t(d, m)
 
+# the trailing key check also runs when the first ORDER BY type supports offset
+# arithmetic; otherwise these maps are treated as peers because their keys are
+# equal even though their values differ
+statement error Error during planning: RANGE window frames are not supported for ORDER BY type Map
+select count(*) over (order by i, m) from (values (1, map(['a'], [1])), (1, map(['a'], [2]))) t(i, m)
+
 query ??I
 select d, e, count(*) over (order by d, e) from (values (arrow_cast(1, 'Duration(Second)'), arrow_cast(2, 'Duration(Millisecond)')), (arrow_cast(1, 'Duration(Second)'), arrow_cast(1, 'Duration(Millisecond)'))) t(d, e) order by 3
 ----

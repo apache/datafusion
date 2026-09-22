@@ -112,9 +112,17 @@ parquet_row_filter_skip: Per-RG fully-matched RowFilter skip on Parquet (apache/
                           range filter + pushdown, so most row groups are fully matched and the per-row RowFilter is skipped on them
                           (subgroups via BENCH_SUBGROUP: skip = clustered key so the skip fires, control = scrambled key so it never fires)
                           (data generated inline by the suite's load SQL; knobs: PRED_ROWS, RG_SIZE)
+spill_views:            Sort and GROUP BY queries that spill StringView/BinaryView columns read from Parquet
+                          (https://github.com/apache/datafusion/issues/23564); each query sets its own memory limit
+                          (subgroups via BENCH_SUBGROUP: repeated = low-cardinality payload, distinct = all-distinct strings)
+                          (data generated inline by the suite's load SQL)
 null_aware_join:        Null-aware (NOT IN) hash join micro-benchmarks: uncorrelated, non-equality-correlated and equality-correlated
                           NOT IN across NULL fractions, to measure the per-pair join-filter work the correlated cases do
                           (data generated inline by the suite's load SQL from range(); knobs: NAJ_ROWS, NAJ_LARGE_ROWS)
+projection_subquery:    IN / NOT IN / EXISTS subqueries in the SELECT list (see https://github.com/apache/datafusion/issues/25341); each query projects the
+                          boolean subquery result and aggregates it, so the cost is the decorrelation plan and not the output size
+                          (q07 correlates on '<' instead of '=', so it keeps the nested-loop plan and acts as the control)
+                          (data generated inline by the suite's load SQL; knob: PSQ_ROWS)
 
 # ClickBench Benchmarks
 clickbench_1:           ClickBench queries against a single parquet file
@@ -275,9 +283,17 @@ main() {
                     # Data is generated inline by the suite's load SQL (COPY).
                     echo "parquet_row_filter_skip: no external data to generate"
                     ;;
+                spill_views)
+                    # Data is generated inline by the suite's load SQL (COPY).
+                    echo "spill_views: no external data to generate"
+                    ;;
                 null_aware_join)
                     # Data is generated inline by the suite's load SQL from range().
                     echo "null_aware_join: no external data to generate"
+                    ;;
+                projection_subquery)
+                    # Data is generated inline by the suite's load SQL.
+                    echo "projection_subquery: no external data to generate"
                     ;;
                 asof_join)
                     data_asof_join
@@ -527,8 +543,14 @@ main() {
                 parquet_row_filter_skip)
                     run_parquet_row_filter_skip
                     ;;
+                spill_views)
+                    run_spill_views
+                    ;;
                 null_aware_join)
                     run_null_aware_join
+                    ;;
+                projection_subquery)
+                    run_projection_subquery
                     ;;
                 asof_join)
                     run_asof_join
@@ -965,6 +987,38 @@ run_null_aware_join() {
     debug_run env BENCH_NAME=null_aware_join \
       NAJ_ROWS="${NAJ_ROWS:-10000}" \
       NAJ_LARGE_ROWS="${NAJ_LARGE_ROWS:-1000000}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Runs the projection_subquery suite: IN / NOT IN / EXISTS subqueries that sit
+# in the SELECT list instead of a filter (see
+# https://github.com/apache/datafusion/issues/25341). The load SQL builds the
+# two tables inline, so there is no data step. Each query projects the boolean
+# subquery result and aggregates it, so the measured cost is the decorrelation
+# plan and not the size of the output. Query 07 correlates on '<' instead of
+# '=', so it keeps the nested-loop plan and acts as the control.
+# Knob (string-substituted into the load SQL, not engine config):
+#   PSQ_ROWS  rows in each of the two tables (default 30_000; the checked-in
+#             result files hold the counts for that value)
+run_projection_subquery() {
+    echo "Running projection_subquery benchmark (rows=${PSQ_ROWS:-30000})..."
+    debug_run env BENCH_NAME=projection_subquery \
+      PSQ_ROWS="${PSQ_ROWS:-30000}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Runs the spill_views suite: sort and GROUP BY queries that spill StringView
+# and BinaryView columns read from Parquet
+# (https://github.com/apache/datafusion/issues/23564). The load SQL COPYs 1M-row
+# Parquet files inline, so there is no data step. Each query sets its own memory
+# limit and target_partitions, so it spills regardless of the environment.
+#   BENCH_SUBGROUP  run one subgroup (repeated, distinct)
+run_spill_views() {
+    echo "Running spill_views benchmark (subgroup=${BENCH_SUBGROUP:-all})..."
+    debug_run env BENCH_NAME=spill_views \
+      ${BENCH_SUBGROUP:+BENCH_SUBGROUP="${BENCH_SUBGROUP}"} \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
       bash -c "$SQL_CARGO_COMMAND"
 }
