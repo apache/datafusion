@@ -1587,7 +1587,7 @@ impl SessionStateBuilder {
     /// Add a [`CatalogProviderFactory`] to the map of factories
     pub fn with_catalog_factory(
         mut self,
-        key: String,
+        key: impl Into<String>,
         catalog_factory: Arc<dyn CatalogProviderFactory>,
     ) -> Self {
         let mut catalog_factories = self.catalog_factories.unwrap_or_default();
