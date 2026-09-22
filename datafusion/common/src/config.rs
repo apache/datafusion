@@ -1782,6 +1782,18 @@ config_namespace! {
         /// Number of times that the optimizer will attempt to optimize the plan
         pub max_passes: usize, default = 3
 
+        /// (Experimental) Run the physical optimizer in phases instead of a
+        /// single pass over the rule list.
+        ///
+        /// The flat rule list is partitioned at its barrier rules, the passes
+        /// that uphold invariants or mark phase boundaries (requirement
+        /// enforcement, output-requirement markers, the sanity check).
+        /// Barriers run exactly once, in order. Each segment of optimizer
+        /// rules between two barriers runs repeatedly, as a unit, until the
+        /// plan's signature repeats (fixpoint or cycle) or `max_passes` is
+        /// reached, mirroring how the logical optimizer loop terminates.
+        pub experimental_physical_phases: bool, default = false
+
         /// When set to true, the physical plan optimizer will run a top down
         /// process to reorder the join keys
         pub top_down_join_key_reordering: bool, default = true

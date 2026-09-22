@@ -102,6 +102,7 @@ use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr, create_physical_sort_exprs,
 };
+use datafusion_physical_optimizer::plan_signature::PhysicalPlanSignature;
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::joins::PiecewiseMergeJoinExec;
@@ -2010,6 +2011,129 @@ impl DefaultPhysicalPlanner {
 /// For example, if we have something like `GROUPING SETS ((a,b,c),(a),(b),(b,c))`
 /// we would expand this to `GROUPING SETS ((a,b,c),(a,NULL,NULL),(NULL,b,NULL),(NULL,b,c))
 /// (see <https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS>)
+/// Rule names that mark a phase boundary under
+/// `experimental_physical_phases`: passes that uphold invariants or bracket
+/// the chain, rather than improve the plan. They run exactly once, in their
+/// list order; the optimizer segments between them run to convergence.
+const PHYSICAL_BARRIER_RULES: &[&str] = &[
+    "OutputRequirements",
+    "EnsureRequirements",
+    "EnforceDistribution",
+    "EnforceSorting",
+    "EnsureCooperative",
+    // Both FilterPushdown phases are single-shot recursive pushdowns, and the
+    // rule is not idempotent: each run conjuncts the same predicate onto the
+    // data source again (`predicate = x AND x AND x` after three passes), so
+    // it cannot live inside a convergence loop as written. POC finding #1.
+    "FilterPushdown",
+    // POC finding #2: a second application of PushdownSort on its own output
+    // returns wrong rows (sort_pushdown.slt:2487 yields 4,5,6 instead of
+    // 1,2,3 on a two-group ordered source): the re-push loses the merge that
+    // made the first application correct. Kept out of loops until fixed; the
+    // bug is likely reachable today by any chain listing the rule twice.
+    "PushdownSort",
+    "FilterPushdown(Post)",
+    "SanityCheckPlan",
+];
+
+/// Applies one physical optimizer rule with the same bookkeeping the flat
+/// pass performs: error context, the optimization invariant check, debug
+/// logging, and the observer callback.
+fn apply_physical_rule<F>(
+    optimizer: &Arc<dyn PhysicalOptimizerRule + Send + Sync>,
+    plan: Arc<dyn ExecutionPlan>,
+    context: &dyn PhysicalOptimizerContext,
+    observer: &mut F,
+) -> Result<Arc<dyn ExecutionPlan>>
+where
+    F: FnMut(&dyn ExecutionPlan, &dyn PhysicalOptimizerRule),
+{
+    let before_schema = plan.schema();
+    let new_plan = optimizer
+        .optimize_with_context(plan, context)
+        .map_err(|e| {
+            DataFusionError::Context(optimizer.name().to_string(), Box::new(e))
+        })?;
+
+    // This only checks the schema in release build, and performs additional checks in debug mode.
+    OptimizationInvariantChecker::new(optimizer).check(&new_plan, &before_schema)?;
+
+    debug!(
+        "Optimized physical plan by {}:\n{}\n",
+        optimizer.name(),
+        displayable(new_plan.as_ref()).indent(false)
+    );
+    observer(new_plan.as_ref(), optimizer.as_ref());
+    Ok(new_plan)
+}
+
+/// Runs the rule list in phases: the list is partitioned at the barrier
+/// rules ([`PHYSICAL_BARRIER_RULES`]), each barrier runs once, and each
+/// segment of optimizer rules between two barriers runs to convergence via
+/// [`converge_physical_segment`]. The partition is derived from the list, so
+/// a downstream chain that splices its own rules around the barriers gets
+/// phased the same way the default chain does.
+fn optimize_physical_plan_phased<F>(
+    plan: Arc<dyn ExecutionPlan>,
+    optimizers: &[Arc<dyn PhysicalOptimizerRule + Send + Sync>],
+    context: &dyn PhysicalOptimizerContext,
+    max_passes: usize,
+    observer: &mut F,
+) -> Result<Arc<dyn ExecutionPlan>>
+where
+    F: FnMut(&dyn ExecutionPlan, &dyn PhysicalOptimizerRule),
+{
+    let mut new_plan = plan;
+    let mut segment: Vec<&Arc<dyn PhysicalOptimizerRule + Send + Sync>> = Vec::new();
+    for optimizer in optimizers {
+        if PHYSICAL_BARRIER_RULES.contains(&optimizer.name()) {
+            new_plan = converge_physical_segment(
+                new_plan, &segment, context, max_passes, observer,
+            )?;
+            segment.clear();
+            new_plan = apply_physical_rule(optimizer, new_plan, context, observer)?;
+        } else {
+            segment.push(optimizer);
+        }
+    }
+    converge_physical_segment(new_plan, &segment, context, max_passes, observer)
+}
+
+/// Runs a segment of optimizer rules repeatedly, as a unit, until the plan's
+/// signature repeats or `max_passes` is reached.
+///
+/// The starting signature seeds the set, so a segment whose first pass
+/// changes nothing stops after that one pass. Keeping every prior signature
+/// rather than only the last one also terminates cycles: a plan oscillating
+/// between two forms revisits one of them and stops, where a comparison
+/// against only the previous pass would spin to `max_passes`.
+fn converge_physical_segment<F>(
+    plan: Arc<dyn ExecutionPlan>,
+    segment: &[&Arc<dyn PhysicalOptimizerRule + Send + Sync>],
+    context: &dyn PhysicalOptimizerContext,
+    max_passes: usize,
+    observer: &mut F,
+) -> Result<Arc<dyn ExecutionPlan>>
+where
+    F: FnMut(&dyn ExecutionPlan, &dyn PhysicalOptimizerRule),
+{
+    if segment.is_empty() {
+        return Ok(plan);
+    }
+    let mut seen = HashSet::with_capacity(4);
+    seen.insert(PhysicalPlanSignature::new(plan.as_ref()));
+    let mut new_plan = plan;
+    for _pass in 0..max_passes.max(1) {
+        for optimizer in segment {
+            new_plan = apply_physical_rule(optimizer, new_plan, context, observer)?;
+        }
+        if !seen.insert(PhysicalPlanSignature::new(new_plan.as_ref())) {
+            break;
+        }
+    }
+    Ok(new_plan)
+}
+
 fn merge_grouping_set_physical_expr(
     grouping_sets: &[Vec<Expr>],
     input_dfschema: &DFSchema,
@@ -2966,24 +3090,24 @@ impl DefaultPhysicalPlanner {
         let optimizer_context = SessionOptimizerContext {
             session: session_state,
         };
-        for optimizer in optimizers {
-            let before_schema = new_plan.schema();
-            new_plan = optimizer
-                .optimize_with_context(new_plan, &optimizer_context)
-                .map_err(|e| {
-                    DataFusionError::Context(optimizer.name().to_string(), Box::new(e))
-                })?;
-
-            // This only checks the schema in release build, and performs additional checks in debug mode.
-            OptimizationInvariantChecker::new(optimizer)
-                .check(&new_plan, &before_schema)?;
-
-            debug!(
-                "Optimized physical plan by {}:\n{}\n",
-                optimizer.name(),
-                displayable(new_plan.as_ref()).indent(false)
-            );
-            observer(new_plan.as_ref(), optimizer.as_ref())
+        let options = session_state.config_options();
+        if options.optimizer.experimental_physical_phases {
+            new_plan = optimize_physical_plan_phased(
+                new_plan,
+                optimizers,
+                &optimizer_context,
+                options.optimizer.max_passes,
+                &mut observer,
+            )?;
+        } else {
+            for optimizer in optimizers {
+                new_plan = apply_physical_rule(
+                    optimizer,
+                    new_plan,
+                    &optimizer_context,
+                    &mut observer,
+                )?;
+            }
         }
 
         // This runs once after all optimizer runs are complete,
@@ -3364,12 +3488,233 @@ impl<'n> TreeNodeVisitor<'n> for InvariantChecker {
 }
 
 #[cfg(test)]
+mod phased_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+    use super::{converge_physical_segment, optimize_physical_plan_phased};
+    use arrow::datatypes::Schema;
+    use datafusion_common::Result;
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_physical_optimizer::optimizer::ConfigOnlyContext;
+    use datafusion_physical_plan::ExecutionPlan;
+    use datafusion_physical_plan::empty::EmptyExec;
+    use datafusion_physical_plan::limit::GlobalLimitExec;
+    use datafusion_session::PhysicalOptimizerRule;
+
+    fn limit_depth(plan: &Arc<dyn ExecutionPlan>) -> usize {
+        if plan.name() == "GlobalLimitExec" {
+            1 + limit_depth(plan.children()[0])
+        } else {
+            0
+        }
+    }
+
+    /// Wraps the plan in one more limit per call until `depth` is reached,
+    /// then returns its input unchanged: a rule that needs several passes to
+    /// converge.
+    #[derive(Debug)]
+    struct WrapUntil {
+        depth: usize,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl PhysicalOptimizerRule for WrapUntil {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.calls.fetch_add(1, AtomicOrdering::Relaxed);
+            if limit_depth(&plan) < self.depth {
+                Ok(Arc::new(GlobalLimitExec::new(plan, 0, Some(10))))
+            } else {
+                Ok(plan)
+            }
+        }
+
+        fn name(&self) -> &str {
+            "wrap_until"
+        }
+
+        fn schema_check(&self) -> bool {
+            true
+        }
+    }
+
+    /// Wraps an unwrapped plan and unwraps a wrapped one: a rule pair
+    /// collapsed into one rule that never converges, only oscillates.
+    #[derive(Debug)]
+    struct Oscillator {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl PhysicalOptimizerRule for Oscillator {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.calls.fetch_add(1, AtomicOrdering::Relaxed);
+            if plan.name() == "GlobalLimitExec" {
+                Ok(Arc::clone(plan.children()[0]))
+            } else {
+                Ok(Arc::new(GlobalLimitExec::new(plan, 0, Some(10))))
+            }
+        }
+
+        fn name(&self) -> &str {
+            "oscillator"
+        }
+
+        fn schema_check(&self) -> bool {
+            true
+        }
+    }
+
+    /// Counts calls and hands the plan back: stands in for a rule that has
+    /// nothing to do, and for a barrier when given a barrier name.
+    #[derive(Debug)]
+    struct CountingNoop {
+        name: &'static str,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl PhysicalOptimizerRule for CountingNoop {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.calls.fetch_add(1, AtomicOrdering::Relaxed);
+            Ok(plan)
+        }
+
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn schema_check(&self) -> bool {
+            true
+        }
+    }
+
+    fn empty_plan() -> Arc<dyn ExecutionPlan> {
+        Arc::new(EmptyExec::new(Arc::new(Schema::empty())))
+    }
+
+    type Rule = Arc<dyn PhysicalOptimizerRule + Send + Sync>;
+
+    /// A segment iterates exactly until its fixpoint: three passes that each
+    /// wrap once, then the one proving pass, and the plan holds the depth the
+    /// rule was converging towards.
+    #[test]
+    fn segment_runs_to_its_fixpoint() -> Result<()> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let rule: Rule = Arc::new(WrapUntil {
+            depth: 3,
+            calls: Arc::clone(&calls),
+        });
+        let config = ConfigOptions::new();
+        let plan = converge_physical_segment(
+            empty_plan(),
+            &[&rule],
+            &ConfigOnlyContext::new(&config),
+            10,
+            &mut |_, _| {},
+        )?;
+        assert_eq!(limit_depth(&plan), 3);
+        assert_eq!(
+            calls.load(AtomicOrdering::Relaxed),
+            4,
+            "three passes that wrap, one that proves the fixpoint"
+        );
+        Ok(())
+    }
+
+    /// A plan oscillating between two forms terminates on the first revisit,
+    /// because every prior signature is kept, not only the last one. A
+    /// last-pass-only comparison would run all ten passes here.
+    #[test]
+    fn segment_terminates_on_a_cycle() -> Result<()> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let rule: Rule = Arc::new(Oscillator {
+            calls: Arc::clone(&calls),
+        });
+        let config = ConfigOptions::new();
+        let plan = converge_physical_segment(
+            empty_plan(),
+            &[&rule],
+            &ConfigOnlyContext::new(&config),
+            10,
+            &mut |_, _| {},
+        )?;
+        assert_eq!(
+            calls.load(AtomicOrdering::Relaxed),
+            2,
+            "pass one wraps (new form), pass two unwraps back to the seeded \
+             form and the revisit stops the loop"
+        );
+        assert_eq!(limit_depth(&plan), 0, "the cycle stopped on the revisit");
+        Ok(())
+    }
+
+    /// The list is partitioned at barrier names: barriers run exactly once
+    /// while the segments around them converge independently.
+    #[test]
+    fn barriers_run_once_between_converged_segments() -> Result<()> {
+        let segment_calls = Arc::new(AtomicUsize::new(0));
+        let barrier_calls = Arc::new(AtomicUsize::new(0));
+        let wrap_calls = Arc::new(AtomicUsize::new(0));
+        let rules: Vec<Rule> = vec![
+            Arc::new(WrapUntil {
+                depth: 2,
+                calls: Arc::clone(&wrap_calls),
+            }),
+            Arc::new(CountingNoop {
+                name: "EnsureRequirements",
+                calls: Arc::clone(&barrier_calls),
+            }),
+            Arc::new(CountingNoop {
+                name: "after_barrier_noop",
+                calls: Arc::clone(&segment_calls),
+            }),
+        ];
+        let config = ConfigOptions::new();
+        let plan = optimize_physical_plan_phased(
+            empty_plan(),
+            &rules,
+            &ConfigOnlyContext::new(&config),
+            10,
+            &mut |_, _| {},
+        )?;
+        assert_eq!(limit_depth(&plan), 2);
+        assert_eq!(
+            wrap_calls.load(AtomicOrdering::Relaxed),
+            3,
+            "first segment: two wrapping passes and one proving pass"
+        );
+        assert_eq!(
+            barrier_calls.load(AtomicOrdering::Relaxed),
+            1,
+            "a barrier is outside every loop and runs exactly once"
+        );
+        assert_eq!(
+            segment_calls.load(AtomicOrdering::Relaxed),
+            1,
+            "a no-op segment costs one proving pass, not max_passes"
+        );
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use std::cmp::Ordering;
     use std::fmt::{self, Debug};
     use std::mem::size_of_val;
     use std::ops::{BitAnd, Not};
-    use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 
     use super::*;
     use crate::datasource::MemTable;
