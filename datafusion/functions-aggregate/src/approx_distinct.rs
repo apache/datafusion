@@ -126,6 +126,36 @@ impl<A: Accumulator> Accumulator for ApproxDistinctBitmapWrapper<A> {
     }
 }
 
+fn merge_serialized<T: Hash + ?Sized>(hll: &mut HyperLogLog<T>, bytes: &[u8]) -> Result<()> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    if bytes.len() == NUM_REGISTERS {
+        let other: HyperLogLog<T> = bytes.try_into()?;
+        hll.merge(&other);
+    } else {
+        if !bytes.len().is_multiple_of(size_of::<u64>()) {
+            return internal_err!(
+                "approx_distinct: malformed sparse state: length {} is not a multiple of {}",
+                bytes.len(),
+                size_of::<u64>()
+            );
+        }
+        if bytes.len() > SPARSE_LIMIT * size_of::<u64>() {
+            return internal_err!(
+                "approx_distinct: malformed sparse state: length {} exceeds sparse limit {}",
+                bytes.len(),
+                SPARSE_LIMIT * size_of::<u64>()
+            );
+        }
+        for chunk in bytes.chunks_exact(size_of::<u64>()) {
+            let h = u64::from_le_bytes(chunk.try_into().unwrap());
+            hll.add_hashed(h);
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct HLLAccumulator {
     hll: HyperLogLog<u8>,
@@ -172,8 +202,7 @@ impl Accumulator for HLLAccumulator {
             let v = v.ok_or_else(|| {
                 internal_datafusion_err!("Impossibly got empty binary array from states")
             })?;
-            let other = v.try_into()?;
-            self.hll.merge(&other);
+            merge_serialized(&mut self.hll, v)?;
         }
         Ok(())
     }
@@ -232,8 +261,7 @@ where
             let v = v.ok_or_else(|| {
                 internal_datafusion_err!("Impossibly got empty binary array from states")
             })?;
-            let other = v.try_into()?;
-            self.hll.merge(&other);
+            merge_serialized(&mut self.hll, v)?;
         }
         Ok(())
     }
