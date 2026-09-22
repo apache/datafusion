@@ -3890,6 +3890,23 @@ mod tests {
     }
 
     #[test]
+    fn test_try_new_from_array_dict_haystack_float64_signed_zero() -> Result<()> {
+        // One value beyond the branchless limit selects the hash-set strategy.
+        let list_len =
+            <Float64Type as branchless_filter::BranchlessFilterType>::MAX_LIST_LEN + 1;
+        let haystack = make_f64_dict_array(vec![Some(-0.0); list_len]);
+        let needles: ArrayRef = Arc::new(Float64Array::from(vec![0.0]));
+        for needles in [Arc::clone(&needles), wrap_in_dict(needles)] {
+            assert_eq!(
+                eval_in_list_from_array(needles, Arc::clone(&haystack))?,
+                BooleanArray::from(vec![true])
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn test_try_new_from_array_type_mismatch_rejects() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let col_a = col("a", &schema)?;
