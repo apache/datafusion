@@ -271,7 +271,11 @@ pub struct CreateExternalTable {
 
 impl fmt::Display for CreateExternalTable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "CREATE EXTERNAL TABLE ")?;
+        write!(f, "CREATE ")?;
+        if self.or_replace {
+            write!(f, "OR REPLACE ")?;
+        }
+        write!(f, "EXTERNAL TABLE ")?;
         if self.if_not_exists {
             write!(f, "IF NOT EXISTS ")?;
         }
@@ -338,6 +342,10 @@ pub struct CreateExternalCatalog {
 impl fmt::Display for CreateExternalCatalog {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "CREATE EXTERNAL CATALOG ")?;
+        if self.or_replace {
+            write!(f, "OR REPLACE ")?;
+        }
+        write!(f, "EXTERNAL CATALOG ")?;
         if self.if_not_exists {
             write!(f, "IF NOT EXISTS ")?;
         }
