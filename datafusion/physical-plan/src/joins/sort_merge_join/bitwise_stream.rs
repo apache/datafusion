@@ -305,7 +305,6 @@ struct ExistenceSummaryState {
     groups: Count,
     inner_rows: Count,
     probe_rows: Count,
-    state_bytes: Gauge,
     rows_until_yield: usize,
 }
 
@@ -357,41 +356,30 @@ impl BitwiseSortMergeJoinStream {
         let peak_mem_used =
             MetricBuilder::new(metrics).peak_memory_usage("peak_mem_used", partition);
 
-        let existence_summary = if enable_existence_summary
-            && matches!(
+        // Expose eligibility when requested, without allocating metric atomics
+        // or a summary reservation while the optimization is disabled.
+        let existence_summary = if enable_existence_summary {
+            let summary = if matches!(
                 join_type,
                 JoinType::LeftSemi
                     | JoinType::RightSemi
                     | JoinType::LeftAnti
                     | JoinType::RightAnti
-            ) {
-            filter
-                .as_ref()
-                .map(|filter| {
-                    ExistenceSummary::try_new(
-                        filter,
-                        outer_is_left,
-                        outer.schema().as_ref(),
-                        inner.schema().as_ref(),
-                    )
-                })
-                .transpose()?
-                .flatten()
-        } else {
-            None
-        };
-        // Expose eligibility when requested, without allocating metric atomics
-        // or a summary reservation while the optimization is disabled.
-        let existence_summary = if enable_existence_summary {
+            ) && let Some(filter) = &filter
+            {
+                ExistenceSummary::try_new(
+                    filter,
+                    outer_is_left,
+                    outer.schema().as_ref(),
+                    inner.schema().as_ref(),
+                )?
+            } else {
+                None
+            };
             let count = |name| MetricBuilder::new(metrics).counter(name, partition);
             let enabled = count("existence_summary_enabled");
             let fallback = count("existence_summary_fallback");
-            let groups = count("existence_summary_groups");
-            let inner_rows = count("existence_summary_inner_rows");
-            let probe_rows = count("existence_summary_probe_rows");
-            let state_bytes = MetricBuilder::new(metrics)
-                .peak_memory_usage("existence_summary_state_bytes", partition);
-            if let Some(summary) = existence_summary {
+            if let Some(summary) = summary {
                 enabled.add(1);
                 Some(Box::new(ExistenceSummaryState {
                     summary,
@@ -401,10 +389,9 @@ impl BitwiseSortMergeJoinStream {
                         "SMJExistenceSummary[{partition}]"
                     ))
                     .register(&runtime_env.memory_pool),
-                    groups,
-                    inner_rows,
-                    probe_rows,
-                    state_bytes,
+                    groups: count("existence_summary_groups"),
+                    inner_rows: count("existence_summary_inner_rows"),
+                    probe_rows: count("existence_summary_probe_rows"),
                     rows_until_yield: SUMMARY_WORK_BUDGET,
                 }))
             } else {
@@ -1037,9 +1024,6 @@ impl BitwiseSortMergeJoinStream {
     /// draining after saturation so input errors and group boundaries retain
     /// their ordinary behavior.
     async fn summarize_inner_key_group(&mut self) -> Result<()> {
-        let state = self.existence_summary.as_mut().unwrap();
-        state.summary.reset(&state.reservation);
-
         while self.inner_batch.is_some() {
             let num_inner = self.inner_batch.as_ref().unwrap().num_rows();
             let from = self.inner_offset;
@@ -1053,9 +1037,7 @@ impl BitwiseSortMergeJoinStream {
                 let state = self.existence_summary.as_mut().unwrap();
                 state.summary.update(&batch, &state.reservation)?;
                 state.inner_rows.add(len);
-                let state_bytes = state.summary.peak_size();
-                state.state_bytes.set_max(state_bytes);
-                self.peak_mem_used.set_max(state_bytes);
+                self.peak_mem_used.set_max(state.summary.peak_size());
                 offset += len;
             }
 
@@ -1100,8 +1082,6 @@ impl BitwiseSortMergeJoinStream {
                 let batch = self.outer_batch.as_ref().unwrap().slice(offset, len);
                 let state = self.existence_summary.as_ref().unwrap();
                 let result = state.summary.evaluate(&batch)?;
-                debug_assert_eq!(result.len(), len);
-                debug_assert_eq!(result.null_count(), 0);
                 let values = result.values();
                 apply_bitwise_binary_op(
                     self.matched.as_slice_mut(),

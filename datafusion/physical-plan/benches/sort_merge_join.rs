@@ -402,13 +402,6 @@ fn bench_existence_summary(c: &mut Criterion) {
                     .sum::<usize>()
             };
             assert_eq!(counter("existence_summary_enabled"), usize::from(enabled));
-            eprintln!(
-                "{name} summary={enabled}: groups={}, inner_rows={}, probe_rows={}, state_bytes={}",
-                counter("existence_summary_groups"),
-                counter("existence_summary_inner_rows"),
-                counter("existence_summary_probe_rows"),
-                counter("existence_summary_state_bytes"),
-            );
             group.bench_function(
                 BenchmarkId::new(name, if enabled { "on" } else { "off" }),
                 |b| {

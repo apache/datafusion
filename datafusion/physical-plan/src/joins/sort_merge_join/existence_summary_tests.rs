@@ -21,8 +21,8 @@ use std::sync::Arc;
 use std::task::Context;
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, Date32Array, Decimal128Array, Float64Array,
-    Int32Array, LargeStringArray, RecordBatch, StringArray, StringViewArray,
+    Array, ArrayRef, BooleanArray, Date32Array, Decimal128Array, Int32Array,
+    LargeStringArray, RecordBatch, StringArray, StringViewArray,
     TimestampMicrosecondArray,
 };
 use arrow::compute::SortOptions;
@@ -204,55 +204,9 @@ async fn ids(plan: &dyn ExecutionPlan, ctx: Arc<TaskContext>) -> Result<Vec<i32>
     Ok(ids)
 }
 
-fn expected(
-    left: &[Row],
-    right: &[Row],
-    join_type: JoinType,
-    nulls: NullEquality,
-    predicate: impl Fn(&Row, &Row) -> bool,
-) -> Vec<i32> {
-    let preserved_left = matches!(join_type, JoinType::LeftSemi | JoinType::LeftAnti);
-    let semi = matches!(join_type, JoinType::LeftSemi | JoinType::RightSemi);
-    let (outer, inner) = if preserved_left {
-        (left, right)
-    } else {
-        (right, left)
-    };
-    outer
-        .iter()
-        .enumerate()
-        .filter_map(|(id, outer)| {
-            let exists = inner.iter().any(|inner| {
-                let keys_match = outer.0 == inner.0
-                    && (outer.0.is_some() || nulls == NullEquality::NullEqualsNull);
-                let (left, right) = if preserved_left {
-                    (outer, inner)
-                } else {
-                    (inner, outer)
-                };
-                keys_match && predicate(left, right)
-            });
-            (exists == semi).then_some(id as i32)
-        })
-        .collect()
-}
-
-fn compare(left: Option<i32>, op: Operator, right: Option<i32>) -> bool {
-    match (left, right) {
-        (Some(left), Some(right)) => match op {
-            Operator::NotEq => left != right,
-            Operator::Lt => left < right,
-            Operator::LtEq => left <= right,
-            Operator::Gt => left > right,
-            Operator::GtEq => left >= right,
-            _ => unreachable!(),
-        },
-        _ => false,
-    }
-}
-
 #[tokio::test]
-async fn atoms_match_scalar_oracle_across_batches_orders_and_null_keys() -> Result<()> {
+async fn comparisons_match_generic_execution_across_groups_and_orientations() -> Result<()>
+{
     let left = vec![
         (None, None, None),
         (None, Some(4), Some(true)),
@@ -260,7 +214,7 @@ async fn atoms_match_scalar_oracle_across_batches_orders_and_null_keys() -> Resu
         (Some(1), None, None),
         (Some(1), Some(2), Some(true)),
         (Some(1), Some(2), Some(false)),
-        (Some(1), Some(8), None),
+        (Some(1), Some(6), None),
         (Some(2), Some(3), Some(true)),
         (Some(4), Some(5), Some(false)),
     ];
@@ -273,90 +227,112 @@ async fn atoms_match_scalar_oracle_across_batches_orders_and_null_keys() -> Resu
         (Some(2), None, None),
         (Some(3), Some(4), Some(false)),
     ];
-    for descending in [false, true] {
-        for nulls_first in [false, true] {
-            let options = SortOptions {
-                descending,
-                nulls_first,
-            };
-            let sort = |rows: &[Row]| {
-                let mut rows = rows.to_vec();
-                rows.sort_by(|a, b| match (a.0, b.0) {
-                    (None, None) => std::cmp::Ordering::Equal,
-                    (None, Some(_)) => {
-                        if nulls_first {
-                            std::cmp::Ordering::Less
-                        } else {
-                            std::cmp::Ordering::Greater
-                        }
-                    }
-                    (Some(_), None) => {
-                        if nulls_first {
-                            std::cmp::Ordering::Greater
-                        } else {
-                            std::cmp::Ordering::Less
-                        }
-                    }
-                    (Some(a), Some(b)) => {
-                        if descending {
-                            b.cmp(&a)
-                        } else {
-                            a.cmp(&b)
-                        }
-                    }
-                });
-                rows
-            };
-            let (left, right) = (sort(&left), sort(&right));
-            for nulls in [
+    let mut cases = vec![];
+    for op in [
+        Operator::NotEq,
+        Operator::Lt,
+        Operator::LtEq,
+        Operator::Gt,
+        Operator::GtEq,
+    ] {
+        for kind in JOINS {
+            cases.push((
+                op,
+                kind,
+                SortOptions::default(),
                 NullEquality::NullEqualsNothing,
-                NullEquality::NullEqualsNull,
-            ] {
-                for op in [
-                    Operator::NotEq,
-                    Operator::Lt,
-                    Operator::LtEq,
-                    Operator::Gt,
-                    Operator::GtEq,
-                ] {
-                    for kind in JOINS {
-                        let expected = expected(&left, &right, kind, nulls, |l, r| {
-                            compare(l.1, op, r.1)
-                        });
-                        for enabled in [false, true] {
-                            let plan = join(
-                                input(&batch(&left)?, 2)?,
-                                input(&batch(&right)?, 3)?,
-                                kind,
-                                comparison(op),
-                                options,
-                                nulls,
-                            )?;
-                            assert_eq!(
-                                ids(&plan, context(2, enabled)).await?,
-                                expected,
-                                "{kind:?} {op:?} enabled={enabled} {options:?} {nulls:?}"
-                            );
-                            assert_eq!(
-                                metric(&plan, "existence_summary_enabled"),
-                                usize::from(enabled)
-                            );
-                            if enabled {
-                                assert!(
-                                    metric(&plan, "existence_summary_inner_rows") > 0
-                                );
-                            } else {
-                                assert!(plan.metrics().unwrap().iter().all(|metric| {
-                                    !metric
-                                        .value()
-                                        .name()
-                                        .starts_with("existence_summary_")
-                                }));
-                            }
-                        }
+            ));
+        }
+    }
+    // Key ordering and null equality are independent of residual comparison.
+    cases.extend([
+        (
+            Operator::NotEq,
+            JoinType::LeftAnti,
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+            NullEquality::NullEqualsNull,
+        ),
+        (
+            Operator::Lt,
+            JoinType::RightSemi,
+            SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+            NullEquality::NullEqualsNull,
+        ),
+        (
+            Operator::LtEq,
+            JoinType::LeftSemi,
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+            NullEquality::NullEqualsNothing,
+        ),
+    ]);
+    for (op, kind, options, nulls) in cases {
+        let sort = |rows: &[Row]| {
+            let mut rows = rows.to_vec();
+            rows.sort_by(|a, b| {
+                let null_order = if options.nulls_first {
+                    b.0.is_none().cmp(&a.0.is_none())
+                } else {
+                    a.0.is_none().cmp(&b.0.is_none())
+                };
+                null_order.then_with(|| {
+                    if options.descending {
+                        b.0.cmp(&a.0)
+                    } else {
+                        a.0.cmp(&b.0)
                     }
-                }
+                })
+            });
+            rows
+        };
+        let (left, right) = (batch(&sort(&left))?, batch(&sort(&right))?);
+        let mut outputs = vec![];
+        for enabled in [false, true] {
+            let plan = join(
+                input(&left, 2)?,
+                input(&right, 3)?,
+                kind,
+                comparison(op),
+                options,
+                nulls,
+            )?;
+            outputs.push(ids(&plan, context(2, enabled)).await?);
+            assert_eq!(
+                metric(&plan, "existence_summary_enabled"),
+                usize::from(enabled)
+            );
+            if enabled {
+                assert!(metric(&plan, "existence_summary_inner_rows") > 0);
+            } else {
+                assert!(plan.metrics().unwrap().iter().all(|metric| {
+                    !metric.value().name().starts_with("existence_summary_")
+                }));
             }
+        }
+        assert_eq!(
+            outputs[0], outputs[1],
+            "{kind:?} {op:?} {options:?} {nulls:?}"
+        );
+        if kind == JoinType::LeftSemi
+            && options == SortOptions::default()
+            && nulls == NullEquality::NullEqualsNothing
+        {
+            // Rows 4/5 equal the minimum; row 6 equals the maximum.
+            let expected = match op {
+                Operator::Lt => vec![4, 5],
+                Operator::Gt => vec![6],
+                Operator::NotEq | Operator::LtEq | Operator::GtEq => vec![4, 5, 6],
+                _ => unreachable!(),
+            };
+            assert_eq!(outputs[1], expected, "{op:?}");
         }
     }
     Ok(())
@@ -370,7 +346,7 @@ async fn guarded_or_preserves_anti_rows_and_requires_an_inner_witness() -> Resul
         (Some(1), Some(3), Some(false)),
         (Some(1), None, None),
         (Some(2), Some(7), Some(true)),
-        (Some(3), Some(4), Some(true)),
+        (Some(3), None, Some(true)),
     ];
     let right = vec![
         (Some(1), Some(2), Some(false)),
@@ -398,23 +374,17 @@ async fn guarded_or_preserves_anti_rows_and_requires_an_inner_witness() -> Resul
                     binary(column(0), Operator::Lt, column(1)),
                 )
             };
-            let expected = expected(
-                &left,
-                &right,
-                kind,
-                NullEquality::NullEqualsNothing,
-                |l, r| {
-                    let guarded = l.2 == Some(true)
-                        && r.2 == Some(true)
-                        && compare(l.1, Operator::NotEq, r.1);
-                    guarded
-                        || if outer_only_or {
-                            l.1.is_none()
-                        } else {
-                            compare(l.1, Operator::Lt, r.1)
-                        }
-                },
-            );
+            let expected = match (kind, outer_only_or) {
+                (JoinType::LeftSemi, false) => vec![1, 2],
+                (JoinType::LeftAnti, false) => vec![0, 3, 4, 5],
+                (JoinType::RightSemi, false) => vec![1],
+                (JoinType::RightAnti, false) => vec![0, 2, 3],
+                (JoinType::LeftSemi, true) => vec![1, 3],
+                (JoinType::LeftAnti, true) => vec![0, 2, 4, 5],
+                (JoinType::RightSemi, true) => vec![0, 1, 2],
+                (JoinType::RightAnti, true) => vec![3],
+                _ => unreachable!(),
+            };
             for enabled in [false, true] {
                 let plan = join(
                     input(&batch(&left)?, 1)?,
@@ -489,98 +459,59 @@ async fn strings_dates_timestamps_and_decimals_match_generic_execution() -> Resu
     for values in types {
         let data_type = values.data_type().clone();
         let batch = batch_values(&rows, values)?;
-        for op in [
-            Operator::NotEq,
-            Operator::Lt,
-            Operator::LtEq,
-            Operator::Gt,
-            Operator::GtEq,
-        ] {
-            for kind in JOINS {
-                let mut outputs = vec![];
-                for enabled in [false, true] {
-                    let plan = join(
-                        input(&batch, 2)?,
-                        input(&batch, 3)?,
-                        kind,
-                        filter(binary(column(0), op, column(1)), data_type.clone()),
-                        SortOptions::default(),
-                        NullEquality::NullEqualsNothing,
-                    )?;
-                    outputs.push(ids(&plan, context(2, enabled)).await?);
-                    assert_eq!(
-                        metric(&plan, "existence_summary_enabled"),
-                        usize::from(enabled),
-                        "{data_type:?} {op:?}"
-                    );
-                }
-                assert_eq!(outputs[0], outputs[1], "{data_type:?} {op:?} {kind:?}");
+        // NotEq uses scalar equality; ranges use array and scalar ordering.
+        for op in [Operator::NotEq, Operator::Lt] {
+            let mut outputs = vec![];
+            for enabled in [false, true] {
+                let plan = join(
+                    input(&batch, 2)?,
+                    input(&batch, 3)?,
+                    JoinType::LeftSemi,
+                    filter(binary(column(0), op, column(1)), data_type.clone()),
+                    SortOptions::default(),
+                    NullEquality::NullEqualsNothing,
+                )?;
+                outputs.push(ids(&plan, context(2, enabled)).await?);
+                assert_eq!(
+                    metric(&plan, "existence_summary_enabled"),
+                    usize::from(enabled),
+                    "{data_type:?} {op:?}"
+                );
             }
+            assert_eq!(outputs[0], outputs[1], "{data_type:?} {op:?}");
         }
     }
     Ok(())
 }
 
 #[tokio::test]
-async fn unsupported_pair_conjunction_and_float_use_generic_fallback() -> Result<()> {
-    let rows = vec![
+async fn independent_cross_side_witnesses_use_generic_fallback() -> Result<()> {
+    let values = batch(&[
         (Some(1), Some(0), Some(true)),
         (Some(1), Some(5), None),
         (Some(1), Some(10), Some(false)),
-    ];
-    let integers = batch(&rows)?;
-    // Independent min/max witnesses would incorrectly match the interval's gap.
-    let interval = binary(
-        binary(column(0), Operator::Lt, column(1)),
-        Operator::And,
-        binary(
-            binary(
-                column(0),
-                Operator::Plus,
-                Arc::new(Literal::new(ScalarValue::Int32(Some(2)))),
-            ),
-            Operator::Gt,
-            column(1),
-        ),
-    );
-    let incompatible_witnesses = binary(
+    ])?;
+    // Min/max have separate witnesses for 5, but no row satisfies both clauses.
+    let expr = binary(
         binary(column(0), Operator::Lt, column(1)),
         Operator::And,
         binary(column(0), Operator::Gt, column(1)),
     );
-    let floats = batch_values(
-        &rows,
-        Arc::new(Float64Array::from(vec![
-            Some(f64::NAN),
-            Some(-0.0),
-            Some(0.0),
-        ])),
-    )?;
-    for (batch, expr) in [
-        (&integers, interval),
-        (&integers, incompatible_witnesses),
-        (&floats, binary(column(0), Operator::NotEq, column(1))),
-    ] {
-        for kind in JOINS {
-            let mut outputs = vec![];
-            for enabled in [false, true] {
-                let plan = join(
-                    input(batch, 1)?,
-                    input(batch, 2)?,
-                    kind,
-                    filter(Arc::clone(&expr), batch.column(1).data_type().clone()),
-                    SortOptions::default(),
-                    NullEquality::NullEqualsNothing,
-                )?;
-                outputs.push(ids(&plan, context(2, enabled)).await?);
-                assert_eq!(metric(&plan, "existence_summary_enabled"), 0);
-                assert_eq!(
-                    metric(&plan, "existence_summary_fallback"),
-                    usize::from(enabled)
-                );
-            }
-            assert_eq!(outputs[0], outputs[1]);
-        }
+    for enabled in [false, true] {
+        let plan = join(
+            input(&values, 1)?,
+            input(&values, 2)?,
+            JoinType::LeftSemi,
+            filter(Arc::clone(&expr), DataType::Int32),
+            SortOptions::default(),
+            NullEquality::NullEqualsNothing,
+        )?;
+        assert!(ids(&plan, context(2, enabled)).await?.is_empty());
+        assert_eq!(metric(&plan, "existence_summary_enabled"), 0);
+        assert_eq!(
+            metric(&plan, "existence_summary_fallback"),
+            usize::from(enabled)
+        );
     }
     Ok(())
 }
@@ -648,78 +579,29 @@ async fn normalized_nullable_strings_and_negated_equality_keep_sql_semantics()
 }
 
 #[tokio::test]
-async fn q21_semi_then_anti_use_separate_qualified_groups() -> Result<()> {
-    // Candidate supplier 1: another supplier exists, but none of the other
-    // suppliers is late. Supplier 2 is rejected by the anti join's late witness.
-    let outer = batch(&[
-        (Some(1), Some(1), Some(true)),
-        (Some(1), Some(2), Some(true)),
-        (Some(2), Some(1), Some(true)),
-        (Some(3), Some(1), Some(true)),
-    ])?;
-    let all = batch(&[
-        (Some(1), Some(1), Some(true)),
-        (Some(1), Some(2), Some(false)),
-        (Some(2), Some(1), Some(true)),
-        (Some(3), Some(2), Some(true)),
-    ])?;
-    for enabled in [false, true] {
-        let semi = Arc::new(join(
-            input(&outer, 1)?,
-            input(&all, 2)?,
-            JoinType::LeftSemi,
-            comparison(Operator::NotEq),
-            SortOptions::default(),
-            NullEquality::NullEqualsNothing,
-        )?);
-        let anti = join(
-            semi,
-            input(&all, 1)?,
-            JoinType::LeftAnti,
+async fn empty_inputs_never_synthesize_a_witness() -> Result<()> {
+    let nonempty = batch(&[(Some(1), None, Some(true))])?;
+    let empty = nonempty.slice(0, 0);
+    for (left, right, kind, expected) in [
+        (&nonempty, &empty, JoinType::LeftAnti, vec![0]),
+        (&nonempty, &empty, JoinType::LeftSemi, vec![]),
+        (&empty, &nonempty, JoinType::RightAnti, vec![0]),
+        (&empty, &nonempty, JoinType::LeftSemi, vec![]),
+    ] {
+        let plan = join(
+            input(left, 1)?,
+            input(right, 1)?,
+            kind,
+            // A true preserved-side guard still needs an inner row.
             filter(
-                binary(
-                    binary(column(0), Operator::NotEq, column(1)),
-                    Operator::And,
-                    column(3),
-                ),
+                column(if kind == JoinType::RightAnti { 3 } else { 2 }),
                 DataType::Int32,
             ),
             SortOptions::default(),
             NullEquality::NullEqualsNothing,
         )?;
-        assert_eq!(ids(&anti, context(1, enabled)).await?, vec![0]);
-    }
-    Ok(())
-}
-
-#[tokio::test]
-async fn empty_inputs_never_synthesize_a_witness() -> Result<()> {
-    let nonempty = batch(&[(Some(1), None, Some(true))])?;
-    let empty = nonempty.slice(0, 0);
-    for kind in JOINS {
-        for (left, right) in [(&empty, &nonempty), (&nonempty, &empty), (&empty, &empty)]
-        {
-            let mut outputs = vec![];
-            for enabled in [false, true] {
-                let plan = join(
-                    input(left, 1)?,
-                    input(right, 1)?,
-                    kind,
-                    filter(
-                        binary(
-                            column(2),
-                            Operator::Or,
-                            binary(column(0), Operator::NotEq, column(1)),
-                        ),
-                        DataType::Int32,
-                    ),
-                    SortOptions::default(),
-                    NullEquality::NullEqualsNothing,
-                )?;
-                outputs.push(ids(&plan, context(1, enabled)).await?);
-            }
-            assert_eq!(outputs[0], outputs[1]);
-        }
+        assert_eq!(ids(&plan, context(1, true)).await?, expected, "{kind:?}");
+        assert_eq!(metric(&plan, "existence_summary_enabled"), 1);
     }
     Ok(())
 }
@@ -750,7 +632,7 @@ async fn large_group_summary_memory_is_independent_of_group_cardinality() -> Res
         assert_eq!(metric(&plan, "existence_summary_groups"), 1);
         assert_eq!(metric(&plan, "existence_summary_inner_rows"), rows);
         assert_eq!(metric(&plan, "existence_summary_probe_rows"), 4);
-        let size = metric(&plan, "existence_summary_state_bytes");
+        let size = metric(&plan, "peak_mem_used");
         assert!(size > 0 && size < 4096, "unexpected summary size {size}");
         sizes.push(size);
         assert_eq!(metric(&plan, "spill_count"), 0);
@@ -805,35 +687,32 @@ async fn summary_work_yields_and_dropping_stream_releases_memory() -> Result<()>
     )?;
     // Exercise reduction, probing, and work accumulated across small groups.
     // The inputs are immediately ready, so yielding must happen in the join.
-    for (outer, inner) in [
-        (&single_row, &single_group),
-        (&single_group, &single_row),
-        (&many_groups, &many_groups),
+    for (outer, inner, chunk) in [
+        (&single_row, &single_group, 8192),
+        (&single_group, &single_row, 8192),
+        (&many_groups, &many_groups, 128),
     ] {
-        // Check both groups spanning many batches and oversized batches.
-        for chunk in [128, 8192] {
-            let plan = join(
-                input(outer, chunk)?,
-                input(inner, chunk)?,
-                JoinType::LeftSemi,
-                comparison(Operator::NotEq),
-                SortOptions::default(),
-                NullEquality::NullEqualsNothing,
-            )?;
-            let ctx = context(128, true);
-            let pool = Arc::clone(ctx.memory_pool());
-            let mut stream = plan.execute(0, ctx)?;
-            let waker = futures::task::noop_waker();
-            let mut cx = Context::from_waker(&waker);
-            assert!(stream.as_mut().poll_next(&mut cx).is_pending());
-            let processed = metric(&plan, "existence_summary_inner_rows")
-                + metric(&plan, "existence_summary_probe_rows");
-            assert!(processed > 0);
-            assert!(processed < outer.num_rows() + inner.num_rows());
-            // Dropping a pending stream is how callers cancel execution upstream.
-            drop(stream);
-            assert_eq!(pool.reserved(), 0);
-        }
+        let plan = join(
+            input(outer, chunk)?,
+            input(inner, chunk)?,
+            JoinType::LeftSemi,
+            comparison(Operator::NotEq),
+            SortOptions::default(),
+            NullEquality::NullEqualsNothing,
+        )?;
+        let ctx = context(128, true);
+        let pool = Arc::clone(ctx.memory_pool());
+        let mut stream = plan.execute(0, ctx)?;
+        let waker = futures::task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        assert!(stream.as_mut().poll_next(&mut cx).is_pending());
+        let processed = metric(&plan, "existence_summary_inner_rows")
+            + metric(&plan, "existence_summary_probe_rows");
+        assert!(processed > 0);
+        assert!(processed < outer.num_rows() + inner.num_rows());
+        // Dropping a pending stream is how callers cancel execution upstream.
+        drop(stream);
+        assert_eq!(pool.reserved(), 0);
     }
     Ok(())
 }

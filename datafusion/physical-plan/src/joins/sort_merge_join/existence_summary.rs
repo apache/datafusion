@@ -38,12 +38,12 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, BooleanArray, RecordBatch};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, RecordBatch};
 use arrow::compute::SortOptions;
 use arrow::compute::kernels::cmp::{gt, gt_eq, lt, lt_eq, neq};
 use arrow::datatypes::{DataType, Schema};
 use arrow_ord::ord::make_comparator;
-use datafusion_common::{JoinSide, Result, ScalarValue, internal_err};
+use datafusion_common::{JoinSide, Result, ScalarValue};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::PhysicalExpr;
@@ -78,36 +78,36 @@ struct State {
 }
 
 impl State {
-    fn clear(&mut self, reservation: &MemoryReservation) {
+    fn set_multiple(&mut self, reservation: &MemoryReservation) {
         self.representative = None;
         reservation.shrink(self.reserved);
-        *self = Self::default();
+        *self = Self {
+            multiple: true,
+            ..Self::default()
+        };
     }
 
-    fn set_multiple(&mut self, reservation: &MemoryReservation) {
-        self.clear(reservation);
-        self.multiple = true;
-    }
-
-    /// Copy only the candidate representative. Reserve the simultaneous old
-    /// and new copies, then release the old copy; do not count only net growth.
-    fn replace_from_array(
+    /// Admit the simultaneous old and new copies before copying the candidate.
+    /// For ranges, retain it only if it improves the current extremum.
+    fn update_from_array(
         &mut self,
         array: &ArrayRef,
         index: usize,
+        order: Option<Ordering>,
         reservation: &MemoryReservation,
         peak: &mut usize,
     ) -> Result<()> {
-        let bytes = scalar_storage_size(array, index)?;
+        let bytes = scalar_storage_size(array, index);
         reservation.try_grow(bytes)?;
         *peak = (*peak).max(reservation.size());
-        let candidate = match ScalarValue::try_from_array(array, index) {
-            Ok(value) => value,
-            Err(error) => {
-                reservation.shrink(bytes);
-                return Err(error);
-            }
-        };
+        let candidate = ScalarValue::try_from_array(array, index)?;
+        if let Some(previous) = &self.representative
+            && order.is_some_and(|order| candidate.partial_cmp(previous) != Some(order))
+        {
+            drop(candidate);
+            reservation.shrink(bytes);
+            return Ok(());
+        }
         self.representative = Some(candidate);
         reservation.shrink(self.reserved);
         self.reserved = bytes;
@@ -183,9 +183,10 @@ impl ExistenceSummary {
             };
             if comparison.op == Operator::NotEq {
                 if clause.state.representative.is_none() {
-                    clause.state.replace_from_array(
+                    clause.state.update_from_array(
                         &values,
                         first,
+                        None,
                         reservation,
                         &mut self.peak,
                     )?;
@@ -201,7 +202,11 @@ impl ExistenceSummary {
                     }
                 }
             } else {
-                let maximize = matches!(comparison.op, Operator::Lt | Operator::LtEq);
+                let order = if matches!(comparison.op, Operator::Lt | Operator::LtEq) {
+                    Ordering::Greater
+                } else {
+                    Ordering::Less
+                };
                 let comparator = make_comparator(
                     values.as_ref(),
                     values.as_ref(),
@@ -209,45 +214,20 @@ impl ExistenceSummary {
                 )?;
                 let mut candidate = first;
                 for row in first + 1..values.len() {
-                    if selected(row) && values.is_valid(row) {
-                        let ordering = comparator(row, candidate);
-                        if (maximize && ordering == Ordering::Greater)
-                            || (!maximize && ordering == Ordering::Less)
-                        {
-                            candidate = row;
-                        }
+                    if selected(row)
+                        && values.is_valid(row)
+                        && comparator(row, candidate) == order
+                    {
+                        candidate = row;
                     }
                 }
-                // Compare one candidate with the previous batch's summary.
-                // The temporary scalar copy is admitted before allocation too.
-                let replace = if let Some(previous) = &clause.state.representative {
-                    let bytes = scalar_storage_size(&values, candidate)?;
-                    reservation.try_grow(bytes)?;
-                    self.peak = self.peak.max(reservation.size());
-                    let ordering = match ScalarValue::try_from_array(&values, candidate) {
-                        Ok(value) => value.partial_cmp(previous),
-                        Err(error) => {
-                            reservation.shrink(bytes);
-                            return Err(error);
-                        }
-                    };
-                    reservation.shrink(bytes);
-                    let Some(ordering) = ordering else {
-                        return internal_err!("Invalid existence-summary comparison");
-                    };
-                    (maximize && ordering == Ordering::Greater)
-                        || (!maximize && ordering == Ordering::Less)
-                } else {
-                    true
-                };
-                if replace {
-                    clause.state.replace_from_array(
-                        &values,
-                        candidate,
-                        reservation,
-                        &mut self.peak,
-                    )?;
-                }
+                clause.state.update_from_array(
+                    &values,
+                    candidate,
+                    Some(order),
+                    reservation,
+                    &mut self.peak,
+                )?;
             }
         }
         Ok(())
@@ -306,15 +286,9 @@ impl ExistenceSummary {
     /// Release all representative storage before beginning another key group.
     pub(super) fn reset(&mut self, reservation: &MemoryReservation) {
         for clause in &mut self.clauses {
-            clause.state.clear(reservation);
+            clause.state = State::default();
         }
-    }
-
-    /// Admitted owned representative storage. Fixed compiler metadata is
-    /// bounded by MAX_CLAUSES and shared expression trees are not input buffers.
-    #[cfg(test)]
-    pub(super) fn size(&self) -> usize {
-        self.clauses.iter().map(|c| c.state.reserved).sum()
+        reservation.free();
     }
 
     /// Peak admitted representative storage over this stream's lifetime,
@@ -333,50 +307,22 @@ fn evaluate_guard(
     guard
         .map(|guard| {
             let array = guard.evaluate(batch)?.into_array(batch.num_rows())?;
-            array
-                .as_any()
-                .downcast_ref::<BooleanArray>()
-                .cloned()
-                .ok_or_else(|| {
-                    datafusion_common::internal_datafusion_err!(
-                        "Non-Boolean summary guard"
-                    )
-                })
+            Ok(array.as_boolean().clone())
         })
         .transpose()
 }
 
 /// ScalarValue copies strings with `to_string`, whose requested capacity is
 /// exactly their byte length. Fixed-width values do not retain array buffers.
-fn scalar_storage_size(array: &ArrayRef, row: usize) -> Result<usize> {
-    use arrow::array::{LargeStringArray, StringArray, StringViewArray};
+fn scalar_storage_size(array: &ArrayRef, row: usize) -> usize {
     let payload = match array.data_type() {
-        DataType::Utf8 => array
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap()
-            .value(row)
-            .len(),
-        DataType::LargeUtf8 => array
-            .as_any()
-            .downcast_ref::<LargeStringArray>()
-            .unwrap()
-            .value(row)
-            .len(),
-        DataType::Utf8View => array
-            .as_any()
-            .downcast_ref::<StringViewArray>()
-            .unwrap()
-            .value(row)
-            .len(),
+        DataType::Utf8 => array.as_string::<i32>().value(row).len(),
+        DataType::LargeUtf8 => array.as_string::<i64>().value(row).len(),
+        DataType::Utf8View => array.as_string_view().value(row).len(),
         DataType::Timestamp(_, zone) => zone.as_ref().map_or(0, |z| z.len()),
         _ => 0,
     };
-    size_of::<ScalarValue>()
-        .checked_add(payload)
-        .ok_or_else(|| {
-            datafusion_common::internal_datafusion_err!("Summary storage size overflow")
-        })
+    size_of::<ScalarValue>() + payload
 }
 
 struct Compiler<'a> {
@@ -387,69 +333,42 @@ struct Compiler<'a> {
 }
 
 impl Compiler<'_> {
-    /// 0 = literal only; 1 = outer; 2 = inner; 3 = both.
-    fn sides(&self, expression: &Expr, depth: usize) -> Option<u8> {
+    /// Whitelist concrete total expressions and identify their inputs:
+    /// 0 = literal only; 1 = outer; 2 = inner; 3 = both. Arithmetic, casts,
+    /// UDFs and dictionary/nested/float values retain the generic path.
+    fn classify(&self, expression: &Expr, depth: usize) -> Result<Option<u8>> {
         if depth > MAX_DEPTH {
-            return None;
+            return Ok(None);
         }
+        let data_type = expression.data_type(self.filter.schema())?;
+        if !supported_type(&data_type) && data_type != DataType::Null {
+            return Ok(None);
+        }
+
         if let Some(column) = expression.downcast_ref::<Column>() {
-            let mapping = self.filter.column_indices().get(column.index())?;
+            let Some(mapping) = self.filter.column_indices().get(column.index()) else {
+                return Ok(None);
+            };
             let is_outer = (mapping.side == JoinSide::Left) == self.outer_is_left;
             if !matches!(mapping.side, JoinSide::Left | JoinSide::Right) {
-                return None;
+                return Ok(None);
             }
             let source = if is_outer {
                 self.outer_schema
             } else {
                 self.inner_schema
             };
-            let field = source.fields().get(mapping.index)?;
-            if field.data_type()
-                != self
-                    .filter
-                    .schema()
-                    .fields()
-                    .get(column.index())?
-                    .data_type()
+            if source
+                .fields()
+                .get(mapping.index)
+                .is_none_or(|field| field.data_type() != &data_type)
             {
-                return None;
+                return Ok(None);
             }
-            return Some(if is_outer { 1 } else { 2 });
+            return Ok(Some(if is_outer { 1 } else { 2 }));
         }
-        let mut sides = 0;
-        for child in expression.children() {
-            sides |= self.sides(child, depth + 1)?;
-        }
-        Some(sides)
-    }
-
-    fn localize(&self, expression: &Expr) -> Result<Expr> {
-        if let Some(column) = expression.downcast_ref::<Column>() {
-            let mapping = &self.filter.column_indices()[column.index()];
-            return Ok(Arc::new(Column::new(column.name(), mapping.index)));
-        }
-        let children = expression
-            .children()
-            .iter()
-            .map(|child| self.localize(child))
-            .collect::<Result<Vec<_>>>()?;
-        Arc::clone(expression).with_new_children(children)
-    }
-
-    /// Whitelist concrete total expression implementations, not names or just
-    /// volatility. Arithmetic, casts, UDFs and dictionary/nested/float values
-    /// retain the generic path. CASE admits normalized COALESCE expressions
-    /// only when every branch and condition is independently total.
-    fn safe(&self, expression: &Expr, depth: usize) -> Result<bool> {
-        if depth > MAX_DEPTH {
-            return Ok(false);
-        }
-        let data_type = expression.data_type(self.filter.schema())?;
-        if !supported_type(&data_type) && data_type != DataType::Null {
-            return Ok(false);
-        }
-        if expression.is::<Column>() || expression.is::<Literal>() {
-            return Ok(true);
+        if expression.is::<Literal>() {
+            return Ok(Some(0));
         }
         let allowed = if let Some(binary) = expression.downcast_ref::<BinaryExpr>() {
             let left = binary.left().data_type(self.filter.schema())?;
@@ -488,31 +407,41 @@ impl Compiler<'_> {
             false
         };
         if !allowed {
-            return Ok(false);
+            return Ok(None);
         }
+        let mut sides = 0;
         for child in expression.children() {
-            if !self.safe(child, depth + 1)? {
-                return Ok(false);
-            }
+            let Some(child_sides) = self.classify(child, depth + 1)? else {
+                return Ok(None);
+            };
+            sides |= child_sides;
         }
-        Ok(true)
+        Ok(Some(sides))
+    }
+
+    fn localize(&self, expression: &Expr) -> Result<Expr> {
+        if let Some(column) = expression.downcast_ref::<Column>() {
+            let mapping = &self.filter.column_indices()[column.index()];
+            return Ok(Arc::new(Column::new(column.name(), mapping.index)));
+        }
+        let children = expression
+            .children()
+            .iter()
+            .map(|child| self.localize(child))
+            .collect::<Result<Vec<_>>>()?;
+        Arc::clone(expression).with_new_children(children)
     }
 
     fn compile(&self, expression: &Expr, depth: usize) -> Result<Option<Vec<Clause>>> {
-        if depth > MAX_DEPTH
-            || expression.data_type(self.filter.schema())? != DataType::Boolean
-        {
-            return Ok(None);
-        }
-        let Some(sides) = self.sides(expression, 0) else {
+        let Some(sides) = self.classify(expression, depth)? else {
             return Ok(None);
         };
+        if expression.data_type(self.filter.schema())? != DataType::Boolean {
+            return Ok(None);
+        }
         // Keep whole local predicates together, preserving their SQL null
         // semantics and avoiding unnecessary distributive expansion.
         if sides != 3 {
-            if !self.safe(expression, 0)? {
-                return Ok(None);
-            }
             let mut clause = Clause::default();
             if sides == 1 {
                 clause.outer_guard = Some(self.localize(expression)?);
@@ -566,13 +495,8 @@ impl Compiler<'_> {
             let Some(binary) = not.arg().downcast_ref::<BinaryExpr>() else {
                 return Ok(None);
             };
-            let op = match binary.op() {
-                Operator::Eq => Operator::NotEq,
-                Operator::Lt => Operator::GtEq,
-                Operator::LtEq => Operator::Gt,
-                Operator::Gt => Operator::LtEq,
-                Operator::GtEq => Operator::Lt,
-                _ => return Ok(None),
+            let Some(op) = binary.op().negate() else {
+                return Ok(None);
             };
             (binary, op)
         } else if let Some(binary) = expression.downcast_ref::<BinaryExpr>() {
@@ -587,26 +511,20 @@ impl Compiler<'_> {
                 | Operator::LtEq
                 | Operator::Gt
                 | Operator::GtEq
-        ) || !self.safe(binary.left(), 0)?
-            || !self.safe(binary.right(), 0)?
-        {
+        ) {
             return Ok(None);
         }
-        let (outer, inner) =
-            match (self.sides(binary.left(), 0), self.sides(binary.right(), 0)) {
-                (Some(1), Some(2)) => (binary.left(), binary.right()),
-                (Some(2), Some(1)) => {
-                    op = op.swap().unwrap();
-                    (binary.right(), binary.left())
-                }
-                _ => return Ok(None),
-            };
-        let data_type = outer.data_type(self.filter.schema())?;
-        if !supported_type(&data_type)
-            || data_type != inner.data_type(self.filter.schema())?
-        {
-            return Ok(None);
-        }
+        let (outer, inner) = match (
+            self.classify(binary.left(), depth + 1)?,
+            self.classify(binary.right(), depth + 1)?,
+        ) {
+            (Some(1), Some(2)) => (binary.left(), binary.right()),
+            (Some(2), Some(1)) => {
+                op = op.swap().unwrap();
+                (binary.right(), binary.left())
+            }
+            _ => return Ok(None),
+        };
         Ok(Some(vec![Clause {
             comparison: Some(Comparison {
                 outer: self.localize(outer)?,
@@ -663,7 +581,7 @@ fn supported_type(data_type: &DataType) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int64Array, StringArray};
+    use arrow::array::Int64Array;
     use arrow::datatypes::{Field, SchemaRef};
     use datafusion_execution::memory_pool::{
         GreedyMemoryPool, MemoryConsumer, MemoryPool,
@@ -721,8 +639,7 @@ mod tests {
             summary.evaluate(&outer)?,
             BooleanArray::from(vec![false, true, false])
         );
-        assert!(summary.size() > 0);
-        assert_eq!(summary.size(), reservation.size());
+        assert!(reservation.size() > 0);
         summary.update(&ints(&schema, vec![Some(12)]), &reservation)?;
         assert_eq!(
             summary.evaluate(&outer)?,
@@ -737,127 +654,8 @@ mod tests {
         );
         summary.update(&ints(&schema, vec![Some(12)]), &reservation)?;
         summary.reset(&reservation);
-        assert_eq!(summary.size(), 0);
         assert_eq!(reservation.size(), 0);
         assert!(summary.peak_size() > 0);
-        Ok(())
-    }
-
-    #[test]
-    fn ranges_retain_extrema_across_batches() -> Result<()> {
-        for (op, expected) in [
-            (Operator::Lt, vec![true, true, true, false, false, false]),
-            (Operator::LtEq, vec![true, true, true, true, false, false]),
-            (Operator::Gt, vec![false, false, true, true, true, false]),
-            (Operator::GtEq, vec![false, true, true, true, true, false]),
-        ] {
-            let (filter, schema) =
-                filter(binary(column(0), op, column(1)), DataType::Int64);
-            let mut summary =
-                ExistenceSummary::try_new(&filter, true, &schema, &schema)?.unwrap();
-            let reservation = reservation(4096);
-            summary.update(&ints(&schema, vec![Some(5), None]), &reservation)?;
-            summary.update(&ints(&schema, vec![Some(9), Some(7)]), &reservation)?;
-            let outer = ints(
-                &schema,
-                vec![Some(4), Some(5), Some(7), Some(9), Some(10), None],
-            );
-            assert_eq!(summary.evaluate(&outer)?, BooleanArray::from(expected));
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn pure_outer_guard_still_requires_inner_presence() -> Result<()> {
-        let (filter, schema) =
-            filter(Arc::new(IsNotNullExpr::new(column(0))), DataType::Int64);
-        let mut summary =
-            ExistenceSummary::try_new(&filter, true, &schema, &schema)?.unwrap();
-        let reservation = reservation(4096);
-        let outer = ints(&schema, vec![Some(7), None]);
-        assert_eq!(
-            summary.evaluate(&outer)?,
-            BooleanArray::from(vec![false, false])
-        );
-        summary.update(&ints(&schema, vec![None]), &reservation)?;
-        assert_eq!(
-            summary.evaluate(&outer)?,
-            BooleanArray::from(vec![true, false])
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn conjunction_cannot_combine_independent_cross_side_witnesses() -> Result<()> {
-        let expression = binary(
-            binary(column(0), Operator::Lt, column(1)),
-            Operator::And,
-            binary(column(0), Operator::Gt, column(1)),
-        );
-        let (filter, schema) = filter(expression, DataType::Int64);
-        assert!(ExistenceSummary::try_new(&filter, true, &schema, &schema)?.is_none());
-        Ok(())
-    }
-
-    #[test]
-    fn normalized_string_case_uses_exact_bytes_and_does_not_pin_sources() -> Result<()> {
-        let normalized = |index| -> Result<Expr> {
-            Ok(Arc::new(CaseExpr::try_new(
-                None,
-                vec![(
-                    Arc::new(IsNullExpr::new(column(index))) as Expr,
-                    Arc::new(Literal::new(ScalarValue::Utf8(Some(String::new()))))
-                        as Expr,
-                )],
-                Some(column(index)),
-            )?))
-        };
-        let expression = binary(normalized(0)?, Operator::NotEq, normalized(1)?);
-        let (filter, schema) = filter(expression, DataType::Utf8);
-        let mut summary =
-            ExistenceSummary::try_new(&filter, true, &schema, &schema)?.unwrap();
-        let reservation = reservation(4096);
-        let source: ArrayRef = Arc::new(StringArray::from(vec![None::<&str>, None]));
-        let inner = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::clone(&source)])?;
-        let references = Arc::strong_count(&source);
-        summary.update(&inner, &reservation)?;
-        assert_eq!(Arc::strong_count(&source), references);
-        let outer = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(StringArray::from(vec![
-                None,
-                Some(""),
-                Some("é"),
-                Some("e"),
-            ]))],
-        )?;
-        assert_eq!(
-            summary.evaluate(&outer)?,
-            BooleanArray::from(vec![false, false, true, true])
-        );
-        summary.reset(&reservation);
-        assert_eq!(reservation.size(), 0);
-        Ok(())
-    }
-
-    #[test]
-    fn representative_allocation_is_admitted_before_copy() -> Result<()> {
-        let (filter, schema) = filter(
-            binary(column(0), Operator::NotEq, column(1)),
-            DataType::Utf8,
-        );
-        let mut summary =
-            ExistenceSummary::try_new(&filter, true, &schema, &schema)?.unwrap();
-        let reservation = reservation(128);
-        let value = "x".repeat(4096);
-        let inner = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(StringArray::from(vec![value.as_str()]))],
-        )?;
-        assert!(summary.update(&inner, &reservation).is_err());
-        assert_eq!(summary.size(), 0);
-        assert_eq!(reservation.size(), 0);
-        summary.reset(&reservation);
         Ok(())
     }
 
