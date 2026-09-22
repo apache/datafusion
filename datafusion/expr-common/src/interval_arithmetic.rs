@@ -1251,25 +1251,6 @@ macro_rules! impl_OneTrait{
 }
 impl_OneTrait! {u8, u16, u32, u64, i8, i16, i32, i64, i128}
 
-impl OneTrait for IntervalDayTime {
-    fn one() -> Self {
-        IntervalDayTime {
-            days: 0,
-            milliseconds: 1,
-        }
-    }
-}
-
-impl OneTrait for IntervalMonthDayNano {
-    fn one() -> Self {
-        IntervalMonthDayNano {
-            months: 0,
-            days: 0,
-            nanoseconds: 1,
-        }
-    }
-}
-
 /// This function either increments or decrements its argument, depending on
 /// the `INC` value (where a `true` value corresponds to the increment).
 fn increment_decrement<const INC: bool, T: OneTrait + SubAssign + AddAssign>(
@@ -1281,6 +1262,54 @@ fn increment_decrement<const INC: bool, T: OneTrait + SubAssign + AddAssign>(
         value.sub_assign(T::one());
     }
     value
+}
+
+/// Adjacent `IntervalDayTime` in its `Ord`, lexicographic over `(days,
+/// milliseconds)`: stepping past a millisecond bound carries into `days`.
+fn adjacent_day_time<const INC: bool>(value: IntervalDayTime) -> IntervalDayTime {
+    let IntervalDayTime { days, milliseconds } = value;
+    if INC {
+        match milliseconds.checked_add(1) {
+            Some(milliseconds) => IntervalDayTime::new(days, milliseconds),
+            // `value_transition!` maps `MAX`/`MIN` to unbounded first, so the
+            // carry cannot overflow.
+            None => IntervalDayTime::new(days + 1, i32::MIN),
+        }
+    } else {
+        match milliseconds.checked_sub(1) {
+            Some(milliseconds) => IntervalDayTime::new(days, milliseconds),
+            None => IntervalDayTime::new(days - 1, i32::MAX),
+        }
+    }
+}
+
+/// Adjacent `IntervalMonthDayNano` in its `Ord`, lexicographic over
+/// `(months, days, nanoseconds)`; see [`adjacent_day_time`].
+fn adjacent_month_day_nano<const INC: bool>(
+    value: IntervalMonthDayNano,
+) -> IntervalMonthDayNano {
+    let IntervalMonthDayNano {
+        months,
+        days,
+        nanoseconds,
+    } = value;
+    if INC {
+        match nanoseconds.checked_add(1) {
+            Some(nanoseconds) => IntervalMonthDayNano::new(months, days, nanoseconds),
+            None => match days.checked_add(1) {
+                Some(days) => IntervalMonthDayNano::new(months, days, i64::MIN),
+                None => IntervalMonthDayNano::new(months + 1, i32::MIN, i64::MIN),
+            },
+        }
+    } else {
+        match nanoseconds.checked_sub(1) {
+            Some(nanoseconds) => IntervalMonthDayNano::new(months, days, nanoseconds),
+            None => match days.checked_sub(1) {
+                Some(days) => IntervalMonthDayNano::new(months, days, i64::MAX),
+                None => IntervalMonthDayNano::new(months - 1, i32::MAX, i64::MAX),
+            },
+        }
+    }
 }
 
 /// This function returns the next/previous value depending on the `INC` value.
@@ -1332,15 +1361,11 @@ fn next_value_helper<const INC: bool>(value: ScalarValue) -> ScalarValue {
         IntervalYearMonth(Some(val)) => {
             IntervalYearMonth(Some(increment_decrement::<INC, i32>(val)))
         }
-        IntervalDayTime(Some(val)) => IntervalDayTime(Some(increment_decrement::<
-            INC,
-            arrow::datatypes::IntervalDayTime,
-        >(val))),
+        IntervalDayTime(Some(val)) => {
+            IntervalDayTime(Some(adjacent_day_time::<INC>(val)))
+        }
         IntervalMonthDayNano(Some(val)) => {
-            IntervalMonthDayNano(Some(increment_decrement::<
-                INC,
-                arrow::datatypes::IntervalMonthDayNano,
-            >(val)))
+            IntervalMonthDayNano(Some(adjacent_month_day_nano::<INC>(val)))
         }
         _ => value, // Unbounded values return without change.
     }
@@ -2354,6 +2379,54 @@ mod tests {
             assert_eq!(next_value(inf.clone()), inf);
             assert_eq!(prev_value(inf.clone()), inf);
         });
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_next_prev_value_composite_intervals() -> Result<()> {
+        use ScalarValue::{IntervalDayTime as DayTime, IntervalMonthDayNano as MDN};
+        use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano};
+        let day_time = |days, ms| DayTime(Some(IntervalDayTime::new(days, ms)));
+        let mdn = |months, days, nanos| {
+            MDN(Some(IntervalMonthDayNano::new(months, days, nanos)))
+        };
+
+        // The smallest component carries into the next one at its bound.
+        assert_eq!(next_value(day_time(0, i32::MAX)), day_time(1, i32::MIN));
+        assert_eq!(prev_value(day_time(1, i32::MIN)), day_time(0, i32::MAX));
+        assert_eq!(next_value(mdn(0, 0, i64::MAX)), mdn(0, 1, i64::MIN));
+        assert_eq!(prev_value(mdn(0, 1, i64::MIN)), mdn(0, 0, i64::MAX));
+        assert_eq!(
+            next_value(mdn(0, i32::MAX, i64::MAX)),
+            mdn(1, i32::MIN, i64::MIN)
+        );
+        assert_eq!(
+            prev_value(mdn(1, i32::MIN, i64::MIN)),
+            mdn(0, i32::MAX, i64::MAX)
+        );
+
+        assert_eq!(next_value(day_time(3, 7)), day_time(3, 8));
+        assert_eq!(prev_value(mdn(3, 2, 1)), mdn(3, 2, 0));
+
+        assert_eq!(
+            next_value(DayTime(Some(IntervalDayTime::MAX))),
+            DayTime(None)
+        );
+        assert_eq!(
+            prev_value(DayTime(Some(IntervalDayTime::MIN))),
+            DayTime(None)
+        );
+        assert_eq!(next_value(MDN(Some(IntervalMonthDayNano::MAX))), MDN(None));
+        assert_eq!(prev_value(MDN(Some(IntervalMonthDayNano::MIN))), MDN(None));
+
+        // The reproduction from #25573: strict propagation needed the successor
+        // of `(0, i32::MAX)` and panicked instead.
+        let left = Interval::try_new(day_time(0, i32::MIN), day_time(1, i32::MAX))?;
+        let right = Interval::try_new(day_time(0, i32::MAX), day_time(1, i32::MAX))?;
+        let (new_left, new_right) = satisfy_greater(&left, &right, true)?.unwrap();
+        assert_eq!(new_left.lower(), &day_time(1, i32::MIN));
+        assert_eq!(new_right.upper(), &day_time(1, i32::MAX - 1));
 
         Ok(())
     }
