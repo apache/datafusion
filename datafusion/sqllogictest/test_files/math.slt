@@ -1249,8 +1249,6 @@ physical_plan
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # https://github.com/apache/datafusion/issues/25137
-# power/log rewrites only hold for a base that is finite, > 0 and != 1, so a
-# base of 1, 0 or a negative value must be evaluated rather than rewritten.
 statement ok
 CREATE VIEW nn AS SELECT * FROM (VALUES (1.0), (0.0), (-2.0), (2.0)) s(a);
 
@@ -1258,9 +1256,8 @@ statement ok
 CREATE VIEW nb AS SELECT a FROM (VALUES (1.0),(0.0),(-2.0),(2.0),(NULL)) s(a) WHERE a IS NOT NULL;
 
 statement ok
-CREATE VIEW degenerate_base AS SELECT * FROM (VALUES (2.0), (3.0)) s(b);
+CREATE VIEW exponents AS SELECT * FROM (VALUES (2.0), (3.0)) s(b);
 
-# A non-nullable base must give the same answers as the nullable one
 query RRR
 SELECT a, log(a, 1.0), log(a, a) FROM nn;
 ----
@@ -1278,13 +1275,13 @@ SELECT a, log(a, 1.0), log(a, a) FROM nb;
 2 0 1
 
 query RRR
-SELECT b, power(1.0, log(1.0, b)), log(1.0, power(1.0, b)) FROM degenerate_base;
+SELECT b, power(1.0, log(1.0, b)), log(1.0, power(1.0, b)) FROM exponents;
 ----
 2 1 NaN
 3 1 NaN
 
 query I
-SELECT count(*) FROM degenerate_base WHERE power(1.0, log(1.0, b)) = 2.0;
+SELECT count(*) FROM exponents WHERE power(1.0, log(1.0, b)) = 2.0;
 ----
 0
 
@@ -1300,7 +1297,7 @@ statement ok
 DROP VIEW nb;
 
 statement ok
-DROP VIEW degenerate_base;
+DROP VIEW exponents;
 
 # Float 16/32/64 for log
 query RT
