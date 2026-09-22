@@ -16,14 +16,16 @@
 // under the License.
 
 use arrow::array::BooleanArray;
-use arrow::array::{ArrayRef, Datum, make_comparator};
+use arrow::array::{Array, ArrayRef, Datum, make_array, make_comparator};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::kernels::cmp::{
     distinct, eq, gt, gt_eq, lt, lt_eq, neq, not_distinct,
 };
 use arrow::compute::{SortOptions, ilike, like, nilike, nlike};
 use arrow::error::ArrowError;
-use datafusion_common::utils::{normalize_float_zero, normalize_float_zero_scalar};
+use datafusion_common::utils::{
+    has_float_leaf, normalize_float_zero, normalize_float_zero_scalar,
+};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common::{arrow_datafusion_err, assert_or_internal_err, internal_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
@@ -147,6 +149,11 @@ pub fn compare_with_eq(
     }
 }
 
+fn normalize_nested_float_zero(array: &dyn Array) -> Option<ArrayRef> {
+    has_float_leaf(array.data_type())
+        .then(|| normalize_float_zero(&make_array(array.to_data())))
+}
+
 /// Compare on nested type List, Struct, and so on
 pub fn compare_op_for_nested(
     op: Operator,
@@ -155,6 +162,10 @@ pub fn compare_op_for_nested(
 ) -> Result<BooleanArray> {
     let (l, is_l_scalar) = lhs.get();
     let (r, is_r_scalar) = rhs.get();
+    let l_norm = normalize_nested_float_zero(l);
+    let r_norm = normalize_nested_float_zero(r);
+    let l = l_norm.as_deref().unwrap_or(l);
+    let r = r_norm.as_deref().unwrap_or(r);
     let l_len = l.len();
     let r_len = r.len();
 

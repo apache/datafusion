@@ -253,11 +253,6 @@ impl RowGroupPruner {
                 .map(Vec::as_slice),
             row_group_metadatas,
             arrow_schema: self.arrow_schema.as_ref(),
-            // Match the existing static row-group pruning behavior: when a
-            // statistic's null count is missing, treat it as zero. This is
-            // sound for runtime pruning because the predicate only needs to
-            // prove a row group *cannot* contain matching rows.
-            missing_null_counts_as_zero: true,
         };
 
         match pp.prune(&stats) {
@@ -435,16 +430,21 @@ impl PushDecoderStreamState {
     /// miri where `&mut self` creates a single opaque borrow that conflicts
     /// with `unfold`'s ownership across yield points.
     async fn transition(mut self) -> Option<(Result<RecordBatch>, Self)> {
+        // Everything below is CPU work (decoding, row group pruning, building
+        // readers, projection) except fetching byte ranges, so the timer runs
+        // for the whole transition and is paused only across that await.
+        // Cloning `Time` shares the underlying counter and keeps the guard
+        // from borrowing `self`. The guard records on drop, which covers
+        // every return.
+        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+        let mut timer = elapsed_compute.timer();
         loop {
             // Step 1: drain a batch from the active reader if any.
             if let Some(reader) = self.active_reader.as_mut() {
                 match reader.next() {
                     Some(Ok(batch)) => {
-                        let mut timer = self.baseline_metrics.elapsed_compute().timer();
                         self.copy_arrow_reader_metrics();
                         let result = self.project_batch(&batch);
-                        timer.stop();
-                        drop(timer);
                         return Some((result, self));
                     }
                     Some(Err(e)) => {
@@ -506,11 +506,14 @@ impl PushDecoderStreamState {
             let decoder = self.decoder.as_mut().expect("decoder present");
             match decoder.try_next_reader() {
                 Ok(DecodeResult::NeedsData(ranges)) => {
+                    // I/O, not compute.
+                    timer.stop();
                     let data = self
                         .reader
                         .get_byte_ranges(ranges.clone())
                         .await
                         .map_err(DataFusionError::from);
+                    timer.restart();
                     match data {
                         Ok(data) => {
                             if let Err(e) = self
