@@ -62,6 +62,7 @@ pub struct BinaryExpr {
     right: Arc<dyn PhysicalExpr>,
     /// Specifies whether an error is returned on overflow or not
     fail_on_overflow: bool,
+    strict_short_circuit: bool,
 }
 
 // Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
@@ -71,6 +72,7 @@ impl PartialEq for BinaryExpr {
             && self.op.eq(&other.op)
             && self.right.eq(&other.right)
             && self.fail_on_overflow.eq(&other.fail_on_overflow)
+            && self.strict_short_circuit.eq(&other.strict_short_circuit)
     }
 }
 impl Hash for BinaryExpr {
@@ -79,6 +81,7 @@ impl Hash for BinaryExpr {
         self.op.hash(state);
         self.right.hash(state);
         self.fail_on_overflow.hash(state);
+        self.strict_short_circuit.hash(state);
     }
 }
 
@@ -94,17 +97,29 @@ impl BinaryExpr {
             op,
             right,
             fail_on_overflow: false,
+            strict_short_circuit: false,
         }
     }
 
     /// Create new binary expression with explicit fail_on_overflow value
     pub fn with_fail_on_overflow(self, fail_on_overflow: bool) -> Self {
         Self {
-            left: self.left,
-            op: self.op,
-            right: self.right,
             fail_on_overflow,
+            ..self
         }
+    }
+
+    /// Require AND/OR to evaluate the right child only for rows whose result
+    /// depends on it, even when masking costs more than eager evaluation.
+    /// Other operators are unaffected. Disabled by default.
+    pub fn with_strict_short_circuit(mut self, strict_short_circuit: bool) -> Self {
+        self.strict_short_circuit = strict_short_circuit;
+        self
+    }
+
+    /// Whether AND/OR require strict row-level short-circuit evaluation.
+    pub fn strict_short_circuit(&self) -> bool {
+        self.strict_short_circuit
     }
 
     /// Get the left side of the binary expression
@@ -625,6 +640,36 @@ impl PhysicalExpr for BinaryExpr {
             }
         }
 
+        if self.strict_short_circuit && matches!(self.op, Operator::And | Operator::Or) {
+            let left = lhs.into_array(batch.num_rows())?;
+            let left_bool = as_boolean_array(&left)?;
+            let decisive = self.op == Operator::Or;
+            let values = if decisive {
+                !left_bool.values()
+            } else {
+                left_bool.values().clone()
+            };
+            let values = match left_bool.nulls() {
+                Some(nulls) => &values | &!nulls.inner(),
+                None => values,
+            };
+            let selection = BooleanArray::new(values, None);
+            if !selection.has_true() {
+                return Ok(ColumnarValue::Array(left));
+            }
+            let right = self
+                .right
+                .evaluate_selection(batch, &selection)?
+                .into_array(batch.num_rows())?;
+            let right = as_boolean_array(&right)?;
+            let result = if decisive {
+                or_kleene(left_bool, right)?
+            } else {
+                and_kleene(left_bool, right)?
+            };
+            return Ok(ColumnarValue::Array(Arc::new(result)));
+        }
+
         let rhs = self.right.evaluate(batch)?;
         let left_data_type = lhs.data_type();
         let right_data_type = rhs.data_type();
@@ -708,7 +753,8 @@ impl PhysicalExpr for BinaryExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(
             BinaryExpr::new(Arc::clone(&children[0]), self.op, Arc::clone(&children[1]))
-                .with_fail_on_overflow(self.fail_on_overflow),
+                .with_fail_on_overflow(self.fail_on_overflow)
+                .with_strict_short_circuit(self.strict_short_circuit),
         ))
     }
 
@@ -989,16 +1035,19 @@ impl PhysicalExpr for BinaryExpr {
             op,
             right,
             fail_on_overflow,
+            strict_short_circuit,
         } = self;
 
         // Linearize a nested binary expression tree with the same operator and
-        // overflow policy into flat operands to avoid deep recursion in proto.
+        // evaluation policies into flat operands to avoid deep recursion in proto.
         let mut operand_refs: Vec<&Arc<dyn PhysicalExpr>> = vec![right];
         let mut current_left = left;
         loop {
             match current_left.downcast_ref::<BinaryExpr>() {
                 Some(bin)
-                    if bin.op == *op && bin.fail_on_overflow == *fail_on_overflow =>
+                    if bin.op == *op
+                        && bin.fail_on_overflow == *fail_on_overflow
+                        && bin.strict_short_circuit == *strict_short_circuit =>
                 {
                     operand_refs.push(&bin.right);
                     current_left = &bin.left;
@@ -1023,6 +1072,7 @@ impl PhysicalExpr for BinaryExpr {
                     op: format!("{op:?}"),
                     operands,
                     fail_on_overflow: *fail_on_overflow,
+                    strict_short_circuit: *strict_short_circuit,
                 }),
             )),
         }))
@@ -1060,6 +1110,7 @@ impl BinaryExpr {
             op,
             operands,
             fail_on_overflow,
+            strict_short_circuit,
         } = node.as_ref();
         let op = Operator::from_proto_name(op).ok_or_else(|| {
             datafusion_common::DataFusionError::Internal(format!(
@@ -1083,7 +1134,8 @@ impl BinaryExpr {
                 .reduce(|left, right| {
                     Arc::new(
                         BinaryExpr::new(left, op, right)
-                            .with_fail_on_overflow(*fail_on_overflow),
+                            .with_fail_on_overflow(*fail_on_overflow)
+                            .with_strict_short_circuit(*strict_short_circuit),
                     ) as Arc<dyn PhysicalExpr>
                 })
                 .expect("Binary expression could not be reduced to a single expression."))
@@ -1094,7 +1146,9 @@ impl BinaryExpr {
             let right =
                 ctx.decode_required_expression(r.as_deref(), "BinaryExpr", "right")?;
             Ok(Arc::new(
-                BinaryExpr::new(left, op, right).with_fail_on_overflow(*fail_on_overflow),
+                BinaryExpr::new(left, op, right)
+                    .with_fail_on_overflow(*fail_on_overflow)
+                    .with_strict_short_circuit(*strict_short_circuit),
             ))
         }
     }
@@ -1479,6 +1533,59 @@ mod tests {
     use arrow::array::BooleanArray;
     use arrow::compute::SortOptions;
     use datafusion_expr::col as logical_col;
+
+    #[test]
+    fn strict_short_circuit_masks_errors_and_preserves_nulls() -> Result<()> {
+        for op in [Operator::And, Operator::Or] {
+            let decisive = op == Operator::Or;
+            let batch = RecordBatch::try_from_iter([
+                (
+                    "guard",
+                    Arc::new(BooleanArray::from(vec![
+                        Some(decisive),
+                        Some(!decisive),
+                        None,
+                        None,
+                    ])) as ArrayRef,
+                ),
+                ("divisor", Arc::new(Int64Array::from(vec![0, 1, 1, -1]))),
+            ])?;
+            let division = Arc::new(BinaryExpr::new(
+                lit(1_i64),
+                Operator::Divide,
+                Arc::new(Column::new("divisor", 1)),
+            ));
+            let right = Arc::new(BinaryExpr::new(division, Operator::Gt, lit(0_i64)));
+            let eager = BinaryExpr::new(Arc::new(Column::new("guard", 0)), op, right);
+            assert!(eager.evaluate(&batch).is_err());
+            let strict = eager.clone().with_strict_short_circuit(true);
+            assert_ne!(eager, strict);
+            // Rebinding the children must preserve the evaluation policy.
+            let children = strict.children().into_iter().cloned().collect();
+            let strict = Arc::new(strict).with_new_children(children)?;
+            let expected = if decisive {
+                vec![Some(true), Some(true), Some(true), None]
+            } else {
+                vec![Some(false), Some(true), None, Some(false)]
+            };
+            let result = strict.evaluate(&batch)?.into_array(batch.num_rows())?;
+            assert_eq!(result.as_boolean(), &BooleanArray::from(expected));
+
+            // Entirely skipped rows must not evaluate a throwing child, while
+            // rows requiring that child must still report its error.
+            for guard in [decisive, !decisive] {
+                let batch = RecordBatch::try_from_iter([
+                    (
+                        "guard",
+                        Arc::new(BooleanArray::from(vec![guard])) as ArrayRef,
+                    ),
+                    ("divisor", Arc::new(Int64Array::from(vec![0]))),
+                ])?;
+                assert_eq!(strict.evaluate(&batch).is_err(), guard != decisive);
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_arithmetic_ordering_overflow() -> Result<()> {

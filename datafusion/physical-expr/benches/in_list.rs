@@ -24,7 +24,7 @@ use arrow::record_batch::RecordBatch;
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr::expressions::{col, in_list, lit};
+use datafusion_physical_expr::expressions::{InListExpr, col, in_list, lit};
 use rand::distr::Alphanumeric;
 use rand::prelude::*;
 use std::any::TypeId;
@@ -260,11 +260,21 @@ fn do_bench_with_columns(
         .map(|f| col(f.name(), &schema).unwrap())
         .collect();
 
+    let strict = InListExpr::try_new_with_strict_short_circuit(
+        col("a", &schema).unwrap(),
+        list_exprs.clone(),
+        false,
+        &schema,
+    )
+    .unwrap();
     let expr = in_list(col("a", &schema).unwrap(), list_exprs, &false, &schema).unwrap();
     let batch = RecordBatch::try_new(Arc::new(schema), columns).unwrap();
 
     c.bench_function(name, |b| {
         b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+    });
+    c.bench_function(&format!("{name}/strict"), |b| {
+        b.iter(|| black_box(strict.evaluate(black_box(&batch)).unwrap()))
     });
 }
 

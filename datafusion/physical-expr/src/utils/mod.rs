@@ -46,6 +46,28 @@ pub fn split_conjunction(
     split_impl(Operator::And, predicate, vec![])
 }
 
+/// Split conjunctions for independent evaluation, retaining strict AND expressions
+/// as one predicate so callers cannot reorder or separately evaluate their children.
+/// Use [`split_conjunction`] instead when inspecting predicates for metadata/pruning.
+pub fn split_conjunction_for_evaluation(
+    predicate: &Arc<dyn PhysicalExpr>,
+) -> Vec<&Arc<dyn PhysicalExpr>> {
+    let mut predicates = Vec::new();
+    let mut remaining = vec![predicate];
+    while let Some(expr) = remaining.pop() {
+        match expr.downcast_ref::<BinaryExpr>() {
+            Some(binary)
+                if binary.op() == &Operator::And && !binary.strict_short_circuit() =>
+            {
+                remaining.push(binary.right());
+                remaining.push(binary.left());
+            }
+            _ => predicates.push(expr),
+        }
+    }
+    predicates
+}
+
 impl ConstExpr {
     /// Collects predicate-derived constants from equality conjunctions.
     ///

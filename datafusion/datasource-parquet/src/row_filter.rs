@@ -78,8 +78,10 @@ use parquet::file::metadata::ParquetMetaData;
 use datafusion_common::Result;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::TreeNode;
-use datafusion_physical_expr::utils::reassign_expr_columns;
-use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
+use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::utils::{
+    reassign_expr_columns, split_conjunction_for_evaluation,
+};
 
 use datafusion_physical_plan::metrics;
 
@@ -484,9 +486,8 @@ pub(crate) fn prebuild_row_filter_candidates(
     file_schema: &SchemaRef,
     metadata: &ParquetMetaData,
 ) -> Result<Option<Vec<PrebuiltRowFilterCandidate>>> {
-    // Split into conjuncts:
-    // `a = 1 AND b = 2 AND c = 3` -> [`a = 1`, `b = 2`, `c = 3`]
-    let predicates = split_conjunction(expr);
+    // Preserve strict conjunctions as one candidate during predicate reordering.
+    let predicates = split_conjunction_for_evaluation(expr);
     let candidates: Vec<FilterCandidate> = predicates
         .into_iter()
         .map(|expr| {
@@ -594,6 +595,61 @@ mod test {
     use parquet::arrow::parquet_to_arrow_schema;
     use parquet::file::reader::{FileReader, SerializedFileReader};
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn strict_conjunction_preserves_masks_during_row_filter_reordering() -> Result<()> {
+        use datafusion_expr::{Operator, lit};
+        use datafusion_physical_expr::expressions::{
+            BinaryExpr, col as physical_col, lit as physical_lit,
+        };
+
+        let batch = RecordBatch::try_from_iter([
+            (
+                "guard",
+                Arc::new(StringArray::from(vec![
+                    "skip".repeat(64),
+                    "keep".to_owned(),
+                ])) as arrow::array::ArrayRef,
+            ),
+            ("divisor", Arc::new(Int32Array::from(vec![0, 1]))),
+        ])?;
+        let schema = batch.schema();
+        let file = NamedTempFile::new()?;
+        let mut writer = ArrowWriter::try_new(file.reopen()?, Arc::clone(&schema), None)?;
+        writer.write(&batch)?;
+        writer.close()?;
+        let reader = ParquetRecordBatchReaderBuilder::try_new(file.reopen()?)?;
+        let guard = logical2physical(&col("guard").eq(lit("keep")), &schema);
+        let division = Arc::new(BinaryExpr::new(
+            physical_lit(1_i32),
+            Operator::Divide,
+            physical_col("divisor", &schema)?,
+        ));
+        let right =
+            Arc::new(BinaryExpr::new(division, Operator::Gt, physical_lit(0_i32)));
+        let strict = Arc::new(
+            BinaryExpr::new(guard, Operator::And, right).with_strict_short_circuit(true),
+        );
+        // Scan filters may wrap the strict predicate in an ordinary conjunction.
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            strict,
+            Operator::And,
+            logical2physical(&col("divisor").gt_eq(lit(0)), &schema),
+        ));
+        let metrics = ExecutionPlanMetricsSet::new();
+        let file_metrics = ParquetFileMetrics::new(0, "strict.parquet", &metrics);
+        let row_filter =
+            build_row_filter(&expr, &schema, reader.metadata(), true, &file_metrics)?
+                .expect("pushdown filter");
+        assert_eq!(row_filter.predicates().len(), 2);
+        let rows = reader
+            .with_row_filter(row_filter)
+            .build()?
+            .map(|batch| batch.map(|batch| batch.num_rows()))
+            .collect::<ArrowResult<Vec<_>>>()?;
+        assert_eq!(rows.into_iter().sum::<usize>(), 1);
+        Ok(())
+    }
 
     // List predicates used by the decoder should be accepted for pushdown
     #[test]
