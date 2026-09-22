@@ -2286,7 +2286,7 @@ mod tests {
     use datafusion_common::{Result, ScalarValue};
 
     #[test]
-    fn test_numeric_cast_out_of_range_bounds() -> Result<()> {
+    fn test_numeric_cast_out_of_range_bounds() {
         for safe in [false, true] {
             let options = CastOptions {
                 safe,
@@ -2307,21 +2307,22 @@ mod tests {
                     (None, Some(42), None, Some(42)),
                     (Some(-42), None, Some(-42), None),
                 ] {
-                    let input =
-                        Interval::make(lower, upper)?.cast_to(&source, &options)?;
+                    let input = Interval::make(lower, upper)
+                        .unwrap()
+                        .cast_to(&source, &options)
+                        .unwrap();
                     assert_eq!(
-                        input.cast_to(&DataType::Int8, &options)?,
-                        Interval::make(expected_lower, expected_upper)?,
+                        input.cast_to(&DataType::Int8, &options).unwrap(),
+                        Interval::make(expected_lower, expected_upper).unwrap(),
                         "{source}: {input}, safe={safe}"
                     );
                 }
             }
         }
-        Ok(())
     }
 
     #[test]
-    fn test_numeric_cast_bounds_across_types() -> Result<()> {
+    fn test_numeric_cast_bounds_across_types() {
         for safe in [false, true] {
             let options = CastOptions {
                 safe,
@@ -2335,49 +2336,57 @@ mod tests {
                 DataType::Decimal128(10, 2),
                 DataType::Decimal256(30, 3),
             ] {
-                let input = Interval::make(Some(42i64), Some(1000))?
-                    .cast_to(&source, &options)?;
+                let input = Interval::make(Some(42i64), Some(1000))
+                    .unwrap()
+                    .cast_to(&source, &options)
+                    .unwrap();
                 for target in
                     [DataType::Int8, DataType::UInt8, DataType::Decimal128(3, 1)]
                 {
-                    let lower = ScalarValue::Int64(Some(42)).cast_to(&target)?;
+                    let lower = ScalarValue::Int64(Some(42)).cast_to(&target).unwrap();
                     assert_eq!(
-                        input.cast_to(&target, &options)?,
-                        Interval::try_new(lower, ScalarValue::try_from(&target)?)?,
+                        input.cast_to(&target, &options).unwrap(),
+                        Interval::try_new(lower, ScalarValue::try_from(&target).unwrap())
+                            .unwrap(),
                         "{source} -> {target}, safe={safe}"
                     );
                 }
             }
             assert_eq!(
-                Interval::make(Some(-1i64), Some(42))?
-                    .cast_to(&DataType::UInt8, &options)?,
-                Interval::make(Some(0u8), Some(42))?
+                Interval::make(Some(-1i64), Some(42))
+                    .unwrap()
+                    .cast_to(&DataType::UInt8, &options)
+                    .unwrap(),
+                Interval::make(Some(0u8), Some(42)).unwrap()
             );
 
             // Fractional inputs retain truncation, including with one overflowing bound.
             for lower in [-129.5f64, -42.5] {
                 for source in [DataType::Float64, DataType::Decimal128(10, 2)] {
-                    let input = Interval::make(Some(lower), Some(42.5))?
-                        .cast_to(&source, &options)?;
+                    let input = Interval::make(Some(lower), Some(42.5))
+                        .unwrap()
+                        .cast_to(&source, &options)
+                        .unwrap();
                     let expected_lower = if lower < -128.0 { None } else { Some(-42i8) };
                     assert_eq!(
-                        input.cast_to(&DataType::Int8, &options)?,
-                        Interval::make(expected_lower, Some(42))?
+                        input.cast_to(&DataType::Int8, &options).unwrap(),
+                        Interval::make(expected_lower, Some(42)).unwrap()
                     );
                 }
             }
             // Float overflow is normalized by Interval::try_new.
             assert_eq!(
-                Interval::make(Some(0.0f64), Some(f64::MAX))?
-                    .cast_to(&DataType::Float32, &options)?,
-                Interval::make(Some(0.0f32), None)?
+                Interval::make(Some(0.0f64), Some(f64::MAX))
+                    .unwrap()
+                    .cast_to(&DataType::Float32, &options)
+                    .unwrap(),
+                Interval::make(Some(0.0f32), None).unwrap()
             );
         }
-        Ok(())
     }
 
     #[test]
-    fn test_numeric_cast_bounds_contain_values() -> Result<()> {
+    fn test_numeric_cast_bounds_contain_values() {
         let types = [
             DataType::Int8,
             DataType::Int16,
@@ -2423,13 +2432,15 @@ mod tests {
             let mut values = samples
                 .iter()
                 .map(|value| cast(&ScalarValue::from(*value), source))
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<Result<Vec<_>>>()
+                .unwrap();
             values.retain(|value| !value.is_null());
             for target in &types {
                 let converted = values
                     .iter()
                     .map(|value| cast(value, target))
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>>>()
+                    .unwrap();
                 for safe in [false, true] {
                     let options = CastOptions {
                         safe,
@@ -2440,8 +2451,9 @@ mod tests {
                             let input = Interval::try_new(
                                 values[start].clone(),
                                 values[end].clone(),
-                            )?;
-                            let bounds = input.cast_to(target, &options)?;
+                            )
+                            .unwrap();
+                            let bounds = input.cast_to(target, &options).unwrap();
                             for value in &converted[start..=end] {
                                 if !value.is_null() {
                                     assert!(
@@ -2458,33 +2470,41 @@ mod tests {
                 }
             }
         }
-        Ok(())
     }
 
     #[test]
-    fn test_non_numeric_cast_retains_error_policy() -> Result<()> {
-        let value = ScalarValue::Utf8(Some("not a number".into()));
-        let input = Interval::try_new(value.clone(), value)?;
+    fn test_non_numeric_cast_retains_error_policy() {
         let strict = CastOptions {
             safe: false,
             ..Default::default()
         };
-        assert!(input.cast_to(&DataType::Int8, &strict).is_err());
         let safe = CastOptions {
             safe: true,
-            ..strict
+            ..strict.clone()
         };
-        assert_eq!(
-            input.cast_to(&DataType::Int8, &safe)?,
-            Interval::make_unbounded(&DataType::Int8)?
-        );
-        let numeric = Interval::make(Some(0i64), Some(1))?;
+        // Exercise failures at either endpoint, preserving the valid opposite bound.
+        for (lower, upper, expected_lower, expected_upper) in [
+            ("not a number", "not a number", None, None),
+            ("1", "not a number", Some(1i8), None),
+            ("!", "42", None, Some(42i8)),
+        ] {
+            let input = Interval::try_new(
+                ScalarValue::Utf8(Some(lower.into())),
+                ScalarValue::Utf8(Some(upper.into())),
+            )
+            .unwrap();
+            assert!(input.cast_to(&DataType::Int8, &strict).is_err());
+            assert_eq!(
+                input.cast_to(&DataType::Int8, &safe).unwrap(),
+                Interval::make(expected_lower, expected_upper).unwrap()
+            );
+        }
+        let numeric = Interval::make(Some(0i64), Some(1)).unwrap();
         assert!(
             numeric
                 .cast_to(&DataType::Struct(Default::default()), &safe)
                 .is_err()
         );
-        Ok(())
     }
 
     #[test]
