@@ -134,6 +134,12 @@ SELECT arrow_field(id)['metadata'] FROM table_with_metadata LIMIT 1
 ----
 {metadata_key: the id field}
 
+# Metadata entries are returned in key order, regardless of insertion order.
+query ?
+SELECT arrow_field(with_metadata(1, 'z', 'last', 'm', 'middle', 'a', 'first'))['metadata']
+----
+{a: first, m: middle, z: last}
+
 # arrow_field nullability field access
 query I
 SELECT count(*) FROM table_with_metadata WHERE NOT arrow_field(id)['nullable']

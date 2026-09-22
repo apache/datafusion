@@ -943,6 +943,200 @@ async fn join_left_different_columns_count_with_filter() -> Result<()> {
     Ok(())
 }
 
+/// A filter whose intermediate schema lists a right column before a left one
+/// (the layout `JoinFilter::swap` produces when a join's inputs are swapped)
+#[tokio::test]
+async fn join_left_with_filter_columns_right_before_left() -> Result<()> {
+    // select *
+    // from t2
+    // left join t1 on t2.b1 = t1.b1 and t2.a2 > t1.a1
+
+    let left = build_table_two_cols(
+        ("a2", &vec![10, 20, 30]),
+        ("b1", &vec![4, 5, 6]), // 6 does not exist on the right
+    );
+
+    let right = build_table(
+        ("a1", &vec![1, 21, 3]), // 20(t2.a2) > 1(t1.a1)
+        ("b1", &vec![4, 5, 7]),
+        ("c1", &vec![7, 8, 9]),
+    );
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+    )];
+
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a2", 1)),
+            Operator::Gt,
+            Arc::new(Column::new("a1", 0)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("a1", DataType::Int32, true),
+            Field::new("a2", DataType::Int32, true),
+        ])),
+    );
+
+    let (_, batches) = join_collect_with_filter(left, right, on, filter, Left).await?;
+
+    assert_snapshot!(batches_to_string(&batches), @r"
+    +----+----+----+----+----+
+    | a2 | b1 | a1 | b1 | c1 |
+    +----+----+----+----+----+
+    | 10 | 4  | 1  | 4  | 7  |
+    | 20 | 5  |    |    |    |
+    | 30 | 6  |    |    |    |
+    +----+----+----+----+----+
+    ");
+    Ok(())
+}
+
+/// Same filter layout for a right join, whose streamed side is the join's
+/// right input, so the streamed/buffered arrays reach `get_filter_columns`
+/// swapped back into join-side order
+#[tokio::test]
+async fn join_right_with_filter_columns_right_before_left() -> Result<()> {
+    // select *
+    // from t2
+    // right join t1 on t2.b1 = t1.b1 and t2.a2 > t1.a1
+
+    let left = build_table_two_cols(("a2", &vec![10, 20, 30]), ("b1", &vec![4, 5, 6]));
+
+    let right = build_table(
+        ("a1", &vec![1, 21, 3]), // 20(t2.a2) > 21(t1.a1) is false
+        ("b1", &vec![4, 5, 7]),  // 7 does not exist on the left
+        ("c1", &vec![7, 8, 9]),
+    );
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+    )];
+
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a2", 1)),
+            Operator::Gt,
+            Arc::new(Column::new("a1", 0)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("a1", DataType::Int32, true),
+            Field::new("a2", DataType::Int32, true),
+        ])),
+    );
+
+    let (_, batches) = join_collect_with_filter(left, right, on, filter, Right).await?;
+
+    assert_snapshot!(batches_to_sort_string(&batches), @r"
+    +----+----+----+----+----+
+    | a2 | b1 | a1 | b1 | c1 |
+    +----+----+----+----+----+
+    |    |    | 21 | 5  | 8  |
+    |    |    | 3  | 7  | 9  |
+    | 10 | 4  | 1  | 4  | 7  |
+    +----+----+----+----+----+
+    ");
+    Ok(())
+}
+
+/// A filter whose intermediate schema interleaves the two sides (Left, Right,
+/// Left), which neither "left columns first" nor "right columns first" produces
+#[tokio::test]
+async fn join_left_with_filter_columns_interleaved() -> Result<()> {
+    // select *
+    // from t1
+    // left join t2 on t1.b1 = t2.b1 and t1.a1 < t2.a2 and t2.a2 < t1.c1
+
+    let left = build_table(
+        ("a1", &vec![1, 2, 3]),
+        ("b1", &vec![4, 5, 6]), // 6 does not exist on the right
+        ("c1", &vec![10, 3, 30]),
+    );
+
+    // Grouping the filter columns by side would evaluate `a1 < c1 and c1 < a2`,
+    // which is false for b1 = 4 and true for b1 = 5: the opposite of the filter.
+    let right = build_table(
+        ("a2", &vec![5, 20, 7]), // 1 < 5 < 10, but 2 < 20 < 3 is false
+        ("b1", &vec![4, 5, 7]),
+        ("c2", &vec![70, 80, 90]),
+    );
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+    )];
+
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a1", 0)),
+                Operator::Lt,
+                Arc::new(Column::new("a2", 1)),
+            )),
+            Operator::And,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a2", 1)),
+                Operator::Lt,
+                Arc::new(Column::new("c1", 2)),
+            )),
+        )),
+        vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Left,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("a1", DataType::Int32, true),
+            Field::new("a2", DataType::Int32, true),
+            Field::new("c1", DataType::Int32, true),
+        ])),
+    );
+
+    let (_, batches) = join_collect_with_filter(left, right, on, filter, Left).await?;
+
+    assert_snapshot!(batches_to_string(&batches), @r"
+    +----+----+----+----+----+----+
+    | a1 | b1 | c1 | a2 | b1 | c2 |
+    +----+----+----+----+----+----+
+    | 1  | 4  | 10 | 5  | 4  | 70 |
+    | 2  | 5  | 3  |    |    |    |
+    | 3  | 6  | 30 |    |    |    |
+    +----+----+----+----+----+----+
+    ");
+    Ok(())
+}
+
 #[tokio::test]
 async fn join_left_mark_different_columns_count_with_filter() -> Result<()> {
     // select *
@@ -6770,6 +6964,82 @@ async fn swap_inputs_swaps_the_projection() -> Result<()> {
     let expected = common::collect(join.execute(0, Arc::clone(&task_ctx))?).await?;
     let actual = common::collect(swapped.execute(0, task_ctx)?).await?;
     assert_eq!(expected, actual);
+
+    Ok(())
+}
+
+/// Swapping the inputs swaps the filter too, which lists its right columns before
+/// its left ones afterwards. The swapped join must still evaluate the same predicate.
+#[tokio::test]
+async fn swap_inputs_swaps_the_filter() -> Result<()> {
+    let left = build_table(
+        ("a1", &vec![1, 2, 3, 4]), // 4 does not exist on the right
+        ("b1", &vec![10, 20, 30, 40]),
+        ("c1", &vec![100, 200, 300, 400]),
+    );
+    let right = build_table(
+        ("a2", &vec![1, 2, 3, 5]), // 5 does not exist on the left
+        ("b2", &vec![11, 15, 33, 55]),
+        ("c2", &vec![111, 222, 333, 555]),
+    );
+    let on: JoinOn = vec![(
+        Arc::new(Column::new("a1", 0)) as _,
+        Arc::new(Column::new("a2", 0)) as _,
+    )];
+    // b1 > b2 holds for key 2 alone, and b2 > b1 for keys 1 and 3, so reading the
+    // two columns from the wrong sides changes the result.
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("b1", 0)),
+            Operator::Gt,
+            Arc::new(Column::new("b2", 1)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("b1", DataType::Int32, true),
+            Field::new("b2", DataType::Int32, true),
+        ])),
+    );
+
+    for join_type in [
+        Inner, Left, Right, Full, LeftSemi, LeftAnti, RightSemi, RightAnti,
+    ] {
+        let join = SortMergeJoinExec::try_new(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            Some(filter.clone()),
+            join_type,
+            vec![SortOptions::default()],
+            NullEquality::NullEqualsNothing,
+        )?;
+
+        let swapped = join.swap_inputs()?;
+        assert_eq!(
+            swapped.schema().fields(),
+            join.schema().fields(),
+            "swapping must not change what the {join_type:?} join emits"
+        );
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let expected = common::collect(join.execute(0, Arc::clone(&task_ctx))?).await?;
+        let actual = common::collect(swapped.execute(0, task_ctx)?).await?;
+        // Swapping changes which side is streamed, and with it the row order.
+        assert_eq!(
+            batches_to_sort_string(&expected),
+            batches_to_sort_string(&actual),
+            "swapping must not change the result of the {join_type:?} join"
+        );
+    }
 
     Ok(())
 }

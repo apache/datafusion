@@ -217,16 +217,16 @@ fn general_left_right_view<F: LeftRightSlicer>(
 
     let views = ScalarBuffer::from(new_views);
     let data_buffers = if has_out_of_line {
-        string_view_array.data_buffers().to_vec()
+        Arc::clone(string_view_array.data_buffers())
     } else {
-        vec![]
+        Arc::from([])
     };
 
     // SAFETY:
     // - Each view is produced by `make_view` with correct bytes and offset
     // - Out-of-line views reuse the original buffer index and adjusted offset
     unsafe {
-        let array = StringViewArray::new_unchecked(views, data_buffers.into(), new_nulls);
+        let array = StringViewArray::new_unchecked(views, data_buffers, new_nulls);
         Ok(Arc::new(array) as ArrayRef)
     }
 }

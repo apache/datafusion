@@ -583,8 +583,14 @@ fn timestamp_arg_to_nanos(
 }
 
 fn validate_interval_step(step: IntervalMonthDayNano) -> Result<()> {
-    if step.months == 0 && step.days == 0 && step.nanoseconds == 0 {
+    let has_positive_component = step.months > 0 || step.days > 0 || step.nanoseconds > 0;
+    let has_negative_component = step.months < 0 || step.days < 0 || step.nanoseconds < 0;
+
+    if !has_positive_component && !has_negative_component {
         return plan_err!("Step interval cannot be zero");
+    }
+    if has_positive_component && has_negative_component {
+        return plan_err!("Step interval cannot have mixed signs");
     }
 
     Ok(())
@@ -939,13 +945,24 @@ impl TableFunctionImpl for RangeFunc {
 mod generate_series_tests {
     use std::sync::Arc;
 
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, IntervalMonthDayNano, Schema};
     use datafusion_common::Result;
     use datafusion_physical_plan::memory::LazyBatchGenerator;
 
     use crate::generate_series::{
-        GenSeriesArgs, GenerateSeriesTable, GenericSeriesState,
+        GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, validate_interval_step,
     };
+
+    #[test]
+    fn rejects_mixed_sign_interval_steps() {
+        assert!(validate_interval_step(IntervalMonthDayNano::new(1, -29, 0)).is_err());
+        assert!(validate_interval_step(IntervalMonthDayNano::new(-1, 29, 0)).is_err());
+
+        validate_interval_step(IntervalMonthDayNano::new(1, 29, 1))
+            .expect("positive interval should be valid");
+        validate_interval_step(IntervalMonthDayNano::new(-1, -29, -1))
+            .expect("negative interval should be valid");
+    }
 
     #[test]
     fn generate_series_rejects_zero_batch_size() {
