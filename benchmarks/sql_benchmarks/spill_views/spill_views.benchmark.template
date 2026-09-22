@@ -7,6 +7,10 @@
 #   VIEW_TYPE     expected Arrow type of column `s`        (Utf8View, BinaryView)
 #   DISTINCT_S    expected number of distinct values of `s`
 #
+# Each qNN.benchmark takes SPILL_LIMIT from the subgroup's environment
+# variable, SPILL_VIEWS_LIMIT_REPEATED or SPILL_VIEWS_LIMIT_DISTINCT, and
+# falls back to the value the suite metadata declares as the default.
+#
 # The load script COPYs a 1M-row Parquet file into scratch/ and registers it
 # as table `t` (id BIGINT in shuffled order, s = a 64-byte payload). Reading
 # the data back from Parquet is load-bearing: the Parquet reader makes the
@@ -17,6 +21,12 @@
 # limits were sized for 4 partitions so that each query spills on main
 # without running out of memory. Do not remove the pin: with more partitions
 # the per-partition sort reservations can exceed the limit.
+#
+# The assert below reads the limit back from information_schema, so it also
+# shows which limit an overridden run used. The memory pool reports the
+# limit in whole K, M or G units, so give an overridden limit in the same
+# form: 256M passes the assert, 1024M and 1.5G do not, because the pool
+# reports both as 1G.
 
 load sql_benchmarks/spill_views/load/${DATASET}.sql
 

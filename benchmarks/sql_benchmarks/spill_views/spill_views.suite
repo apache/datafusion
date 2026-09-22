@@ -1,6 +1,20 @@
-description = "Sort and aggregation queries that spill StringView and BinaryView columns read from Parquet (https://github.com/apache/datafusion/issues/23564). Each query sets its own memory limit and target_partitions = 4, so it spills with any environment. The repeated subgroup sorts rows whose string payload has few distinct values, so the Parquet reader makes views into one shared dictionary buffer and the spill writer can compact that buffer. The distinct subgroup sorts and groups all-distinct strings, where compaction cannot remove data and only adds work."
+description = "Sort and aggregation queries that spill StringView and BinaryView columns read from Parquet (https://github.com/apache/datafusion/issues/23564). Each query sets its own memory limit and target_partitions = 4, so it spills with any environment. The repeated subgroup sorts rows whose string payload has few distinct values, so the Parquet reader makes views into one shared dictionary buffer and the spill writer can compact that buffer. The distinct subgroup sorts and groups all-distinct strings, where compaction cannot remove data and only adds work. Set the memory limit of each subgroup with SPILL_VIEWS_LIMIT_REPEATED and SPILL_VIEWS_LIMIT_DISTINCT, for example to let both sides of a comparison finish when one of them runs out of memory at the default."
 
 query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[[options]]
+name = "limit-repeated"
+env = "SPILL_VIEWS_LIMIT_REPEATED"
+default = "40M"
+values = ["40M", "..."]
+help = "Sets the memory limit of the repeated subgroup. The queries must still spill, so keep the value well below the working set. Give a whole number of K, M or G units, for example 256M: the run asserts the limit that the memory pool reports back, and the pool reports 1024M as 1G."
+
+[[options]]
+name = "limit-distinct"
+env = "SPILL_VIEWS_LIMIT_DISTINCT"
+default = "96M"
+values = ["96M", "..."]
+help = "Sets the memory limit of the distinct subgroup. The queries must still spill, so keep the value well below the working set. Give a whole number of K, M or G units, for example 256M: the run asserts the limit that the memory pool reports back, and the pool reports 1024M as 1G."
 
 [[examples]]
 command = "cargo run --release --bin benchmark_runner -- spill_views"
@@ -9,3 +23,7 @@ description = "Run all spill_views queries."
 [[examples]]
 command = "cargo run --release --bin benchmark_runner -- spill_views --subgroup distinct"
 description = "Run only the all-distinct (cost case) queries."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- spill_views --subgroup distinct --limit-distinct 256M"
+description = "Raise the memory limit of the distinct subgroup, for example when a query runs out of memory at the default."
