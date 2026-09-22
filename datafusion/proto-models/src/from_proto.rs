@@ -380,11 +380,15 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
             )?,
             write_batch_size: to_usize(proto.write_batch_size, "write_batch_size")?,
             writer_version,
-            compression: proto.compression_opt.as_ref().map(|opt| match opt {
-                parquet_options::CompressionOpt::Compression(compression) => {
-                    compression.clone()
-                }
-            }),
+            compression: proto
+                .compression_opt
+                .as_ref()
+                .map(|opt| match opt {
+                    parquet_options::CompressionOpt::Compression(compression) => {
+                        compression.parse()
+                    }
+                })
+                .transpose()?,
             dictionary_enabled: proto.dictionary_enabled_opt.as_ref().map(|opt| {
                 match opt {
                     parquet_options::DictionaryEnabledOpt::DictionaryEnabled(

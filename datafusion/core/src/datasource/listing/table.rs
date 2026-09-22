@@ -808,9 +808,10 @@ mod tests {
         )
         .await
         .expect_err("Example should fail!");
+        // The value is rejected when the option is set, before any file is written
         assert_eq!(
             e.strip_backtrace(),
-            "Invalid or Unsupported Configuration: zstd compression requires specifying a level such as zstd(4)"
+            "Error setting config datafusion.execution.parquet.compression\ncaused by\nInvalid or Unsupported Configuration: zstd compression requires specifying a level such as zstd(4)"
         );
 
         Ok(())
