@@ -3072,9 +3072,9 @@ Can be a constant, column, or function.</p></li>
 </div>
 <section id="id176">
 <h4>Arguments<a class="headerlink" href="#id176" title="Link to this heading">#</a></h4>
-<ul class="simple">
-<li><p><strong>part</strong>: Part of the date to return. The following date parts are supported:</p>
 <ul>
+<li><p><strong>part</strong>: Part of the date to return. The following date parts are supported:</p>
+<ul class="simple">
 <li><p>year</p></li>
 <li><p>isoyear (ISO 8601 week-numbering year)</p></li>
 <li><p>quarter (emits value in inclusive range [1, 4] based on which quartile of the year the date is in)</p></li>
@@ -3091,7 +3091,11 @@ Can be a constant, column, or function.</p></li>
 <li><p>doy (day of the year)</p></li>
 <li><p>epoch (seconds since Unix epoch for timestamps/dates, total seconds for intervals)</p></li>
 <li><p>isodow (ISO 8601 day of the week where Monday is 1 and Sunday is 7)</p></li>
+<li><p>timezone (UTC offset in seconds)</p></li>
+<li><p>timezone_hour (whole hours of the UTC offset)</p></li>
+<li><p>timezone_minute (whole minutes of the UTC offset, excluding the hours)</p></li>
 </ul>
+<p>The <code class="docutils literal notranslate"><span class="pre">timezone</span></code>, <code class="docutils literal notranslate"><span class="pre">timezone_hour</span></code> and <code class="docutils literal notranslate"><span class="pre">timezone_minute</span></code> parts are only defined for timestamps that carry a timezone; extracting them from a timezone-naive timestamp, a date, a time or an interval is an error. They report the offset that applies at that instant, so they follow daylight saving time: <code class="docutils literal notranslate"><span class="pre">Europe/Brussels</span></code> yields <code class="docutils literal notranslate"><span class="pre">3600</span></code> in January and <code class="docutils literal notranslate"><span class="pre">7200</span></code> in July. For a negative offset each non-zero part carries the sign, so <code class="docutils literal notranslate"><span class="pre">America/St_Johns</span></code> in January yields <code class="docutils literal notranslate"><span class="pre">-3</span></code> hours and <code class="docutils literal notranslate"><span class="pre">-30</span></code> minutes. An offset smaller than one hour has a zero hour part, which cannot show a sign: <code class="docutils literal notranslate"><span class="pre">Africa/Monrovia</span></code> before 1972 yields <code class="docutils literal notranslate"><span class="pre">0</span></code> hours and <code class="docutils literal notranslate"><span class="pre">-43</span></code> minutes.</p>
 </li>
 <li><p><strong>expression</strong>: Time expression to operate on. Can be a constant, column, or function.</p></li>
 </ul>
@@ -3110,6 +3114,12 @@ Can be a constant, column, or function.</p></li>
 <span class="o">+</span><span class="c1">----------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">                                                  </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">----------------------------------------------------+</span>
+<span class="o">&gt;</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="n">date_part</span><span class="p">(</span><span class="s1">&#39;timezone&#39;</span><span class="p">,</span><span class="w"> </span><span class="k">TIMESTAMP</span><span class="w"> </span><span class="s1">&#39;2024-07-01T12:00:00&#39;</span><span class="w"> </span><span class="k">AT</span><span class="w"> </span><span class="k">TIME</span><span class="w"> </span><span class="k">ZONE</span><span class="w"> </span><span class="s1">&#39;Europe/Brussels&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">utc_offset_seconds</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">--------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">utc_offset_seconds</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">7200</span><span class="w">               </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------------+</span>
 </pre></div>
 </div>
 </section>
