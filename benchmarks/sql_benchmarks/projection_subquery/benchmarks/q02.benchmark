@@ -1,0 +1,3 @@
+template sql_benchmarks/projection_subquery/projection_subquery.benchmark.template
+QPAD=02
+NAME=q02_in_coalesce

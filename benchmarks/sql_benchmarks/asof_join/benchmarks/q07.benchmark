@@ -1,0 +1,25 @@
+name Q07
+group asof_join
+
+load sql_benchmarks/asof_join/init/load_q07.sql
+
+assert II
+SELECT
+    (SELECT count(*) FROM asof_left_sorted) AS left_rows,
+    (SELECT count(*) FROM asof_right_sorted) AS right_rows
+----
+100000|100000
+
+expect_plan AsOfJoinExec
+
+run
+-- Left and right: 100K rows each; 10K balanced equality groups; integer payloads.
+-- Both Parquet inputs declare (group_key, ts) ordering, so the measured query does not
+-- include the input sorts required by the other keyed workloads.
+-- Matches the latest right row at or before each left timestamp (l.ts >= r.ts).
+SELECT l.group_key, l.ts, l.payload, r.payload AS right_payload
+FROM asof_left_sorted l
+ASOF JOIN asof_right_sorted r MATCH_CONDITION (l.ts >= r.ts)
+ON l.group_key = r.group_key;
+
+cleanup sql_benchmarks/asof_join/init/cleanup_q07.sql

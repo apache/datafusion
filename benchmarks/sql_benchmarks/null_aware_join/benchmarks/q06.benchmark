@@ -1,0 +1,36 @@
+name Q06
+group null_aware_join
+
+load sql_benchmarks/null_aware_join/init/load.sql
+
+# Correctness canary: the NOT IN result must match a reference count
+# that does not use NOT IN. It holds for every NAJ_ROWS / NAJ_LARGE_ROWS.
+# As Q04, with NULL outer keys excluded unless the subquery is empty.
+assert I
+SELECT count(*) = (
+  SELECT count(*) FROM small_outer o
+  WHERE o.z <= (SELECT min(z) FROM small_inner)
+     OR (o.id_n50 IS NOT NULL AND NOT (o.id % 2 = 0 AND (o.id / 2) % 1000 < o.z))
+)
+FROM small_outer o
+WHERE o.id_n50 NOT IN (SELECT i.id_n0 FROM small_inner i WHERE i.z < o.z);
+----
+# Pinned to today's behaviour, which is incorrect. See
+# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
+false
+
+expect_plan HashJoinExec
+expect_plan null_aware
+
+run
+-- Q6: non-equality-correlated NOT IN, 50% NULL on the outer side.
+-- Worst case for the pairing that has no correlation scope keys: half the
+-- outer rows are NULL, and the join filter is evaluated for each of them
+-- against every subquery row, including for outer rows already known to be
+-- UNKNOWN. Compare against Q05 (same query, 1% NULL) to see how the cost
+-- tracks the NULL fraction.
+SELECT count(*)
+FROM small_outer o
+WHERE o.id_n50 NOT IN (SELECT i.id_n0 FROM small_inner i WHERE i.z < o.z);
+
+cleanup sql_benchmarks/null_aware_join/init/cleanup.sql
