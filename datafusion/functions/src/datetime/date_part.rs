@@ -939,6 +939,37 @@ mod tests {
         );
     }
 
+    /// An Arrow timestamp type can carry any string as its timezone, because
+    /// nothing validates it at construction time. SQL cannot produce such an
+    /// array, but an externally built Arrow schema can, so the invalid value
+    /// must surface as an execution error that names the offending timezone.
+    #[test]
+    fn timezone_parts_reject_invalid_arrow_timezone() {
+        for part in ["timezone", "timezone_hour", "timezone_minute"] {
+            let array = TimestampNanosecondArray::from(vec![Some(ts_nanos(
+                "2024-07-01T12:00:00Z",
+            ))])
+            .with_timezone("Not/A_Timezone");
+
+            let err = invoke_date_part(part, ColumnarValue::Array(Arc::new(array)), 1)
+                .unwrap_err()
+                .to_string();
+
+            assert!(
+                err.contains("Execution error"),
+                "expected an execution error for {part}: {err}"
+            );
+            assert!(
+                err.contains("Not/A_Timezone"),
+                "error for {part} must name the offending timezone: {err}"
+            );
+            assert!(
+                err.contains("failed on timezone"),
+                "error for {part} must keep the parse context: {err}"
+            );
+        }
+    }
+
     #[test]
     fn timezone_parts_return_int32() {
         let arg_fields: Vec<FieldRef> = vec![
