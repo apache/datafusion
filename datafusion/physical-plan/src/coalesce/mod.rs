@@ -33,6 +33,8 @@ pub struct LimitedBatchCoalescer {
     fetch: Option<usize>,
     /// Indicates if the coalescer is finished
     finished: bool,
+    /// Rows to accept before a single early flush; zero means ordinary coalescing.
+    startup_rows_remaining: usize,
 }
 
 /// Status returned by [`LimitedBatchCoalescer::push_batch`]
@@ -65,7 +67,26 @@ impl LimitedBatchCoalescer {
             total_rows: 0,
             fetch,
             finished: false,
+            startup_rows_remaining: 0,
         }
+    }
+
+    /// Request one early batch after accepting `rows` rows, then resume normal
+    /// coalescing. This is a delivery hint, independent of the fetch limit.
+    pub(crate) fn with_startup_rows(mut self, rows: usize) -> Self {
+        self.startup_rows_remaining = rows;
+        self
+    }
+
+    fn flush_startup_batch(&mut self, rows: usize) -> Result<()> {
+        if self.startup_rows_remaining != 0 {
+            self.startup_rows_remaining =
+                self.startup_rows_remaining.saturating_sub(rows);
+            if self.startup_rows_remaining == 0 {
+                self.inner.finish_buffered_batch()?;
+            }
+        }
+        Ok(())
     }
 
     /// Return the schema of the output batches
@@ -109,13 +130,16 @@ impl LimitedBatchCoalescer {
                 let batch_head = batch.slice(0, remaining_rows);
                 self.total_rows += batch_head.num_rows();
                 self.inner.push_batch(batch_head)?;
+                self.flush_startup_batch(remaining_rows)?;
                 return Ok(PushBatchStatus::LimitReached);
             }
         }
 
         // Limit not reached, push the entire batch
-        self.total_rows += batch.num_rows();
+        let rows = batch.num_rows();
+        self.total_rows += rows;
         self.inner.push_batch(batch)?;
+        self.flush_startup_batch(rows)?;
 
         Ok(PushBatchStatus::Continue)
     }
@@ -137,6 +161,10 @@ impl LimitedBatchCoalescer {
 
         let Some(fetch) = self.fetch else {
             self.inner.push_batch_with_filter(batch, filter)?;
+            if self.startup_rows_remaining != 0 {
+                // Count the selected rows only while a startup batch is pending.
+                self.flush_startup_batch(filter.true_count())?;
+            }
             return Ok(PushBatchStatus::Continue);
         };
 
@@ -159,11 +187,13 @@ impl LimitedBatchCoalescer {
             self.total_rows += remaining;
             self.inner
                 .push_batch_with_filter(batch.slice(0, end), &mask.slice(0, end))?;
+            self.flush_startup_batch(remaining)?;
             return Ok(PushBatchStatus::LimitReached);
         }
 
         self.total_rows += selected_count;
         self.inner.push_batch_with_filter(batch, filter)?;
+        self.flush_startup_batch(selected_count)?;
         Ok(PushBatchStatus::Continue)
     }
 
@@ -200,6 +230,78 @@ mod tests {
     use arrow::array::UInt32Array;
     use arrow::compute::concat_batches;
     use arrow::datatypes::{DataType, Field, Schema};
+
+    #[test]
+    fn startup_output_flushes_once_and_preserves_values_and_fetch() -> Result<()> {
+        use arrow::array::BooleanArray;
+        for filtered in [false, true] {
+            for (startup, fetch, expected) in [
+                (0, None, vec![8, 4]),
+                (2, None, vec![2, 8, 2]),
+                (10, None, vec![8, 2, 2]),
+                (64, None, vec![8, 4]),
+                (2, Some(0), vec![]),
+                (2, Some(1), vec![1]),
+                (2, Some(2), vec![2]),
+                (2, Some(5), vec![2, 3]),
+            ] {
+                let mut coalescer =
+                    LimitedBatchCoalescer::new(uint32_batch(0..0).schema(), 8, fetch)
+                        .with_startup_rows(startup);
+                let mut output = Vec::new();
+                for i in 0..12 {
+                    let status = if filtered {
+                        let batch = uint32_batch(i..i + 3);
+                        coalescer.push_batch_with_filter(
+                            batch,
+                            &BooleanArray::from(vec![Some(true), None, Some(false)]),
+                        )?
+                    } else {
+                        coalescer.push_batch(uint32_batch(i..i + 1))?
+                    };
+                    while let Some(batch) = coalescer.next_completed_batch() {
+                        output.push(batch);
+                    }
+                    if status == PushBatchStatus::LimitReached {
+                        break;
+                    }
+                }
+                coalescer.finish()?;
+                while let Some(batch) = coalescer.next_completed_batch() {
+                    output.push(batch);
+                }
+                assert_eq!(
+                    output.iter().map(RecordBatch::num_rows).collect::<Vec<_>>(),
+                    expected,
+                    "startup={startup}, fetch={fetch:?}, filtered={filtered}"
+                );
+                let combined = concat_batches(&uint32_batch(0..0).schema(), &output)?;
+                assert_eq!(combined, uint32_batch(0..fetch.unwrap_or(12) as u32));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn startup_output_does_not_split_a_natural_batch() -> Result<()> {
+        let mut coalescer =
+            LimitedBatchCoalescer::new(uint32_batch(0..0).schema(), 8, None)
+                .with_startup_rows(2);
+        coalescer.push_batch(uint32_batch(0..6))?;
+        assert_eq!(
+            coalescer.next_completed_batch().unwrap(),
+            uint32_batch(0..6)
+        );
+        assert!(coalescer.next_completed_batch().is_none());
+        coalescer.push_batch(uint32_batch(6..7))?;
+        assert!(coalescer.next_completed_batch().is_none());
+        coalescer.finish()?;
+        assert_eq!(
+            coalescer.next_completed_batch().unwrap(),
+            uint32_batch(6..7)
+        );
+        Ok(())
+    }
 
     #[test]
     fn test_coalesce() {

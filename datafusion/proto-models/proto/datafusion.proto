@@ -1262,6 +1262,8 @@ message FilterExecNode {
   repeated uint32 projection = 9;
   uint32 batch_size = 10;
   optional uint32 fetch = 11;
+  // Query-derived one-time early output threshold; zero keeps ordinary batching.
+  uint64 startup_rows = 12;
 }
 
 message FileGroup {

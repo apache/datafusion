@@ -101,3 +101,37 @@ fn roundtrip_filter_projection_states() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn roundtrip_filter_startup_output() -> Result<()> {
+    use datafusion_proto::physical_plan::{
+        PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
+    };
+    use datafusion_proto::protobuf::physical_plan_node::PhysicalPlanType;
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, true)]));
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
+        col("a", &schema)?,
+        Arc::new(EmptyExec::new(schema)),
+    )?);
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DefaultPhysicalProtoConverter {};
+    let task_ctx = ctx.task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
+    for startup_rows in [0, 1, 10, 10000] {
+        let mut proto = converter.execution_plan_to_proto(&plan, &codec)?;
+        let Some(PhysicalPlanType::Filter(filter)) = proto.physical_plan_type.as_mut()
+        else {
+            panic!("expected filter")
+        };
+        filter.startup_rows = startup_rows;
+        let decoded = converter.proto_to_execution_plan(&proto, &decode_ctx)?;
+        let result = roundtrip_test_and_return(decoded, &ctx, &codec, &converter)?;
+        let encoded = converter.execution_plan_to_proto(&result, &codec)?;
+        let Some(PhysicalPlanType::Filter(filter)) = encoded.physical_plan_type else {
+            panic!("expected filter")
+        };
+        assert_eq!(filter.startup_rows, startup_rows);
+    }
+    Ok(())
+}

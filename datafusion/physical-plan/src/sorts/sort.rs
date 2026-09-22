@@ -1640,7 +1640,7 @@ impl ExecutionPlan for SortExec {
 
     fn handle_child_pushdown_result(
         &self,
-        _phase: FilterPushdownPhase,
+        phase: FilterPushdownPhase,
         child_pushdown_result: ChildPushdownResult,
         _config: &datafusion_common::config::ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
@@ -1655,8 +1655,20 @@ impl ExecutionPlan for SortExec {
         // rows, then keep only those with a > 5").  Pushing the filter below
         // Sort changes the meaning to "filter first, then take top 10", which
         // produces a different result.
-        if self.fetch.is_some() {
-            return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
+        if let Some(fetch) = self.fetch {
+            let mut result = FilterPushdownPropagation::if_all(child_pushdown_result);
+            if phase == FilterPushdownPhase::Post
+                && let Some(filter) = &self.filter
+                && let Some(id) = filter.read().expr().expression_id()
+                && let Some(input) =
+                    crate::filter::with_startup_filter_output(&self.input, id, fetch)?
+            {
+                let mut new_sort = self.cloned();
+                new_sort.input = input;
+                result = result
+                    .with_updated_node(Arc::new(new_sort) as Arc<dyn ExecutionPlan>);
+            }
+            return Ok(result);
         }
 
         // Collect parent filters that were NOT successfully pushed to our child.

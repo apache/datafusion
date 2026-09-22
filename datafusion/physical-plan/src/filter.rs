@@ -77,6 +77,9 @@ use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
+mod startup;
+pub(crate) use startup::with_startup_filter_output;
+
 const FILTER_EXEC_DEFAULT_SELECTIVITY: u8 = 20;
 const FILTER_EXEC_DEFAULT_BATCH_SIZE: usize = 8192;
 
@@ -100,6 +103,8 @@ pub struct FilterExec {
     batch_size: usize,
     /// Number of rows to fetch
     fetch: Option<usize>,
+    /// Query-derived row count for one early output batch; zero disables it.
+    startup_rows: usize,
 }
 
 /// Builder for [`FilterExec`] to set optional parameters
@@ -110,6 +115,8 @@ pub struct FilterExecBuilder {
     default_selectivity: u8,
     batch_size: usize,
     fetch: Option<usize>,
+    /// Query-derived row count for one early output batch; zero disables it.
+    startup_rows: usize,
 }
 
 impl FilterExecBuilder {
@@ -122,6 +129,7 @@ impl FilterExecBuilder {
             default_selectivity: FILTER_EXEC_DEFAULT_SELECTIVITY,
             batch_size: FILTER_EXEC_DEFAULT_BATCH_SIZE,
             fetch: None,
+            startup_rows: 0,
         }
     }
 
@@ -223,6 +231,7 @@ impl FilterExecBuilder {
             projection: self.projection,
             batch_size: self.batch_size,
             fetch: self.fetch,
+            startup_rows: self.startup_rows,
         })
     }
 }
@@ -236,6 +245,7 @@ impl From<&FilterExec> for FilterExecBuilder {
             default_selectivity: exec.default_selectivity,
             batch_size: exec.batch_size,
             fetch: exec.fetch,
+            startup_rows: exec.startup_rows,
             // We could cache / copy over PlanProperties
             // here but that would require invalidating them in FilterExecBuilder::apply_projection, etc.
             // and currently every call to this method ends up invalidating them anyway.
@@ -299,6 +309,7 @@ impl FilterExec {
             projection: self.projection.clone(),
             batch_size,
             fetch: self.fetch,
+            startup_rows: self.startup_rows,
         })
     }
 
@@ -550,10 +561,16 @@ impl DisplayAs for FilterExec {
                 let fetch = self
                     .fetch
                     .map_or_else(|| "".to_string(), |f| format!(", fetch={f}"));
+                let startup_rows =
+                    if t == DisplayFormatType::Verbose && self.startup_rows != 0 {
+                        format!(", startup_rows={}", self.startup_rows)
+                    } else {
+                        String::new()
+                    };
                 write!(
                     f,
-                    "FilterExec: {}{}{}",
-                    self.predicate, display_projections, fetch
+                    "FilterExec: {}{}{}{}",
+                    self.predicate, display_projections, fetch, startup_rows
                 )
             }
             DisplayFormatType::TreeRender => {
@@ -656,7 +673,8 @@ impl ExecutionPlan for FilterExec {
                 self.schema(),
                 self.batch_size,
                 self.fetch,
-            ),
+            )
+            .with_startup_rows(self.startup_rows),
         }))
     }
 
@@ -855,6 +873,7 @@ impl ExecutionPlan for FilterExec {
                 projection: self.projection.clone(),
                 batch_size: self.batch_size,
                 fetch: self.fetch,
+                startup_rows: self.startup_rows,
             };
             Some(Arc::new(new) as _)
         };
@@ -879,6 +898,7 @@ impl ExecutionPlan for FilterExec {
             projection: self.projection.clone(),
             batch_size: self.batch_size,
             fetch,
+            startup_rows: self.startup_rows,
         }))
     }
 
@@ -915,6 +935,7 @@ impl ExecutionPlan for FilterExec {
             projection,
             batch_size,
             fetch,
+            startup_rows,
         } = self;
         let input_node = ctx.encode_child(input)?;
         let expr = ctx.encode_expr(predicate)?;
@@ -945,6 +966,11 @@ impl ExecutionPlan for FilterExec {
                         projection,
                         batch_size,
                         fetch,
+                        startup_rows: usize_to_wire(
+                            *startup_rows,
+                            "FilterExec",
+                            "startup_rows",
+                        )?,
                     },
                 )),
             ),
@@ -981,6 +1007,7 @@ impl FilterExec {
             projection,
             batch_size,
             fetch,
+            startup_rows,
         } = &**filter_node;
         let input = ctx.decode_required_child(input.as_deref(), "FilterExec", "input")?;
         let predicate = ctx.decode_required_expr(
@@ -1015,11 +1042,13 @@ impl FilterExec {
         let fetch = fetch
             .map(|f| usize_from_wire(f, "FilterExec", "fetch"))
             .transpose()?;
-        let filter = FilterExecBuilder::new(predicate, input)
+        let mut filter = FilterExecBuilder::new(predicate, input)
             .apply_projection(projection)?
             .with_batch_size(batch_size)
             .with_fetch(fetch)
             .build()?;
+        filter.startup_rows =
+            usize_from_wire(*startup_rows, "FilterExec", "startup_rows")?;
         match filter_selectivity {
             Ok(filter_selectivity) => Ok(Arc::new(
                 filter.with_default_selectivity(filter_selectivity)?,
@@ -1577,6 +1606,68 @@ mod tests {
     use crate::test::exec::StatisticsExec;
     use arrow::array::Int32Array;
     use arrow::datatypes::{Field, Schema, UnionFields, UnionMode};
+
+    #[tokio::test]
+    async fn startup_output_does_not_wait_for_input_completion() -> Result<()> {
+        use crate::stream::RecordBatchStreamAdapter;
+        use arrow::array::BooleanArray;
+        use futures::FutureExt;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("keep", DataType::Boolean, true),
+        ]));
+        let output_schema = Arc::new(Schema::new(vec![schema.field(0).clone()]));
+        let make_batch = |keep| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 2, 3])),
+                    Arc::new(BooleanArray::from(keep)),
+                ],
+            )
+            .unwrap()
+        };
+        for fetch in [None, Some(1), Some(2)] {
+            let batches = futures::stream::iter(vec![
+                Ok(make_batch(vec![Some(false), None, Some(false)])),
+                Ok(make_batch(vec![Some(false), Some(true), None])),
+                Ok(make_batch(vec![Some(false), Some(true), None])),
+            ])
+            .chain(futures::stream::pending());
+            let mut stream = FilterExecStream {
+                schema: Arc::clone(&output_schema),
+                predicate: col("keep", &schema)?,
+                input: Box::pin(RecordBatchStreamAdapter::new(
+                    Arc::clone(&schema),
+                    batches,
+                )),
+                metrics: FilterExecMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+                projection: Some(vec![0].into()),
+                batch_coalescer: LimitedBatchCoalescer::new(
+                    Arc::clone(&output_schema),
+                    8192,
+                    fetch,
+                )
+                .with_startup_rows(2),
+            };
+            let result = stream
+                .next()
+                .now_or_never()
+                .expect("startup demand must be satisfied without input completion")
+                .expect("expected initial output")?;
+            assert_eq!(
+                result.column(0).as_ref(),
+                &Int32Array::from(vec![2; fetch.unwrap_or(2)])
+            );
+            if fetch.is_some() {
+                assert!(stream.next().now_or_never().unwrap().is_none());
+            } else {
+                assert!(stream.next().now_or_never().is_none());
+            }
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_filter_exec_fetch_truncates_within_selected_rows() -> Result<()> {

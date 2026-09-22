@@ -2395,9 +2395,8 @@ impl ExecutionPlan for AggregateExec {
         if phase == FilterPushdownPhase::Post
             && let Some(dyn_filter) = &self.dynamic_filter
         {
-            let child_accepts_dyn_filter = dyn_filter
-                .filter
-                .expression_id()
+            let id = dyn_filter.filter.expression_id();
+            let child_accepts_dyn_filter = id
                 .map(|id| plan_contains_expression_id(&self.input, id))
                 .transpose()?
                 .unwrap_or(false);
@@ -2410,6 +2409,15 @@ impl ExecutionPlan for AggregateExec {
 
                 result = result
                     .with_updated_node(Arc::new(new_node) as Arc<dyn ExecutionPlan>);
+            } else if let Some(id) = id
+                && let Some(input) =
+                    crate::filter::with_startup_filter_output(&self.input, id, 1)?
+            {
+                // One candidate row is enough for a first MIN/MAX bound; the
+                // threshold counts rows, so a null candidate also triggers the flush.
+                let mut new_node = self.clone();
+                new_node.input = input;
+                result = result.with_updated_node(Arc::new(new_node));
             }
         }
 
