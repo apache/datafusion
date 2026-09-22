@@ -133,11 +133,40 @@ struct Scratch {
     batch_indices: Vec<u32>,
 }
 
+/// A scratch buffer keeps its capacity after a batch unless that capacity is
+/// more than this many entries and more than [`SCRATCH_RETAIN_RATIO`] times
+/// what the batch used. Then it shrinks to the smaller of the two. This stops
+/// one unusually large batch from holding memory for all the batches after it.
+const MAX_RETAINED_SCRATCH_ENTRIES: usize = 64 * 1024;
+
+/// See [`MAX_RETAINED_SCRATCH_ENTRIES`]
+const SCRATCH_RETAIN_RATIO: usize = 4;
+
 impl Scratch {
     fn allocated_size(&self) -> usize {
         self.groups_with_rows.allocated_size()
             + self.offsets.allocated_size()
             + self.batch_indices.allocated_size()
+    }
+
+    /// Shrink each buffer that is much larger than the batch that just used
+    /// it. Call this after the batch, before the buffers are cleared for the
+    /// next batch.
+    fn release_oversized(&mut self) {
+        fn release_if_oversized<T>(buffer: &mut Vec<T>) {
+            let keep = SCRATCH_RETAIN_RATIO * buffer.len();
+            if buffer.capacity() > MAX_RETAINED_SCRATCH_ENTRIES
+                && buffer.capacity() > keep
+            {
+                // The batch is done with the contents, so clear them first
+                // and the shrink has nothing to copy
+                buffer.clear();
+                buffer.shrink_to(MAX_RETAINED_SCRATCH_ENTRIES.min(keep));
+            }
+        }
+        release_if_oversized(&mut self.groups_with_rows);
+        release_if_oversized(&mut self.offsets);
+        release_if_oversized(&mut self.batch_indices);
     }
 }
 
@@ -275,6 +304,7 @@ impl GroupsAccumulatorAdapter {
             opt_filter,
             f,
         );
+        scratch.release_oversized();
         self.adjust_allocation(scratch_size_pre, scratch.allocated_size());
         self.scratch = scratch;
         result
@@ -1252,6 +1282,49 @@ mod tests {
         let values: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
         assert!(accumulator.convert_to_state(&[values], None).is_err());
         assert_eq!(metric_updates.load(Ordering::Relaxed), 1);
+        Ok(())
+    }
+
+    /// One large batch must not make the adapter keep its scratch capacity
+    /// for the smaller batches after it.
+    #[test]
+    fn adapter_releases_oversized_scratch() -> Result<()> {
+        const NUM_GROUPS: usize = 2 * MAX_RETAINED_SCRATCH_ENTRIES;
+        let mut adapter = GroupsAccumulatorAdapter::new(|| {
+            Ok(Box::new(MaxAccumulator::try_new(&DataType::Int64)?)
+                as Box<dyn Accumulator>)
+        });
+
+        // every row is a different group, so the scratch buffers need one
+        // entry for each row
+        let group_indices: Vec<usize> = (0..NUM_GROUPS).collect();
+        let values: ArrayRef =
+            Arc::new(Int64Array::from_iter_values(0..NUM_GROUPS as i64));
+        adapter.update_batch(&[values], &group_indices, None, NUM_GROUPS)?;
+        let large_scratch = adapter.scratch.allocated_size();
+        assert!(large_scratch >= NUM_GROUPS * size_of::<usize>());
+        let size_after_large_batch = adapter.size();
+
+        // a batch with one row shrinks each large buffer to
+        // SCRATCH_RETAIN_RATIO times what it used: one group, two offsets and
+        // one row index
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1]));
+        adapter.update_batch(&[values], &[0], None, NUM_GROUPS)?;
+        let small_scratch = adapter.scratch.allocated_size();
+        assert!(small_scratch < large_scratch);
+        assert_eq!(
+            adapter.scratch.groups_with_rows.capacity(),
+            SCRATCH_RETAIN_RATIO
+        );
+        assert_eq!(adapter.scratch.offsets.capacity(), 2 * SCRATCH_RETAIN_RATIO);
+        assert_eq!(
+            adapter.scratch.batch_indices.capacity(),
+            SCRATCH_RETAIN_RATIO
+        );
+        assert_eq!(
+            adapter.size(),
+            size_after_large_batch - large_scratch + small_scratch
+        );
         Ok(())
     }
 
