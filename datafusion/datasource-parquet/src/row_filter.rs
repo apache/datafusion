@@ -57,13 +57,15 @@
 //! List-aware predicates (for example, `array_has`, `array_has_all`, and
 //! `array_has_any`) can be evaluated directly during Parquet decoding.
 //! Struct field access via `get_field` is also supported when the accessed
-//! leaf is a primitive type. Filters that reference entire struct columns
-//! rather than individual fields cannot be pushed down and are instead
-//! evaluated after the full batches are materialized.
+//! leaf is a primitive type, and `IS NULL` / `IS NOT NULL` on a whole struct
+//! column, which needs only the struct's null bitmap. Filters that need a whole
+//! struct's *data* cannot be pushed down and are instead evaluated after the
+//! full batches are materialized.
 //!
 //! For example, given a struct column `s {name: Utf8, value: Int32}`:
 //! - `WHERE s['value'] > 5` — pushed down (accesses a primitive leaf)
-//! - `WHERE s IS NOT NULL`  — not pushed down (references the whole struct)
+//! - `WHERE s IS NOT NULL`  — pushed down (reads one leaf for the null bitmap)
+//! - `WHERE s = other_s`    — not pushed down (needs every leaf)
 
 use std::sync::Arc;
 
@@ -103,7 +105,7 @@ use crate::projection_read_plan::{
 ///   supported predicates (such as `array_has_all` or NULL checks).
 /// * References struct fields via `get_field` where the accessed leaf
 ///   is a primitive type (e.g. `get_field(struct_col, 'field') > 5`).
-///   Direct references to whole struct columns are still evaluated after
+///   References that need a whole struct's data are still evaluated after
 ///   decoding.
 #[derive(Debug)]
 pub(crate) struct DatafusionArrowPredicate {
@@ -264,7 +266,7 @@ fn pushdown_columns(
 ///
 /// Returns `Ok(Some((plan, required_bytes)))` when the expression can be
 /// evaluated using only pushdown-compatible columns. `Ok(None)` when it
-/// cannot (it references whole struct columns or columns missing from disk).
+/// cannot (it needs a whole struct's data, or columns missing from disk).
 ///
 /// The `required_bytes` is the total compressed size of all referenced columns
 /// across all row groups, used to estimate filter evaluation cost.
@@ -315,7 +317,7 @@ pub(crate) fn build_parquet_read_plan(
 /// - Are primitive types OR list columns with supported predicates
 ///   (e.g., `array_has`, `array_has_all`, `array_has_any`, IS NULL, IS NOT NULL)
 /// - Are struct columns accessed via `get_field` where the leaf type is primitive
-/// - Direct references to whole struct columns will prevent pushdown
+/// - References needing a whole struct's data will prevent pushdown
 ///
 /// # Arguments
 /// * `expr` - The filter expression to check
@@ -792,6 +794,22 @@ mod test {
     }
 
     #[test]
+    fn struct_null_checks_allow_pushdown() {
+        let table_schema = Arc::new(Schema::new(vec![Field::new(
+            "struct_col",
+            DataType::Struct(
+                vec![Arc::new(Field::new("a", DataType::Int32, true))].into(),
+            ),
+            true,
+        )]));
+
+        for expr in [col("struct_col").is_not_null(), col("struct_col").is_null()] {
+            let expr = logical2physical(&expr, &table_schema);
+            assert!(can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
+        }
+    }
+
+    #[test]
     fn struct_data_structures_prevent_pushdown() {
         let table_schema = Arc::new(Schema::new(vec![Field::new(
             "struct_col",
@@ -801,7 +819,7 @@ mod test {
             true,
         )]));
 
-        let expr = col("struct_col").is_not_null();
+        let expr = col("struct_col").eq(col("struct_col"));
         let expr = logical2physical(&expr, &table_schema);
 
         assert!(!can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
@@ -823,11 +841,11 @@ mod test {
             Field::new("int_col", DataType::Int32, false),
         ]));
 
-        // Expression: (struct_col IS NOT NULL) AND (int_col = 5)
+        // Expression: (struct_col = struct_col) AND (int_col = 5)
         // Even though int_col is primitive, the presence of struct_col in the
         // conjunction should prevent pushdown of the entire expression.
         let expr = col("struct_col")
-            .is_not_null()
+            .eq(col("struct_col"))
             .and(col("int_col").eq(Expr::Literal(ScalarValue::Int32(Some(5)), None)));
         let expr = logical2physical(&expr, &table_schema);
 
@@ -1245,6 +1263,71 @@ mod test {
         let expr = logical2physical(&expr, &table_schema);
 
         assert!(can_expr_be_pushed_down_with_schemas(&expr, &table_schema));
+    }
+
+    #[test]
+    fn struct_is_not_null_filter_candidate_reads_one_leaf() {
+        use arrow::array::{Int32Array, StringArray, StructArray};
+        use arrow::buffer::NullBuffer;
+
+        // Schema: id (Int32), s (Struct{value: Int32, label: Utf8, unused: Utf8})
+        // Parquet leaves: id=0, s.value=1, s.label=2, s.unused=3
+        let struct_fields: Fields = vec![
+            Arc::new(Field::new("value", DataType::Int32, true)),
+            Arc::new(Field::new("label", DataType::Utf8, true)),
+            Arc::new(Field::new("unused", DataType::Utf8, true)),
+        ]
+        .into();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("s", DataType::Struct(struct_fields.clone()), true),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StructArray::new(
+                    struct_fields,
+                    vec![
+                        Arc::new(Int32Array::from(vec![Some(10), None, Some(30)])) as _,
+                        Arc::new(StringArray::from(vec![Some("a"), None, Some("c")]))
+                            as _,
+                        Arc::new(StringArray::from(vec![Some("x"), None, Some("z")]))
+                            as _,
+                    ],
+                    Some(NullBuffer::from(vec![true, false, true])),
+                )),
+            ],
+        )
+        .unwrap();
+
+        let file = NamedTempFile::new().expect("temp file");
+        let mut writer =
+            ArrowWriter::try_new(file.reopen().unwrap(), Arc::clone(&schema), None)
+                .expect("writer");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+
+        let reader_file = file.reopen().expect("reopen file");
+        let builder = ParquetRecordBatchReaderBuilder::try_new(reader_file)
+            .expect("reader builder");
+        let metadata = builder.metadata().clone();
+        let file_schema = builder.schema().clone();
+
+        let expr = col("s").is_not_null();
+        let expr = logical2physical(&expr, &file_schema);
+
+        let candidate =
+            FilterCandidateBuilder::new(Arc::clone(&expr), Arc::clone(&file_schema))
+                .build(&metadata)
+                .expect("building candidate")
+                .expect("struct null check should be pushable");
+
+        // Only s.value (leaf 1) is read; s.label and s.unused stay on disk.
+        let expected_mask =
+            ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [1]);
+        assert_eq!(candidate.read_plan.projection_mask, expected_mask);
     }
 
     /// get_field on a struct produces correct Parquet leaf indices.
