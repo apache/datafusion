@@ -957,6 +957,7 @@ impl AggregateExec {
                 // An accumulator rewrite cannot inherit DISTINCT's early stop.
                 new.kind = AggregateKind::General {
                     group_by: Arc::clone(group_by),
+                    // The previous `DistinctLimit` type doesn't include filter
                     filter_expr: vec![None; aggr_expr.len()].into(),
                     aggr_expr,
                     limit_options: None,
