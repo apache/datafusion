@@ -184,6 +184,188 @@ SELECT a FROM c WHERE b > 20
 3
 4
 
+# IN and NOT IN subqueries that declare a materialized CTE.
+query I rowsort
+SELECT k FROM t WHERE k IN (
+  WITH r AS MATERIALIZED (SELECT k FROM t WHERE k > 2) SELECT k FROM r)
+----
+3
+4
+
+query I rowsort
+SELECT k FROM t WHERE k NOT IN (
+  WITH r AS MATERIALIZED (SELECT k FROM t WHERE k > 2) SELECT k FROM r)
+----
+1
+2
+
+# Correlated subqueries whose continuation refers to the outer query.
+query I rowsort
+SELECT k FROM t WHERE EXISTS (
+  WITH r AS MATERIALIZED (SELECT k AS rk FROM t)
+  SELECT 1 FROM r WHERE r.rk = t.k + 1)
+----
+1
+2
+3
+
+query I
+SELECT k FROM t WHERE NOT EXISTS (
+  WITH r AS MATERIALIZED (SELECT k AS rk FROM t)
+  SELECT 1 FROM r WHERE r.rk = t.k + 1)
+----
+4
+
+query I rowsort
+SELECT k FROM t WHERE v IN (
+  WITH r AS MATERIALIZED (SELECT k AS rk, v AS rv FROM t)
+  SELECT rv FROM r WHERE r.rk = t.k AND r.rk > 2)
+----
+3
+4
+
+# In a WITH RECURSIVE block, MATERIALIZED applies to a CTE that does not refer
+# to itself.
+query I
+WITH RECURSIVE r AS MATERIALIZED (SELECT random() AS x)
+SELECT count(DISTINCT x) FROM (SELECT x FROM r UNION ALL SELECT x FROM r)
+----
+1
+
+# A recursive CTE is also materialized: RecursiveQueryExec runs once, and its
+# reference to itself is still a work table.
+query TT
+EXPLAIN WITH RECURSIVE r AS MATERIALIZED (
+  SELECT 1 AS n UNION ALL SELECT n + 1 FROM r WHERE n < 3
+)
+SELECT count(*) FROM r a, r b
+----
+logical_plan
+01)MaterializedCte: name=r
+02)--SubqueryAlias: r
+03)----RecursiveQuery: is_distinct=false
+04)------Projection: Int64(1) AS n
+05)--------EmptyRelation: rows=1
+06)------Projection: r.n + Int64(1)
+07)--------Filter: r.n < Int64(3)
+08)----------TableScan: r projection=[n]
+09)--Projection: count(Int64(1)) AS count(*)
+10)----Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+11)------Cross Join:
+12)--------SubqueryAlias: a
+13)----------Projection:
+14)------------MaterializedCteScan: name=r
+15)--------SubqueryAlias: b
+16)----------Projection:
+17)------------MaterializedCteScan: name=r
+physical_plan
+01)MaterializedCteExec: name=r
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----RecursiveQueryExec: name=r, is_distinct=false
+04)------ProjectionExec: expr=[CAST(1 AS Int64) as n]
+05)--------PlaceholderRowExec
+06)------CoalescePartitionsExec
+07)--------ProjectionExec: expr=[n@0 + 1 as n]
+08)----------FilterExec: n@0 < 3
+09)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)--------------WorkTableExec: name=r
+11)--ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+12)----AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+13)------CoalescePartitionsExec
+14)--------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+15)----------CrossJoinExec
+16)------------CoalescePartitionsExec
+17)--------------ProjectionExec: expr=[]
+18)----------------MaterializedCteScanExec: name=r
+19)------------ProjectionExec: expr=[]
+20)--------------MaterializedCteScanExec: name=r
+
+query I
+WITH RECURSIVE r AS MATERIALIZED (
+  SELECT 1 AS n UNION ALL SELECT n + 1 FROM r WHERE n < 3
+)
+SELECT count(*) FROM r a, r b
+----
+9
+
+# A recursive CTE reads a materialized CTE of the same block.
+query I rowsort
+WITH RECURSIVE m AS MATERIALIZED (SELECT 3 AS lim),
+  r AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM r, m WHERE n < m.lim)
+SELECT n FROM r
+----
+1
+2
+3
+
+# Each reference to a view is a separate query, so each has its own
+# materialized CTE, as in PostgreSQL.
+statement ok
+CREATE VIEW vv AS WITH r AS MATERIALIZED (SELECT random() AS x) SELECT x FROM r;
+
+query B
+SELECT a.x = b.x FROM vv a, vv b
+----
+false
+
+query I
+SELECT count(DISTINCT x) FROM (
+  SELECT x FROM vv UNION ALL SELECT x FROM vv UNION ALL SELECT (SELECT max(x) FROM vv)
+)
+----
+3
+
+# Inside one reference to a view, the CTE is still shared.
+statement ok
+CREATE VIEW vv2 AS WITH r AS MATERIALIZED (SELECT random() AS x)
+SELECT a.x = b.x AS same FROM r a, r b;
+
+query B
+SELECT * FROM vv2 UNION ALL SELECT * FROM vv2
+----
+true
+true
+
+statement ok
+DROP VIEW vv;
+
+statement ok
+DROP VIEW vv2;
+
+# A filter above the query that declares the CTE goes into the continuation,
+# not into the shared body.
+query TT
+EXPLAIN SELECT * FROM (
+  WITH r AS MATERIALIZED (SELECT k FROM t)
+  SELECT t.k, t.v FROM t JOIN r ON t.k = r.k
+) s WHERE s.v = 10
+----
+logical_plan
+01)SubqueryAlias: s
+02)--MaterializedCte: name=r
+03)----SubqueryAlias: r
+04)------TableScan: t projection=[k]
+05)----Projection: t.k, t.v
+06)------Inner Join: t.k = r.k
+07)--------Filter: t.v = Int32(10)
+08)----------TableScan: t projection=[k, v]
+09)--------MaterializedCteScan: name=r
+physical_plan
+01)MaterializedCteExec: name=r
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(k@0, k@0)], projection=[k@0, v@1]
+04)----FilterExec: v@1 = 10
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+06)----MaterializedCteScanExec: name=r
+
+query II
+SELECT * FROM (
+  WITH r AS MATERIALIZED (SELECT k FROM t)
+  SELECT t.k, t.v FROM t JOIN r ON t.k = r.k
+) s WHERE s.v = 10
+----
+1 10
+
 # Spill: the body does not fit in the memory limit, so it is written to disk
 # and replayed from there by every reference.
 statement ok
@@ -219,6 +401,7 @@ Plan with Metrics
 statement ok
 RESET datafusion.runtime.memory_limit
 
+# Setting a runtime option also sets this option to false.
 statement ok
 RESET datafusion.catalog.create_default_catalog_and_schema
 
