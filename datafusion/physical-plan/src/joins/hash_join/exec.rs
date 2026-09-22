@@ -17,7 +17,6 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::mem::size_of;
 use std::sync::{Arc, OnceLock};
 use std::vec;
 
@@ -78,7 +77,7 @@ use arrow_schema::{DataType, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::utils::memory::{
-    RecordBatchMemoryCounter, estimate_memory_size, get_record_batch_memory_size,
+    RecordBatchMemoryCounter, get_record_batch_memory_size,
 };
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
@@ -2808,40 +2807,28 @@ fn is_perfect_hash_join_candidate(
     Ok(ArrayMap::is_supported_type(&data_type))
 }
 
+/// Creates the generic build-side lookup map.
+///
+/// The row-index chain keeps one slot per build row (needed to preserve join
+/// multiplicity), while the lookup index starts small and grows only as
+/// distinct hashes are inserted. This avoids reserving a hash bucket for every
+/// build row when the join keys have low cardinality, so a join whose payload
+/// and duplicate chain fit in the memory pool is no longer rejected, and the
+/// map is charged to the pool in step with its actual growth.
 fn new_join_hashmap(
     num_rows: usize,
     reservation: &mut MemoryReservation,
-    metrics: &BuildProbeJoinMetrics,
 ) -> Result<Box<dyn JoinHashMapType>> {
-    let fixed_size_u32 = size_of::<JoinHashMapU32>();
-    let fixed_size_u64 = size_of::<JoinHashMapU64>();
-
     if num_rows > u32::MAX as usize {
-        let estimated_hashtable_size =
-            estimate_memory_size::<(u64, u64)>(num_rows, fixed_size_u64)?
-                // Each build row also owns an index in the duplicate-key chain.
-                .checked_add(num_rows * size_of::<u64>())
-                .ok_or_else(|| {
-                    datafusion_common::exec_datafusion_err!(
-                        "Hash join table size overflow"
-                    )
-                })?;
-        reservation.try_grow(estimated_hashtable_size)?;
-        metrics.build_mem_used.add(estimated_hashtable_size);
-        Ok(Box::new(JoinHashMapU64::with_capacity(num_rows)))
+        Ok(Box::new(JoinHashMapU64::with_capacity_and_reservation(
+            num_rows,
+            reservation,
+        )?))
     } else {
-        let estimated_hashtable_size =
-            estimate_memory_size::<(u32, u64)>(num_rows, fixed_size_u32)?
-                // Each build row also owns an index in the duplicate-key chain.
-                .checked_add(num_rows * size_of::<u32>())
-                .ok_or_else(|| {
-                    datafusion_common::exec_datafusion_err!(
-                        "Hash join table size overflow"
-                    )
-                })?;
-        reservation.try_grow(estimated_hashtable_size)?;
-        metrics.build_mem_used.add(estimated_hashtable_size);
-        Ok(Box::new(JoinHashMapU32::with_capacity(num_rows)))
+        Ok(Box::new(JoinHashMapU32::with_capacity_and_reservation(
+            num_rows,
+            reservation,
+        )?))
     }
 }
 
@@ -3062,7 +3049,7 @@ async fn collect_left_input(
         // Use `u32` indices for the JoinHashMap when num_rows ≤ u32::MAX, otherwise use the
         // `u64` indice variant
         // Arc is used instead of Box to allow sharing with SharedBuildAccumulator for hash map pushdown
-        let mut hashmap = new_join_hashmap(num_rows, &mut reservation, &metrics)?;
+        let mut hashmap = new_join_hashmap(num_rows, &mut reservation)?;
 
         let mut hashes_buffer = Vec::new();
         let mut offset = 0;
@@ -3084,6 +3071,9 @@ async fn collect_left_input(
             )?;
             offset += batch.num_rows();
         }
+
+        // Charge the final row-index chain and lookup index after building it.
+        metrics.build_mem_used.add(hashmap.size());
 
         // Merge all batches into a single batch, so we can directly index into the arrays
         let batch = concat_build_batches(
@@ -3144,7 +3134,7 @@ async fn collect_left_input(
             // Scope-only NULL marking uses a HashMap (the primary join map may
             // use ArrayMap for full-key matches, but scope keys have arbitrary
             // shape).
-            let mut scope_map = new_join_hashmap(num_rows, &mut reservation, &metrics)?;
+            let mut scope_map = new_join_hashmap(num_rows, &mut reservation)?;
 
             let mut hashes_buffer = vec![0; batch.num_rows()];
             update_hash(
@@ -3158,6 +3148,7 @@ async fn collect_left_input(
                 true,
                 NullEquality::NullEqualsNothing,
             )?;
+            metrics.build_mem_used.add(scope_map.size());
             Some(scope_map)
         };
 
@@ -3188,10 +3179,14 @@ async fn collect_left_input(
                 None
             } else {
                 let null_rows = build_indices.len();
-                let mut map = new_join_hashmap(null_rows, &mut reservation, &metrics)?;
+                let mut map = new_join_hashmap(null_rows, &mut reservation)?;
                 let mut hashes_buffer = vec![0; null_rows];
                 create_hashes(&scope_values, &random_state, &mut hashes_buffer)?;
-                map.update_from_iter(Box::new(hashes_buffer.iter().enumerate().rev()), 0);
+                map.update_from_iter(
+                    Box::new(hashes_buffer.iter().enumerate().rev()),
+                    0,
+                )?;
+                metrics.build_mem_used.add(map.size());
                 Some(map)
             };
 
@@ -3266,6 +3261,7 @@ async fn collect_left_input(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion_common::utils::memory::estimate_memory_size;
 
     fn assert_phj_used(metrics: &MetricsSet, use_phj: bool) {
         if use_phj {
@@ -3368,18 +3364,18 @@ mod tests {
         use datafusion_execution::memory_pool::{GreedyMemoryPool, MemoryPool};
 
         let rows = 1024;
-        let buckets =
-            estimate_memory_size::<(u32, u64)>(rows, size_of::<JoinHashMapU32>())?;
-        let bytes = buckets + rows * size_of::<u32>();
-        for (limit, succeeds) in [(bytes - 1, false), (bytes, true)] {
+        let chain_bytes = rows * size_of::<u32>();
+        // The chain alone must be admitted. With room for a small table the
+        // constructor can succeed without reserving a bucket for every row.
+        for (limit, succeeds) in [(chain_bytes - 1, false), (chain_bytes + 4096, true)] {
             let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(limit));
             let mut reservation = MemoryConsumer::new("row indices").register(&pool);
-            let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
-            let result = new_join_hashmap(rows, &mut reservation, &metrics);
+            let result = new_join_hashmap(rows, &mut reservation);
             if succeeds {
                 let map = result?;
-                assert_eq!(reservation.size(), bytes);
-                assert_eq!(metrics.build_mem_used.value(), bytes);
+                assert_eq!(pool.reserved(), map.size());
+                assert!(pool.reserved() >= chain_bytes);
+                assert_eq!(reservation.size(), 0);
                 drop(map);
             } else {
                 assert!(matches!(
@@ -3387,7 +3383,6 @@ mod tests {
                     Err(datafusion_common::DataFusionError::ResourcesExhausted(_))
                 ));
                 assert_eq!(reservation.size(), 0);
-                assert_eq!(metrics.build_mem_used.value(), 0);
             }
             drop(reservation);
             assert_eq!(pool.reserved(), 0);
@@ -7180,6 +7175,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn low_cardinality_generic_join_fits_bounded_pool() -> Result<()> {
+        use arrow::array::StringArray;
+        // String keys force the generic lookup path, independently of the
+        // perfect-hash thresholds. Every build row must survive, including
+        // both matches for the duplicated probe key.
+        let rows = 10_000;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("row", DataType::Int32, false),
+        ]));
+        let build = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from_iter_values(
+                    (0..rows).map(|i| format!("k{}", i % 8)),
+                )),
+                Arc::new(Int32Array::from_iter_values(0..rows as i32)),
+            ],
+        )?;
+        let probe = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![
+                    "k0", "k0", "k1", "k2", "k3", "k4", "k5", "k6", "k7",
+                ])),
+                Arc::new(Int32Array::from(vec![0; 9])),
+            ],
+        )?;
+        // Enough for payload, duplicate chains and a small lookup index, but
+        // not for the old index with a bucket for every input row.
+        let limit = build.get_array_memory_size() + rows * 4 + 64 * 1024;
+        for mode in [PartitionMode::CollectLeft, PartitionMode::Partitioned] {
+            let left = TestMemoryExec::try_new_exec(
+                &[vec![build.clone()]],
+                Arc::clone(&schema),
+                None,
+            )?;
+            let right = TestMemoryExec::try_new_exec(
+                &[vec![probe.clone()]],
+                Arc::clone(&schema),
+                None,
+            )?;
+            let on = vec![(
+                Arc::new(Column::new("key", 0)) as _,
+                Arc::new(Column::new("key", 0)) as _,
+            )];
+            let join = HashJoinExec::try_new(
+                left,
+                right,
+                on,
+                None,
+                &JoinType::Inner,
+                None,
+                mode,
+                NullEquality::NullEqualsNothing,
+                false,
+            )?;
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(limit, 1.0)
+                .build_arc()?;
+            let ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+            let batches = common::collect(join.execute(0, ctx)?).await?;
+            let mut actual: Vec<i32> = batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(1)
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .unwrap()
+                        .values()
+                        .iter()
+                        .copied()
+                })
+                .collect();
+            actual.sort_unstable();
+            let expected: Vec<i32> = (0..rows as i32)
+                .flat_map(|i| std::iter::repeat_n(i, if i % 8 == 0 { 2 } else { 1 }))
+                .collect();
+            assert_eq!(actual, expected, "{mode:?}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn build_side_sliced_batches_memory_accounting() -> Result<()> {
         // The build side emits zero-copy slices of one large batch, as e.g. an
         // aggregate emitting its output in batch_size chunks does. The buffers
@@ -7521,8 +7601,12 @@ mod tests {
         let map = if use_perfect_hash_join_as_possible {
             ArrayMap::estimate_memory_size(0, num_rows as u64 - 1, build_rows)
         } else {
-            estimate_memory_size::<(u32, u64)>(build_rows, size_of::<JoinHashMapU32>())?
-                + build_rows * size_of::<u32>()
+            // The generic lookup index stores one entry for each of the
+            // `num_rows` distinct keys, while the chain retains all build rows.
+            estimate_memory_size::<(u32, u64)>(
+                num_rows as usize,
+                size_of::<JoinHashMapU32>(),
+            )? + build_rows * size_of::<u32>()
         };
 
         for (limit, fits) in [(map + inputs * 3 / 2, false), (map + inputs * 3, true)] {

@@ -63,9 +63,15 @@ impl JoinHashMapType for PruningJoinHashMap {
         &mut self,
         iter: Box<dyn Iterator<Item = (usize, &'a u64)> + Send + 'a>,
         deleted_offset: usize,
-    ) {
+    ) -> Result<()> {
         let slice: &mut [u64] = self.next.make_contiguous();
-        update_from_iter::<u64>(&mut self.map, slice, iter, deleted_offset);
+        // `PruningJoinHashMap` manages its own reservation, so it does not use
+        // the generic lookup-index accounting.
+        update_from_iter::<u64>(&mut self.map, slice, iter, deleted_offset, None)
+    }
+
+    fn size(&self) -> usize {
+        PruningJoinHashMap::size(self)
     }
 
     fn get_matched_indices<'a>(
