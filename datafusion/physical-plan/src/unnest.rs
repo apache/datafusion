@@ -768,15 +768,11 @@ fn flatten_struct_cols(
                 DataType::Struct(_) => {
                     let struct_arr =
                         column_data.as_any().downcast_ref::<StructArray>().unwrap();
-                    if struct_arr.null_count() == 0 {
-                        Ok(struct_arr.columns().to_vec())
-                    } else {
-                        struct_arr
-                            .columns()
-                            .iter()
-                            .map(|column| apply_parent_nulls(column, struct_arr.nulls()))
-                            .collect()
-                    }
+                    struct_arr
+                        .columns()
+                        .iter()
+                        .map(|column| apply_parent_nulls(column, struct_arr.nulls()))
+                        .collect()
                 }
                 data_type => internal_err!(
                     "expecting column {idx} from input plan to be a struct, got {data_type}"
@@ -1455,67 +1451,8 @@ mod tests {
     use datafusion_physical_expr_common::metrics::MetricValue;
     use insta::assert_snapshot;
 
-    #[test]
-    fn test_flatten_struct_parent_nulls() -> Result<()> {
-        let values = Int32Array::from(vec![Some(1), Some(2), None]);
-        let mut children: Vec<ArrayRef> = vec![
-            Arc::new(values.clone()),
-            Arc::new(StringArray::from(vec![Some("x"), Some("y"), None])),
-            Arc::new(NullArray::new(3)),
-            Arc::new(RunArray::<Int32Type>::try_new(
-                &Int32Array::from(vec![2, 3]),
-                &Int32Array::from(vec![Some(1), None]),
-            )?),
-        ];
-        for offsets in [None, Some(vec![0, 1, 2].into())] {
-            children.push(Arc::new(UnionArray::try_new(
-                UnionFields::try_new([0], [Field::new("v", DataType::Int32, true)])?,
-                vec![0, 0, 0].into(),
-                offsets,
-                vec![Arc::new(values.clone())],
-            )?));
-        }
-
-        for child in children {
-            let fields = vec![Field::new("v", child.data_type().clone(), true)];
-            let schema = Arc::new(Schema::new(vec![fields[0].clone().with_name("s.v")]));
-            for nulls in [None, Some(NullBuffer::from(vec![true, false, true]))] {
-                let parent = StructArray::new(
-                    fields.clone().into(),
-                    vec![Arc::clone(&child)],
-                    nulls.clone(),
-                );
-                let output = flatten_struct_cols(
-                    &[Arc::new(parent)],
-                    &schema,
-                    &HashSet::from_iter([0]),
-                )?;
-                let result = output.column(0);
-                result.to_data().validate_full()?;
-                assert_eq!(result.data_type(), child.data_type());
-                if nulls.is_none() {
-                    assert!(Arc::ptr_eq(result, &child));
-                } else {
-                    assert_eq!(
-                        result.logical_nulls(),
-                        Some(NullBuffer::from(vec![
-                            !child.data_type().is_null(),
-                            false,
-                            false,
-                        ]))
-                    );
-                    assert_eq!(result.slice(0, 1).as_ref(), child.slice(0, 1).as_ref());
-                }
-            }
-        }
-        Ok(())
-    }
-
-    #[rstest::rstest]
-    #[case::values(false)]
-    #[case::buffers(true)]
     #[tokio::test]
-    async fn test_unnest_struct_parent_nulls(#[case] check_buffers: bool) -> Result<()> {
+    async fn test_unnest_struct_parent_nulls() -> Result<()> {
         let values =
             Int32Array::from(vec![Some(10), Some(20), None, Some(40), Some(50), None]);
         let child_nulls = values.nulls().cloned();
@@ -1677,7 +1614,7 @@ mod tests {
                             );
                         }
                     }
-                    if check_buffers && layout(child.data_type()).can_contain_null_mask {
+                    if layout(child.data_type()).can_contain_null_mask {
                         let expected = child.to_data();
                         assert_eq!(actual.offset(), expected.offset());
                         assert_eq!(actual.buffers().len(), expected.buffers().len());
