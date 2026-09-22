@@ -2011,33 +2011,8 @@ impl DefaultPhysicalPlanner {
 /// For example, if we have something like `GROUPING SETS ((a,b,c),(a),(b),(b,c))`
 /// we would expand this to `GROUPING SETS ((a,b,c),(a,NULL,NULL),(NULL,b,NULL),(NULL,b,c))
 /// (see <https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS>)
-/// Rule names that mark a phase boundary under
-/// `experimental_physical_phases`: passes that uphold invariants or bracket
-/// the chain, rather than improve the plan. They run exactly once, in their
-/// list order; the optimizer segments between them run to convergence.
-const PHYSICAL_BARRIER_RULES: &[&str] = &[
-    "OutputRequirements",
-    "EnsureRequirements",
-    "EnforceDistribution",
-    "EnforceSorting",
-    "EnsureCooperative",
-    // Both FilterPushdown phases are single-shot recursive pushdowns, and the
-    // rule is not idempotent: each run conjuncts the same predicate onto the
-    // data source again (`predicate = x AND x AND x` after three passes), so
-    // it cannot live inside a convergence loop as written. POC finding #1.
-    "FilterPushdown",
-    // POC finding #2: a second application of PushdownSort on its own output
-    // returns wrong rows (sort_pushdown.slt:2487 yields 4,5,6 instead of
-    // 1,2,3 on a two-group ordered source): the re-push loses the merge that
-    // made the first application correct. Kept out of loops until fixed; the
-    // bug is likely reachable today by any chain listing the rule twice.
-    "PushdownSort",
-    "FilterPushdown(Post)",
-    "SanityCheckPlan",
-];
-
-/// Applies one physical optimizer rule with the same bookkeeping the flat
-/// pass performs: error context, the optimization invariant check, debug
+/// Applies one physical optimizer rule with the same bookkeeping the plain
+/// path performs: error context, the optimization invariant check, debug
 /// logging, and the observer callback.
 fn apply_physical_rule<F>(
     optimizer: &Arc<dyn PhysicalOptimizerRule + Send + Sync>,
@@ -2067,49 +2042,18 @@ where
     Ok(new_plan)
 }
 
-/// Runs the rule list in phases: the list is partitioned at the barrier
-/// rules ([`PHYSICAL_BARRIER_RULES`]), each barrier runs once, and each
-/// segment of optimizer rules between two barriers runs to convergence via
-/// [`converge_physical_segment`]. The partition is derived from the list, so
-/// a downstream chain that splices its own rules around the barriers gets
-/// phased the same way the default chain does.
-fn optimize_physical_plan_phased<F>(
-    plan: Arc<dyn ExecutionPlan>,
-    optimizers: &[Arc<dyn PhysicalOptimizerRule + Send + Sync>],
-    context: &dyn PhysicalOptimizerContext,
-    max_passes: usize,
-    observer: &mut F,
-) -> Result<Arc<dyn ExecutionPlan>>
-where
-    F: FnMut(&dyn ExecutionPlan, &dyn PhysicalOptimizerRule),
-{
-    let mut new_plan = plan;
-    let mut segment: Vec<&Arc<dyn PhysicalOptimizerRule + Send + Sync>> = Vec::new();
-    for optimizer in optimizers {
-        if PHYSICAL_BARRIER_RULES.contains(&optimizer.name()) {
-            new_plan = converge_physical_segment(
-                new_plan, &segment, context, max_passes, observer,
-            )?;
-            segment.clear();
-            new_plan = apply_physical_rule(optimizer, new_plan, context, observer)?;
-        } else {
-            segment.push(optimizer);
-        }
-    }
-    converge_physical_segment(new_plan, &segment, context, max_passes, observer)
-}
-
-/// Runs a segment of optimizer rules repeatedly, as a unit, until the plan's
-/// signature repeats or `max_passes` is reached.
+/// Runs one rule repeatedly at this call site until the plan's signature
+/// repeats or `max_passes` is reached.
 ///
-/// The starting signature seeds the set, so a segment whose first pass
-/// changes nothing stops after that one pass. Keeping every prior signature
-/// rather than only the last one also terminates cycles: a plan oscillating
-/// between two forms revisits one of them and stops, where a comparison
-/// against only the previous pass would spin to `max_passes`.
-fn converge_physical_segment<F>(
+/// The starting signature seeds the set, so a call whose first application
+/// changes nothing stops after that one application, costing what a plain
+/// call costs plus two signatures. Keeping every prior signature rather than
+/// only the last one also terminates cycles: a plan oscillating A to B to A
+/// revisits a seen form on the second application, where a last-pass-only
+/// comparison would spin to `max_passes`.
+fn converge_physical_rule<F>(
+    optimizer: &Arc<dyn PhysicalOptimizerRule + Send + Sync>,
     plan: Arc<dyn ExecutionPlan>,
-    segment: &[&Arc<dyn PhysicalOptimizerRule + Send + Sync>],
     context: &dyn PhysicalOptimizerContext,
     max_passes: usize,
     observer: &mut F,
@@ -2117,16 +2061,11 @@ fn converge_physical_segment<F>(
 where
     F: FnMut(&dyn ExecutionPlan, &dyn PhysicalOptimizerRule),
 {
-    if segment.is_empty() {
-        return Ok(plan);
-    }
     let mut seen = HashSet::with_capacity(4);
     seen.insert(PhysicalPlanSignature::new(plan.as_ref()));
     let mut new_plan = plan;
     for _pass in 0..max_passes.max(1) {
-        for optimizer in segment {
-            new_plan = apply_physical_rule(optimizer, new_plan, context, observer)?;
-        }
+        new_plan = apply_physical_rule(optimizer, new_plan, context, observer)?;
         if !seen.insert(PhysicalPlanSignature::new(new_plan.as_ref())) {
             break;
         }
@@ -3091,23 +3030,26 @@ impl DefaultPhysicalPlanner {
             session: session_state,
         };
         let options = session_state.config_options();
-        if options.optimizer.experimental_physical_phases {
-            new_plan = optimize_physical_plan_phased(
-                new_plan,
-                optimizers,
-                &optimizer_context,
-                options.optimizer.max_passes,
-                &mut observer,
-            )?;
-        } else {
-            for optimizer in optimizers {
-                new_plan = apply_physical_rule(
+        // A rule that declares itself idempotent runs to convergence at each
+        // of its call sites; every other rule runs exactly once, in list
+        // order, as before.
+        for optimizer in optimizers {
+            new_plan = if optimizer.idempotent() {
+                converge_physical_rule(
+                    optimizer,
+                    new_plan,
+                    &optimizer_context,
+                    options.optimizer.max_passes,
+                    &mut observer,
+                )?
+            } else {
+                apply_physical_rule(
                     optimizer,
                     new_plan,
                     &optimizer_context,
                     &mut observer,
-                )?;
-            }
+                )?
+            };
         }
 
         // This runs once after all optimizer runs are complete,
@@ -3488,11 +3430,11 @@ impl<'n> TreeNodeVisitor<'n> for InvariantChecker {
 }
 
 #[cfg(test)]
-mod phased_tests {
+mod iterative_tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
-    use super::{converge_physical_segment, optimize_physical_plan_phased};
+    use super::converge_physical_rule;
     use arrow::datatypes::Schema;
     use datafusion_common::Result;
     use datafusion_common::config::ConfigOptions;
@@ -3511,8 +3453,9 @@ mod phased_tests {
     }
 
     /// Wraps the plan in one more limit per call until `depth` is reached,
-    /// then returns its input unchanged: a rule that needs several passes to
-    /// converge.
+    /// then returns its input unchanged: a rule that needs several
+    /// applications to converge, the way an enforcement pass that does not
+    /// settle in one sweep does.
     #[derive(Debug)]
     struct WrapUntil {
         depth: usize,
@@ -3542,8 +3485,9 @@ mod phased_tests {
         }
     }
 
-    /// Wraps an unwrapped plan and unwraps a wrapped one: a rule pair
-    /// collapsed into one rule that never converges, only oscillates.
+    /// Wraps an unwrapped plan and unwraps a wrapped one: a rule that never
+    /// converges, only oscillates, standing in for the measured case of an
+    /// enforcement pass whose adjacent applications undo each other.
     #[derive(Debug)]
     struct Oscillator {
         calls: Arc<AtomicUsize>,
@@ -3572,53 +3516,25 @@ mod phased_tests {
         }
     }
 
-    /// Counts calls and hands the plan back: stands in for a rule that has
-    /// nothing to do, and for a barrier when given a barrier name.
-    #[derive(Debug)]
-    struct CountingNoop {
-        name: &'static str,
-        calls: Arc<AtomicUsize>,
-    }
-
-    impl PhysicalOptimizerRule for CountingNoop {
-        fn optimize(
-            &self,
-            plan: Arc<dyn ExecutionPlan>,
-            _config: &ConfigOptions,
-        ) -> Result<Arc<dyn ExecutionPlan>> {
-            self.calls.fetch_add(1, AtomicOrdering::Relaxed);
-            Ok(plan)
-        }
-
-        fn name(&self) -> &str {
-            self.name
-        }
-
-        fn schema_check(&self) -> bool {
-            true
-        }
-    }
-
     fn empty_plan() -> Arc<dyn ExecutionPlan> {
         Arc::new(EmptyExec::new(Arc::new(Schema::empty())))
     }
 
     type Rule = Arc<dyn PhysicalOptimizerRule + Send + Sync>;
 
-    /// A segment iterates exactly until its fixpoint: three passes that each
-    /// wrap once, then the one proving pass, and the plan holds the depth the
-    /// rule was converging towards.
+    /// A declared rule iterates exactly until its fixpoint: three
+    /// applications that each wrap once, then the one proving application.
     #[test]
-    fn segment_runs_to_its_fixpoint() -> Result<()> {
+    fn converges_to_the_fixpoint() -> Result<()> {
         let calls = Arc::new(AtomicUsize::new(0));
         let rule: Rule = Arc::new(WrapUntil {
             depth: 3,
             calls: Arc::clone(&calls),
         });
         let config = ConfigOptions::new();
-        let plan = converge_physical_segment(
+        let plan = converge_physical_rule(
+            &rule,
             empty_plan(),
-            &[&rule],
             &ConfigOnlyContext::new(&config),
             10,
             &mut |_, _| {},
@@ -3627,24 +3543,23 @@ mod phased_tests {
         assert_eq!(
             calls.load(AtomicOrdering::Relaxed),
             4,
-            "three passes that wrap, one that proves the fixpoint"
+            "three applications that wrap, one that proves the fixpoint"
         );
         Ok(())
     }
 
-    /// A plan oscillating between two forms terminates on the first revisit,
-    /// because every prior signature is kept, not only the last one. A
-    /// last-pass-only comparison would run all ten passes here.
+    /// A rule oscillating between two forms terminates on the first revisit,
+    /// because every prior signature is kept, not only the last one.
     #[test]
-    fn segment_terminates_on_a_cycle() -> Result<()> {
+    fn terminates_on_a_cycle() -> Result<()> {
         let calls = Arc::new(AtomicUsize::new(0));
         let rule: Rule = Arc::new(Oscillator {
             calls: Arc::clone(&calls),
         });
         let config = ConfigOptions::new();
-        let plan = converge_physical_segment(
+        let plan = converge_physical_rule(
+            &rule,
             empty_plan(),
-            &[&rule],
             &ConfigOnlyContext::new(&config),
             10,
             &mut |_, _| {},
@@ -3652,58 +3567,99 @@ mod phased_tests {
         assert_eq!(
             calls.load(AtomicOrdering::Relaxed),
             2,
-            "pass one wraps (new form), pass two unwraps back to the seeded \
-             form and the revisit stops the loop"
+            "application one wraps (new form), application two unwraps back \
+             to the seeded form and the revisit stops the loop"
         );
-        assert_eq!(limit_depth(&plan), 0, "the cycle stopped on the revisit");
+        assert_eq!(limit_depth(&plan), 0);
         Ok(())
     }
 
-    /// The list is partitioned at barrier names: barriers run exactly once
-    /// while the segments around them converge independently.
-    #[test]
-    fn barriers_run_once_between_converged_segments() -> Result<()> {
-        let segment_calls = Arc::new(AtomicUsize::new(0));
-        let barrier_calls = Arc::new(AtomicUsize::new(0));
-        let wrap_calls = Arc::new(AtomicUsize::new(0));
-        let rules: Vec<Rule> = vec![
+    /// The dispatch consults the rule, not a name list: an undeclared rule
+    /// scheduled twice runs exactly twice (the authored count is preserved),
+    /// while a declared rule converges at its single call site.
+    #[tokio::test]
+    async fn dispatch_preserves_authored_counts_for_undeclared_rules() -> Result<()> {
+        use crate::execution::session_state::SessionStateBuilder;
+        use crate::prelude::{SessionConfig, SessionContext};
+        use datafusion_expr::LogicalPlanBuilder;
+
+        /// Same wrapping behaviour as [`WrapUntil`], but declared idempotent.
+        #[derive(Debug)]
+        struct DeclaredWrapUntil(WrapUntil);
+        impl PhysicalOptimizerRule for DeclaredWrapUntil {
+            fn optimize(
+                &self,
+                plan: Arc<dyn ExecutionPlan>,
+                config: &ConfigOptions,
+            ) -> Result<Arc<dyn ExecutionPlan>> {
+                self.0.optimize(plan, config)
+            }
+            fn name(&self) -> &str {
+                "declared_wrap_until"
+            }
+            fn schema_check(&self) -> bool {
+                true
+            }
+            fn idempotent(&self) -> bool {
+                true
+            }
+        }
+
+        let undeclared_calls = Arc::new(AtomicUsize::new(0));
+        let declared_calls = Arc::new(AtomicUsize::new(0));
+        let undeclared = || {
             Arc::new(WrapUntil {
+                depth: 0,
+                calls: Arc::clone(&undeclared_calls),
+            }) as Arc<dyn PhysicalOptimizerRule + Send + Sync>
+        };
+        let declared: Arc<dyn PhysicalOptimizerRule + Send + Sync> =
+            Arc::new(DeclaredWrapUntil(WrapUntil {
                 depth: 2,
-                calls: Arc::clone(&wrap_calls),
-            }),
-            Arc::new(CountingNoop {
-                name: "EnsureRequirements",
-                calls: Arc::clone(&barrier_calls),
-            }),
-            Arc::new(CountingNoop {
-                name: "after_barrier_noop",
-                calls: Arc::clone(&segment_calls),
-            }),
-        ];
+                calls: Arc::clone(&declared_calls),
+            }));
+
+        let state = SessionStateBuilder::new()
+            .with_config(SessionConfig::new())
+            .with_default_features()
+            .with_physical_optimizer_rules(vec![undeclared(), undeclared(), declared])
+            .build();
+        let ctx = SessionContext::new_with_state(state);
+        let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+        ctx.state().create_physical_plan(&logical_plan).await?;
+
+        assert_eq!(
+            undeclared_calls.load(AtomicOrdering::Relaxed),
+            2,
+            "an undeclared rule runs exactly as often as the chain scheduled it"
+        );
+        assert_eq!(
+            declared_calls.load(AtomicOrdering::Relaxed),
+            3,
+            "a declared rule converges at its call site: two wrapping \
+             applications and one proving application"
+        );
+        Ok(())
+    }
+
+    /// An already-converged call site costs one application: the seeded
+    /// signature answers the proving question immediately.
+    #[test]
+    fn a_no_op_call_site_costs_one_application() -> Result<()> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let rule: Rule = Arc::new(WrapUntil {
+            depth: 0,
+            calls: Arc::clone(&calls),
+        });
         let config = ConfigOptions::new();
-        let plan = optimize_physical_plan_phased(
+        converge_physical_rule(
+            &rule,
             empty_plan(),
-            &rules,
             &ConfigOnlyContext::new(&config),
             10,
             &mut |_, _| {},
         )?;
-        assert_eq!(limit_depth(&plan), 2);
-        assert_eq!(
-            wrap_calls.load(AtomicOrdering::Relaxed),
-            3,
-            "first segment: two wrapping passes and one proving pass"
-        );
-        assert_eq!(
-            barrier_calls.load(AtomicOrdering::Relaxed),
-            1,
-            "a barrier is outside every loop and runs exactly once"
-        );
-        assert_eq!(
-            segment_calls.load(AtomicOrdering::Relaxed),
-            1,
-            "a no-op segment costs one proving pass, not max_passes"
-        );
+        assert_eq!(calls.load(AtomicOrdering::Relaxed), 1);
         Ok(())
     }
 }

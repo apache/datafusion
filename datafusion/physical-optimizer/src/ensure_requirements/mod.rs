@@ -293,6 +293,15 @@ impl PhysicalOptimizerRule for EnsureRequirements {
         "EnsureRequirements"
     }
 
+    // Enforcement is idempotent by specification: applying it to a plan
+    // whose requirements already hold must change nothing. Empirically it is
+    // not yet: declaring `idempotent() -> true` here changes 35 plans across
+    // eight sqllogictest files, because a second application rewrites
+    // sort-preserving merges to other members of the ordering equivalence
+    // class (and in at least one case replaces a CoalescePartitionsExec with
+    // a costlier merge). Until re-application is a proven no-op, this stays
+    // on the default, and fixing that is the gate for declaring it.
+
     fn schema_check(&self) -> bool {
         true
     }

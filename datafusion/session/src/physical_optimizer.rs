@@ -110,4 +110,24 @@ pub trait PhysicalOptimizerRule: Debug + std::any::Any {
     ///
     /// [`optimize`]: PhysicalOptimizerRule::optimize
     fn schema_check(&self) -> bool;
+
+    /// Whether this rule may be applied to its own output, i.e. whether it is
+    /// idempotent: an application to a plan it has already settled must
+    /// change nothing.
+    ///
+    /// The optimizer runs a rule that returns `true` to convergence at each
+    /// of its call sites, re-applying it until the plan's signature repeats
+    /// (fixpoint or cycle) or `max_passes` is reached. A rule that returns
+    /// `false`, the default, runs exactly once per call site: how often it
+    /// runs stays entirely a property of the chain that scheduled it.
+    ///
+    /// Only declare this for rules whose specification promises it.
+    /// Enforcement passes qualify by definition: enforcing requirements on a
+    /// plan that already satisfies them must be a no-op. Most optimizations
+    /// do not: a rewrite whose trigger pattern survives in its own output
+    /// re-fires on re-application (a pushdown that leaves the original
+    /// operator in place will push the same thing again).
+    fn idempotent(&self) -> bool {
+        false
+    }
 }
