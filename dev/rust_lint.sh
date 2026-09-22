@@ -114,6 +114,7 @@ ensure_tool "typos" "cargo install typos-cli --locked"
 ensure_tool "lychee" "cargo install lychee --locked --version ${LYCHEE_VERSION}"
 ensure_tool "cargo-audit" "cargo install cargo-audit --locked"
 ensure_tool "cargo-machete" "cargo install cargo-machete --locked --version ^${CARGO_MACHETE_VERSION}"
+ensure_tool "cargo-semver-checks" "cargo install cargo-semver-checks --locked"
 
 run_step() {
   local name="$1"
@@ -142,6 +143,7 @@ declare -a READONLY_STEPS=(
   "ci/scripts/check_circular_dependencies.sh|false"
   "ci/scripts/check_unused_dependencies.sh|false"
   "ci/scripts/rust_docs.sh|false"
+  "ci/scripts/check_semver.sh|false"
 )
 
 for entry in "${WRITE_STEPS[@]}" "${READONLY_STEPS[@]}"; do
