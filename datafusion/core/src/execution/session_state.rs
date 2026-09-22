@@ -500,7 +500,7 @@ impl SessionState {
         &self.inner.table_factories
     }
 
-    /// Get the table factories
+    /// Get the table factories mutably
     pub fn table_factories_mut(
         &mut self,
     ) -> &mut HashMap<String, Arc<dyn TableProviderFactory>> {
@@ -512,7 +512,7 @@ impl SessionState {
         &self.inner.catalog_factories
     }
 
-    /// Get the catalog factories
+    /// Get the catalog factories mutably
     pub fn catalog_factories_mut(
         &mut self,
     ) -> &mut HashMap<String, Arc<dyn CatalogProviderFactory>> {
