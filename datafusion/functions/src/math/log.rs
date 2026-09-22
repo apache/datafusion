@@ -17,6 +17,7 @@
 
 //! Math function: `log()`.
 
+use super::common::is_rewritable_log_base;
 use super::power::PowerFunc;
 
 use crate::utils::calculate_binary_math;
@@ -362,11 +363,12 @@ impl ScalarUDFImpl for LogFunc {
         } else {
             lit(ScalarValue::new_ten(&number_datatype)?)
         };
-        let base_nullable = info.nullable(&base)?;
+        let rewritable_base = is_rewritable_log_base(&base);
 
         match number {
             Expr::Literal(value, _)
-                if value == ScalarValue::new_one(&number_datatype)? && !base_nullable =>
+                if value == ScalarValue::new_one(&number_datatype)?
+                    && rewritable_base =>
             {
                 Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_zero(
                     &info.get_data_type(&base)?,
@@ -376,13 +378,13 @@ impl ScalarUDFImpl for LogFunc {
                 if is_pow(&func)
                     && args.len() == 2
                     && base == args[0]
-                    && !base_nullable =>
+                    && rewritable_base =>
             {
                 let b = args.pop().unwrap(); // length checked above
                 Ok(ExprSimplifyResult::Simplified(b))
             }
             number => {
-                if number == base && !base_nullable {
+                if number == base && rewritable_base {
                     Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_one(
                         &number_datatype,
                     )?)))
@@ -786,6 +788,36 @@ mod tests {
         assert_eq!(args.len(), 2);
         assert_eq!(args[0], lit(2));
         assert_eq!(args[1], lit(3));
+    }
+
+    #[test]
+    // Test that log() is only simplified for a base > 0 and != 1
+    fn test_log_simplify_base_value() {
+        let context = SimplifyContext::default();
+
+        // Degenerate bases must be evaluated, not rewritten
+        for base in [1.0, 0.0, -2.0] {
+            for number in [1.0, base] {
+                let result = LogFunc::new()
+                    .simplify(vec![lit(base), lit(number)], &context)
+                    .unwrap();
+                let ExprSimplifyResult::Original(args) = result else {
+                    panic!("Expected ExprSimplifyResult::Original for base {base}")
+                };
+                assert_eq!(args, vec![lit(base), lit(number)]);
+            }
+        }
+
+        // A valid base still simplifies: log(2, 1) => 0 and log(2, 2) => 1
+        for (number, expected) in [(1.0, lit(0.0)), (2.0, lit(1.0))] {
+            let result = LogFunc::new()
+                .simplify(vec![lit(2.0), lit(number)], &context)
+                .unwrap();
+            let ExprSimplifyResult::Simplified(expr) = result else {
+                panic!("Expected ExprSimplifyResult::Simplified")
+            };
+            assert_eq!(expr, expected);
+        }
     }
 
     #[test]

@@ -16,11 +16,26 @@
 // under the License.
 
 use arrow::array::ArrowNativeTypeOp;
+use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
+use datafusion_common::ScalarValue;
+use datafusion_expr::Expr;
 use num_traits::{CheckedMul, CheckedNeg, Signed};
 use std::fmt::Display;
 use std::mem::swap;
 use std::ops::RemAssign;
+
+/// Whether `expr` is a literal base for which the `power`/`log` rewrites hold:
+/// finite, greater than 0 and not 1.
+pub(super) fn is_rewritable_log_base(expr: &Expr) -> bool {
+    let Expr::Literal(value, _) = expr else {
+        return false;
+    };
+    matches!(
+        value.cast_to(&DataType::Float64),
+        Ok(ScalarValue::Float64(Some(v))) if v.is_finite() && v > 0.0 && v != 1.0
+    )
+}
 
 /// A gcd helper to compute GCD using Euclidean GCD algorithm
 /// on non-negative numbers (scalars and decimals)
