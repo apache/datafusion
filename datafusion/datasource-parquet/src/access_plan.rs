@@ -397,6 +397,151 @@ impl ParquetAccessPlan {
         }
     }
 
+    /// Return an overall `RowSelection`, if needed
+    ///
+    /// This is used to compute the row selection for the parquet reader. See
+    /// [`ArrowReaderBuilder::with_row_selection`] for more details.
+    ///
+    /// Returns
+    /// * `None` if there are no  [`RowGroupAccess::Selection`]
+    /// * `Some(selection)` if there are [`RowGroupAccess::Selection`]s
+    ///
+    /// The returned selection represents which rows to scan across any row
+    /// groups which are not skipped.
+    ///
+    /// # Deprecated
+    ///
+    /// DataFusion scans now keep selections local to each row group. For custom
+    /// readers, use [`Self::into_inner`] to obtain the [`RowGroupAccess`] entries
+    /// and adapt them to the reader's selection API. This compatibility method
+    /// retains its existing conversion and length validation behavior.
+    ///
+    /// # Notes
+    ///
+    /// If there are no [`RowGroupAccess::Selection`]s, the overall row
+    /// selection is `None` because each row group is either entirely skipped or
+    /// scanned, which is covered by [`Self::row_group_indexes`].
+    ///
+    /// If there are any [`RowGroupAccess::Selection`], an overall row selection
+    /// is returned for *all* the rows in the row groups that are not skipped.
+    /// Thus it includes a `Select` selection for any [`RowGroupAccess::Scan`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any specified row selection does not specify
+    /// the same number of rows as in its corresponding `row_group_metadata`.
+    ///
+    /// # Example: No Selections
+    ///
+    /// Given an access plan like this
+    ///
+    /// ```text
+    ///   RowGroupAccess::Scan (scan all row group 0)
+    ///   RowGroupAccess::Skip (skip row group 1)
+    ///   RowGroupAccess::Scan (scan all row group 2)
+    ///   RowGroupAccess::Scan (scan all row group 3)
+    /// ```
+    ///
+    /// The overall row selection would be `None` because there are no
+    /// [`RowGroupAccess::Selection`]s. The row group indexes
+    /// returned by [`Self::row_group_indexes`] would be `0, 2, 3` .
+    ///
+    /// # Example: With Selections
+    ///
+    /// Given an access plan like this:
+    ///
+    /// ```text
+    ///   RowGroupAccess::Scan (scan all row group 0)
+    ///   RowGroupAccess::Skip (skip row group 1)
+    ///   RowGroupAccess::Selection (skip 50, scan 50, skip 900) (scan rows 50-100 in row group 2)
+    ///   RowGroupAccess::Scan (scan all row group 3)
+    /// ```
+    ///
+    /// Assuming each row group has 1000 rows, the resulting row selection would
+    /// be the rows to scan in row group 0, 2 and 3:
+    ///
+    /// ```text
+    ///  RowSelection::Select(1000) (scan all rows in row group 0)
+    ///  RowSelection::Skip(50)     (skip first 50 rows in row group 2)
+    ///  RowSelection::Select(50)   (scan rows 50-100 in row group 2)
+    ///  RowSelection::Skip(900)    (skip last 900 rows in row group 2)
+    ///  RowSelection::Select(1000) (scan all rows in row group 3)
+    /// ```
+    ///
+    /// Note there is no entry for the (entirely) skipped row group 1.
+    ///
+    /// The row group indexes returned by [`Self::row_group_indexes`] would
+    /// still be `0, 2, 3` .
+    ///
+    /// [`ArrowReaderBuilder::with_row_selection`]: parquet::arrow::arrow_reader::ArrowReaderBuilder::with_row_selection
+    #[deprecated(
+        since = "56.0.0",
+        note = "Use into_inner() to obtain row-group-local access entries"
+    )]
+    pub fn into_overall_row_selection(
+        self,
+        row_group_meta_data: &[RowGroupMetaData],
+    ) -> Result<Option<RowSelection>> {
+        assert_eq!(row_group_meta_data.len(), self.row_groups.len());
+        // Intuition: entire row groups are filtered out using
+        // `row_group_indexes` which come from Skip and Scan. An overall
+        // RowSelection is only useful if there is any parts *within* a row group
+        // which can be filtered out, that is a `Selection`.
+        if !self
+            .row_groups
+            .iter()
+            .any(|rg| matches!(rg, RowGroupAccess::Selection(_)))
+        {
+            return Ok(None);
+        }
+
+        // validate all Selections
+        for (idx, (rg, rg_meta)) in self
+            .row_groups
+            .iter()
+            .zip(row_group_meta_data.iter())
+            .enumerate()
+        {
+            let RowGroupAccess::Selection(selection) = rg else {
+                continue;
+            };
+            let rows_in_selection = selection
+                .iter()
+                .map(|selection| selection.row_count)
+                .sum::<usize>();
+
+            let row_group_row_count = rg_meta.num_rows();
+            assert_eq_or_internal_err!(
+                rows_in_selection as i64,
+                row_group_row_count,
+                "Invalid ParquetAccessPlan Selection. Row group {idx} has {row_group_row_count} rows \
+                    but selection only specifies {rows_in_selection} rows. \
+                    Selection: {selection:?}"
+            );
+        }
+
+        let total_selection: RowSelection = self
+            .row_groups
+            .into_iter()
+            .zip(row_group_meta_data.iter())
+            .flat_map(|(rg, rg_meta)| {
+                match rg {
+                    RowGroupAccess::Skip => vec![],
+                    RowGroupAccess::Scan => {
+                        // need a row group access to scan the entire row group (need row group counts)
+                        vec![RowSelector::select(rg_meta.num_rows() as usize)]
+                    }
+                    RowGroupAccess::Selection(selection) => {
+                        let selection: Vec<RowSelector> = selection.into();
+                        selection
+                    }
+                }
+            })
+            .collect();
+
+        Ok(Some(total_selection))
+    }
+
     /// Return an iterator over the row group indexes that should be scanned
     pub fn row_group_index_iter(&self) -> impl Iterator<Item = usize> + '_ {
         self.row_groups
@@ -691,6 +836,81 @@ mod test {
     use parquet::file::metadata::ColumnChunkMetaData;
     use parquet::schema::types::{SchemaDescPtr, SchemaDescriptor};
     use std::sync::{Arc, LazyLock};
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_deprecated_overall_row_selection() {
+        for plan in [
+            ParquetAccessPlan::new_all(4),
+            ParquetAccessPlan::new_none(4),
+        ] {
+            assert_eq!(
+                plan.into_overall_row_selection(&ROW_GROUP_METADATA)
+                    .unwrap(),
+                None
+            );
+        }
+
+        // Skipped groups do not occupy coordinates in the combined selection.
+        // Check both input representations retain the same conversion behavior.
+        let selectors =
+            RowSelection::from(vec![RowSelector::skip(10), RowSelector::select(20)]);
+        let bitmap = RowSelection::from(arrow::buffer::BooleanBuffer::from(
+            (0..30).map(|i| i >= 10).collect::<Vec<_>>(),
+        ));
+        for selection in [selectors, bitmap] {
+            let plan = ParquetAccessPlan::new(vec![
+                RowGroupAccess::Scan,
+                RowGroupAccess::Skip,
+                RowGroupAccess::Selection(selection),
+                RowGroupAccess::Scan,
+            ]);
+            assert_eq!(
+                plan.into_overall_row_selection(&ROW_GROUP_METADATA)
+                    .unwrap(),
+                Some(RowSelection::from(vec![
+                    RowSelector::select(10),
+                    RowSelector::skip(10),
+                    RowSelector::select(60),
+                ]))
+            );
+        }
+
+        let plan = ParquetAccessPlan::new(vec![
+            RowGroupAccess::Selection(vec![RowSelector::skip(10)].into()),
+            RowGroupAccess::Skip,
+            RowGroupAccess::Skip,
+            RowGroupAccess::Skip,
+        ]);
+        assert_eq!(
+            plan.into_overall_row_selection(&ROW_GROUP_METADATA)
+                .unwrap(),
+            Some(RowSelection::from(vec![RowSelector::skip(10)]))
+        );
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_deprecated_overall_row_selection_validates_length() {
+        for rows in [19, 21] {
+            let plan = ParquetAccessPlan::new(vec![
+                RowGroupAccess::Scan,
+                RowGroupAccess::Selection(vec![RowSelector::select(rows)].into()),
+                RowGroupAccess::Skip,
+                RowGroupAccess::Skip,
+            ]);
+            let err = plan
+                .into_overall_row_selection(&ROW_GROUP_METADATA)
+                .unwrap_err()
+                .to_string();
+            assert_contains!(
+                err,
+                format!(
+                    "Row group 1 has 20 rows but selection only specifies {rows} rows"
+                )
+            );
+        }
+    }
 
     #[test]
     fn test_only_scans() {
