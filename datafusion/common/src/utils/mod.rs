@@ -1432,9 +1432,9 @@ fn fsl_values_row_number(list_size: i32, array_len: usize) -> Result<Int32Array>
     Ok(PrimitiveArray::new(rows_number.into(), None))
 }
 
-/// Replace `-0.0` with `+0.0` in any `Float16`, `Float32`, or `Float64` array.
-/// For non-float arrays returns the input unchanged. NaN payloads are
-/// preserved.
+/// Replace `-0.0` with `+0.0` in any `Float16`, `Float32`, or `Float64` array,
+/// including floats inside dictionaries and nested arrays. For other arrays,
+/// returns the input unchanged. NaN payloads are preserved.
 ///
 /// Arrow's comparison kernels (`arrow::compute::kernels::cmp::eq` etc.) and
 /// row-encoding (`arrow::row::RowConverter`) use IEEE 754 totalOrder
@@ -1455,6 +1455,15 @@ pub fn normalize_float_zero(array: &ArrayRef) -> ArrayRef {
     const NEG_ZERO_F32_BITS: u32 = (-0.0_f32).to_bits();
     const NEG_ZERO_F64_BITS: u64 = (-0.0_f64).to_bits();
     match array.data_type() {
+        DataType::Dictionary(_, value_type) if has_float_leaf(value_type) => {
+            let dictionary = array.as_any_dictionary();
+            let values = normalize_float_zero(dictionary.values());
+            if Arc::ptr_eq(&values, dictionary.values()) {
+                Arc::clone(array)
+            } else {
+                dictionary.with_values(values)
+            }
+        }
         DataType::Float32 => {
             let arr: &Float32Array = array.as_primitive::<Float32Type>();
             if !arr
@@ -1544,8 +1553,8 @@ pub fn has_float_leaf(data_type: &DataType) -> bool {
 }
 
 /// Replace `-0.0` with `+0.0` in `Float16`, `Float32`, or `Float64` scalar
-/// values. Other variants are returned unchanged. See [`normalize_float_zero`]
-/// for context.
+/// values, including dictionary-wrapped floats. Other variants are returned
+/// unchanged. See [`normalize_float_zero`] for context.
 pub fn normalize_float_zero_scalar(scalar: ScalarValue) -> ScalarValue {
     match scalar {
         ScalarValue::Float32(Some(v)) if v.to_bits() << 1 == 0 => {
@@ -1556,6 +1565,10 @@ pub fn normalize_float_zero_scalar(scalar: ScalarValue) -> ScalarValue {
         }
         ScalarValue::Float16(Some(v)) if v.to_bits() << 1 == 0 => {
             ScalarValue::Float16(Some(half::f16::from_bits(0)))
+        }
+        ScalarValue::Dictionary(key, mut value) => {
+            *value = normalize_float_zero_scalar(*value);
+            ScalarValue::Dictionary(key, value)
         }
         other => other,
     }
@@ -1568,9 +1581,9 @@ mod tests {
     use super::*;
     use crate::ScalarValue::Null;
     use arrow::{
-        array::{Float64Array, Int32Array},
+        array::{DictionaryArray, Float64Array, Int8Array, Int32Array},
         buffer::NullBuffer,
-        datatypes::Int32Type,
+        datatypes::{Float64Type, Int8Type, Int32Type},
     };
     #[cfg(feature = "sql")]
     use sqlparser::ast::Ident;
@@ -1610,6 +1623,33 @@ mod tests {
         } else {
             assert!(max.is_err());
         }
+    }
+
+    #[test]
+    fn normalize_float_zero_in_dictionary_arrays_and_scalars() -> Result<()> {
+        let nan = f64::from_bits(0x7ff8_0000_0000_0001);
+        let keys = Int8Array::from(vec![Some(0), Some(1), None, Some(2)]);
+        let array: ArrayRef = Arc::new(DictionaryArray::try_new(
+            keys.clone(),
+            Arc::new(Float64Array::from(vec![-0.0, nan, 1.0])),
+        )?);
+
+        let normalized = normalize_float_zero(&array);
+        let dictionary = normalized.as_dictionary::<Int8Type>();
+        assert_eq!(dictionary.keys(), &keys);
+        let values = dictionary.values().as_primitive::<Float64Type>();
+        assert_eq!(values.value(0).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(values.value(1).to_bits(), nan.to_bits());
+        assert_eq!(values.value(2), 1.0);
+
+        assert!(Arc::ptr_eq(&normalize_float_zero(&normalized), &normalized));
+
+        assert_eq!(
+            normalize_float_zero_scalar(ScalarValue::try_from_array(&array, 0)?),
+            ScalarValue::try_from_array(&normalized, 0)?
+        );
+
+        Ok(())
     }
 
     #[test]
