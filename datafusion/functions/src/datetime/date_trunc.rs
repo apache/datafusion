@@ -1565,6 +1565,19 @@ mod tests {
         );
     }
 
+    /// The scalar fast path shares the same underflow check as the array
+    /// path: truncating a value within one unit of `i64::MIN` to a coarser
+    /// granularity in its own unit must error rather than wrap around.
+    #[test]
+    fn scalar_and_array_reject_fine_granularity_underflow() {
+        let (scalar, array) = date_trunc_scalar_and_array(
+            "minute",
+            ScalarValue::TimestampSecond(Some(i64::MIN), None),
+        );
+        assert!(scalar.is_err(), "expected scalar path to reject underflow");
+        assert!(array.is_err(), "expected array path to reject underflow");
+    }
+
     fn assert_fine_granularity_underflow<T: ArrowTimestampType>(
         array: PrimitiveArray<T>,
         granularity: DatePart,
