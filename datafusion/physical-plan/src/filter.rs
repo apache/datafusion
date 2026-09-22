@@ -1466,9 +1466,7 @@ impl Stream for FilterExecStream {
                             match as_boolean_array(&array) {
                                 Ok(filter_array) => {
                                     self.metrics.selectivity.add_total(batch.num_rows());
-                                    // TODO: support push_batch_with_filter in LimitedBatchCoalescer
-                                    let batch = filter_record_batch(&batch, filter_array)?;
-                                    let state = self.batch_coalescer.push_batch(batch)?;
+                                    let state = self.batch_coalescer.push_batch_with_filter(batch, filter_array)?;
                                     Ok(state)
                                 }
                                 Err(_) => {
@@ -1571,12 +1569,50 @@ pub type EqualAndNonEqual<'a> =
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::collect;
     use crate::empty::EmptyExec;
     use crate::expressions::*;
     use crate::statistics::{StatisticsArgs, StatisticsContext};
     use crate::test;
     use crate::test::exec::StatisticsExec;
+    use arrow::array::Int32Array;
     use arrow::datatypes::{Field, Schema, UnionFields, UnionMode};
+
+    #[tokio::test]
+    async fn test_filter_exec_fetch_truncates_within_selected_rows() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from_iter_values(0..10))],
+        )?;
+        let input = test::TestMemoryExec::try_new_exec(
+            &[vec![batch]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let predicate = binary(col("i", &schema)?, Operator::GtEq, lit(2i32), &schema)?;
+        let filter = Arc::new(
+            FilterExecBuilder::new(predicate, input)
+                .with_fetch(Some(3))
+                .build()?,
+        );
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let batches = collect(filter.execute(0, task_ctx)?).await?;
+        let values: Vec<i32> = batches
+            .iter()
+            .flat_map(|b| {
+                b.column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        assert_eq!(values, vec![2, 3, 4]);
+        Ok(())
+    }
 
     #[test]
     fn filter_rejects_zero_batch_size() -> Result<()> {
@@ -2348,7 +2384,7 @@ mod tests {
         // A mathematical lower bound of 5 would exclude a valid input value.
         let batch = RecordBatch::try_new(
             input.schema(),
-            vec![Arc::new(arrow::array::Int32Array::from(vec![i32::MIN]))],
+            vec![Arc::new(Int32Array::from(vec![i32::MIN]))],
         )
         .unwrap();
         let result = predicate.evaluate(&batch).unwrap().into_array(1).unwrap();

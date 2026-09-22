@@ -222,6 +222,7 @@ mod ordered_single_stream;
 mod partial_reduce_stream;
 mod single_stream;
 mod skip_partial;
+mod spill;
 mod topk;
 
 /// Returns true if TopK aggregation data structures support the provided key and value types.
