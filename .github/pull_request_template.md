@@ -2,6 +2,8 @@
 
 <!--
 We generally require a GitHub issue to be filed for all bug fixes and enhancements and this helps us generate change logs for our releases. You can link an issue to this PR using the GitHub syntax. For example `Closes #123` indicates that this PR will close issue #123.
+
+If this PR comes from a fork, the Rust workflow runs on your fork: enable workflows on your fork's Actions tab. See https://datafusion.apache.org/contributor-guide/#pull-requests-from-forks
 -->
 
 - Closes #.

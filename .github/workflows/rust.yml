@@ -38,8 +38,18 @@
 # The other jobs carry an `if:` that skips them for that event alone. PRs, the
 # merge queue, `workflow_dispatch`, and every other branch run all jobs. A
 # direct push that bypasses the queue is not re-checked; dispatch the workflow
-# on `main` for a full run. `ci/scripts/check_asf_yaml_status_checks.py` keeps
+# on `main` for a full run. `ci/scripts/check_rust_workflow_skips.py` keeps
 # the skipped set explicit.
+#
+# # Pull requests from forks
+#
+# A PR from a fork runs this workflow on the fork, on the contributor's own
+# runners, and `fork_ci_status.yml` mirrors that run as the `Rust (fork)` check
+# on the PR. Upstream runs only `check-fmt` and `check-workflow-tool-installs`
+# for such a PR; the other jobs carry an `if:` that skips them. The merge queue
+# runs every job on the merged result, so it stays the gate. PRs from branches
+# in this repository, and fork PRs to release branches, which have no merge
+# queue, run every job here, as before.
 #
 name: Rust
 
@@ -71,6 +81,7 @@ jobs:
   # Check crate compiles and base cargo check passes
   linux-build-lib:
     name: linux build test
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=8,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -121,7 +132,7 @@ jobs:
   linux-datafusion-common-features:
     name: cargo check datafusion-common features
     needs: linux-build-lib
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -152,7 +163,7 @@ jobs:
   linux-datafusion-substrait-features:
     name: cargo check datafusion-substrait features
     needs: linux-build-lib
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     env:
       CARGO_INCREMENTAL: "0"
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
@@ -199,7 +210,7 @@ jobs:
   linux-datafusion-proto-features:
     name: cargo check datafusion-proto features
     needs: linux-build-lib
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -236,6 +247,7 @@ jobs:
   linux-datafusion-ffi-features:
     name: cargo check datafusion-ffi features
     needs: linux-build-lib
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -262,7 +274,7 @@ jobs:
   linux-cargo-check-datafusion:
     name: cargo check datafusion features
     needs: linux-build-lib
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     env:
       CARGO_INCREMENTAL: "0"
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
@@ -338,6 +350,7 @@ jobs:
   linux-cargo-check-datafusion-functions:
     name: cargo check datafusion-functions features
     needs: linux-build-lib
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -383,7 +396,7 @@ jobs:
   linux-cargo-check-datafusion-spark:
     name: cargo check datafusion-spark features
     needs: linux-build-lib
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -412,6 +425,7 @@ jobs:
   linux-test:
     name: cargo test (amd64)
     needs: linux-build-lib
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -465,7 +479,7 @@ jobs:
   linux-test-datafusion-cli:
     name: cargo test datafusion-cli (amd64)
     needs: linux-build-lib
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     steps:
       - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
@@ -512,6 +526,7 @@ jobs:
   linux-test-example:
     name: cargo examples (amd64)
     needs: linux-build-lib
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -543,7 +558,7 @@ jobs:
   linux-test-doc:
     name: cargo test doc (amd64)
     needs: linux-build-lib
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -566,7 +581,7 @@ jobs:
   linux-rustdoc:
     name: cargo doc
     needs: linux-build-lib
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -582,7 +597,7 @@ jobs:
 
   linux-wasm-pack:
     name: build and run with wasm-pack
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -610,7 +625,7 @@ jobs:
   verify-benchmark-results:
     name: verify benchmark results (amd64)
     needs: linux-build-lib
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -643,7 +658,7 @@ jobs:
   sqllogictest-postgres:
     name: "Run sqllogictest with Postgres runner"
     needs: linux-build-lib
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -681,7 +696,7 @@ jobs:
   sqllogictest-substrait:
     name: "Run sqllogictest in Substrait round-trip mode"
     needs: linux-build-lib
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -728,6 +743,7 @@ jobs:
   # flaky sqllogictest metrics.
   macos-aarch64:
     name: cargo test (macos-aarch64)
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -742,7 +758,7 @@ jobs:
 
   vendor:
     name: Verify Vendored Code
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -787,6 +803,7 @@ jobs:
   clippy:
     name: clippy
     needs: linux-build-lib
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -814,7 +831,7 @@ jobs:
   cargo-toml-formatting-checks:
     name: check Cargo.toml formatting
     needs: linux-build-lib
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -838,7 +855,7 @@ jobs:
   config-docs-check:
     name: check configs.md and ***_functions.md is up-to-date
     needs: linux-build-lib
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=16,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     container:
       image: amd64/rust
@@ -868,7 +885,7 @@ jobs:
   examples-docs-check:
     name: check example README is up-to-date
     needs: linux-build-lib
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -901,7 +918,7 @@ jobs:
   # - datafusion-cli
   msrv:
     name: Verify MSRV (Min Supported Rust Version)
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
+    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
