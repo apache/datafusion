@@ -1997,6 +1997,14 @@ impl DefaultPhysicalPlanner {
                     .downcast_ref::<datafusion_expr::MaterializedCte>()
                     .unwrap();
                 let [body, continuation] = children.two()?;
+                // The body is fully buffered before a scan yields a row, so an
+                // unbounded body would never produce output.
+                if body.boundedness().is_unbounded() {
+                    return plan_err!(
+                        "MATERIALIZED CTE {} reads an unbounded source, which cannot be materialized",
+                        cte.name
+                    );
+                }
                 let buffer =
                     Arc::new(MaterializedCteBuffer::new(cte.id.as_u64(), &cte.name));
                 Arc::new(MaterializedCteExec::new(body, continuation, buffer))

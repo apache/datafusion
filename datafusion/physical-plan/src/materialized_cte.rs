@@ -30,8 +30,13 @@
 //!
 //! Buffered batches are accounted in the memory pool. When a reservation
 //! fails, the rest of that partition is written to a spill file, and the scans
-//! read the in-memory prefix and then the spill file, so row order within a
+//! read the in-memory prefix and then the spill files, so row order within a
 //! partition is kept.
+//!
+//! A scan reads a spill file one batch at a time, without read-ahead. After
+//! the body is buffered, memory for one decoded batch per concurrent reader is
+//! reserved. If the pool cannot grant it, in-memory batches are moved to spill
+//! files until it can.
 
 use std::fmt;
 use std::sync::Arc;
@@ -69,18 +74,105 @@ use crate::{
 };
 
 /// The buffered output of one body partition: an in-memory prefix followed by
-/// an optional spill file with the remaining batches.
+/// spill files with the remaining batches, in order.
 struct BufferedPartition {
     batches: Vec<RecordBatch>,
-    spill_file: Option<Arc<dyn SpillFile>>,
-    /// Released when the buffer is dropped.
-    _reservation: MemoryReservation,
+    spill_files: Vec<Arc<dyn SpillFile>>,
+    /// The memory size of the largest batch in `spill_files` when decoded.
+    max_spilled_batch_size: usize,
+    /// Holds `batches`. Released when the buffer is dropped.
+    reservation: MemoryReservation,
+}
+
+impl BufferedPartition {
+    /// Move in-memory batches from the end of `batches` to a new spill file,
+    /// until at least `bytes` are released or no in-memory batch is left.
+    /// The new file is read before the existing spill files, so the order of
+    /// the partition is kept.
+    fn spill_in_memory_suffix(
+        &mut self,
+        bytes: usize,
+        spill_manager: &SpillManager,
+    ) -> Result<()> {
+        let mut split = self.batches.len();
+        let mut released = 0;
+        while split > 0 && released < bytes {
+            split -= 1;
+            released += self.batches[split].get_array_memory_size();
+        }
+        let suffix = self.batches.split_off(split);
+        let mut file = spill_manager.create_in_progress_file("MaterializedCte")?;
+        for batch in &suffix {
+            let size = file.append_batch(batch)?;
+            self.max_spilled_batch_size = self.max_spilled_batch_size.max(size);
+        }
+        if let Some(file) = file.finish()? {
+            self.spill_files.insert(0, file);
+        }
+        self.reservation.shrink(released);
+        Ok(())
+    }
 }
 
 /// The materialized output of a CTE body.
 struct MaterializedOutput {
     partitions: Vec<BufferedPartition>,
     spill_manager: SpillManager,
+    /// Memory for the batches that the scans decode from the spill files.
+    /// Released when the buffer is dropped.
+    _replay_reservation: MemoryReservation,
+}
+
+/// The memory that the scans need to read the spill files of `partitions`.
+///
+/// Partition `p` of a scan with `n` partitions reads the body partitions
+/// `p, p + n, ...` one after the other, with at most one decoded batch in
+/// memory. All scan partitions can read at the same time.
+fn replay_memory(partitions: &[BufferedPartition], scan_partitions: &[usize]) -> usize {
+    scan_partitions
+        .iter()
+        .map(|&n| {
+            (0..n)
+                .map(|p| {
+                    partitions
+                        .iter()
+                        .skip(p)
+                        .step_by(n)
+                        .map(|b| b.max_spilled_batch_size)
+                        .max()
+                        .unwrap_or(0)
+                })
+                .sum::<usize>()
+        })
+        .sum()
+}
+
+/// Grow `reservation` to the memory the scans need to replay `partitions`.
+/// If the pool cannot grant it, move in-memory batches to spill files, from
+/// the partition that holds the most memory first, until it can.
+fn reserve_replay_memory(
+    partitions: &mut [BufferedPartition],
+    scan_partitions: &[usize],
+    spill_manager: &SpillManager,
+    reservation: &mut MemoryReservation,
+) -> Result<()> {
+    loop {
+        let required = replay_memory(partitions, scan_partitions);
+        let Err(e) = reservation.try_resize(required) else {
+            return Ok(());
+        };
+        let Some(partition) = partitions
+            .iter_mut()
+            .filter(|p| !p.batches.is_empty())
+            .max_by_key(|p| p.reservation.size())
+        else {
+            return Err(e);
+        };
+        partition.spill_in_memory_suffix(
+            required.saturating_sub(reservation.size()),
+            spill_manager,
+        )?;
+    }
 }
 
 /// State shared by one [`MaterializedCteExec`] and all its
@@ -94,6 +186,8 @@ pub struct MaterializedCteBuffer {
     /// `MaterializedCteExec` executes, for example from a scalar subquery.
     body: Mutex<Option<Arc<dyn ExecutionPlan>>>,
     output: Mutex<Arc<OnceAsync<MaterializedOutput>>>,
+    /// The partition count of every scan bound to this buffer.
+    scan_partitions: Mutex<Vec<usize>>,
     metrics: ExecutionPlanMetricsSet,
 }
 
@@ -112,6 +206,7 @@ impl MaterializedCteBuffer {
             name: name.into(),
             body: Mutex::new(None),
             output: Mutex::new(Arc::default()),
+            scan_partitions: Mutex::new(vec![]),
             metrics: ExecutionPlanMetricsSet::new(),
         }
     }
@@ -140,14 +235,18 @@ impl MaterializedCteBuffer {
         };
         let once = Arc::clone(&self.output.lock());
         let name = self.name.clone();
+        let scan_partitions = self.scan_partitions.lock().clone();
         let metrics = self.metrics.clone();
-        once.try_once(move || Ok(buffer_body(name, body, context, metrics)))
+        once.try_once(move || {
+            Ok(buffer_body(name, body, scan_partitions, context, metrics))
+        })
     }
 }
 
 async fn buffer_body(
     name: String,
     body: Arc<dyn ExecutionPlan>,
+    scan_partitions: Vec<usize>,
     context: Arc<TaskContext>,
     metrics: ExecutionPlanMetricsSet,
 ) -> Result<MaterializedOutput> {
@@ -185,9 +284,21 @@ async fn buffer_body(
         }
     }
     partitions.sort_by_key(|(partition, _)| *partition);
+    let mut partitions: Vec<_> = partitions.into_iter().map(|(_, p)| p).collect();
+
+    let mut replay_reservation =
+        MemoryConsumer::new(format!("MaterializedCte[{name}] replay"))
+            .register(context.memory_pool());
+    reserve_replay_memory(
+        &mut partitions,
+        &scan_partitions,
+        &spill_manager,
+        &mut replay_reservation,
+    )?;
     Ok(MaterializedOutput {
-        partitions: partitions.into_iter().map(|(_, p)| p).collect(),
+        partitions,
         spill_manager,
+        _replay_reservation: replay_reservation,
     })
 }
 
@@ -199,6 +310,7 @@ async fn buffer_partition(
 ) -> Result<BufferedPartition> {
     let mut batches = vec![];
     let mut spill = None;
+    let mut max_spilled_batch_size = 0;
     while let Some(batch) = stream.next().await.transpose()? {
         buffered_rows.add(batch.num_rows());
         // Once a partition spills, every later batch goes to the same file,
@@ -212,7 +324,8 @@ async fn buffer_partition(
             spill = Some(spill_manager.create_in_progress_file("MaterializedCte")?);
         }
         if let Some(file) = spill.as_mut() {
-            file.append_batch(&batch)?;
+            let size = file.append_batch(&batch)?;
+            max_spilled_batch_size = max_spilled_batch_size.max(size);
         }
     }
     let spill_file = match spill {
@@ -221,8 +334,9 @@ async fn buffer_partition(
     };
     Ok(BufferedPartition {
         batches,
-        spill_file,
-        _reservation: reservation,
+        spill_files: spill_file.into_iter().collect(),
+        max_spilled_batch_size,
+        reservation,
     })
 }
 
@@ -246,12 +360,13 @@ fn replay(
             schema,
             futures::stream::iter(batches.into_iter().map(Ok)),
         )) as SendableRecordBatchStream);
-        if let Some(file) = &buffered.spill_file {
-            streams.push(
-                output
-                    .spill_manager
-                    .read_spill_as_stream(Arc::clone(file), None)?,
-            );
+        // Read without read-ahead, so that the decoded batch fits in the
+        // replay reservation.
+        for file in &buffered.spill_files {
+            streams.push(output.spill_manager.read_spill_as_stream_unbuffered(
+                Arc::clone(file),
+                Some(buffered.max_spilled_batch_size),
+            )?);
         }
     }
     Ok(streams)
@@ -459,6 +574,10 @@ impl MaterializedCteScanExec {
 
     /// Bind this scan to the buffer of its [`MaterializedCteExec`].
     pub fn bind(&self, buffer: Arc<MaterializedCteBuffer>) -> Self {
+        buffer
+            .scan_partitions
+            .lock()
+            .push(self.cache.partitioning.partition_count());
         Self {
             id: self.id,
             name: self.name.clone(),
@@ -571,9 +690,13 @@ impl ExecutionPlan for MaterializedCteScanExec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::collect;
     use crate::empty::EmptyExec;
     use crate::filter_pushdown::PushedDown;
+    use crate::test::TestMemoryExec;
+    use arrow::array::{Array, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_physical_expr::expressions::{col, lit};
 
     #[test]
@@ -601,6 +724,66 @@ mod tests {
         assert_eq!(parent_filters.len(), 2);
         assert!(matches!(parent_filters[0][0].discriminant, PushedDown::No));
         assert!(matches!(parent_filters[1][0].discriminant, PushedDown::Yes));
+        Ok(())
+    }
+
+    /// The in-memory prefix takes all the memory that the pool can grant.
+    /// Some of it is then moved to disk, so that the two scans have memory to
+    /// decode the spill files, and both scans still return every row in order.
+    #[tokio::test]
+    async fn spill_replay_memory_is_reserved() -> Result<()> {
+        let memory_limit = 20_000;
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batches = (0..10)
+            .map(|i| {
+                let values = Int32Array::from_iter_values(i * 1000..(i + 1) * 1000);
+                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(values)])
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let body = TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let buffer = Arc::new(MaterializedCteBuffer::new(0, "c"));
+        let _exec = MaterializedCteExec::new(
+            body,
+            Arc::new(EmptyExec::new(Arc::clone(&schema))),
+            Arc::clone(&buffer),
+        );
+        let scan = MaterializedCteScanExec::new(0, "c", Arc::clone(&schema), 1);
+        let scans = [
+            scan.bind(Arc::clone(&buffer)),
+            scan.bind(Arc::clone(&buffer)),
+        ];
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(memory_limit, 1.0)
+            .build_arc()?;
+        let context = Arc::new(TaskContext::default().with_runtime(runtime));
+
+        let mut output = buffer.materialize(Arc::clone(&context))?;
+        let output = std::future::poll_fn(|cx| output.get_shared(cx)).await?;
+        let partition = &output.partitions[0];
+        assert!(
+            partition.spill_files.len() > 1,
+            "the prefix was not spilled"
+        );
+        assert!(partition.max_spilled_batch_size > 0);
+        // The pool holds the in-memory prefix and one decoded batch per scan.
+        assert_eq!(
+            context.memory_pool().reserved(),
+            partition.reservation.size() + 2 * partition.max_spilled_batch_size
+        );
+        assert!(context.memory_pool().reserved() <= memory_limit);
+
+        for scan in scans {
+            let batches = collect(scan.execute(0, Arc::clone(&context))?).await?;
+            let values: Vec<i32> = batches
+                .iter()
+                .flat_map(|b| {
+                    let array = b.column(0).as_any().downcast_ref::<Int32Array>();
+                    array.unwrap().values().to_vec()
+                })
+                .collect();
+            assert_eq!(values, (0..10_000).collect::<Vec<_>>());
+        }
         Ok(())
     }
 }
