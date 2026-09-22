@@ -228,7 +228,7 @@ LOCATION 'test_files/scratch/skip_pushdown/arrow/';
 ####################
 
 query TT
-EXPLAIN SELECT id FROM skip_src skip 5 LIMIT 3
+EXPLAIN SELECT id FROM skip_src OFFSET 5 LIMIT 3
 ----
 logical_plan
 01)Limit: skip=5, fetch=3
@@ -248,28 +248,28 @@ statement ok
 set datafusion.explain.logical_plan_only = true;
 
 query TT
-EXPLAIN SELECT id FROM skip_csv skip 5 LIMIT 3
+EXPLAIN SELECT id FROM skip_csv OFFSET 5 LIMIT 3
 ----
 logical_plan
 01)Limit: skip=0, fetch=3
 02)--TableScan: skip_csv projection=[id], fetch=3, skip=5
 
 query TT
-EXPLAIN SELECT id FROM skip_json skip 5 LIMIT 3
+EXPLAIN SELECT id FROM skip_json OFFSET 5 LIMIT 3
 ----
 logical_plan
 01)Limit: skip=0, fetch=3
 02)--TableScan: skip_json projection=[id], fetch=3, skip=5
 
 query TT
-EXPLAIN SELECT id FROM skip_parquet skip 5 LIMIT 3
+EXPLAIN SELECT id FROM skip_parquet OFFSET 5 LIMIT 3
 ----
 logical_plan
 01)Limit: skip=0, fetch=3
 02)--TableScan: skip_parquet projection=[id], fetch=3, skip=5
 
 query TT
-EXPLAIN SELECT id FROM skip_arrow skip 5 LIMIT 3
+EXPLAIN SELECT id FROM skip_arrow OFFSET 5 LIMIT 3
 ----
 logical_plan
 01)Limit: skip=0, fetch=3
@@ -282,7 +282,7 @@ reset datafusion.explain.logical_plan_only;
 # `GlobalLimitExec` wrapped directly around the file scan (built inside
 # `ListingTable::scan_with_args`).
 #
-# NB: `skip 15 LIMIT 10` is chosen so that `skip + limit` (25) exceeds
+# NB: `OFFSET 15 LIMIT 10` is chosen so that `skip + limit` (25) exceeds
 # the table's 20 rows. `ListingTable` stops *listing* files once file-level
 # statistics show enough rows to satisfy a smaller limit (see
 # `get_files_with_limit`), and which files that leaves out is not
@@ -292,7 +292,7 @@ statement ok
 set datafusion.execution.target_partitions = 1;
 
 query TT
-EXPLAIN SELECT id FROM skip_parquet skip 15 LIMIT 10
+EXPLAIN SELECT id FROM skip_parquet OFFSET 15 LIMIT 10
 ----
 logical_plan
 01)Limit: skip=0, fetch=10
@@ -308,7 +308,7 @@ statement ok
 set datafusion.execution.target_partitions = 4;
 
 query TT
-EXPLAIN SELECT id FROM skip_parquet skip 15 LIMIT 10
+EXPLAIN SELECT id FROM skip_parquet OFFSET 15 LIMIT 10
 ----
 logical_plan
 01)Limit: skip=0, fetch=10
@@ -344,42 +344,42 @@ statement ok
 set datafusion.execution.target_partitions = 1;
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_csv skip 0 LIMIT 3)
+SELECT COUNT(*) FROM (SELECT id FROM skip_csv OFFSET 0 LIMIT 3)
 ----
 3
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_csv skip 7 LIMIT 6)
+SELECT COUNT(*) FROM (SELECT id FROM skip_csv OFFSET 7 LIMIT 6)
 ----
 6
 
 query I
-SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_csv skip 7 LIMIT 6)
+SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_csv OFFSET 7 LIMIT 6)
 ----
 6
 
 query I
-SELECT COUNT(*) FROM ((SELECT id FROM skip_csv skip 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
+SELECT COUNT(*) FROM ((SELECT id FROM skip_csv OFFSET 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
 ----
 0
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_csv skip 19 LIMIT 5)
+SELECT COUNT(*) FROM (SELECT id FROM skip_csv OFFSET 19 LIMIT 5)
 ----
 1
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_csv skip 20)
+SELECT COUNT(*) FROM (SELECT id FROM skip_csv OFFSET 20)
 ----
 0
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_csv skip 25 LIMIT 3)
+SELECT COUNT(*) FROM (SELECT id FROM skip_csv OFFSET 25 LIMIT 3)
 ----
 0
 
 query II
-SELECT id, val FROM skip_csv ORDER BY id skip 7 LIMIT 6
+SELECT id, val FROM skip_csv ORDER BY id OFFSET 7 LIMIT 6
 ----
 7 70
 8 80
@@ -392,42 +392,42 @@ statement ok
 set datafusion.execution.target_partitions = 8;
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_csv skip 0 LIMIT 3)
+SELECT COUNT(*) FROM (SELECT id FROM skip_csv OFFSET 0 LIMIT 3)
 ----
 3
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_csv skip 7 LIMIT 6)
+SELECT COUNT(*) FROM (SELECT id FROM skip_csv OFFSET 7 LIMIT 6)
 ----
 6
 
 query I
-SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_csv skip 7 LIMIT 6)
+SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_csv OFFSET 7 LIMIT 6)
 ----
 6
 
 query I
-SELECT COUNT(*) FROM ((SELECT id FROM skip_csv skip 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
+SELECT COUNT(*) FROM ((SELECT id FROM skip_csv OFFSET 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
 ----
 0
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_csv skip 19 LIMIT 5)
+SELECT COUNT(*) FROM (SELECT id FROM skip_csv OFFSET 19 LIMIT 5)
 ----
 1
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_csv skip 20)
+SELECT COUNT(*) FROM (SELECT id FROM skip_csv OFFSET 20)
 ----
 0
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_csv skip 25 LIMIT 3)
+SELECT COUNT(*) FROM (SELECT id FROM skip_csv OFFSET 25 LIMIT 3)
 ----
 0
 
 query II
-SELECT id, val FROM skip_csv ORDER BY id skip 7 LIMIT 6
+SELECT id, val FROM skip_csv ORDER BY id OFFSET 7 LIMIT 6
 ----
 7 70
 8 80
@@ -442,42 +442,42 @@ statement ok
 set datafusion.execution.target_partitions = 1;
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_json skip 0 LIMIT 3)
+SELECT COUNT(*) FROM (SELECT id FROM skip_json OFFSET 0 LIMIT 3)
 ----
 3
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_json skip 7 LIMIT 6)
+SELECT COUNT(*) FROM (SELECT id FROM skip_json OFFSET 7 LIMIT 6)
 ----
 6
 
 query I
-SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_json skip 7 LIMIT 6)
+SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_json OFFSET 7 LIMIT 6)
 ----
 6
 
 query I
-SELECT COUNT(*) FROM ((SELECT id FROM skip_json skip 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
+SELECT COUNT(*) FROM ((SELECT id FROM skip_json OFFSET 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
 ----
 0
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_json skip 19 LIMIT 5)
+SELECT COUNT(*) FROM (SELECT id FROM skip_json OFFSET 19 LIMIT 5)
 ----
 1
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_json skip 20)
+SELECT COUNT(*) FROM (SELECT id FROM skip_json OFFSET 20)
 ----
 0
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_json skip 25 LIMIT 3)
+SELECT COUNT(*) FROM (SELECT id FROM skip_json OFFSET 25 LIMIT 3)
 ----
 0
 
 query II
-SELECT id, val FROM skip_json ORDER BY id skip 7 LIMIT 6
+SELECT id, val FROM skip_json ORDER BY id OFFSET 7 LIMIT 6
 ----
 7 70
 8 80
@@ -490,42 +490,42 @@ statement ok
 set datafusion.execution.target_partitions = 8;
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_json skip 0 LIMIT 3)
+SELECT COUNT(*) FROM (SELECT id FROM skip_json OFFSET 0 LIMIT 3)
 ----
 3
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_json skip 7 LIMIT 6)
+SELECT COUNT(*) FROM (SELECT id FROM skip_json OFFSET 7 LIMIT 6)
 ----
 6
 
 query I
-SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_json skip 7 LIMIT 6)
+SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_json OFFSET 7 LIMIT 6)
 ----
 6
 
 query I
-SELECT COUNT(*) FROM ((SELECT id FROM skip_json skip 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
+SELECT COUNT(*) FROM ((SELECT id FROM skip_json OFFSET 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
 ----
 0
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_json skip 19 LIMIT 5)
+SELECT COUNT(*) FROM (SELECT id FROM skip_json OFFSET 19 LIMIT 5)
 ----
 1
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_json skip 20)
+SELECT COUNT(*) FROM (SELECT id FROM skip_json OFFSET 20)
 ----
 0
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_json skip 25 LIMIT 3)
+SELECT COUNT(*) FROM (SELECT id FROM skip_json OFFSET 25 LIMIT 3)
 ----
 0
 
 query II
-SELECT id, val FROM skip_json ORDER BY id skip 7 LIMIT 6
+SELECT id, val FROM skip_json ORDER BY id OFFSET 7 LIMIT 6
 ----
 7 70
 8 80
@@ -540,42 +540,42 @@ statement ok
 set datafusion.execution.target_partitions = 1;
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_parquet skip 0 LIMIT 3)
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet OFFSET 0 LIMIT 3)
 ----
 3
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_parquet skip 7 LIMIT 6)
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet OFFSET 7 LIMIT 6)
 ----
 6
 
 query I
-SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_parquet skip 7 LIMIT 6)
+SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_parquet OFFSET 7 LIMIT 6)
 ----
 6
 
 query I
-SELECT COUNT(*) FROM ((SELECT id FROM skip_parquet skip 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
+SELECT COUNT(*) FROM ((SELECT id FROM skip_parquet OFFSET 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
 ----
 0
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_parquet skip 19 LIMIT 5)
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet OFFSET 19 LIMIT 5)
 ----
 1
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_parquet skip 20)
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet OFFSET 20)
 ----
 0
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_parquet skip 25 LIMIT 3)
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet OFFSET 25 LIMIT 3)
 ----
 0
 
 query II
-SELECT id, val FROM skip_parquet ORDER BY id skip 7 LIMIT 6
+SELECT id, val FROM skip_parquet ORDER BY id OFFSET 7 LIMIT 6
 ----
 7 70
 8 80
@@ -588,42 +588,42 @@ statement ok
 set datafusion.execution.target_partitions = 8;
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_parquet skip 0 LIMIT 3)
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet OFFSET 0 LIMIT 3)
 ----
 3
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_parquet skip 7 LIMIT 6)
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet OFFSET 7 LIMIT 6)
 ----
 6
 
 query I
-SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_parquet skip 7 LIMIT 6)
+SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_parquet OFFSET 7 LIMIT 6)
 ----
 6
 
 query I
-SELECT COUNT(*) FROM ((SELECT id FROM skip_parquet skip 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
+SELECT COUNT(*) FROM ((SELECT id FROM skip_parquet OFFSET 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
 ----
 0
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_parquet skip 19 LIMIT 5)
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet OFFSET 19 LIMIT 5)
 ----
 1
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_parquet skip 20)
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet OFFSET 20)
 ----
 0
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_parquet skip 25 LIMIT 3)
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet OFFSET 25 LIMIT 3)
 ----
 0
 
 query II
-SELECT id, val FROM skip_parquet ORDER BY id skip 7 LIMIT 6
+SELECT id, val FROM skip_parquet ORDER BY id OFFSET 7 LIMIT 6
 ----
 7 70
 8 80
@@ -638,42 +638,42 @@ statement ok
 set datafusion.execution.target_partitions = 1;
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_arrow skip 0 LIMIT 3)
+SELECT COUNT(*) FROM (SELECT id FROM skip_arrow OFFSET 0 LIMIT 3)
 ----
 3
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_arrow skip 7 LIMIT 6)
+SELECT COUNT(*) FROM (SELECT id FROM skip_arrow OFFSET 7 LIMIT 6)
 ----
 6
 
 query I
-SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_arrow skip 7 LIMIT 6)
+SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_arrow OFFSET 7 LIMIT 6)
 ----
 6
 
 query I
-SELECT COUNT(*) FROM ((SELECT id FROM skip_arrow skip 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
+SELECT COUNT(*) FROM ((SELECT id FROM skip_arrow OFFSET 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
 ----
 0
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_arrow skip 19 LIMIT 5)
+SELECT COUNT(*) FROM (SELECT id FROM skip_arrow OFFSET 19 LIMIT 5)
 ----
 1
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_arrow skip 20)
+SELECT COUNT(*) FROM (SELECT id FROM skip_arrow OFFSET 20)
 ----
 0
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_arrow skip 25 LIMIT 3)
+SELECT COUNT(*) FROM (SELECT id FROM skip_arrow OFFSET 25 LIMIT 3)
 ----
 0
 
 query II
-SELECT id, val FROM skip_arrow ORDER BY id skip 7 LIMIT 6
+SELECT id, val FROM skip_arrow ORDER BY id OFFSET 7 LIMIT 6
 ----
 7 70
 8 80
@@ -686,42 +686,42 @@ statement ok
 set datafusion.execution.target_partitions = 8;
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_arrow skip 0 LIMIT 3)
+SELECT COUNT(*) FROM (SELECT id FROM skip_arrow OFFSET 0 LIMIT 3)
 ----
 3
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_arrow skip 7 LIMIT 6)
+SELECT COUNT(*) FROM (SELECT id FROM skip_arrow OFFSET 7 LIMIT 6)
 ----
 6
 
 query I
-SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_arrow skip 7 LIMIT 6)
+SELECT COUNT(DISTINCT id) FROM (SELECT id FROM skip_arrow OFFSET 7 LIMIT 6)
 ----
 6
 
 query I
-SELECT COUNT(*) FROM ((SELECT id FROM skip_arrow skip 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
+SELECT COUNT(*) FROM ((SELECT id FROM skip_arrow OFFSET 7 LIMIT 6) EXCEPT (SELECT id FROM skip_src))
 ----
 0
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_arrow skip 19 LIMIT 5)
+SELECT COUNT(*) FROM (SELECT id FROM skip_arrow OFFSET 19 LIMIT 5)
 ----
 1
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_arrow skip 20)
+SELECT COUNT(*) FROM (SELECT id FROM skip_arrow OFFSET 20)
 ----
 0
 
 query I
-SELECT COUNT(*) FROM (SELECT id FROM skip_arrow skip 25 LIMIT 3)
+SELECT COUNT(*) FROM (SELECT id FROM skip_arrow OFFSET 25 LIMIT 3)
 ----
 0
 
 query II
-SELECT id, val FROM skip_arrow ORDER BY id skip 7 LIMIT 6
+SELECT id, val FROM skip_arrow ORDER BY id OFFSET 7 LIMIT 6
 ----
 7 70
 8 80
