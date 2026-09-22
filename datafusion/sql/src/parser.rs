@@ -1420,7 +1420,7 @@ impl<'a> DFParser<'a> {
         Ok(Statement::CreateExternalCatalog(CreateExternalCatalog {
             catalog_name,
             catalog_type,
-            location: location,
+            location,
             if_not_exists,
             or_replace,
             options: options.unwrap_or_default(),

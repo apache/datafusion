@@ -199,8 +199,10 @@ async fn create_external_catalog_or_replace() -> Result<()> {
         .await?;
     let original = ctx.catalog("cat").unwrap();
 
-    ctx.sql("CREATE OR REPLACE EXTERNAL CATALOG cat STORED AS TESTCATALOG LOCATION 's3://x'")
-        .await?;
+    ctx.sql(
+        "CREATE OR REPLACE EXTERNAL CATALOG cat STORED AS TESTCATALOG LOCATION 's3://x'",
+    )
+    .await?;
     let replacement = ctx.catalog("cat").unwrap();
 
     assert!(!Arc::ptr_eq(&original, &replacement));
