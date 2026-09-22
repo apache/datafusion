@@ -22,13 +22,23 @@
 //! These helpers are independent of the [`ParquetFormat`](crate::file_format::ParquetFormat)
 //! type and several have been re-exported at the crate root for use by
 //! callers outside the format implementation.
+//!
+//! # Binary to string coercion
+//!
+//! Coercing a binary file column to a string type makes the Parquet reader
+//! build the string array itself. It only validates UTF-8 for columns carrying
+//! the `UTF8` logical annotation, which such a column by definition does not,
+//! so invalid bytes surface as an invalid string array rather than an error.
+//! That is long-standing behaviour for top-level and struct fields; it is not
+//! extended to map children, whose positional matching is newer, so binary map
+//! values keep going through the validating cast instead.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field, FieldRef, Schema, TimeUnit};
+use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, TimeUnit};
 use parquet::basic::Type;
 use parquet::schema::types::SchemaDescriptor;
 
@@ -75,6 +85,21 @@ pub(crate) fn coerce_physical_file_schema(
 /// 2. Regular to view types conversion - Converts standard string/binary types to
 ///    view types when the table schema uses view types
 ///
+/// The same coercions are applied recursively to nested types: children of
+/// [`DataType::Struct`] fields are matched by name, while the children of
+/// list-like types ([`DataType::List`], [`DataType::LargeList`],
+/// [`DataType::ListView`], [`DataType::LargeListView`],
+/// [`DataType::FixedSizeList`]) and the key/value children of
+/// [`DataType::Map`] are matched by position, regardless of their names.
+///
+/// Only leaf data types are ever changed: field names, nullability, metadata,
+/// the list/map container kind, [`DataType::FixedSizeList`] width and
+/// [`DataType::Map`] ordering are always taken from `file_schema`, since the
+/// resulting schema must still describe the data physically present in the
+/// file (see [`ArrowReaderOptions::with_schema`]).
+///
+/// [`ArrowReaderOptions::with_schema`]: parquet::arrow::arrow_reader::ArrowReaderOptions::with_schema
+///
 /// # Arguments
 /// * `table_schema` - The table schema containing the desired types
 /// * `file_schema` - The file schema to be transformed
@@ -86,158 +111,170 @@ pub fn apply_file_schema_type_coercions(
     table_schema: &Schema,
     file_schema: &Schema,
 ) -> Option<Schema> {
-    let mut needs_view_transform = false;
-    let mut needs_string_transform = false;
-    let mut needs_nested_transform = false;
-
-    // Create a mapping of table field names to their data types for fast lookup
-    // and simultaneously check if we need any transformations
-    let table_fields: HashMap<_, _> = table_schema
-        .fields()
-        .iter()
-        .map(|f| {
-            let dt = f.data_type();
-            // Check if we need view type transformation
-            if matches!(dt, &DataType::Utf8View | &DataType::BinaryView) {
-                needs_view_transform = true;
-            }
-            // Check if we need string type transformation
-            if matches!(
-                dt,
-                &DataType::Utf8 | &DataType::LargeUtf8 | &DataType::Utf8View
-            ) {
-                needs_string_transform = true;
-            }
-            // Nested fields can need transformations even when their parent does not.
-            if matches!(
-                dt,
-                DataType::Struct(_)
-                    | DataType::List(_)
-                    | DataType::LargeList(_)
-                    | DataType::ListView(_)
-                    | DataType::LargeListView(_)
-                    | DataType::FixedSizeList(_, _)
-                    | DataType::Map(_, _)
-            ) {
-                needs_nested_transform = true;
-            }
-
-            (f.name(), dt)
-        })
-        .collect();
-
-    // Early return if no transformation needed
-    if !needs_view_transform && !needs_string_transform && !needs_nested_transform {
-        return None;
-    }
-
-    let transformed_fields: Vec<Arc<Field>> = file_schema
-        .fields()
-        .iter()
-        .map(|field| {
-            let field_name = field.name();
-            let field_type = field.data_type();
-
-            // Look up the corresponding field type in the table schema
-            if let Some(table_type) = table_fields.get(field_name) {
-                match (table_type, field_type) {
-                    // table schema uses string type, coerce the file schema to use string type
-                    (
-                        &DataType::Utf8,
-                        DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
-                    ) => {
-                        return field_with_new_type(field, DataType::Utf8);
-                    }
-                    // table schema uses large string type, coerce the file schema to use large string type
-                    (
-                        &DataType::LargeUtf8,
-                        DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
-                    ) => {
-                        return field_with_new_type(field, DataType::LargeUtf8);
-                    }
-                    // table schema uses string view type, coerce the file schema to use view type
-                    (
-                        &DataType::Utf8View,
-                        DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
-                    ) => {
-                        return field_with_new_type(field, DataType::Utf8View);
-                    }
-                    // Handle view type conversions
-                    (&DataType::Utf8View, DataType::Utf8 | DataType::LargeUtf8) => {
-                        return field_with_new_type(field, DataType::Utf8View);
-                    }
-                    (&DataType::BinaryView, DataType::Binary | DataType::LargeBinary) => {
-                        return field_with_new_type(field, DataType::BinaryView);
-                    }
-                    // Apply the same coercions to matching fields inside structs.
-                    (DataType::Struct(table_fields), DataType::Struct(file_fields)) => {
-                        if let Some(schema) = apply_file_schema_type_coercions(
-                            &Schema::new(table_fields.clone()),
-                            &Schema::new(file_fields.clone()),
-                        ) {
-                            return field_with_new_type(
-                                field,
-                                DataType::Struct(schema.fields),
-                            );
-                        }
-                    }
-                    // Container children match by position, regardless of their names.
-                    (DataType::List(table_child), DataType::List(file_child))
-                    | (
-                        DataType::LargeList(table_child),
-                        DataType::LargeList(file_child),
-                    )
-                    | (DataType::ListView(table_child), DataType::ListView(file_child))
-                    | (
-                        DataType::LargeListView(table_child),
-                        DataType::LargeListView(file_child),
-                    )
-                    | (
-                        DataType::FixedSizeList(table_child, _),
-                        DataType::FixedSizeList(file_child, _),
-                    )
-                    | (DataType::Map(table_child, _), DataType::Map(file_child, _)) => {
-                        if let Some(schema) = apply_file_schema_type_coercions(
-                            &Schema::new(vec![field_with_new_type(
-                                file_child,
-                                table_child.data_type().clone(),
-                            )]),
-                            &Schema::new(vec![Arc::clone(file_child)]),
-                        ) {
-                            let child = Arc::clone(&schema.fields()[0]);
-                            let new_type = match field_type {
-                                DataType::List(_) => DataType::List(child),
-                                DataType::LargeList(_) => DataType::LargeList(child),
-                                DataType::ListView(_) => DataType::ListView(child),
-                                DataType::LargeListView(_) => {
-                                    DataType::LargeListView(child)
-                                }
-                                DataType::FixedSizeList(_, size) => {
-                                    DataType::FixedSizeList(child, *size)
-                                }
-                                DataType::Map(_, sorted) => DataType::Map(child, *sorted),
-                                _ => return Arc::clone(field),
-                            };
-                            return field_with_new_type(field, new_type);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-
-            // If no transformation is needed, keep the original field
-            Arc::clone(field)
-        })
-        .collect();
-
-    if transformed_fields.iter().eq(file_schema.fields().iter()) {
-        return None;
-    }
-
+    let fields =
+        coerce_fields_by_name(table_schema.fields(), file_schema.fields(), true)?;
     Some(Schema::new_with_metadata(
-        transformed_fields,
+        fields,
         file_schema.metadata.clone(),
     ))
+}
+
+/// Coerce `file_fields` towards `table_fields`, matching fields by name.
+///
+/// File fields with no counterpart in `table_fields` are kept unchanged and
+/// table fields missing from the file are ignored. Returns `None` if no field
+/// changed.
+fn coerce_fields_by_name(
+    table_fields: &Fields,
+    file_fields: &Fields,
+    binary_to_string: bool,
+) -> Option<Fields> {
+    // Create a mapping of table field names to their data types for fast lookup
+    let table_types: HashMap<_, _> = table_fields
+        .iter()
+        .map(|f| (f.name(), f.data_type()))
+        .collect();
+
+    coerce_fields(file_fields, |_, field| {
+        let table_type = table_types.get(field.name())?;
+        coerce_data_type(table_type, field.data_type(), binary_to_string)
+            .map(|new_type| field_with_new_type(field, new_type))
+    })
+}
+
+/// Rebuild `file_fields`, replacing every field for which `coerce` returns a
+/// new one. Returns `None` if no field changed.
+///
+/// The output is only allocated once a field actually changes, so schemas
+/// needing no coercion at all (the common case) are walked without allocating
+/// or touching the reference counts of the file fields.
+fn coerce_fields(
+    file_fields: &Fields,
+    mut coerce: impl FnMut(usize, &FieldRef) -> Option<FieldRef>,
+) -> Option<Fields> {
+    let mut coerced: Option<Vec<FieldRef>> = None;
+    for (idx, field) in file_fields.iter().enumerate() {
+        match coerce(idx, field) {
+            Some(new_field) => coerced
+                .get_or_insert_with(|| {
+                    // The fields before the first change are carried over as is
+                    let mut fields = Vec::with_capacity(file_fields.len());
+                    fields.extend_from_slice(&file_fields[..idx]);
+                    fields
+                })
+                .push(new_field),
+            // Unchanged fields are only copied once something else changed
+            None => {
+                if let Some(coerced) = &mut coerced {
+                    coerced.push(Arc::clone(field));
+                }
+            }
+        }
+    }
+
+    coerced.map(Fields::from)
+}
+
+/// Coerce `file_type` towards `table_type`, recursing into nested types.
+///
+/// `binary_to_string` allows binary file types to be read as string types.
+/// Parquet only validates UTF-8 when the column carries the `UTF8` logical
+/// annotation, which a binary column by definition does not, so such a
+/// conversion hands back an unvalidated string array; see the module docs.
+///
+/// Returns the new type for the file field, or `None` if no transformation
+/// is needed (including when the two types are unrelated).
+fn coerce_data_type(
+    table_type: &DataType,
+    file_type: &DataType,
+    binary_to_string: bool,
+) -> Option<DataType> {
+    use DataType::*;
+    match (table_type, file_type) {
+        // table schema uses string type, coerce the file schema to use string type
+        (Utf8, Binary | LargeBinary | BinaryView) if binary_to_string => Some(Utf8),
+        // table schema uses large string type, coerce the file schema to use large string type
+        (LargeUtf8, Binary | LargeBinary | BinaryView) if binary_to_string => {
+            Some(LargeUtf8)
+        }
+        // table schema uses string view type, coerce the file schema to use view type
+        (Utf8View, Binary | LargeBinary | BinaryView) if binary_to_string => {
+            Some(Utf8View)
+        }
+        (Utf8View, Utf8 | LargeUtf8) => Some(Utf8View),
+        (BinaryView, Binary | LargeBinary) => Some(BinaryView),
+        // Struct children match by name
+        (Struct(table_fields), Struct(file_fields)) => {
+            coerce_fields_by_name(table_fields, file_fields, binary_to_string).map(Struct)
+        }
+        // List-like children match by position, regardless of their names.
+        // The container kind and FixedSizeList width always come from the file.
+        (List(table_child), List(file_child)) => {
+            coerce_child(table_child, file_child, binary_to_string).map(List)
+        }
+        (LargeList(table_child), LargeList(file_child)) => {
+            coerce_child(table_child, file_child, binary_to_string).map(LargeList)
+        }
+        (ListView(table_child), ListView(file_child)) => {
+            coerce_child(table_child, file_child, binary_to_string).map(ListView)
+        }
+        (LargeListView(table_child), LargeListView(file_child)) => {
+            coerce_child(table_child, file_child, binary_to_string).map(LargeListView)
+        }
+        (FixedSizeList(table_child, _), FixedSizeList(file_child, size)) => {
+            coerce_child(table_child, file_child, binary_to_string)
+                .map(|child| FixedSizeList(child, *size))
+        }
+        // Map keys and values match by position: Parquet always names them
+        // `key`/`value` while Arrow producers commonly use `keys`/`values`.
+        (Map(table_entries, _), Map(file_entries, sorted)) => {
+            coerce_map_entries(table_entries, file_entries)
+                .map(|entries| Map(entries, *sorted))
+        }
+        _ => None,
+    }
+}
+
+/// Coerce a single nested child field, keeping everything but its data type
+/// from `file_child`.
+fn coerce_child(
+    table_child: &FieldRef,
+    file_child: &FieldRef,
+    binary_to_string: bool,
+) -> Option<FieldRef> {
+    coerce_data_type(
+        table_child.data_type(),
+        file_child.data_type(),
+        binary_to_string,
+    )
+    .map(|new_type| field_with_new_type(file_child, new_type))
+}
+
+/// Coerce the `entries` struct of a [`DataType::Map`], matching the key and
+/// value children by position.
+///
+/// Binary children are never read as strings here: matching by position newly
+/// reaches map children whose names differ, and turning those into unvalidated
+/// string arrays would be a regression over leaving them to the (validating)
+/// cast. See the module docs.
+fn coerce_map_entries(
+    table_entries: &FieldRef,
+    file_entries: &FieldRef,
+) -> Option<FieldRef> {
+    let (DataType::Struct(table_fields), DataType::Struct(file_fields)) =
+        (table_entries.data_type(), file_entries.data_type())
+    else {
+        return None;
+    };
+    if table_fields.len() != file_fields.len() {
+        return None;
+    }
+
+    let fields = coerce_fields(file_fields, |idx, file_child| {
+        coerce_child(&table_fields[idx], file_child, false)
+    })?;
+
+    Some(field_with_new_type(file_entries, DataType::Struct(fields)))
 }
 
 /// Coerces the file schema's Timestamps to the provided TimeUnit if the
@@ -642,7 +679,11 @@ mod tests {
 
     #[test]
     fn nested_coercion_preserves_list_containers() {
-        let wrap: [fn(FieldRef) -> DataType; 6] = [
+        // The table side deliberately differs from the file side in the child
+        // field name, nullability and metadata, as well as in the
+        // FixedSizeList width and Map ordering: all of those must be taken
+        // from the file, only the leaf types come from the table.
+        let file_wrap: [fn(FieldRef) -> DataType; 6] = [
             DataType::List,
             DataType::LargeList,
             DataType::ListView,
@@ -650,42 +691,414 @@ mod tests {
             |field| DataType::FixedSizeList(field, 3),
             |field| DataType::Map(field, false),
         ];
-        for wrap in wrap {
-            let file_element = Arc::new(Field::new_struct(
-                "entries",
-                vec![
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Binary, true),
-                ],
-                false,
-            ));
+        let table_wrap: [fn(FieldRef) -> DataType; 6] = [
+            DataType::List,
+            DataType::LargeList,
+            DataType::ListView,
+            DataType::LargeListView,
+            |field| DataType::FixedSizeList(field, 7),
+            |field| DataType::Map(field, true),
+        ];
+        for (file_wrap, table_wrap) in file_wrap.into_iter().zip(table_wrap) {
+            let file_element = Arc::new(
+                Field::new_struct(
+                    "key_value",
+                    vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Utf8, true),
+                    ],
+                    false,
+                )
+                .with_metadata(HashMap::from([("source".into(), "file".into())])),
+            );
             let table_element = Arc::new(Field::new_struct(
                 "entries",
                 vec![
-                    Field::new("value", DataType::Utf8View, true),
-                    Field::new("key", DataType::Utf8View, false),
+                    Field::new("value", DataType::Utf8View, false),
+                    Field::new("key", DataType::Utf8View, true),
                 ],
-                false,
+                true,
             ));
-            let expected_element = Arc::new(Field::new_struct(
-                "entries",
-                vec![
-                    Field::new("key", DataType::Utf8View, false),
-                    Field::new("value", DataType::Utf8View, true),
-                ],
-                false,
-            ));
+            let expected_element = Arc::new(
+                Field::new_struct(
+                    "key_value",
+                    vec![
+                        Field::new("key", DataType::Utf8View, false),
+                        Field::new("value", DataType::Utf8View, true),
+                    ],
+                    false,
+                )
+                .with_metadata(HashMap::from([("source".into(), "file".into())])),
+            );
             let file_schema =
-                Schema::new(vec![Field::new("data", wrap(file_element), true)]);
+                Schema::new(vec![Field::new("data", file_wrap(file_element), true)]);
             let table_schema =
-                Schema::new(vec![Field::new("data", wrap(table_element), true)]);
+                Schema::new(vec![Field::new("data", table_wrap(table_element), false)]);
             let expected =
-                Schema::new(vec![Field::new("data", wrap(expected_element), true)]);
+                Schema::new(vec![Field::new("data", file_wrap(expected_element), true)]);
             assert_eq!(
                 apply_file_schema_type_coercions(&table_schema, &file_schema),
                 Some(expected)
             );
         }
+    }
+
+    #[test]
+    fn nested_coercion_matches_map_entries_by_position() {
+        // Parquet readers always name map children `key_value`/`key`/`value`,
+        // while Arrow producers (e.g. `MapBuilder`) default to
+        // `entries`/`keys`/`values`. Names must not matter for maps.
+        let file_schema = Schema::new(vec![Field::new_map(
+            "m",
+            "key_value",
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Binary, true),
+            false,
+            true,
+        )]);
+        let table_schema = Schema::new(vec![Field::new_map(
+            "m",
+            "entries",
+            Field::new("keys", DataType::Utf8View, false),
+            Field::new("values", DataType::Utf8View, true),
+            false,
+            true,
+        )]);
+        // The key is matched by position and coerced to a view, while the
+        // binary value is left to the validating cast (see
+        // `coerce_map_entries`)
+        let expected = Schema::new(vec![Field::new_map(
+            "m",
+            "key_value",
+            Field::new("key", DataType::Utf8View, false),
+            Field::new("value", DataType::Binary, true),
+            false,
+            true,
+        )]);
+        assert_eq!(
+            apply_file_schema_type_coercions(&table_schema, &file_schema),
+            Some(expected)
+        );
+
+        // A map whose entries do not have the same shape is left alone
+        let odd_table_schema = Schema::new(vec![Field::new(
+            "m",
+            DataType::Map(
+                Arc::new(Field::new_struct(
+                    "entries",
+                    vec![Field::new("keys", DataType::Utf8View, false)],
+                    false,
+                )),
+                false,
+            ),
+            true,
+        )]);
+        assert_eq!(
+            apply_file_schema_type_coercions(&odd_table_schema, &file_schema),
+            None
+        );
+    }
+
+    #[test]
+    fn nested_coercion_map_entry_struct_children_match_by_name() {
+        // A map whose key and value are both structs: the two entry children
+        // are matched by position (the file's `key`/`value` take the types of
+        // the table's first/second entry child, whatever they are named),
+        // while the fields inside those structs go back to matching by name.
+        //
+        // Both structs put `shared` in a different position on each side, so a
+        // positional match inside them would coerce `file_only` instead, and a
+        // by-name match on the entries themselves would coerce nothing at all.
+        let struct_field =
+            |name: &str, first: (&str, DataType), second: (&str, DataType)| {
+                Field::new_struct(
+                    name,
+                    vec![
+                        Field::new(first.0, first.1, true),
+                        Field::new(second.0, second.1, true),
+                    ],
+                    true,
+                )
+            };
+        let file_schema = Schema::new(vec![Field::new_map(
+            "m",
+            "key_value",
+            struct_field(
+                "key",
+                ("file_only", DataType::Utf8),
+                ("shared", DataType::Utf8),
+            ),
+            struct_field(
+                "value",
+                ("file_only", DataType::Utf8),
+                ("shared", DataType::Utf8),
+            ),
+            false,
+            true,
+        )]);
+        let table_schema = Schema::new(vec![Field::new_map(
+            "m",
+            "entries",
+            struct_field(
+                "keys",
+                ("shared", DataType::Utf8View),
+                ("table_only", DataType::Utf8View),
+            ),
+            struct_field(
+                "values",
+                ("shared", DataType::Utf8View),
+                ("table_only", DataType::Utf8View),
+            ),
+            false,
+            true,
+        )]);
+        let expected = Schema::new(vec![Field::new_map(
+            "m",
+            "key_value",
+            struct_field(
+                "key",
+                ("file_only", DataType::Utf8),
+                ("shared", DataType::Utf8View),
+            ),
+            struct_field(
+                "value",
+                ("file_only", DataType::Utf8),
+                ("shared", DataType::Utf8View),
+            ),
+            false,
+            true,
+        )]);
+        assert_eq!(
+            apply_file_schema_type_coercions(&table_schema, &file_schema),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn nested_coercion_leaves_binary_map_children_to_the_validating_cast() {
+        use arrow::array::{
+            Array, ArrayRef, AsArray, BinaryBuilder, MapBuilder, MapFieldNames,
+            StringBuilder,
+        };
+        use arrow::record_batch::RecordBatch;
+        use bytes::Bytes;
+        use parquet::arrow::ArrowWriter;
+        use parquet::arrow::arrow_reader::{
+            ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
+        };
+        use parquet::arrow::arrow_writer::ArrowWriterOptions;
+
+        // A binary map value holding bytes that are not valid UTF-8. Reading it
+        // as a string would produce an invalid array, since the Parquet reader
+        // only validates columns annotated `UTF8`, so the value must be left
+        // binary for the (validating) cast to reject.
+        let parquet_names = MapFieldNames {
+            entry: "key_value".to_string(),
+            key: "key".to_string(),
+            value: "value".to_string(),
+        };
+        let mut builder = MapBuilder::new(
+            Some(parquet_names),
+            StringBuilder::new(),
+            BinaryBuilder::new(),
+        );
+        builder.keys().append_value("k1");
+        builder.values().append_value([0xff]);
+        builder.append(true).unwrap();
+        let batch =
+            RecordBatch::try_from_iter([("m", Arc::new(builder.finish()) as ArrayRef)])
+                .unwrap();
+
+        let mut bytes = Vec::new();
+        let mut writer = ArrowWriter::try_new_with_options(
+            &mut bytes,
+            batch.schema(),
+            ArrowWriterOptions::new().with_skip_arrow_metadata(true),
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let bytes = Bytes::from(bytes);
+
+        let file_schema = ParquetRecordBatchReaderBuilder::try_new(bytes.clone())
+            .unwrap()
+            .schema()
+            .clone();
+        let table_schema = Schema::new(vec![Field::new_map(
+            "m",
+            "entries",
+            Field::new("keys", DataType::Utf8View, false),
+            Field::new("values", DataType::Utf8View, true),
+            false,
+            true,
+        )]);
+
+        // The key is still coerced by position, the binary value is not
+        let coerced =
+            apply_file_schema_type_coercions(&table_schema, &file_schema).unwrap();
+        assert_eq!(
+            coerced.field(0).data_type(),
+            &DataType::Map(
+                Arc::new(Field::new_struct(
+                    "key_value",
+                    vec![
+                        Field::new("key", DataType::Utf8View, false),
+                        Field::new("value", DataType::Binary, true),
+                    ],
+                    false,
+                )),
+                false,
+            )
+        );
+
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
+            bytes,
+            ArrowReaderOptions::new().with_schema(Arc::new(coerced)),
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+        let decoded = reader.next().unwrap().unwrap();
+        // The decoded batch is valid: the invalid bytes are still binary
+        decoded.column(0).to_data().validate_full().unwrap();
+        assert_eq!(
+            decoded
+                .column(0)
+                .as_map()
+                .values()
+                .as_binary::<i32>()
+                .value(0),
+            [0xff]
+        );
+    }
+
+    #[test]
+    fn nested_coercion_list_inside_struct() {
+        let file_schema = Schema::new(vec![Field::new_struct(
+            "s",
+            vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new_list("tags", Field::new("item", DataType::Utf8, true), true),
+            ],
+            true,
+        )]);
+        let table_schema = Schema::new(vec![Field::new_struct(
+            "s",
+            vec![Field::new_list(
+                "tags",
+                Field::new("element", DataType::Utf8View, false),
+                false,
+            )],
+            false,
+        )]);
+        let expected = Schema::new(vec![Field::new_struct(
+            "s",
+            vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new_list(
+                    "tags",
+                    Field::new("item", DataType::Utf8View, true),
+                    true,
+                ),
+            ],
+            true,
+        )]);
+        assert_eq!(
+            apply_file_schema_type_coercions(&table_schema, &file_schema),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn nested_coercion_map_reader_produces_string_views() {
+        use arrow::array::{
+            Array, ArrayRef, AsArray, MapBuilder, MapFieldNames, StringBuilder,
+        };
+        use arrow::record_batch::RecordBatch;
+        use bytes::Bytes;
+        use parquet::arrow::ArrowWriter;
+        use parquet::arrow::arrow_reader::{
+            ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
+        };
+        use parquet::arrow::arrow_writer::ArrowWriterOptions;
+
+        // Build the file with Parquet's `key_value`/`key`/`value` naming, as
+        // written by non-Arrow writers, while the table schema below uses
+        // Arrow's default `entries`/`keys`/`values` naming.
+        let parquet_names = MapFieldNames {
+            entry: "key_value".to_string(),
+            key: "key".to_string(),
+            value: "value".to_string(),
+        };
+        let mut builder = MapBuilder::new(
+            Some(parquet_names),
+            StringBuilder::new(),
+            StringBuilder::new(),
+        );
+        builder.keys().append_value("k1");
+        builder.values().append_value("v1");
+        builder.append(true).unwrap();
+        builder.append(false).unwrap();
+        let map = builder.finish();
+        let batch =
+            RecordBatch::try_from_iter([("m", Arc::new(map) as ArrayRef)]).unwrap();
+        let table_schema = Schema::new(vec![Field::new_map(
+            "m",
+            "entries",
+            Field::new("keys", DataType::Utf8View, false),
+            Field::new("values", DataType::Utf8View, true),
+            false,
+            true,
+        )]);
+
+        // Write without the embedded Arrow schema, as a non-Arrow writer would
+        let mut bytes = Vec::new();
+        let mut writer = ArrowWriter::try_new_with_options(
+            &mut bytes,
+            batch.schema(),
+            ArrowWriterOptions::new().with_skip_arrow_metadata(true),
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let bytes = Bytes::from(bytes);
+
+        let file_schema = ParquetRecordBatchReaderBuilder::try_new(bytes.clone())
+            .unwrap()
+            .schema()
+            .clone();
+        assert_eq!(
+            file_schema.field(0).data_type(),
+            &DataType::Map(
+                Arc::new(Field::new_struct(
+                    "key_value",
+                    vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Utf8, true),
+                    ],
+                    false,
+                )),
+                false,
+            )
+        );
+
+        let reader_schema = Arc::new(
+            apply_file_schema_type_coercions(&table_schema, &file_schema).unwrap(),
+        );
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
+            bytes,
+            ArrowReaderOptions::new().with_schema(Arc::clone(&reader_schema)),
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+        let decoded = reader.next().unwrap().unwrap();
+        assert_eq!(decoded.schema(), reader_schema);
+        let map = decoded.column(0).as_map();
+        assert_eq!(map.keys().as_string_view().value(0), "k1");
+        assert_eq!(map.values().as_string_view().value(0), "v1");
+        assert!(map.is_null(1));
+        assert!(reader.next().is_none());
     }
 
     #[test]
