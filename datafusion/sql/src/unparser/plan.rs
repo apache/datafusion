@@ -593,7 +593,18 @@ impl Unparser<'_> {
         alias: Option<ast::TableAlias>,
         lateral: bool,
     ) -> Result<()> {
+        let preserve_names = matches!(plan, LogicalPlan::Projection(_))
+            && alias.as_ref().is_none_or(|alias| alias.columns.is_empty());
         let mut derived_builder = DerivedRelationBuilder::default();
+        if preserve_names {
+            derived_builder.projection_names(
+                plan.schema()
+                    .fields()
+                    .iter()
+                    .map(|field| self.column_alias_to_sql(field.name()))
+                    .collect::<Result<Vec<_>>>()?,
+            );
+        }
         derived_builder.lateral(lateral).alias(alias).subquery({
             let inner_statement = self.plan_to_sql(plan)?;
             if let ast::Statement::Query(inner_query) = inner_statement {
@@ -2693,18 +2704,9 @@ impl Unparser<'_> {
             Expr::Alias(Alias { expr, name, .. }) => {
                 let inner = self.expr_to_sql(expr)?;
 
-                // Determine the alias name to use
-                let col_name = if let Some(rewritten_name) =
-                    self.dialect.col_alias_overrides(name)?
-                {
-                    rewritten_name.to_string()
-                } else {
-                    name.to_string()
-                };
-
                 Ok(ast::SelectItem::ExprWithAlias {
                     expr: inner,
-                    alias: self.new_ident_quoted_if_needs(col_name),
+                    alias: self.column_alias_to_sql(name)?,
                 })
             }
             _ => {
@@ -2713,6 +2715,14 @@ impl Unparser<'_> {
                 Ok(ast::SelectItem::UnnamedExpr(inner))
             }
         }
+    }
+
+    fn column_alias_to_sql(&self, name: &str) -> Result<Ident> {
+        let name = self
+            .dialect
+            .col_alias_overrides(name)?
+            .unwrap_or_else(|| name.to_string());
+        Ok(self.new_ident_quoted_if_needs(name))
     }
 
     fn sorts_to_sql(&self, sort_exprs: &[SortExpr]) -> Result<OrderByKind> {
