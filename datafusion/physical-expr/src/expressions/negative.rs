@@ -314,27 +314,28 @@ mod tests {
     }
 
     #[test]
-    fn test_wrapping_negation_properties() -> Result<()> {
+    fn test_wrapping_negation_properties() {
         let expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
         let ordered = SortProperties::Ordered(Default::default());
         for data_type in [Int8, Int16, Int32, Int64] {
             let minimum = ScalarValue::min(&data_type).unwrap();
-            let full = Interval::make_unbounded(&data_type)?;
-            let singleton = Interval::try_new(minimum.clone(), minimum.clone())?;
+            let full = Interval::make_unbounded(&data_type).unwrap();
+            let singleton = Interval::try_new(minimum.clone(), minimum.clone()).unwrap();
             for range in [
                 full.clone(),
                 singleton.clone(),
-                Interval::try_new(ScalarValue::try_from(&data_type)?, minimum)?,
+                Interval::try_new(ScalarValue::try_from(&data_type).unwrap(), minimum)
+                    .unwrap(),
             ] {
                 let child = ExprProperties::new_unknown()
                     .with_range(range.clone())
                     .with_order(ordered);
-                let result = expr.get_properties(&[child])?;
+                let result = expr.get_properties(&[child]).unwrap();
                 assert_eq!(result.sort_properties, SortProperties::Unordered);
                 assert_eq!(result.range, full);
-                assert_eq!(expr.evaluate_bounds(&[&range])?, full);
+                assert_eq!(expr.evaluate_bounds(&[&range]).unwrap(), full);
                 assert_eq!(
-                    expr.propagate_constraints(&range, &[&full])?,
+                    expr.propagate_constraints(&range, &[&full]).unwrap(),
                     Some(vec![full.clone()])
                 );
             }
@@ -342,23 +343,95 @@ mod tests {
                 .with_range(singleton)
                 .with_order(SortProperties::Singleton);
             assert_eq!(
-                expr.get_properties(&[child])?.sort_properties,
+                expr.get_properties(&[child]).unwrap().sort_properties,
                 SortProperties::Singleton
             );
         }
-        let safe = Interval::make(Some(i8::MIN + 1), Some(1_i8))?;
-        let child = ExprProperties::new_unknown()
-            .with_range(safe.clone())
-            .with_order(ordered);
-        let result = expr.get_properties(&[child])?;
-        assert_eq!(result.sort_properties, -ordered);
-        assert_eq!(result.range, safe.arithmetic_negate()?);
-        let unknown = ExprProperties::new_unknown().with_order(ordered);
+    }
+
+    #[test]
+    fn test_non_wrapping_negation_properties() {
+        let expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
+        let ranges = [
+            Interval::make(Some(i8::MIN + 1), Some(1_i8)).unwrap(),
+            Interval::make(Some(i16::MIN + 1), Some(1_i16)).unwrap(),
+            Interval::make(Some(i32::MIN + 1), Some(1_i32)).unwrap(),
+            Interval::make(Some(i64::MIN + 1), Some(1_i64)).unwrap(),
+            Interval::make(Some(-2_f32), Some(1_f32)).unwrap(),
+            Interval::make(Some(-2_f64), Some(1_f64)).unwrap(),
+            Interval::make_unbounded(&Float32).unwrap(),
+            Interval::make_unbounded(&Float64).unwrap(),
+        ];
+        for range in ranges {
+            let expected_range = range.arithmetic_negate().unwrap();
+            for descending in [false, true] {
+                for nulls_first in [false, true] {
+                    let ordered = SortProperties::Ordered(arrow::compute::SortOptions {
+                        descending,
+                        nulls_first,
+                    });
+                    let child = ExprProperties::new_unknown()
+                        .with_range(range.clone())
+                        .with_order(ordered);
+                    let result = expr.get_properties(&[child]).unwrap();
+                    assert_eq!(result.sort_properties, -ordered);
+                    assert_eq!(result.range, expected_range);
+                }
+            }
+            assert_eq!(expr.evaluate_bounds(&[&range]).unwrap(), expected_range);
+            assert_eq!(
+                expr.propagate_constraints(&expected_range, &[&range])
+                    .unwrap(),
+                Some(vec![range])
+            );
+        }
+    }
+
+    #[test]
+    fn test_unknown_negation_properties() {
+        let expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
+        for order in [
+            SortProperties::Ordered(Default::default()),
+            SortProperties::Unordered,
+            SortProperties::Singleton,
+        ] {
+            let child = ExprProperties::new_unknown().with_order(order);
+            let range = child.range.clone();
+            let result = expr.get_properties(&[child]).unwrap();
+            assert_eq!(
+                result.sort_properties,
+                if order == SortProperties::Singleton {
+                    SortProperties::Singleton
+                } else {
+                    SortProperties::Unordered
+                }
+            );
+            assert_eq!(result.range, range);
+            assert_eq!(expr.evaluate_bounds(&[&range]).unwrap(), range);
+        }
+    }
+
+    #[test]
+    fn test_negation_bounds_errors() {
+        let expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
+        // Boolean intervals cannot be negated. All callers must propagate the error.
+        let range = Interval::make(Some(false), Some(true)).unwrap();
+        let child = ExprProperties::new_unknown().with_range(range.clone());
+        let expected = range.arithmetic_negate().unwrap_err().to_string();
         assert_eq!(
-            expr.get_properties(&[unknown])?.sort_properties,
-            SortProperties::Unordered
+            expr.evaluate_bounds(&[&range]).unwrap_err().to_string(),
+            expected
         );
-        Ok(())
+        assert_eq!(
+            expr.get_properties(&[child]).unwrap_err().to_string(),
+            expected
+        );
+        assert_eq!(
+            expr.propagate_constraints(&range, &[&range])
+                .unwrap_err()
+                .to_string(),
+            expected
+        );
     }
 
     #[test]
