@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -276,7 +276,7 @@ physical_plan
 03)----SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[max(d.a)]
 05)--------RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4
-06)----------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[max(d.a)], ordering_mode=Sorted
+06)----------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[max(d.a)]
 07)------------UnionExec
 08)--------------ProjectionExec: expr=[1 as a, aa as b]
 09)----------------PlaceholderRowExec
@@ -6600,9 +6600,9 @@ FROM (
 )
 ORDER BY a;
 ----
-1.5 1.5 2.5
-2.5 1.5 3.5
-3.5 2.5 3.5
+1.50 1.50 2.50
+2.50 1.50 3.50
+3.50 2.50 3.50
 
 ############################################################################
 # ROWS frame regression guard: huge offsets already saturate via
@@ -6825,8 +6825,8 @@ FROM (VALUES(1,CAST(1.5 AS DECIMAL(10,2))),
             (4,CAST(NULL AS DECIMAL(10,2)))) t(i,v)
 ORDER BY i;
 ----
-1 2
-2 2.5
+1 2.000000
+2 2.500000
 3 NULL
 4 NULL
 
@@ -7018,8 +7018,8 @@ query error DataFusion error: type_coercion\ncaused by\nError during planning: R
 SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND INTERVAL '1' HOUR FOLLOWING)
 FROM (VALUES (arrow_cast('01:00:00', 'Time64(Microsecond)'))) t(x)
 
-# Unsupported RANGE ORDER BY types still propagate the type-coercion error.
-query error DataFusion error: type_coercion\ncaused by\nInternal error: Cannot run range queries on datatype: Struct\("c0": Int64\)
+# Unsupported RANGE ORDER BY types are rejected during planning.
+query error Error during planning: RANGE window frames are not supported for ORDER BY type Struct
 SELECT COUNT(*) OVER (ORDER BY x)
 FROM (VALUES (struct(1))) t(x)
 
@@ -7062,8 +7062,8 @@ FROM (VALUES (arrow_cast(1.5, 'Decimal128(10, 2)')),
              (arrow_cast(2.0, 'Decimal128(10, 2)'))) t(x)
 ORDER BY x
 ----
-1.5 1
-2 2
+1.50 1
+2.00 2
 
 # Free range frames over those same types keep working, so the rejection above is
 # narrowed to the offset form rather than to the order key type as a whole.
@@ -7093,3 +7093,198 @@ SELECT last_value() OVER () FROM (VALUES (1), (2), (3)) t(x)
 
 statement error DataFusion error: Error during planning: 'nth_value' does not support zero arguments
 SELECT nth_value() OVER () FROM (VALUES (1), (2), (3)) t(x)
+
+# The default frame of `OVER (ORDER BY ...)` is a free RANGE frame, which
+# needs no offset arithmetic on the ORDER BY type. Durations and intervals
+# used to fail with "Internal error: Cannot run range queries on datatype".
+query ?I
+select x, row_number() over (order by x) from (values (arrow_cast(2, 'Duration(Second)')), (arrow_cast(1, 'Duration(Second)'))) t(x) order by 2
+----
+0 days 0 hours 0 mins 1 secs 1
+0 days 0 hours 0 mins 2 secs 2
+
+query ?I
+select x, rank() over (order by x) from (values (interval '2 months'), (interval '1 month')) t(x) order by 2
+----
+1 mons 1
+2 mons 2
+
+query ?I
+select x, row_number() over (order by x range between unbounded preceding and current row) from (values (arrow_cast(2, 'Duration(Millisecond)')), (arrow_cast(1, 'Duration(Millisecond)'))) t(x) order by 2
+----
+0 days 0 hours 0 mins 0.001 secs 1
+0 days 0 hours 0 mins 0.002 secs 2
+
+# offset frames still need an arithmetic ORDER BY type; the map and struct
+# types are not accepted in free frames either, see `supports_free_range_frame`
+statement error Error during planning: RANGE window frames are not supported for ORDER BY type Struct
+select count(*) over (order by x range between 1 preceding and current row) from (values (struct(1))) t(x)
+
+statement error Error during planning: RANGE window frames are not supported for ORDER BY type Map
+select count(*) over (order by x) from (values (map(['a'], [1])), (map(['a'], [2]))) t(x)
+
+# every ORDER BY expression takes part in the peer comparison, so a map after
+# a duration is rejected as well, while two durations are fine; the error names
+# the offending type, not the first ORDER BY type
+statement error Error during planning: RANGE window frames are not supported for ORDER BY type Map
+select count(*) over (order by d, m) from (values (arrow_cast(1, 'Duration(Second)'), map(['a'], [1])), (arrow_cast(1, 'Duration(Second)'), map(['a'], [2]))) t(d, m)
+
+# the trailing key check also runs when the first ORDER BY type supports offset
+# arithmetic; otherwise these maps are treated as peers because their keys are
+# equal even though their values differ
+statement error Error during planning: RANGE window frames are not supported for ORDER BY type Map
+select count(*) over (order by i, m) from (values (1, map(['a'], [1])), (1, map(['a'], [2]))) t(i, m)
+
+query ??I
+select d, e, count(*) over (order by d, e) from (values (arrow_cast(1, 'Duration(Second)'), arrow_cast(2, 'Duration(Millisecond)')), (arrow_cast(1, 'Duration(Second)'), arrow_cast(1, 'Duration(Millisecond)'))) t(d, e) order by 3
+----
+0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 0.001 secs 1
+0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 0.002 secs 2
+
+# List ORDER BY keys were already accepted in RANGE frames before the free-range
+# fallback existed (`extract_window_frame_target_type` returns the list type
+# itself), and this PR does not change that. A list of primitives works:
+query I
+select count(*) over (order by l) from (values ([1]), ([2])) t(l)
+----
+1
+2
+
+# but a list whose elements are nested (struct, list) plans and then fails at
+# execution: the peer comparison in the RANGE frame goes through
+# `ScalarValue::partial_cmp`, which cannot compare nested list elements, while
+# the sort that produced the input uses `make_comparator` and can. Documented
+# here so the fix to the scalar comparison can flip these expectations.
+query error DataFusion error: Internal error: Uncomparable values: List\(\[\{c0: 1\}\]\), List\(\[\{c0: 1\}\]\)
+select count(*) over (order by l) from (values ([struct(1)]), ([struct(2)])) t(l)
+
+query error DataFusion error: Internal error: Uncomparable values: List\(\[\[1\]\]\), List\(\[\[1\]\]\)
+select count(*) over (order by l) from (values ([[1]]), ([[2]])) t(l)
+
+# after a duration key the free-range check looks at every ORDER BY type, and
+# a list is rejected at planning even though it sorts fine: the RANGE peer
+# check (`compare_rows`, then `ScalarValue::partial_cmp`) always orders a NULL
+# list element after a non-NULL one, while the sort applies NULLS FIRST to the
+# elements as well, so with tied durations `[NULL]` and `[1]` would be sorted
+# one way and compared the other
+query error Error during planning: RANGE window frames are not supported for ORDER BY type List
+select count(*) over (order by d, l nulls first) from (values (arrow_cast(1, 'Duration(Second)'), [NULL]), (arrow_cast(1, 'Duration(Second)'), [1])) t(d, l)
+
+# the check is on the type, not the values: a list without NULLs and a
+# dictionary-encoded list are rejected the same way
+query error Error during planning: RANGE window frames are not supported for ORDER BY type List
+select count(*) over (order by d, l) from (values (arrow_cast(1, 'Duration(Second)'), [1]), (arrow_cast(1, 'Duration(Second)'), [2])) t(d, l)
+
+query error Error during planning: RANGE window frames are not supported for ORDER BY type Dictionary\(Int32, List
+select count(*) over (order by d, l) from (values (arrow_cast(1, 'Duration(Second)'), arrow_cast([1], 'Dictionary(Int32, List(Int64))')), (arrow_cast(1, 'Duration(Second)'), arrow_cast([2], 'Dictionary(Int32, List(Int64))'))) t(d, l)
+
+# Window functions are not allowed in WHERE or HAVING: both are evaluated before
+# window functions are computed, so they are rejected during planning
+# issue: https://github.com/apache/datafusion/issues/4610
+statement ok
+CREATE TABLE window_in_filter_t(a INT, b INT) AS VALUES (1, 1), (2, 2);
+
+statement error DataFusion error: Error during planning: Window function calls are not allowed in HAVING: 'sum\(count\(Int64\(1\)\) AS count\(\*\)\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT a, count(*) AS cnt, sum(count(*)) OVER () AS total
+FROM window_in_filter_t
+GROUP BY a
+HAVING sum(count(*)) OVER () >= 10;
+
+# ... also through an alias of the window function
+statement error DataFusion error: Error during planning: Window function calls are not allowed in HAVING: 'sum\(count\(Int64\(1\)\) AS count\(\*\)\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT a, count(*) AS cnt, sum(count(*)) OVER () AS total
+FROM window_in_filter_t
+GROUP BY a
+HAVING total >= 10;
+
+statement error DataFusion error: Error during planning: Window function calls are not allowed in HAVING: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT a FROM window_in_filter_t GROUP BY a HAVING row_number() OVER () = 1;
+
+statement error DataFusion error: Error during planning: Window function calls are not allowed in WHERE: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT a FROM window_in_filter_t WHERE row_number() OVER () = 1;
+
+# The same window function is legal in the SELECT list ...
+query III
+SELECT a, count(*) AS cnt, sum(count(*)) OVER () AS total
+FROM window_in_filter_t
+GROUP BY a
+ORDER BY a;
+----
+1 1 2
+2 1 2
+
+# ... in QUALIFY, which is the clause for filtering on a window function ...
+query III
+SELECT a, count(*) AS cnt, sum(count(*)) OVER () AS total
+FROM window_in_filter_t
+GROUP BY a
+QUALIFY sum(count(*)) OVER () >= 2
+ORDER BY a;
+----
+1 1 2
+2 1 2
+
+# ... in the WHERE of an outer query ...
+query III
+SELECT * FROM (
+  SELECT a, count(*) AS cnt, sum(count(*)) OVER () AS total
+  FROM window_in_filter_t
+  GROUP BY a
+) s
+WHERE total >= 2
+ORDER BY a;
+----
+1 1 2
+2 1 2
+
+# ... and inside a subquery of a WHERE predicate
+query I
+SELECT a FROM window_in_filter_t
+WHERE a IN (SELECT a FROM window_in_filter_t QUALIFY row_number() OVER (ORDER BY a) = 1);
+----
+1
+
+# Window functions are rejected during planning in JOIN ON, GROUP BY and VALUES
+# as well
+statement error DataFusion error: Error during planning: Window function calls are not allowed in JOIN ON: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT * FROM window_in_filter_t x JOIN window_in_filter_t y ON x.a = y.a AND row_number() OVER () = 1;
+
+statement error DataFusion error: Error during planning: Window function calls are not allowed in GROUP BY: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT count(*) FROM window_in_filter_t GROUP BY row_number() OVER ();
+
+# ... also through an alias or the position of a select expression
+statement error DataFusion error: Error during planning: Window function calls are not allowed in GROUP BY: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT row_number() OVER () AS rn, count(*) FROM window_in_filter_t GROUP BY rn;
+
+statement error DataFusion error: Error during planning: Window function calls are not allowed in GROUP BY: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+SELECT row_number() OVER (), count(*) FROM window_in_filter_t GROUP BY 1;
+
+statement error DataFusion error: Error during planning: Window function calls are not allowed in VALUES: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+VALUES (row_number() OVER ());
+
+statement error DataFusion error: Error during planning: Window function calls are not allowed in VALUES: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+INSERT INTO window_in_filter_t VALUES (row_number() OVER (), 1);
+
+# A window function in a joined subquery is legal
+query II
+SELECT x.a, y.total FROM window_in_filter_t x
+JOIN (SELECT a, sum(b) OVER () AS total FROM window_in_filter_t) y ON x.a = y.a
+ORDER BY x.a;
+----
+1 3
+2 3
+
+# Positions with no dedicated check are reported by the physical planner, which
+# names the function instead of dumping its internal representation
+statement error DataFusion error: This feature is not implemented: Unsupported LIMIT expression: CAST\(row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS Int64\)
+SELECT a FROM window_in_filter_t LIMIT row_number() OVER ();
+
+statement error DataFusion error: This feature is not implemented: Unsupported OFFSET expression: CAST\(row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS Int64\)
+SELECT a FROM window_in_filter_t OFFSET row_number() OVER ();
+
+# ... and the same for an aggregate function
+statement error DataFusion error: This feature is not implemented: Unsupported LIMIT expression: count\(Int64\(1\)\) AS count\(\*\)
+SELECT a FROM window_in_filter_t LIMIT count(*);
+
+statement ok
+DROP TABLE window_in_filter_t;

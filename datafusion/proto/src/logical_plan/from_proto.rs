@@ -69,13 +69,26 @@ pub fn parse_write_op(
                         .to_string(),
                 )
             })?;
-            WriteOp::MergeInto(Box::new(parse_merge_into_op(merge_into, ctx, codec)?))
+            let target_qualifier = super::from_table_reference(
+                merge_into
+                    .target_qualifier
+                    .as_ref()
+                    .or(node.table_name.as_ref()),
+                "MERGE INTO ",
+            )?;
+            WriteOp::MergeInto(Box::new(parse_merge_into_op(
+                merge_into,
+                target_qualifier,
+                ctx,
+                codec,
+            )?))
         }
     })
 }
 
 fn parse_merge_into_op(
     op: &protobuf::MergeIntoOpNode,
+    target_qualifier: TableReference,
     ctx: &TaskContext,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<MergeIntoOp, Error> {
@@ -88,7 +101,7 @@ fn parse_merge_into_op(
         .iter()
         .map(|c| parse_merge_into_clause(c, ctx, codec))
         .collect::<Result<Vec<_>, Error>>()?;
-    Ok(MergeIntoOp { on, clauses })
+    Ok(MergeIntoOp::new(target_qualifier, on, clauses))
 }
 
 fn parse_merge_into_clause(
@@ -429,7 +442,8 @@ pub fn parse_expr(
             let data_type: DataType = cast.arrow_type.as_ref().required("arrow_type")?;
             let field = data_type
                 .into_nullable_field()
-                .with_nullable(cast.nullable.unwrap_or(true));
+                .with_nullable(cast.nullable.unwrap_or(true))
+                .with_metadata(cast.metadata.clone());
             Ok(Expr::Cast(Cast::new_from_field(expr, Arc::new(field))))
         }
         ExprType::TryCast(cast) => {
@@ -442,7 +456,8 @@ pub fn parse_expr(
             let data_type: DataType = cast.arrow_type.as_ref().required("arrow_type")?;
             let field = data_type
                 .into_nullable_field()
-                .with_nullable(cast.nullable.unwrap_or(true));
+                .with_nullable(cast.nullable.unwrap_or(true))
+                .with_metadata(cast.metadata.clone());
             Ok(Expr::TryCast(TryCast::new_from_field(
                 expr,
                 Arc::new(field),

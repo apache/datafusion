@@ -1547,10 +1547,13 @@ impl MaterializingSortMergeJoinStream {
         let right_columns =
             self.materialize_right_columns(matched_chunks, total_matched_rows)?;
 
+        // `get_filter_columns` takes arrays in join-side order. `left_columns`
+        // / `right_columns` here are streamed / buffered, and for a Right join
+        // the streamed side is the join's right input, hence the swap.
         let filter_columns = if self.join_type == JoinType::Right {
-            get_filter_columns(self.filter.as_ref(), &right_columns, &left_columns)
+            get_filter_columns(self.filter.as_ref(), &right_columns, &left_columns)?
         } else {
-            get_filter_columns(self.filter.as_ref(), &left_columns, &right_columns)
+            get_filter_columns(self.filter.as_ref(), &left_columns, &right_columns)?
         };
 
         let columns = if self.join_type != JoinType::Right {

@@ -19,25 +19,17 @@
 //!
 //! See comments in [`PartialHashAggregateStream`] and [`FinalHashAggregateStream`]
 //! for details.
-//!
-//! Note these streams are an incremental migration of the existing
-//! [`crate::aggregates::grouped_hash_stream::GroupedHashAggregateStream`].
-//!
-//! See issue for details: <https://github.com/apache/datafusion/issues/22710>
 
 use std::mem::size_of;
-use std::ops::ControlFlow;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result, internal_datafusion_err, internal_err};
-use datafusion_execution::TaskContext;
+use datafusion_common::{
+    DataFusionError, Result, assert_ne_or_internal_err, internal_datafusion_err,
+};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_physical_expr::PhysicalSortExpr;
-use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
@@ -45,16 +37,13 @@ use super::aggregate_hash_table::{
     AggregateHashTable, FinalMarker, OrderedAggregateTableMetrics, PartialMarker,
     PartialSkipMarker,
 };
-use super::ordered_final_stream::OrderedFinalAggregateStream;
 use super::skip_partial::SkipAggregationProbe;
+use super::spill::AggregateSpill;
 use crate::metrics::{
     BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput, SpillMetrics,
 };
-use crate::sorts::IncrementalSortIterator;
-use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
-use crate::spill::spill_manager::SpillManager;
-use crate::stream::EmptyRecordBatchStream;
-use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metrics};
+use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
+use crate::{InputOrderMode, SendableRecordBatchStream, metrics};
 
 /// Hash aggregation is implemented in two stages: partial and final. This
 /// stream implements the partial stage.
@@ -117,6 +106,16 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metric
 /// remaining input batch is converted directly to partial aggregate state rows
 /// without inserting the rows into the grouped hash table.
 ///
+/// # Feature: Grouping Sets
+///
+/// `GROUPING SETS`, `CUBE` and `ROLLUP` are expanded in the partial stage: every
+/// grouping set of an input batch is evaluated (with the grouping expressions
+/// that are not part of the set replaced by `NULL`, plus an internal
+/// `__grouping_id` column) and interned into the same hash table. The final
+/// stage then merges the expanded keys as a plain group by.
+///
+/// The partial aggregation skip optimization is disabled for grouping sets.
+///
 /// # Feature: Memory-limited Execution
 ///
 /// ## Partial Aggregation
@@ -137,7 +136,7 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metric
 /// 3. Perform a sort-preserving merge of all spill files and feed the merged output
 ///    into an ordered streaming aggregation, which ensures bounded memory usage and
 ///    evaluates the final result.
-///    - [`OrderedFinalAggregateStream`] is reused for the streaming aggregation.
+///    - [`OrderedFinalAggregateStream`](super::ordered_final_stream::OrderedFinalAggregateStream) is reused for the streaming aggregation.
 pub(crate) struct PartialHashAggregateStream {
     /// Output schema: group columns followed by partial aggregate state columns.
     schema: SchemaRef,
@@ -157,6 +156,9 @@ pub(crate) struct PartialHashAggregateStream {
     /// Tracks partial aggregation row reduction, matching `GroupedHashAggregateStream`.
     reduction_factor: metrics::RatioMetrics,
 
+    /// Number of times accumulated states were emitted due to memory pressure.
+    early_emit_count: metrics::Count,
+
     /// Tracks whether partial aggregation should switch to direct state conversion.
     skip_aggregation_probe: Option<SkipAggregationProbe>,
 
@@ -166,67 +168,8 @@ pub(crate) struct PartialHashAggregateStream {
     /// be empty. See struct comments for details.
     group_values_soft_limit: Option<usize>,
 
-    /// Tracks the high-level stream lifecycle. The hash table owns the lower-level
-    /// state for emitting output batches.
-    state: Option<PartialHashAggregateState>,
-}
-
-/// States for partial hash aggregation processing.
-enum PartialHashAggregateState {
-    ReadingInput {
-        hash_table: AggregateHashTable<PartialMarker>,
-    },
-    /// A fully materialized partial-state batch being emitted incrementally.
-    EmittingOnMemoryPressure {
-        hash_table: AggregateHashTable<PartialMarker>,
-        // After each incremental emitting step, the `remaining_groups` will be updated
-        // with batch slicing.
-        remaining_groups: RecordBatch,
-    },
-    ProducingOutput {
-        hash_table: AggregateHashTable<PartialMarker>,
-        /// If `None`, partial skip was never triggered and this state will
-        /// finish in `Done`. If `Some`, partial skip has triggered and the
-        /// stream will move to `SkippingAggregation` after these accumulated
-        /// groups are emitted.
-        skip_hash_table: Option<AggregateHashTable<PartialSkipMarker>>,
-    },
-    SkippingAggregation {
-        hash_table: AggregateHashTable<PartialSkipMarker>,
-    },
-    Done,
-    /// Sentinel state to use when returning error from any other states, because:
-    /// - It explicitly releases state-owned resources immediately
-    /// - More defensive against accidentally resuming execution after error
-    Error,
-}
-
-type PartialHashAggregatePoll = Poll<Option<Result<RecordBatch>>>;
-type PartialHashAggregateStateTransition = ControlFlow<
-    (PartialHashAggregatePoll, PartialHashAggregateState),
-    PartialHashAggregateState,
->;
-
-/// Spill configuration and accumulated runs for final hash aggregation.
-///
-/// Each spill event drains all currently buffered groups, sorts their intermediate
-/// states by the full group key, and writes them to one spill file. All files are
-/// merged and replayed after the original input ends.
-struct FinalSpillContext {
-    /// Aggregate configuration used to construct the final replay stream.
-    final_agg: AggregateExec,
-    /// Task context.
-    context: Arc<TaskContext>,
-    /// Original partition index.
-    partition: usize,
-    /// Target batch size from configuration.
-    batch_size: usize,
-    /// Full group-key ordering kept by every spill file and the merged input.
-    spill_expr: LexOrdering,
-    /// Spill I/O and metrics manager.
-    spill_manager: SpillManager,
-    /// Spill runs waiting to be merged, they're all sorted by full group-by keys.
-    spills: Vec<SortedSpillFile>,
+    /// The hash table owns the lower-level state for emitting output batches.
+    hash_table: Option<AggregateHashTable<PartialMarker>>,
 }
 
 /// Hash aggregation is implemented in two stages: partial and final. This
@@ -249,179 +192,22 @@ pub(crate) struct FinalHashAggregateStream {
     /// See comments for the same variable in [`PartialHashAggregateStream`].
     group_values_soft_limit: Option<usize>,
 
-    /// Tracks the high-level stream lifecycle. The hash table owns the lower-level
+    /// The hash table owns the lower-level
     /// state for emitting output batches.
-    state: Option<FinalHashAggregateState>,
+    ///
+    /// This will be None when creating the stream
+    hash_table: Option<AggregateHashTable<FinalMarker>>,
+    /// `None` if spilling is not supported by the configured `DiskManager`.
+    spill_context: Option<Box<AggregateSpill>>,
 }
 
-/// States for final hash aggregation processing.
-// The typestate pattern is used in case the inner logic becomes more complex in
-// the future.
-enum FinalHashAggregateState {
-    ReadingInput {
-        hash_table: AggregateHashTable<FinalMarker>,
-        /// `None` if spilling is not supported by the configured `DiskManager`.
-        spill_context: Option<Box<FinalSpillContext>>,
-    },
-    Spilling {
-        hash_table: AggregateHashTable<FinalMarker>,
-        spill_context: Box<FinalSpillContext>,
-    },
-    ProducingOutput {
-        hash_table: AggregateHashTable<FinalMarker>,
-    },
-    PreparingMergeInput {
-        hash_table: AggregateHashTable<FinalMarker>,
-        spill_context: Box<FinalSpillContext>,
-    },
-    MergingSpills {
-        stream: SendableRecordBatchStream,
-    },
-    Done,
-    /// Sentinel state to use when returning error from any other states, because:
-    /// - It explicitly releases state-owned resources immediately
-    /// - More defensive against accidentally resuming execution after error
-    Error,
-}
-
-type FinalHashAggregatePoll = Poll<Option<Result<RecordBatch>>>;
-type FinalHashAggregateStateTransition = ControlFlow<
-    (FinalHashAggregatePoll, FinalHashAggregateState),
-    FinalHashAggregateState,
->;
-
-impl FinalSpillContext {
-    fn new(
-        agg: &AggregateExec,
-        context: &Arc<TaskContext>,
-        partition: usize,
-        batch_size: usize,
-        spill_schema: &SchemaRef,
-        spill_metrics: SpillMetrics,
-    ) -> Result<Self> {
-        let group_schema = agg.group_by.group_schema(&agg.input().schema())?;
-        let output_ordering = agg.cache.output_ordering();
-        let spill_sort_exprs =
-            group_schema
-                .fields()
-                .iter()
-                .enumerate()
-                .map(|(idx, field)| {
-                    let output_expr = Column::new(field.name(), idx);
-                    let sort_options = output_ordering
-                        .and_then(|ordering| ordering.get_sort_options(&output_expr))
-                        .unwrap_or_default();
-                    PhysicalSortExpr::new(Arc::new(output_expr), sort_options)
-                });
-        let Some(spill_expr) = LexOrdering::new(spill_sort_exprs) else {
-            return internal_err!("Final hash aggregate spill expression is empty");
-        };
-
-        let spill_manager = SpillManager::new(
-            context.runtime_env(),
-            spill_metrics,
-            Arc::clone(spill_schema),
-        )
-        .with_compression_type(context.session_config().spill_compression());
-
-        let mut final_agg = agg.clone();
-        final_agg.input_order_mode = InputOrderMode::Sorted;
-
-        Ok(Self {
-            final_agg,
-            context: Arc::clone(context),
-            partition,
-            batch_size,
-            spill_expr,
-            spill_manager,
-            spills: vec![],
-        })
-    }
-
-    fn has_spills(&self) -> bool {
-        !self.spills.is_empty()
-    }
-
-    /// Sorts and spills the aggregated groups. Memory reservation should be updated
-    /// by the caller.
-    ///
-    /// Individual spill files are ordered by the `group by` keys.
-    ///
-    /// See [`FinalHashAggregateStream`] for spilling details.
-    fn spill_table(
-        &mut self,
-        hash_table: &mut AggregateHashTable<FinalMarker>,
-    ) -> Result<()> {
-        let Some(batch) = hash_table.take_state_batch()? else {
-            return Ok(());
-        };
-
-        let sorted_iter =
-            IncrementalSortIterator::new(batch, self.spill_expr.clone(), self.batch_size);
-        let spill_file = self
-            .spill_manager
-            .spill_record_batch_iter_and_return_max_batch_memory(
-                sorted_iter,
-                "FinalHashAggregateSpill",
-            )?;
-
-        let Some((file, max_record_batch_memory)) = spill_file else {
-            return internal_err!("Final hash aggregation produced an empty spill");
-        };
-
-        self.spills.push(SortedSpillFile {
-            file,
-            max_record_batch_memory,
-        });
-
-        Ok(())
-    }
-
-    /// Merges every sorted run, and do the aggregate evaluation with
-    /// [`OrderedFinalAggregateStream`]
-    fn into_replay_stream(
-        self,
-        baseline_metrics: &BaselineMetrics,
-        metrics: OrderedAggregateTableMetrics,
-        reservation: MemoryReservation,
-    ) -> Result<SendableRecordBatchStream> {
-        let Self {
-            final_agg,
-            context,
-            partition,
-            batch_size,
-            spill_expr,
-            spill_manager,
-            spills,
-        } = self;
-
-        let spill_schema = Arc::clone(spill_manager.schema());
-        // The merge and replay table are two components of the same aggregate
-        // operator. Keep them under one consumer registration so a fair memory
-        // pool does not divide this operator's quota between its own phases.
-        let merge_reservation = reservation.new_empty();
-        let merged = StreamingMergeBuilder::new()
-            .with_schema(spill_schema)
-            .with_spill_manager(spill_manager)
-            .with_sorted_spill_files(spills)
-            .with_expressions(&spill_expr)
-            .with_metrics(baseline_metrics.intermediate())
-            .with_batch_size(batch_size)
-            .with_reservation(merge_reservation)
-            .build()?;
-        let replay = OrderedFinalAggregateStream::new_with_input_and_metrics(
-            &final_agg,
-            &context,
-            partition,
-            merged,
-            &InputOrderMode::Sorted,
-            baseline_metrics.clone(),
-            metrics,
-            None,
-            reservation,
-        )?;
-        Ok(Box::pin(replay))
-    }
+#[derive(PartialEq)]
+enum HandleInputResult {
+    ProcessNext,
+    ReachedLimit,
+    #[expect(clippy::upper_case_acronyms)]
+    OOM,
+    SwitchToSkipAggregation,
 }
 
 impl PartialHashAggregateStream {
@@ -443,6 +229,8 @@ impl PartialHashAggregateStream {
         let reduction_factor = MetricBuilder::new(&agg.metrics)
             .with_type(metrics::MetricType::Summary)
             .ratio_metrics("reduction_factor", partition);
+        let early_emit_count =
+            MetricBuilder::new(&agg.metrics).counter("early_emit_count", partition);
 
         let hash_table = AggregateHashTable::<PartialMarker>::new(
             agg,
@@ -474,6 +262,9 @@ impl PartialHashAggregateStream {
 
         let reservation =
             MemoryConsumer::new(format!("PartialHashAggregateStream[{partition}]"))
+                // We interpret 'can spill' as 'can handle memory back pressure'.
+                // This value needs to be set to true for the default memory pool implementations
+                // to ensure fair application of back pressure amongst the memory consumers.
                 .with_can_spill(true)
                 .register(context.memory_pool());
 
@@ -484,28 +275,84 @@ impl PartialHashAggregateStream {
             baseline_metrics,
             reservation,
             reduction_factor,
+            early_emit_count,
             skip_aggregation_probe,
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
-            state: Some(PartialHashAggregateState::ReadingInput { hash_table }),
+            hash_table: Some(hash_table),
         })
     }
 
-    fn close_input(&mut self) {
-        let input_schema = self.input.schema();
-        self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
+    pub(crate) fn into_stream(self) -> SendableRecordBatchStream {
+        let schema = Arc::clone(&self.schema);
+
+        Box::pin(RecordBatchStreamAdapter::new(schema, self.create_stream()))
     }
 
-    fn break_with_err(error: DataFusionError) -> PartialHashAggregateStateTransition {
-        ControlFlow::Break((
-            Poll::Ready(Some(Err(error))),
-            PartialHashAggregateState::Error,
-        ))
-    }
+    /// Entry point for the partial hash aggregate state machine.
+    ///
+    /// See comments in [`PartialHashAggregateStream`] for high-level ideas.
+    fn create_stream(mut self) -> impl Stream<Item = Result<RecordBatch>> {
+        async_try_stream(|mut emitter| async move {
+            let mut hash_table = self
+                .hash_table
+                .take()
+                .expect("hash_table should not be None");
 
-    fn break_with_internal_err(
-        message: impl std::fmt::Display,
-    ) -> PartialHashAggregateStateTransition {
-        Self::break_with_err(internal_datafusion_err!("{message}"))
+            debug_assert!(hash_table.is_building());
+            let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+
+            let mut last_state = HandleInputResult::ProcessNext;
+            while let Some(batch) = self.input.next().await.transpose()? {
+                let timer = elapsed_compute.timer();
+                last_state = self.handle_input_batch(&batch, &mut hash_table)?;
+
+                match last_state {
+                    HandleInputResult::ProcessNext => {}
+                    HandleInputResult::ReachedLimit
+                    | HandleInputResult::SwitchToSkipAggregation => {
+                        break;
+                    }
+                    HandleInputResult::OOM => {
+                        let materialized_group_states = hash_table.take_state_batch()?.ok_or_else(|| {
+                            internal_datafusion_err!(
+                                "Partial hash aggregate ran out of memory with no aggregated groups"
+                            )
+                        })?;
+
+                        self.early_emit_count.add(1);
+                        timer.done();
+                        self.emit_on_memory_pressure(
+                            materialized_group_states,
+                            &mut emitter,
+                            hash_table.memory_size(),
+                        )
+                        .await?;
+                    }
+                }
+            }
+
+            let timer = elapsed_compute.timer();
+
+            let skip_hash_table =
+                if last_state == HandleInputResult::SwitchToSkipAggregation {
+                    Some(hash_table.partial_skip_table()?)
+                } else {
+                    self.close_input();
+
+                    None
+                };
+            hash_table.start_output()?;
+
+            timer.done();
+
+            self.produce_output(hash_table, &mut emitter).await?;
+
+            if let Some(hash_table) = skip_hash_table {
+                self.skip_rest_of_aggregation(hash_table, emitter).await?;
+            }
+
+            Ok(())
+        })
     }
 
     /// See comments in [`Self::group_values_soft_limit`] for details.
@@ -532,477 +379,184 @@ impl PartialHashAggregateStream {
             .is_some_and(|probe| probe.should_skip())
     }
 
-    fn start_output(
+    fn close_input(&mut self) {
+        let input_schema = self.input.schema();
+        self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
+    }
+
+    /// Aggregate input batch into the hash table
+    fn handle_input_batch(
         &mut self,
+        batch: &RecordBatch,
         hash_table: &mut AggregateHashTable<PartialMarker>,
-        close_input: bool,
+    ) -> Result<HandleInputResult> {
+        // ----------------------------------
+        // Step 1: Aggregate the input batch
+        // ----------------------------------
+        let input_rows = batch.num_rows();
+        self.reduction_factor.add_total(input_rows);
+        hash_table.aggregate_batch(batch)?;
+
+        // --------------------------------
+        // Step 2: Soft limit optimization
+        // --------------------------------
+        if self.hit_soft_group_limit(hash_table) {
+            return Ok(HandleInputResult::ReachedLimit);
+        }
+
+        // ----------------------------------------------
+        // Step 3: Skip partial aggregation optimization
+        // ----------------------------------------------
+        self.update_skip_aggregation_probe(input_rows, hash_table.building_group_count());
+
+        // True branch: a decision has been made to skip partial aggregation.
+        if self.should_skip_aggregation() {
+            return Ok(HandleInputResult::SwitchToSkipAggregation);
+        }
+
+        // -------------------------------------------------
+        // Step 4: Larger-than-memory execution (early emit)
+        // -------------------------------------------------
+        let resize_result = self.reservation.try_resize(hash_table.memory_size());
+        match resize_result {
+            Ok(()) => Ok(HandleInputResult::ProcessNext),
+            Err(DataFusionError::ResourcesExhausted(_)) => Ok(HandleInputResult::OOM),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// emit a materialized partial-state on memory pressure
+    /// batch in `batch_size`(from configuration) slices
+    async fn emit_on_memory_pressure(
+        &mut self,
+        // After each incremental emitting step, the `remaining_groups` will be updated
+        // with batch slicing.
+        mut remaining_groups: RecordBatch,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+        hash_table_mem_size: usize,
     ) -> Result<()> {
-        if close_input {
-            let input_schema = self.input.schema();
-            self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
-        }
-        hash_table.start_output()
-    }
+        let remaining_groups_memory = remaining_groups.get_array_memory_size();
 
-    /// Handle ReadingInput state - aggregate input batches into the hash table.
-    ///
-    /// See comments at `poll_next()` for details.
-    ///
-    /// Returns the next operator state with control flow decision.
-    fn handle_reading_input(
-        &mut self,
-        cx: &mut Context<'_>,
-        original_state: PartialHashAggregateState,
-    ) -> PartialHashAggregateStateTransition {
-        let PartialHashAggregateState::ReadingInput { mut hash_table } = original_state
-        else {
-            return Self::break_with_internal_err(
-                "Partial hash aggregate stream expected ReadingInput state",
-            );
-        };
-        debug_assert!(hash_table.is_building());
-
-        match self.input.poll_next_unpin(cx) {
-            Poll::Pending => ControlFlow::Break((
-                Poll::Pending,
-                PartialHashAggregateState::ReadingInput { hash_table },
-            )),
-            Poll::Ready(Some(Ok(batch))) => {
-                // ----------------------------------
-                // Step 1: Aggregate the input batch
-                // ----------------------------------
-                let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-                let timer = elapsed_compute.timer();
-                let input_rows = batch.num_rows();
-                self.reduction_factor.add_total(input_rows);
-                let result = hash_table.aggregate_batch(&batch);
-                timer.done();
-
-                if let Err(e) = result {
-                    return Self::break_with_err(e);
-                }
-
-                // --------------------------------
-                // Step 2: Soft limit optimization
-                // --------------------------------
-                if self.hit_soft_group_limit(&hash_table) {
-                    let timer = elapsed_compute.timer();
-                    let result = self.start_output(&mut hash_table, true);
-                    timer.done();
-
-                    if let Err(e) = result {
-                        return Self::break_with_err(e);
-                    }
-
-                    return ControlFlow::Continue(
-                        PartialHashAggregateState::ProducingOutput {
-                            hash_table,
-                            skip_hash_table: None,
-                        },
-                    );
-                }
-
-                // ----------------------------------------------
-                // Step 3: Skip partial aggregation optimization
-                // ----------------------------------------------
-                self.update_skip_aggregation_probe(
-                    input_rows,
-                    hash_table.building_group_count(),
-                );
-
-                // True branch: a decision has been made to skip partial aggregation.
-                if self.should_skip_aggregation() {
-                    let timer = elapsed_compute.timer();
-                    let result = match hash_table.partial_skip_table() {
-                        Ok(skip_hash_table) => self
-                            .start_output(&mut hash_table, false)
-                            .map(|()| skip_hash_table),
-                        Err(e) => Err(e),
-                    };
-                    timer.done();
-
-                    match result {
-                        Ok(skip_hash_table) => {
-                            // Move to `ProducingOutput` first. Its `skip_hash_table`
-                            // field moves the stream to skip-partial aggregation after
-                            // the accumulated batches have been output.
-                            return ControlFlow::Continue(
-                                PartialHashAggregateState::ProducingOutput {
-                                    hash_table,
-                                    skip_hash_table: Some(skip_hash_table),
-                                },
-                            );
-                        }
-                        Err(e) => return Self::break_with_err(e),
-                    }
-                }
-
-                // -------------------------------------------------
-                // Step 4: Larger-than-memory execution (early emit)
-                // -------------------------------------------------
-                let timer = elapsed_compute.timer();
-                let resize_result = self.reservation.try_resize(hash_table.memory_size());
-                timer.done();
-                match resize_result {
-                    Ok(()) => {}
-                    Err(DataFusionError::ResourcesExhausted(_)) => {
-                        let elapsed_compute =
-                            self.baseline_metrics.elapsed_compute().clone();
-                        // Stops on drop
-                        let _timer = elapsed_compute.timer();
-                        let state_batch_result = hash_table.take_state_batch();
-
-                        // Emitting clears the aggregate table and releases its
-                        // accumulated memory. Update the reservation accordingly.
-                        let resize_result =
-                            self.reservation.try_resize(hash_table.memory_size());
-
-                        if let Err(e) = resize_result {
-                            return Self::break_with_err(e);
-                        }
-
-                        let materialized_group_states = match state_batch_result {
-                            Ok(Some(batch)) => batch,
-                            Ok(None) => {
-                                return Self::break_with_err(internal_datafusion_err!(
-                                    "Partial hash aggregate ran out of memory with no aggregated groups"
-                                ));
-                            }
-                            Err(e) => return Self::break_with_err(e),
-                        };
-
-                        return ControlFlow::Continue(
-                            PartialHashAggregateState::EmittingOnMemoryPressure {
-                                hash_table,
-                                remaining_groups: materialized_group_states,
-                            },
-                        );
-                    }
-                    Err(e) => return Self::break_with_err(e),
-                }
-
-                ControlFlow::Continue(PartialHashAggregateState::ReadingInput {
-                    hash_table,
-                })
+        // Emitting clears the aggregate table and releases its
+        // accumulated memory. Update the reservation accordingly.
+        // We account here for the remaining groups memory to see if we can return batch size states
+        // if there is not enough memory, fallback to emit large batch
+        match self
+            .reservation
+            .try_resize(hash_table_mem_size + remaining_groups_memory)
+        {
+            Ok(_) => {
+                // Continue with slicing
             }
-            Poll::Ready(Some(Err(e))) => Self::break_with_err(e),
-            Poll::Ready(None) => {
-                let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-                let timer = elapsed_compute.timer();
-                let result = self.start_output(&mut hash_table, true);
-                timer.done();
+            Err(DataFusionError::ResourcesExhausted(_)) => {
+                // Fail to reserve memory for the hash table + state batch while slicing so emit a huge batch
 
-                match result {
-                    Ok(()) => ControlFlow::Continue(
-                        PartialHashAggregateState::ProducingOutput {
-                            hash_table,
-                            skip_hash_table: None,
-                        },
-                    ),
-                    Err(e) => Self::break_with_err(e),
-                }
+                // Try resize without holding the state batch, if it fails there is nothing we can do
+                self.reservation.try_resize(hash_table_mem_size)?;
+
+                self.reduction_factor.add_part(remaining_groups.num_rows());
+                emitter
+                    .emit(remaining_groups.record_output(&self.baseline_metrics))
+                    .await;
+
+                return Ok(());
             }
+            Err(e) => return Err(e),
         }
-    }
 
-    /// Handle EmittingOnMemoryPressure state - emit a materialized partial-state
-    /// batch in `batch_size`(from configuration) slices, then resume reading input.
-    ///
-    /// See comments at `poll_next()` for details.
-    ///
-    /// Returns the next operator state with control flow decision.
-    fn handle_emitting_on_memory_pressure(
-        &mut self,
-        original_state: PartialHashAggregateState,
-    ) -> PartialHashAggregateStateTransition {
-        let PartialHashAggregateState::EmittingOnMemoryPressure {
-            hash_table,
-            remaining_groups: batch,
-        } = original_state
-        else {
-            return Self::break_with_internal_err(
-                "Partial hash aggregate stream expected EmittingOnMemoryPressure state",
-            );
-        };
-
-        let (output_batch, next_state) = if batch.num_rows() <= self.batch_size {
-            // Last batch to output, go back to `ReadingInput`
-            (
-                batch,
-                PartialHashAggregateState::ReadingInput { hash_table },
-            )
-        } else {
+        while remaining_groups.num_rows() > self.batch_size {
             // More batch to output, continue in the current state.
-            let remaining =
-                batch.slice(self.batch_size, batch.num_rows() - self.batch_size);
-            let output = batch.slice(0, self.batch_size);
-            (
-                output,
-                PartialHashAggregateState::EmittingOnMemoryPressure {
-                    hash_table,
-                    remaining_groups: remaining,
-                },
-            )
-        };
+            let output = remaining_groups.slice(0, self.batch_size);
 
-        self.reduction_factor.add_part(output_batch.num_rows());
-        debug_assert!(output_batch.num_rows() > 0);
-        ControlFlow::Break((
-            Poll::Ready(Some(Ok(output_batch.record_output(&self.baseline_metrics)))),
-            next_state,
-        ))
+            remaining_groups = remaining_groups.slice(
+                self.batch_size,
+                remaining_groups.num_rows() - self.batch_size,
+            );
+
+            self.reduction_factor.add_part(output.num_rows());
+            debug_assert!(output.num_rows() > 0);
+
+            emitter
+                .emit(output.record_output(&self.baseline_metrics))
+                .await;
+        }
+
+        self.reduction_factor.add_part(remaining_groups.num_rows());
+        debug_assert!(remaining_groups.num_rows() > 0);
+
+        // We are no longer holding on the batch while slicing, so release the memory.
+        // The memory will now equal to the hash table size
+        self.reservation.try_shrink(remaining_groups_memory)?;
+
+        emitter
+            .emit(remaining_groups.record_output(&self.baseline_metrics))
+            .await;
+
+        Ok(())
     }
 
-    /// Handle ProducingOutput state - emit partial aggregate state batches.
-    ///
-    /// See comments at `poll_next()` for details.
-    ///
-    /// Returns the next operator state with control flow decision.
-    fn handle_producing_output(
+    /// emit partial aggregate state batches.
+    async fn produce_output(
         &mut self,
-        original_state: PartialHashAggregateState,
-    ) -> PartialHashAggregateStateTransition {
-        let PartialHashAggregateState::ProducingOutput {
-            mut hash_table,
-            skip_hash_table,
-        } = original_state
-        else {
-            return Self::break_with_internal_err(
-                "Partial hash aggregate stream expected ProducingOutput state",
-            );
-        };
+        mut hash_table: AggregateHashTable<PartialMarker>,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
         debug_assert!(!hash_table.is_building());
 
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-        let timer = elapsed_compute.timer();
-        let result = hash_table.next_output_batch();
-        timer.done();
+        let mut timer = elapsed_compute.timer();
 
-        match result {
-            Ok(Some(batch)) => {
-                let _ = self.reservation.try_resize(hash_table.memory_size());
-                self.reduction_factor.add_part(batch.num_rows());
-                debug_assert!(batch.num_rows() > 0);
-                let next_state = if hash_table.is_done() {
-                    match skip_hash_table {
-                        Some(hash_table) => {
-                            PartialHashAggregateState::SkippingAggregation { hash_table }
-                        }
-                        None => PartialHashAggregateState::Done,
-                    }
-                } else {
-                    PartialHashAggregateState::ProducingOutput {
-                        hash_table,
-                        skip_hash_table,
-                    }
-                };
-
-                ControlFlow::Break((
-                    Poll::Ready(Some(Ok(batch.record_output(&self.baseline_metrics)))),
-                    next_state,
-                ))
-            }
-            Ok(None) => {
-                let _ = self.reservation.try_resize(0);
-                // If the previous `Aggregating` stage decided to skip partial
-                // aggregation, go to the `SkippingAggregation` stage; otherwise finish.
-                let next_state = match skip_hash_table {
-                    Some(hash_table) => {
-                        PartialHashAggregateState::SkippingAggregation { hash_table }
-                    }
-                    None => PartialHashAggregateState::Done,
-                };
-                ControlFlow::Continue(next_state)
-            }
-            Err(e) => Self::break_with_err(e),
-        }
-    }
-
-    /// Handle SkippingAggregation state - convert raw input directly to partial states.
-    ///
-    /// See comments at `poll_next()` for details.
-    ///
-    /// Returns the next operator state with control flow decision.
-    fn handle_skipping_aggregation(
-        &mut self,
-        cx: &mut Context<'_>,
-        original_state: PartialHashAggregateState,
-    ) -> PartialHashAggregateStateTransition {
-        let PartialHashAggregateState::SkippingAggregation { mut hash_table } =
-            original_state
-        else {
-            return Self::break_with_internal_err(
-                "Partial hash aggregate stream expected SkippingAggregation state",
-            );
-        };
-
-        match self.input.poll_next_unpin(cx) {
-            Poll::Pending => ControlFlow::Break((
-                Poll::Pending,
-                PartialHashAggregateState::SkippingAggregation { hash_table },
-            )),
-            Poll::Ready(Some(Ok(batch))) => {
-                if let Some(probe) = self.skip_aggregation_probe.as_mut() {
-                    probe.record_skipped(&batch);
-                }
-
-                let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-                let timer = elapsed_compute.timer();
-                let result = hash_table.convert_batch_to_state(&batch);
-                timer.done();
-
-                match result {
-                    Ok(batch) => ControlFlow::Break((
-                        Poll::Ready(Some(
-                            Ok(batch.record_output(&self.baseline_metrics)),
-                        )),
-                        PartialHashAggregateState::SkippingAggregation { hash_table },
-                    )),
-                    Err(e) => Self::break_with_err(e),
-                }
-            }
-            Poll::Ready(Some(Err(e))) => Self::break_with_err(e),
-            Poll::Ready(None) => {
-                let input_schema = self.input.schema();
-                self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
-                ControlFlow::Continue(PartialHashAggregateState::Done)
-            }
-        }
-    }
-}
-
-impl Stream for PartialHashAggregateStream {
-    type Item = Result<RecordBatch>;
-
-    /// Entry point for the partial hash aggregate state machine.
-    ///
-    /// See comments in [`PartialHashAggregateStream`] for high-level ideas.
-    ///
-    /// State transition graph:
-    ///
-    /// ```text
-    /// (start)
-    ///   -> ReadingInput
-    ///      The stream starts by polling input and aggregating batches into the
-    ///      in-memory hash table.
-    ///
-    /// ReadingInput
-    ///   -> ReadingInput
-    ///      Aggregate one batch, update the inner aggregate hash table, and
-    ///      continue with the next input batch.
-    ///   -> EmittingOnMemoryPressure
-    ///      The table cannot reserve enough memory. Materialize all accumulated
-    ///      partial states and begin emitting them incrementally.
-    ///   -> ProducingOutput(skip=None)
-    ///      Input was exhausted, or the soft group limit was reached. Move to
-    ///      the next state to start outputting.
-    ///   -> ProducingOutput(skip=Some)
-    ///      Partial skip aggregation was triggered. First move to the
-    ///      `ProducingOutput` state to drain the accumulated state, then move to
-    ///      the `SkippingAggregation` state to convert input directly to partial
-    ///      state without aggregation.
-    ///
-    /// EmittingOnMemoryPressure
-    ///   -> EmittingOnMemoryPressure
-    ///      One batch-sized slice was yielded; repeat until all materialized
-    ///      partial states are emitted.
-    ///   -> ReadingInput
-    ///      The materialized states were emitted; continue with the empty table.
-    ///
-    /// ProducingOutput(skip=None)
-    ///   -> ProducingOutput(skip=None)
-    ///      One accumulated output batch was yielded, repeat to continue producing
-    ///      output incrementally.
-    ///   -> Done
-    ///      All accumulated output was emitted.
-    ///
-    /// ProducingOutput(skip=Some)
-    ///   -> ProducingOutput(skip=Some)
-    ///      One accumulated output batch was yielded, repeat to continue producing
-    ///      output incrementally.
-    ///   -> SkippingAggregation
-    ///      All accumulated output was emitted. Continue by converting raw
-    ///      input batches directly to partial aggregate state.
-    ///
-    /// SkippingAggregation
-    ///   -> SkippingAggregation
-    ///      One `convert_to_state` batch was yielded; repeat to continue
-    ///      processing.
-    ///   -> Done
-    ///      Input was exhausted.
-    ///
-    /// Any active state
-    ///   -> Error
-    ///      An error drops state-owned resources before it is returned.
-    ///
-    /// Error
-    ///   -> (end)
-    ///
-    /// Done
-    ///   -> (end)
-    /// ```
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
         loop {
-            let cur_state = self
-                .state
-                .take()
-                .expect("PartialHashAggregateStream state should not be None");
-
-            let next_state = match cur_state {
-                state @ PartialHashAggregateState::ReadingInput { .. } => {
-                    self.handle_reading_input(cx, state)
-                }
-                state @ PartialHashAggregateState::EmittingOnMemoryPressure { .. } => {
-                    self.handle_emitting_on_memory_pressure(state)
-                }
-                state @ PartialHashAggregateState::ProducingOutput { .. } => {
-                    self.handle_producing_output(state)
-                }
-                state @ PartialHashAggregateState::SkippingAggregation { .. } => {
-                    self.handle_skipping_aggregation(cx, state)
-                }
-                state @ PartialHashAggregateState::Error => {
-                    self.close_input();
-                    self.reservation.free();
-                    self.state = Some(state);
-                    return Poll::Ready(None);
-                }
-                state @ PartialHashAggregateState::Done => {
-                    let _ = self.reservation.try_resize(0);
-                    self.state = Some(state);
-                    return Poll::Ready(None);
-                }
+            let Some(batch) = hash_table.next_output_batch()? else {
+                // Only reachable when the table held no groups at all: a
+                // non-empty table always reports its last batch together with
+                // the `Done` state, which the `try_resize` below already zeroes.
+                self.reservation.try_resize(0)?;
+                return Ok(());
             };
 
-            match next_state {
-                ControlFlow::Continue(next_state) => {
-                    self.state = Some(next_state);
-                }
-                ControlFlow::Break((Poll::Ready(Some(Err(e))), next_state)) => {
-                    debug_assert!(matches!(next_state, PartialHashAggregateState::Error));
+            debug_assert!(batch.num_rows() > 0);
 
-                    // The handler has already discarded its state-owned resources.
-                    // Release the remaining stream-owned resources before returning.
-                    self.close_input();
-                    self.reservation.free();
-                    self.state = Some(PartialHashAggregateState::Error);
-                    return Poll::Ready(Some(Err(e)));
-                }
-                ControlFlow::Break((poll, next_state)) => {
-                    self.state = Some(next_state);
-                    return poll;
-                }
-            }
+            // The table hands over its groups as they are materialized and
+            // reports a size of 0 once it reaches `Done`, so this releases the
+            // reservation before the final batch goes downstream.
+            let _ = self.reservation.try_resize(hash_table.memory_size());
+            self.reduction_factor.add_part(batch.num_rows());
+
+            timer.done();
+            emitter
+                .emit(batch.record_output(&self.baseline_metrics))
+                .await;
+            timer = elapsed_compute.timer();
         }
     }
-}
 
-impl RecordBatchStream for PartialHashAggregateStream {
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
+    /// convert raw input directly to partial states.
+    async fn skip_rest_of_aggregation(
+        &mut self,
+        mut hash_table: AggregateHashTable<PartialSkipMarker>,
+        mut emitter: TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
+        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+
+        while let Some(batch) = self.input.next().await.transpose()? {
+            if let Some(probe) = self.skip_aggregation_probe.as_mut() {
+                probe.record_skipped(&batch);
+            }
+
+            let result = {
+                let _timer = elapsed_compute.timer();
+                hash_table.convert_batch_to_state(&batch)?
+            };
+
+            emitter
+                .emit(result.record_output(&self.baseline_metrics))
+                .await;
+        }
+
+        self.close_input();
+
+        Ok(())
     }
 }
 
@@ -1018,8 +572,18 @@ impl FinalHashAggregateStream {
         ));
         debug_assert_eq!(agg.input_order_mode, InputOrderMode::Linear);
 
-        let schema = Arc::clone(&agg.schema);
         let input = agg.input.execute(partition, Arc::clone(context))?;
+        Self::new_with_input(agg, context, partition, input)
+    }
+
+    /// Builds the stream over `input` instead of executing the plan's input.
+    pub(in crate::aggregates) fn new_with_input(
+        agg: &AggregateExec,
+        context: &Arc<TaskContext>,
+        partition: usize,
+        input: SendableRecordBatchStream,
+    ) -> Result<Self> {
+        let schema = Arc::clone(&agg.schema);
         let input_schema = input.schema();
         let batch_size = context.session_config().batch_size();
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
@@ -1034,11 +598,13 @@ impl FinalHashAggregateStream {
 
         let can_spill = context.runtime_env().disk_manager.tmp_files_enabled();
         let spill_context = if can_spill {
-            Some(Box::new(FinalSpillContext::new(
+            Some(Box::new(AggregateSpill::try_new(
+                "FinalHashAggregateSpill",
                 agg,
                 context,
                 partition,
                 batch_size,
+                &InputOrderMode::Linear,
                 &input_schema,
                 spill_metrics,
             )?))
@@ -1057,10 +623,44 @@ impl FinalHashAggregateStream {
             baseline_metrics,
             reservation,
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
-            state: Some(FinalHashAggregateState::ReadingInput {
-                hash_table,
-                spill_context,
-            }),
+            hash_table: Some(hash_table),
+            spill_context,
+        })
+    }
+
+    pub(crate) fn into_stream(self) -> SendableRecordBatchStream {
+        let schema = Arc::clone(&self.schema);
+
+        Box::pin(RecordBatchStreamAdapter::new(schema, self.create_stream()))
+    }
+
+    /// Entry point for the final hash aggregate flow
+    ///
+    /// See comments in [`FinalHashAggregateStream`] for high-level ideas.
+    fn create_stream(mut self) -> impl Stream<Item = Result<RecordBatch>> {
+        async_try_stream(|emitter| async move {
+            let mut hash_table = self
+                .hash_table
+                .take()
+                .expect("hash_table should not be None");
+
+            let mut spill_context = self.spill_context.take();
+
+            self.consume_input(&mut hash_table, &mut spill_context)
+                .await?;
+            self.close_input();
+
+            match spill_context.filter(|s| s.has_spills()) {
+                // - If spilled before, perform merging spill runs
+                Some(spill_context) => {
+                    self.produce_output_from_spills(hash_table, spill_context, emitter)
+                        .await?
+                }
+                // Either all the input fit in memory or hit soft group limit with no spilling
+                None => self.produce_output_from_memory(hash_table, emitter).await?,
+            }
+
+            Ok(())
         })
     }
 
@@ -1069,37 +669,16 @@ impl FinalHashAggregateStream {
         self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
     }
 
-    fn break_with_err(error: DataFusionError) -> FinalHashAggregateStateTransition {
-        ControlFlow::Break((
-            Poll::Ready(Some(Err(error))),
-            FinalHashAggregateState::Error,
-        ))
-    }
-
-    fn break_with_internal_err(
-        message: impl std::fmt::Display,
-    ) -> FinalHashAggregateStateTransition {
-        Self::break_with_err(internal_datafusion_err!("{message}"))
-    }
-
     /// See comments in [`Self::group_values_soft_limit`] for details.
     fn hit_soft_group_limit(&self, hash_table: &AggregateHashTable<FinalMarker>) -> bool {
         self.group_values_soft_limit
             .is_some_and(|limit| limit <= hash_table.building_group_count())
     }
 
-    fn start_output(
-        &mut self,
-        hash_table: &mut AggregateHashTable<FinalMarker>,
-    ) -> Result<()> {
-        self.close_input();
-        hash_table.start_output()
-    }
-
     /// Reserve memory for the current aggregate table.
     fn reservation_size_for_table(
         hash_table: &AggregateHashTable<FinalMarker>,
-        spill_context: Option<&FinalSpillContext>,
+        spill_context: Option<&AggregateSpill>,
     ) -> usize {
         let table_size = hash_table.memory_size();
         if spill_context.is_some() {
@@ -1116,471 +695,203 @@ impl FinalHashAggregateStream {
         }
     }
 
-    /// Handle ReadingInput state - aggregate partial state batches into the hash table.
+    /// Read input stream, if no memory, then spill and continue reading - aggregate partial state batches into the hash table.
     ///
-    /// See comments at `poll_next()` for details.
-    ///
-    /// Returns the next operator state with control flow decision.
-    fn handle_reading_input(
+    /// Spilling: The table cannot reserve enough memory.
+    ///           Move all current states into one fully group-key-sorted spill run.
+    async fn consume_input(
         &mut self,
-        cx: &mut Context<'_>,
-        original_state: FinalHashAggregateState,
-    ) -> FinalHashAggregateStateTransition {
-        let FinalHashAggregateState::ReadingInput {
-            mut hash_table,
-            spill_context,
-        } = original_state
-        else {
-            return Self::break_with_internal_err(
-                "Final hash aggregate stream expected ReadingInput state",
-            );
-        };
+        hash_table: &mut AggregateHashTable<FinalMarker>,
+        spill_context: &mut Option<Box<AggregateSpill>>,
+    ) -> Result<()> {
+        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
 
-        match self.input.poll_next_unpin(cx) {
-            Poll::Pending => ControlFlow::Break((
-                Poll::Pending,
-                FinalHashAggregateState::ReadingInput {
-                    hash_table,
-                    spill_context,
-                },
-            )),
-            Poll::Ready(Some(Ok(batch))) => {
-                let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-                let timer = elapsed_compute.timer();
-                let result = hash_table.aggregate_batch(&batch);
-                timer.done();
+        while let Some(batch) = self.input.next().await.transpose()? {
+            let _timer = elapsed_compute.timer();
+            hash_table.aggregate_batch(&batch)?;
 
-                if let Err(e) = result {
-                    return Self::break_with_err(e);
-                }
-
-                // Soft group limits are usually small and rarely coincide with
-                // spilling. Once spilling has occurred, skip this optimization to
-                // make the internal logic simpler.
-                let spilled = spill_context
-                    .as_ref()
-                    .is_some_and(|context| context.has_spills());
-                if self.hit_soft_group_limit(&hash_table) && !spilled {
-                    let timer = elapsed_compute.timer();
-                    let result = self.start_output(&mut hash_table);
-                    timer.done();
-
-                    return match result {
-                        Ok(()) => ControlFlow::Continue(
-                            FinalHashAggregateState::ProducingOutput { hash_table },
-                        ),
-                        Err(e) => Self::break_with_err(e),
-                    };
-                }
-
-                // Check memory reservation, and potentially spill.
-                let timer = elapsed_compute.timer();
-                let resize_result =
-                    self.reservation
-                        .try_resize(Self::reservation_size_for_table(
-                            &hash_table,
-                            spill_context.as_deref(),
-                        ));
-                timer.done();
-                match resize_result {
-                    Ok(()) => {}
-                    Err(e @ DataFusionError::ResourcesExhausted(_)) => {
-                        // OOM and don't support spilling from configuration
-                        let Some(spill_context) = spill_context else {
-                            return Self::break_with_err(e.context(
-                                "Final hash aggregate cannot spill because temporary files are not enabled in the DiskManager",
-                            ));
-                        };
-                        // Sanity check: impossible to OOM when there is no group aggregated.
-                        if hash_table.building_group_count() == 0 {
-                            return Self::break_with_internal_err(
-                                "Final hash aggregate ran out of memory with no aggregated groups",
-                            );
-                        }
-                        // Go to the next state to perform spilling the aggregated
-                        // groups so far.
-                        return ControlFlow::Continue(
-                            FinalHashAggregateState::Spilling {
-                                hash_table,
-                                spill_context,
-                            },
-                        );
-                    }
-                    Err(e) => return Self::break_with_err(e),
-                }
-
-                ControlFlow::Continue(FinalHashAggregateState::ReadingInput {
-                    hash_table,
-                    spill_context,
-                })
+            // Soft group limits are usually small and rarely coincide with
+            // spilling. Once spilling has occurred, skip this optimization to
+            // make the internal logic simpler.
+            let spilled = spill_context
+                .as_ref()
+                .is_some_and(|context| context.has_spills());
+            if self.hit_soft_group_limit(hash_table) && !spilled {
+                break;
             }
-            Poll::Ready(Some(Err(e))) => Self::break_with_err(e),
-            // Input done, move to next state:
-            // - If spilled before, perform merging spill runs
-            // - If not spilled, start producing outputs
-            Poll::Ready(None) => {
-                self.close_input();
-                match spill_context {
-                    Some(spill_context) if spill_context.has_spills() => {
-                        ControlFlow::Continue(
-                            FinalHashAggregateState::PreparingMergeInput {
-                                hash_table,
-                                spill_context,
-                            },
-                        )
-                    }
-                    _ => {
-                        let elapsed_compute =
-                            self.baseline_metrics.elapsed_compute().clone();
-                        let timer = elapsed_compute.timer();
-                        let result = hash_table.start_output();
-                        timer.done();
 
-                        match result {
-                            Ok(()) => ControlFlow::Continue(
-                                FinalHashAggregateState::ProducingOutput { hash_table },
-                            ),
-                            Err(e) => Self::break_with_err(e),
-                        }
-                    }
+            // Check memory reservation, and potentially spill.
+            let resize_result =
+                self.reservation
+                    .try_resize(Self::reservation_size_for_table(
+                        hash_table,
+                        spill_context.as_deref(),
+                    ));
+
+            match resize_result {
+                Ok(()) => {}
+
+                // The table cannot reserve enough memory.
+                // Move all current states into one fully group-key-sorted spill run.
+                Err(e @ DataFusionError::ResourcesExhausted(_)) => {
+                    // OOM and don't support spilling from configuration
+                    let spill_context = spill_context.as_mut().ok_or_else(|| e.context(
+                        "Final hash aggregate cannot spill because temporary files are not enabled in the DiskManager",
+                    ))?;
+
+                    // Sanity check: impossible to OOM when there is no group aggregated.
+                    assert_ne_or_internal_err!(
+                        hash_table.building_group_count(),
+                        0,
+                        "Final hash aggregate ran out of memory with no aggregated groups"
+                    );
+
+                    // Sorts and spills one complete in-memory state run
+
+                    // Go to the next state to perform spilling the aggregated
+                    // groups so far.
+                    let result = hash_table
+                        .take_state_batch()
+                        .and_then(|batch| spill_context.sort_and_spill(batch));
+
+                    // Spilling shrinks the aggregate table and releases its accumulated
+                    // memory. Update the reservation accordingly.
+                    self.reservation
+                        .try_resize(hash_table.memory_size())
+                        .map_err(|e| {
+                            e.context(
+                                "Decreasing allocation after spilling should succeed",
+                            )
+                        })?;
+
+                    result?;
+
+                    // One sorted run was written; resume reading the original input.
                 }
+                Err(e) => return Err(e),
             }
         }
+
+        Ok(())
     }
 
-    /// Sorts and spills one complete in-memory state run, then resumes input.
-    ///
-    /// See comments at `poll_next()` for details.
-    ///
-    /// Returns the next operator state with control flow decision.
-    fn handle_spilling(
+    /// Produce output from spills
+    /// 1. Spill in progress in-memory hash table
+    /// 2. Switch to ordered final stream
+    /// 3. passthrough stream output
+    async fn produce_output_from_spills(
         &mut self,
-        original_state: FinalHashAggregateState,
-    ) -> FinalHashAggregateStateTransition {
-        let FinalHashAggregateState::Spilling {
-            mut hash_table,
-            mut spill_context,
-        } = original_state
-        else {
-            return Self::break_with_internal_err(
-                "Final hash aggregate stream expected Spilling state",
-            );
-        };
-
-        // Sanity check: it is impossible to OOM when the table is empty.
-        if hash_table.building_group_count() == 0 {
-            return Self::break_with_internal_err(
-                "Final hash aggregation entered Spilling with an empty table",
-            );
-        }
-
+        mut hash_table: AggregateHashTable<FinalMarker>,
+        mut spill_context: Box<AggregateSpill>,
+        mut emitter: TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
-        let mut result = spill_context.spill_table(&mut hash_table);
 
-        // Spilling shrinks the aggregate table and releases its accumulated
-        // memory. Update the reservation accordingly.
-        if let Err(e) = self.reservation.try_resize(hash_table.memory_size()) {
-            result =
-                Err(e.context("Decreasing allocation after spilling should succeed"));
-        }
+        // Input was exhausted after spilling. Spill the last in-memory run
+        hash_table
+            .take_state_batch()
+            .and_then(|batch| spill_context.sort_and_spill(batch))?;
+
+        // Construct the ordered input used to merge all spill files.
+        let mut output_stream =
+            self.switch_to_ordered_final_stream(hash_table, spill_context)?;
 
         timer.done();
 
-        match result {
-            // Finished spilling the aggregate table, continue aggregating from input.
-            Ok(()) => ControlFlow::Continue(FinalHashAggregateState::ReadingInput {
-                hash_table,
-                spill_context: Some(spill_context),
-            }),
-            Err(e) => Self::break_with_err(e),
+        // Forwards output from the fully ordered stream that consumes the merged
+        // spill runs.
+        //
+        // Not wrapping in a timer and not record output batches since this is now `merge_stream` responsibility
+        // we just pass through
+        while let Some(batch) = output_stream.next().await.transpose()? {
+            emitter.emit(batch).await;
         }
+
+        Ok(())
     }
 
-    /// 1. Spills the last in-memory run.
-    /// 2. Constructs a globally ordered input stream by applying a sort-preserving
+    /// 1. Constructs a globally ordered input stream by applying a sort-preserving
     ///    merge to all spills.
-    /// 3. Constructs a replay stream: an ordered final aggregate stream over the
+    /// 2. Constructs a replay stream: an ordered final aggregate stream over the
     ///    fully ordered input constructed from the spills.
     ///
-    /// See comments at `poll_next()` for details.
-    ///
-    /// Returns the next operator state with control flow decision.
-    fn handle_preparing_merge_input(
+    /// Returns the replay stream
+    fn switch_to_ordered_final_stream(
         &mut self,
-        original_state: FinalHashAggregateState,
-    ) -> FinalHashAggregateStateTransition {
-        let FinalHashAggregateState::PreparingMergeInput {
-            mut hash_table,
-            mut spill_context,
-        } = original_state
-        else {
-            return Self::break_with_internal_err(
-                "Final hash aggregate stream expected PreparingMergeInput state",
-            );
-        };
+        hash_table: AggregateHashTable<FinalMarker>,
+        spill_context: Box<AggregateSpill>,
+    ) -> Result<SendableRecordBatchStream> {
+        let metrics = OrderedAggregateTableMetrics::from_hash_table(&hash_table);
+        drop(hash_table);
+        self.reservation.try_resize(0)?;
+        spill_context.into_replay_stream(
+            &self.baseline_metrics,
+            metrics,
+            self.reservation.new_empty(),
+        )
+    }
 
+    /// Emit final aggregate value batches:
+    /// Input was exhausted without spilling, or the soft group limit was reached.
+    async fn produce_output_from_memory(
+        &mut self,
+        mut hash_table: AggregateHashTable<FinalMarker>,
+        mut emitter: TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-        let timer = elapsed_compute.timer();
-        let replay = match spill_context.spill_table(&mut hash_table) {
-            Ok(()) => {
-                let metrics = OrderedAggregateTableMetrics::from_hash_table(&hash_table);
-                drop(hash_table);
-                match self.reservation.try_resize(0) {
-                    Ok(()) => (*spill_context).into_replay_stream(
-                        &self.baseline_metrics,
-                        metrics,
-                        self.reservation.new_empty(),
-                    ),
-                    Err(e) => Err(e),
-                }
-            }
-            Err(e) => Err(e),
-        };
-        timer.done();
 
-        match replay {
-            Ok(stream) => {
-                ControlFlow::Continue(FinalHashAggregateState::MergingSpills { stream })
-            }
-            Err(e) => Self::break_with_err(e),
-        }
-    }
+        let mut timer = elapsed_compute.timer();
+        hash_table.start_output()?;
 
-    /// Forwards output from the fully ordered stream that consumes the merged
-    /// spill runs.
-    ///
-    /// See comments at `poll_next()` for details.
-    ///
-    /// Returns the next operator state with control flow decision.
-    fn handle_merging_spills(
-        &mut self,
-        cx: &mut Context<'_>,
-        original_state: FinalHashAggregateState,
-    ) -> FinalHashAggregateStateTransition {
-        let FinalHashAggregateState::MergingSpills { mut stream } = original_state else {
-            return Self::break_with_internal_err(
-                "Final hash aggregate stream expected MergingSpills state",
-            );
-        };
-
-        match stream.poll_next_unpin(cx) {
-            Poll::Pending => ControlFlow::Break((
-                Poll::Pending,
-                FinalHashAggregateState::MergingSpills { stream },
-            )),
-            Poll::Ready(Some(Ok(batch))) => ControlFlow::Break((
-                Poll::Ready(Some(Ok(batch))),
-                FinalHashAggregateState::MergingSpills { stream },
-            )),
-            Poll::Ready(Some(Err(e))) => Self::break_with_err(e),
-            Poll::Ready(None) => ControlFlow::Continue(FinalHashAggregateState::Done),
-        }
-    }
-
-    /// Handle ProducingOutput state - emit final aggregate value batches.
-    ///
-    /// See comments at `poll_next()` for details.
-    ///
-    /// Returns the next operator state with control flow decision.
-    fn handle_producing_output(
-        &mut self,
-        original_state: FinalHashAggregateState,
-    ) -> FinalHashAggregateStateTransition {
-        let FinalHashAggregateState::ProducingOutput { mut hash_table } = original_state
-        else {
-            return Self::break_with_internal_err(
-                "Final hash aggregate stream expected ProducingOutput state",
-            );
-        };
-
-        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-        let timer = elapsed_compute.timer();
-        let result = hash_table.next_output_batch();
-        timer.done();
-
-        match result {
-            Ok(Some(batch)) => {
-                let next_state = if hash_table.is_done() {
-                    drop(hash_table);
-                    if let Err(e) = self.reservation.try_resize(0) {
-                        return Self::break_with_err(e);
-                    }
-                    FinalHashAggregateState::Done
-                } else {
-                    if let Err(e) = self.reservation.try_resize(hash_table.memory_size())
-                    {
-                        return Self::break_with_err(e);
-                    }
-                    FinalHashAggregateState::ProducingOutput { hash_table }
-                };
-
-                ControlFlow::Break((
-                    Poll::Ready(Some(Ok(batch.record_output(&self.baseline_metrics)))),
-                    next_state,
-                ))
-            }
-            Err(e) => Self::break_with_err(e),
-            Ok(None) => {
-                drop(hash_table);
-                let next_state = FinalHashAggregateState::Done;
-                if let Err(e) = self.reservation.try_resize(0) {
-                    return Self::break_with_err(e);
-                }
-                ControlFlow::Continue(next_state)
-            }
-        }
-    }
-}
-
-impl Stream for FinalHashAggregateStream {
-    type Item = Result<RecordBatch>;
-
-    /// Entry point for the final hash aggregate state machine.
-    ///
-    /// See comments in [`FinalHashAggregateStream`] for high-level ideas.
-    ///
-    /// State transition graph:
-    ///
-    /// ```text
-    /// (start)
-    ///   -> ReadingInput
-    ///      The stream starts by polling partial-state input and aggregating
-    ///      those states into the final hash table.
-    ///
-    /// ReadingInput
-    ///   -> ReadingInput
-    ///      Aggregate one partial-state input batch. If it fits in memory,
-    ///      continue with the next input batch.
-    ///   -> Spilling
-    ///      The table cannot reserve enough memory. Move all current states into
-    ///      one fully group-key-sorted spill run.
-    ///   -> ProducingOutput
-    ///      Input was exhausted without spilling, or the soft group limit was
-    ///      reached. Start outputting final aggregate values.
-    ///   -> PreparingMergeInput
-    ///      Input was exhausted after spilling. Spill the last in-memory run and
-    ///      construct the ordered input used to merge all spill files.
-    ///
-    /// Spilling
-    ///   -> ReadingInput
-    ///      One sorted run was written; resume reading the original input.
-    ///
-    /// PreparingMergeInput
-    ///   Spill the final in-memory run and build the input ordered replay stream.
-    ///   -> MergingSpills
-    ///      The final run was spilled and the ordered replay stream was built.
-    ///
-    /// MergingSpills
-    ///   Aggregate the merged spill runs and emit final results.
-    ///   -> MergingSpills
-    ///      Forward one result batch from the fully ordered replay stream that
-    ///      consumes the sort-preserving merge.
-    ///   -> Done
-    ///      The merged spill input was fully aggregated.
-    ///
-    /// ProducingOutput
-    ///   -> ProducingOutput
-    ///      One final output batch was yielded; repeat to continue producing
-    ///      output incrementally.
-    ///   -> Done
-    ///      All final output was emitted.
-    ///
-    /// Any active state
-    ///   -> Error
-    ///      An error drops state-owned resources before it is returned.
-    ///
-    /// Error
-    ///   -> (end)
-    ///
-    /// Done
-    ///   -> (end)
-    /// ```
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
         loop {
-            let cur_state = self
-                .state
-                .take()
-                .expect("FinalHashAggregateStream state should not be None");
-
-            let next_state = match cur_state {
-                state @ FinalHashAggregateState::ReadingInput { .. } => {
-                    self.handle_reading_input(cx, state)
-                }
-                state @ FinalHashAggregateState::Spilling { .. } => {
-                    self.handle_spilling(state)
-                }
-                state @ FinalHashAggregateState::PreparingMergeInput { .. } => {
-                    self.handle_preparing_merge_input(state)
-                }
-                state @ FinalHashAggregateState::MergingSpills { .. } => {
-                    self.handle_merging_spills(cx, state)
-                }
-                state @ FinalHashAggregateState::ProducingOutput { .. } => {
-                    self.handle_producing_output(state)
-                }
-                state @ FinalHashAggregateState::Error => {
-                    self.close_input();
-                    self.reservation.free();
-                    self.state = Some(state);
-                    return Poll::Ready(None);
-                }
-                state @ FinalHashAggregateState::Done => {
-                    let _ = self.reservation.try_resize(0);
-                    self.state = Some(state);
-                    return Poll::Ready(None);
-                }
+            let Some(batch) = hash_table.next_output_batch()? else {
+                // Only reachable when the table held no groups at all: a
+                // non-empty table always reports its last batch together with
+                // the `Done` state, which the `try_resize` below already zeroes.
+                self.reservation.try_resize(0)?;
+                return Ok(());
             };
 
-            match next_state {
-                ControlFlow::Continue(next_state) => {
-                    self.state = Some(next_state);
-                }
-                ControlFlow::Break((Poll::Ready(Some(Err(e))), next_state)) => {
-                    debug_assert!(matches!(next_state, FinalHashAggregateState::Error));
+            // The table hands over its groups as they are materialized and
+            // reports a size of 0 once it reaches `Done`, so this releases the
+            // reservation before the final batch goes downstream.
+            self.reservation.try_resize(hash_table.memory_size())?;
 
-                    // The handler has already discarded its state-owned resources.
-                    // Release the remaining stream-owned resources before returning.
-                    self.close_input();
-                    self.reservation.free();
-                    self.state = Some(FinalHashAggregateState::Error);
-                    return Poll::Ready(Some(Err(e)));
-                }
-                ControlFlow::Break((poll, next_state)) => {
-                    self.state = Some(next_state);
-                    return poll;
-                }
-            }
+            timer.done();
+            emitter
+                .emit(batch.record_output(&self.baseline_metrics))
+                .await;
+            timer = elapsed_compute.timer();
         }
-    }
-}
-
-impl RecordBatchStream for FinalHashAggregateStream {
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time::Duration;
 
     use super::*;
     use crate::aggregates::{AggregateMode, PhysicalGroupBy};
+    use crate::common::collect;
     use crate::execution_plan::ExecutionPlan;
     use crate::test::TestMemoryExec;
+    use crate::test::exec::BarrierExec;
 
-    use arrow::array::{Int32Array, Int64Array};
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::{AsArray, Int32Array, Int64Array, StringViewArray};
+    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use datafusion_common::Result;
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::memory_pool::{GreedyMemoryPool, MemoryPool};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::count::count_udaf;
+    use datafusion_functions_aggregate::{min_max::min_udaf, sum::sum_udaf};
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
-    use futures::StreamExt;
+    use futures::channel::mpsc;
+    use futures::{FutureExt, StreamExt};
+    use std::collections::BTreeMap;
 
     #[tokio::test]
     async fn test_partial_hash_stream_double_emission_race_condition_bug() -> Result<()> {
@@ -1665,7 +976,8 @@ mod tests {
 
         // Execute and collect results
         let mut stream =
-            PartialHashAggregateStream::new(&aggregate_exec, &Arc::clone(&task_ctx), 0)?;
+            PartialHashAggregateStream::new(&aggregate_exec, &Arc::clone(&task_ctx), 0)?
+                .into_stream();
         let mut results = Vec::new();
 
         while let Some(result) = stream.next().await {
@@ -1682,6 +994,45 @@ mod tests {
         assert_eq!(
             total_output_groups, num_groups,
             "Unexpected number of groups",
+        );
+        assert_eq!(
+            aggregate_exec
+                .metrics()
+                .unwrap()
+                .sum_by_name("early_emit_count")
+                .unwrap()
+                .as_usize(),
+            0
+        );
+
+        // Disable skip aggregation so the same input is emitted on memory pressure.
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(1024, 1.0)
+            .build_arc()?;
+        let session_config = task_ctx.session_config().clone().set(
+            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+            &datafusion_common::ScalarValue::Float64(Some(2.0)),
+        );
+        let no_skip_task_ctx = Arc::new(
+            TaskContext::default()
+                .with_runtime(runtime)
+                .with_session_config(session_config),
+        );
+        let mut stream =
+            PartialHashAggregateStream::new(&aggregate_exec, &no_skip_task_ctx, 0)?
+                .into_stream();
+        while let Some(result) = stream.next().await {
+            result?;
+        }
+
+        assert_eq!(
+            aggregate_exec
+                .metrics()
+                .unwrap()
+                .sum_by_name("early_emit_count")
+                .unwrap()
+                .as_usize(),
+            1
         );
 
         Ok(())
@@ -1809,7 +1160,8 @@ mod tests {
 
         // Execute and collect results
         let mut stream =
-            PartialHashAggregateStream::new(&aggregate_exec, &Arc::clone(&task_ctx), 0)?;
+            PartialHashAggregateStream::new(&aggregate_exec, &Arc::clone(&task_ctx), 0)?
+                .into_stream();
         let mut results = Vec::new();
 
         while let Some(result) = stream.next().await {
@@ -1831,6 +1183,563 @@ mod tests {
             "Expected batch 3's rows ({batch3_rows}) to be skipped",
         );
 
+        Ok(())
+    }
+
+    /// Builds a partial hash aggregate stream over a single input batch of
+    /// `num_groups` distinct groups, running under `memory_limit` bytes.
+    ///
+    /// The input does not signal end-of-stream until `wait_finish` is called
+    /// on the returned [`BarrierExec`], so any output produced before that can
+    /// only come from the memory pressure emission path (normal output waits
+    /// for all input). Skip partial aggregation is disabled for the same reason.
+    fn partial_stream_under_memory_limit(
+        memory_limit: usize,
+        batch_size: usize,
+        num_groups: usize,
+    ) -> Result<(
+        SendableRecordBatchStream,
+        Arc<BarrierExec>,
+        Arc<datafusion_execution::runtime_env::RuntimeEnv>,
+    )> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("group_col", DataType::Int32, false),
+            Field::new("value_col", DataType::Int64, false),
+        ]));
+
+        let group_ids: Vec<i32> = (0..num_groups as i32).collect();
+        let values: Vec<i64> = vec![1; num_groups];
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(group_ids)),
+                Arc::new(Int64Array::from(values)),
+            ],
+        )?;
+        let input_partitions = vec![vec![batch]];
+
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(memory_limit, 1.0)
+            .build_arc()?;
+
+        let mut task_ctx = TaskContext::default().with_runtime(Arc::clone(&runtime));
+        let session_config = task_ctx
+            .session_config()
+            .clone()
+            .set(
+                "datafusion.execution.batch_size",
+                &datafusion_common::ScalarValue::UInt64(Some(batch_size as u64)),
+            )
+            .set(
+                "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+                &datafusion_common::ScalarValue::Float64(Some(1.0)),
+            );
+        task_ctx = task_ctx.with_session_config(session_config);
+        let task_ctx = Arc::new(task_ctx);
+
+        // Create aggregate: COUNT(*) GROUP BY group_col
+        let group_expr = vec![(col("group_col", &schema)?, "group_col".to_string())];
+        let aggr_expr = vec![Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col("value_col", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("count_value")
+                .build()?,
+        )];
+
+        let input = Arc::new(
+            BarrierExec::new(input_partitions, Arc::clone(&schema))
+                .without_start_barrier()
+                .with_finish_barrier()
+                .with_log(false),
+        );
+
+        let aggregate_exec = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(group_expr),
+            aggr_expr,
+            vec![None],
+            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+            Arc::clone(&schema),
+        )?;
+
+        let stream =
+            PartialHashAggregateStream::new(&aggregate_exec, &task_ctx, 0)?.into_stream();
+
+        Ok((stream, input, runtime))
+    }
+
+    #[tokio::test]
+    async fn test_partial_hash_stream_accounts_held_batch_on_memory_pressure_while_slicing()
+    -> Result<()> {
+        // When memory pressure triggers early emission, the materialized state
+        // batch is held while it is sliced into `batch_size` outputs. The
+        // stream must keep that held batch accounted for in its memory
+        // reservation until the last slice is emitted; before the fix the
+        // reservation was resized down to just the (emptied) hash table size,
+        // leaving the held batch unaccounted.
+
+        let batch_size = 1024;
+        // One row per group so the state batch is emitted in 4 slices
+        let num_groups = 4 * batch_size;
+
+        // Smaller than the building hash table (so pressure triggers) but large
+        // enough to hold the materialized state batch (so slicing can proceed)
+        let memory_limit = 100 * 1024;
+        let (mut stream, input, runtime) =
+            partial_stream_under_memory_limit(memory_limit, batch_size, num_groups)?;
+
+        // The first output batch must be a pressure-emitted slice, with the rest
+        // of the materialized state batch still held by the stream
+        let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect(
+                "did not get early emit due to OOM, this probably means that the \
+                 memory limit is too high to trigger the OOM",
+            )
+            .expect("stream ended early")?;
+        assert_eq!(first.num_rows(), batch_size);
+
+        // The emitted slice shares buffers with the held state batch, so its
+        // array memory size reflects the full held allocation
+        let held_size = first.get_array_memory_size();
+        let reserved = runtime.memory_pool.reserved();
+        assert!(
+            reserved >= held_size,
+            "memory pool has {reserved} bytes reserved but the stream is \
+             holding a materialized state batch of {held_size} bytes"
+        );
+
+        let second = stream.next().await.expect("stream ended early")?;
+        assert_eq!(second.num_rows(), batch_size);
+
+        // Make sure the state batch is really being sliced (and not emitted whole by the fallback path):
+        // the second output must share the same underlying buffer as the first
+        //
+        // If you changed the code and this fail because
+        // - you now deep copy `batch_size` from the full state batch, please update this assertion to something else
+        // - you only take batch size from the hash table, you can remove the test
+        assert_eq!(
+            first
+                .column(0)
+                .as_primitive::<Int32Type>()
+                .values()
+                .inner()
+                .data_ptr(),
+            second
+                .column(0)
+                .as_primitive::<Int32Type>()
+                .values()
+                .inner()
+                .data_ptr(),
+            "both batches should be slices of the same materialized state batch"
+        );
+
+        // Let the input finish and drain the stream: no groups lost
+        input.wait_finish().await;
+        let mut total_rows = first.num_rows() + second.num_rows();
+        while let Some(batch) = stream.next().await {
+            total_rows += batch?.num_rows();
+        }
+        assert_eq!(total_rows, num_groups);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_partial_hash_stream_emits_whole_batch_when_held_batch_does_not_fit()
+    -> Result<()> {
+        // When memory pressure triggers early emission but the materialized
+        // state batch itself does not fit in the reservation, the stream must
+        // not fail with a resources exhausted error. Instead it gives up on
+        // slicing and emits the whole state batch at once.
+
+        let batch_size = 1024;
+        let num_groups = 4 * batch_size;
+
+        // Smaller than the materialized state batch (4096 rows of Int32 group
+        // keys plus Int64 counts is at least 48 KiB), so the reservation for
+        // hash table  held batch fails. The emptied hash table itself is tiny
+        // and still fits.
+        let memory_limit = 32 * 1024;
+        let (mut stream, input, runtime) =
+            partial_stream_under_memory_limit(memory_limit, batch_size, num_groups)?;
+
+        let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect(
+                "did not get early emit due to OOM, this probably means that the \
+                 memory limit is too high to trigger the OOM",
+            )
+            .expect("stream ended early")?;
+
+        // The whole state batch is emitted at once instead of `batch_size` slices
+        assert_eq!(first.num_rows(), num_groups);
+        assert!(
+            first.get_array_memory_size() > memory_limit,
+            "test setup is wrong: the state batch fits within the memory limit, \
+             so the slicing path would have been taken"
+        );
+
+        // Unlike the slicing path, the stream does not hold on to the emitted
+        // batch, so it must not be accounted for in the reservation. Only the
+        // (emptied) hash table remains reserved
+        let emitted_size = first.get_array_memory_size();
+        let reserved = runtime.memory_pool.reserved();
+        assert!(
+            reserved < emitted_size,
+            "memory pool has {reserved} bytes reserved but the stream no longer \
+             holds the emitted state batch of {emitted_size} bytes"
+        );
+
+        input.wait_finish().await;
+        let mut total_rows = first.num_rows();
+        while let Some(batch) = stream.next().await {
+            total_rows += batch?.num_rows();
+        }
+        assert_eq!(total_rows, num_groups);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_partial_hash_stream_releases_held_batch_after_last_slice() -> Result<()>
+    {
+        // While the pressure-emitted state batch is sliced, the stream holds
+        // the remaining groups and keeps them reserved. Once the last slice is
+        // handed out nothing is held anymore, so the reservation must drop
+        // back to just the (emptied) hash table before the input is resumed.
+
+        let batch_size = 1024;
+        let num_slices = 4;
+        let num_groups = num_slices * batch_size;
+
+        let memory_limit = 100 * 1024;
+        let (mut stream, input, runtime) =
+            partial_stream_under_memory_limit(memory_limit, batch_size, num_groups)?;
+
+        // The input has not finished, so all of these are pressure-emitted slices
+        let mut held_size = 0;
+        for slice_idx in 0..num_slices {
+            let slice = if slice_idx == 0 {
+                tokio::time::timeout(Duration::from_secs(5), stream.next())
+                    .await
+                    .expect(
+                        "did not get early emit due to OOM, this probably means that the \
+                         memory limit is too high to trigger the OOM",
+                    )
+                    .expect("stream ended early")?
+            } else {
+                stream.next().await.expect("stream ended early")?
+            };
+
+            assert_eq!(slice.num_rows(), batch_size);
+
+            // Every slice shares buffers with the held state batch, so this is
+            // the size of the full held allocation
+            held_size = slice.get_array_memory_size();
+            let reserved = runtime.memory_pool.reserved();
+
+            if slice_idx + 1 < num_slices {
+                assert!(
+                    reserved >= held_size,
+                    "after slice {slice_idx} the stream still holds {held_size} \
+                     bytes but only {reserved} bytes are reserved"
+                );
+            } else {
+                assert!(
+                    reserved < held_size,
+                    "after the last slice nothing is held anymore but {reserved} \
+                     bytes are still reserved (held batch was {held_size} bytes)"
+                );
+            }
+        }
+        assert!(held_size > 0);
+
+        input.wait_finish().await;
+        let mut total_rows = num_groups;
+        while let Some(batch) = stream.next().await {
+            total_rows += batch?.num_rows();
+        }
+        assert_eq!(total_rows, num_groups);
+
+        Ok(())
+    }
+
+    #[derive(Clone, Copy)]
+    enum Finish {
+        Collect,
+        DropDuringReplay,
+        InputError,
+    }
+
+    #[tokio::test]
+    async fn final_hash_spill_replay_with_other_partitions_holding_state() -> Result<()> {
+        for spills in [1, 2, 3] {
+            run_shared_pool_case(spills, 1024 * 1024, Finish::Collect).await?;
+        }
+        // An unlimited pool produces the reference results without spilling.
+        run_shared_pool_case(0, 10 * 1024 * 1024, Finish::Collect).await
+    }
+
+    #[tokio::test]
+    async fn final_hash_spill_replay_releases_memory_on_drop() -> Result<()> {
+        run_shared_pool_case(1, 1024 * 1024, Finish::DropDuringReplay).await
+    }
+
+    #[tokio::test]
+    async fn final_hash_spill_releases_memory_on_input_error() -> Result<()> {
+        run_shared_pool_case(1, 1024 * 1024, Finish::InputError).await
+    }
+
+    /// Partition 0 spills `spills` times and replays while partitions 1..3
+    /// keep their aggregate state in the same greedy pool. With `spills` at 0,
+    /// partition 0 reads a fixed input that fits in memory.
+    ///
+    /// Input sizes follow the observed reservations, so the cases do not
+    /// depend on the memory accounting of a platform or feature set.
+    ///
+    /// These cases cover the spill and replay lifecycle in a shared pool:
+    /// results, spill metrics, and memory release. Case G in
+    /// `aggregate_memory_spill.slt` covers the merge fan-in regression for
+    /// issue #25423.
+    async fn run_shared_pool_case(
+        spills: usize,
+        limit: usize,
+        finish: Finish,
+    ) -> Result<()> {
+        const PARTITIONS: usize = 4;
+        /// Partitions 1..3 hold at least this much state.
+        const HELD_BYTES: usize = 512 * 1024;
+        /// A case that never reaches its target fails instead of looping.
+        const MAX_BATCHES: i64 = 1000;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+            Field::new("v", DataType::Int64, false),
+            Field::new("s", DataType::Utf8View, false),
+        ]));
+        let groups = PhysicalGroupBy::new_single(vec![
+            (col("a", &schema)?, "a".into()),
+            (col("b", &schema)?, "b".into()),
+        ]);
+        let expressions = vec![
+            Arc::new(
+                AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("sum")
+                    .build()?,
+            ),
+            Arc::new(
+                AggregateExprBuilder::new(min_udaf(), vec![col("s", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("min")
+                    .build()?,
+            ),
+        ];
+        let empty = TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let partial = AggregateExec::try_new(
+            AggregateMode::Partial,
+            groups.clone(),
+            expressions.clone(),
+            vec![None; 2],
+            empty,
+            Arc::clone(&schema),
+        )?;
+        let partial_schema = partial.schema();
+        let input = TestMemoryExec::try_new_exec(
+            &vec![vec![]; PARTITIONS],
+            Arc::clone(&partial_schema),
+            None,
+        )?;
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::FinalPartitioned,
+            groups.as_final(),
+            expressions,
+            vec![None; 2],
+            input,
+            schema,
+        )?;
+        assert_eq!(aggregate.input_order_mode(), &InputOrderMode::Linear);
+
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(limit));
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(128))
+                .with_runtime(
+                    RuntimeEnvBuilder::new()
+                        .with_memory_pool(Arc::clone(&pool))
+                        .build_arc()?,
+                ),
+        );
+        let mut streams = vec![];
+        let mut senders = vec![];
+        for partition in 0..PARTITIONS {
+            let (sender, receiver) = mpsc::unbounded();
+            let input = Box::pin(RecordBatchStreamAdapter::new(
+                Arc::clone(&partial_schema),
+                receiver,
+            ));
+            let stream = FinalHashAggregateStream::new_with_input(
+                &aggregate, &context, partition, input,
+            )?
+            .into_stream();
+            senders.push(sender);
+            streams.push(stream);
+        }
+        let mut expected = BTreeMap::new();
+        let mut make_batch = |partition: i64, start: i64| {
+            for value in start..start + 128 {
+                let entry = expected
+                    .entry((
+                        partition,
+                        if partition == 0 && value % 128 == 0 {
+                            0
+                        } else {
+                            value
+                        },
+                    ))
+                    .or_insert_with(|| (0, (value % 2).to_string()));
+                entry.0 += value * 2;
+            }
+            RecordBatch::try_new(
+                Arc::clone(&partial_schema),
+                vec![
+                    Arc::new(Int64Array::from(vec![partition; 128])),
+                    Arc::new(Int64Array::from_iter_values((start..start + 128).map(
+                        |value| {
+                            if partition == 0 && value % 128 == 0 {
+                                0
+                            } else {
+                                value
+                            }
+                        },
+                    ))),
+                    Arc::new(Int64Array::from_iter_values(
+                        (start..start + 128).map(|v| v * 2),
+                    )),
+                    Arc::new(StringViewArray::from_iter_values(
+                        (start..start + 128).map(|v| if v % 2 == 0 { "0" } else { "1" }),
+                    )),
+                ],
+            )
+            .unwrap()
+        };
+        // Channel inputs return Pending after each supplied batch, so the
+        // interleaving below does not depend on task scheduling.
+        let mut feed = |partition: usize, batch: i64| {
+            senders[partition]
+                .unbounded_send(Ok(make_batch(partition as i64, batch * 128)))
+                .unwrap();
+            assert!(streams[partition].next().now_or_never().is_none());
+        };
+        // Keep the state of partitions 1..3 live while partition 0 spills and
+        // replays.
+        let mut held_batches = 0;
+        while pool.reserved() < HELD_BYTES {
+            assert!(held_batches < MAX_BATCHES, "held state stays small");
+            for partition in 1..PARTITIONS {
+                feed(partition, held_batches);
+            }
+            held_batches += 1;
+        }
+        let held = pool.reserved();
+        let spill_count = || aggregate.metrics().unwrap().spill_count().unwrap();
+        assert_eq!(spill_count(), 0);
+        // Feed partition 0 until it has spilled `spills` times. Key (0, 0)
+        // repeats in every batch, so replay must merge its sum across runs.
+        let mut batches = 0;
+        loop {
+            let done = if spills == 0 {
+                batches == 70
+            } else {
+                spill_count() >= spills
+            };
+            if done {
+                break;
+            }
+            assert!(batches < MAX_BATCHES, "partition 0 did not spill");
+            feed(0, batches);
+            batches += 1;
+        }
+        // Add groups after the last spill so replay also merges the final
+        // in-memory run.
+        for _ in 0..8 {
+            feed(0, batches);
+            batches += 1;
+        }
+        assert!(spill_count() >= spills);
+        assert_eq!(spill_count() == 0, spills == 0);
+        let mut first = streams.remove(0);
+        match finish {
+            Finish::Collect => {
+                senders[0].close_channel();
+                let mut output = collect(first).await?;
+                assert_eq!(pool.reserved(), held);
+                for sender in &senders[1..] {
+                    sender.close_channel();
+                }
+                for stream in streams.drain(..) {
+                    output.extend(collect(stream).await?);
+                }
+                let mut actual = BTreeMap::new();
+                for batch in output {
+                    let a = batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap();
+                    let b = batch
+                        .column(1)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap();
+                    let sum = batch
+                        .column(2)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap();
+                    let min = batch
+                        .column(3)
+                        .as_any()
+                        .downcast_ref::<StringViewArray>()
+                        .unwrap();
+                    for row in 0..batch.num_rows() {
+                        assert!(
+                            actual
+                                .insert(
+                                    (a.value(row), b.value(row)),
+                                    (sum.value(row), min.value(row).to_string())
+                                )
+                                .is_none()
+                        );
+                    }
+                }
+                assert_eq!(actual, expected);
+                assert_eq!(spill_count() == 0, spills == 0);
+            }
+            Finish::DropDuringReplay => {
+                senders[0].close_channel();
+                first.next().await.unwrap()?;
+                assert!(pool.reserved() > held);
+                drop(first);
+                assert_eq!(pool.reserved(), held);
+            }
+            Finish::InputError => {
+                senders[0]
+                    .unbounded_send(datafusion_common::exec_err!(
+                        "injected input failure"
+                    ))
+                    .unwrap();
+                let error = first.next().await.unwrap().unwrap_err();
+                assert!(error.to_string().contains("injected input failure"));
+                assert_eq!(pool.reserved(), held);
+                drop(first);
+            }
+        }
+        drop(streams);
+        assert_eq!(pool.reserved(), 0);
         Ok(())
     }
 }

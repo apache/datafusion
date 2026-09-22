@@ -28,7 +28,7 @@ use crate::{
 };
 use datafusion_expr_common::signature::{Signature, TypeSignature};
 
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -616,28 +616,45 @@ pub fn compare_sort_expr(
     Ordering::Equal
 }
 
-/// Group a slice of window expression expr by their order by expressions
+/// Group window expressions by their sort keys, preserving any outer alias.
 pub fn group_window_expr_by_sort_keys(
     window_expr: impl IntoIterator<Item = Expr>,
 ) -> Result<Vec<(WindowSortKey, Vec<Expr>)>> {
     let mut result = vec![];
-    window_expr.into_iter().try_for_each(|expr| match &expr {
-        Expr::WindowFunction(window_fun) => {
-            let WindowFunctionParams{ partition_by, order_by, ..} = &window_fun.as_ref().params;
-            let sort_key = generate_sort_key(partition_by, order_by)?;
-            if let Some((_, values)) = result.iter_mut().find(
-                |group: &&mut (WindowSortKey, Vec<Expr>)| matches!(group, (key, _) if *key == sort_key),
-            ) {
-                values.push(expr);
-            } else {
-                result.push((sort_key, vec![expr]))
-            }
-            Ok(())
+
+    window_expr.into_iter().try_for_each(|expr| {
+        // Read the window's settings through one alias.
+        // Keep `expr` intact so its output name is preserved.
+        let inner = match &expr {
+            Expr::Alias(alias) => alias.expr.as_ref(),
+            _ => &expr,
+        };
+
+        let Expr::WindowFunction(window_fun) = inner else {
+            return internal_err!("Impossibly got non-window expr {expr:?}");
+        };
+
+        let WindowFunctionParams {
+            partition_by,
+            order_by,
+            ..
+        } = &window_fun.as_ref().params;
+
+        let sort_key = generate_sort_key(partition_by, order_by)?;
+
+        if let Some((_, values)) = result.iter_mut().find(
+            |group: &&mut (WindowSortKey, Vec<Expr>)| {
+                matches!(group, (key, _) if *key == sort_key)
+            },
+        ) {
+            values.push(expr);
+        } else {
+            result.push((sort_key, vec![expr]));
         }
-        other => internal_err!(
-            "Impossibly got non-window expr {other:?}"
-        ),
+
+        Ok(())
     })?;
+
     Ok(result)
 }
 
@@ -748,6 +765,74 @@ fn first_span(expr: &Expr) -> Option<Span> {
     })
     .ok()?;
     span
+}
+
+/// Returns an error if `expr` contains a window function call.
+///
+/// `clause` names where `expr` came from and completes the message
+/// `Window function calls are not allowed in {clause}`, for example `WHERE` or
+/// `HAVING`. Filters are evaluated before window functions are computed, so a
+/// window call in a filter predicate has no physical equivalent and is not
+/// valid SQL either (PostgreSQL: `window functions are not allowed in HAVING`).
+/// Rejecting it while the logical plan is built gives an error that names the
+/// offending call instead of a late physical planning failure.
+///
+/// [`Filter::try_new`] calls this for every predicate, so the SQL planner and
+/// the `DataFrame`/`LogicalPlanBuilder` paths are covered without callers
+/// invoking it directly. Window calls inside subqueries of `expr` are not
+/// visited and are legal.
+///
+/// The error is built by [`window_function_not_allowed_err`] with the best
+/// effort span of the call (see [`Expr::spans`]) and a generic help message. A
+/// caller that knows where the call is in the original query, such as the SQL
+/// planner, can build a more precise error with that function directly.
+///
+/// [`Filter::try_new`]: crate::logical_plan::Filter::try_new
+pub fn check_no_window_functions(expr: &Expr, clause: &str) -> Result<()> {
+    match first_window_function(expr) {
+        None => Ok(()),
+        Some(window) => Err(window_function_not_allowed_err(
+            window,
+            clause,
+            first_span(window),
+            format!(
+                "Compute '{window}' first, in a Window node or an inner query, and filter on its result"
+            ),
+        )),
+    }
+}
+
+/// The first window function call in `expr`, if any. Subqueries are not
+/// visited.
+fn first_window_function(expr: &Expr) -> Option<&Expr> {
+    let mut window = None;
+    expr.apply(|e| {
+        if matches!(e, Expr::WindowFunction(_)) {
+            window = Some(e);
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
+        }
+    })
+    .ok()?;
+    window
+}
+
+/// The planning error for `window`, a window function call that appeared in
+/// `clause` where it is not allowed (see [`check_no_window_functions`]).
+///
+/// The message is `Window function calls are not allowed in {clause}:
+/// '{window}'`. The error carries a [`Diagnostic`] with the same message,
+/// pointing at `span`, and with `help`.
+pub fn window_function_not_allowed_err(
+    window: &Expr,
+    clause: &str,
+    span: Option<Span>,
+    help: impl Into<String>,
+) -> DataFusionError {
+    let message = format!("Window function calls are not allowed in {clause}");
+    plan_datafusion_err!("{message}: '{window}'")
+        .with_diagnostic(Diagnostic::new_error(message, span).with_help(help, None))
 }
 
 /// Collect all deeply nested `Expr::WindowFunction`. They are returned in order of occurrence
@@ -1417,6 +1502,23 @@ pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{name}[{state_name}]")
 }
 
+/// Creates aggregate state fields for ordering expressions with unique names.
+///
+/// Each field is renamed using the aggregate name and its ordering position.
+pub fn ordering_state_fields(
+    name: &str,
+    ordering_fields: &[FieldRef],
+) -> impl Iterator<Item = FieldRef> {
+    ordering_fields.iter().enumerate().map(|(idx, field)| {
+        Arc::new(
+            field
+                .as_ref()
+                .clone()
+                .with_name(format_state_name(name, &format!("ordering_{idx}"))),
+        )
+    })
+}
+
 /// Determine the set of [`Column`]s produced by the subquery.
 pub fn collect_subquery_cols(
     exprs: &[Expr],
@@ -1482,6 +1584,31 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_group_window_expr_by_sort_keys_aliased_window_expr() -> Result<()> {
+        let age_asc = Sort::new(col("age"), true, true);
+        let max1 = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::AggregateUDF(max_udaf()),
+            vec![col("name")],
+        ))
+        .order_by(vec![age_asc.clone()])
+        .build()
+        .unwrap();
+        // The same window function under an alias, as the Substrait consumer
+        // produces when a window column's default name collides with an
+        // input column. It must be grouped by the inner function's sort key
+        // and kept aliased.
+        let max1_aliased = max1.clone().alias("max_name");
+
+        let result =
+            group_window_expr_by_sort_keys(vec![max1.clone(), max1_aliased.clone()])?;
+
+        let key = vec![(age_asc, false)];
+        let expected: Vec<(WindowSortKey, Vec<Expr>)> =
+            vec![(key, vec![max1, max1_aliased])];
+        assert_eq!(expected, result);
+        Ok(())
+    }
     #[test]
     fn test_group_window_expr_by_sort_keys() -> Result<()> {
         let age_asc = Sort::new(col("age"), true, true);
@@ -2101,5 +2228,44 @@ mod tests {
             err.strip_backtrace(),
             @"Error during planning: Window function calls cannot be nested: 'sum(a) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' is nested inside 'sum(sum(a) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
         );
+    }
+
+    #[test]
+    fn test_check_no_window_functions() -> Result<()> {
+        use crate::test::function_stub::sum;
+        use insta::assert_snapshot;
+
+        // columns, scalar expressions and aggregates are fine
+        check_no_window_functions(&col("a"), "WHERE")?;
+        check_no_window_functions(&(col("a") + lit(1)).gt(lit(0)), "WHERE")?;
+        check_no_window_functions(&sum(col("a")).gt(lit(0)), "HAVING")?;
+
+        // a bare window call
+        let err =
+            check_no_window_functions(&sum_over(vec![col("a")]), "WHERE").unwrap_err();
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @"Error during planning: Window function calls are not allowed in WHERE: 'sum(a) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+        );
+        let diag = err.diagnostic().expect("diagnostic");
+        assert_snapshot!(
+            diag.message,
+            @"Window function calls are not allowed in WHERE"
+        );
+        assert_snapshot!(
+            diag.helps[0].message,
+            @"Compute 'sum(a) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING' first, in a Window node or an inner query, and filter on its result"
+        );
+
+        // a window call over an aggregate, nested below other expressions,
+        // names the clause it was given
+        let predicate = sum_over(vec![sum(col("a"))]).gt(lit(10)).and(col("b"));
+        let err = check_no_window_functions(&predicate, "HAVING").unwrap_err();
+        assert_snapshot!(
+            err.strip_backtrace(),
+            @"Error during planning: Window function calls are not allowed in HAVING: 'sum(sum(a)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
+        );
+
+        Ok(())
     }
 }

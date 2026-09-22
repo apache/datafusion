@@ -32,9 +32,8 @@ use datafusion_common::cast::{
 };
 use datafusion_common::exec_err;
 use datafusion_common::plan_err;
-use datafusion_common::{
-    DataFusionError, Result, cast::as_generic_string_array, internal_err,
-};
+use datafusion_common::utils::offset_span_len;
+use datafusion_common::{Result, cast::as_generic_string_array, internal_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::TypeSignature;
 use datafusion_expr::function::Hint;
@@ -43,6 +42,8 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 use regex::{CaptureLocations, Regex};
+
+use super::compile_regex;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
@@ -361,15 +362,15 @@ where
                             // if patterns hashmap already has regexp then use else create and return
                             let re = match patterns.get(pattern) {
                                 Some(re) => Ok(re),
-                                None => match Regex::new(pattern) {
-                                    Ok(re) => {
-                                        patterns.insert(pattern.to_string(), re);
-                                        Ok(patterns.get(pattern).unwrap())
+                                None => {
+                                    match compile_regex("regexp_replace", pattern, None) {
+                                        Ok(re) => {
+                                            patterns.insert(pattern.to_string(), re);
+                                            Ok(patterns.get(pattern).unwrap())
+                                        }
+                                        Err(err) => Err(err),
                                     }
-                                    Err(err) => {
-                                        Err(DataFusionError::External(Box::new(err)))
-                                    }
-                                },
+                                }
                             };
 
                             Some(re.map(|re| re.replace(string, replacement.as_str())))
@@ -409,32 +410,27 @@ where
                             let replacement = regex_replace_posix_groups(replacement);
 
                             // format flags into rust pattern
-                            let (pattern, replace_all) = if flags == "g" {
-                                (pattern.to_string(), true)
-                            } else if flags.contains('g') {
-                                (
-                                    format!(
-                                        "(?{}){}",
-                                        flags.to_string().replace('g', ""),
-                                        pattern
-                                    ),
-                                    true,
-                                )
+                            let replace_all = flags.contains('g');
+                            let flags = flags.replace('g', "");
+                            let pattern = if flags.is_empty() {
+                                pattern.to_string()
                             } else {
-                                (format!("(?{flags}){pattern}"), false)
+                                format!("(?{flags}){pattern}")
                             };
 
                             // if patterns hashmap already has regexp then use else create and return
                             let re = match patterns.get(&pattern) {
                                 Some(re) => Ok(re),
-                                None => match Regex::new(pattern.as_str()) {
+                                None => match compile_regex(
+                                    "regexp_replace",
+                                    pattern.as_str(),
+                                    None,
+                                ) {
                                     Ok(re) => {
                                         patterns.insert(pattern.clone(), re);
                                         Ok(patterns.get(&pattern).unwrap())
                                     }
-                                    Err(err) => {
-                                        Err(DataFusionError::External(Box::new(err)))
-                                    }
+                                    Err(err) => Err(err),
                                 },
                             };
 
@@ -531,16 +527,20 @@ fn regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
     // whether this is a global match (as in replace all) or just a single
     // replace operation.
     let (pattern, limit) = match flags {
-        Some("g") => (pattern.to_string(), 0),
-        Some(flags) => (
-            format!("(?{}){}", flags.to_string().replace('g', ""), pattern),
-            !flags.contains('g') as usize,
-        ),
+        Some(flags) => {
+            let limit = !flags.contains('g') as usize;
+            let flags = flags.replace('g', "");
+            let pattern = if flags.is_empty() {
+                pattern.to_string()
+            } else {
+                format!("(?{flags}){pattern}")
+            };
+            (pattern, limit)
+        }
         None => (pattern.to_string(), 1),
     };
 
-    let re =
-        Regex::new(&pattern).map_err(|err| DataFusionError::External(Box::new(err)))?;
+    let re = compile_regex("regexp_replace", &pattern, None)?;
 
     // Replaces the posix groups in the replacement string
     // with rust ones.
@@ -555,12 +555,8 @@ fn regexp_replace_static_pattern_replace<T: OffsetSizeTrait>(
 
             // We are going to create the underlying string buffer from its parts
             // to be able to re-use the existing null buffer for sparse arrays.
-            let mut vals = BufferBuilder::<u8>::new({
-                let offsets = string_array.value_offsets();
-                (offsets[string_array.len()] - offsets[0])
-                    .to_usize()
-                    .unwrap()
-            });
+            let mut vals =
+                BufferBuilder::<u8>::new(offset_span_len(string_array.offsets()));
             let mut new_offsets = BufferBuilder::<T>::new(string_array.len() + 1);
             new_offsets.append(T::zero());
 
@@ -925,6 +921,44 @@ mod tests {
     }
 
     #[test]
+    fn test_static_pattern_regexp_replace_empty_flags() {
+        // An empty flags string must behave like no flags at all, matching
+        // `compile_regex` in this module, which is used by the other regexp
+        // functions.
+        let values = StringArray::from(vec!["abc"; 3]);
+        let patterns = StringArray::from(vec!["b"; 3]);
+        let replacements = StringArray::from(vec!["X"; 3]);
+        // `gg` collapses to an empty flags string once `g` is stripped.
+        let flags = StringArray::from(vec![Some(""), Some("g"), Some("gg")]);
+        let expected = StringArray::from(vec!["aXc"; 3]);
+
+        let re = regexp_replace_static_pattern_replace::<i32>(&[
+            Arc::new(values),
+            Arc::new(patterns),
+            Arc::new(replacements),
+            Arc::new(flags),
+        ])
+        .unwrap();
+
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_regexp_replace_empty_flags() {
+        let values = StringArray::from(vec!["abc"; 3]);
+        let patterns = StringArray::from(vec!["b"; 3]);
+        let replacements = StringArray::from(vec!["X"; 3]);
+        let flags = StringArray::from(vec![Some(""), Some("g"), Some("gg")]);
+        let expected = StringArray::from(vec!["aXc"; 3]);
+
+        let re =
+            regexp_replace::<i32, _>(&values, &patterns, &replacements, Some(&flags))
+                .unwrap();
+
+        assert_eq!(re.as_ref(), &expected);
+    }
+
+    #[test]
     fn test_static_pattern_regexp_replace_pattern_error() {
         let values = StringArray::from(vec!["abc"; 5]);
         // Deliberately using an invalid pattern to see how the single pattern
@@ -940,7 +974,7 @@ mod tests {
         let pattern_err = re.expect_err("broken pattern should have failed");
         assert_eq!(
             pattern_err.strip_backtrace(),
-            "External error: regex parse error:\n    [\n    ^\nerror: unclosed character class"
+            "Execution error: Regular expression did not compile: regex parse error:\n    [\n    ^\nerror: unclosed character class"
         );
     }
 

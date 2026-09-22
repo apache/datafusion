@@ -26,9 +26,13 @@ mod nlj_spill_unmatched;
 mod repartition_mem_limit;
 mod union_nullable_spill;
 mod view_spill_compaction;
-use arrow::array::{ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringViewArray};
+use arrow::array::{
+    ArrayRef, DictionaryArray, Int32Array, Int64Array, Int64Builder, ListBuilder,
+    RecordBatch, StringArray, StringViewArray, StructArray,
+};
+use arrow::buffer::NullBuffer;
 use arrow::compute::SortOptions;
-use arrow::datatypes::{Int32Type, SchemaRef};
+use arrow::datatypes::{Fields, Int32Type, SchemaRef};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::assert_batches_eq;
 use datafusion::config::SpillCompression;
@@ -43,6 +47,7 @@ use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_catalog::Session;
 use datafusion_catalog::streaming::StreamingTable;
+use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_common::{Result, assert_contains};
 use datafusion_execution::TaskContext;
 use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
@@ -121,6 +126,319 @@ async fn group_by_hash() {
             "for PartialHashAggregateStream[0]",
         ])
         .with_memory_limit(1_000)
+        .run()
+        .await
+}
+
+/// With `force_hash_collisions` every key hashes alike, so the hash
+/// repartitioning sends all groups to a single final stage, whose table then
+/// does not fit the limit however well memory is released. The limit is sized
+/// for the real distribution across four final stages, so this test is skipped
+/// under that feature.
+#[cfg(not(feature = "force_hash_collisions"))]
+mod count_distinct_spill {
+    use super::*;
+    use datafusion::assert_batches_sorted_eq;
+
+    /// `count(distinct)` over integers under a memory limit.
+    ///
+    /// The integer distinct-count groups accumulator reports the capacity of its
+    /// buffers in `size()`. After an aggregate stream emits all groups, either to
+    /// emit partial state early or to spill, it resizes its reservation to the
+    /// table's reported size and expects it to have shrunk. If the accumulator
+    /// keeps its capacity, that resize is a grow against an exhausted pool and the
+    /// query fails although everything was already written out.
+    const COUNT_DISTINCT_ROWS: usize = 200_000;
+    const COUNT_DISTINCT_GROUPS: i64 = 64;
+    const COUNT_DISTINCT_BATCH_ROWS: usize = 8_192;
+
+    /// Far below the distinct sets (200k values, several megabytes across the
+    /// partial and final tables), far above the fixed cost of the stages. With the
+    /// accumulator releasing its buffers the query passes from 2 MB upwards;
+    /// without, it fails up to 4 MB with "Decreasing allocation after spilling
+    /// should succeed" in the final stage or a failed emit in the partial stage.
+    const COUNT_DISTINCT_MEMORY_LIMIT: usize = 4 * 1024 * 1024;
+
+    /// `g` has 64 groups, `v` is unique, so every group holds 3125 distinct values.
+    fn count_distinct_table() -> MemTable {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("g", DataType::Int64, false),
+            Field::new("v", DataType::Int64, false),
+        ]));
+        let batches = (0..COUNT_DISTINCT_ROWS)
+            .step_by(COUNT_DISTINCT_BATCH_ROWS)
+            .map(|start| {
+                let rows =
+                    start..(start + COUNT_DISTINCT_BATCH_ROWS).min(COUNT_DISTINCT_ROWS);
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Int64Array::from_iter_values(
+                            rows.clone().map(|row| row as i64 % COUNT_DISTINCT_GROUPS),
+                        )),
+                        Arc::new(Int64Array::from_iter_values(
+                            rows.map(|row| row as i64),
+                        )),
+                    ],
+                )
+                .unwrap()
+            })
+            .collect();
+        MemTable::try_new(schema, vec![batches]).unwrap()
+    }
+
+    /// Four partial stages emit their state early and four hash-partitioned final
+    /// stages spill; every one of them must see the accumulator memory drop after
+    /// emitting all groups.
+    #[tokio::test]
+    async fn count_distinct_releases_memory_after_emitting_all() {
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(COUNT_DISTINCT_MEMORY_LIMIT, 1.0)
+            .with_disk_manager_builder(DiskManagerBuilder::default())
+            .build_arc()
+            .unwrap();
+        let config = SessionConfig::new().with_target_partitions(4);
+        let ctx = SessionContext::new_with_config_rt(config, runtime);
+        ctx.register_table("t", Arc::new(count_distinct_table()))
+            .unwrap();
+
+        let batches = ctx
+            .sql("select count(distinct v) as d, count(*) as n from t group by g")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap_or_else(|error| {
+                panic!("query failed under the memory limit: {error}")
+            });
+
+        let per_group = (COUNT_DISTINCT_ROWS as i64 / COUNT_DISTINCT_GROUPS).to_string();
+        let row = format!("| {per_group} | {per_group} |");
+        let mut expected = vec!["+------+------+", "| d    | n    |", "+------+------+"];
+        expected.extend(std::iter::repeat_n(
+            row.as_str(),
+            COUNT_DISTINCT_GROUPS as usize,
+        ));
+        expected.push("+------+------+");
+        assert_batches_sorted_eq!(expected, &batches);
+    }
+}
+
+/// `GROUP BY` on a single nested key under a memory limit, on both the legacy
+/// `GroupedHashAggregateStream` and the migrated streams. The legacy stream used
+/// to emit duplicate groups after spilling.
+#[tokio::test]
+async fn nested_key_spill_keeps_groups_unique() {
+    const NESTED_KEY_ROWS: usize = 200_000;
+    const NESTED_KEY_GROUPS: i64 = 16;
+    const NESTED_KEY_BATCH_ROWS: usize = 8_192;
+
+    /// Small enough that the final stage must spill its `count(distinct)` state
+    /// under the plan shape each stream implementation runs with, see
+    /// `nested_key_session_config` for why they differ.
+    const LEGACY_MEMORY_LIMIT: usize = 8 * 1024 * 1024;
+    const MIGRATED_MEMORY_LIMIT: usize = 2 * 1024 * 1024;
+
+    /// A `FairSpillPool` splits the limit evenly between the spillable consumers
+    /// registered at the time of each allocation, so what a stream may hold
+    /// depends on which other streams are still alive. Each implementation gets
+    /// a plan shape under which that does not matter.
+    ///
+    /// The legacy bug needs several new groups per merged batch: 64 row batches
+    /// over 4 hash partitioned final streams reproduce it, and the legacy replay
+    /// of the merged spill holds at most ~340 KiB, within the ~680 KiB share it
+    /// gets even while all 12 consumers (partials, repartitions and finals) are
+    /// registered.
+    ///
+    /// The migrated final stream replays the merged spill through an ordered
+    /// table that accounts for every group of a merged batch before emitting
+    /// the completed ones, and one group's `count(distinct)` state here is
+    /// ~675 KiB. With 64 row batches over 4 partitions that reached ~2.7 MiB,
+    /// which only fit once the other partitions had finished and released
+    /// their share, so the run depended on scheduling. It therefore runs a
+    /// single final stream (no hash repartition), which is the only spillable
+    /// consumer left once the partials are done, with 8 row batches so a
+    /// merged batch holds one or two groups.
+    fn nested_key_session_config(legacy: bool) -> SessionConfig {
+        let config = SessionConfig::new()
+            .with_target_partitions(4)
+            .set_bool("datafusion.execution.enable_migration_aggregate", !legacy);
+        if legacy {
+            // small batches: the merged spill stream arrives in many batches and
+            // groups span batch boundaries
+            config.with_batch_size(64)
+        } else {
+            config
+                .with_batch_size(8)
+                .set_bool("datafusion.optimizer.repartition_aggregations", false)
+        }
+    }
+
+    fn nested_key_struct_fields() -> Fields {
+        Fields::from(vec![
+            Field::new("list", DataType::new_list(DataType::Int64, true), true),
+            Field::new("num", DataType::Int64, true),
+        ])
+    }
+
+    fn nested_key_table() -> MemTable {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new_struct("st", nested_key_struct_fields(), true),
+            Field::new("v", DataType::Int64, false),
+        ]));
+        let batches = (0..NESTED_KEY_ROWS)
+            .step_by(NESTED_KEY_BATCH_ROWS)
+            .map(|start| {
+                let rows = start..(start + NESTED_KEY_BATCH_ROWS).min(NESTED_KEY_ROWS);
+                let mut list = ListBuilder::new(Int64Builder::new());
+                let mut num = Vec::with_capacity(rows.len());
+                let mut valid = Vec::with_capacity(rows.len());
+                for row in rows.clone() {
+                    let group = row as i64 % NESTED_KEY_GROUPS;
+                    match row % 37 {
+                        0 => list.append_null(),
+                        1 => list.append(true),
+                        _ => {
+                            list.values().append_value(group);
+                            list.values().append_value(group + 1);
+                            list.append(true);
+                        }
+                    }
+                    num.push((row % 41 != 0).then_some(group));
+                    valid.push(row % 43 != 0);
+                }
+                let st = StructArray::new(
+                    nested_key_struct_fields(),
+                    vec![Arc::new(list.finish()), Arc::new(Int64Array::from(num))],
+                    Some(NullBuffer::from(valid)),
+                );
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(st),
+                        Arc::new(Int64Array::from_iter_values(
+                            rows.map(|row| row as i64),
+                        )),
+                    ],
+                )
+                .unwrap()
+            })
+            .collect();
+        MemTable::try_new(schema, vec![batches]).unwrap()
+    }
+
+    async fn run_nested_key_query(memory_limit: Option<usize>, legacy: bool) -> String {
+        let mut runtime = RuntimeEnvBuilder::new()
+            .with_disk_manager_builder(DiskManagerBuilder::default());
+        if let Some(limit) = memory_limit {
+            runtime = runtime.with_memory_pool(Arc::new(FairSpillPool::new(limit)));
+        }
+        let ctx = SessionContext::new_with_config_rt(
+            nested_key_session_config(legacy),
+            runtime.build_arc().unwrap(),
+        );
+        ctx.register_table("t", Arc::new(nested_key_table()))
+            .unwrap();
+
+        let df = ctx
+            .sql(
+                "select st, count(v), count(distinct v), sum(v), avg(v), min(v), max(v) \
+                                 from t group by st",
+            )
+            .await
+            .unwrap();
+        let plan = df.create_physical_plan().await.unwrap();
+
+        let task_ctx = ctx.task_ctx();
+        let batches = collect_batches(Arc::clone(&plan), task_ctx)
+            .await
+            .expect("Query execution failed");
+
+        let spill_count = plan_spill_count(plan.as_ref());
+        match memory_limit {
+            Some(_) => assert_ne!(spill_count, 0, "must have spilled"),
+            None => assert_eq!(spill_count, 0, "must not spill on unbounded memory"),
+        }
+
+        batches_to_sort_string(&batches)
+    }
+
+    let expected = run_nested_key_query(None, false).await;
+    assert_eq!(
+        run_nested_key_query(None, true).await,
+        expected,
+        "unbounded, legacy=true"
+    );
+
+    for (legacy, memory_limit) in
+        [(true, LEGACY_MEMORY_LIMIT), (false, MIGRATED_MEMORY_LIMIT)]
+    {
+        assert_eq!(
+            run_nested_key_query(Some(memory_limit), legacy).await,
+            expected,
+            "spilling, legacy={legacy}"
+        );
+    }
+}
+
+/// A grouped `COUNT(DISTINCT <string>)` gets one accumulator per group, and
+/// each of those owns a hash set of the distinct values it has seen. Those
+/// sets used to be created pre-allocated, which costs far more than the
+/// handful of values a group typically holds, so the query's memory use
+/// tracked the number of groups rather than the amount of data.
+///
+/// With 4,000 groups holding 2 distinct values each, this query needed about
+/// 35.5 MB of budget before the per group pre-allocation was removed and
+/// about 1.9 MB after, so an 8 MB limit is a failure before the change and a
+/// success after it. Spilling is disabled, so completing means the query
+/// genuinely fit in the budget.
+///
+/// The `avg(payload)` is load bearing, and `avg` specifically. Without a
+/// second aggregate, `single_distinct_aggregation_to_group_by` rewrites the
+/// distinct aggregate into a plain two stage `GROUP BY` that does not use
+/// these accumulators at all. That rule tolerates a non-distinct `sum`, `min`
+/// or `max` beside the distinct aggregate, because it re-aggregates its own
+/// partial results over the deduplicated inner group by, and those three
+/// compose with themselves. `avg` does not: averaging per group averages of
+/// different sizes gives the wrong answer, so the rule can never accept it.
+/// That is why ClickBench Q9 keeps its distinct aggregate. Do not replace
+/// this with `count(*)`: `count` is only incidentally rejected today, and
+/// <https://github.com/apache/datafusion/pull/24859> proposes accepting it,
+/// which would rewrite the query and leave this test passing by construction.
+#[tokio::test]
+async fn group_by_count_distinct_utf8() {
+    TestCase::new()
+        .with_query(
+            "select group_key, count(distinct value), avg(payload) from t group by group_key",
+        )
+        .with_scenario(Scenario::GroupedDistinctStrings {
+            groups: 4_000,
+            string_view: false,
+        })
+        .with_config(SessionConfig::new().with_target_partitions(1))
+        .with_memory_limit(8_000_000)
+        .with_expected_success()
+        .run()
+        .await
+}
+
+/// The `Utf8View` counterpart of [`group_by_count_distinct_utf8`], covering
+/// the separate view flavoured hash set. The same query over a `Utf8View`
+/// column needed about 123 MB of budget before the change and about 2.5 MB
+/// after, so 16 MB separates the two.
+#[tokio::test]
+async fn group_by_count_distinct_utf8_view() {
+    TestCase::new()
+        .with_query(
+            "select group_key, count(distinct value), avg(payload) from t group by group_key",
+        )
+        .with_scenario(Scenario::GroupedDistinctStrings {
+            groups: 4_000,
+            string_view: true,
+        })
+        .with_config(SessionConfig::new().with_target_partitions(1))
+        .with_memory_limit(16_000_000)
+        .with_expected_success()
         .run()
         .await
 }
@@ -786,6 +1104,107 @@ async fn test_spill_file_compressed_with_lz4_frame() -> Result<()> {
 
     Ok(())
 }
+
+/// Number of groups the `covar_samp` queries below produce.
+const ADAPTER_GROUPS: i64 = 128;
+/// Rows per input batch for the `covar_samp` queries below.
+const ADAPTER_BATCH_SIZE: i64 = 8192;
+/// Bytes of scratch row indices `GroupsAccumulatorAdapter` retains for the
+/// `covar_samp` queries below: one `u32` per row of the largest batch each
+/// group has ever received, kept for the lifetime of the group.
+const ADAPTER_RETAINED_BYTES: usize =
+    (ADAPTER_GROUPS * ADAPTER_BATCH_SIZE) as usize * size_of::<u32>();
+
+/// Runs a `GROUP BY` `covar_samp` query under `memory_limit` and returns the
+/// executed plan so the caller can inspect its metrics.
+///
+/// `covar_samp` has no native [`GroupsAccumulator`], so its per-group state is
+/// held by `GroupsAccumulatorAdapter`. The adapter keeps one scratch `Vec<u32>`
+/// of row indices per group, grown to the largest number of rows that group
+/// has ever taken from a single input batch and retained (cleared, but not
+/// deallocated) for the lifetime of the group.
+///
+/// The query hands each of the [`ADAPTER_GROUPS`] groups `batches_per_group`
+/// consecutive full batches of [`ADAPTER_BATCH_SIZE`] rows, so the adapter
+/// retains [`ADAPTER_RETAINED_BYTES`] (4 MiB) of scratch capacity however many
+/// batches each group receives. Everything else the aggregate holds is two
+/// orders of magnitude smaller.
+///
+/// `target_partitions = 1` puts the aggregate in `Single` mode, which spills
+/// under memory pressure instead of emitting groups early, so the accounting
+/// is observable as a spill.
+///
+/// [`GroupsAccumulator`]: datafusion_expr::GroupsAccumulator
+async fn run_adapter_query(
+    memory_limit: usize,
+    batches_per_group: i64,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::new(GreedyMemoryPool::new(memory_limit)))
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+
+    let config = SessionConfig::new()
+        .with_target_partitions(1)
+        .with_batch_size(ADAPTER_BATCH_SIZE as usize);
+    let ctx = SessionContext::new_with_config_rt(config, runtime);
+
+    let rows_per_group = ADAPTER_BATCH_SIZE * batches_per_group;
+    let sql = format!(
+        "SELECT v / {rows_per_group} AS g, covar_samp(v, v) AS c \
+         FROM generate_series(0, {}) AS t(v) \
+         GROUP BY v / {rows_per_group}",
+        ADAPTER_GROUPS * rows_per_group - 1
+    );
+
+    let plan = ctx.sql(&sql).await?.create_physical_plan().await?;
+    let batches = collect_batches(Arc::clone(&plan), ctx.task_ctx()).await?;
+
+    let rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+    assert_eq!(rows, ADAPTER_GROUPS as usize);
+
+    Ok(plan)
+}
+
+/// The scratch capacity `GroupsAccumulatorAdapter` retains is four times the
+/// memory limit, so the aggregate must spill. Without the capacity everything
+/// the aggregate reports is far under the limit, and the query runs to
+/// completion without ever asking the pool for what it is really using.
+#[tokio::test]
+async fn aggregate_adapter_spills_on_retained_indices() -> Result<()> {
+    let plan = run_adapter_query(ADAPTER_RETAINED_BYTES / 4, 1).await?;
+
+    let spill_count = plan_spill_count(plan.as_ref());
+    assert!(
+        spill_count > 0,
+        "the aggregate retains {ADAPTER_RETAINED_BYTES} bytes of scratch indices \
+         against a limit of a quarter of that, so it must spill, \
+         but spill_count was {spill_count}"
+    );
+
+    Ok(())
+}
+
+/// The retained scratch capacity is charged once, not once per batch. Every
+/// group receives four batches, so charging the capacity per batch would
+/// report four times the retained bytes, and the memory limit of twice the
+/// retained bytes fits the aggregate only if it is charged once.
+#[tokio::test]
+async fn aggregate_adapter_charges_retained_indices_once() -> Result<()> {
+    let plan = run_adapter_query(ADAPTER_RETAINED_BYTES * 2, 4).await?;
+
+    let spill_count = plan_spill_count(plan.as_ref());
+    assert_eq!(
+        spill_count, 0,
+        "the aggregate retains {ADAPTER_RETAINED_BYTES} bytes of scratch indices \
+         under a limit of twice that, so it must not spill"
+    );
+
+    Ok(())
+}
+
 /// Run the query with the specified memory limit,
 /// and verifies the expected errors are returned
 #[derive(Clone, Debug)]
@@ -982,6 +1401,14 @@ enum Scenario {
         /// If true, splits all input batches into 1 row each
         single_row_batches: bool,
     },
+
+    /// `groups` distinct integer keys paired with a short string value, for
+    /// grouped aggregates that build one accumulator per group.
+    GroupedDistinctStrings {
+        groups: usize,
+        /// If true, the value column is `Utf8View` rather than `Utf8`
+        string_view: bool,
+    },
 }
 
 impl Scenario {
@@ -1056,6 +1483,15 @@ impl Scenario {
                 let table = SortedTableProvider::new(batches, sort_information);
                 Arc::new(table)
             }
+            Self::GroupedDistinctStrings {
+                groups,
+                string_view,
+            } => {
+                let batches = grouped_distinct_string_batches(*groups, *string_view);
+                let table =
+                    MemTable::try_new(batches[0].schema(), vec![batches]).unwrap();
+                Arc::new(table)
+            }
         }
     }
 
@@ -1079,8 +1515,62 @@ impl Scenario {
                 // Use default rules
                 None
             }
+            Self::GroupedDistinctStrings { .. } => {
+                // Disable the rules that would add a repartition, so the test
+                // measures the aggregate's budget rather than a repartition's
+                Some(vec![Arc::new(JoinSelection::new())])
+            }
         }
     }
+}
+
+/// Number of distinct string values held by every group produced by
+/// [`grouped_distinct_string_batches`]
+const DISTINCT_VALUES_PER_GROUP: usize = 2;
+
+/// Returns batches of 1024 rows with `groups` distinct keys in `group_key`,
+/// each key paired with [`DISTINCT_VALUES_PER_GROUP`] distinct short strings
+/// in `value` and an `Int64` `payload` to aggregate over. The values are
+/// `Utf8View` if `string_view` is set, `Utf8` otherwise.
+fn grouped_distinct_string_batches(groups: usize, string_view: bool) -> Vec<RecordBatch> {
+    let value_type = if string_view {
+        DataType::Utf8View
+    } else {
+        DataType::Utf8
+    };
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("group_key", DataType::Int32, false),
+        Field::new("value", value_type, false),
+        Field::new("payload", DataType::Int64, false),
+    ]));
+
+    const ROWS_PER_BATCH: usize = 1024;
+
+    let rows = groups * DISTINCT_VALUES_PER_GROUP;
+    let mut keys = Vec::with_capacity(rows);
+    let mut values = Vec::with_capacity(rows);
+    for value in 0..DISTINCT_VALUES_PER_GROUP {
+        for group in 0..groups {
+            keys.push(group as i32);
+            values.push(format!("value-{value}"));
+        }
+    }
+
+    keys.chunks(ROWS_PER_BATCH)
+        .zip(values.chunks(ROWS_PER_BATCH))
+        .map(|(keys, values)| {
+            let payloads: ArrayRef =
+                Arc::new(Int64Array::from_iter_values(keys.iter().map(|k| *k as i64)));
+            let keys: ArrayRef = Arc::new(Int32Array::from(keys.to_vec()));
+            let values: ArrayRef = if string_view {
+                Arc::new(StringViewArray::from_iter_values(values))
+            } else {
+                Arc::new(StringArray::from_iter_values(values))
+            };
+            RecordBatch::try_new(Arc::clone(&schema), vec![keys, values, payloads])
+                .unwrap()
+        })
+        .collect()
 }
 
 fn access_log_batches() -> Vec<RecordBatch> {
