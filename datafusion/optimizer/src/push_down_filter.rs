@@ -40,8 +40,8 @@ use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    BinaryExpr, Distinct, Expr, Filter, Operator, Projection,
-    TableProviderFilterPushDown, and, or,
+    BinaryExpr, Distinct, Expr, Extension, Filter, MaterializedCte, Operator, Projection,
+    TableProviderFilterPushDown, UserDefinedLogicalNodeCore, and, or,
 };
 
 use crate::optimizer::ApplyOrder;
@@ -1244,6 +1244,23 @@ impl OptimizerRule for PushDownFilter {
                     new_predicate,
                     LogicalPlan::TableScan(scan),
                 )))
+            }
+            LogicalPlan::Extension(Extension { node })
+                if node.as_any().is::<MaterializedCte>() =>
+            {
+                // The output is the output of the continuation, so the filter
+                // moves onto the continuation. The body is shared by every scan
+                // of the CTE and is never filtered for one of them.
+                let cte = node.as_any().downcast_ref::<MaterializedCte>().unwrap();
+                let continuation = LogicalPlan::Filter(Filter::new(
+                    filter.predicate,
+                    Arc::new(cte.continuation.clone()),
+                ));
+                let cte = cte
+                    .with_exprs_and_inputs(vec![], vec![cte.cte.clone(), continuation])?;
+                Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                    node: Arc::new(cte),
+                })))
             }
             LogicalPlan::Extension(extension_plan) => {
                 // This check prevents the Filter from being removed when the extension node has no children,

@@ -39,6 +39,7 @@ use crate::expr_rewriter::{
 };
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
+use crate::logical_plan::materialized_cte::MaterializedCte;
 use crate::logical_plan::{DmlStatement, Statement, WriteOp};
 use crate::utils::{
     check_aggregate_and_window_nesting, check_no_window_functions,
@@ -609,13 +610,19 @@ impl LogicalPlan {
                     })
                     .map_or(Ok(None), |v| v.map(Some))
             }
+            // A materialized CTE outputs the output of its continuation.
+            LogicalPlan::Extension(Extension { node }) => {
+                match node.as_any().downcast_ref::<MaterializedCte>() {
+                    Some(cte) => cte.continuation.head_output_expr(),
+                    None => Ok(None),
+                }
+            }
             LogicalPlan::Subquery(_) => Ok(None),
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Statement(_)
             | LogicalPlan::Values(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Analyze(_)
-            | LogicalPlan::Extension(_)
             | LogicalPlan::Dml(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::Ddl(_)

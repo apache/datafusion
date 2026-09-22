@@ -92,9 +92,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } else {
                 self.apply_table_alias(cte_plan, cte.alias)?
             };
-            if is_materialized && !is_recursive {
+            if is_materialized {
                 // Every reference reads the shared result instead of a copy
-                // of the body.
+                // of the body. The body is already planned, so a reference
+                // of a recursive CTE to itself stays a work table scan.
                 let id = MaterializedCteId::next();
                 let scan = LogicalPlan::Extension(Extension {
                     node: Arc::new(MaterializedCteScan {

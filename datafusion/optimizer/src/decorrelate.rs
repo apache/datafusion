@@ -34,8 +34,9 @@ use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
 };
 use datafusion_expr::{
-    BinaryExpr, Cast, EmptyRelation, Expr, ExprSchemable, FetchType, LogicalPlan,
-    LogicalPlanBuilder, Operator, expr, lit,
+    BinaryExpr, Cast, EmptyRelation, Expr, ExprSchemable, Extension, FetchType,
+    LogicalPlan, LogicalPlanBuilder, MaterializedCte, Operator,
+    UserDefinedLogicalNodeCore, expr, lit,
 };
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -141,6 +142,41 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             // level and must not be pulled up into the current scope.
             LogicalPlan::Subquery(_) => {
                 Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+            }
+            LogicalPlan::Extension(Extension { node })
+                if node.as_any().is::<MaterializedCte>() =>
+            {
+                let cte = node.as_any().downcast_ref::<MaterializedCte>().unwrap();
+                if !cte.cte.all_out_ref_exprs().is_empty() {
+                    // A correlated body would have to run once per outer row.
+                    self.can_pull_up = false;
+                    return Ok(Transformed::new(
+                        LogicalPlan::Extension(Extension { node }),
+                        false,
+                        TreeNodeRecursion::Jump,
+                    ));
+                }
+                // Only the continuation can hold correlated expressions. Rewrite
+                // it alone, so that the body shared by every scan keeps its schema.
+                let continuation = cte.continuation.clone().rewrite(self)?;
+                if !continuation.transformed {
+                    return Ok(Transformed::new(
+                        LogicalPlan::Extension(Extension { node }),
+                        false,
+                        TreeNodeRecursion::Jump,
+                    ));
+                }
+                let cte = cte.with_exprs_and_inputs(
+                    vec![],
+                    vec![cte.cte.clone(), continuation.data],
+                )?;
+                Ok(Transformed::new(
+                    LogicalPlan::Extension(Extension {
+                        node: Arc::new(cte),
+                    }),
+                    true,
+                    TreeNodeRecursion::Jump,
+                ))
             }
             LogicalPlan::Union(_) | LogicalPlan::Sort(_) | LogicalPlan::Extension(_) => {
                 let plan_hold_outer = !plan.all_out_ref_exprs().is_empty();

@@ -38,6 +38,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, Statistics, internal_err};
 use datafusion_common_runtime::JoinSet;
@@ -47,9 +48,14 @@ use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr
 use futures::{StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
+use crate::coop::cooperative;
 use crate::execution_plan::{
     Boundedness, CardinalityEffect, EmissionType, ExecutionPlan, ExecutionPlanProperties,
     PlanProperties, SchedulingType,
+};
+use crate::filter_pushdown::{
+    ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
+    FilterPushdownPropagation,
 };
 use crate::joins::utils::{OnceAsync, OnceFut};
 use crate::metrics::{
@@ -202,9 +208,12 @@ async fn buffer_partition(
             batches.push(batch);
             continue;
         }
-        spill
-            .get_or_insert(spill_manager.create_in_progress_file("MaterializedCte")?)
-            .append_batch(&batch)?;
+        if spill.is_none() {
+            spill = Some(spill_manager.create_in_progress_file("MaterializedCte")?);
+        }
+        if let Some(file) = spill.as_mut() {
+            file.append_batch(&batch)?;
+        }
     }
     let spill_file = match spill {
         Some(mut file) => file.finish()?,
@@ -382,6 +391,34 @@ impl ExecutionPlan for MaterializedCteExec {
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
     }
+
+    /// The output is the output of the continuation, so parent filters go to
+    /// the continuation only. The body is shared by every scan and must not
+    /// be filtered for one consumer.
+    fn gather_filters_for_pushdown(
+        &self,
+        _phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        _config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        Ok(FilterDescription::new()
+            .with_child(ChildFilterDescription::all_unsupported(&parent_filters))
+            .with_child(ChildFilterDescription::from_child(
+                &parent_filters,
+                &self.continuation,
+            )?))
+    }
+
+    fn handle_child_pushdown_result(
+        &self,
+        _phase: FilterPushdownPhase,
+        child_pushdown_result: ChildPushdownResult,
+        _config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+        // The body always reports `No`, so a filter is handled when the
+        // continuation handles it.
+        Ok(FilterPushdownPropagation::if_any(child_pushdown_result))
+    }
 }
 
 /// Reads the buffered output of a [`MaterializedCteExec`] body.
@@ -430,10 +467,6 @@ impl MaterializedCteScanExec {
             metrics: ExecutionPlanMetricsSet::new(),
             cache: Arc::clone(&self.cache),
         }
-    }
-
-    pub fn is_bound(&self) -> bool {
-        self.buffer.is_some()
     }
 
     /// The id of the [`MaterializedCteBuffer`] this scan reads.
@@ -514,10 +547,12 @@ impl ExecutionPlan for MaterializedCteScanExec {
         })
         .try_flatten()
         .inspect_ok(move |batch| baseline.record_output(batch.num_rows()));
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
+        // The replay of in-memory batches never returns `Pending`, so it must
+        // consume the Tokio budget explicitly.
+        Ok(Box::pin(cooperative(RecordBatchStreamAdapter::new(
             Arc::clone(&self.schema),
-            stream,
-        )))
+            Box::pin(stream),
+        ))))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -530,5 +565,42 @@ impl ExecutionPlan for MaterializedCteScanExec {
         _args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
         Ok(Arc::new(Statistics::new_unknown(&self.schema)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::empty::EmptyExec;
+    use crate::filter_pushdown::PushedDown;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_physical_expr::expressions::{col, lit};
+
+    #[test]
+    fn parent_filters_go_to_the_continuation_only() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let body = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let continuation = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let exec = MaterializedCteExec::new(
+            body,
+            continuation,
+            Arc::new(MaterializedCteBuffer::new(0, "c")),
+        );
+        let filter = Arc::new(datafusion_physical_expr::expressions::BinaryExpr::new(
+            col("a", &schema)?,
+            datafusion_expr::Operator::Eq,
+            lit(1i32),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let description = exec.gather_filters_for_pushdown(
+            FilterPushdownPhase::Pre,
+            vec![filter],
+            &ConfigOptions::default(),
+        )?;
+        let parent_filters = description.parent_filters();
+        assert_eq!(parent_filters.len(), 2);
+        assert!(matches!(parent_filters[0][0].discriminant, PushedDown::No));
+        assert!(matches!(parent_filters[1][0].discriminant, PushedDown::Yes));
+        Ok(())
     }
 }
