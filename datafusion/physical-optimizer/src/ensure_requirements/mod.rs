@@ -302,6 +302,18 @@ impl PhysicalOptimizerRule for EnsureRequirements {
     // a costlier merge). Until re-application is a proven no-op, this stays
     // on the default, and fixing that is the gate for declaring it.
 
+    /// The rule reads nothing but the plan and the session configuration, so
+    /// a call handing it a plan it has been observed to leave unchanged can
+    /// be skipped. This is the saving that matters to chains that interleave
+    /// rewrites with enforcement: most rewrites do not fire on most plans,
+    /// and the enforcement pass scheduled behind each one then re-derives a
+    /// plan it has already settled. Note this is safe even though the rule
+    /// is not (yet) idempotent: an observed fixpoint is replayed, never
+    /// predicted, and a plan the rule oscillates on records no fixpoint.
+    fn deterministic(&self) -> bool {
+        true
+    }
+
     fn schema_check(&self) -> bool {
         true
     }

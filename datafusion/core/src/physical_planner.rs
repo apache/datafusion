@@ -102,7 +102,9 @@ use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr, create_physical_sort_exprs,
 };
-use datafusion_physical_optimizer::plan_signature::PhysicalPlanSignature;
+use datafusion_physical_optimizer::plan_signature::{
+    PhysicalPlanSignature, plan_fingerprint,
+};
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::joins::PiecewiseMergeJoinExec;
@@ -2011,6 +2013,10 @@ impl DefaultPhysicalPlanner {
 /// For example, if we have something like `GROUPING SETS ((a,b,c),(a),(b),(b,c))`
 /// we would expand this to `GROUPING SETS ((a,b,c),(a,NULL,NULL),(NULL,b,NULL),(NULL,b,c))
 /// (see <https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS>)
+/// A plan a deterministic rule was observed to return unchanged, with the
+/// full fingerprint it was recorded under.
+type ObservedFixpoint = (Arc<dyn ExecutionPlan>, String);
+
 /// Applies one physical optimizer rule with the same bookkeeping the plain
 /// path performs: error context, the optimization invariant check, debug
 /// logging, and the observer callback.
@@ -3030,10 +3036,50 @@ impl DefaultPhysicalPlanner {
             session: session_state,
         };
         let options = session_state.config_options();
+        // Plans each deterministic rule has been observed to leave unchanged
+        // in this run, so a later call handing one back can be skipped. The
+        // fingerprint is kept in full rather than hashed: a collision here
+        // would skip a rule that had work to do, and for an enforcement pass
+        // that means an invalid plan, not a missed optimization.
+        let mut fixpoints: HashMap<&str, Vec<ObservedFixpoint>> = HashMap::new();
         // A rule that declares itself idempotent runs to convergence at each
         // of its call sites; every other rule runs exactly once, in list
         // order, as before.
         for optimizer in optimizers {
+            let mut pending: Option<ObservedFixpoint> = None;
+            if optimizer.deterministic() {
+                let known = fixpoints.get(optimizer.name());
+
+                // The same object coming back around is the common case when
+                // the rules in between left the plan alone, and it settles
+                // identity without rendering anything.
+                let same_object = known.is_some_and(|entries| {
+                    entries.iter().any(|(plan, _)| Arc::ptr_eq(plan, &new_plan))
+                });
+
+                // Otherwise the plan has to be rendered: a rule that changed
+                // nothing still commonly rebuilds the tree, so a different
+                // object can still be the same plan.
+                let fingerprint =
+                    (!same_object).then(|| plan_fingerprint(new_plan.as_ref()));
+                let same_content = fingerprint.as_ref().is_some_and(|rendered| {
+                    known.is_some_and(|entries| {
+                        entries.iter().any(|(_, seen)| seen == rendered)
+                    })
+                });
+
+                if same_object || same_content {
+                    // This rule already ran on this exact plan and left it
+                    // alone; being deterministic, it would do so again.
+                    observer(new_plan.as_ref(), optimizer.as_ref());
+                    continue;
+                }
+                if let Some(rendered) = fingerprint {
+                    pending = Some((Arc::clone(&new_plan), rendered));
+                }
+            }
+
+            let input = Arc::clone(&new_plan);
             new_plan = if optimizer.idempotent() {
                 converge_physical_rule(
                     optimizer,
@@ -3050,6 +3096,25 @@ impl DefaultPhysicalPlanner {
                     &mut observer,
                 )?
             };
+
+            // Record a fixpoint only where the rule demonstrably produced the
+            // plan it was given. A rule still working towards its fixpoint
+            // records nothing, so its next call is not skipped.
+            if optimizer.deterministic() {
+                let unchanged = Arc::ptr_eq(&input, &new_plan)
+                    || pending.as_ref().is_some_and(|(_, rendered)| {
+                        plan_fingerprint(new_plan.as_ref()) == *rendered
+                    });
+                if unchanged {
+                    let (plan, rendered) = pending.unwrap_or_else(|| {
+                        (Arc::clone(&input), plan_fingerprint(input.as_ref()))
+                    });
+                    fixpoints
+                        .entry(optimizer.name())
+                        .or_default()
+                        .push((plan, rendered));
+                }
+            }
         }
 
         // This runs once after all optimizer runs are complete,
@@ -3571,6 +3636,107 @@ mod iterative_tests {
              to the seeded form and the revisit stops the loop"
         );
         assert_eq!(limit_depth(&plan), 0);
+        Ok(())
+    }
+
+    /// The saving that matters to interleaved chains: a deterministic rule
+    /// scheduled twice, whose second call receives the plan it already left
+    /// alone, is skipped outright, even when the rules in between rebuilt an
+    /// equal tree. A rule that never returned its input unchanged records no
+    /// fixpoint and is never skipped, which is what keeps this safe for
+    /// non-idempotent rules.
+    #[tokio::test]
+    async fn deterministic_rules_skip_observed_fixpoints() -> Result<()> {
+        use crate::execution::session_state::SessionStateBuilder;
+        use crate::prelude::{SessionConfig, SessionContext};
+        use datafusion_expr::LogicalPlanBuilder;
+        use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
+
+        /// A no-op that declares determinism and counts its calls.
+        #[derive(Debug)]
+        struct DeterministicNoop {
+            calls: Arc<AtomicUsize>,
+        }
+        impl PhysicalOptimizerRule for DeterministicNoop {
+            fn optimize(
+                &self,
+                plan: Arc<dyn ExecutionPlan>,
+                _config: &ConfigOptions,
+            ) -> Result<Arc<dyn ExecutionPlan>> {
+                self.calls.fetch_add(1, AtomicOrdering::Relaxed);
+                Ok(plan)
+            }
+            fn name(&self) -> &str {
+                "deterministic_noop"
+            }
+            fn schema_check(&self) -> bool {
+                true
+            }
+            fn deterministic(&self) -> bool {
+                true
+            }
+        }
+
+        /// Returns an equal plan built fresh, the way a rule that changed
+        /// nothing still commonly rebuilds the tree: forces the skip to go
+        /// through the fingerprint, not the pointer.
+        #[derive(Debug)]
+        struct RebuildingNoop;
+        impl PhysicalOptimizerRule for RebuildingNoop {
+            fn optimize(
+                &self,
+                plan: Arc<dyn ExecutionPlan>,
+                _config: &ConfigOptions,
+            ) -> Result<Arc<dyn ExecutionPlan>> {
+                let rebuilt: Arc<dyn ExecutionPlan> = if plan.name() == "EmptyExec" {
+                    Arc::new(EmptyExec::new(plan.schema()))
+                } else {
+                    Arc::new(PlaceholderRowExec::new(plan.schema()))
+                };
+                Ok(rebuilt)
+            }
+            fn name(&self) -> &str {
+                "rebuilding_noop"
+            }
+            fn schema_check(&self) -> bool {
+                true
+            }
+        }
+
+        async fn calls_with_rebuild_between(rebuild: bool) -> Result<usize> {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let noop = || {
+                Arc::new(DeterministicNoop {
+                    calls: Arc::clone(&calls),
+                }) as Arc<dyn PhysicalOptimizerRule + Send + Sync>
+            };
+            let mut rules = vec![noop()];
+            if rebuild {
+                rules.push(Arc::new(RebuildingNoop));
+            }
+            rules.push(noop());
+            let state = SessionStateBuilder::new()
+                .with_config(SessionConfig::new())
+                .with_default_features()
+                .with_physical_optimizer_rules(rules)
+                .build();
+            let ctx = SessionContext::new_with_state(state);
+            let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+            ctx.state().create_physical_plan(&logical_plan).await?;
+            Ok(calls.load(AtomicOrdering::Relaxed))
+        }
+
+        assert_eq!(
+            calls_with_rebuild_between(false).await?,
+            1,
+            "the second call received the exact object the first left alone"
+        );
+        assert_eq!(
+            calls_with_rebuild_between(true).await?,
+            1,
+            "a rebuilt but identical plan must still count as the fixpoint \
+             already proven, or the pointer check would be the only path"
+        );
         Ok(())
     }
 

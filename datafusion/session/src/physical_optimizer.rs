@@ -130,4 +130,25 @@ pub trait PhysicalOptimizerRule: Debug + std::any::Any {
     fn idempotent(&self) -> bool {
         false
     }
+
+    /// Whether this rule's output is a pure function of the plan and the
+    /// configuration: no clocks, no randomness, no external mutable state.
+    ///
+    /// The optimizer uses this for a weaker and safer saving than
+    /// [`idempotent`](Self::idempotent): within one optimization run, once a
+    /// deterministic rule has been *observed* to return a plan unchanged, a
+    /// later call handing it that same plan is skipped outright, since it
+    /// would provably do the same nothing. Nothing is ever re-applied
+    /// speculatively, so this is safe for rules that are not idempotent: a
+    /// rule that oscillates between two forms is deterministic (each form
+    /// maps to the other, reproducibly) and never records a fixpoint, so it
+    /// is simply never skipped.
+    ///
+    /// This is what makes hand-authored repetition affordable: a chain that
+    /// interleaves rewrites with enforcement passes re-runs enforcement after
+    /// every rewrite, and on most plans most rewrites do not fire, so most of
+    /// those enforcement calls are re-deriving a plan they already settled.
+    fn deterministic(&self) -> bool {
+        false
+    }
 }
