@@ -1566,11 +1566,11 @@ impl SessionStateBuilder {
     /// Add a [`TableProviderFactory`] to the map of factories
     pub fn with_table_factory(
         mut self,
-        key: String,
+        key: impl Into<String>,
         table_factory: Arc<dyn TableProviderFactory>,
     ) -> Self {
         let mut table_factories = self.table_factories.unwrap_or_default();
-        table_factories.insert(key, table_factory);
+        table_factories.insert(key.into(), table_factory);
         self.table_factories = Some(table_factories);
         self
     }
@@ -1591,7 +1591,7 @@ impl SessionStateBuilder {
         catalog_factory: Arc<dyn CatalogProviderFactory>,
     ) -> Self {
         let mut catalog_factories = self.catalog_factories.unwrap_or_default();
-        catalog_factories.insert(key, catalog_factory);
+        catalog_factories.insert(key.into(), catalog_factory);
         self.catalog_factories = Some(catalog_factories);
         self
     }

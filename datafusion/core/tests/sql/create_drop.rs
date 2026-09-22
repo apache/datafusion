@@ -46,11 +46,11 @@ impl CatalogProviderFactory for TestCatalogFactory {
 
 #[tokio::test]
 async fn create_custom_table() -> Result<()> {
-    let mut state = SessionStateBuilder::new().with_default_features().build();
-    state
-        .table_factories_mut()
-        .insert("DELTATABLE".to_string(), Arc::new(TestTableFactory {}));
-    let ctx = SessionContext::new_with_state(state);
+    let ctx: SessionContext = SessionStateBuilder::new()
+        .with_default_features()
+        .with_table_factory("DELTATABLE", Arc::new(TestTableFactory {}))
+        .build()
+        .into();
 
     let sql = "CREATE EXTERNAL TABLE dt STORED AS DELTATABLE LOCATION 's3://bucket/schema/table';";
     ctx.sql(sql).await.unwrap();
@@ -65,11 +65,11 @@ async fn create_custom_table() -> Result<()> {
 
 #[tokio::test]
 async fn create_external_table_with_ddl() -> Result<()> {
-    let mut state = SessionStateBuilder::new().with_default_features().build();
-    state
-        .table_factories_mut()
-        .insert("MOCKTABLE".to_string(), Arc::new(TestTableFactory {}));
-    let ctx = SessionContext::new_with_state(state);
+    let ctx: SessionContext = SessionStateBuilder::new()
+        .with_default_features()
+        .with_table_factory("MOCKTABLE", Arc::new(TestTableFactory {}))
+        .build()
+        .into();
 
     let sql = "CREATE EXTERNAL TABLE dt (a_id integer, a_str string, a_bool boolean) STORED AS MOCKTABLE LOCATION 'mockprotocol://path/to/table';";
     ctx.sql(sql).await.unwrap();
@@ -116,12 +116,11 @@ async fn create_drop_table() -> Result<()> {
 
 #[tokio::test]
 async fn create_external_catalog_with_factory() -> Result<()> {
-    let mut state = SessionStateBuilder::new().with_default_features().build();
-    state
-        .catalog_factories_mut()
-        .insert("TESTCATALOG".to_string(), Arc::new(TestCatalogFactory {}));
-    let ctx = SessionContext::new_with_state(state);
-
+    let ctx: SessionContext = SessionStateBuilder::new()
+        .with_default_features()
+        .with_catalog_factory("TESTCATALOG", Arc::new(TestCatalogFactory {}))
+        .build()
+        .into();
     let sql = "CREATE EXTERNAL CATALOG cat STORED AS TESTCATALOG LOCATION 's3://bucket/warehouse' OPTIONS ('warehouse' 'cat')";
     ctx.sql(sql).await?;
 
@@ -149,11 +148,11 @@ async fn create_external_catalog_unknown_factory() -> Result<()> {
 
 #[tokio::test]
 async fn create_external_catalog_factory_error_not_registered() -> Result<()> {
-    let mut state = SessionStateBuilder::new().with_default_features().build();
-    state
-        .catalog_factories_mut()
-        .insert("TESTCATALOG".to_string(), Arc::new(TestCatalogFactory {}));
-    let ctx = SessionContext::new_with_state(state);
+    let ctx: SessionContext = SessionStateBuilder::new()
+        .with_default_features()
+        .with_catalog_factory("TESTCATALOG", Arc::new(TestCatalogFactory {}))
+        .build()
+        .into();
 
     let sql = "CREATE EXTERNAL CATALOG cat STORED AS TESTCATALOG LOCATION 's3://x' OPTIONS ('fail' 'true')";
     let err = ctx.sql(sql).await.unwrap_err();
@@ -168,11 +167,11 @@ async fn create_external_catalog_factory_error_not_registered() -> Result<()> {
 
 #[tokio::test]
 async fn create_external_catalog_if_not_exists() -> Result<()> {
-    let mut state = SessionStateBuilder::new().with_default_features().build();
-    state
-        .catalog_factories_mut()
-        .insert("TESTCATALOG".to_string(), Arc::new(TestCatalogFactory {}));
-    let ctx = SessionContext::new_with_state(state);
+    let ctx: SessionContext = SessionStateBuilder::new()
+        .with_default_features()
+        .with_catalog_factory("TESTCATALOG", Arc::new(TestCatalogFactory {}))
+        .build()
+        .into();
 
     let sql = "CREATE EXTERNAL CATALOG cat STORED AS TESTCATALOG LOCATION 's3://x'";
     ctx.sql(sql).await?;
@@ -190,11 +189,11 @@ async fn create_external_catalog_if_not_exists() -> Result<()> {
 
 #[tokio::test]
 async fn create_drop_catalog() -> Result<()> {
-    let mut state = SessionStateBuilder::new().with_default_features().build();
-    state
-        .catalog_factories_mut()
-        .insert("TESTCATALOG".to_string(), Arc::new(TestCatalogFactory {}));
-    let ctx = SessionContext::new_with_state(state);
+    let ctx: SessionContext = SessionStateBuilder::new()
+        .with_default_features()
+        .with_catalog_factory("TESTCATALOG", Arc::new(TestCatalogFactory {}))
+        .build()
+        .into();
 
     let sql = "CREATE EXTERNAL CATALOG cat STORED AS TESTCATALOG LOCATION 's3://x'";
     ctx.sql(sql).await?;
