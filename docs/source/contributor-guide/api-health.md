@@ -45,8 +45,11 @@ Examples of non-breaking changes include:
 
 ### DataFusion-internal Public APIs
 
-Some APIs require `pub` visibility for use across DataFusion crates. Examples
-include:
+Some internal implementation details require `pub` visibility because they are
+shared across DataFusion crates. These APIs are not intended as downstream
+extension points. They are hidden from generated documentation and are not part
+of DataFusion's supported public API, so they may be changed or removed without
+notice or a deprecation period. Examples include:
 
 1. Test helpers.
 2. Operator APIs required by the optimizer to inspect or rewrite execution plans
@@ -68,10 +71,6 @@ impl HashTableLookupExpr {
     pub fn new(...) {...}
 }
 ```
-
-These APIs are hidden from generated documentation and are not considered part
-of DataFusion's supported public API. They may be deprecated, changed, or removed
-without notice or a deprecation period.
 
 ### What is the public SQL API and what is a breaking SQL change?
 
