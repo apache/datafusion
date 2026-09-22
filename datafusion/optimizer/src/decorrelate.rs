@@ -49,6 +49,9 @@ pub struct PullUpCorrelatedExpr {
     /// mapping from the plan to its holding correlated columns
     pub correlated_subquery_cols_map: HashMap<LogicalPlan, BTreeSet<Column>>,
     pub in_predicate_opt: Option<Expr>,
+    /// Whether a correlation filter was removed because it duplicated the `IN`
+    /// equality, so `NOT IN` never needs null-aware handling.
+    pub in_predicate_is_correlated: bool,
     /// Is this an Exists(Not Exists) SubQuery. Defaults to **FALSE**
     pub exists_sub_query: bool,
     /// Can the correlated expressions be pulled up. Defaults to **TRUE**
@@ -88,6 +91,7 @@ impl PullUpCorrelatedExpr {
             join_filters: vec![],
             correlated_subquery_cols_map: HashMap::new(),
             in_predicate_opt: None,
+            in_predicate_is_correlated: false,
             exists_sub_query: false,
             can_pull_up: true,
             can_pull_over_aggregation: true,
@@ -186,7 +190,9 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     find_join_exprs(subquery_filter_exprs)?;
                 if let Some(in_predicate) = &self.in_predicate_opt {
                     // in_predicate may be already included in the join filters, remove it from the join filters first.
+                    let before = join_filters.len();
                     join_filters = remove_duplicated_filter(join_filters, in_predicate)?;
+                    self.in_predicate_is_correlated |= join_filters.len() != before;
                 }
                 let correlated_subquery_cols =
                     collect_subquery_cols(&join_filters, subquery_schema)?;

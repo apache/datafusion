@@ -1013,3 +1013,93 @@ DROP TABLE nam_guard_outer;
 
 statement ok
 DROP TABLE nam_guard_inner;
+
+##########################################################
+## Correlated NOT IN mark join whose correlation is the IN equality
+## https://github.com/apache/datafusion/issues/25480
+##########################################################
+
+# The subquery filters on `t2.id = t1.id`, so a NULL `t2.id` never reaches the
+# subquery output and the mark is never NULL. Expected results verified with
+# DuckDB.
+
+statement ok
+CREATE TABLE nam_eq_t1(id INT, z INT) AS VALUES (1,10), (2,20), (NULL,30), (4,40);
+
+statement ok
+CREATE TABLE nam_eq_t2(id INT, z INT) AS VALUES (1,5), (NULL,50), (5,10);
+
+query I
+SELECT id FROM nam_eq_t1
+WHERE id NOT IN (SELECT nam_eq_t2.id FROM nam_eq_t2 WHERE nam_eq_t2.id = nam_eq_t1.id)
+   OR z = 40
+ORDER BY id;
+----
+2
+4
+NULL
+
+query I
+SELECT id FROM nam_eq_t1
+WHERE (id NOT IN (SELECT nam_eq_t2.id FROM nam_eq_t2 WHERE nam_eq_t2.id = nam_eq_t1.id)) IS NULL
+ORDER BY id;
+----
+
+query I
+SELECT id FROM nam_eq_t1
+WHERE (id NOT IN (SELECT nam_eq_t2.id FROM nam_eq_t2 WHERE nam_eq_t2.id = nam_eq_t1.id)) IS TRUE
+ORDER BY id;
+----
+2
+4
+NULL
+
+query I
+SELECT id FROM nam_eq_t1
+WHERE (id NOT IN (SELECT nam_eq_t2.id FROM nam_eq_t2 WHERE nam_eq_t2.id = nam_eq_t1.id)) IS FALSE
+ORDER BY id;
+----
+1
+
+query I
+SELECT id FROM nam_eq_t1
+WHERE NOT (id IN (SELECT nam_eq_t2.id FROM nam_eq_t2 WHERE nam_eq_t2.id = nam_eq_t1.id))
+   OR z = 40
+ORDER BY id;
+----
+2
+4
+NULL
+
+query IB
+SELECT id, id NOT IN (SELECT nam_eq_t2.id FROM nam_eq_t2 WHERE nam_eq_t2.id = nam_eq_t1.id) AS m
+FROM nam_eq_t1 ORDER BY id;
+----
+1 false
+2 true
+4 true
+NULL true
+
+query TT
+EXPLAIN SELECT id FROM nam_eq_t1
+WHERE (id NOT IN (SELECT nam_eq_t2.id FROM nam_eq_t2 WHERE nam_eq_t2.id = nam_eq_t1.id)) IS NULL;
+----
+logical_plan
+01)Projection: nam_eq_t1.id
+02)--Filter: NOT __correlated_sq_1.mark IS NULL
+03)----LeftMark Join: nam_eq_t1.id = __correlated_sq_1.id
+04)------TableScan: nam_eq_t1 projection=[id]
+05)------SubqueryAlias: __correlated_sq_1
+06)--------TableScan: nam_eq_t2 projection=[id]
+physical_plan
+01)FilterExec: NOT mark@1 IS NULL, projection=[id@0]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE nam_eq_t1;
+
+statement ok
+DROP TABLE nam_eq_t2;
