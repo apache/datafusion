@@ -1365,14 +1365,9 @@ impl<'a> DFParser<'a> {
         }
 
         let catalog_name = self.parser.parse_object_name(true)?;
-
-        #[derive(Default)]
-        struct Builder {
-            catalog_type: Option<String>,
-            location: Option<String>,
-            options: Option<Vec<(String, Value)>>,
-        }
-        let mut builder = Builder::default();
+        let mut catalog_type: Option<String> = None;
+        let mut location: Option<String> = None;
+        let mut options: Option<Vec<(String, Value)>> = None;
 
         loop {
             if let Some(keyword) = self.parser.parse_one_of_keywords(&[
@@ -1383,16 +1378,16 @@ impl<'a> DFParser<'a> {
                 match keyword {
                     Keyword::STORED => {
                         self.parser.expect_keyword(Keyword::AS)?;
-                        ensure_not_set(builder.catalog_type.as_ref(), "STORED AS")?;
-                        builder.catalog_type = Some(self.parse_file_format()?);
+                        ensure_not_set(catalog_type.as_ref(), "STORED AS")?;
+                        catalog_type = Some(self.parse_file_format()?);
                     }
                     Keyword::LOCATION => {
-                        ensure_not_set(builder.location.as_ref(), "LOCATION")?;
-                        builder.location = Some(self.parser.parse_literal_string()?);
+                        ensure_not_set(location.as_ref(), "LOCATION")?;
+                        location = Some(self.parser.parse_literal_string()?);
                     }
                     Keyword::OPTIONS => {
-                        ensure_not_set(builder.options.as_ref(), "OPTIONS")?;
-                        builder.options = Some(self.parse_value_options()?);
+                        ensure_not_set(options.as_ref(), "OPTIONS")?;
+                        options = Some(self.parse_value_options()?);
                     }
                     _ => {
                         unreachable!()
@@ -1408,7 +1403,7 @@ impl<'a> DFParser<'a> {
             }
         }
 
-        let Some(catalog_type) = builder.catalog_type else {
+        let Some(catalog_type) = catalog_type else {
             return sql_err!(ParserError::ParserError(
                 "Missing STORED AS clause in CREATE EXTERNAL CATALOG statement".into(),
             ));
@@ -1417,10 +1412,10 @@ impl<'a> DFParser<'a> {
         Ok(Statement::CreateExternalCatalog(CreateExternalCatalog {
             catalog_name,
             catalog_type,
-            location: builder.location,
+            location: location,
             if_not_exists,
             or_replace,
-            options: builder.options.unwrap_or_default(),
+            options: options.unwrap_or_default(),
         }))
     }
 
