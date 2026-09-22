@@ -109,6 +109,16 @@ Carol
 Alice
 Bob
 
+# Snowflake-style colon access preserves dictionary encoding and values.
+query TT
+SELECT dict_struct:name, arrow_typeof(dict_struct:name) FROM dict_struct_table;
+----
+Alice Dictionary(UInt32, Utf8)
+Bob Dictionary(UInt32, Utf8)
+Carol Dictionary(UInt32, Utf8)
+Alice Dictionary(UInt32, Utf8)
+Bob Dictionary(UInt32, Utf8)
+
 # A nullable parent makes its non-nullable child nullable, preserving the dictionary type.
 query TTB
 SELECT ds['name'], arrow_typeof(ds['name']), arrow_field(ds['name'])['nullable'] FROM dict_struct_nullable;
