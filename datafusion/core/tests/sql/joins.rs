@@ -28,6 +28,92 @@ use datafusion_sql::unparser::plan_to_sql;
 use super::*;
 
 #[tokio::test]
+async fn sql_sort_merge_join_existence_summary_uses_execution_setting() -> Result<()> {
+    use datafusion::physical_plan::joins::SortMergeJoinExec;
+
+    let ctx = SessionContext::new();
+    // More than one target partition is required for the SQL planner to choose
+    // sort-merge joins, even though these small inputs may remain unpartitioned.
+    for setting in [
+        "SET datafusion.optimizer.prefer_hash_join = false",
+        "SET datafusion.execution.target_partitions = 2",
+    ] {
+        ctx.sql(setting).await?.collect().await?;
+    }
+    ctx.sql(
+        "CREATE TABLE documents(id BIGINT, document_id BIGINT, version BIGINT) AS VALUES
+         (1, 10, 1), (2, 10, 2), (3, 10, 2),
+         (4, 20, 1), (5, 20, NULL), (6, 30, NULL)",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    // Exercise default-off, SQL opt-in, and SQL opt-out. Each iteration builds
+    // the real physical plan rather than constructing a join directly.
+    for setting in [None, Some(true), Some(false)] {
+        let enabled = setting.unwrap_or(false);
+        if let Some(setting) = setting {
+            ctx.sql(&format!(
+                "SET datafusion.execution.enable_sort_merge_join_existence_summary = {setting}"
+            ))
+            .await?
+            .collect()
+            .await?;
+        }
+        let plan = ctx
+            .sql(
+                "SELECT current.id FROM documents current WHERE NOT EXISTS (
+                   SELECT 1 FROM documents other
+                   WHERE other.document_id = current.document_id
+                     AND other.version > current.version
+                 )",
+            )
+            .await?
+            .create_physical_plan()
+            .await?;
+        let batches = collect(Arc::clone(&plan), ctx.task_ctx()).await?;
+        assert_batches_sorted_eq!(
+            [
+                "+----+", "| id |", "+----+", "| 2  |", "| 3  |", "| 4  |", "| 5  |",
+                "| 6  |", "+----+",
+            ],
+            &batches
+        );
+
+        let mut pending = vec![plan];
+        let mut joins = 0;
+        let mut activated = 0;
+        let mut summarized_rows = 0;
+        while let Some(node) = pending.pop() {
+            if node.is::<SortMergeJoinExec>() {
+                joins += 1;
+                let metrics = node.metrics().unwrap();
+                for metric in metrics.iter() {
+                    match metric.value().name() {
+                        "existence_summary_enabled" => {
+                            activated += metric.value().as_usize();
+                        }
+                        "existence_summary_inner_rows" => {
+                            summarized_rows += metric.value().as_usize();
+                        }
+                        "existence_summary_fallback" => {
+                            assert_eq!(metric.value().as_usize(), 0);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            pending.extend(node.children().into_iter().cloned());
+        }
+        assert!(joins > 0, "SQL did not select a sort-merge join");
+        assert_eq!(activated > 0, enabled);
+        assert_eq!(summarized_rows > 0, enabled);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn volatile_join_filter_preserves_evaluations_below_min() -> Result<()> {
     use arrow::array::record_batch;
     use datafusion::logical_expr::{ColumnarValue, Volatility, create_udf};
