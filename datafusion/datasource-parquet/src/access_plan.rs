@@ -508,14 +508,6 @@ pub(crate) struct PreparedAccessPlan {
 }
 
 impl PreparedAccessPlan {
-    #[cfg(test)]
-    pub(crate) fn row_group_indexes(&self) -> Vec<usize> {
-        self.row_groups
-            .iter()
-            .map(|rg| rg.selection.row_group_index())
-            .collect()
-    }
-
     /// Reorder row groups by their min statistics for the given sort order.
     ///
     /// This helps TopK queries find optimal values first. Row groups are
@@ -680,6 +672,14 @@ impl PreparedAccessPlan {
     pub(crate) fn reverse(mut self) -> Self {
         self.row_groups.reverse();
         self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn row_group_indexes(&self) -> Vec<usize> {
+        self.row_groups
+            .iter()
+            .map(|rg| rg.selection.row_group_index())
+            .collect()
     }
 }
 
