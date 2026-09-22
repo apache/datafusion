@@ -27,6 +27,7 @@ use arrow::array::{Array, ArrayRef, AsArray, BooleanArray};
 use arrow::datatypes::*;
 use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::{HashSet, Result, exec_datafusion_err};
+use half::f16;
 
 use super::branchless_filter::{BranchlessFilter, BranchlessFilterType};
 use super::result::build_in_list_result;
@@ -199,6 +200,9 @@ trait BitmapFilterType: ArrowPrimitiveType + Send + Sync + 'static {
 
     /// Returns the index in the bitmap to check for this value.
     fn index(value: Self::Native) -> usize;
+
+    /// Bitmap indices for the two signed-zero encodings of a float type.
+    const SIGNED_ZERO_INDICES: Option<[usize; 2]> = None;
 }
 
 /// `Int8` has 256 possible bit patterns, so four `u64` words cover the full domain.
@@ -254,6 +258,11 @@ impl BitmapFilterType for Float16Type {
     fn index(value: Self::Native) -> usize {
         value.to_bits() as usize
     }
+
+    const SIGNED_ZERO_INDICES: Option<[usize; 2]> = Some([
+        f16::ZERO.to_bits() as usize,
+        f16::NEG_ZERO.to_bits() as usize,
+    ]);
 }
 
 /// `IN` filter backed by one bit per possible value.
@@ -290,6 +299,13 @@ where
                     bits.set_bit(T::index(values[i]));
                 }
             }
+        }
+        // Store both signed zeros so per-row lookup stays branch-free.
+        if let Some([positive_zero, negative_zero]) = T::SIGNED_ZERO_INDICES
+            && (bits.get_bit(positive_zero) || bits.get_bit(negative_zero))
+        {
+            bits.set_bit(positive_zero);
+            bits.set_bit(negative_zero);
         }
         Ok(Self {
             null_count: prim_array.null_count(),
@@ -332,6 +348,13 @@ where
     }
 }
 
+/// Hash keys and the two signed-zero encodings for float types.
+trait HashSetKey<V>: From<V> + Eq + Hash + Sized {
+    const SIGNED_ZERO_KEYS: Option<[Self; 2]> = None;
+}
+
+impl<T> HashSetKey<T> for T where T: Copy + Eq + Hash {}
+
 /// Wrapper for f32 that implements Hash and Eq using bit comparison.
 /// This treats NaN values as equal to each other when they have the same bit pattern.
 #[derive(Clone, Copy)]
@@ -355,6 +378,10 @@ impl From<f32> for OrderedFloat32 {
     fn from(v: f32) -> Self {
         Self(v)
     }
+}
+
+impl HashSetKey<f32> for OrderedFloat32 {
+    const SIGNED_ZERO_KEYS: Option<[Self; 2]> = Some([Self(0.0), Self(-0.0)]);
 }
 
 /// Wrapper for f64 that implements Hash and Eq using bit comparison.
@@ -382,6 +409,10 @@ impl From<f64> for OrderedFloat64 {
     }
 }
 
+impl HashSetKey<f64> for OrderedFloat64 {
+    const SIGNED_ZERO_KEYS: Option<[Self; 2]> = Some([Self(0.0), Self(-0.0)]);
+}
+
 /// Hash-set membership for primitive types.
 ///
 /// `K` defaults to the Arrow type's native value. Floats use an ordered wrapper
@@ -399,7 +430,7 @@ impl<T, K> PrimitiveHashSetFilter<T, K>
 where
     T: ArrowPrimitiveType,
     T::Native: Copy,
-    K: From<T::Native> + Eq + Hash,
+    K: HashSetKey<T::Native>,
 {
     fn try_new(in_array: &ArrayRef) -> Result<Self> {
         let in_array = in_array.as_primitive_opt::<T>().ok_or_else(|| {
@@ -413,6 +444,13 @@ where
             values.insert(K::from(value));
         }
 
+        // Store both signed zeros so per-row lookup stays branch-free.
+        if let Some([positive_zero, negative_zero]) = K::SIGNED_ZERO_KEYS
+            && (values.contains(&positive_zero) || values.contains(&negative_zero))
+        {
+            values.insert(positive_zero);
+            values.insert(negative_zero);
+        }
         Ok(Self {
             null_count: in_array.null_count(),
             values,
@@ -461,7 +499,6 @@ mod tests {
         DictionaryArray, Float16Array, Float32Array, Float64Array, Int8Array, Int16Array,
         PrimitiveArray, UInt8Array, UInt16Array, UInt32Array,
     };
-    use half::f16;
 
     use super::super::dictionary_filter::DictionaryFilter;
 
@@ -546,14 +583,14 @@ mod tests {
         assert_contains(
             &filter,
             &needles,
-            vec![Some(true), Some(false), Some(true), Some(false), None],
+            vec![Some(true), Some(true), Some(true), Some(false), None],
         )?;
 
         let nan64 = f64::NAN;
-        let haystack: ArrayRef = Arc::new(Float64Array::from(vec![1.0, nan64]));
+        let haystack: ArrayRef = Arc::new(Float64Array::from(vec![-0.0, nan64]));
         let filter =
             PrimitiveHashSetFilter::<Float64Type, OrderedFloat64>::try_new(&haystack)?;
-        let needles = Float64Array::from(vec![Some(1.0), Some(nan64), Some(2.0)]);
+        let needles = Float64Array::from(vec![Some(0.0), Some(nan64), Some(2.0)]);
         assert_contains(&filter, &needles, vec![Some(true), Some(true), Some(false)])
     }
 
@@ -682,8 +719,8 @@ mod tests {
         );
         let filter = BitmapFilter::<Float16Type>::try_new(&haystack)?;
         let needles = Float16Array::from(vec![
-            Some(f16::from_f32(0.0)),
             Some(f16::from_f32(-0.0)),
+            Some(f16::from_f32(0.0)),
             Some(nan_a),
             Some(nan_b),
             None,
