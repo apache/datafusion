@@ -48,7 +48,7 @@ use datafusion_physical_expr::expressions::{Column, NoOp};
 use datafusion_physical_expr::utils::map_columns_before_projection;
 use datafusion_physical_expr::{
     EquivalenceProperties, OrderingRequirements, PhysicalExpr, PhysicalExprRef,
-    physical_exprs_equal,
+    PhysicalSortExpr, physical_exprs_equal,
 };
 use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::aggregates::{
@@ -592,6 +592,25 @@ fn range_join_key_positions(
     })
 }
 
+/// Returns true when an unbounded input does not already satisfy the
+/// proposed ordering. Conservatively avoid adding sorting requirements
+/// to unbounded inputs during join-key alignment.
+fn forces_unbounded_sort<'a>(
+    input: &Arc<dyn ExecutionPlan>,
+    keys: impl Iterator<Item = &'a PhysicalExprRef>,
+    sort_options: &[SortOptions],
+) -> Result<bool> {
+    if !input.boundedness().is_unbounded() {
+        return Ok(false);
+    }
+    let sort_exprs = keys
+        .zip(sort_options)
+        .map(|(expr, options)| PhysicalSortExpr::new(Arc::clone(expr), *options));
+    Ok(!input
+        .equivalence_properties()
+        .ordering_satisfy(sort_exprs)?)
+}
+
 /// Returns the non-identity permutation that aligns `on` with a
 /// range-partitioned input, trying the left input first and then the right.
 fn range_aligned_join_key_positions(
@@ -646,14 +665,27 @@ fn reorder_join_keys_to_range_inputs(
         else {
             return Ok(plan);
         };
-        let new_on = positions
+        let new_on: Vec<_> = positions
             .iter()
             .map(|&index| join.on[index].clone())
             .collect();
-        let new_sort_options = positions
+        let new_sort_options: Vec<_> = positions
             .iter()
             .map(|&index| join.sort_options[index])
             .collect();
+        // Keep the original key order unless every unbounded input already
+        // satisfies the reordered requirements, avoiding a potentially blocking sort.
+        if forces_unbounded_sort(
+            &join.left,
+            new_on.iter().map(|(left_key, _)| left_key),
+            &new_sort_options,
+        )? || forces_unbounded_sort(
+            &join.right,
+            new_on.iter().map(|(_, right_key)| right_key),
+            &new_sort_options,
+        )? {
+            return Ok(plan);
+        }
         // `try_new` resets `projection`; restore it so the output schema is unchanged.
         let reordered = SortMergeJoinExec::try_new(
             Arc::clone(&join.left),

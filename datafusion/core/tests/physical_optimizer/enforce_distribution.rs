@@ -21,10 +21,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::physical_optimizer::test_utils::{
-    RequirementsTestExec, bounded_window_exec_with_can_repartition, check_integrity,
-    coalesce_partitions_exec, parquet_exec_with_sort, parquet_exec_with_stats,
-    repartition_exec, schema, sort_exec, sort_exec_with_preserve_partitioning,
-    sort_merge_join_exec, sort_preserving_merge_exec, union_exec,
+    RequirementsTestExec, TestStreamPartition, bounded_window_exec_with_can_repartition,
+    check_integrity, coalesce_partitions_exec, parquet_exec_with_sort,
+    parquet_exec_with_stats, repartition_exec, schema, sort_exec,
+    sort_exec_with_preserve_partitioning, sort_merge_join_exec,
+    sort_preserving_merge_exec, union_exec,
 };
 
 use arrow::array::{Int64Array, RecordBatch, UInt8Array, UInt64Array};
@@ -86,6 +87,7 @@ use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion_physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlanProperties,
@@ -1200,6 +1202,95 @@ fn range_join_key_alignment_sort_merge_join() -> Result<()> {
                 DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC, b@1 DESC], [(10, 0), (20, 0), (30, 0)], 4), file_type=parquet
               SortExec: expr=[a@0 ASC, b@1 DESC], preserve_partitioning=[true]
                 DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC, b@1 DESC], [(10, 0), (20, 0), (30, 0)], 4), file_type=parquet
+            "
+            );
+        }
+    })
+}
+
+/// Four unbounded partitions declared as `Range([a, b])` whose rows are
+/// ordered by `ordered_by` within each partition: partition membership and
+/// row order are independent.
+fn unbounded_range_stream(ordered_by: [&str; 2]) -> Result<Arc<dyn ExecutionPlan>> {
+    let schema = schema();
+    let ordering: LexOrdering = [
+        PhysicalSortExpr::new(col(ordered_by[0], &schema)?, SortOptions::default()),
+        PhysicalSortExpr::new(col(ordered_by[1], &schema)?, SortOptions::default()),
+    ]
+    .into();
+    let partitions = (0..4)
+        .map(|_| {
+            Arc::new(TestStreamPartition {
+                schema: Arc::clone(&schema),
+            }) as _
+        })
+        .collect();
+    let exec = StreamingTableExec::try_new(
+        Arc::clone(&schema),
+        partitions,
+        None,
+        vec![ordering],
+        true,
+        None,
+    )?
+    .with_output_partitioning(range_partitioning_multi(
+        &[("a", SortOptions::default()), ("b", SortOptions::default())],
+        &[&[10, 0], &[20, 0], &[30, 0]],
+    )?)?;
+    Ok(Arc::new(exec))
+}
+
+#[test]
+fn range_join_key_alignment_keeps_streamable_sort_merge_join_keys() -> Result<()> {
+    // A sort-merge join on (b, a) over unbounded Range([a, b]) inputs whose
+    // rows are ordered by `ordered_by`.
+    let smj_on_b_a = |ordered_by: [&str; 2]| -> Result<Arc<dyn ExecutionPlan>> {
+        let left = unbounded_range_stream(ordered_by)?;
+        let right = unbounded_range_stream(ordered_by)?;
+        let on = vec![
+            (col("b", &left.schema())?, col("b", &right.schema())?),
+            (col("a", &left.schema())?, col("a", &right.schema())?),
+        ];
+        Ok(Arc::new(SortMergeJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            JoinType::Inner,
+            vec![SortOptions::default(); 2],
+            NullEquality::NullEqualsNothing,
+        )?))
+    };
+
+    // Rows are sorted by the keys as written, (b, a). Realigning the keys to
+    // the range order (a, b) would require a full sort of each unbounded
+    // input, which is pipeline breaking, so the keys stay as written and the
+    // inputs are repartitioned with an order-preserving exchange instead.
+    check_range_join_key_alignment(smj_on_b_a(["b", "a"])?, |plan| {
+        insta::allow_duplicates! {
+            assert_plan!(
+                plan,
+                @r"
+            SortMergeJoinExec: join_type=Inner, on=[(b@1, b@1), (a@0, a@0)]
+              RepartitionExec: partitioning=Hash([b@1, a@0], 4), input_partitions=4, preserve_order=true, sort_exprs=b@1 ASC, a@0 ASC
+                StreamingTableExec: partition_sizes=4, projection=[a, b, c, d, e], infinite_source=true, output_partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), output_ordering=[b@1 ASC, a@0 ASC]
+              RepartitionExec: partitioning=Hash([b@1, a@0], 4), input_partitions=4, preserve_order=true, sort_exprs=b@1 ASC, a@0 ASC
+                StreamingTableExec: partition_sizes=4, projection=[a, b, c, d, e], infinite_source=true, output_partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), output_ordering=[b@1 ASC, a@0 ASC]
+            "
+            );
+        }
+    })?;
+
+    // Rows are already sorted by the range order (a, b), so realigning the
+    // keys adds no sort: the join is aligned and runs without any exchange.
+    check_range_join_key_alignment(smj_on_b_a(["a", "b"])?, |plan| {
+        insta::allow_duplicates! {
+            assert_plan!(
+                plan,
+                @r"
+            SortMergeJoinExec: join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
+              StreamingTableExec: partition_sizes=4, projection=[a, b, c, d, e], infinite_source=true, output_partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), output_ordering=[a@0 ASC, b@1 ASC]
+              StreamingTableExec: partition_sizes=4, projection=[a, b, c, d, e], infinite_source=true, output_partitioning=Range([a@0 ASC, b@1 ASC], [(10, 0), (20, 0), (30, 0)], 4), output_ordering=[a@0 ASC, b@1 ASC]
             "
             );
         }
