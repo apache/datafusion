@@ -34,6 +34,7 @@ mod nested_schema_pruning;
 mod opener;
 mod page_filter;
 mod projection_read_plan;
+mod pruning;
 mod push_decoder;
 mod reader;
 mod row_filter;

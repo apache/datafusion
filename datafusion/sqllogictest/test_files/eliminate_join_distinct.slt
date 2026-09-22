@@ -1,0 +1,222 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Duplicate-insensitive aggregates may ignore join fanout, including NULLs.
+statement ok
+CREATE TABLE l(id INT, g INT, x INT);
+
+statement ok
+CREATE TABLE r(id INT, y INT);
+
+statement ok
+INSERT INTO l VALUES (1, 0, 10), (1, 0, 20), (2, 0, NULL), (3, 1, 30), (4, 2, NULL), (NULL, 3, 99);
+
+statement ok
+INSERT INTO r VALUES (1, 100), (1, 200), (2, 300), (4, 400), (4, 500), (NULL, 600);
+
+statement ok
+SET datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT l.g, MIN(l.x), MAX(l.x) FROM l JOIN r ON l.id = r.id GROUP BY l.g;
+----
+logical_plan
+01)Aggregate: groupBy=[[l.g]], aggr=[[min(l.x), max(l.x)]]
+02)--Projection: l.g, l.x
+03)----LeftSemi Join: l.id = r.id
+04)------TableScan: l projection=[id, g, x]
+05)------TableScan: r projection=[id]
+
+query III rowsort
+SELECT l.g, MIN(l.x), MAX(l.x) FROM l JOIN r ON l.id = r.id GROUP BY l.g;
+----
+0 10 20
+2 NULL NULL
+
+query II rowsort
+SELECT l.g, APPROX_DISTINCT(l.x) FROM l JOIN r ON l.id = r.id GROUP BY l.g;
+----
+0 2
+2 0
+
+query IBBII rowsort
+SELECT l.g, BOOL_AND(l.x > 15), BOOL_OR(l.x > 15), BIT_AND(l.x), BIT_OR(l.x) FROM l JOIN r ON l.id = r.id GROUP BY l.g;
+----
+0 false true 0 30
+2 NULL NULL NULL NULL
+
+# An insensitive aggregate with a sensitive companion must retain join fanout.
+query IIII rowsort
+SELECT l.g, MIN(l.x), COUNT(*), SUM(l.x) FROM l JOIN r ON l.id = r.id GROUP BY l.g;
+----
+0 10 5 60
+2 NULL 2 NULL
+
+# The right side remains live through an aggregate FILTER.
+# The filter removes all non-NULL values, so ignoring it would change the result.
+query TT
+EXPLAIN SELECT MIN(l.x) FILTER (WHERE r.y > 250) FROM l JOIN r ON l.id = r.id;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[min(l.x) FILTER (WHERE r.y > Int32(250)) AS min(l.x) FILTER (WHERE r.y > Int64(250))]]
+02)--Projection: l.x, r.y
+03)----Inner Join: l.id = r.id
+04)------TableScan: l projection=[id, x]
+05)------TableScan: r projection=[id, y]
+
+query I
+SELECT MIN(l.x) FILTER (WHERE r.y > 250) FROM l JOIN r ON l.id = r.id;
+----
+NULL
+
+# The unused non-preserved side of an outer join disappears entirely.
+query TT
+EXPLAIN SELECT MIN(l.x) FROM l LEFT JOIN r ON l.id = r.id;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[min(l.x)]]
+02)--TableScan: l projection=[x]
+
+query III rowsort
+SELECT l.g, MIN(l.x), MAX(l.x) FROM l LEFT JOIN r ON l.id = r.id GROUP BY l.g;
+----
+0 10 20
+1 30 30
+2 NULL NULL
+3 99 99
+
+# The surviving join side can also be the right side.
+query TT
+EXPLAIN SELECT MAX(r.y) FROM l JOIN r ON l.id = r.id;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[max(r.y)]]
+02)--Projection: r.y
+03)----RightSemi Join: l.id = r.id
+04)------TableScan: l projection=[id]
+05)------TableScan: r projection=[id, y]
+
+query I
+SELECT MAX(r.y) FROM l JOIN r ON l.id = r.id;
+----
+500
+
+# Empty join inputs retain global-aggregate semantics.
+statement ok
+CREATE TABLE empty_r(id INT);
+
+query II
+SELECT MIN(l.x), APPROX_DISTINCT(l.x) FROM l JOIN empty_r ON l.id = empty_r.id;
+----
+NULL 0
+
+query I
+SELECT MIN(l.x) FROM l LEFT JOIN empty_r ON l.id = empty_r.id;
+----
+10
+
+query I
+SELECT MIN(empty_r.id) FROM empty_r LEFT JOIN l ON l.id = empty_r.id;
+----
+NULL
+
+# Aggregates that deduplicate their own input ignore join fanout as well.
+query TT
+EXPLAIN SELECT l.g, COUNT(DISTINCT l.x), SUM(DISTINCT l.x) FROM l JOIN r ON l.id = r.id GROUP BY l.g;
+----
+logical_plan
+01)Aggregate: groupBy=[[l.g]], aggr=[[count(DISTINCT l.x), sum(DISTINCT CAST(l.x AS Int64))]]
+02)--Projection: l.g, l.x
+03)----LeftSemi Join: l.id = r.id
+04)------TableScan: l projection=[id, g, x]
+05)------TableScan: r projection=[id]
+
+query III rowsort
+SELECT l.g, COUNT(DISTINCT l.x), SUM(DISTINCT l.x) FROM l JOIN r ON l.id = r.id GROUP BY l.g;
+----
+0 2 30
+2 0 NULL
+
+query TT
+EXPLAIN SELECT COUNT(DISTINCT l.x) FILTER (WHERE l.g = 0), MIN(l.x) FROM l JOIN r ON l.id = r.id;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[count(DISTINCT l.x) FILTER (WHERE l.g = Int32(0)) AS count(DISTINCT l.x) FILTER (WHERE l.g = Int64(0)), min(l.x)]]
+02)--Projection: l.g, l.x
+03)----LeftSemi Join: l.id = r.id
+04)------TableScan: l projection=[id, g, x]
+05)------TableScan: r projection=[id]
+
+query II
+SELECT COUNT(DISTINCT l.x) FILTER (WHERE l.g = 0), MIN(l.x) FROM l JOIN r ON l.id = r.id;
+----
+2 10
+
+query ?
+SELECT ARRAY_AGG(DISTINCT l.x ORDER BY l.x) FROM l JOIN r ON l.id = r.id;
+----
+[10, 20, NULL]
+
+# A DISTINCT aggregate with a non-DISTINCT sensitive companion must retain join fanout.
+query TT
+EXPLAIN SELECT COUNT(DISTINCT l.x), COUNT(l.g) FROM l JOIN r ON l.id = r.id;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[count(DISTINCT l.x), count(l.g)]]
+02)--Projection: l.g, l.x
+03)----Inner Join: l.id = r.id
+04)------TableScan: l projection=[id, g, x]
+05)------TableScan: r projection=[id]
+
+query II
+SELECT COUNT(DISTINCT l.x), COUNT(l.g) FROM l JOIN r ON l.id = r.id;
+----
+2 7
+
+# REGR_COUNT declares `DistinctHandling::Unsupported`: its accumulator ignores
+# `is_distinct` and counts every joined row, so the results below are the
+# non-distinct counts (4 and 6; the distinct counts would be 2 and 4). DISTINCT
+# therefore does not hide the join fanout: the inner join must stay an inner
+# join, and the left join must be kept.
+query TT
+EXPLAIN SELECT REGR_COUNT(DISTINCT l.x, l.g) FROM l JOIN r ON l.id = r.id;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[regr_count(DISTINCT CAST(l.x AS Float64), CAST(l.g AS Float64))]]
+02)--Projection: l.g, l.x
+03)----Inner Join: l.id = r.id
+04)------TableScan: l projection=[id, g, x]
+05)------TableScan: r projection=[id]
+
+query I
+SELECT REGR_COUNT(DISTINCT l.x, l.g) FROM l JOIN r ON l.id = r.id;
+----
+4
+
+query I
+SELECT REGR_COUNT(DISTINCT l.x, l.g) FROM l LEFT JOIN r ON l.id = r.id;
+----
+6
+
+# A limit below the aggregate still observes repeated join rows.
+query I
+SELECT MAX(x) FROM (SELECT l.x FROM l JOIN r ON l.id = r.id ORDER BY l.x NULLS LAST LIMIT 2);
+----
+10
+
+statement ok
+RESET datafusion.explain.logical_plan_only;

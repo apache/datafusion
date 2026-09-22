@@ -140,6 +140,12 @@ impl AggregateUDFImpl for Stddev {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn distinct_handling(&self) -> datafusion_expr::DistinctHandling {
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`, so the
+        // planner has to deduplicate the input first.
+        datafusion_expr::DistinctHandling::Unsupported
+    }
 }
 
 make_udaf_expr_and_func!(
@@ -239,6 +245,12 @@ impl AggregateUDFImpl for StddevPop {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn distinct_handling(&self) -> datafusion_expr::DistinctHandling {
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`, so the
+        // planner has to deduplicate the input first.
+        datafusion_expr::DistinctHandling::Unsupported
     }
 }
 

@@ -689,6 +689,16 @@ pub fn create_physical_expr(
                 Arc::clone(schema_field),
             )))
         }
+        // Window and aggregate functions are evaluated by dedicated plan
+        // nodes, never by a physical expression. Reaching this point means
+        // the function is in a position where it cannot be evaluated, so
+        // report that instead of dumping the internal representation.
+        Expr::WindowFunction(_) => plan_err!(
+            "Window function '{e}' is not supported in this position. Window functions are supported in the SELECT list, ORDER BY, DISTINCT ON and QUALIFY"
+        ),
+        Expr::AggregateFunction(_) => plan_err!(
+            "Aggregate function '{e}' is not supported in this position. Aggregate functions are supported in the SELECT list, HAVING and ORDER BY of a query with GROUP BY"
+        ),
         other => {
             not_impl_err!("Physical plan does not support logical expression {other:?}")
         }
@@ -732,7 +742,7 @@ pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
 #[cfg(test)]
 mod tests {
     use arrow::array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, Metadata};
     use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
     use datafusion_common::HashMap;
     use datafusion_expr::physical_planning_context::{
@@ -874,15 +884,10 @@ mod tests {
         // With exact target metadata semantics, all target metadata should propagate.
         let target_field = Arc::new(
             Field::new("cast_target", DataType::Int64, true).with_metadata(
-                [
-                    (
-                        EXTENSION_TYPE_NAME_KEY.to_string(),
-                        "arrow.json".to_string(),
-                    ),
-                    (EXTENSION_TYPE_METADATA_KEY.to_string(), "{}".to_string()),
-                    ("custom_target_meta".to_string(), "custom_value".to_string()),
-                ]
-                .into(),
+                Metadata::new()
+                    .with(EXTENSION_TYPE_NAME_KEY, "arrow.json")
+                    .with(EXTENSION_TYPE_METADATA_KEY, "{}")
+                    .with("custom_target_meta", "custom_value"),
             ),
         );
         let cast_expr = Expr::Cast(Cast::new_from_field(
@@ -952,14 +957,9 @@ mod tests {
         // With exact target metadata semantics, all target metadata should propagate.
         let target_field = Arc::new(
             Field::new("same_type_cast", DataType::Int32, true).with_metadata(
-                [
-                    (
-                        EXTENSION_TYPE_NAME_KEY.to_string(),
-                        "arrow.opaque".to_string(),
-                    ),
-                    ("custom_meta".to_string(), "custom_value".to_string()),
-                ]
-                .into(),
+                Metadata::new()
+                    .with(EXTENSION_TYPE_NAME_KEY, "arrow.opaque")
+                    .with("custom_meta", "custom_value"),
             ),
         );
 

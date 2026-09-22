@@ -29,7 +29,7 @@ use arrow::array::{
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, Schema, SchemaRef, TimeUnit, UInt32Type,
+    DataType, Field, FieldRef, Fields, Metadata, Schema, SchemaRef, TimeUnit, UInt32Type,
     UnionFields,
 };
 use arrow::record_batch::RecordBatch;
@@ -85,8 +85,7 @@ impl TypePlanner for SqlLogicTestTypePlanner {
         match sql_type {
             ast::DataType::Uuid => Ok(Some(Arc::new(
                 Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
-                    [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())]
-                        .into(),
+                    Metadata::new().with("ARROW:extension:name", "arrow.uuid"),
                 ),
             ))),
             _ => Ok(None),
@@ -148,6 +147,9 @@ impl TestContext {
 
         let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         match file_name {
+            "parquet_missing_bounds.slt" => {
+                register_parquet_missing_bounds(&mut test_ctx).await;
+            }
             "cte.slt" => {
                 info!("Registering strict schema provider for CTE tests");
                 register_strict_schema_provider(test_ctx.session_ctx());
@@ -410,6 +412,77 @@ pub async fn register_partition_table(test_ctx: &mut TestContext) {
             "test_partition_table",
             test_ctx.testdir_path().to_str().unwrap(),
             CsvReadOptions::new().schema(&schema),
+        )
+        .await
+        .unwrap();
+}
+
+/// Write row groups with different statistics settings using the public writer API.
+async fn register_parquet_missing_bounds(test_ctx: &mut TestContext) {
+    use datafusion::parquet::column::writer::ColumnWriterImpl;
+    use datafusion::parquet::data_type::{ByteArray, ByteArrayType};
+    use datafusion::parquet::file::properties::{EnabledStatistics, WriterProperties};
+    use datafusion::parquet::file::writer::{
+        SerializedFileWriter, SerializedPageWriter, TrackedWrite,
+    };
+    use datafusion::parquet::schema::parser::parse_message_type;
+
+    test_ctx.enable_testdir();
+    let path = test_ctx.testdir_path().join("missing_bounds.parquet");
+    let column_path = test_ctx.testdir_path().join("column.pages");
+    let schema = Arc::new(
+        parse_message_type("message schema { REQUIRED BINARY a (UTF8); }").unwrap(),
+    );
+    let mut writer = SerializedFileWriter::new(
+        File::create(&path).unwrap(),
+        schema,
+        Arc::new(WriterProperties::default()),
+    )
+    .unwrap();
+    let long_value = "z".repeat(8192);
+    for (values, statistics) in [
+        (["a", "b"], EnabledStatistics::Chunk),
+        (
+            [long_value.as_str(), long_value.as_str()],
+            EnabledStatistics::None,
+        ),
+    ] {
+        // parquet-rs truncates long extrema rather than omitting them. Disable
+        // statistics for the second chunk to exercise the missing-bound case
+        // produced naturally by writers such as PyArrow, without editing metadata.
+        let properties = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(statistics)
+                .build(),
+        );
+        let mut buffer = TrackedWrite::new(File::create(&column_path).unwrap());
+        let mut column = ColumnWriterImpl::<ByteArrayType>::new(
+            writer.schema_descr().column(0),
+            properties,
+            Box::new(SerializedPageWriter::new(&mut buffer)),
+        );
+        let values = values.map(ByteArray::from);
+        column.write_batch(&values, None, None).unwrap();
+        let result = column.close().unwrap();
+        assert_eq!(
+            result.metadata.statistics().is_some(),
+            statistics == EnabledStatistics::Chunk
+        );
+        buffer.into_inner().unwrap();
+        let mut group = writer.next_row_group().unwrap();
+        group
+            .append_column(&File::open(&column_path).unwrap(), result)
+            .unwrap();
+        group.close().unwrap();
+    }
+    writer.close().unwrap();
+    std::fs::remove_file(&column_path).unwrap();
+    test_ctx
+        .ctx
+        .register_parquet(
+            "missing_bounds",
+            path.to_str().unwrap(),
+            ParquetReadOptions::default(),
         )
         .await
         .unwrap();
@@ -738,23 +811,25 @@ fn register_dictionary_struct_table(ctx: &SessionContext) {
 
     ctx.register_batch("dict_struct_table", batch).unwrap();
 
-    // Second table: dictionary-encoded struct with nullable entries
-    let names_nullable = Arc::new(StringArray::from(vec!["X", "Y"])) as ArrayRef;
-    let ids_nullable = Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef;
+    // Second table: null keys, null structs with valid children, and null children.
+    let names_nullable =
+        Arc::new(StringArray::from(vec!["X", "Y", "hidden"])) as ArrayRef;
+    let ids_nullable =
+        Arc::new(Int32Array::from(vec![Some(10), None, Some(30)])) as ArrayRef;
     let struct_fields_nullable: Fields = vec![
         Field::new("name", DataType::Utf8, false),
-        Field::new("id", DataType::Int32, false),
+        Field::new("id", DataType::Int32, true),
     ]
     .into();
     let values_struct_nullable = Arc::new(
         StructArray::try_new(
             struct_fields_nullable.clone(),
             vec![names_nullable, ids_nullable],
-            None,
+            Some(vec![true, true, false].into()),
         )
         .unwrap(),
     ) as ArrayRef;
-    let keys_nullable = UInt32Array::from(vec![Some(0), None, Some(1), None]);
+    let keys_nullable = UInt32Array::from(vec![Some(0), None, Some(1), Some(2), Some(2)]);
     let dict_nullable =
         DictionaryArray::<UInt32Type>::try_new(keys_nullable, values_struct_nullable)
             .unwrap();
