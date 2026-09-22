@@ -188,6 +188,26 @@ async fn create_external_catalog_if_not_exists() -> Result<()> {
 }
 
 #[tokio::test]
+async fn create_external_catalog_or_replace() -> Result<()> {
+    let ctx: SessionContext = SessionStateBuilder::new()
+        .with_default_features()
+        .with_catalog_factory("TESTCATALOG", Arc::new(TestCatalogFactory {}))
+        .build()
+        .into();
+
+    ctx.sql("CREATE EXTERNAL CATALOG cat STORED AS TESTCATALOG LOCATION 's3://x'")
+        .await?;
+    let original = ctx.catalog("cat").unwrap();
+
+    ctx.sql("CREATE OR REPLACE EXTERNAL CATALOG cat STORED AS TESTCATALOG LOCATION 's3://x'")
+        .await?;
+    let replacement = ctx.catalog("cat").unwrap();
+
+    assert!(!Arc::ptr_eq(&original, &replacement));
+    Ok(())
+}
+
+#[tokio::test]
 async fn create_drop_catalog() -> Result<()> {
     let ctx: SessionContext = SessionStateBuilder::new()
         .with_default_features()
