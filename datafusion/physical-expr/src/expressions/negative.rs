@@ -417,19 +417,22 @@ mod tests {
         // Boolean intervals cannot be negated. All callers must propagate the error.
         let range = Interval::make(Some(false), Some(true)).unwrap();
         let child = ExprProperties::new_unknown().with_range(range.clone());
-        let expected = range.arithmetic_negate().unwrap_err().to_string();
+        // Compare the error messages without call-site-dependent backtraces.
+        let expected = range.arithmetic_negate().unwrap_err().strip_backtrace();
         assert_eq!(
-            expr.evaluate_bounds(&[&range]).unwrap_err().to_string(),
+            expr.evaluate_bounds(&[&range])
+                .unwrap_err()
+                .strip_backtrace(),
             expected
         );
         assert_eq!(
-            expr.get_properties(&[child]).unwrap_err().to_string(),
+            expr.get_properties(&[child]).unwrap_err().strip_backtrace(),
             expected
         );
         assert_eq!(
             expr.propagate_constraints(&range, &[&range])
                 .unwrap_err()
-                .to_string(),
+                .strip_backtrace(),
             expected
         );
     }
