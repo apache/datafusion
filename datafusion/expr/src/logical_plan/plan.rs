@@ -3357,7 +3357,7 @@ impl TableScanBuilder {
             projected_schema,
             filters,
             fetch,
-            skip: skip,
+            skip,
             statistics_requests,
         })
     }
