@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -904,3 +904,275 @@ SET datafusion.optimizer.enable_dynamic_filter_pushdown = true;
 
 statement ok
 RESET datafusion.execution.parquet.max_row_group_size;
+
+# Regression for https://github.com/apache/datafusion/issues/25244.
+# Pushing a join dynamic filter through operators whose schema contains
+# duplicate column names must map columns by position, not by name. Each
+# query below keeps both a.id and b.id (and sometimes c.id) in the probe-side
+# output; with dynamic filtering enabled the filter on b.id must not be
+# redirected to a.id, which holds a different value and would drop the row.
+statement ok
+SET datafusion.optimizer.join_reordering = false;
+
+query I
+COPY (SELECT 'a1' AS id, 'x1' AS ty)
+TO 'test_files/scratch/dynamic_filter_pushdown_config/issue_25244_a.parquet'
+STORED AS PARQUET;
+----
+1
+
+query I
+COPY (SELECT 'x1' AS id)
+TO 'test_files/scratch/dynamic_filter_pushdown_config/issue_25244_b.parquet'
+STORED AS PARQUET;
+----
+1
+
+statement ok
+CREATE EXTERNAL TABLE issue_25244_a
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/issue_25244_a.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE issue_25244_b
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/issue_25244_b.parquet';
+
+# Expected results, with join dynamic filtering disabled.
+statement ok
+SET datafusion.optimizer.enable_join_dynamic_filter_pushdown = false;
+
+# 1. Nested joins, with a RepartitionExec between them at four partitions.
+#    LEFT JOINs keep this join tree through logical optimization.
+query TTTT
+SELECT s.id AS sid, a.id AS aid, b.id AS bid, c.id AS cid
+FROM issue_25244_b s
+JOIN (
+    (issue_25244_a a LEFT JOIN issue_25244_b b ON a.ty = b.id)
+    LEFT JOIN issue_25244_b c ON b.id = c.id
+)
+ON s.id = b.id;
+----
+x1 a1 x1 x1
+
+# 2. A FilterExec with an embedded projection.
+query TTT
+SELECT s.id AS sid, a.id AS aid, b.id AS bid
+FROM issue_25244_b s
+JOIN (
+    SELECT a.id, b.id
+    FROM issue_25244_a a LEFT JOIN issue_25244_b b ON a.ty = b.id
+    WHERE (a.ty || '!') IS DISTINCT FROM b.id
+)
+ON s.id = b.id;
+----
+x1 a1 x1
+
+# 3. A ProjectionExec whose output has two columns aliased `id`.
+query TTTT
+SELECT s.id AS sid, a.id AS aid, b.id AS bid, tag
+FROM issue_25244_a s
+JOIN (
+    SELECT a.id, b.id, a.ty || '!' AS tag
+    FROM issue_25244_a a JOIN issue_25244_b b ON a.ty = b.id
+)
+ON s.id = a.id;
+----
+a1 a1 x1 x1!
+
+# 4. An AggregateExec grouping on two same-named columns.
+query TTT
+SELECT s.id AS sid, a.id AS aid, b.id AS bid
+FROM issue_25244_b s
+JOIN (
+    SELECT a.id, b.id
+    FROM issue_25244_a a LEFT JOIN issue_25244_b b ON a.ty = b.id
+    GROUP BY a.id, b.id
+)
+ON s.id = b.id;
+----
+x1 a1 x1
+
+# The same queries must return the same rows with join dynamic filtering
+# enabled.
+statement ok
+SET datafusion.optimizer.enable_join_dynamic_filter_pushdown = true;
+
+# 1. Nested joins, with a RepartitionExec between them at four partitions.
+#    LEFT JOINs keep this join tree through logical optimization.
+query TTTT
+SELECT s.id AS sid, a.id AS aid, b.id AS bid, c.id AS cid
+FROM issue_25244_b s
+JOIN (
+    (issue_25244_a a LEFT JOIN issue_25244_b b ON a.ty = b.id)
+    LEFT JOIN issue_25244_b c ON b.id = c.id
+)
+ON s.id = b.id;
+----
+x1 a1 x1 x1
+
+# 2. A FilterExec with an embedded projection.
+query TTT
+SELECT s.id AS sid, a.id AS aid, b.id AS bid
+FROM issue_25244_b s
+JOIN (
+    SELECT a.id, b.id
+    FROM issue_25244_a a LEFT JOIN issue_25244_b b ON a.ty = b.id
+    WHERE (a.ty || '!') IS DISTINCT FROM b.id
+)
+ON s.id = b.id;
+----
+x1 a1 x1
+
+# 3. A ProjectionExec whose output has two columns aliased `id`.
+query TTTT
+SELECT s.id AS sid, a.id AS aid, b.id AS bid, tag
+FROM issue_25244_a s
+JOIN (
+    SELECT a.id, b.id, a.ty || '!' AS tag
+    FROM issue_25244_a a JOIN issue_25244_b b ON a.ty = b.id
+)
+ON s.id = a.id;
+----
+a1 a1 x1 x1!
+
+# 4. An AggregateExec grouping on two same-named columns.
+query TTT
+SELECT s.id AS sid, a.id AS aid, b.id AS bid
+FROM issue_25244_b s
+JOIN (
+    SELECT a.id, b.id
+    FROM issue_25244_a a LEFT JOIN issue_25244_b b ON a.ty = b.id
+    GROUP BY a.id, b.id
+)
+ON s.id = b.id;
+----
+x1 a1 x1
+
+statement ok
+DROP TABLE issue_25244_a;
+
+statement ok
+DROP TABLE issue_25244_b;
+
+statement ok
+RESET datafusion.optimizer.join_reordering;
+
+# Regression for https://github.com/apache/datafusion/issues/25296.
+# Both joins expose columns named amount. The TopK filter on p.amount must
+# not be remapped by name to o.amount in the lower join's output. Orders is
+# larger than payments so it streams on the probe side. One row per batch
+# and row group lets TopK update its filter before later orders are read.
+# Name-based remapping prunes those orders and incorrectly returns (100, 30).
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+SET datafusion.execution.batch_size = 1;
+
+statement ok
+CREATE TABLE issue_25296_orders_src(id INT, amount INT) AS VALUES
+(1, 100), (2, 200), (3, 300), (4, 400), (5, 500), (6, 600);
+
+statement ok
+CREATE TABLE issue_25296_payments_src(id INT, amount INT) AS VALUES
+(1, 30), (2, 20), (3, 10);
+
+statement ok
+CREATE TABLE issue_25296_customers_src(id INT) AS VALUES (1), (2), (3);
+
+query I
+COPY issue_25296_orders_src TO 'test_files/scratch/dynamic_filter_pushdown_config/issue_25296_orders.parquet'
+STORED AS PARQUET OPTIONS ('format.max_row_group_size' '1');
+----
+6
+
+query I
+COPY issue_25296_payments_src TO 'test_files/scratch/dynamic_filter_pushdown_config/issue_25296_payments.parquet'
+STORED AS PARQUET;
+----
+3
+
+query I
+COPY issue_25296_customers_src TO 'test_files/scratch/dynamic_filter_pushdown_config/issue_25296_customers.parquet'
+STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE issue_25296_orders(id INT, amount INT) STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/issue_25296_orders.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE issue_25296_payments(id INT, amount INT) STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/issue_25296_payments.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE issue_25296_customers(id INT) STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_filter_pushdown_config/issue_25296_customers.parquet';
+
+# Establish the expected result without TopK dynamic filtering.
+statement ok
+SET datafusion.optimizer.enable_topk_dynamic_filter_pushdown = false;
+
+query II
+SELECT o.amount, p.amount
+FROM issue_25296_orders o
+JOIN issue_25296_payments p ON o.id = p.id
+JOIN issue_25296_customers c ON p.id = c.id
+ORDER BY p.amount LIMIT 1;
+----
+300 10
+
+# Enabling TopK dynamic filtering must preserve the result.
+statement ok
+SET datafusion.optimizer.enable_topk_dynamic_filter_pushdown = true;
+
+query II
+SELECT o.amount, p.amount
+FROM issue_25296_orders o
+JOIN issue_25296_payments p ON o.id = p.id
+JOIN issue_25296_customers c ON p.id = c.id
+ORDER BY p.amount LIMIT 1;
+----
+300 10
+
+# Also exercise Parquet row filtering in addition to row-group pruning.
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+query II
+SELECT o.amount, p.amount
+FROM issue_25296_orders o
+JOIN issue_25296_payments p ON o.id = p.id
+JOIN issue_25296_customers c ON p.id = c.id
+ORDER BY p.amount LIMIT 1;
+----
+300 10
+
+statement ok
+DROP TABLE issue_25296_orders;
+
+statement ok
+DROP TABLE issue_25296_payments;
+
+statement ok
+DROP TABLE issue_25296_customers;
+
+statement ok
+DROP TABLE issue_25296_orders_src;
+
+statement ok
+DROP TABLE issue_25296_payments_src;
+
+statement ok
+DROP TABLE issue_25296_customers_src;
+
+statement ok
+RESET datafusion.execution.batch_size;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;

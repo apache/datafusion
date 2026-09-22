@@ -41,9 +41,10 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement, WriteOp};
 use crate::utils::{
-    check_aggregate_and_window_nesting, enumerate_grouping_sets, expr_to_columns,
-    exprlist_to_fields, find_out_reference_exprs, grouping_set_expr_count,
-    grouping_set_to_exprlist, merge_schema, split_conjunction,
+    check_aggregate_and_window_nesting, check_no_window_functions,
+    enumerate_grouping_sets, expr_to_columns, exprlist_to_fields,
+    find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
+    merge_schema, split_conjunction,
 };
 use crate::{
     BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, GroupingSet,
@@ -54,7 +55,7 @@ use crate::{
 
 use crate::statistics::StatisticsRequest;
 use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Metadata, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
 use datafusion_common::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use datafusion_common::metadata::check_metadata_with_storage_equal;
@@ -130,7 +131,7 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// # fn main() -> Result<()> {
 /// let plan = table_scan(Some("employee"), &employee_schema(), None)?
 ///  .filter(col("salary").gt(lit(1000)))?
-///  .project(vec![col("name")])?
+///  .project(vec![col("name"), col("salary")])?
 ///  .build()?;
 ///
 /// // use apply to walk the plan and collect all expressions
@@ -145,14 +146,16 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// }).unwrap();
 ///
 /// // we found the expression in projection and filter
-/// assert_eq!(expressions.len(), 2);
+/// assert_eq!(expressions.len(), 3);
 /// println!("Found expressions: {:?}", expressions);
 /// // found predicate in the Filter: employee.salary > 1000
 /// let salary = Expr::Column(Column::new(Some("employee"), "salary"));
 /// assert!(expressions.contains(&salary.gt(lit(1000))));
-/// // found projection in the Projection: employee.name
+/// // found projection in the Projection: employee.name, employee.salary
 /// let name = Expr::Column(Column::new(Some("employee"), "name"));
+/// let salary = Expr::Column(Column::new(Some("employee"), "salary"));
 /// assert!(expressions.contains(&name));
+/// assert!(expressions.contains(&salary));
 /// # Ok(())
 /// # }
 /// ```
@@ -179,7 +182,7 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// use datafusion_common::tree_node::Transformed;
 /// let plan = table_scan(Some("employee"), &employee_schema(), None)?
 ///  .filter(col("salary").gt(lit(1000)))?
-///  .project(vec![col("name")])?
+///  .project(vec![col("name"), col("salary")])?
 ///  .build()?;
 ///
 /// // use transform to rewrite the plan
@@ -202,7 +205,7 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 ///
 /// // we found the filter
 /// assert_eq!(rewritten_plan.display_indent().to_string(),
-/// "Projection: employee.name\
+/// "Projection: employee.name, employee.salary\
 /// \n  Filter: employee.salary < Int32(2000)\
 /// \n    TableScan: employee");
 /// # Ok(())
@@ -2822,18 +2825,23 @@ pub struct Filter {
 impl Filter {
     /// Create a new filter operator.
     ///
-    /// Skips the type-checking and dealiasing done in [Self::try_new].
-    /// For internal use in DataFusion only.
+    /// Skips the type-checking, window function check and dealiasing done in
+    /// [Self::try_new]. For internal use in DataFusion only.
     ///
     /// **Preconditions:**
     /// - the `predicate` expression returns a boolean value
     /// - the `predicate` expression is not aliased
+    /// - the `predicate` expression contains no window function calls
     #[doc(hidden)]
     pub fn new(predicate: Expr, input: Arc<LogicalPlan>) -> Self {
         Self { predicate, input }
     }
 
     /// Create a new filter operator.
+    ///
+    /// Returns an error if the predicate is not boolean or contains a window
+    /// function call, which cannot be evaluated by a filter (see
+    /// [`check_no_window_functions`]).
     ///
     /// Notes: as Aliases have no effect on the output of a filter operator,
     /// they are removed from the predicate expression.
@@ -2853,6 +2861,11 @@ impl Filter {
     }
 
     fn try_new_internal(predicate: Expr, input: Arc<LogicalPlan>) -> Result<Self> {
+        // Filters are evaluated before window functions are computed, so a
+        // window call in the predicate has no physical equivalent. Reject it
+        // here rather than failing during physical planning.
+        check_no_window_functions(&predicate, "filter predicates")?;
+
         // Filter predicates must return a boolean value so we try and validate that here.
         // Note that it is not always possible to resolve the predicate expression during plan
         // construction (such as with correlated subqueries) so we make a best effort here and
@@ -3447,8 +3460,7 @@ impl Union {
         inputs: &[Arc<LogicalPlan>],
         loose_types: bool,
     ) -> Result<DFSchemaRef> {
-        type FieldData<'a> =
-            (&'a DataType, bool, Vec<&'a HashMap<String, String>>, usize);
+        type FieldData<'a> = (&'a DataType, bool, Vec<&'a Metadata>, usize);
         let mut cols: Vec<(&str, FieldData)> = Vec::new();
         for input in inputs.iter() {
             for field in input.schema().fields() {
@@ -6054,7 +6066,7 @@ mod tests {
         let schema_with_metadata = || {
             DFSchema::from_unqualified_fields(
                 vec![Field::new("count", DataType::Int64, false)].into(),
-                [("key".to_string(), "value".to_string())].into(),
+                Metadata::new().with("key", "value"),
             )
             .unwrap()
         };

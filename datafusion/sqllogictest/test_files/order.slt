@@ -15,7 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-
 statement ok
 CREATE EXTERNAL TABLE alltypes_plain STORED AS PARQUET LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
 
@@ -635,6 +634,16 @@ ORDER BY sum(value) + sum(value);
 statement error DataFusion error: This feature is not implemented: SORT BY
 select * from t SORT BY time;
 
+## ORDER BY USING <operator> (PostgreSQL) is not supported
+statement ok
+set datafusion.sql_parser.dialect = 'PostgreSQL';
+
+statement error DataFusion error: This feature is not implemented: ORDER BY USING is not supported: <
+select * from t ORDER BY time USING <;
+
+statement ok
+reset datafusion.sql_parser.dialect;
+
 
 # distinct on a column not in the select list should not work
 statement error DataFusion error: Error during planning: For SELECT DISTINCT, ORDER BY expressions t\.time must appear in select list
@@ -799,6 +808,36 @@ logical_plan
 02)--Projection: floor(CAST(multiple_ordered_table.a AS Float64)) AS a_
 03)----TableScan: multiple_ordered_table projection=[a]
 physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[floor(CAST(a@1 AS Float64)) as a_], file_type=csv, has_header=true
+
+# A merely monotone (`preserves_lex_ordering`, but not strictly order-preserving) function such as factorial()
+# does NOT justify the suffix keys:
+# factorial(0) == factorial(1) which means that it collapses distinct inputs into one output value, and `b`
+# is not sorted within such a run, so a SortExec must remain.
+query TT
+EXPLAIN SELECT factorial(a) AS a_, b
+FROM multiple_ordered_table
+ORDER BY a_, b;
+----
+logical_plan
+01)Sort: a_ ASC NULLS LAST, multiple_ordered_table.b ASC NULLS LAST
+02)--Projection: factorial(CAST(multiple_ordered_table.a AS Int64)) AS a_, multiple_ordered_table.b
+03)----TableScan: multiple_ordered_table projection=[a, b]
+physical_plan
+01)SortExec: expr=[a_@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[factorial(CAST(a@1 AS Int64)) as a_, b], file_type=csv, has_header=true
+
+# Monotonicity alone is still enough when the expression is the *only* sort
+# key, so here the SortExec is removed even though factorial() is not strict:
+query TT
+EXPLAIN SELECT factorial(a) AS a_
+FROM multiple_ordered_table
+ORDER BY a_;
+----
+logical_plan
+01)Sort: a_ ASC NULLS LAST
+02)--Projection: factorial(CAST(multiple_ordered_table.a AS Int64)) AS a_
+03)----TableScan: multiple_ordered_table projection=[a]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[factorial(CAST(a@1 AS Int64)) as a_], file_type=csv, has_header=true
 
 # The SLT runner sets `target_partitions` to 4 instead of using the default, so
 # reset it explicitly.

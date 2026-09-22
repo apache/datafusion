@@ -870,11 +870,9 @@ impl DefaultPhysicalPlanner {
                     e.context(format!("MERGE INTO operation on table '{table_name}'"))
                 })?;
                 let input_exec = children.one()?;
-                let target_schema = DFSchema::try_from_qualified_schema(
-                    table_name.clone(),
-                    &target.schema(),
-                )?;
-                let merge_schema = Arc::new(target_schema.join(input.schema())?);
+                let merge_schema = Arc::new(
+                    merge_op.expression_schema(&target.schema(), input.schema())?,
+                );
                 provider
                     .merge_into(
                         session_state,
@@ -1270,16 +1268,20 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::SubqueryAlias(_) => children.one()?,
             LogicalPlan::Limit(limit) => {
                 let input = children.one()?;
+                // `get_skip_type` / `get_fetch_type` only return a non literal
+                // type for an expression that is present
                 let SkipType::Literal(skip) = limit.get_skip_type()? else {
+                    let skip = limit.skip.as_deref().map(ToString::to_string);
                     return not_impl_err!(
-                        "Unsupported OFFSET expression: {:?}",
-                        limit.skip
+                        "Unsupported OFFSET expression: {}",
+                        skip.unwrap_or_default()
                     );
                 };
                 let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
+                    let fetch = limit.fetch.as_deref().map(ToString::to_string);
                     return not_impl_err!(
-                        "Unsupported LIMIT expression: {:?}",
-                        limit.fetch
+                        "Unsupported LIMIT expression: {}",
+                        fetch.unwrap_or_default()
                     );
                 };
 
@@ -1600,6 +1602,17 @@ impl DefaultPhysicalPlanner {
                     && session_state.config().repartition_joins()
                     && !*null_aware;
 
+                // Only `HashJoinExec` implements null-aware semantics, and it
+                // needs equi-join keys to do so. Without them the join would be
+                // planned as a nested loop (or piecewise merge) join, which
+                // silently ignores the flag and returns wrong results for
+                // `NOT IN` over a nullable subquery. Fail loudly instead.
+                if *null_aware && join_on.is_empty() {
+                    return plan_err!(
+                        "null_aware {join_type} join requires equi-join keys, but the join has none"
+                    );
+                }
+
                 // TODO: Allow PWMJ to deal with residual equijoin conditions
                 let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
                     if join_filter.is_none() && *join_type == JoinType::Inner {
@@ -1607,17 +1620,6 @@ impl DefaultPhysicalPlanner {
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
                     } else if num_range_filters == 1
                         && total_filters == 1
-                        // PWMJ supports classic joins and Left Semi/Anti existence joins.
-                        // Right Semi/Anti and Mark joins are not implemented yet (they
-                        // would require swapping the inputs so the marked side is buffered),
-                        // so exclude them here and let them fall back to NestedLoopJoin.
-                        && !matches!(
-                            join_type,
-                            JoinType::RightSemi
-                                | JoinType::RightAnti
-                                | JoinType::LeftMark
-                                | JoinType::RightMark
-                        )
                         && session_state
                             .config_options()
                             .optimizer
@@ -1650,14 +1652,20 @@ impl DefaultPhysicalPlanner {
                             }
                         }
 
+                        // `Neither` covers an operand that references no column from
+                        // either side (e.g. a literal), and `Both` an operand that
+                        // references columns from both. PWMJ needs one operand pinned
+                        // to each side, so both fall back to NestedLoopJoin below rather
+                        // than erroring or (for `Neither`) panicking.
                         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
                         enum Side {
                             Left,
                             Right,
                             Both,
+                            Neither,
                         }
 
-                        let side_of = |e: &Expr| -> Result<Side> {
+                        let side_of = |e: &Expr| -> Side {
                             let cols = e.column_refs();
                             let any_left = cols
                                 .iter()
@@ -1666,20 +1674,29 @@ impl DefaultPhysicalPlanner {
                                 .iter()
                                 .any(|c| right_df_schema.index_of_column(c).is_ok());
 
-                            Ok(match (any_left, any_right) {
+                            match (any_left, any_right) {
                                 (true, false) => Side::Left,
                                 (false, true) => Side::Right,
                                 (true, true) => Side::Both,
-                                _ => unreachable!(),
-                            })
+                                (false, false) => Side::Neither,
+                            }
                         };
 
                         let mut lhs_logical = &be.left;
                         let mut rhs_logical = &be.right;
 
-                        let left_side = side_of(lhs_logical)?;
-                        let right_side = side_of(rhs_logical)?;
-                        if left_side == Side::Both || right_side == Side::Both {
+                        let left_side = side_of(lhs_logical);
+                        let right_side = side_of(rhs_logical);
+
+                        if left_side == Side::Right && right_side == Side::Left {
+                            std::mem::swap(&mut lhs_logical, &mut rhs_logical);
+                            op = reverse_ineq(op);
+                        } else if !(left_side == Side::Left && right_side == Side::Right)
+                        {
+                            // Anything other than a clean left/right split -- both
+                            // operands on one side, one referencing neither side, or
+                            // either referencing both -- isn't a range predicate PWMJ
+                            // can plan, so let NestedLoopJoin evaluate it instead.
                             return Ok(Arc::new(NestedLoopJoinExec::try_new(
                                 physical_left,
                                 physical_right,
@@ -1687,17 +1704,6 @@ impl DefaultPhysicalPlanner {
                                 join_type,
                                 None,
                             )?));
-                        }
-
-                        if left_side == Side::Right && right_side == Side::Left {
-                            std::mem::swap(&mut lhs_logical, &mut rhs_logical);
-                            op = reverse_ineq(op);
-                        } else if !(left_side == Side::Left && right_side == Side::Right)
-                        {
-                            return plan_err!(
-                                "Unsupported operator for PWMJ: {:?}. Expected one of <, <=, >, >=",
-                                op
-                            );
                         }
 
                         let on_left = create_physical_expr(
@@ -3626,8 +3632,8 @@ mod tests {
         ctx.register_table("source", source)?;
 
         ctx.sql(
-            "MERGE INTO target AS t USING source AS s ON t.id = s.id \
-             WHEN MATCHED AND t.id > s.id THEN DELETE",
+            "MERGE INTO target AS t USING source AS target ON t.id = target.id \
+             WHEN MATCHED AND t.id > target.id THEN DELETE",
         )
         .await?
         .create_physical_plan()
@@ -3638,11 +3644,11 @@ mod tests {
             captured.as_ref().expect("merge_into should be called");
         assert_eq!(*clause_count, 1);
         assert_eq!(
-            merge_schema.index_of_column(&Column::new(Some("target"), "id"))?,
+            merge_schema.index_of_column(&Column::new(Some("t"), "id"))?,
             0
         );
         assert_eq!(
-            merge_schema.index_of_column(&Column::new(Some("s"), "id"))?,
+            merge_schema.index_of_column(&Column::new(Some("target"), "id"))?,
             1
         );
         assert_contains!(physical_on, "index: 0");

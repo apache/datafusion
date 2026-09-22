@@ -349,10 +349,11 @@ impl MemTable {
         self.schema()
             .logically_equivalent_names_and_types(&input.schema())?;
 
-        if insert_op != InsertOp::Append {
+        if insert_op == InsertOp::Replace {
             return not_impl_err!("{insert_op} not implemented for MemoryTable yet");
         }
-        let sink = MemSink::try_new(self.batches.clone(), Arc::clone(&self.schema))?;
+        let sink = MemSink::try_new(self.batches.clone(), Arc::clone(&self.schema))?
+            .with_overwrite(insert_op == InsertOp::Overwrite);
         Ok(Arc::new(DataSinkExec::new(input, Arc::new(sink), None)))
     }
 
