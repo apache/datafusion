@@ -623,8 +623,9 @@ mod tests {
         use datafusion_execution::runtime_env::RuntimeEnv;
         use datafusion_expr::function::AccumulatorArgs;
         use datafusion_expr::{
-            Accumulator, AggregateUDFImpl, ColumnarValue, PartitionEvaluator,
-            ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility, WindowUDFImpl,
+            Accumulator, AggregateUDFImpl, ColumnarValue, HigherOrderUDFImpl,
+            PartitionEvaluator, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+            WindowUDFImpl,
         };
         use datafusion_functions_window_common::field::WindowUDFFieldArgs;
         use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
@@ -731,6 +732,41 @@ mod tests {
             }
         }
 
+        #[derive(Debug, Hash, Eq, PartialEq)]
+        struct TestHigherOrderUdf;
+
+        impl HigherOrderUDFImpl for TestHigherOrderUdf {
+            fn name(&self) -> &str {
+                "test_higher_order_udf"
+            }
+
+            fn signature(&self) -> &datafusion_expr::HigherOrderSignature {
+                unimplemented!("not needed for these tests")
+            }
+
+            fn lambda_parameters(
+                &self,
+                _step: usize,
+                _fields: &[datafusion_expr::ValueOrLambda<FieldRef, Option<FieldRef>>],
+            ) -> Result<datafusion_expr::LambdaParametersProgress> {
+                unimplemented!("not needed for these tests")
+            }
+
+            fn return_field_from_args(
+                &self,
+                _args: datafusion_expr::HigherOrderReturnFieldArgs,
+            ) -> Result<FieldRef> {
+                unimplemented!("not needed for these tests")
+            }
+
+            fn invoke_with_args(
+                &self,
+                _args: datafusion_expr::HigherOrderFunctionArgs,
+            ) -> Result<ColumnarValue> {
+                unimplemented!("not needed for these tests")
+            }
+        }
+
         /// Codec that encodes every function as its name bytes and decodes by
         /// checking the payload it receives, so tests can observe exactly what
         /// crosses the bytes-only boundary.
@@ -796,6 +832,24 @@ mod tests {
                 assert_eq!(name, "test_udwf");
                 assert_eq!(buf, name.as_bytes());
                 Ok(Arc::new(WindowUDF::from(TestUdwf::new())))
+            }
+
+            fn try_encode_higher_order_function(
+                &self,
+                node: &HigherOrderUDF,
+                buf: &mut Vec<u8>,
+            ) -> Result<()> {
+                buf.extend_from_slice(node.name().as_bytes());
+                Ok(())
+            }
+
+            fn try_decode_higher_order_function(
+                &self,
+                name: &str,
+                buf: &[u8],
+            ) -> Result<Arc<HigherOrderUDF>> {
+                assert_eq!(buf, name.as_bytes(), "payload must survive the round trip");
+                Ok(Arc::new(HigherOrderUDF::new_from_impl(TestHigherOrderUdf)))
             }
         }
 
@@ -1243,6 +1297,45 @@ mod tests {
                 "test_udaf"
             );
 
+            Ok(())
+        }
+
+        #[test]
+        fn composed_codec_round_trips_a_higher_order_function_payload() -> Result<()> {
+            // The higher-order hook shares the by-name contract with udf/udaf/udwf,
+            // so it must frame a real payload and resolve it back through the same
+            // position.
+            let composed =
+                ComposedPhysicalExtensionCodec::new(vec![Arc::new(PayloadCodec)]);
+
+            let mut buf = vec![];
+            composed.try_encode_higher_order_function(
+                &HigherOrderUDF::new_from_impl(TestHigherOrderUdf),
+                &mut buf,
+            )?;
+            assert!(!buf.is_empty(), "a codec with a payload must produce one");
+
+            let decoded = composed
+                .try_decode_higher_order_function("test_higher_order_udf", &buf)?;
+            assert_eq!(decoded.name(), "test_higher_order_udf");
+            Ok(())
+        }
+
+        #[test]
+        fn composed_codec_leaves_by_name_higher_order_functions_payload_free()
+        -> Result<()> {
+            // A plans-only codec accepts the hook without writing, which is the
+            // encode-by-name signal; framing an empty blob would strand it at decode.
+            let composed = ComposedPhysicalExtensionCodec::new(vec![Arc::new(
+                DefaultPhysicalExtensionCodec {},
+            )]);
+
+            let mut buf = vec![];
+            composed.try_encode_higher_order_function(
+                &HigherOrderUDF::new_from_impl(TestHigherOrderUdf),
+                &mut buf,
+            )?;
+            assert!(buf.is_empty(), "expected no payload, got {buf:?}");
             Ok(())
         }
 
