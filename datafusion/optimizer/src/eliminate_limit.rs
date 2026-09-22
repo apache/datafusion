@@ -33,13 +33,6 @@ use std::sync::Arc;
 #[derive(Default, Debug)]
 pub struct EliminateLimit;
 
-impl EliminateLimit {
-    #[expect(missing_docs)]
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
 impl OptimizerRule for EliminateLimit {
     fn name(&self) -> &str {
         "eliminate_limit"
@@ -57,6 +50,19 @@ impl OptimizerRule for EliminateLimit {
         &self,
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>, datafusion_common::DataFusionError> {
+        Self::rewrite_inner(plan)
+    }
+}
+
+impl EliminateLimit {
+    /// Create a new `EliminateLimit`
+    pub fn new() -> Self {
+        Self {}
+    }
+
+    fn rewrite_inner(
+        plan: LogicalPlan,
     ) -> Result<Transformed<LogicalPlan>, datafusion_common::DataFusionError> {
         match plan {
             LogicalPlan::Limit(limit) => {
@@ -77,9 +83,7 @@ impl OptimizerRule for EliminateLimit {
                 } else if matches!(limit.get_skip_type()?, SkipType::Literal(0)) {
                     // If fetch is `None` and skip is 0, then Limit takes no effect and
                     // we can remove it. Its input also can be Limit, so we should apply again.
-                    #[expect(clippy::used_underscore_binding)]
-                    let mut res =
-                        self.rewrite(Arc::unwrap_or_clone(limit.input), _config)?;
+                    let mut res = Self::rewrite_inner(Arc::unwrap_or_clone(limit.input))?;
                     res.transformed = true;
                     return Ok(res);
                 }
