@@ -383,6 +383,10 @@ impl ExecutionPlan for LazyMemoryExec {
         Some(self.metrics.clone_inner())
     }
 
+    fn metrics_for_partition(&self, partition: usize) -> Option<MetricsSet> {
+        Some(self.metrics.clone_partition(partition))
+    }
+
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         let generators = self
             .generators()

@@ -467,6 +467,10 @@ impl ExecutionPlan for PartitionedTopKExec {
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics_set.clone_inner())
     }
+
+    fn metrics_for_partition(&self, partition: usize) -> Option<MetricsSet> {
+        Some(self.metrics_set.clone_partition(partition))
+    }
 }
 
 /// Read all input, feed each batch into a per-partition top-K state

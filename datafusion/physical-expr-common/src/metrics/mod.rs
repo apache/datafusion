@@ -509,33 +509,81 @@ impl FromIterator<Arc<Metric>> for MetricsSet {
 /// underlying metrics set
 #[derive(Default, Debug, Clone)]
 pub struct ExecutionPlanMetricsSet {
-    inner: Arc<Mutex<MetricsSet>>,
+    inner: Arc<Mutex<IndexedMetricsSet>>,
+}
+
+/// Keep registration order for full snapshots, with positions for partition lookups.
+/// Both are updated under the same lock, so readers never see a partial registration.
+#[derive(Default, Debug)]
+struct IndexedMetricsSet {
+    metrics: MetricsSet,
+    partitions: HashMap<usize, Vec<usize>>,
+}
+
+impl IndexedMetricsSet {
+    fn register(&mut self, metric: Arc<Metric>) {
+        if let Some(partition) = metric.partition() {
+            self.partitions
+                .entry(partition)
+                .or_default()
+                .push(self.metrics.metrics.len());
+        }
+        self.metrics.push(metric);
+    }
 }
 
 impl ExecutionPlanMetricsSet {
     /// Create a new empty shared metrics set
     pub fn new() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(MetricsSet::new())),
-        }
+        Self::default()
     }
 
     /// Add the specified metric to the underlying metric set
     pub fn register(&self, metric: Arc<Metric>) {
-        self.inner.lock().push(metric)
+        self.inner.lock().register(metric)
     }
 
     /// Return a clone of the inner [`MetricsSet`]
     pub fn clone_inner(&self) -> MetricsSet {
+        self.inner.lock().metrics.clone()
+    }
+
+    /// Return a snapshot containing only metrics whose partition is `Some(partition)`.
+    ///
+    /// This clones only the selected metric handles, in registration order, using
+    /// an index rather than scanning metrics from other partitions. Lookup takes
+    /// expected O(1) plus O(m) to clone the m selected handles (excluding lock
+    /// contention). An unknown partition returns an empty set. Metrics with no
+    /// partition are excluded; use [`Self::clone_inner`] to include those metrics.
+    ///
+    /// The snapshot shares metric values with this set, but does not acquire
+    /// metrics registered later. Call again to observe later registrations.
+    /// Duplicate names and labels are preserved, just as in [`Self::clone_inner`].
+    pub fn clone_partition(&self, partition: usize) -> MetricsSet {
         let guard = self.inner.lock();
-        (*guard).clone()
+        let Some(indices) = guard.partitions.get(&partition) else {
+            return MetricsSet::new();
+        };
+        indices
+            .iter()
+            .map(|&index| Arc::clone(&guard.metrics.metrics[index]))
+            .collect()
     }
 }
 
 impl From<MetricsSet> for ExecutionPlanMetricsSet {
     fn from(metrics: MetricsSet) -> Self {
+        let mut partitions: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (index, metric) in metrics.iter().enumerate() {
+            if let Some(partition) = metric.partition() {
+                partitions.entry(partition).or_default().push(index);
+            }
+        }
         Self {
-            inner: Arc::new(Mutex::new(metrics)),
+            inner: Arc::new(Mutex::new(IndexedMetricsSet {
+                metrics,
+                partitions,
+            })),
         }
     }
 }
@@ -735,6 +783,85 @@ mod tests {
         assert_eq!(borrowed, shared);
         assert_eq!(borrowed.to_string(), owned.to_string());
         assert_eq!(borrowed.to_string(), shared.to_string());
+    }
+
+    #[test]
+    fn partition_snapshots_preserve_registration_and_shared_values() {
+        let metrics = ExecutionPlanMetricsSet::new();
+        assert_eq!(metrics.clone_partition(0).iter().count(), 0);
+        let first = MetricBuilder::new(&metrics).output_rows(0);
+        first.add(11);
+        MetricBuilder::new(&metrics).global_counter("global").add(7);
+        MetricBuilder::new(&metrics).output_rows(usize::MAX).add(99);
+        // Same name and partition must not overwrite the earlier metric.
+        MetricBuilder::new(&metrics).output_rows(0).add(13);
+        let snapshot = metrics.clone_partition(0);
+        assert_eq!(snapshot.output_rows(), Some(24));
+        assert_eq!(snapshot.iter().count(), 2);
+        assert_eq!(snapshot.aggregate_by_name().output_rows(), Some(24));
+        assert_eq!(metrics.clone_partition(usize::MAX).output_rows(), Some(99));
+        assert_eq!(metrics.clone_partition(1).iter().count(), 0);
+
+        let shared = metrics.clone();
+        first.add(1);
+        MetricBuilder::new(&shared).output_rows(0).add(17);
+        assert_eq!(snapshot.output_rows(), Some(25));
+        assert_eq!(shared.clone_partition(0).output_rows(), Some(42));
+        assert_eq!(metrics.clone_partition(0).output_rows(), Some(42));
+
+        let full = metrics.clone_inner();
+        let imported = ExecutionPlanMetricsSet::from(full.clone());
+        for (original, copied) in full.iter().zip(imported.clone_inner().iter()) {
+            assert!(Arc::ptr_eq(original, copied));
+        }
+        for partition in [0, 1, usize::MAX] {
+            let expected: Vec<_> = full
+                .iter()
+                .filter(|metric| metric.partition() == Some(partition))
+                .collect();
+            let selected = imported.clone_partition(partition);
+            assert_eq!(expected.len(), selected.iter().count());
+            for (original, copied) in expected.into_iter().zip(selected.iter()) {
+                assert!(Arc::ptr_eq(original, copied));
+            }
+        }
+        // From shares metric values, but creates an independent registration set.
+        MetricBuilder::new(&imported).output_rows(0).add(3);
+        assert_eq!(imported.clone_partition(0).output_rows(), Some(45));
+        assert_eq!(metrics.clone_partition(0).output_rows(), Some(42));
+        assert_eq!(full.iter().filter(|m| m.partition().is_none()).count(), 1);
+    }
+
+    #[test]
+    fn partition_snapshots_during_registration() {
+        let metrics = ExecutionPlanMetricsSet::new();
+        let barrier = std::sync::Barrier::new(5);
+        std::thread::scope(|scope| {
+            for partition in 0..4 {
+                let metrics = &metrics;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    for _ in 0..1000 {
+                        MetricBuilder::new(metrics).output_rows(partition).add(1);
+                    }
+                });
+            }
+            barrier.wait();
+            for _ in 0..1000 {
+                for partition in 0..4 {
+                    let selected = metrics.clone_partition(partition);
+                    assert!(selected.iter().all(|m| m.partition() == Some(partition)));
+                    assert!(selected.iter().count() <= 1000);
+                }
+            }
+        });
+        for partition in 0..4 {
+            let selected = metrics.clone_partition(partition);
+            assert_eq!(selected.iter().count(), 1000);
+            assert_eq!(selected.output_rows(), Some(1000));
+        }
+        assert_eq!(metrics.clone_inner().output_rows(), Some(4000));
     }
 
     #[test]

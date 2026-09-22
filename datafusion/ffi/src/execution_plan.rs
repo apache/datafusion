@@ -85,6 +85,10 @@ pub struct FFI_ExecutionPlan {
     /// underlying [`ExecutionPlan::metrics`] returned `None`.
     pub metrics: unsafe extern "C" fn(plan: &Self) -> FFI_Option<FFI_MetricsSet>,
 
+    /// Snapshot only the metrics registered for the specified partition.
+    metrics_for_partition:
+        unsafe extern "C" fn(plan: &Self, partition: usize) -> FFI_Option<FFI_MetricsSet>,
+
     /// Snapshot partition statistics. `partition == None` corresponds to
     /// statistics over all partitions; `Some(idx)` corresponds to a specific
     /// partition. The returned bytes are a prost-encoded
@@ -242,6 +246,17 @@ unsafe extern "C" fn metrics_fn_wrapper(
         .into()
 }
 
+unsafe extern "C" fn metrics_for_partition_fn_wrapper(
+    plan: &FFI_ExecutionPlan,
+    partition: usize,
+) -> FFI_Option<FFI_MetricsSet> {
+    plan.inner()
+        .metrics_for_partition(partition)
+        .as_ref()
+        .map(FFI_MetricsSet::from)
+        .into()
+}
+
 unsafe extern "C" fn partition_statistics_fn_wrapper(
     plan: &FFI_ExecutionPlan,
     partition: FFI_Option<usize>,
@@ -355,6 +370,7 @@ impl FFI_ExecutionPlan {
             execute: execute_fn_wrapper,
             repartitioned: repartitioned_fn_wrapper,
             metrics: metrics_fn_wrapper,
+            metrics_for_partition: metrics_for_partition_fn_wrapper,
             partition_statistics: partition_statistics_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
@@ -544,6 +560,12 @@ impl ExecutionPlan for ForeignExecutionPlan {
     fn metrics(&self) -> Option<MetricsSet> {
         let ffi: Option<FFI_MetricsSet> =
             unsafe { (self.plan.metrics)(&self.plan) }.into();
+        ffi.map(MetricsSet::from)
+    }
+
+    fn metrics_for_partition(&self, partition: usize) -> Option<MetricsSet> {
+        let ffi: Option<FFI_MetricsSet> =
+            unsafe { (self.plan.metrics_for_partition)(&self.plan, partition) }.into();
         ffi.map(MetricsSet::from)
     }
 
@@ -847,6 +869,7 @@ pub mod tests {
         bare_local.library_marker_id = crate::mock_foreign_marker_id;
         let bare_foreign: Arc<dyn ExecutionPlan> = (&bare_local).try_into()?;
         assert!(bare_foreign.metrics().is_none());
+        assert!(bare_foreign.metrics_for_partition(0).is_none());
 
         // Plans with metrics produce equivalent MetricsSets after a round trip.
         let mut original_metrics = MetricsSet::new();
@@ -861,11 +884,40 @@ pub mod tests {
 
         let metric_plan = Arc::new(EmptyExec::new(schema).with_metrics(original_metrics));
         let mut metric_local = FFI_ExecutionPlan::new(metric_plan, None);
+        let local: Arc<dyn ExecutionPlan> = (&metric_local).try_into()?;
+        assert!(local.is::<EmptyExec>());
+        assert_eq!(
+            local.metrics_for_partition(0).unwrap().output_rows(),
+            Some(11)
+        );
+
         metric_local.library_marker_id = crate::mock_foreign_marker_id;
         let metric_foreign: Arc<dyn ExecutionPlan> = (&metric_local).try_into()?;
 
         let observed = metric_foreign.metrics().expect("metrics should be present");
         assert_eq!(observed.output_rows(), Some(42));
+        assert_eq!(
+            metric_foreign
+                .metrics_for_partition(0)
+                .unwrap()
+                .output_rows(),
+            Some(11)
+        );
+        assert_eq!(
+            metric_foreign
+                .metrics_for_partition(1)
+                .unwrap()
+                .output_rows(),
+            Some(31)
+        );
+        assert_eq!(
+            metric_foreign
+                .metrics_for_partition(2)
+                .unwrap()
+                .iter()
+                .count(),
+            0
+        );
 
         Ok(())
     }

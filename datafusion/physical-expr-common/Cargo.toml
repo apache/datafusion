@@ -73,3 +73,7 @@ name = "compare_nested"
 [[bench]]
 harness = false
 name = "arrow_bytes_map"
+
+[[bench]]
+harness = false
+name = "partition_metrics"

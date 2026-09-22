@@ -328,6 +328,10 @@ impl ExecutionPlan for UnnestExec {
         Some(self.metrics.clone_inner())
     }
 
+    fn metrics_for_partition(&self, partition: usize) -> Option<MetricsSet> {
+        Some(self.metrics.clone_partition(partition))
+    }
+
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,

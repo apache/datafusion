@@ -498,6 +498,11 @@ impl ExecutionPlan for DataSourceExec {
         Some(metrics)
     }
 
+    fn metrics_for_partition(&self, partition: usize) -> Option<MetricsSet> {
+        // output_rows_skew is a plan-wide derived metric with no partition.
+        Some(self.data_source.metrics().clone_partition(partition))
+    }
+
     fn statistics_from_inputs(
         &self,
         _input_stats: &[Arc<Statistics>],

@@ -83,6 +83,17 @@ mod tests {
         // across that boundary - not just the in-process From conversions
         // covered by physical_expr::metrics's roundtrip tests.
         let metrics = plan.metrics().expect("plan should report metrics");
+        for partition in [0, 1, usize::MAX] {
+            let expected: Vec<_> = metrics
+                .iter()
+                .filter(|metric| metric.partition() == Some(partition))
+                .map(|metric| metric.to_string())
+                .collect();
+            let selected = plan.metrics_for_partition(partition).unwrap();
+            let actual: Vec<_> =
+                selected.iter().map(|metric| metric.to_string()).collect();
+            assert_eq!(actual, expected);
+        }
 
         // Assert the transported Bytes category, the generic variant/name/
         // value, and (below) the byte-formatted display output - MetricValue

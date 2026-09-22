@@ -402,6 +402,10 @@ impl DataSink for ParquetSink {
         Some(self.metrics.clone_inner())
     }
 
+    fn metrics_for_partition(&self, partition: usize) -> Option<MetricsSet> {
+        Some(self.metrics.clone_partition(partition))
+    }
+
     fn schema(&self) -> &SchemaRef {
         self.config.output_schema()
     }

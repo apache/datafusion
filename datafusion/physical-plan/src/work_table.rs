@@ -247,6 +247,10 @@ impl ExecutionPlan for WorkTableExec {
         Some(self.metrics.clone_inner())
     }
 
+    fn metrics_for_partition(&self, partition: usize) -> Option<MetricsSet> {
+        Some(self.metrics.clone_partition(partition))
+    }
+
     fn statistics_from_inputs(
         &self,
         _input_stats: &[Arc<Statistics>],
