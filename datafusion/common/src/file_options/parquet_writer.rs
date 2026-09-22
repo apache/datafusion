@@ -633,8 +633,8 @@ mod tests {
                 schema_force_view_types: global_options_defaults.schema_force_view_types,
                 binary_as_string: global_options_defaults.binary_as_string,
                 skip_arrow_metadata: global_options_defaults.skip_arrow_metadata,
-                write_row_group_number_distinct_values: global_options_defaults
-                    .write_row_group_number_distinct_values,
+                write_row_group_number_distinct_values: props
+                    .write_row_group_number_distinct_values(),
                 coerce_int96: None,
                 coerce_int96_tz: None,
                 content_defined_chunking: props.content_defined_chunking().into(),
