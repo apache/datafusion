@@ -471,6 +471,34 @@ the Cargo Book</a>. Common examples include:</p>
 <li><p>Adding a new function to a <code class="docutils literal notranslate"><span class="pre">trait</span></code> with a default implementation</p></li>
 </ul>
 </section>
+<section id="datafusion-internal-public-apis">
+<h3>DataFusion-internal Public APIs<a class="headerlink" href="#datafusion-internal-public-apis" title="Link to this heading">#</a></h3>
+<p>Some internal implementation details require <code class="docutils literal notranslate"><span class="pre">pub</span></code> visibility because they are
+shared across DataFusion crates. These APIs are not intended as downstream
+extension points. They are hidden from generated documentation and are not part
+of DataFusion’s supported public API, so they may be changed or removed without
+notice or a deprecation period. Examples include:</p>
+<ol class="arabic simple">
+<li><p>Test helpers.</p></li>
+<li><p>Operator APIs required by the optimizer to inspect or rewrite execution plans
+across crate boundaries.</p></li>
+</ol>
+<p>For APIs intended only for internal use, add <code class="docutils literal notranslate"><span class="pre">#[doc(hidden)]</span></code> and a doc comment
+section headed <code class="docutils literal notranslate"><span class="pre">#</span> <span class="pre">Public</span> <span class="pre">Only</span> <span class="pre">for</span> <span class="pre">Internal</span> <span class="pre">Use:</span></code>. Name the crate or component
+that requires access and explain why the API is not intended for downstream use.
+For example:</p>
+<div class="highlight-txt notranslate"><div class="highlight"><pre><span></span>impl HashTableLookupExpr {
+    /// ...
+    ///
+    /// # Public Only for Internal Use:
+    /// `datafusion-proto` tests require this constructor, but it is not part of
+    /// the supported public API.
+    #[doc(hidden)]
+    pub fn new(...) {...}
+}
+</pre></div>
+</div>
+</section>
 <section id="what-is-the-public-sql-api-and-what-is-a-breaking-sql-change">
 <h3>What is the public SQL API and what is a breaking SQL change?<a class="headerlink" href="#what-is-the-public-sql-api-and-what-is-a-breaking-sql-change" title="Link to this heading">#</a></h3>
 <p>DataFusion is also used as a SQL engine, so changes to SQL semantics (the
@@ -591,6 +619,7 @@ version will be <code class="docutils literal notranslate"><span class="pre">44.
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#breaking-api-changes">Breaking API Changes</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#what-is-the-public-rust-api-and-what-is-a-breaking-api-change">What is the public Rust API and what is a breaking API change?</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-internal-public-apis">DataFusion-internal Public APIs</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#what-is-the-public-sql-api-and-what-is-a-breaking-sql-change">What is the public SQL API and what is a breaking SQL change?</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#when-to-make-breaking-api-changes">When to make breaking API changes?</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#what-to-do-when-making-breaking-api-changes">What to do when making breaking API changes?</a></li>
