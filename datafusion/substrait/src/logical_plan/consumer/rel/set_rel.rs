@@ -16,11 +16,12 @@
 // under the License.
 
 use crate::logical_plan::consumer::SubstraitConsumer;
-use datafusion::common::metadata::FieldMetadata;
+use datafusion::arrow::datatypes::Field;
 use datafusion::common::{JoinType, NullEquality, not_impl_err, substrait_err};
 use datafusion::logical_expr::{
-    Expr, LogicalPlan, LogicalPlanBuilder, requalify_sides_if_needed,
+    Cast, Expr, LogicalPlan, LogicalPlanBuilder, requalify_sides_if_needed,
 };
+use std::sync::Arc;
 use substrait::proto::set_rel::SetOp;
 use substrait::proto::{Rel, SetRel};
 
@@ -112,13 +113,15 @@ async fn intersect_rels(
 /// semi join does.
 ///
 /// Differing metadata does not change which path is taken, as it is no part of
-/// nullability. The result should describe the left input, as
-/// [`LogicalPlanBuilder::intersect`] does, so on conflicting keys the left's
-/// metadata wins: a column read from the right is aliased with the left field's
-/// metadata, and an inner join's schema already lets the left input's schema
-/// metadata win, in the logical and in the physical plan alike. Keys only the
-/// right input carries are merged in, and the physical plan and the batches
-/// carry the same metadata as the logical plan.
+/// nullability. The result should describe the left input, exactly as
+/// [`LogicalPlanBuilder::intersect`] does: a column read from the right is cast
+/// to an explicit target field carrying the left field's metadata, and an
+/// explicit-field cast target replaces the source's metadata outright rather
+/// than merging into it, so a key only the right input carries is dropped
+/// rather than surviving into the result. A column read from the left is
+/// already exactly the left input's own field, in the logical and in the
+/// physical plan alike, so it needs no such treatment. The physical plan and
+/// the batches carry the same metadata as the logical plan.
 ///
 /// [Set Operation rules]: https://substrait.io/relations/logical_relations/#set-operation
 fn intersect_rel(
@@ -130,7 +133,7 @@ fn intersect_rel(
     let right_fields = right.schema().fields();
     // A field is read from the right side when the left leaves it nullable and
     // the right requires it. Its metadata does not matter here: it is read from
-    // the right with the left field's metadata layered over it.
+    // the right with the left field's metadata substituted for its own.
     let from_right: Vec<bool> = left_fields
         .iter()
         .zip(right_fields.iter())
@@ -164,11 +167,26 @@ fn intersect_rel(
         .zip(&from_right)
         .map(|(((field, left), right), from_right)| {
             if *from_right {
-                Expr::Column(right.clone()).alias_qualified_with_metadata(
-                    left.relation.clone(),
-                    &left.name,
-                    Some(FieldMetadata::from(field.metadata().clone())),
-                )
+                // `alias_qualified_with_metadata` would not do: `Expr::Alias`'s
+                // field derivation extends the aliased expression's own
+                // metadata with the alias's, so a key only the right column
+                // carries would survive alongside the left field's metadata.
+                // An explicit-field `Cast` target's metadata is instead used
+                // exactly as given, in both the logical and the physical
+                // plan, so casting to the left field's type (already proven
+                // equal to the right's) and metadata drops the right's own
+                // metadata outright. The qualifier and name still need
+                // `alias_qualified` on top, since a `Cast`'s own field is not
+                // renamed to its target field's name.
+                let target_field = Arc::new(
+                    Field::new(&left.name, field.data_type().clone(), false)
+                        .with_metadata(field.metadata().clone()),
+                );
+                Expr::Cast(Cast::new_from_field(
+                    Box::new(Expr::Column(right.clone())),
+                    target_field,
+                ))
+                .alias_qualified(left.relation.clone(), &left.name)
             } else {
                 Expr::Column(left.clone())
             }

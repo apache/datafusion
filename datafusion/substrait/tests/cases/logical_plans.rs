@@ -393,16 +393,24 @@ mod tests {
 
             if tagged {
                 // Where the inputs disagree, the primary table's metadata wins,
-                // also on the columns read from a secondary input
+                // also on the columns read from a secondary input. Comparing
+                // the complete map, not just the "column" key, catches a
+                // secondary-only key ("only_in_secondary") leaking through:
+                // the primary table never carries that key, so its presence
+                // would fail this exact-equality check.
                 assert_eq!(
                     plan.schema().metadata().get("table").map(String::as_str),
                     Some("data"),
                     "schema metadata of {file}"
                 );
                 for field in plan.schema().fields() {
+                    let expected_metadata = HashMap::from([(
+                        "column".to_string(),
+                        format!("data.{}", field.name()),
+                    )]);
                     assert_eq!(
-                        field.metadata().get("column"),
-                        Some(&format!("data.{}", field.name())),
+                        field.metadata(),
+                        &expected_metadata,
                         "metadata of column {} of {file}",
                         field.name()
                     );
