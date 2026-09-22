@@ -48,6 +48,52 @@ SELECT 0.0 IS DISTINCT FROM -0.0 AS is_distinct;
 false
 
 #####
+## IN / NOT IN predicates
+#####
+
+statement ok
+CREATE TABLE negative_zero_in_list AS
+SELECT arrow_cast(-0.0, 'Float16') AS negative_f16,
+       arrow_cast(0.0, 'Float32') AS positive_f32,
+       0.0 AS positive_f64,
+       -0.0 AS negative_f64,
+       arrow_cast(-0.0, 'Dictionary(Int32, Float64)') AS negative_dict_f64;
+
+# Three-item lists become comparisons; four-item lists remain InList.
+# Check IN and NOT IN across float widths and both zero signs.
+query BBBBB
+SELECT
+  positive_f64 IN (-0.0, 1, 2),
+  negative_f16 IN (arrow_cast(0.0, 'Float16'), 1, 2, 3),
+  positive_f32 IN (arrow_cast(-0.0, 'Float32'), 1, 2, 3),
+  positive_f64 IN (-0.0, 1, 2, 3),
+  positive_f64 NOT IN (-0.0, 1, 2, 3)
+FROM negative_zero_in_list;
+----
+true true true true false
+
+# Dictionary encoding must preserve equality on both sides of the rewrite threshold.
+query BB
+SELECT
+  negative_dict_f64 IN (0.0),
+  negative_dict_f64 IN (0.0, 1, 2, 3)
+FROM negative_zero_in_list;
+----
+true true
+
+# A column-valued list item forces non-static evaluation. Check both directions.
+query BB
+SELECT
+  positive_f64 IN (negative_f64, 1, 2, 3),
+  negative_f64 IN (positive_f64, 1, 2, 3)
+FROM negative_zero_in_list;
+----
+true true
+
+statement ok
+DROP TABLE negative_zero_in_list;
+
+#####
 ## SELECT DISTINCT with +0.0 / -0.0 (Float64)
 #####
 
