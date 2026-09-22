@@ -367,7 +367,9 @@ SELECT * FROM (
 1 10
 
 # Spill: the body does not fit in the memory limit, so it is written to disk
-# and replayed from there by every reference.
+# and replayed from there by every reference. Part of the in-memory prefix is
+# also moved to disk, so that the two references have memory to decode the
+# spill files (spill_count=2).
 statement ok
 SET datafusion.execution.target_partitions = 1
 
@@ -385,7 +387,7 @@ EXPLAIN ANALYZE WITH g AS MATERIALIZED (SELECT value AS x FROM generate_series(1
 SELECT count(*) FROM (SELECT x FROM g UNION ALL SELECT x FROM g)
 ----
 Plan with Metrics
-01)MaterializedCteExec: name=g, metrics=[spill_count=1, <slt:ignore>buffered_rows=200.0 K]
+01)MaterializedCteExec: name=g, metrics=[spill_count=2, <slt:ignore>buffered_rows=200.0 K]
 02)--ProjectionExec: expr=[value@0 as x], metrics=[output_rows=200.0 K, <slt:ignore>]
 03)----LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=200000, batch_size=8192], metrics=[output_rows=200.0 K, <slt:ignore>]
 04)--ProjectionExec: expr=[count(Int64(1))@0 as count(*)], metrics=[<slt:ignore>]
@@ -408,6 +410,25 @@ RESET datafusion.catalog.create_default_catalog_and_schema
 # Restore the slt runner default.
 statement ok
 SET datafusion.execution.target_partitions = 4
+
+# An unbounded body is rejected: it is fully buffered before any row is
+# returned, so the query would never produce output.
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE unbounded_t(c1 integer NOT NULL)
+STORED AS CSV
+LOCATION '../core/tests/data/empty.csv'
+OPTIONS ('format.has_header' 'true');
+
+query error DataFusion error: Error during planning: MATERIALIZED CTE u reads an unbounded source, which cannot be materialized
+WITH u AS MATERIALIZED (SELECT c1 FROM unbounded_t)
+SELECT count(*) FROM u
+
+# Without MATERIALIZED the CTE is inlined as before.
+statement ok
+EXPLAIN WITH u AS (SELECT c1 FROM unbounded_t) SELECT c1 FROM u
+
+statement ok
+DROP TABLE unbounded_t;
 
 statement ok
 DROP TABLE t;

@@ -73,10 +73,17 @@ pub struct MaterializedCte {
     pub continuation: LogicalPlan,
 }
 
+/// Orders by `id` and `name`. Nodes with the same `id` and `name` but a
+/// different `cte` or `continuation` are not comparable, so `Some(Equal)` is
+/// returned only for equal nodes.
 impl PartialOrd for MaterializedCte {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.id.cmp(&other.id) {
-            Ordering::Equal => self.name.partial_cmp(&other.name),
+        match self
+            .id
+            .cmp(&other.id)
+            .then_with(|| self.name.cmp(&other.name))
+        {
+            Ordering::Equal if self != other => None,
             ord => Some(ord),
         }
     }
@@ -140,10 +147,16 @@ pub struct MaterializedCteScan {
     pub schema: DFSchemaRef,
 }
 
+/// Orders by `id` and `name`. Scans with the same `id` and `name` but a
+/// different `schema` are not comparable.
 impl PartialOrd for MaterializedCteScan {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.id.cmp(&other.id) {
-            Ordering::Equal => self.name.partial_cmp(&other.name),
+        match self
+            .id
+            .cmp(&other.id)
+            .then_with(|| self.name.cmp(&other.name))
+        {
+            Ordering::Equal if self != other => None,
             ord => Some(ord),
         }
     }
@@ -182,5 +195,42 @@ impl UserDefinedLogicalNodeCore for MaterializedCteScan {
             "MaterializedCteScan takes no inputs"
         );
         Ok(self.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::EmptyRelation;
+    use std::sync::Arc;
+
+    fn empty(produce_one_row: bool) -> LogicalPlan {
+        LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row,
+            schema: Arc::new(datafusion_common::DFSchema::empty()),
+        })
+    }
+
+    #[test]
+    fn partial_cmp_is_equal_only_for_equal_nodes() {
+        let id = MaterializedCteId::next();
+        let a = MaterializedCte {
+            id,
+            name: "c".to_string(),
+            cte: empty(false),
+            continuation: empty(false),
+        };
+        let mut b = a.clone();
+        assert_eq!(a.partial_cmp(&b), Some(Ordering::Equal));
+
+        b.continuation = empty(true);
+        assert_ne!(a, b);
+        assert_eq!(a.partial_cmp(&b), None);
+
+        let c = MaterializedCte {
+            id: MaterializedCteId::next(),
+            ..a.clone()
+        };
+        assert_eq!(a.partial_cmp(&c), Some(Ordering::Less));
     }
 }
