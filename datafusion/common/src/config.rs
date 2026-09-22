@@ -23,7 +23,7 @@ use arrow_ipc::CompressionType;
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::{_config_datafusion_err, _config_err};
 use crate::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
-use crate::parquet_config::{DFParquetStatistics, DFParquetWriterVersion};
+use crate::parquet_config::{DFParquetStatistics, DFParquetWriterVersion, DFTimeUnit};
 use crate::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
@@ -1367,13 +1367,13 @@ config_namespace! {
         /// reading them as binary and then casting to string.
         pub binary_as_string: bool, default = false
 
-        /// (reading) If true, parquet reader will read columns of
-        /// physical type int96 as originating from a different resolution
-        /// than nanosecond. This is useful for reading data from systems like Spark
-        /// which stores microsecond resolution timestamps in an int96 allowing it
-        /// to write values with a larger date range than 64-bit timestamps with
-        /// nanosecond resolution.
-        pub coerce_int96: Option<String>, transform = str::to_lowercase, default = None
+        /// (reading) If set, parquet reader will read columns of
+        /// physical type int96 as originating from this resolution instead of
+        /// nanosecond. Valid values are: ns, us, ms, and s. This is useful for
+        /// reading data from systems like Spark which store microsecond
+        /// resolution timestamps in an int96, allowing them to write values with
+        /// a larger date range than 64-bit timestamps with nanosecond resolution.
+        pub coerce_int96: Option<DFTimeUnit>, default = None
 
         /// (reading) Optional timezone applied to INT96 columns when `coerce_int96`
         /// is set. When `Some`, INT96 columns coerce to
@@ -4682,6 +4682,70 @@ mod tests {
         let mut scalar = DFParquetStatistics::Page;
         assert!(ConfigField::set(&mut scalar, "typo", "none").is_err());
         assert_eq!(scalar, DFParquetStatistics::Page);
+    }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn test_parquet_coerce_int96_validation() {
+        use crate::{config::ConfigOptions, parquet_config::DFTimeUnit};
+
+        let mut config = ConfigOptions::default();
+        assert_eq!(config.execution.parquet.coerce_int96, None);
+
+        for (value, expected) in [
+            ("ns", DFTimeUnit::Nanosecond),
+            ("US", DFTimeUnit::Microsecond),
+            ("ms", DFTimeUnit::Millisecond),
+            ("s", DFTimeUnit::Second),
+        ] {
+            config
+                .set("datafusion.execution.parquet.coerce_int96", value)
+                .unwrap();
+            assert_eq!(config.execution.parquet.coerce_int96, Some(expected));
+        }
+
+        let err = config
+            .set("datafusion.execution.parquet.coerce_int96", "nanos")
+            .unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "Invalid parquet coerce_int96 setting: nanos. Expected one of: ns, us, ms, s"
+        );
+        // A rejected value leaves the previous one in place.
+        assert_eq!(
+            config.execution.parquet.coerce_int96,
+            Some(DFTimeUnit::Second)
+        );
+
+        // An invalid update must leave an unset option unset rather than
+        // inserting a default.
+        config.execution.parquet.coerce_int96 = None;
+        assert!(
+            config
+                .set("datafusion.execution.parquet.coerce_int96", "nanos")
+                .is_err()
+        );
+        assert_eq!(config.execution.parquet.coerce_int96, None);
+
+        config.execution.parquet.coerce_int96 = Some(DFTimeUnit::Microsecond);
+        assert!(
+            config
+                .set("datafusion.execution.parquet.coerce_int96.typo", "ns")
+                .is_err()
+        );
+        assert!(
+            config
+                .reset("datafusion.execution.parquet.coerce_int96.typo")
+                .is_err()
+        );
+        assert_eq!(
+            config.execution.parquet.coerce_int96,
+            Some(DFTimeUnit::Microsecond)
+        );
+
+        let mut scalar = DFTimeUnit::Microsecond;
+        assert!(ConfigField::set(&mut scalar, "typo", "ns").is_err());
+        assert_eq!(scalar, DFTimeUnit::Microsecond);
     }
 
     #[cfg(feature = "parquet")]

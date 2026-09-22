@@ -922,7 +922,8 @@ mod tests {
         table_options.json.schema_infer_max_rec = Some(10);
         #[cfg(feature = "parquet")]
         {
-            table_options.parquet.global.coerce_int96 = Some("123456789".into());
+            table_options.parquet.global.coerce_int96 =
+                Some(datafusion_common::parquet_config::DFTimeUnit::Microsecond);
         }
         table_options.current_format = Some(ConfigFileType::JSON);
 

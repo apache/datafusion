@@ -536,24 +536,6 @@ impl ParquetSource {
     }
 }
 
-/// Parses datafusion.common.config.ParquetOptions.coerce_int96 String to a arrow_schema.datatype.TimeUnit
-pub(crate) fn parse_coerce_int96_string(
-    str_setting: &str,
-) -> datafusion_common::Result<TimeUnit> {
-    let str_setting_lower: &str = &str_setting.to_lowercase();
-
-    match str_setting_lower {
-        "ns" => Ok(TimeUnit::Nanosecond),
-        "us" => Ok(TimeUnit::Microsecond),
-        "ms" => Ok(TimeUnit::Millisecond),
-        "s" => Ok(TimeUnit::Second),
-        _ => Err(DataFusionError::Configuration(format!(
-            "Unknown or unsupported parquet coerce_int96: \
-        {str_setting}. Valid values are: ns, us, ms, and s."
-        ))),
-    }
-}
-
 /// Validates that `tz` is a parseable IANA timezone and returns it as an
 /// `Arc<str>` for use in `Timestamp(_, Some(tz))` types.
 pub(crate) fn parse_coerce_int96_tz_string(
@@ -616,8 +598,7 @@ impl FileSource for ParquetSource {
             .table_parquet_options
             .global
             .coerce_int96
-            .as_ref()
-            .map(|time_unit| parse_coerce_int96_string(time_unit.as_str()).unwrap());
+            .map(TimeUnit::from);
         let coerce_int96_tz = self
             .table_parquet_options
             .global

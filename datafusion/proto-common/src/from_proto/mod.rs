@@ -1271,9 +1271,9 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             )?,
             schema_force_view_types: value.schema_force_view_types,
             binary_as_string: value.binary_as_string,
-            coerce_int96: value.coerce_int96_opt.clone().map(|opt| match opt {
-                protobuf::parquet_options::CoerceInt96Opt::CoerceInt96(v) => Some(v),
-            }).unwrap_or(None),
+            coerce_int96: value.coerce_int96_opt.as_ref().map(|opt| match opt {
+                protobuf::parquet_options::CoerceInt96Opt::CoerceInt96(v) => v.parse(),
+            }).transpose()?,
             coerce_int96_tz: value.coerce_int96_tz_opt.clone().map(|opt| match opt {
                 protobuf::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(v) => Some(v),
             }).unwrap_or(None),
@@ -1438,7 +1438,7 @@ mod tests {
     use datafusion_common::config::{
         MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions, TableParquetOptions,
     };
-    use datafusion_common::parquet_config::DFParquetStatistics;
+    use datafusion_common::parquet_config::{DFParquetStatistics, DFTimeUnit};
 
     #[test]
     fn constraint_requires_mode() {
@@ -1539,12 +1539,12 @@ mod tests {
     #[test]
     fn test_parquet_options_coerce_int96_tz_set_round_trip() {
         let opts = ParquetOptions {
-            coerce_int96: Some("us".to_string()),
+            coerce_int96: Some(DFTimeUnit::Microsecond),
             coerce_int96_tz: Some("UTC".to_string()),
             ..ParquetOptions::default()
         };
         let recovered = parquet_options_proto_round_trip(opts.clone());
-        assert_eq!(recovered.coerce_int96, Some("us".to_string()));
+        assert_eq!(recovered.coerce_int96, Some(DFTimeUnit::Microsecond));
         assert_eq!(recovered.coerce_int96_tz, Some("UTC".to_string()));
     }
 
@@ -1558,6 +1558,26 @@ mod tests {
         assert_eq!(
             recovered.statistics_enabled,
             Some(DFParquetStatistics::Chunk)
+        );
+    }
+
+    #[test]
+    fn test_invalid_parquet_coerce_int96_rejected_from_proto() {
+        let opts = ParquetOptions::default();
+        let mut proto: crate::protobuf_common::ParquetOptions =
+            (&opts).try_into().expect("to_proto");
+        proto.coerce_int96_opt = Some(
+            crate::protobuf_common::parquet_options::CoerceInt96Opt::CoerceInt96(
+                "nanos".to_string(),
+            ),
+        );
+
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "Invalid parquet coerce_int96 setting: nanos. Expected one of: ns, us, ms, s"
+            ),
+            "unexpected error: {err}"
         );
     }
 
@@ -1599,10 +1619,10 @@ mod tests {
     #[test]
     fn test_table_parquet_options_coerce_int96_tz_round_trip() {
         let mut opts = TableParquetOptions::default();
-        opts.global.coerce_int96 = Some("us".to_string());
+        opts.global.coerce_int96 = Some(DFTimeUnit::Microsecond);
         opts.global.coerce_int96_tz = Some("America/Los_Angeles".to_string());
         let recovered = table_parquet_options_proto_round_trip(opts.clone());
-        assert_eq!(recovered.global.coerce_int96, Some("us".to_string()));
+        assert_eq!(recovered.global.coerce_int96, Some(DFTimeUnit::Microsecond));
         assert_eq!(
             recovered.global.coerce_int96_tz,
             Some("America/Los_Angeles".to_string())

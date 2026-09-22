@@ -751,6 +751,32 @@ Invalid or Unsupported Configuration: Invalid parquet statistics setting: invali
 statement ok
 RESET datafusion.execution.parquet.statistics_enabled
 
+# parquet.coerce_int96 is validated when it is set
+statement ok
+SET datafusion.execution.parquet.coerce_int96 = 'US'
+
+query TT
+SHOW datafusion.execution.parquet.coerce_int96
+----
+datafusion.execution.parquet.coerce_int96 us
+
+statement error
+SET datafusion.execution.parquet.coerce_int96 = 'nanos'
+----
+DataFusion error: Error setting config datafusion.execution.parquet.coerce_int96
+caused by
+Invalid or Unsupported Configuration: Invalid parquet coerce_int96 setting: nanos. Expected one of: ns, us, ms, s
+
+
+# The rejected value did not change the setting
+query TT
+SHOW datafusion.execution.parquet.coerce_int96
+----
+datafusion.execution.parquet.coerce_int96 us
+
+statement ok
+RESET datafusion.execution.parquet.coerce_int96
+
 statement error DataFusion error: Error setting config datafusion\.execution\.batch_size\ncaused by\nInvalid or Unsupported Configuration: value must be greater than 0
 SET datafusion.execution.batch_size = 0
 
