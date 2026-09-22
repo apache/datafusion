@@ -1250,6 +1250,10 @@ struct OrderedArrayAggEntry {
 /// per-array memory overhead while limiting repeated concatenation costs.
 const ORDERED_ARRAY_AGG_COALESCE_ROWS: usize = 64;
 
+/// Skip coalescing once the tail batch is large enough that the fixed
+/// per-array overhead is negligible relative to the payload.
+const ORDERED_ARRAY_AGG_COALESCE_BYTES: usize = 4096;
+
 #[derive(Debug)]
 pub(crate) struct OrderSensitiveArrayAggAccumulator {
     /// Arrow payload arrays. Entries refer to rows in these batches.
@@ -1537,7 +1541,10 @@ impl OrderSensitiveArrayAggAccumulator {
         let start = self.entries.len();
         let (batch_idx, row_offset) = match self.batches.last() {
             Some(last_batch)
-                if last_batch.len() + row_count <= ORDERED_ARRAY_AGG_COALESCE_ROWS =>
+                if last_batch.len() + row_count <= ORDERED_ARRAY_AGG_COALESCE_ROWS
+                    && last_batch.get_buffer_memory_size()
+                        + values.get_buffer_memory_size()
+                        <= ORDERED_ARRAY_AGG_COALESCE_BYTES =>
             {
                 let merged =
                     arrow::compute::concat(&[last_batch.as_ref(), values.as_ref()])?;

@@ -18,13 +18,12 @@
 use std::hint::black_box;
 use std::sync::Arc;
 
-use arrow::array::Int64Array;
 use arrow::array::{
-    Array, ArrayRef, ArrowPrimitiveType, AsArray, ListArray, NullBufferBuilder,
-    StringArray,
+    Array, ArrayRef, ArrowPrimitiveType, AsArray, Int64Array, ListArray,
+    NullBufferBuilder, StringArray,
 };
 use arrow::datatypes::{DataType, Field, FieldRef, Int64Type, Schema};
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{Accumulator, AggregateUDFImpl};
 use datafusion_functions_aggregate::array_agg::{
@@ -294,8 +293,7 @@ fn distinct_array_agg_benchmark(c: &mut Criterion) {
 }
 
 /// Precomputes the schema, physical expressions, sort expression, and aggregate
-/// metadata so each benchmark iteration measures only accumulator creation,
-/// `update_batch()`, and `evaluate()`.
+/// metadata so each benchmark iteration can focus on accumulator operations.
 struct OrderedArrayAggBenchFixture {
     schema: Schema,
     value_expr: Arc<dyn PhysicalExpr>,
@@ -306,9 +304,9 @@ struct OrderedArrayAggBenchFixture {
 }
 
 impl OrderedArrayAggBenchFixture {
-    fn new(input_preordered: bool) -> Self {
+    fn new(value_type: &DataType, input_preordered: bool) -> Self {
         let schema = Schema::new(vec![
-            Field::new("value", DataType::Int64, false),
+            Field::new("value", value_type.clone(), false),
             Field::new("ordering", DataType::Int64, false),
         ]);
 
@@ -332,7 +330,7 @@ impl OrderedArrayAggBenchFixture {
 
         let return_field = Field::new(
             "array_agg",
-            DataType::List(Field::new_list_field(DataType::Int64, true).into()),
+            DataType::List(Field::new_list_field(value_type.clone(), true).into()),
             true,
         )
         .into();
@@ -398,11 +396,12 @@ fn create_ordered_array_agg_batches(
 fn ordered_array_agg_bench(
     c: &mut Criterion,
     name: &str,
+    value_type: &DataType,
     batches: &[[ArrayRef; 2]],
     input_preordered: bool,
 ) {
     c.bench_function(name, |b| {
-        let fixture = OrderedArrayAggBenchFixture::new(input_preordered);
+        let fixture = OrderedArrayAggBenchFixture::new(value_type, input_preordered);
         b.iter(|| {
             let mut accumulator = fixture.create_accumulator();
 
@@ -428,6 +427,7 @@ fn ordered_array_agg_benchmark(c: &mut Criterion) {
                 "ordered_array_agg i64 ordered input, \
                    {rows_per_batch} rows per update_batch"
             ),
+            &DataType::Int64,
             &ordered_batches,
             true,
         );
@@ -438,15 +438,83 @@ fn ordered_array_agg_benchmark(c: &mut Criterion) {
                 "ordered_array_agg i64 random input, \
                    {rows_per_batch} rows per update_batch"
             ),
+            &DataType::Int64,
             &shuffled_batches,
             false,
         );
     }
 }
+
+/// Creates preordered batches with a 4 KiB Utf8 payload per row.
+fn create_wide_utf8_batches(rows_per_batch: usize) -> Vec<[ArrayRef; 2]> {
+    assert!(
+        rows_per_batch > 0,
+        "rows_per_batch must be greater than zero"
+    );
+
+    let values = vec!["x".repeat(4 * 1_024); ORDERED_ARRAY_AGG_ROWS];
+
+    values
+        .chunks(rows_per_batch)
+        .enumerate()
+        .map(|(idx, batch_values)| {
+            let payload =
+                Arc::new(StringArray::from_iter_values(batch_values.iter())) as ArrayRef;
+            let start = idx * rows_per_batch;
+            let ordering_values = Arc::new(Int64Array::from(
+                (start..start + batch_values.len())
+                    .map(|row| i64::try_from(row).unwrap())
+                    .collect::<Vec<_>>(),
+            )) as ArrayRef;
+
+            [payload, ordering_values]
+        })
+        .collect()
+}
+
+fn ordered_array_agg_update_only_bench(
+    c: &mut Criterion,
+    name: &str,
+    value_type: &DataType,
+    batches: &[[ArrayRef; 2]],
+    input_preordered: bool,
+) {
+    let fixture = OrderedArrayAggBenchFixture::new(value_type, input_preordered);
+
+    c.bench_function(name, |b| {
+        b.iter_batched(
+            || fixture.create_accumulator(),
+            |mut accumulator| {
+                for batch in batches {
+                    accumulator
+                        .update_batch(batch)
+                        .expect("update_batch should succeed");
+                }
+
+                // Return the accumulator so Criterion drops it after timing the updates.
+                accumulator
+            },
+            BatchSize::PerIteration,
+        );
+    });
+}
+
+fn ordered_array_agg_wide_utf8_benchmark(c: &mut Criterion) {
+    let ordered_batches = create_wide_utf8_batches(1);
+    ordered_array_agg_update_only_bench(
+        c,
+        "ordered_array_agg utf8 4 KiB, 1 row per update_batch",
+        &DataType::Utf8,
+        &ordered_batches,
+        true,
+    );
+}
+
 criterion_group!(
     benches,
     array_agg_benchmark,
     distinct_array_agg_benchmark,
-    ordered_array_agg_benchmark
+    ordered_array_agg_benchmark,
+    ordered_array_agg_wide_utf8_benchmark
 );
 criterion_main!(benches);
