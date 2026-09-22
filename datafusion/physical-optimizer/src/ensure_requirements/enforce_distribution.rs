@@ -444,10 +444,10 @@ fn shift_right_required(
 ///         bottom left join on(b, a, c)
 ///         bottom right join on(c, b, a)
 ///
-/// Compared to the Top-Down reordering process, this Bottom-Up approach is much simpler, but might not reach a best result.
-/// The Bottom-Up approach will be useful in future if we plan to support storage partition-wised Joins.
-/// In that case, the datasources/tables might be pre-partitioned and we can't adjust the key ordering of the datasources
-/// and then can't apply the Top-Down reordering process.
+/// This bottom-up pass aligns join keys with existing hash partitioning.
+/// Range alignment happens in [`ensure_distribution_with_stats`], independently
+/// of the configured join-key reordering strategy, using the children's
+/// partitioning after bottom-up enforcement.
 pub fn reorder_join_keys_to_inputs(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -552,6 +552,123 @@ fn reorder_current_join_keys(
         }
         _ => (join_keys, None),
     }
+}
+
+/// Finds the permutation that aligns this input's join keys with its range keys.
+fn range_join_key_positions(
+    input: &dyn ExecutionPlan,
+    join_keys: &[PhysicalExprRef],
+) -> Option<Vec<usize>> {
+    let Partitioning::Range(range) = input.output_partitioning() else {
+        return None;
+    };
+
+    if join_keys.len() != range.ordering().len() {
+        return None;
+    }
+
+    let expected = range
+        .ordering()
+        .iter()
+        .map(|sort_expr| Arc::clone(&sort_expr.expr))
+        .collect::<Vec<_>>();
+
+    expected_expr_positions(join_keys, &expected).or_else(|| {
+        let eq_group = input.equivalence_properties().eq_group();
+        if eq_group.is_empty() {
+            return None;
+        }
+
+        let normalized_keys = join_keys
+            .iter()
+            .map(|expr| eq_group.normalize_expr(Arc::clone(expr)))
+            .collect::<Vec<_>>();
+        let normalized_expected = expected
+            .iter()
+            .map(|expr| eq_group.normalize_expr(Arc::clone(expr)))
+            .collect::<Vec<_>>();
+
+        expected_expr_positions(&normalized_keys, &normalized_expected)
+    })
+}
+
+/// Returns the non-identity permutation that aligns `on` with a
+/// range-partitioned input, trying the left input first and then the right.
+fn range_aligned_join_key_positions(
+    left: &Arc<dyn ExecutionPlan>,
+    right: &Arc<dyn ExecutionPlan>,
+    on: &[(PhysicalExprRef, PhysicalExprRef)],
+) -> Option<Vec<usize>> {
+    if !matches!(left.output_partitioning(), Partitioning::Range(_))
+        && !matches!(right.output_partitioning(), Partitioning::Range(_))
+    {
+        return None;
+    }
+
+    let keys = extract_join_keys(on);
+    let positions = range_join_key_positions(left.as_ref(), &keys.left_keys)
+        .or_else(|| range_join_key_positions(right.as_ref(), &keys.right_keys))?;
+
+    if positions.iter().copied().eq(0..positions.len()) {
+        return None;
+    }
+
+    Some(positions)
+}
+
+/// Aligns a partitioned join's equi-key pairs with an existing input range
+/// ordering, so compatible Range inputs satisfy the join's co-partitioning
+/// requirement without a repartition. Covers partitioned hash joins and
+/// sort-merge joins. The permutation moves whole key pairs and, for
+/// sort-merge joins, the matching `sort_options`.
+fn reorder_join_keys_to_range_inputs(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
+        if join.mode != PartitionMode::Partitioned {
+            return Ok(plan);
+        }
+        let Some(positions) =
+            range_aligned_join_key_positions(&join.left, &join.right, &join.on)
+        else {
+            return Ok(plan);
+        };
+        let new_on = positions
+            .into_iter()
+            .map(|index| join.on[index].clone())
+            .collect();
+        return join.builder().with_on(new_on).build_exec();
+    }
+
+    if let Some(join) = plan.downcast_ref::<SortMergeJoinExec>() {
+        let Some(positions) =
+            range_aligned_join_key_positions(&join.left, &join.right, &join.on)
+        else {
+            return Ok(plan);
+        };
+        let new_on = positions
+            .iter()
+            .map(|&index| join.on[index].clone())
+            .collect();
+        let new_sort_options = positions
+            .iter()
+            .map(|&index| join.sort_options[index])
+            .collect();
+        // `try_new` resets `projection`; restore it so the output schema is unchanged.
+        let reordered = SortMergeJoinExec::try_new(
+            Arc::clone(&join.left),
+            Arc::clone(&join.right),
+            new_on,
+            join.filter.clone(),
+            join.join_type,
+            new_sort_options,
+            join.null_equality,
+        )?
+        .with_projection(join.projection.clone())?;
+        return Ok(Arc::new(reordered) as _);
+    }
+
+    Ok(plan)
 }
 
 fn try_reorder(
@@ -1350,6 +1467,12 @@ pub fn ensure_distribution(
 /// can first repartition (or newly partition) at the datasources -- these
 /// source partitions may be later repartitioned with additional data exchange operators.
 ///
+/// Before reading distribution requirements, this function aligns partitioned
+/// hash-join and sort-merge-join keys with an existing input Range ordering.
+/// Reordering whole key pairs preserves the join condition while allowing
+/// compatible Range inputs to avoid repartitioning. Distribution satisfaction
+/// remains positional, so incompatible layouts still require repartitioning.
+///
 /// `stats_ctx` carries the memoization cache used to answer the child
 /// statistics queries behind the repartition decisions. Share one context
 /// across the whole traversal so each subtree is computed once rather than
@@ -1419,6 +1542,10 @@ pub fn ensure_distribution_with_stats(
     {
         plan = updated_window;
     }
+
+    // Align against the children's current range partitioning before deriving
+    // requirements that could otherwise introduce unnecessary repartitioning.
+    plan = reorder_join_keys_to_range_inputs(plan)?;
 
     // For joins in partitioned mode, we need exact hash matching between
     // both sides, so subset partitioning logic must be disabled.
