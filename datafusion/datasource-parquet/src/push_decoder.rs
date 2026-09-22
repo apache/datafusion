@@ -29,7 +29,7 @@
 //!   [`RowGroupPruner`] is consulted; row groups it proves unwinnable are
 //!   dropped from the head of `rg_plan` and the decoder is rebuilt via
 //!   [`ParquetPushDecoder::into_builder`] +
-//!   [`ParquetPushDecoderBuilder::with_row_groups`] so the skipped RGs are
+//!   [`ParquetPushDecoderBuilder::with_row_group_selections`] so the skipped RGs are
 //!   bypassed entirely — no decode, no row-filter eval.
 //!
 //! The opener constructs both halves and hands the state off to
@@ -50,7 +50,9 @@ use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ParquetRecordBatchReader, RowFilter, RowSelectionPolicy,
 };
 use parquet::arrow::async_reader::AsyncFileReader;
-use parquet::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
+use parquet::arrow::push_decoder::{
+    ParquetPushDecoder, ParquetPushDecoderBuilder, RowGroupSelection,
+};
 use parquet::file::metadata::ParquetMetaData;
 
 use datafusion_common::{DataFusionError, Result, internal_err};
@@ -60,7 +62,6 @@ use datafusion_physical_plan::metrics::{BaselineMetrics, Count, Gauge};
 use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
 
 use crate::ParquetFileMetrics;
-use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
 use crate::row_filter::{
@@ -83,14 +84,14 @@ pub(crate) struct DecoderBuilderConfig<'a> {
 }
 
 impl DecoderBuilderConfig<'_> {
-    /// Build a [`ParquetPushDecoderBuilder`] from a prepared access plan.
+    /// Build a [`ParquetPushDecoderBuilder`] from row-group-local selections.
     ///
     /// The caller is expected to attach the
     /// [`RowFilter`] and predicate
     /// cache size on the returned builder.
     pub(crate) fn build(
         &self,
-        prepared_access_plan: PreparedAccessPlan,
+        row_group_selections: Vec<RowGroupSelection>,
         metadata: ArrowReaderMetadata,
     ) -> ParquetPushDecoderBuilder {
         let mut builder = ParquetPushDecoderBuilder::new_with_metadata(metadata)
@@ -100,10 +101,7 @@ impl DecoderBuilderConfig<'_> {
         if self.force_filter_selections {
             builder = builder.with_row_selection_policy(RowSelectionPolicy::Selectors);
         }
-        if let Some(row_selection) = prepared_access_plan.row_selection {
-            builder = builder.with_row_selection(row_selection);
-        }
-        builder = builder.with_row_groups(prepared_access_plan.row_group_indexes);
+        builder = builder.with_row_group_selections(row_group_selections);
         if let Some(limit) = self.decoder_limit {
             builder = builder.with_limit(limit);
         }
@@ -113,7 +111,8 @@ impl DecoderBuilderConfig<'_> {
 
 #[derive(Debug, Clone)]
 pub(crate) struct RgPlanEntry {
-    pub(crate) rg_index: usize,
+    /// Keep the local selection attached to the row group during rebuilds.
+    pub(crate) selection: RowGroupSelection,
     /// `true` when static pruning proved every row of this RG satisfies the
     /// predicate, so the per-row `RowFilter` can be skipped as a no-op.
     pub(crate) fully_matched: bool,
@@ -301,7 +300,7 @@ pub(crate) struct PushDecoderStreamState {
     /// statistics and drop RGs the current threshold proves cannot
     /// contribute. The decoder is rebuilt via
     /// [`ParquetPushDecoder::into_builder`] +
-    /// [`ParquetPushDecoderBuilder::with_row_groups`] so the skipped RGs are
+    /// [`ParquetPushDecoderBuilder::with_row_group_selections`] so the skipped RGs are
     /// bypassed entirely. `None` when the scan has no watching dynamic
     /// predicate or only one row group remains.
     pub(crate) row_group_pruner: Option<RowGroupPruner>,
@@ -595,7 +594,7 @@ impl PushDecoderStreamState {
         byte_progress: &mut ByteProgress,
     ) -> Result<()> {
         while let Some(front) = rg_plan.front() {
-            if front.rg_index == target {
+            if front.selection.row_group_index() == target {
                 return Ok(());
             }
             // Popped here means arrow-rs finished this row group without
@@ -619,7 +618,7 @@ impl PushDecoderStreamState {
         let mut pruned_count = 0usize;
         let mut kept = VecDeque::with_capacity(self.rg_plan.len());
         while let Some(entry) = self.rg_plan.pop_front() {
-            if pruner.should_prune(&[entry.rg_index]) {
+            if pruner.should_prune(&[entry.selection.row_group_index()]) {
                 pruned_count += 1;
                 self.row_groups_pruned_dynamic.add(1);
                 // The scan is done with this row group's bytes.
@@ -661,9 +660,13 @@ impl PushDecoderStreamState {
         }
 
         let decoder = self.decoder.take().expect("decoder present");
-        let new_indices: Vec<usize> = self.rg_plan.iter().map(|e| e.rg_index).collect();
         let mut builder = decoder.into_builder().map_err(DataFusionError::from)?;
-        builder = builder.with_row_groups(new_indices);
+        // `into_builder` preserves the remaining selections. Only replace them
+        // when pruning changed the plan, avoiding selector copies on filter toggles.
+        if pruned_count > 0 {
+            let selections = self.rg_plan.iter().map(|e| e.selection.clone()).collect();
+            builder = builder.with_row_group_selections(selections);
+        }
         if filter_needs_toggle {
             let want_filter = desired_filter.expect("filter_needs_toggle ⇒ desired Some");
             if want_filter {
@@ -886,7 +889,7 @@ mod tests {
         indexes
             .into_iter()
             .map(|rg_index| RgPlanEntry {
-                rg_index,
+                selection: RowGroupSelection::new(rg_index, None),
                 fully_matched: false,
                 bytes: 100 * (rg_index as u64 + 1),
             })
@@ -903,7 +906,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            plan.iter().map(|e| e.rg_index).collect::<Vec<_>>(),
+            plan.iter()
+                .map(|e| e.selection.row_group_index())
+                .collect::<Vec<_>>(),
             vec![2, 3],
             "must pop the entries before `target` and stop at it",
         );
