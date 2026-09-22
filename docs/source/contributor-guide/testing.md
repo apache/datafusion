@@ -320,6 +320,26 @@ the README:
 [`dev/update_function_docs.sh`]: https://github.com/apache/datafusion/blob/main/dev/update_function_docs.sh
 [`ci/scripts/check_generated_docs.sh`]: https://github.com/apache/datafusion/blob/main/ci/scripts/check_generated_docs.sh
 
+## Documentation HTML Build
+
+[`ci/scripts/check_docs_html.sh`] builds the documentation website with
+[`docs/build.sh`], the same build the "Test doc build" job runs. Sphinx runs
+with `-W`, so a warning fails the build. `./dev/rust_lint.sh` runs it and needs
+`uv`, `cargo`, [cargo-depgraph], Graphviz `dot`, and `make`; see
+[docs/README.md] for the setup. To run the build on its own:
+
+```shell
+./ci/scripts/check_docs_html.sh
+```
+
+Each build rewrites `docs/build` and `docs/source/_static/data/deps.svg`, which
+Git ignores. Open `docs/build/html/index.html` to read the result.
+
+[`ci/scripts/check_docs_html.sh`]: https://github.com/apache/datafusion/blob/main/ci/scripts/check_docs_html.sh
+[`docs/build.sh`]: https://github.com/apache/datafusion/blob/main/docs/build.sh
+[cargo-depgraph]: https://github.com/jplatte/cargo-depgraph
+[docs/readme.md]: https://github.com/apache/datafusion/blob/main/docs/README.md
+
 ## Benchmarks
 
 ### Criterion Benchmarks
