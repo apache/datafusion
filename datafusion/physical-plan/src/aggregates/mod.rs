@@ -916,25 +916,28 @@ impl AggregateExec {
     /// # Consistency
     ///
     /// This is a safe, atomic optimization: it preserves the grouping keys and
-    /// leaves the aggregate in a consistent state. Inapplicable requests are
-    /// no-ops; the existing configuration is returned unchanged.
+    /// leaves the aggregate in a consistent state. Ineligible aggregates return
+    /// `None`. Eligible aggregates are returned unchanged when the limit is zero
+    /// or no tighter than the existing limit.
     pub fn try_optimize_distinct_soft_limit(
         mut self,
         limit: usize,
-    ) -> Result<Transformed<Self>> {
+    ) -> Option<Transformed<Self>> {
+        if !self.is_unordered_unfiltered_group_by_distinct() {
+            return None;
+        }
         if limit == 0
-            || !self.is_unordered_unfiltered_group_by_distinct()
             || self
                 .limit_options()
                 .is_some_and(|existing| existing.limit <= limit)
         {
-            return Ok(Transformed::no(self));
+            return Some(Transformed::no(self));
         }
         self.kind = AggregateKind::DistinctLimit {
             group_by: Arc::clone(self.group_by()),
             limit,
         };
-        Ok(Transformed::yes(self))
+        Some(Transformed::yes(self))
     }
 
     /// Function used in `OptimizeAggregateOrder` optimizer rule,

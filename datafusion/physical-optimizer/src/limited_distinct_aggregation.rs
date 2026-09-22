@@ -48,12 +48,7 @@ impl LimitedDistinctAggregation {
         aggr: &AggregateExec,
         limit: usize,
     ) -> Option<Transformed<Arc<dyn ExecutionPlan>>> {
-        // rules for transforming this Aggregate are held in this method
-        if !aggr.is_unordered_unfiltered_group_by_distinct() {
-            return None;
-        }
-
-        let new_aggr = aggr.clone().try_optimize_distinct_soft_limit(limit).ok()?;
+        let new_aggr = aggr.clone().try_optimize_distinct_soft_limit(limit)?;
         // An already limited aggregate still permits optimizing its partial child.
         Some(new_aggr.update_data(|aggr| Arc::new(aggr) as Arc<dyn ExecutionPlan>))
     }
