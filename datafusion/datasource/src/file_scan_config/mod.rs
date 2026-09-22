@@ -39,8 +39,8 @@ use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    Constraint, Constraints, Result, ScalarValue, Statistics, internal_datafusion_err,
-    internal_err,
+    Constraint, Constraints, Result, ScalarValue, SplitPoint, Statistics,
+    internal_datafusion_err, internal_err,
 };
 use datafusion_execution::{
     SendableRecordBatchStream, TaskContext, object_store::ObjectStoreUrl,
@@ -52,7 +52,9 @@ use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::projection::{ProjectionExprs, ProjectionMapping};
 use datafusion_physical_expr::utils::reassign_expr_columns;
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning, split_conjunction};
+use datafusion_physical_expr::{
+    EquivalenceProperties, Partitioning, RangePartitioning, split_conjunction,
+};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -615,15 +617,52 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
     }
 }
 
-/// Builds output partitioning over `partition_cols` (resolved to their indices in
-/// `schema`) with `partition_count` partitions. Returns `None` when there are no
-/// partition columns. Callers use this to declare the output partitioning of a scan
-/// whose file groups are organized by partition column values.
+/// Builds `Partitioning::Hash` over `partition_cols` (resolved to their indices in
+/// `schema`). Returns `None` when there are no partition columns.
+#[deprecated(
+    since = "56.0.0",
+    note = "Use `output_range_partitioning_from_split_points` instead"
+)]
 pub fn output_partitioning_from_partition_fields(
     schema: &Schema,
     partition_cols: &Fields,
     partition_count: usize,
 ) -> Option<Partitioning> {
+    let exprs = partition_column_exprs(schema, partition_cols)?;
+    Some(Partitioning::Hash(exprs, partition_count))
+}
+
+/// Builds the [`Partitioning::Range`] for file groups from
+/// [`FileGroup::group_by_partition_values_with_split_points`], each column sorted with
+/// `SortOptions::default()` to match how the groups were cut. Returns `None` when there
+/// are no partition columns or one is missing from `schema`, and errors when
+/// `split_points` are not strictly ordered. Split point values must have the partition
+/// column types in `schema`.
+pub fn output_range_partitioning_from_split_points(
+    schema: &Schema,
+    partition_cols: &Fields,
+    split_points: Vec<SplitPoint>,
+) -> Result<Option<Partitioning>> {
+    let Some(exprs) = partition_column_exprs(schema, partition_cols) else {
+        return Ok(None);
+    };
+    let sort_exprs = exprs
+        .into_iter()
+        .map(PhysicalSortExpr::new_default)
+        .collect::<Vec<_>>();
+    let Some(ordering) = LexOrdering::new(sort_exprs) else {
+        return Ok(None);
+    };
+    let range = RangePartitioning::try_new(ordering, split_points)?;
+    Ok(Some(Partitioning::Range(range)))
+}
+
+/// Resolves `partition_cols` to `Column` expressions in `schema`, or `None` when there
+/// are no partition columns or one is missing.
+fn partition_column_exprs(
+    schema: &Schema,
+    partition_cols: &Fields,
+) -> Option<Vec<Arc<dyn PhysicalExpr>>> {
     if partition_cols.is_empty() {
         return None;
     }
@@ -637,8 +676,7 @@ pub fn output_partitioning_from_partition_fields(
             .position(|field| field.name() == name)?;
         exprs.push(Arc::new(Column::new(name, idx)));
     }
-
-    Some(Partitioning::Hash(exprs, partition_count))
+    Some(exprs)
 }
 
 fn project_output_partitioning(
@@ -3112,6 +3150,14 @@ mod tests {
 
         let partitioning = config.output_partitioning();
         assert!(matches!(partitioning, Partitioning::UnknownPartitioning(_)));
+
+        let partitioning = output_range_partitioning_from_split_points(
+            config.file_source.table_schema().table_schema(),
+            config.table_partition_cols(),
+            vec![],
+        )
+        .unwrap();
+        assert!(partitioning.is_none());
     }
 
     #[test]
@@ -3136,21 +3182,43 @@ mod tests {
             FileGroup::new(vec![PartitionedFile::new("f2.parquet".to_string(), 1024)]),
             FileGroup::new(vec![PartitionedFile::new("f3.parquet".to_string(), 1024)]),
         ];
-        config.output_partitioning = output_partitioning_from_partition_fields(
+        let dict = |v: &str| wrap_partition_value_in_dict(ScalarValue::from(v));
+        config.output_partitioning = output_range_partitioning_from_split_points(
             config.file_source.table_schema().table_schema(),
             config.table_partition_cols(),
-            config.file_groups.len(),
-        );
+            vec![
+                SplitPoint::new(vec![dict("2026-09")]),
+                SplitPoint::new(vec![dict("2026-10")]),
+            ],
+        )
+        .unwrap();
 
         let partitioning = config.output_partitioning();
         match partitioning {
-            Partitioning::Hash(exprs, num_partitions) => {
-                assert_eq!(num_partitions, 3);
-                assert_eq!(exprs.len(), 1);
-                assert_eq!(exprs[0].downcast_ref::<Column>().unwrap().name(), "date");
+            Partitioning::Range(range) => {
+                assert_eq!(range.partition_count(), 3);
+                assert_eq!(range.ordering().len(), 1);
+                let sort_expr = &range.ordering()[0];
+                assert_eq!(
+                    sort_expr.expr.downcast_ref::<Column>().unwrap().name(),
+                    "date"
+                );
+                assert_eq!(sort_expr.options, arrow::compute::SortOptions::default());
+                assert_eq!(range.split_points().len(), 2);
             }
-            _ => panic!("Expected Hash partitioning"),
+            other => panic!("Expected Range partitioning, got {other}"),
         }
+
+        let err = output_range_partitioning_from_split_points(
+            config.file_source.table_schema().table_schema(),
+            config.table_partition_cols(),
+            vec![
+                SplitPoint::new(vec![dict("2026-10")]),
+                SplitPoint::new(vec![dict("2026-09")]),
+            ],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("strictly ordered"), "{err}");
 
         // Test multiple partition columns
         let multiple_partition_cols = vec![
@@ -3168,24 +3236,25 @@ mod tests {
             FileGroup::new(vec![PartitionedFile::new("f1.parquet".to_string(), 1024)]),
             FileGroup::new(vec![PartitionedFile::new("f2.parquet".to_string(), 1024)]),
         ];
-        config.output_partitioning = output_partitioning_from_partition_fields(
+        config.output_partitioning = output_range_partitioning_from_split_points(
             config.file_source.table_schema().table_schema(),
             config.table_partition_cols(),
-            config.file_groups.len(),
-        );
+            vec![SplitPoint::new(vec![dict("2026"), dict("09")])],
+        )
+        .unwrap();
 
         let partitioning = config.output_partitioning();
         match partitioning {
-            Partitioning::Hash(exprs, num_partitions) => {
-                assert_eq!(num_partitions, 2);
-                assert_eq!(exprs.len(), 2);
-                let col_names: Vec<_> = exprs
+            Partitioning::Range(range) => {
+                assert_eq!(range.partition_count(), 2);
+                let col_names: Vec<_> = range
+                    .ordering()
                     .iter()
-                    .map(|e| e.downcast_ref::<Column>().unwrap().name())
+                    .map(|e| e.expr.downcast_ref::<Column>().unwrap().name())
                     .collect();
                 assert_eq!(col_names, vec!["year", "month"]);
             }
-            _ => panic!("Expected Hash partitioning"),
+            other => panic!("Expected Range partitioning, got {other}"),
         }
     }
 

@@ -1002,11 +1002,24 @@ impl HashJoinExec {
             return false;
         }
 
-        // Hive style file groups declare `Partitioning::Range`, so a `Hash` input here
-        // follows the hash router that partitioned dynamic filters assume. Range inputs
-        // go through the co-partitioning check below.
+        // Under `preserve_file_partitions`, file groups can report Hash without following
+        // the dynamic filter hash router and look like a real hash repartition, so reject
+        // Hash. Range inputs with matching split points are safe.
         // Follow-up work: enable dynamic filtering for preserve_file_partitioned scans (issue #20195).
         // https://github.com/apache/datafusion/issues/20195
+        if config.optimizer.preserve_file_partitions > 0
+            && self.mode == PartitionMode::Partitioned
+            && matches!(
+                (
+                    self.left.output_partitioning(),
+                    self.right.output_partitioning()
+                ),
+                (Partitioning::Hash(_, _), Partitioning::Hash(_, _))
+            )
+        {
+            return false;
+        }
+
         if self.mode == PartitionMode::Partitioned
             && !self.has_partitioned_dynamic_filter_routing()
         {
@@ -9134,7 +9147,6 @@ mod tests {
             .optimizer
             .preserve_file_partitions = 1;
         assert!(range_join.allow_join_dynamic_filter_pushdown(session_config.options()));
-        assert!(hash_join.allow_join_dynamic_filter_pushdown(session_config.options()));
 
         Ok(())
     }
@@ -9142,6 +9154,8 @@ mod tests {
     #[test]
     fn test_partitioned_dynamic_filter_pushdown_rejects_unsupported_partitioning()
     -> Result<()> {
+        let (range_join, on) = range_partitioned_dynamic_filter_test_join(10, 10)?;
+        let hash_join = with_hash_partitioned_children(&range_join, &on)?;
         let (mismatched_range_join, _) =
             range_partitioned_dynamic_filter_test_join(10, 11)?;
         let mut session_config = SessionConfig::default();
@@ -9159,10 +9173,7 @@ mod tests {
             .options_mut()
             .optimizer
             .preserve_file_partitions = 1;
-        assert!(
-            !mismatched_range_join
-                .allow_join_dynamic_filter_pushdown(session_config.options())
-        );
+        assert!(!hash_join.allow_join_dynamic_filter_pushdown(session_config.options()));
 
         Ok(())
     }

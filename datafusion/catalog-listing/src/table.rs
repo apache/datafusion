@@ -25,12 +25,14 @@ use async_trait::async_trait;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_common::{
-    Column, Constraints, DFSchema, SchemaExt, SplitPoint, Statistics,
-    internal_datafusion_err, plan_err, project_schema,
+    Constraints, DFSchema, SchemaExt, SplitPoint, Statistics, internal_datafusion_err,
+    plan_err, project_schema,
 };
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
-use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::file_scan_config::{
+    FileScanConfig, FileScanConfigBuilder, output_range_partitioning_from_split_points,
+};
 use datafusion_datasource::file_sink_config::{FileOutputMode, FileSinkConfig};
 #[expect(deprecated)]
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
@@ -44,9 +46,7 @@ use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{
-    Expr, Partitioning as LogicalPartitioning,
-    RangePartitioning as LogicalRangePartitioning, TableProviderFilterPushDown,
-    TableType,
+    Expr, Partitioning as LogicalPartitioning, TableProviderFilterPushDown, TableType,
 };
 use datafusion_physical_expr::{create_lex_ordering, create_physical_partitioning};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
@@ -683,26 +683,8 @@ impl ListingTable {
             None => {} // no ordering required
         }
 
-        // Hive grouped files are contiguous key intervals, so they declare `Range`
-        // unless the statistics re-cut above changed the groups. The ordering must
-        // match the `SortOptions::default()` used to cut the groups.
-        let derived_output_partitioning =
-            if partitioned_by_file_group && !regrouped_by_statistics {
-                let ordering = table_partition_cols
-                    .iter()
-                    .map(|field| {
-                        Expr::Column(Column::from_name(field.name())).sort(true, true)
-                    })
-                    .collect();
-                Some(LogicalPartitioning::Range(
-                    LogicalRangePartitioning::try_new(ordering, partition_split_points)?,
-                ))
-            } else {
-                None
-            };
-
         let output_partitioning = if let Some(output_partitioning) =
-            declared_output_partitioning.or(derived_output_partitioning.as_ref())
+            declared_output_partitioning
         {
             let output_partitioning = match output_partitioning {
                 LogicalPartitioning::RoundRobinBatch(_) => {
@@ -725,6 +707,17 @@ impl ListingTable {
                     )?
                 }
             };
+            Some(output_partitioning)
+        } else if partitioned_by_file_group && !regrouped_by_statistics {
+            output_range_partitioning_from_split_points(
+                &self.table_schema,
+                &table_partition_cols.into(),
+                partition_split_points,
+            )?
+        } else {
+            None
+        };
+        if let Some(output_partitioning) = &output_partitioning {
             let partition_count = output_partitioning.partition_count();
             if partitioned_file_lists.len() != partition_count {
                 return plan_err!(
@@ -732,10 +725,7 @@ impl ListingTable {
                     partitioned_file_lists.len()
                 );
             }
-            Some(output_partitioning)
-        } else {
-            None
-        };
+        }
 
         let Some(object_store_url) =
             self.table_paths.first().map(ListingTableUrl::object_store)
