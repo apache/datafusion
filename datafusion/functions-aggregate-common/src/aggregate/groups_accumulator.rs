@@ -125,14 +125,19 @@ struct Scratch {
     /// appearance in the batch
     groups_with_rows: Vec<usize>,
 
-    /// `offsets[i]` is the index into the reordered rows where the rows for
+    /// `offsets[i]` is the index into `batch_indices` where the rows for
     /// `groups_with_rows[i]` start
     offsets: Vec<usize>,
+
+    /// Indices into the batch rows, with the rows of each group contiguous
+    batch_indices: Vec<u32>,
 }
 
 impl Scratch {
     fn allocated_size(&self) -> usize {
-        self.groups_with_rows.allocated_size() + self.offsets.allocated_size()
+        self.groups_with_rows.allocated_size()
+            + self.offsets.allocated_size()
+            + self.batch_indices.allocated_size()
     }
 }
 
@@ -290,6 +295,7 @@ impl GroupsAccumulatorAdapter {
         let Scratch {
             groups_with_rows,
             offsets,
+            batch_indices,
         } = scratch;
 
         // groups_with_rows holds a list of group indexes that have any rows
@@ -320,7 +326,14 @@ impl GroupsAccumulatorAdapter {
         self.add_allocation(indices_allocation_delta);
 
         // batch_indices holds indices into values, each group is contiguous
-        let mut batch_indices = Vec::with_capacity(group_indices.len());
+        batch_indices.clear();
+        batch_indices
+            .try_reserve(group_indices.len())
+            .map_err(|e| {
+                arrow_datafusion_err!(arrow::error::ArrowError::MemoryError(
+                    e.to_string()
+                ))
+            })?;
 
         // offsets[i] is index into batch_indices where the rows for
         // groups_with_rows[i] start
@@ -334,13 +347,20 @@ impl GroupsAccumulatorAdapter {
             offset_so_far += indices.len();
             offsets.push(offset_so_far);
         }
-        let batch_indices = batch_indices.into();
+        // Move the buffer into an array without a copy, for the take kernels
+        let indices_array =
+            PrimitiveArray::<UInt32Type>::from(std::mem::take(batch_indices));
 
         // reorder the values and opt_filter by batch_indices so that
         // all values for each group are contiguous, then invoke the
         // accumulator once per group with values
-        let values = take_arrays(values, &batch_indices, None)?;
-        let opt_filter = get_filter_at_indices(opt_filter, &batch_indices)?;
+        let values = take_arrays(values, &indices_array, None)?;
+        let opt_filter = get_filter_at_indices(opt_filter, &indices_array)?;
+
+        // The take kernels only borrow the indices, so the array holds the
+        // only reference to the buffer and we can get it back without a copy
+        let (_, indices_buffer, _) = indices_array.into_parts();
+        *batch_indices = indices_buffer.into_inner().into_vec().unwrap_or_default();
 
         let grouped_update_metric = self.grouped_metric();
 
@@ -888,6 +908,8 @@ mod tests {
         let retained_indices = adapter.states[0].indices.allocated_size();
         assert!(retained_indices > 0);
         assert!(adapter.states[0].indices.is_empty());
+        // The indices buffer comes back from the take kernels without a copy
+        assert!(adapter.scratch.batch_indices.capacity() >= 4);
         let retained_scratch = adapter.scratch.allocated_size();
         assert!(retained_scratch > 0);
         assert_eq!(
