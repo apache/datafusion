@@ -60,7 +60,7 @@ pub enum DdlStatement {
     DropView(DropView),
     /// Drops a catalog schema
     DropCatalogSchema(DropCatalogSchema),
-    /// Drops a catalog previously created with `CREATE EXTERNAL CATALOG`.
+    /// Drops a catalog (aka "Database").
     DropCatalog(DropCatalog),
     /// Create function statement. Boxed for the same reason as
     /// [`Self::CreateExternalTable`] (~288 bytes).
@@ -719,6 +719,8 @@ pub struct DropCatalog {
     pub name: String,
     /// If the catalog exists
     pub if_exists: bool,
+    /// Whether drop should cascade
+    pub cascade: bool,
     /// Dummy schema
     pub schema: DFSchemaRef,
 }

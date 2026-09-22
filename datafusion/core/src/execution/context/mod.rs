@@ -1171,13 +1171,16 @@ impl SessionContext {
 
     fn drop_catalog(&self, cmd: DropCatalog) -> Result<DataFrame> {
         let DropCatalog {
-            name, if_exists, ..
+            name,
+            if_exists,
+            cascade,
+            ..
         } = cmd;
         let dereg = self
             .state
             .write()
             .catalog_list()
-            .deregister_catalog(&name)?;
+            .deregister_catalog(&name, cascade)?;
         match (dereg, if_exists) {
             (Some(_), _) => self.return_empty_dataframe(),
             (None, true) => self.return_empty_dataframe(),
@@ -2847,7 +2850,7 @@ mod tests {
         );
 
         // Create catalog
-        ctx.sql("CREATE DATABASE test").await?.collect().await?;
+        ctx.sql("CREATE CATALOG test").await?.collect().await?;
 
         // Create schema
         ctx.sql("CREATE SCHEMA test.abc").await?.collect().await?;

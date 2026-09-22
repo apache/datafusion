@@ -57,8 +57,12 @@ impl CatalogProviderList for DynamicObjectStoreCatalog {
         self.inner.register_catalog(name, catalog)
     }
 
-    fn deregister_catalog(&self, name: &str) -> Result<Option<Arc<dyn CatalogProvider>>> {
-        self.inner.deregister_catalog(name)
+    fn deregister_catalog(
+        &self,
+        name: &str,
+        cascade: bool,
+    ) -> Result<Option<Arc<dyn CatalogProvider>>> {
+        self.inner.deregister_catalog(name, cascade)
     }
 
     fn catalog_names(&self) -> Vec<String> {

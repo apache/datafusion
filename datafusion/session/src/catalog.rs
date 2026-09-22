@@ -53,6 +53,7 @@ impl CatalogProviderList for EmptyCatalogProviderList {
     fn deregister_catalog(
         &self,
         _name: &str,
+        _cascade: bool,
     ) -> Result<Option<Arc<dyn CatalogProvider>>> {
         Ok(None)
     }
@@ -181,6 +182,14 @@ pub trait CatalogProvider: Any + Debug + Sync + Send {
     ) -> Result<Option<Arc<dyn SchemaProvider>>> {
         not_impl_err!("Deregistering new schemas is not supported")
     }
+
+    /// Called when a catalog is being dropped. Implementations can use this hook
+    /// to prevent a catalog from being dropped if it is not empty.
+    ///
+    /// By default returns a "Not Implemented" error
+    fn prepare_deregister_catalog(&self, _cascade: bool) -> Result<()> {
+        not_impl_err!("Deregistering all schemas is not supported")
+    }
 }
 
 impl dyn CatalogProvider {
@@ -221,9 +230,16 @@ pub trait CatalogProviderList: Any + Debug + Sync + Send {
     /// Implementations of this method should return `Ok(None)` if no catalog
     /// with `name` exists.
     ///
+    /// If `cascade` is `false`, implementations should return an error if the
+    /// catalog is not empty.
+    ///
     /// By default returns a "Not Implemented" error
-    fn deregister_catalog(&self, name: &str) -> Result<Option<Arc<dyn CatalogProvider>>> {
-        let _ = name;
+    fn deregister_catalog(
+        &self,
+        name: &str,
+        cascade: bool,
+    ) -> Result<Option<Arc<dyn CatalogProvider>>> {
+        let _ = (name, cascade);
         not_impl_err!("Deregistering catalogs is not supported")
     }
 

@@ -187,7 +187,7 @@ fn visit_statement(statement: &DFStatement, visitor: &mut RelationVisitor) -> Re
         }
         DFStatement::Reset(_) => {}
         // Catalogs are not tables, so there is nothing to resolve here.
-        DFStatement::CreateExternalCatalog(_) | DFStatement::DropCatalog(_) => {}
+        DFStatement::CreateExternalCatalog(_) => {}
     }
     Ok(())
 }

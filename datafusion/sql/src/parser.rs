@@ -24,7 +24,7 @@ use datafusion_common::DataFusionError;
 use datafusion_common::config::{ConfigNonZeroUsize, SqlParserOptions};
 use datafusion_common::format::{ExplainFormat, ExplainStatementOptions};
 use datafusion_common::{Diagnostic, Span, sql_err};
-use sqlparser::ast::{ExprWithAlias, Ident, OrderByOptions, OrderBySort};
+use sqlparser::ast::{ExprWithAlias, Ident, ObjectType, OrderByOptions, OrderBySort};
 use sqlparser::tokenizer::TokenWithSpan;
 use sqlparser::{
     ast::{
@@ -369,6 +369,8 @@ pub struct DropCatalog {
     pub name: ObjectName,
     /// Option to not error if the catalog does not exist
     pub if_exists: bool,
+    /// Whether drop should cascade
+    pub cascade: bool,
 }
 
 impl fmt::Display for DropCatalog {
@@ -411,8 +413,6 @@ pub enum Statement {
     CreateExternalTable(CreateExternalTable),
     /// Extension: `CREATE EXTERNAL CATALOG`
     CreateExternalCatalog(CreateExternalCatalog),
-    /// Extension: `DROP CATALOG`
-    DropCatalog(DropCatalog),
     /// Extension: `COPY TO`
     CopyTo(CopyToStatement),
     /// EXPLAIN for extensions
@@ -427,7 +427,6 @@ impl fmt::Display for Statement {
             Statement::Statement(stmt) => write!(f, "{stmt}"),
             Statement::CreateExternalTable(stmt) => write!(f, "{stmt}"),
             Statement::CreateExternalCatalog(stmt) => write!(f, "{stmt}"),
-            Statement::DropCatalog(stmt) => write!(f, "{stmt}"),
             Statement::CopyTo(stmt) => write!(f, "{stmt}"),
             Statement::Explain(stmt) => write!(f, "{stmt}"),
             Statement::Reset(stmt) => write!(f, "{stmt}"),
@@ -1036,6 +1035,10 @@ impl<'a> DFParser<'a> {
             .parse_keywords(&[Keyword::UNBOUNDED, Keyword::EXTERNAL])
         {
             self.parse_create_external(true, false)
+        } else if self.parser.parse_keywords(&[Keyword::CATALOG]) {
+            Ok(Statement::Statement(Box::from(
+                self.parser.parse_create_database()?,
+            )))
         } else {
             Ok(Statement::Statement(Box::from(self.parser.parse_create()?)))
         }
@@ -1431,7 +1434,28 @@ impl<'a> DFParser<'a> {
     fn parse_drop_catalog(&mut self) -> Result<Statement, DataFusionError> {
         let if_exists = self.parser.parse_keywords(&[Keyword::IF, Keyword::EXISTS]);
         let name = self.parser.parse_object_name(true)?;
-        Ok(Statement::DropCatalog(DropCatalog { name, if_exists }))
+
+        let loc = self.parser.peek_token_ref().span.start;
+        let cascade = self.parser.parse_keyword(Keyword::CASCADE);
+        let restrict = self.parser.parse_keyword(Keyword::RESTRICT);
+        if cascade && restrict {
+            return parser_err!(format!(
+                "Cannot specify both CASCADE and RESTRICT in DROP DATABASE {loc}"
+            ));
+        }
+
+        Ok(Statement::Statement(Box::new(
+            sqlparser::ast::Statement::Drop {
+                object_type: ObjectType::Database,
+                if_exists,
+                names: vec![name],
+                cascade,
+                restrict,
+                purge: false,
+                temporary: false,
+                table: None,
+            },
+        )))
     }
 
     /// Parses one or more external table locations.
@@ -2108,26 +2132,56 @@ mod tests {
     #[test]
     fn drop_catalog() -> Result<(), DataFusionError> {
         let sql = "DROP CATALOG c";
-        let expected = Statement::DropCatalog(DropCatalog {
-            name: ObjectName::from(vec![Ident::from("c")]),
+        let expected = Statement::Statement(Box::new(sqlparser::ast::Statement::Drop {
+            object_type: ObjectType::Database,
             if_exists: false,
-        });
+            names: vec![ObjectName::from(vec![Ident::from("c")])],
+            cascade: false,
+            restrict: false,
+            purge: false,
+            temporary: false,
+            table: None,
+        }));
         expect_parse_ok(sql, expected)?;
 
         let sql = "DROP CATALOG IF EXISTS c";
-        let expected = Statement::DropCatalog(DropCatalog {
-            name: ObjectName::from(vec![Ident::from("c")]),
+        let expected = Statement::Statement(Box::new(sqlparser::ast::Statement::Drop {
+            object_type: ObjectType::Database,
             if_exists: true,
-        });
+            names: vec![ObjectName::from(vec![Ident::from("c")])],
+            cascade: false,
+            restrict: false,
+            purge: false,
+            temporary: false,
+            table: None,
+        }));
         expect_parse_ok(sql, expected)?;
 
-        // DROP TABLE / VIEW / SCHEMA are unaffected by the DROP EXTERNAL
-        // CATALOG dispatch and continue to use the native parser.
-        let sql = "DROP TABLE t";
-        assert!(matches!(
-            DFParser::parse_sql(sql)?.pop_front(),
-            Some(Statement::Statement(_))
-        ));
+        let sql = "DROP CATALOG c CASCADE";
+        let expected = Statement::Statement(Box::new(sqlparser::ast::Statement::Drop {
+            object_type: ObjectType::Database,
+            if_exists: false,
+            names: vec![ObjectName::from(vec![Ident::from("c")])],
+            cascade: true,
+            restrict: false,
+            purge: false,
+            temporary: false,
+            table: None,
+        }));
+        expect_parse_ok(sql, expected)?;
+
+        let sql = "DROP CATALOG IF EXISTS c CASCADE";
+        let expected = Statement::Statement(Box::new(sqlparser::ast::Statement::Drop {
+            object_type: ObjectType::Database,
+            if_exists: true,
+            names: vec![ObjectName::from(vec![Ident::from("c")])],
+            cascade: true,
+            restrict: false,
+            purge: false,
+            temporary: false,
+            table: None,
+        }));
+        expect_parse_ok(sql, expected)?;
 
         Ok(())
     }

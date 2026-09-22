@@ -52,8 +52,9 @@ impl CatalogProviderList for DynamicFileCatalog {
     fn deregister_catalog(
         &self,
         name: &str,
+        cascade: bool,
     ) -> datafusion_common::Result<Option<Arc<dyn CatalogProvider>>> {
-        self.inner.deregister_catalog(name)
+        self.inner.deregister_catalog(name, cascade)
     }
 
     fn catalog_names(&self) -> Vec<String> {

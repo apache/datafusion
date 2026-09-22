@@ -279,8 +279,18 @@ impl CatalogProviderList for CustomCatalogProviderList {
         Some(catalog)
     }
 
-    fn deregister_catalog(&self, name: &str) -> Result<Option<Arc<dyn CatalogProvider>>> {
+    fn deregister_catalog(
+        &self,
+        name: &str,
+        cascade: bool,
+    ) -> Result<Option<Arc<dyn CatalogProvider>>> {
         let mut cats = self.catalogs.write().unwrap();
+        let Some(cat) = cats.get_mut(name) else {
+            return Ok(None);
+        };
+
+        cat.prepare_deregister_catalog(cascade)?;
+
         Ok(cats.remove(name))
     }
 

@@ -22,17 +22,17 @@
 DDL stands for "Data Definition Language" and relates to creating and
 modifying catalog objects such as Tables.
 
-## CREATE DATABASE
+## CREATE CATALOG / CREATE DATABASE
 
-Create catalog with specified name.
+Create catalog with specified name. In DataFusion, `CREATE DATABASE` is an alias for `CREATE CATALOG`.
 
 <pre>
-CREATE DATABASE [ IF NOT EXISTS ] <i><b>catalog</i></b>
+CREATE CATALOG [ IF NOT EXISTS ] <i><b>catalog</i></b>
 </pre>
 
 ```sql
 -- create catalog cat
-CREATE DATABASE cat;
+CREATE CATALOG cat;
 ```
 
 ## CREATE EXTERNAL CATALOG

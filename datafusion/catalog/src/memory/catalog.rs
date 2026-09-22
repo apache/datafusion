@@ -54,7 +54,21 @@ impl CatalogProviderList for MemoryCatalogProviderList {
         self.catalogs.insert(name, catalog)
     }
 
-    fn deregister_catalog(&self, name: &str) -> Result<Option<Arc<dyn CatalogProvider>>> {
+    fn deregister_catalog(
+        &self,
+        name: &str,
+        cascade: bool,
+    ) -> Result<Option<Arc<dyn CatalogProvider>>> {
+        let Some(mut entry) = self.catalogs.get_mut(name) else {
+            return Ok(None);
+        };
+
+        let catalog = entry.value_mut();
+        catalog.prepare_deregister_catalog(cascade)?;
+
+        // Drop entry to release its lock
+        drop(entry);
+
         Ok(self.catalogs.remove(name).map(|(_, catalog)| catalog))
     }
 
@@ -118,7 +132,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     Ok(Some(removed))
                 }
                 (false, false) => exec_err!(
-                    "Cannot drop schema {} because other tables depend on it: {}",
+                    "Cannot drop schema {} containing tables: {}",
                     name,
                     itertools::join(table_names.iter(), ", ")
                 ),
@@ -126,5 +140,17 @@ impl CatalogProvider for MemoryCatalogProvider {
         } else {
             Ok(None)
         }
+    }
+
+    fn prepare_deregister_catalog(&self, cascade: bool) -> Result<()> {
+        if !cascade && !self.schemas.is_empty() {
+            return exec_err!(
+                "Cannot drop catalog containing schemas: {}",
+                itertools::join(self.schema_names().iter(), ", ")
+            );
+        }
+
+        self.schemas.clear();
+        Ok(())
     }
 }

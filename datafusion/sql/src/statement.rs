@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::parser::{
     CopyToSource, CopyToStatement, CreateExternalCatalog, CreateExternalTable, DFParser,
-    DropCatalog, ExplainStatement, LexOrdering, ResetStatement, Statement as DFStatement,
+    ExplainStatement, LexOrdering, ResetStatement, Statement as DFStatement,
 };
 use crate::planner::{
     ContextProvider, PlannerContext, SqlToRel, object_name_to_qualifier,
@@ -51,11 +51,11 @@ use datafusion_expr::{
     CreateExternalCatalog as PlanCreateExternalCatalog,
     CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
     CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, Deallocate,
-    DescribeTable, DmlStatement, DropCatalog as PlanDropCatalog, DropCatalogSchema,
-    DropFunction, DropTable, DropView, EmptyRelation, Execute, Explain, ExplainFormat,
-    Expr, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, OperateFunctionArg,
-    PlanType, Prepare, ResetVariable, SetVariable, SortExpr, Statement as PlanStatement,
-    ToStringifiedPlan, TransactionAccessMode, TransactionConclusion, TransactionEnd,
+    DescribeTable, DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView,
+    EmptyRelation, Execute, Explain, ExplainFormat, Expr, ExprSchemable, Filter,
+    LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare,
+    ResetVariable, SetVariable, SortExpr, Statement as PlanStatement, ToStringifiedPlan,
+    TransactionAccessMode, TransactionConclusion, TransactionEnd,
     TransactionIsolationLevel, TransactionStart, Volatility, WriteOp, cast,
 };
 use sqlparser::ast::{
@@ -236,7 +236,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let plan = match statement {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s)?,
             DFStatement::CreateExternalCatalog(s) => self.external_catalog_to_plan(s)?,
-            DFStatement::DropCatalog(s) => self.drop_catalog_to_plan(s)?,
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s)?,
             DFStatement::CopyTo(s) => self.copy_to_plan(s)?,
             DFStatement::Explain(ExplainStatement { options, statement }) => {
@@ -847,11 +846,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         DdlStatement::DropCatalog(datafusion_expr::DropCatalog {
                             name: object_name_to_string(&name),
                             if_exists,
+                            cascade,
                             schema: DFSchemaRef::new(DFSchema::empty()),
                         }),
                     )),
                     _ => not_impl_err!(
-                        "Only `DROP TABLE/VIEW/SCHEMA  ...` statement is supported currently"
+                        "Only `DROP TABLE/VIEW/SCHEMA/CATALOG/DATABASE  ...` statement is supported currently"
                     ),
                 }
             }
@@ -1964,17 +1964,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 options: options_map,
                 schema: Arc::new(DFSchema::empty()),
             }),
-        )))
-    }
-
-    fn drop_catalog_to_plan(&self, statement: DropCatalog) -> Result<LogicalPlan> {
-        let DropCatalog { name, if_exists } = statement;
-        Ok(LogicalPlan::Ddl(DdlStatement::DropCatalog(
-            PlanDropCatalog {
-                name: object_name_to_string(&name),
-                if_exists,
-                schema: DFSchemaRef::new(DFSchema::empty()),
-            },
         )))
     }
 
