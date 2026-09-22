@@ -3836,7 +3836,7 @@ mod tests {
     use std::fmt::{self, Debug};
     use std::mem::size_of_val;
     use std::ops::{BitAnd, Not};
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
+    use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
     use super::*;
     use crate::datasource::MemTable;
