@@ -198,6 +198,13 @@ FROM (
 statement ok
 SET datafusion.execution.target_partitions = 4
 
+# Four final partitions share the greedy pool. Limit merge buffers so a
+# partition that replays its spills can allocate while the other partitions
+# retain their aggregate state.
+# See https://github.com/apache/datafusion/issues/25423
+statement ok
+SET datafusion.runtime.max_spill_merge_fan_in = 2
+
 query II
 SELECT count(*), sum(total)
 FROM (
@@ -229,6 +236,9 @@ FROM (
 # Restore settings to slt runner defaults
 statement ok
 RESET datafusion.runtime.memory_limit
+
+statement ok
+RESET datafusion.runtime.max_spill_merge_fan_in
 
 statement ok
 RESET datafusion.execution.batch_size

@@ -33,6 +33,7 @@ use crate::filter_pushdown::{
     ChildFilterDescription, FilterDescription, FilterPushdownPhase, PushedDownPredicate,
 };
 use crate::joins::SharedBitmapBuilder;
+use crate::joins::logical_batch::{BatchRow, LogicalBatch};
 use crate::joins::utils::{
     BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
     boolean_mask_from_filter, build_join_schema, check_join_is_valid,
@@ -58,9 +59,7 @@ use arrow::array::{
     UInt64Array, new_null_array,
 };
 use arrow::buffer::BooleanBuffer;
-use arrow::compute::{
-    BatchCoalescer, concat_batches, filter, filter_record_batch, not, take,
-};
+use arrow::compute::{BatchCoalescer, filter, filter_record_batch, not, take};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::DataType;
@@ -134,7 +133,9 @@ use crate::spill::spill_manager::SpillManager;
 ///
 /// ## 1. Buffering Left Input
 /// - The operator eagerly buffers all left-side input batches into memory,
-///   util a memory limit is reached.
+///   util a memory limit is reached. The batches are kept as they arrive and
+///   addressed as one contiguous batch (see `LogicalBatch`), so buffering
+///   does not copy them into a merged batch.
 ///   Currently, an out-of-memory error will be thrown if all the left-side input batches
 ///   cannot fit into memory at once.
 ///   In the future, it's possible to make this case finish execution. (see
@@ -1164,8 +1165,9 @@ impl EmbeddedProjection for NestedLoopJoinExec {
 
 /// Left (build-side) data
 pub(crate) struct JoinLeftData {
-    /// Build-side data collected to single batch
-    batch: RecordBatch,
+    /// Build-side rows. See [`LogicalBatch`] for details on this layout
+    /// and why it is used.
+    batch: LogicalBatch,
     /// Shared bitmap builder for visited left indices
     bitmap: SharedBitmapBuilder,
     /// Counter of running probe-threads, potentially able to update `bitmap`
@@ -1179,7 +1181,7 @@ pub(crate) struct JoinLeftData {
 
 impl JoinLeftData {
     pub(crate) fn new(
-        batch: RecordBatch,
+        batch: LogicalBatch,
         bitmap: SharedBitmapBuilder,
         probe_threads_counter: AtomicUsize,
         reservation: MemoryReservation,
@@ -1192,7 +1194,7 @@ impl JoinLeftData {
         }
     }
 
-    pub(crate) fn batch(&self) -> &RecordBatch {
+    pub(crate) fn batch(&self) -> &LogicalBatch {
         &self.batch
     }
 
@@ -1267,11 +1269,11 @@ async fn collect_left_input(
     // polling the child stream above.
     let build_timer = metrics.build_time.timer();
 
-    let merged_batch = concat_batches(&schema, &batches)?;
+    let buffered_build_batch = LogicalBatch::new(Arc::clone(&schema), batches)?;
 
     // Reserve memory for visited_left_side bitmap if required by join type
     let visited_left_side = if with_visited_left_side {
-        let n_rows = merged_batch.num_rows();
+        let n_rows = buffered_build_batch.num_rows();
         let buffer_size = n_rows.div_ceil(8);
         match reservation.try_grow(buffer_size) {
             Ok(()) => {}
@@ -1280,11 +1282,10 @@ async fn collect_left_input(
                 // outside that timer.
                 build_timer.done();
                 let spill_manager = spill_manager.expect("checked by is_spillable_oom");
-                drop(batches);
                 let spilled = spill_left_input(
                     spill_manager,
                     Arc::clone(&schema),
-                    vec![merged_batch],
+                    buffered_build_batch.into_batches(),
                     None,
                     stream,
                     metrics,
@@ -1310,7 +1311,7 @@ async fn collect_left_input(
     };
 
     Ok(LeftLoad::InMemory(Arc::new(JoinLeftData::new(
-        merged_batch,
+        buffered_build_batch,
         Mutex::new(visited_left_side),
         AtomicUsize::new(probe_threads_count),
         reservation,
@@ -1328,7 +1329,7 @@ fn left_load_from_spill(
         Some(data) => LeftLoad::Spilled(Arc::new(data)),
         // No rows means no bitmap either, whatever the join type.
         None => LeftLoad::InMemory(Arc::new(JoinLeftData::new(
-            RecordBatch::new_empty(schema),
+            LogicalBatch::new_empty(schema),
             Mutex::new(BooleanBufferBuilder::new(0)),
             AtomicUsize::new(probe_threads_count),
             reservation,
@@ -1484,8 +1485,6 @@ struct FallbackCoordinatorInner {
     /// The shared left spill stream from which chunks are read. Owned by
     /// the coordinator so only one partition reads it at a time.
     left_stream: Option<SendableRecordBatchStream>,
-    /// Left schema. Set after the first leader resolves the spill future.
-    left_schema: Option<SchemaRef>,
     /// One batch carried over from the previous chunk's load: when
     /// reservation `try_grow` failed for chunk N, the offending batch is
     /// recorded here and becomes the first batch of chunk N+1.
@@ -1583,7 +1582,6 @@ impl FallbackCoordinator {
             inner: Mutex::new(FallbackCoordinatorInner {
                 reservation: None,
                 left_stream: None,
-                left_schema: None,
                 carryover: None,
                 left_exhausted: false,
                 next_chunk_index: 0,
@@ -1728,6 +1726,13 @@ impl FallbackCoordinator {
         self.cancel_notify.notify_waiters();
     }
 
+    /// Gives up the leader claim without publishing a chunk, and wakes waiters so
+    /// they do not block on a release the failed leader never makes.
+    fn abandon_load(&self) {
+        self.inner.lock().loader_in_flight = false;
+        self.notify.notify_waiters();
+    }
+
     /// Fetch `expected_chunk_index`, becoming leader to load it from the
     /// left spill stream if no other partition has done so. Returns
     /// `Ok(None)` when the left stream is exhausted and no chunk with
@@ -1803,39 +1808,17 @@ impl FallbackCoordinator {
                     carryover,
                     chunk_index,
                 } => {
-                    // Build whatever the slot did not already have. A failure
-                    // here must clear the leader flag and wake waiters, or they
-                    // block on a release the failed leader never makes.
-                    let (mut left_stream, left_schema) = match stream {
-                        Some(stream) => {
-                            let schema = {
-                                let inner = self.inner.lock();
-                                inner.left_schema.clone()
-                            };
-                            let schema = match schema {
-                                Some(schema) => schema,
-                                None => Arc::clone(&spill_data.schema),
-                            };
-                            (stream, schema)
-                        }
+                    // Build whatever the slot did not already have.
+                    let mut left_stream = match stream {
+                        Some(stream) => stream,
                         None => {
                             match spill_data.spill_manager.read_spill_as_stream(
                                 Arc::clone(&spill_data.spill_file),
                                 None,
                             ) {
-                                Ok(stream) => {
-                                    let mut inner = self.inner.lock();
-                                    inner.left_schema =
-                                        Some(Arc::clone(&spill_data.schema));
-                                    drop(inner);
-                                    (stream, Arc::clone(&spill_data.schema))
-                                }
+                                Ok(stream) => stream,
                                 Err(e) => {
-                                    {
-                                        let mut inner = self.inner.lock();
-                                        inner.loader_in_flight = false;
-                                    }
-                                    self.notify.notify_waiters();
+                                    self.abandon_load();
                                     return Err(e);
                                 }
                             }
@@ -1862,12 +1845,11 @@ impl FallbackCoordinator {
                         self.cancel();
                     }
                     let cancelled = self.cancel_notify.notified();
-                    let load = Arc::clone(&self).load_one_chunk(
-                        chunk_index,
+                    let load = self.load_one_chunk(
                         &mut left_stream,
                         &mut reservation,
                         carryover,
-                        Arc::clone(&left_schema),
+                        Arc::clone(&spill_data.schema),
                         build_time.clone(),
                     );
                     let load_result = {
@@ -1894,11 +1876,7 @@ impl FallbackCoordinator {
                         // clear the leader claim so nothing waits on us.
                         drop(left_stream);
                         drop(reservation);
-                        {
-                            let mut inner = self.inner.lock();
-                            inner.loader_in_flight = false;
-                        }
-                        self.notify.notify_waiters();
+                        self.abandon_load();
                         return exec_err!(
                             "NestedLoopJoin coordinated fallback was cancelled \
                              while a chunk was being loaded"
@@ -1926,13 +1904,12 @@ impl FallbackCoordinator {
                                     if is_last {
                                         inner.left_exhausted = true;
                                     }
-                                    let arc_data = Arc::new(data);
                                     inner.current = Some(CurrentChunk {
                                         chunk_index,
-                                        data: Arc::clone(&arc_data),
+                                        data: Arc::clone(&data),
                                         is_last,
                                     });
-                                    Some(Ok(Some((arc_data, is_last))))
+                                    Some(Ok(Some((data, is_last))))
                                 }
                                 Ok(LoadOutcome::Empty) => {
                                     inner.left_exhausted = true;
@@ -1960,8 +1937,7 @@ impl FallbackCoordinator {
     /// Read one chunk worth of left batches into a `JoinLeftData`,
     /// honoring the coordinator's reservation as the memory budget.
     async fn load_one_chunk(
-        self: Arc<Self>,
-        _chunk_index: usize,
+        &self,
         left_stream: &mut SendableRecordBatchStream,
         reservation: &mut MemoryReservation,
         carryover: Option<RecordBatch>,
@@ -2022,8 +1998,8 @@ impl FallbackCoordinator {
         }
 
         let _build_timer = build_time.timer();
-        let merged_batch = concat_batches(&left_schema, &pending_batches)?;
-        let n_rows = merged_batch.num_rows();
+        let batch = LogicalBatch::new(left_schema, pending_batches)?;
+        let n_rows = batch.num_rows();
         let visited_left_side = if self.with_visited_bitmap {
             let buffer_size = n_rows.div_ceil(8);
             reservation.grow(buffer_size);
@@ -2050,14 +2026,14 @@ impl FallbackCoordinator {
         let chunk_reservation = reservation.take();
 
         let data = JoinLeftData::new(
-            merged_batch,
+            batch,
             Mutex::new(visited_left_side),
             AtomicUsize::new(self.right_partition_count),
             chunk_reservation,
         );
 
         Ok(LoadOutcome::Chunk {
-            data,
+            data: Arc::new(data),
             is_last: left_stream_exhausted,
             carryover: next_carryover,
         })
@@ -2086,7 +2062,7 @@ enum Decision<'a> {
 
 enum LoadOutcome {
     Chunk {
-        data: JoinLeftData,
+        data: Arc<JoinLeftData>,
         is_last: bool,
         carryover: Option<RecordBatch>,
     },
@@ -2139,9 +2115,6 @@ type ChunkFetchFuture = BoxFuture<'static, Result<ChunkFetchOutput>>;
 pub(crate) struct SpillStateActive {
     /// The spilled left side, shared by every partition.
     left_spill: Arc<LeftSpillData>,
-    /// Left-side schema, set from the first chunk the coordinator delivers.
-    /// Used by `EmitGlobalRightUnmatched` to build NULL-padded left columns.
-    left_schema: Option<SchemaRef>,
     /// Plan-level coordinator that publishes per-chunk `JoinLeftData`
     /// shared across all right-side partitions.
     coordinator: Arc<FallbackCoordinator>,
@@ -2726,7 +2699,6 @@ impl NestedLoopJoinStream {
 
         self.spill_state = SpillState::Active(Box::new(SpillStateActive {
             left_spill,
-            left_schema: None,
             coordinator: fallback_coordinator,
             next_chunk_index: 0,
             task_context: Arc::clone(&context),
@@ -2850,7 +2822,7 @@ impl NestedLoopJoinStream {
             }
             Ok(Some((data, is_last))) => {
                 // The operator's own work on the delivered chunk: recording
-                // metrics, caching the schema and opening the right-side pass.
+                // metrics and opening the right-side pass.
                 // `load_one_chunk` times the reading it does, but a chunk can
                 // also be served straight from the coordinator's slot, in which
                 // case this is the only build work there is.
@@ -2858,9 +2830,6 @@ impl NestedLoopJoinStream {
                 let n_rows = data.batch().num_rows();
                 self.metrics.join_metrics.build_input_batches.add(1);
                 self.metrics.join_metrics.build_input_rows.add(n_rows);
-                if active.left_schema.is_none() {
-                    active.left_schema = Some(data.batch().schema());
-                }
                 self.buffered_left_data = Some(data);
                 self.left_exhausted = is_last;
                 self.left_buffered_in_one_pass = is_last && active.next_chunk_index == 0;
@@ -3228,12 +3197,7 @@ impl NestedLoopJoinStream {
                     )
                 };
 
-                let left_schema = Arc::clone(
-                    active
-                        .left_schema
-                        .as_ref()
-                        .expect("left_schema must be set"),
-                );
+                let left_schema = Arc::clone(&active.left_spill.schema);
 
                 match build_unmatched_batch(
                     &self.output_schema,
@@ -3397,14 +3361,15 @@ impl NestedLoopJoinStream {
         // materializes the intermediate batch, and finally applies the join filter
         // to it.
         // -----------------------------------------------------------
+        let left_batch = left_data.batch();
         let right_rows = right_batch.num_rows();
         let total_rows = l_row_count * right_rows;
 
         // Build index arrays for cartesian product: left_range X right_batch
-        let left_indices: UInt32Array =
-            UInt32Array::from_iter_values((0..l_row_count).flat_map(|i| {
-                std::iter::repeat_n((l_start_index + i) as u32, right_rows)
-            }));
+        let left_indices = left_batch.row_indices(
+            (0..l_row_count)
+                .flat_map(|i| std::iter::repeat_n(l_start_index + i, right_rows)),
+        )?;
         let right_indices: UInt32Array = UInt32Array::from_iter_values(
             (0..l_row_count).flat_map(|_| 0..right_rows as u32),
         );
@@ -3430,8 +3395,7 @@ impl NestedLoopJoinStream {
                     Vec::with_capacity(filter.column_indices().len());
                 for column_index in filter.column_indices() {
                     let array = if column_index.side == JoinSide::Left {
-                        let col = left_data.batch().column(column_index.index);
-                        take(col.as_ref(), &left_indices, None)?
+                        left_batch.take_column(column_index.index, &left_indices)?
                     } else {
                         let col = right_batch.column(column_index.index);
                         take(col.as_ref(), &right_indices, None)?
@@ -3551,8 +3515,7 @@ impl NestedLoopJoinStream {
             Vec::with_capacity(self.output_schema.fields().len());
         for column_index in &self.column_indices {
             let array = if column_index.side == JoinSide::Left {
-                let col = left_data.batch().column(column_index.index);
-                take(col.as_ref(), &left_indices, None)?
+                left_batch.take_column(column_index.index, &left_indices)?
             } else {
                 let col = right_batch.column(column_index.index);
                 take(col.as_ref(), &right_indices, None)?
@@ -3581,13 +3544,9 @@ impl NestedLoopJoinStream {
             return Ok(None);
         }
 
+        let left_row = left_data.batch().row(l_index)?;
         let cur_right_bitmap = if let Some(filter) = &self.join_filter {
-            apply_filter_to_row_join_batch(
-                left_data.batch(),
-                l_index,
-                right_batch,
-                filter,
-            )?
+            apply_filter_to_row_join_batch(left_row, right_batch, filter)?
         } else {
             BooleanArray::from(vec![true; right_row_count])
         };
@@ -3615,8 +3574,7 @@ impl NestedLoopJoinStream {
             // Use the optimized approach similar to build_intermediate_batch_for_single_left_row
             let join_batch = build_row_join_batch(
                 &self.output_schema,
-                left_data.batch(),
-                l_index,
+                left_row,
                 right_batch,
                 Some(cur_right_bitmap),
                 &self.column_indices,
@@ -3694,8 +3652,8 @@ impl NestedLoopJoinStream {
 
         // Slice both left batch, and bitmap to range [start_idx, end_idx)
         // The range is bit index (not byte)
-        let left_batch = left_data.batch();
-        let left_batch_sliced = left_batch.slice(start_idx, end_idx - start_idx);
+        let left_batch_sliced =
+            left_data.batch().slice(start_idx, end_idx - start_idx)?;
 
         // Can this be more efficient?
         let mut bitmap_sliced = BooleanBufferBuilder::new(end_idx - start_idx);
@@ -3833,15 +3791,14 @@ impl NestedLoopJoinStream {
 // ==== Utilities ====
 
 /// Apply the join filter between:
-/// (l_index th row in left buffer) x (right batch)
+/// (left_row in left buffer) x (right batch)
 /// Returns a bitmap, with successfully joined indices set to true
 fn apply_filter_to_row_join_batch(
-    left_batch: &RecordBatch,
-    l_index: usize,
+    left_row: BatchRow<'_>,
     right_batch: &RecordBatch,
     filter: &JoinFilter,
 ) -> Result<BooleanArray> {
-    debug_assert!(left_batch.num_rows() != 0 && right_batch.num_rows() != 0);
+    debug_assert!(right_batch.num_rows() != 0);
 
     let intermediate_batch = if filter.schema.fields().is_empty() {
         // If filter is constant (e.g. literal `true`), empty batch can be used
@@ -3853,8 +3810,7 @@ fn apply_filter_to_row_join_batch(
     } else {
         build_row_join_batch(
             &filter.schema,
-            left_batch,
-            l_index,
+            left_row,
             right_batch,
             None,
             &filter.column_indices,
@@ -3877,21 +3833,20 @@ fn apply_filter_to_row_join_batch(
 
 /// This function performs the following steps:
 /// 1. Apply filter to probe-side batch
-/// 2. Broadcast the left row (build_side_batch\[build_side_index\]) to the
-///    filtered probe-side batch
+/// 2. Broadcast the build row (`build_row`) to the filtered probe-side batch
 /// 3. Concat them together according to `col_indices`, and return the result
 ///    (None if the result is empty)
 ///
 /// Example:
-/// build_side_batch:
+/// build side batch:
 /// a
 /// ----
 /// 1
 /// 2
 /// 3
 ///
-/// # 0 index element in the build_side_batch (that is `1`) will be used
-/// build_side_index: 0
+/// # 0 index row of the build side batch (that is `1`) will be used
+/// build_row: row 0
 ///
 /// probe_side_batch:
 /// b
@@ -3924,8 +3879,7 @@ fn apply_filter_to_row_join_batch(
 /// 1 40
 fn build_row_join_batch(
     output_schema: &Schema,
-    build_side_batch: &RecordBatch,
-    build_side_index: usize,
+    build_row: BatchRow<'_>,
     probe_side_batch: &RecordBatch,
     probe_side_filter: Option<BooleanArray>,
     // See [`NLJStream`] struct's `column_indices` field for more detail
@@ -3969,7 +3923,7 @@ fn build_row_join_batch(
         let array = if column_index.side == build_side {
             // Broadcast the single build-side row to match the filtered
             // probe-side batch length
-            let original_left_array = build_side_batch.column(column_index.index);
+            let original_left_array = build_row.column(column_index.index)?;
 
             // Use `arrow::compute::take` directly for `List(Utf8View)` rather
             // than going through `ScalarValue::to_array_of_size()`, which
@@ -3981,7 +3935,7 @@ fn build_row_join_batch(
                     if field.data_type() == &DataType::Utf8View =>
                 {
                     let indices_iter = std::iter::repeat_n(
-                        build_side_index as u64,
+                        build_row.index() as u64,
                         filtered_probe_batch.num_rows(),
                     );
                     let indices_array = UInt64Array::from_iter_values(indices_iter);
@@ -3990,7 +3944,7 @@ fn build_row_join_batch(
                 _ => {
                     let scalar_value = ScalarValue::try_from_array(
                         original_left_array.as_ref(),
-                        build_side_index,
+                        build_row.index(),
                     )?;
                     scalar_value.to_array_of_size(filtered_probe_batch.num_rows())?
                 }
@@ -4145,9 +4099,9 @@ fn build_unmatched_batch(
                     .collect::<Vec<_>>(),
             ));
             let left_null_batch = if nullable_left_schema.fields.is_empty() {
-                // Left input can be an empty relation, in this case left relation
-                // won't be used to construct the result batch (i.e. not in `col_indices`)
-                create_record_batch_with_empty_schema(nullable_left_schema, 0)?
+                // Keep the placeholder row even when no columns from this
+                // side are projected, so BatchRow can address row 0.
+                create_record_batch_with_empty_schema(nullable_left_schema, 1)?
             } else {
                 RecordBatch::try_new(nullable_left_schema, left_null_columns)?
             };
@@ -4157,8 +4111,7 @@ fn build_unmatched_batch(
 
             build_row_join_batch(
                 output_schema,
-                &left_null_batch,
-                0,
+                BatchRow::new(&left_null_batch, 0)?,
                 batch,
                 Some(flipped_bitmap),
                 col_indices,
@@ -4749,7 +4702,7 @@ pub(crate) mod tests {
                     BooleanBufferBuilder::new(0)
                 };
                 let chunk = Arc::new(JoinLeftData::new(
-                    left_batch.clone(),
+                    left_batch.clone().into(),
                     Mutex::new(visited),
                     AtomicUsize::new(1),
                     MemoryConsumer::new("NestedLoopJoinFallbackChunk[test]".to_string())
@@ -4764,7 +4717,6 @@ pub(crate) mod tests {
                 });
             } else {
                 let mut inner = coordinator.inner.lock();
-                inner.left_schema = Some(Arc::clone(&left_schema));
                 inner.left_stream = Some(left_stream);
             }
             let active = SpillStateActive {
@@ -4773,7 +4725,6 @@ pub(crate) mod tests {
                     spill_file: left_spill_file,
                     schema: Arc::clone(&left_schema),
                 }),
-                left_schema: Some(Arc::clone(&left_schema)),
                 // Preload the single left chunk into the coordinator's slot so
                 // `next_chunk` serves it from `current` without reading the
                 // spill file. That keeps this helper's premise intact: the left
@@ -6658,7 +6609,6 @@ pub(crate) mod tests {
         let spill = spill_left_for_test(build_left_table(), Arc::clone(&ctx)).await?;
         {
             let mut inner = coordinator.inner.lock();
-            inner.left_schema = Some(Arc::clone(&spill.schema));
             inner.left_stream =
                 Some(Box::pin(crate::stream::RecordBatchStreamAdapter::new(
                     Arc::clone(&spill.schema),
@@ -6698,7 +6648,6 @@ pub(crate) mod tests {
         let spill = spill_left_for_test(build_left_table(), Arc::clone(&ctx)).await?;
         {
             let mut inner = coordinator.inner.lock();
-            inner.left_schema = Some(Arc::clone(&spill.schema));
             inner.left_stream =
                 Some(Box::pin(crate::stream::RecordBatchStreamAdapter::new(
                     Arc::clone(&spill.schema),
@@ -7000,7 +6949,6 @@ pub(crate) mod tests {
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         {
             let mut inner = coordinator.inner.lock();
-            inner.left_schema = Some(Arc::clone(&schema));
             inner.left_stream =
                 Some(Box::pin(crate::stream::RecordBatchStreamAdapter::new(
                     schema,

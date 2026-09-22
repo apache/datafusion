@@ -34,7 +34,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::vec;
 
-use super::aggregate_hash_table::accumulator_phases;
+use super::aggregate_hash_table::{accumulator_phases, create_group_accumulator};
 use super::order::GroupOrdering;
 use super::skip_partial::SkipAggregationProbe;
 use super::{AggregateExec, format_human_display};
@@ -64,10 +64,9 @@ use datafusion_common::{
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_expr::{AggregateMetrics, EmitTo, GroupsAccumulator};
-use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
+use datafusion_expr::{EmitTo, GroupsAccumulator};
+use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 
@@ -649,29 +648,6 @@ impl GroupedHashAggregateStream {
             skip_aggregation_probe,
             reduction_factor,
         })
-    }
-}
-
-/// Create an accumulator for `agg_expr` -- a [`GroupsAccumulator`] if
-/// that is supported by the aggregate, or a
-/// [`GroupsAccumulatorAdapter`] if not.
-pub(crate) fn create_group_accumulator(
-    agg_expr: &Arc<AggregateFunctionExpr>,
-    metrics: Arc<dyn AggregateMetrics>,
-) -> Result<Box<dyn GroupsAccumulator>> {
-    if agg_expr.groups_accumulator_supported() {
-        agg_expr.create_groups_accumulator_with_metrics(metrics)
-    } else {
-        // Note in the log when the slow path is used
-        debug!(
-            "Creating GroupsAccumulatorAdapter for {}: {agg_expr:?}",
-            agg_expr.name()
-        );
-        let agg_expr = Arc::clone(agg_expr);
-        let mut adapter =
-            GroupsAccumulatorAdapter::new(move || agg_expr.create_accumulator());
-        adapter.set_metrics(metrics);
-        Ok(Box::new(adapter))
     }
 }
 
@@ -1376,6 +1352,7 @@ impl GroupedHashAggregateStream {
                 .with_metrics(self.baseline_metrics.clone())
                 .with_batch_size(self.batch_size)
                 .with_reservation(self.reservation.new_empty())
+                .with_replay_headroom()
                 .build()?;
             self.input_done = false;
 
@@ -1403,6 +1380,9 @@ impl GroupedHashAggregateStream {
             // to ensure we don't spill the spilled data to disk again.
             self.oom_mode = OutOfMemoryMode::ReportError;
 
+            // Release unused initial capacity from recreated group values so it
+            // does not consume the memory available for spill replay.
+            self.group_values.clear_shrink(0);
             self.update_memory_reservation()?;
 
             ExecutionState::ReadingInput
@@ -1508,7 +1488,7 @@ mod tests {
     use arrow::array::{Int32Array, Int64Array, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-    use datafusion_expr::AggregateMetric;
+    use datafusion_expr::{AggregateMetric, AggregateMetrics};
     use datafusion_functions_aggregate::{array_agg::array_agg_udaf, count::count_udaf};
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;

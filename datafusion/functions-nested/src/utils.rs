@@ -30,6 +30,7 @@ use datafusion_common::cast::{
     as_fixed_size_list_array, as_float64_array, as_generic_list_array,
     as_large_list_array, as_large_list_view_array, as_list_array, as_list_view_array,
 };
+use datafusion_common::utils::offset_span_len;
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 
 use datafusion_expr::ColumnarValue;
@@ -409,8 +410,9 @@ where
 
     let row_nulls = NullBuffer::union(lhs.nulls(), rhs.nulls());
 
-    let mut out_values: Vec<f64> = Vec::with_capacity(lhs_values.len());
-    let mut out_inner_nulls = NullBufferBuilder::new(lhs_values.len());
+    let capacity = offset_span_len(lhs.offsets());
+    let mut out_values: Vec<f64> = Vec::with_capacity(capacity);
+    let mut out_inner_nulls = NullBufferBuilder::new(capacity);
     let mut out_offsets = Vec::<O>::with_capacity(lhs.len() + 1);
     out_offsets.push(O::zero());
 
@@ -507,7 +509,7 @@ pub(crate) fn needs_norm_scale(sum_of_squares: f64, len: usize) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use arrow::array::ListArray;
     use arrow::datatypes::Int64Type;
@@ -601,5 +603,53 @@ mod tests {
         assert!(needs_norm_scale(0.0, 1));
         assert!(needs_norm_scale(f64::INFINITY, 1));
         assert!(needs_norm_scale(f64::NAN, 1));
+    }
+
+    /// Tests the array function supplied via `run` on small slices of a large
+    /// list, checking two independent properties:
+    ///
+    /// 1. Correctness: results match those from equivalent inputs with compact
+    ///    child storage.
+    /// 2. Capacity: output buffers retain little memory, catching reservations
+    ///    based on the full backing child array rather than the visible slice.
+    pub(crate) fn check_sliced_list_behavior(
+        run: impl Fn(&ArrayRef) -> Result<ArrayRef>,
+    ) -> Result<()> {
+        let padding = 8192;
+        let visible = vec![Some(3.0), None, Some(4.0), Some(9.0), Some(9.0)];
+        let values = Float64Array::from_iter(
+            std::iter::repeat_n(Some(1.0), padding)
+                .chain(visible.iter().copied())
+                .chain(std::iter::repeat_n(Some(1.0), padding)),
+        );
+        let field = Arc::new(Field::new_list_field(DataType::Float64, true));
+        let input = ListArray::new(
+            Arc::clone(&field),
+            OffsetBuffer::from_lengths([padding, 3, 0, 2, padding]),
+            Arc::new(values),
+            Some(NullBuffer::from(vec![true, true, true, false, true])),
+        );
+        let compact = ListArray::new(
+            Arc::clone(&field),
+            OffsetBuffer::from_lengths([3, 0, 2]),
+            Arc::new(Float64Array::from(visible)),
+            Some(NullBuffer::from(vec![true, true, false])),
+        );
+        for data_type in [input.data_type().clone(), DataType::LargeList(field)] {
+            let input = arrow::compute::cast(&input, &data_type)?;
+            let compact = arrow::compute::cast(&compact, &data_type)?;
+            // Middle slice, empty slice, empty row, and null row with child data.
+            for (offset, len) in [(0, 3), (0, 0), (1, 1), (2, 1)] {
+                let result = run(&input.slice(1 + offset, len))?;
+                let expected = run(&compact.slice(offset, len))?;
+                assert_eq!(result.as_ref(), expected.as_ref());
+                assert!(
+                    result.get_buffer_memory_size() < 1024,
+                    "{data_type}: {} bytes for {len} rows",
+                    result.get_buffer_memory_size()
+                );
+            }
+        }
+        Ok(())
     }
 }

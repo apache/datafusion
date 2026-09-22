@@ -74,7 +74,7 @@ use arrow::array::{
     Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
     TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array, UnionArray,
-    downcast_run_array, new_empty_array, new_null_array,
+    downcast_run_array, make_comparator, new_empty_array, new_null_array,
 };
 use arrow::buffer::{BooleanBuffer, ScalarBuffer};
 use arrow::compute::kernels::cast::{CastOptions, cast_with_options};
@@ -920,23 +920,11 @@ fn partial_cmp_map(m1: &Arc<MapArray>, m2: &Arc<MapArray>) -> Option<Ordering> {
         return None;
     }
 
-    for col_index in 0..m1.len() {
-        let arr1 = m1.entries().column(col_index);
-        let arr2 = m2.entries().column(col_index);
-
-        let lt_res = arrow::compute::kernels::cmp::lt(arr1, arr2).ok()?;
-        let eq_res = arrow::compute::kernels::cmp::eq(arr1, arr2).ok()?;
-
-        for j in 0..lt_res.len() {
-            if lt_res.is_valid(j) && lt_res.value(j) {
-                return Some(Ordering::Less);
-            }
-            if eq_res.is_valid(j) && !eq_res.value(j) {
-                return Some(Ordering::Greater);
-            }
-        }
-    }
-    Some(Ordering::Equal)
+    // Keep ScalarValue ordering consistent with Arrow sorting and nested comparison.
+    // Maps compare lexicographically by entry (key, value), including offsets and nulls.
+    let comparator =
+        make_comparator(m1.as_ref(), m2.as_ref(), Default::default()).ok()?;
+    Some(comparator(0, 0))
 }
 
 impl Eq for ScalarValue {}
@@ -7425,6 +7413,41 @@ mod tests {
     }
 
     #[test]
+    fn test_map_partial_cmp() {
+        fn map(entries: Option<Vec<(&str, Option<i32>)>>) -> ScalarValue {
+            ScalarValue::Map(Arc::new(MapArray::from_vec_of_maps::<
+                StringArray,
+                Int32Array,
+                _,
+                _,
+            >(vec![entries], false)))
+        }
+
+        let a1 = map(Some(vec![("a", Some(1))]));
+        let a2 = map(Some(vec![("a", Some(2))]));
+        assert_eq!(a1.partial_cmp(&a2), Some(Ordering::Less));
+        assert_eq!(a2.partial_cmp(&a1), Some(Ordering::Greater));
+
+        // Map entries compare as (key, value) pairs, rather than comparing all keys
+        // before all values. The first pair therefore determines this ordering.
+        let high_first_value = map(Some(vec![("a", Some(100)), ("b", Some(1))]));
+        let low_first_value = map(Some(vec![("a", Some(1)), ("c", Some(999))]));
+        assert_eq!(
+            high_first_value.partial_cmp(&low_first_value),
+            Some(Ordering::Greater)
+        );
+
+        let prefix = map(Some(vec![("a", Some(1))]));
+        let longer = map(Some(vec![("a", Some(1)), ("b", Some(2))]));
+        assert_eq!(prefix.partial_cmp(&longer), Some(Ordering::Less));
+
+        let null = map(None);
+        let empty = map(Some(vec![]));
+        assert_eq!(null.partial_cmp(&empty), Some(Ordering::Less));
+        assert_eq!(empty.partial_cmp(&empty), Some(Ordering::Equal));
+    }
+
+    #[test]
     fn scalar_value_to_array_u64() -> Result<()> {
         let value = ScalarValue::UInt64(Some(13u64));
         let array = value.to_array().expect("Failed to convert to array");
@@ -11109,7 +11132,7 @@ mod tests {
             Box::new(ScalarValue::Float32(None)),
         );
         let err = scalar.eq_array(&run_array, 0).unwrap_err();
-        let expected = "Internal error: could not cast array of type RunEndEncoded(\"run_ends\": non-null Int16, \"values\": Float32) to arrow_array::array::run_array::RunArray<arrow_array::types::Int32Type>";
+        let expected = "Internal error: could not cast array of type RunEndEncoded(non-null Int16, Float32) to arrow_array::array::run_array::RunArray<arrow_array::types::Int32Type>";
         assert!(err.to_string().starts_with(expected));
     }
 

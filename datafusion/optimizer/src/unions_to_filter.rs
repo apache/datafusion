@@ -18,6 +18,7 @@
 //! Rewrites `UNION DISTINCT` branches that differ only by filter predicates
 //! into a single filtered branch plus `DISTINCT`.
 
+use crate::utils::is_repeatable;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::Result;
 use datafusion_common::tree_node::{
@@ -180,7 +181,7 @@ fn extract_branch(plan: LogicalPlan) -> Result<Option<UnionBranch>> {
         LogicalPlan::Filter(Filter {
             predicate, input, ..
         }) => {
-            if !is_mergeable_predicate(&predicate) {
+            if !is_repeatable(&predicate) {
                 debug!(
                     "unions_to_filter skipped: branch predicate contains volatility or a subquery"
                 );
@@ -334,10 +335,6 @@ fn align_plan_to_schema(
     )?))
 }
 
-fn is_mergeable_predicate(expr: &Expr) -> bool {
-    !expr.is_volatile() && !expr_contains_subquery(expr)
-}
-
 /// Check every expression in the retained source, including its descendants.
 /// Merging branches also merges their source evaluations, so the same
 /// restrictions as for projection wrappers apply throughout the source.
@@ -345,7 +342,7 @@ fn source_is_safe(source: &LogicalPlan) -> Result<bool> {
     let mut safe = true;
     source.apply(|node| {
         node.apply_expressions(|expr| {
-            if is_mergeable_predicate(expr) {
+            if is_repeatable(expr) {
                 Ok(TreeNodeRecursion::Continue)
             } else {
                 safe = false;
@@ -370,28 +367,15 @@ fn collect_table_sources(source: &LogicalPlan) -> Result<Vec<Arc<dyn TableSource
 /// Returns `true` when every projection expression in `wrappers` is both
 /// non-volatile and subquery-free.
 ///
-/// Volatile expressions (e.g. `random()`, `now()`) or correlated subqueries
+/// Volatile expressions (e.g. `random()`) or correlated subqueries
 /// in the SELECT list cannot be safely merged: the original plan evaluates
 /// them once per branch execution, while the rewritten plan evaluates them
 /// once per combined row, which can change the set of output rows.
 fn wrapper_projections_are_safe(wrappers: &[Wrapper]) -> bool {
     wrappers.iter().all(|w| match w {
-        Wrapper::Projection { expr, .. } => expr
-            .iter()
-            .all(|e| !e.is_volatile() && !expr_contains_subquery(e)),
+        Wrapper::Projection { expr, .. } => expr.iter().all(is_repeatable),
         Wrapper::SubqueryAlias { .. } => true,
     })
-}
-
-fn expr_contains_subquery(expr: &Expr) -> bool {
-    expr.exists(|e| match e {
-        Expr::ScalarSubquery(_)
-        | Expr::Exists(_)
-        | Expr::InSubquery(_)
-        | Expr::SetComparison(_) => Ok(true),
-        _ => Ok(false),
-    })
-    .expect("boolean expression walk is infallible")
 }
 
 #[cfg(test)]
@@ -401,11 +385,10 @@ mod tests {
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::test_table_scan_with_name;
     use arrow::datatypes::DataType;
-    use datafusion_common::{Result, Spans};
-    use datafusion_expr::expr::{SetComparison, SetQuantifier};
+    use datafusion_common::Result;
     use datafusion_expr::{
-        ColumnarValue, Expr, Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-        Signature, Subquery, Volatility, col, lit,
+        ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+        Volatility, col, lit,
     };
 
     macro_rules! assert_optimized_plan_equal {
@@ -453,27 +436,6 @@ mod tests {
 
     fn volatile_expr() -> Expr {
         ScalarUDF::new_from_impl(VolatileTestUdf).call(vec![])
-    }
-
-    #[test]
-    fn set_comparison_is_detected_as_subquery() {
-        let subquery = LogicalPlanBuilder::from(test_table_scan_with_name("t2").unwrap())
-            .project(vec![col("b")])
-            .unwrap()
-            .build()
-            .unwrap();
-        let expr = Expr::SetComparison(SetComparison::new(
-            Box::new(col("a")),
-            Subquery {
-                subquery: Arc::new(subquery),
-                outer_ref_columns: vec![],
-                spans: Spans::new(),
-            },
-            Operator::Gt,
-            SetQuantifier::Any,
-        ));
-
-        assert!(expr_contains_subquery(&expr));
     }
 
     fn assert_not_rewritten(plan: LogicalPlan) {
