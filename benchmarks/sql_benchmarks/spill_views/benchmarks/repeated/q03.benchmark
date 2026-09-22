@@ -1,0 +1,9 @@
+subgroup repeated
+
+template sql_benchmarks/spill_views/spill_views.benchmark.template
+QPAD=03
+DATASET=low_card_1000_binary
+NAME=q03_sort_binary_1000_distinct
+SPILL_LIMIT=40M
+VIEW_TYPE=BinaryView
+DISTINCT_S=1000
