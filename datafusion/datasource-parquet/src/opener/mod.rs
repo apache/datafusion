@@ -1637,17 +1637,22 @@ impl RowGroupsPrunedParquetOpen {
 
             let prepared_access_plan = prepare_access_plan(access_plan)?;
             let has_row_selection = prepared_access_plan.has_row_selection;
-            // Selections and match flags stay attached to their row groups
-            // through preparation, reordering, and decoder rebuilds.
-            let rg_plan: VecDeque<RgPlanEntry> = prepared_access_plan
-                .row_groups
-                .into_iter()
-                .map(|rg| RgPlanEntry {
-                    bytes: row_group_bytes(&rg_metadata[rg.selection.row_group_index()]),
-                    selection: rg.selection,
-                    fully_matched: rg.fully_matched,
-                })
-                .collect();
+            // Move selections into the decoder, retaining only the metadata
+            // needed for pruning, filter toggles, and byte accounting.
+            let (selections, rg_plan): (Vec<_>, VecDeque<RgPlanEntry>) =
+                prepared_access_plan
+                    .row_groups
+                    .into_iter()
+                    .map(|rg| {
+                        let rg_index = rg.selection.row_group_index();
+                        let entry = RgPlanEntry {
+                            rg_index,
+                            bytes: row_group_bytes(&rg_metadata[rg_index]),
+                            fully_matched: rg.fully_matched,
+                        };
+                        (rg.selection, entry)
+                    })
+                    .unzip();
 
             // Decide the initial row filter state based on the first RG to
             // read. If that RG is `fully_matched` the per-row predicate is
@@ -1663,10 +1668,6 @@ impl RowGroupsPrunedParquetOpen {
             let first_rg_fully_matched = rg_plan.front().is_some_and(|e| e.fully_matched);
             let row_filter_context = precomputed_context;
 
-            let selections = rg_plan
-                .iter()
-                .map(|entry| entry.selection.clone())
-                .collect();
             let mut builder = decoder_config.build(selections, reader_metadata.clone());
             let mut filter_installed = false;
             if let Some(ctx) = row_filter_context.as_ref() {

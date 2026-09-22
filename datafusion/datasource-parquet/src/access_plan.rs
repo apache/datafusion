@@ -471,7 +471,7 @@ impl ParquetAccessPlan {
                     );
                     // Intersections can leave an empty selection: drop the
                     // group together with its match status.
-                    if !selection.selects_any() {
+                    if selection.row_count() == 0 {
                         continue;
                     }
                     Some(selection)

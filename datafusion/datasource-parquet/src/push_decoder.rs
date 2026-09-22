@@ -111,8 +111,7 @@ impl DecoderBuilderConfig<'_> {
 
 #[derive(Debug, Clone)]
 pub(crate) struct RgPlanEntry {
-    /// Keep the local selection attached to the row group during rebuilds.
-    pub(crate) selection: RowGroupSelection,
+    pub(crate) rg_index: usize,
     /// `true` when static pruning proved every row of this RG satisfies the
     /// predicate, so the per-row `RowFilter` can be skipped as a no-op.
     pub(crate) fully_matched: bool,
@@ -594,7 +593,7 @@ impl PushDecoderStreamState {
         byte_progress: &mut ByteProgress,
     ) -> Result<()> {
         while let Some(front) = rg_plan.front() {
-            if front.selection.row_group_index() == target {
+            if front.rg_index == target {
                 return Ok(());
             }
             // Popped here means arrow-rs finished this row group without
@@ -618,7 +617,7 @@ impl PushDecoderStreamState {
         let mut pruned_count = 0usize;
         let mut kept = VecDeque::with_capacity(self.rg_plan.len());
         while let Some(entry) = self.rg_plan.pop_front() {
-            if pruner.should_prune(&[entry.selection.row_group_index()]) {
+            if pruner.should_prune(&[entry.rg_index]) {
                 pruned_count += 1;
                 self.row_groups_pruned_dynamic.add(1);
                 // The scan is done with this row group's bytes.
@@ -661,10 +660,15 @@ impl PushDecoderStreamState {
 
         let decoder = self.decoder.take().expect("decoder present");
         let mut builder = decoder.into_builder().map_err(DataFusionError::from)?;
-        // `into_builder` preserves the remaining selections. Only replace them
-        // when pruning changed the plan, avoiding selector copies on filter toggles.
+        // Filter-only rebuilds preserve the decoder's remaining selections.
+        // Runtime pruning is disabled for scans with selections, so pruned
+        // plans can be rebuilt from row-group indexes alone.
         if pruned_count > 0 {
-            let selections = self.rg_plan.iter().map(|e| e.selection.clone()).collect();
+            let selections = self
+                .rg_plan
+                .iter()
+                .map(|e| RowGroupSelection::new(e.rg_index, None))
+                .collect();
             builder = builder.with_row_group_selections(selections);
         }
         if filter_needs_toggle {
@@ -889,7 +893,7 @@ mod tests {
         indexes
             .into_iter()
             .map(|rg_index| RgPlanEntry {
-                selection: RowGroupSelection::new(rg_index, None),
+                rg_index,
                 fully_matched: false,
                 bytes: 100 * (rg_index as u64 + 1),
             })
@@ -906,9 +910,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            plan.iter()
-                .map(|e| e.selection.row_group_index())
-                .collect::<Vec<_>>(),
+            plan.iter().map(|e| e.rg_index).collect::<Vec<_>>(),
             vec![2, 3],
             "must pop the entries before `target` and stop at it",
         );
