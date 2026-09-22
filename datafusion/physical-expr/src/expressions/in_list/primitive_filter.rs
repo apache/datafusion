@@ -459,7 +459,7 @@ mod tests {
 
     use arrow::array::{
         DictionaryArray, Float16Array, Float32Array, Float64Array, Int8Array, Int16Array,
-        UInt8Array, UInt16Array, UInt32Array,
+        PrimitiveArray, UInt8Array, UInt16Array, UInt32Array,
     };
     use half::f16;
 
@@ -505,6 +505,28 @@ mod tests {
         assert!(instantiate_branchless_filter(&array)?.is_some());
 
         Ok(())
+    }
+
+    #[test]
+    fn branchless_float_zero_expansion_handles_max_list_len() -> Result<()> {
+        fn assert_routed_filter<T: BranchlessFilterType>(
+            negative_zero: T::Native,
+            positive_zero: T::Native,
+        ) -> Result<()> {
+            // The mirror zero is appended after the full logical list.
+            let haystack: ArrayRef = Arc::new(PrimitiveArray::<T>::from_value(
+                negative_zero,
+                T::MAX_LIST_LEN,
+            ));
+            let filter = instantiate_branchless_filter(&haystack)?
+                .expect("a full float list still uses a branchless filter");
+            let needles = PrimitiveArray::<T>::from_value(positive_zero, 1);
+            assert_contains(filter.as_ref(), &needles, vec![Some(true)])
+        }
+
+        assert_routed_filter::<Float16Type>(f16::NEG_ZERO, f16::ZERO)?;
+        assert_routed_filter::<Float32Type>(-0.0, 0.0)?;
+        assert_routed_filter::<Float64Type>(-0.0, 0.0)
     }
 
     #[test]
