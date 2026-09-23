@@ -24,8 +24,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow::array::{
-    DurationMillisecondArray, GenericListArray, Int64Array, StringArray, StructArray,
-    TimestampMillisecondArray, UInt64Array,
+    Array, DurationMillisecondArray, GenericListArray, Int64Array, MapBuilder,
+    StringArray, StringBuilder, StructArray, TimestampMillisecondArray, UInt64Array,
 };
 use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};
@@ -45,6 +45,10 @@ use async_trait::async_trait;
 use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use parquet::basic::ConvertedType;
 use parquet::data_type::{ByteArray, FixedLenByteArray};
+use parquet::file::metadata::{KeyValue, PageIndexPolicy, ParquetMetaDataReader};
+use parquet::file::page_index::column_index::{
+    ColumnIndexMetaData, PrimitiveColumnIndex,
+};
 use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::file::statistics::Statistics;
@@ -315,23 +319,23 @@ fn fixed_len_byte_array_to_string(val: &FixedLenByteArray) -> String {
         .unwrap_or_else(|_e| val.to_string())
 }
 
+/// Returns the file path passed to the parquet table function `func`
+fn parquet_file_path<'a>(func: &str, exprs: &'a [Expr]) -> Result<&'a str> {
+    match exprs.first() {
+        Some(Expr::Literal(ScalarValue::Utf8(Some(s)), _)) => Ok(s), // single quote: func('x.parquet')
+        Some(Expr::Column(Column { name, .. })) => Ok(name), // double quote: func("x.parquet")
+        _ => plan_err!("{func} requires string argument as its input"),
+    }
+}
+
 #[derive(Debug)]
 pub struct ParquetMetadataFunc {}
 
 impl TableFunctionImpl for ParquetMetadataFunc {
     fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
-        let exprs = args.exprs();
-        let filename = match exprs.first() {
-            Some(Expr::Literal(ScalarValue::Utf8(Some(s)), _)) => s, // single quote: parquet_metadata('x.parquet')
-            Some(Expr::Column(Column { name, .. })) => name, // double quote: parquet_metadata("x.parquet")
-            _ => {
-                return plan_err!(
-                    "parquet_metadata requires string argument as its input"
-                );
-            }
-        };
+        let filename = parquet_file_path("parquet_metadata", args.exprs())?;
 
-        let file = File::open(filename.clone())?;
+        let file = File::open(filename)?;
         let reader = SerializedFileReader::new(file)?;
         let metadata = reader.metadata();
 
@@ -387,7 +391,7 @@ impl TableFunctionImpl for ParquetMetadataFunc {
         let mut total_uncompressed_size_arr = vec![];
         for (rg_idx, row_group) in metadata.row_groups().iter().enumerate() {
             for (col_idx, column) in row_group.columns().iter().enumerate() {
-                filename_arr.push(filename.clone());
+                filename_arr.push(filename);
                 row_group_id_arr.push(rg_idx as i64);
                 row_group_num_rows_arr.push(row_group.num_rows());
                 row_group_num_columns_arr.push(row_group.num_columns() as i64);
@@ -460,6 +464,184 @@ impl TableFunctionImpl for ParquetMetadataFunc {
 
         let parquet_metadata = ParquetMetadataTable { schema, batch: rb };
         Ok(Arc::new(parquet_metadata))
+    }
+}
+
+/// PARQUET_FILE_METADATA table function
+#[derive(Debug)]
+pub struct ParquetFileMetadataFunc {}
+
+impl TableFunctionImpl for ParquetFileMetadataFunc {
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+        let filename = parquet_file_path("parquet_file_metadata", args.exprs())?;
+
+        let mut reader = ParquetMetaDataReader::new();
+        reader.try_parse(&File::open(filename)?)?;
+        let footer_length = reader.metadata_size().map(|size| size as i64);
+        let metadata = reader.finish()?;
+        let file_metadata = metadata.file_metadata();
+
+        let key_values = file_metadata.key_value_metadata();
+        let mut key_value_metadata =
+            MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+        for KeyValue { key, value } in key_values.into_iter().flatten() {
+            key_value_metadata.keys().append_value(key);
+            key_value_metadata.values().append_option(value.as_ref());
+        }
+        key_value_metadata.append(key_values.is_some())?;
+        let key_value_metadata = key_value_metadata.finish();
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("filename", DataType::Utf8, true),
+            Field::new("created_by", DataType::Utf8, true),
+            Field::new("version", DataType::Int64, true),
+            Field::new("num_rows", DataType::Int64, true),
+            Field::new("num_row_groups", DataType::Int64, true),
+            Field::new(
+                "key_value_metadata",
+                key_value_metadata.data_type().clone(),
+                true,
+            ),
+            Field::new("footer_length", DataType::Int64, true),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![filename])),
+                Arc::new(StringArray::from(vec![file_metadata.created_by()])),
+                Arc::new(Int64Array::from(vec![i64::from(file_metadata.version())])),
+                Arc::new(Int64Array::from(vec![file_metadata.num_rows()])),
+                Arc::new(Int64Array::from(vec![metadata.num_row_groups() as i64])),
+                Arc::new(key_value_metadata),
+                Arc::new(Int64Array::from(vec![footer_length])),
+            ],
+        )?;
+
+        Ok(Arc::new(ParquetMetadataTable { schema, batch }))
+    }
+}
+
+/// Formats the min and max of page `idx` in `index` the same way as
+/// [`convert_parquet_statistics`]
+fn convert_page_min_max(
+    index: &ColumnIndexMetaData,
+    idx: usize,
+    converted_type: ConvertedType,
+) -> (Option<String>, Option<String>) {
+    fn primitive<T: ToString>(
+        index: &PrimitiveColumnIndex<T>,
+        idx: usize,
+    ) -> (Option<String>, Option<String>) {
+        (
+            index.min_value(idx).map(T::to_string),
+            index.max_value(idx).map(T::to_string),
+        )
+    }
+    let bytes = |val: &[u8]| match std::str::from_utf8(val) {
+        Ok(s) if converted_type == ConvertedType::UTF8 => s.to_string(),
+        _ => format!("{val:?}"),
+    };
+
+    match index {
+        ColumnIndexMetaData::BOOLEAN(index) => primitive(index, idx),
+        ColumnIndexMetaData::INT32(index) => primitive(index, idx),
+        ColumnIndexMetaData::INT64(index) => primitive(index, idx),
+        ColumnIndexMetaData::INT96(index) => primitive(index, idx),
+        ColumnIndexMetaData::FLOAT(index) => primitive(index, idx),
+        ColumnIndexMetaData::DOUBLE(index) => primitive(index, idx),
+        ColumnIndexMetaData::BYTE_ARRAY(index)
+        | ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(index) => (
+            index.min_value(idx).map(bytes),
+            index.max_value(idx).map(bytes),
+        ),
+    }
+}
+
+/// PARQUET_PAGE_INDEX table function
+#[derive(Debug)]
+pub struct ParquetPageIndexFunc {}
+
+impl TableFunctionImpl for ParquetPageIndexFunc {
+    fn call_with_args(&self, args: TableFunctionArgs) -> Result<Arc<dyn TableProvider>> {
+        let filename = parquet_file_path("parquet_page_index", args.exprs())?;
+
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_index_policy(PageIndexPolicy::Optional)
+            .parse_and_finish(&File::open(filename)?)?;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("filename", DataType::Utf8, true),
+            Field::new("row_group_id", DataType::Int64, true),
+            Field::new("column_id", DataType::Int64, true),
+            Field::new("page_ordinal", DataType::Int64, true),
+            Field::new("first_row_index", DataType::Int64, true),
+            Field::new("offset", DataType::Int64, true),
+            Field::new("compressed_page_size", DataType::Int64, true),
+            Field::new("min_value", DataType::Utf8, true),
+            Field::new("max_value", DataType::Utf8, true),
+            Field::new("null_count", DataType::Int64, true),
+        ]));
+
+        // construct record batch from metadata, one row per page
+        let mut filename_arr = vec![];
+        let mut row_group_id_arr = vec![];
+        let mut column_id_arr = vec![];
+        let mut page_ordinal_arr = vec![];
+        let mut first_row_index_arr = vec![];
+        let mut offset_arr = vec![];
+        let mut compressed_page_size_arr = vec![];
+        let mut min_value_arr = vec![];
+        let mut max_value_arr = vec![];
+        let mut null_count_arr = vec![];
+        for (rg_idx, row_group) in metadata.row_groups().iter().enumerate() {
+            let page_index = metadata.page_index_for_row_group(rg_idx);
+            for (col_idx, column) in row_group.columns().iter().enumerate() {
+                // the offset index locates the pages, so without it there are none to list
+                let Some(offset_index) = page_index.offset_index(col_idx) else {
+                    continue;
+                };
+                let column_index = page_index.column_index(col_idx);
+                let converted_type = column.column_descr().converted_type();
+
+                for (page_idx, page) in offset_index.page_locations().iter().enumerate() {
+                    filename_arr.push(filename);
+                    row_group_id_arr.push(rg_idx as i64);
+                    column_id_arr.push(col_idx as i64);
+                    page_ordinal_arr.push(page_idx as i64);
+                    first_row_index_arr.push(page.first_row_index);
+                    offset_arr.push(page.offset);
+                    compressed_page_size_arr.push(i64::from(page.compressed_page_size));
+                    let (min_val, max_val) = column_index
+                        .map(|index| {
+                            convert_page_min_max(index, page_idx, converted_type)
+                        })
+                        .unwrap_or_default();
+                    min_value_arr.push(min_val);
+                    max_value_arr.push(max_val);
+                    null_count_arr
+                        .push(column_index.and_then(|index| index.null_count(page_idx)));
+                }
+            }
+        }
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(filename_arr)),
+                Arc::new(Int64Array::from(row_group_id_arr)),
+                Arc::new(Int64Array::from(column_id_arr)),
+                Arc::new(Int64Array::from(page_ordinal_arr)),
+                Arc::new(Int64Array::from(first_row_index_arr)),
+                Arc::new(Int64Array::from(offset_arr)),
+                Arc::new(Int64Array::from(compressed_page_size_arr)),
+                Arc::new(StringArray::from(min_value_arr)),
+                Arc::new(StringArray::from(max_value_arr)),
+                Arc::new(Int64Array::from(null_count_arr)),
+            ],
+        )?;
+
+        Ok(Arc::new(ParquetMetadataTable { schema, batch }))
     }
 }
 
