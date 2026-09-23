@@ -160,6 +160,26 @@ pub fn new_group_values(
     schema: SchemaRef,
     group_ordering: &GroupOrdering,
 ) -> Result<Box<dyn GroupValues>> {
+    new_group_values_with_borrow(schema, group_ordering, false)
+}
+
+/// As [`new_group_values`], where `borrow_source` lets the group values keep
+/// the data buffers of the arrays they are given instead of copying the bytes
+/// of every new group value.
+///
+/// Only for a table that is known to be dropped before the batches it is fed,
+/// which today means the table of one bucket of a bucketed final aggregation.
+///
+/// It applies to the multi-column path only. Measured on a single `Utf8View`
+/// group key it is a small gain for short values and a loss for long ones
+/// (ClickBench Q33, URLs of ~90 bytes: 0.53x -> 0.57x), because that path
+/// compares the stored bytes of a candidate on every probe, and the copies it
+/// would avoid are what packs those bytes together.
+pub fn new_group_values_with_borrow(
+    schema: SchemaRef,
+    group_ordering: &GroupOrdering,
+    borrow_source: bool,
+) -> Result<Box<dyn GroupValues>> {
     if schema.fields.len() == 1 {
         let d = schema.fields[0].data_type();
 
@@ -227,9 +247,15 @@ pub fn new_group_values(
 
     if multi_group_by::supported_schema(schema.as_ref()) {
         if matches!(group_ordering, GroupOrdering::None) {
-            Ok(Box::new(GroupValuesColumn::<false>::try_new(schema)?))
+            Ok(Box::new(GroupValuesColumn::<false>::try_new_with_borrow(
+                schema,
+                borrow_source,
+            )?))
         } else {
-            Ok(Box::new(GroupValuesColumn::<true>::try_new(schema)?))
+            Ok(Box::new(GroupValuesColumn::<true>::try_new_with_borrow(
+                schema,
+                borrow_source,
+            )?))
         }
     } else {
         Ok(Box::new(GroupValuesRows::try_new(schema)?))

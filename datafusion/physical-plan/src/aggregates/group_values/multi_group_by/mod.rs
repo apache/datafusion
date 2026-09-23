@@ -178,6 +178,9 @@ impl GroupIndexView {
 /// A [`GroupValues`] that stores multiple columns of group values,
 /// and supports vectorized operators for them
 pub struct GroupValuesColumn<const STREAMING: bool> {
+    /// See `ByteViewGroupValueBuilder::borrow_source`
+    borrow_source: bool,
+
     /// The output schema
     schema: SchemaRef,
 
@@ -284,14 +287,21 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
 
     /// Create a new instance of GroupValuesColumn if supported for the specified schema
     pub fn try_new(schema: SchemaRef) -> Result<Self> {
+        Self::try_new_with_borrow(schema, false)
+    }
+
+    /// `borrow_source`: see `ByteViewGroupValueBuilder::borrow_source`. Only
+    /// for a table that is shorter lived than the batches it is given.
+    pub fn try_new_with_borrow(schema: SchemaRef, borrow_source: bool) -> Result<Self> {
         let map = HashTable::with_capacity(0);
-        let group_values = Self::build_group_columns(&schema)?;
+        let group_values = Self::build_group_columns(&schema, borrow_source)?;
         Ok(Self {
             schema,
             map,
             group_index_lists: Vec::new(),
             emit_group_index_list_buffer: Vec::new(),
             vectorized_operation_buffers: VectorizedOperationBuffers::default(),
+            borrow_source,
             map_size: 0,
             group_values,
             hashes_buffer: Default::default(),
@@ -306,10 +316,13 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     /// `clear_shrink`). Centralising it keeps the post-condition that
     /// `self.group_values` always contains exactly one builder per schema
     /// field outside of those transient drain points.
-    fn build_group_columns(schema: &Schema) -> Result<Vec<Box<dyn GroupColumn>>> {
+    fn build_group_columns(
+        schema: &Schema,
+        borrow_source: bool,
+    ) -> Result<Vec<Box<dyn GroupColumn>>> {
         let mut v: Vec<Box<dyn GroupColumn>> = Vec::with_capacity(schema.fields().len());
         for f in schema.fields().iter() {
-            v.push(make_group_column(f.as_ref())?);
+            v.push(make_group_column(f.as_ref(), borrow_source)?);
         }
         Ok(v)
     }
@@ -940,7 +953,7 @@ macro_rules! instantiate_primitive {
 /// column only creates empty buffers, and this runs once per stream.
 fn group_column_supported_type(data_type: &DataType) -> bool {
     // Whether a type is supported does not depend on its nullability
-    make_group_column(&Field::new("", data_type.clone(), true)).is_ok()
+    make_group_column(&Field::new("", data_type.clone(), true), false).is_ok()
 }
 
 /// Build a [`GroupColumn`] for a single schema field.
@@ -955,7 +968,7 @@ fn group_column_supported_type(data_type: &DataType) -> bool {
 /// Returns `Err(not_impl_err!(...))` for any type not in the supported set.
 /// [`group_column_supported_type`] reports exactly that, which is how
 /// `new_group_values` knows to use the `GroupValuesRows` fallback instead.
-fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
+fn make_group_column(field: &Field, borrow_source: bool) -> Result<Box<dyn GroupColumn>> {
     let nullable = field.is_nullable();
     let data_type = field.data_type();
     let builder: Option<Box<dyn GroupColumn>> = match data_type {
@@ -1058,12 +1071,14 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
         DataType::FixedSizeBinary(byte_width @ 0..) => {
             Some(Box::new(FixedSizeBinaryGroupValueBuilder::new(*byte_width)))
         }
-        DataType::Utf8View => {
-            Some(Box::new(ByteViewGroupValueBuilder::<StringViewType>::new()))
-        }
-        DataType::BinaryView => {
-            Some(Box::new(ByteViewGroupValueBuilder::<BinaryViewType>::new()))
-        }
+        DataType::Utf8View => Some(Box::new(
+            ByteViewGroupValueBuilder::<StringViewType>::new()
+                .with_borrow_source(borrow_source),
+        )),
+        DataType::BinaryView => Some(Box::new(
+            ByteViewGroupValueBuilder::<BinaryViewType>::new()
+                .with_borrow_source(borrow_source),
+        )),
         DataType::Boolean => {
             if nullable {
                 Some(Box::new(BooleanGroupValueBuilder::<true>::new()))
@@ -1071,24 +1086,27 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
                 Some(Box::new(BooleanGroupValueBuilder::<false>::new()))
             }
         }
-        DataType::List(child_field) => match make_group_column(child_field.as_ref()) {
-            Ok(child) => Some(Box::new(list::ListGroupValueBuilder::<i32>::new(
-                Arc::clone(child_field),
-                child,
-            ))),
-            Err(_) => None,
-        },
-        DataType::LargeList(child_field) => match make_group_column(child_field.as_ref())
-        {
-            Ok(child) => Some(Box::new(list::ListGroupValueBuilder::<i64>::new(
-                Arc::clone(child_field),
-                child,
-            ))),
-            Err(_) => None,
-        },
+        DataType::List(child_field) => {
+            match make_group_column(child_field.as_ref(), false) {
+                Ok(child) => Some(Box::new(list::ListGroupValueBuilder::<i32>::new(
+                    Arc::clone(child_field),
+                    child,
+                ))),
+                Err(_) => None,
+            }
+        }
+        DataType::LargeList(child_field) => {
+            match make_group_column(child_field.as_ref(), false) {
+                Ok(child) => Some(Box::new(list::ListGroupValueBuilder::<i64>::new(
+                    Arc::clone(child_field),
+                    child,
+                ))),
+                Err(_) => None,
+            }
+        }
         DataType::Dictionary(key_dt, value_dt) => {
             let new_field = Field::new("", *value_dt.clone(), true);
-            let inner = make_group_column(&new_field)?;
+            let inner = make_group_column(&new_field, false)?;
             macro_rules! dict_col {
                 ($T:ty) => {
                     Box::new(dictionary::DictionaryGroupValuesColumn::<$T>::new(
@@ -1167,7 +1185,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
                 // so `build_group_columns` would only error here if some
                 // out-of-band schema mutation occurred — propagate it as
                 // a real Result rather than panicking.
-                let fresh = Self::build_group_columns(&self.schema)?;
+                let fresh = Self::build_group_columns(&self.schema, self.borrow_source)?;
                 let group_values = mem::replace(&mut self.group_values, fresh);
 
                 group_values
@@ -1281,7 +1299,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         // in `try_new`, so rebuilding cannot fail unless something else
         // mutated the schema out-of-band — surface that as a panic since
         // `clear_shrink` is infallible by trait signature.
-        self.group_values = Self::build_group_columns(&self.schema)
+        self.group_values = Self::build_group_columns(&self.schema, self.borrow_source)
             .expect("schema previously validated in try_new");
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
@@ -1687,7 +1705,7 @@ mod tests {
             // Building a top-level Field and feeding it through the factory
             // must succeed for every supported case.
             let field = Field::new("col", dt.clone(), true);
-            make_group_column(&field).unwrap_or_else(|e| {
+            make_group_column(&field, false).unwrap_or_else(|e| {
                 panic!(
                     "group_column_supported_type accepted {dt:?} but make_group_column rejected: {e}"
                 )
@@ -1728,7 +1746,7 @@ mod tests {
             );
             let field = Field::new("col", dt.clone(), true);
             assert!(
-                make_group_column(&field).is_err(),
+                make_group_column(&field, false).is_err(),
                 "group_column_supported_type rejected {dt:?} but make_group_column accepted it"
             );
         }

@@ -127,13 +127,24 @@ impl BucketedAggregation {
         self.threshold
     }
 
-    fn new_table(&self) -> Result<AggregateHashTable<FinalMarker>> {
+    /// A table over the state rows of one bucket.
+    ///
+    /// `borrow_group_values` lets it keep its group keys where its input rows
+    /// already hold them instead of copying them out. That is right for the
+    /// table that aggregates a bucket, which is emptied before the bucket's
+    /// rows are, and wrong for the table that compacts a bucket, whose whole
+    /// purpose is to replace those rows with something smaller.
+    fn new_table(
+        &self,
+        borrow_group_values: bool,
+    ) -> Result<AggregateHashTable<FinalMarker>> {
         AggregateHashTable::<FinalMarker>::new_over_state(
             &self.agg,
             &self.state_schema,
             self.partition,
             Arc::clone(&self.output_schema),
             self.batch_size,
+            borrow_group_values,
         )
     }
 
@@ -171,7 +182,7 @@ impl BucketedAggregation {
         while let Some(index) = buckets.bucket_to_compact() {
             let table = match table {
                 Some(table) => table,
-                None => table.insert(self.new_table()?),
+                None => table.insert(self.new_table(false)?),
             };
             let mut input_rows = 0;
             for batch in buckets.take_bucket(index)? {
@@ -284,7 +295,7 @@ impl BucketedAggregation {
                 let mut timer = elapsed_compute.timer();
                 let mut hash_table = match reusable_table.take() {
                     Some(hash_table) => hash_table,
-                    None => self.new_table()?.with_restart(),
+                    None => self.new_table(true)?.with_restart(),
                 };
                 let mut table_rows = 0usize;
                 let mut sub_buckets: Option<FinalBuckets> = None;
