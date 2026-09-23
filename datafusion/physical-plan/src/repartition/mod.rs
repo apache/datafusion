@@ -1888,10 +1888,6 @@ impl ExecutionPlan for RepartitionExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn metrics_for_partition(&self, partition: usize) -> Option<MetricsSet> {
-        Some(self.metrics.clone_partition(partition))
-    }
-
     fn child_stats_requests(&self, _partition: Option<usize>) -> Vec<ChildStats> {
         vec![ChildStats::At(None)]
     }

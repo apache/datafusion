@@ -1547,10 +1547,6 @@ impl ExecutionPlan for SortExec {
         Some(self.metrics_set.clone_inner())
     }
 
-    fn metrics_for_partition(&self, partition: usize) -> Option<MetricsSet> {
-        Some(self.metrics_set.clone_partition(partition))
-    }
-
     fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
         let child_partition = if self.preserve_partitioning() {
             partition

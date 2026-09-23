@@ -385,10 +385,6 @@ impl ExecutionPlan for StreamingTableExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn metrics_for_partition(&self, partition: usize) -> Option<MetricsSet> {
-        Some(self.metrics.clone_partition(partition))
-    }
-
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         Some(Arc::new(StreamingTableExec {
             partitions: self.partitions.clone(),

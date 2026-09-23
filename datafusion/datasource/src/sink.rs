@@ -56,19 +56,6 @@ pub trait DataSink: Any + DisplayAs + Debug + Send + Sync {
         None
     }
 
-    /// Return metrics registered for this partition, excluding unpartitioned metrics.
-    ///
-    /// The default filters a full snapshot. Sinks using `ExecutionPlanMetricsSet`
-    /// should override this to use its indexed `clone_partition` method.
-    fn metrics_for_partition(&self, partition: usize) -> Option<MetricsSet> {
-        self.metrics().map(|metrics| {
-            metrics
-                .into_iter()
-                .filter(|metric| metric.partition() == Some(partition))
-                .collect()
-        })
-    }
-
     /// Returns the sink schema
     fn schema(&self) -> &SchemaRef;
 
@@ -383,10 +370,6 @@ impl ExecutionPlan for DataSinkExec {
     /// Returns the metrics of the underlying [DataSink]
     fn metrics(&self) -> Option<MetricsSet> {
         self.sink.metrics()
-    }
-
-    fn metrics_for_partition(&self, partition: usize) -> Option<MetricsSet> {
-        self.sink.metrics_for_partition(partition)
     }
 
     /// Delegates protobuf serialization to the underlying sink.

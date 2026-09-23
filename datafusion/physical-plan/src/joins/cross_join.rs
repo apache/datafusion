@@ -270,10 +270,6 @@ impl ExecutionPlan for CrossJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn metrics_for_partition(&self, partition: usize) -> Option<MetricsSet> {
-        Some(self.metrics.clone_partition(partition))
-    }
-
     fn apply_expressions(
         &self,
         _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,

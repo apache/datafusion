@@ -235,10 +235,6 @@ impl ExecutionPlan for RecursiveQueryExec {
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }
-
-    fn metrics_for_partition(&self, partition: usize) -> Option<MetricsSet> {
-        Some(self.metrics.clone_partition(partition))
-    }
 }
 
 impl DisplayAs for RecursiveQueryExec {

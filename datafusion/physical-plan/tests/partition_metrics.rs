@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[path = "../benches/metrics/plan.rs"]
+#[path = "metrics/plan.rs"]
 mod plan;
 
 use std::sync::Arc;
@@ -36,13 +36,13 @@ async fn run_shared_tree() -> Result<()> {
     let (nodes, gate) = plan::shared_plan(16)?;
     let context = Arc::new(TaskContext::default());
     for node in &nodes {
-        assert_eq!(node.metrics_for_partition(0).unwrap().iter().count(), 0);
+        assert_eq!(node.metrics().unwrap().for_partition(0).iter().count(), 0);
     }
     let mut long_stream = nodes[0].execute(0, Arc::clone(&context))?;
     let first = long_stream.next().await.unwrap()?;
     assert_eq!(first.num_rows(), 16);
     assert!(long_stream.next().now_or_never().is_none());
-    let early = nodes[0].metrics_for_partition(0).unwrap();
+    let early = nodes[0].metrics().unwrap().for_partition(0);
     assert_eq!(early.output_rows(), Some(16));
 
     // Concurrent execution and registration on the same Arc<dyn ExecutionPlan>.
@@ -70,7 +70,7 @@ async fn run_shared_tree() -> Result<()> {
     // Other completed partitions do not affect the still-running partition.
     assert_eq!(early.output_rows(), Some(16));
     assert_eq!(
-        nodes[0].metrics_for_partition(0).unwrap().output_rows(),
+        nodes[0].metrics().unwrap().for_partition(0).output_rows(),
         Some(16)
     );
     gate.notify_one();
@@ -83,7 +83,7 @@ async fn run_shared_tree() -> Result<()> {
         let full = node.metrics().unwrap();
         assert_eq!(full.output_rows(), Some(rows * 16));
         for partition in 0..16 {
-            let selected = node.metrics_for_partition(partition).unwrap();
+            let selected = node.metrics().unwrap().for_partition(partition);
             assert_eq!(selected.output_rows(), Some(rows));
             assert_eq!(selected.aggregate_by_name().output_rows(), Some(rows));
             let expected: Vec<_> = full
@@ -95,7 +95,7 @@ async fn run_shared_tree() -> Result<()> {
                 assert!(Arc::ptr_eq(actual, expected));
             }
         }
-        assert_eq!(node.metrics_for_partition(16).unwrap().iter().count(), 0);
+        assert_eq!(node.metrics().unwrap().for_partition(16).iter().count(), 0);
     }
     Ok(())
 }

@@ -520,10 +520,6 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         Some(self.metrics.clone_inner())
     }
 
-    fn metrics_for_partition(&self, partition: usize) -> Option<MetricsSet> {
-        Some(self.metrics.clone_partition(partition))
-    }
-
     fn execute(
         &self,
         partition: usize,

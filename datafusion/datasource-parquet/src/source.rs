@@ -1372,11 +1372,11 @@ mod tests {
             FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
                 .build();
         let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
-        assert_eq!(plan.metrics_for_partition(0).unwrap().iter().count(), 0);
+        assert_eq!(plan.metrics().unwrap().for_partition(0).iter().count(), 0);
         MetricBuilder::new(&metrics).output_rows(0).add(10);
         MetricBuilder::new(&metrics).output_rows(1).add(20);
         MetricBuilder::new(&metrics).global_counter("global").add(1);
-        let selected = plan.metrics_for_partition(0).unwrap();
+        let selected = plan.metrics().unwrap().for_partition(0);
         assert_eq!(selected.output_rows(), Some(10));
         assert!(selected.iter().all(|m| m.partition() == Some(0)));
         let full = plan.metrics().unwrap();
@@ -1389,7 +1389,7 @@ mod tests {
         MetricBuilder::new(&metrics).output_rows(0).add(5);
         assert_eq!(selected.output_rows(), Some(10));
         assert_eq!(
-            plan.metrics_for_partition(0).unwrap().output_rows(),
+            plan.metrics().unwrap().for_partition(0).output_rows(),
             Some(15)
         );
     }

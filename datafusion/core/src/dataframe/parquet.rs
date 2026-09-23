@@ -490,7 +490,7 @@ mod tests {
         let metrics = plan
             .metrics()
             .expect("DataSinkExec should return metrics from ParquetSink");
-        let selected = plan.metrics_for_partition(0).unwrap();
+        let selected = plan.metrics().unwrap().for_partition(0);
         let expected: Vec<_> = metrics
             .iter()
             .filter(|metric| metric.partition() == Some(0))

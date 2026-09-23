@@ -473,10 +473,6 @@ impl ExecutionPlan for PartialSortExec {
         Some(self.metrics_set.clone_inner())
     }
 
-    fn metrics_for_partition(&self, partition: usize) -> Option<MetricsSet> {
-        Some(self.metrics_set.clone_partition(partition))
-    }
-
     fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
         vec![ChildStats::At(partition)]
     }

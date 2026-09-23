@@ -713,27 +713,6 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         None
     }
 
-    /// Return a snapshot of metrics whose [`Metric::partition`] is `Some(partition)`.
-    ///
-    /// This has the same snapshot semantics as [`Self::metrics`], but excludes
-    /// metrics for other partitions and metrics with no partition. It does not
-    /// aggregate metrics, recurse into children, or remap partition identifiers.
-    /// A partition with no registered metrics returns an empty set if this plan
-    /// supports metrics, and `None` otherwise. Call again to see late registrations.
-    ///
-    /// The default implementation clones and filters all metrics for compatibility
-    /// with existing implementations. Operators using [`ExecutionPlanMetricsSet`](crate::metrics::ExecutionPlanMetricsSet)
-    /// should override this with [`ExecutionPlanMetricsSet::clone_partition`](crate::metrics::ExecutionPlanMetricsSet::clone_partition) to
-    /// make retrieval independent of metrics registered for other partitions.
-    fn metrics_for_partition(&self, partition: usize) -> Option<MetricsSet> {
-        self.metrics().map(|metrics| {
-            metrics
-                .into_iter()
-                .filter(|metric| metric.partition() == Some(partition))
-                .collect()
-        })
-    }
-
     /// Returns statistics for a specific partition of this `ExecutionPlan` node.
     ///
     /// Deprecated: use [`StatisticsContext::compute`] instead.
