@@ -22,12 +22,13 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
+use crate::expressions::{Column, Literal};
 use crate::physical_expr::physical_exprs_bag_equal;
 
 use arrow::array::*;
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::SortOptions;
-use arrow::compute::kernels::boolean::{not, or_kleene};
+use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::cmp::eq as arrow_eq;
 use arrow::datatypes::*;
 
@@ -274,17 +275,14 @@ impl InListExpr {
             assert_inlist_data_types_match(&expr_data_type, &list_expr_data_type)?;
         }
 
-        let static_filter = if strict_short_circuit
-            && !list
-                .iter()
-                .all(|expr| expr.is::<crate::expressions::Literal>())
-        {
-            None
-        } else {
-            try_evaluate_constant_list(&list, schema)?
-                .map(|array| instantiate_static_filter(array, &expr_data_type))
-                .transpose()?
-        };
+        let static_filter =
+            if strict_short_circuit && !list.iter().all(|expr| expr.is::<Literal>()) {
+                None
+            } else {
+                try_evaluate_constant_list(&list, schema)?
+                    .map(|array| instantiate_static_filter(array, &expr_data_type))
+                    .transpose()?
+            };
 
         Ok(Self {
             strict_short_circuit,
@@ -419,6 +417,8 @@ impl PhysicalExpr for InListExpr {
                 // comparator for unsupported types (nested, RunEndEncoded, etc.).
                 let value = value.into_array(num_rows)?;
                 let lhs_supports_arrow_eq = supports_arrow_eq(value.data_type());
+                let cheap_comparison = value.data_type().is_primitive()
+                    || value.data_type() == &DataType::Boolean;
 
                 // Helper: compare value against a single list expression
                 let compare_one = |item: ColumnarValue| -> Result<BooleanArray> {
@@ -485,7 +485,7 @@ impl PhysicalExpr for InListExpr {
                     BooleanArray::new(BooleanBuffer::new_unset(num_rows), None)
                 };
                 for expr in list {
-                    let item = if self.strict_short_circuit {
+                    let comparison = if self.strict_short_circuit {
                         let mut selection = !found.values();
                         if let Some(nulls) = found.nulls() {
                             selection = &selection | &!nulls.inner();
@@ -497,14 +497,23 @@ impl PhysicalExpr for InListExpr {
                         if !selection.has_true() {
                             break;
                         }
-                        expr.evaluate_selection(batch, &selection)?
+                        let item = if expr.is::<Literal>()
+                            || (cheap_comparison && expr.is::<Column>())
+                        {
+                            // Avoid copying cheap values; keep variable-width and
+                            // nested columns masked before their costly comparisons.
+                            expr.evaluate(batch)?
+                        } else {
+                            expr.evaluate_selection(batch, &selection)?
+                        };
+                        and_kleene(&compare_one(item)?, &selection)?
                     } else {
                         if found.null_count() == 0 && !found.has_false() {
                             break;
                         }
-                        expr.evaluate(batch)?
+                        compare_one(expr.evaluate(batch)?)?
                     };
-                    found = or_kleene(&found, &compare_one(item)?)?;
+                    found = or_kleene(&found, &comparison)?;
                 }
 
                 if self.negated { not(&found)? } else { found }
@@ -3268,6 +3277,10 @@ mod tests {
                     as ArrayRef,
             ),
             ("divisor", Arc::new(Int64Array::from(vec![0, 1, 0, 2]))),
+            (
+                "candidate",
+                Arc::new(Int64Array::from(vec![Some(9), None, None, Some(3)])),
+            ),
         ])?;
         let schema = batch.schema();
         let probe = col("value", &schema)?;
@@ -3280,7 +3293,7 @@ mod tests {
             (false, vec![Some(true), Some(true), None, Some(false)]),
             (true, vec![Some(false), Some(false), None, None]),
         ] {
-            let mut list = vec![lit(0_i64)];
+            let mut list = vec![lit(0_i64), col("candidate", &schema)?];
             if negated {
                 list.push(lit(ScalarValue::Int64(None)));
             }
@@ -3323,6 +3336,36 @@ mod tests {
             &schema,
         )?;
         assert_ne!(expr, reversed);
+        Ok(())
+    }
+
+    #[test]
+    fn strict_in_preserves_encoded_probe_nulls() -> Result<()> {
+        let run_ends = Int32Array::from(vec![1, 2]);
+        let probe = RunArray::<Int32Type>::try_new(
+            &run_ends,
+            &Int32Array::from(vec![None, Some(1)]),
+        )?;
+        let candidate =
+            RunArray::<Int32Type>::try_new(&run_ends, &Int32Array::from(vec![42, 1]))?;
+        let batch = RecordBatch::try_from_iter([
+            ("probe", Arc::new(probe) as ArrayRef),
+            ("candidate", Arc::new(candidate) as ArrayRef),
+        ])?;
+        let schema = batch.schema();
+        for negated in [false, true] {
+            let expr = InListExpr::try_new_with_strict_short_circuit(
+                col("probe", &schema)?,
+                vec![col("candidate", &schema)?],
+                negated,
+                &schema,
+            )?;
+            let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+            assert_eq!(
+                result.as_boolean(),
+                &BooleanArray::from(vec![None, Some(!negated)])
+            );
+        }
         Ok(())
     }
 
