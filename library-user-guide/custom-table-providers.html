@@ -1138,6 +1138,13 @@ ensures that only the relevant directories are scanned. The actual file reading
 happens later, in the stream produced by <code class="docutils literal notranslate"><span class="pre">execute()</span></code>.</p>
 </section>
 </section>
+<section id="row-level-dml-delete-and-update">
+<h2>Row-Level DML: DELETE and UPDATE<a class="headerlink" href="#row-level-dml-delete-and-update" title="Link to this heading">#</a></h2>
+<p>A custom table provider can support <code class="docutils literal notranslate"><span class="pre">DELETE</span></code> and <code class="docutils literal notranslate"><span class="pre">UPDATE</span></code> by implementing the optional <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html#method.delete_from"><code class="docutils literal notranslate"><span class="pre">TableProvider::delete_from()</span></code></a> and <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html#method.update"><code class="docutils literal notranslate"><span class="pre">TableProvider::update()</span></code></a> methods. Their default implementations return a “not implemented” error.</p>
+<p>Each method builds an <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html">ExecutionPlan</a> that changes the matching rows and returns the number of affected rows in a <code class="docutils literal notranslate"><span class="pre">count</span></code> column. Your provider decides how to apply and persist the changes. Perform the changes when the returned plan executes: these methods run during physical planning, including for <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span></code>.</p>
+<p>The method documentation describes the filters, assignments, SQL semantics, and result schema that an implementation must support. <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/datasource/memory/struct.MemTable.html">MemTable</a> provides an implementation of both methods over in-memory batches.</p>
+<p>For SQL syntax and examples, see the <a class="reference internal" href="../user-guide/sql/dml.html"><span class="std std-doc">DML section</span></a> of the user guide.</p>
+</section>
 <section id="putting-it-all-together">
 <h2>Putting It All Together<a class="headerlink" href="#putting-it-all-together" title="Link to this heading">#</a></h2>
 <p>Here is a minimal but complete example of a custom table provider that generates
@@ -1385,6 +1392,7 @@ contains working examples including custom table providers</p></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#a-complete-filter-pushdown-example">A Complete Filter Pushdown Example</a></li>
 </ul>
 </li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#row-level-dml-delete-and-update">Row-Level DML: DELETE and UPDATE</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#putting-it-all-together">Putting It All Together</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#using-your-table-provider">Using Your Table Provider</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#further-reading">Further Reading</a></li>
