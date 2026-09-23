@@ -390,6 +390,14 @@ impl RowFilterContext {
         }
     }
 
+    /// Whether any pushed-down predicate reads this Parquet leaf column.
+    pub(crate) fn reads_leaf(&self, leaf_idx: usize) -> bool {
+        self.prebuilt
+            .as_slice()
+            .iter()
+            .any(|candidate| candidate.reads_leaf(leaf_idx))
+    }
+
     /// Build a fresh [`RowFilter`] for the next non-fully-matched run using
     /// the cached candidates. Cheap: no tree walks, only counter allocation
     /// and (optionally) a sort by `required_bytes`.
