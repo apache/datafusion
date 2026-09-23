@@ -19,6 +19,7 @@ use clap::{ColorChoice, Parser};
 use datafusion::common::instant::Instant;
 use datafusion::common::utils::get_available_parallelism;
 use datafusion::common::{DataFusionError, Result, exec_datafusion_err, exec_err};
+use datafusion::execution::memory_pool::DEFAULT_DRIFT_LOG_THRESHOLD;
 #[cfg(feature = "substrait")]
 use datafusion_sqllogictest::DataFusionSubstraitRoundTrip;
 use datafusion_sqllogictest::TestFile;
@@ -146,7 +147,7 @@ async fn run_tests() -> Result<()> {
     options.warn_on_ignored();
 
     if options.memory_drift {
-        enable_memory_drift_logging();
+        enable_memory_drift_logging(options.memory_drift_log_threshold);
     }
 
     // Print parallelism info for debugging CI performance
@@ -398,6 +399,12 @@ async fn run_tests() -> Result<()> {
 
     if let Some(peak) = memory_drift_tracker().and_then(|t| t.peak_drift()) {
         eprintln!("Peak memory drift: {peak}");
+        if options.test_threads > 1 {
+            eprintln!(
+                "Test files ran concurrently, so the file and consumer above can be wrong. \
+                 Run with --test-threads 1 to attribute drift to one file."
+            );
+        }
     }
 
     #[cfg(feature = "postgres")]
@@ -1128,6 +1135,15 @@ struct Options {
         help = "Log drift between MemoryPool reservations and allocated bytes (RUST_LOG=info to see each change)"
     )]
     memory_drift: bool,
+
+    #[clap(
+        long,
+        env = "SLT_MEMORY_DRIFT_LOG_THRESHOLD",
+        value_name = "BYTES",
+        default_value_t = DEFAULT_DRIFT_LOG_THRESHOLD,
+        help = "Rise in memory drift, in bytes, needed before another line is logged"
+    )]
+    memory_drift_log_threshold: usize,
 
     #[clap(
         long,

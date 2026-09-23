@@ -45,6 +45,11 @@ use parking_lot::Mutex;
 use super::{MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation};
 
 /// Returns the number of bytes currently allocated by the process.
+///
+/// This is called on every reservation change (`grow`, `try_grow` and
+/// `shrink`) of every pool that reports to the tracker, so it must be cheap,
+/// e.g. a single atomic load. Do not read allocator statistics that need a
+/// refresh on each call (such as jemalloc's `epoch`).
 pub type AllocatedBytesFn = Arc<dyn Fn() -> usize + Send + Sync>;
 
 /// Default rise in drift, in bytes, needed before another line is logged.
@@ -99,9 +104,14 @@ pub struct MemoryDriftTracker {
 /// One observation of drift, recorded by [`MemoryDriftTracker`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriftSample {
-    /// Label of the [`DriftLoggingPool`] that made the observation.
+    /// Label of the [`DriftLoggingPool`] whose reservation change took this
+    /// sample, or the source passed to [`MemoryDriftTracker::sample`]. When
+    /// several pools share a tracker, the untracked memory can come from any
+    /// of them.
     pub pool: String,
-    /// Consumer whose reservation change triggered the observation.
+    /// Consumer whose reservation change took this sample (empty for
+    /// [`MemoryDriftTracker::sample`]). This shows when drift was sampled,
+    /// not what caused it.
     pub consumer: String,
     /// Bytes reserved across all pools reporting to the tracker.
     pub reserved: usize,
@@ -159,6 +169,17 @@ impl MemoryDriftTracker {
         self.peak.lock().clone()
     }
 
+    /// Compare the current allocated bytes with the reserved total now,
+    /// without a reservation change.
+    ///
+    /// Drift is otherwise only sampled when a reservation changes, so memory
+    /// allocated by code that reserves little can go unseen until some other
+    /// reservation changes. Calling this periodically, e.g. from a timer,
+    /// closes that gap. `source` is recorded as the pool label.
+    pub fn sample(&self, source: &str) {
+        self.observe(source, "", self.reserved());
+    }
+
     fn grew(&self, pool: &str, consumer: &str, additional: usize) {
         let reserved =
             self.reserved.fetch_add(additional, Ordering::Relaxed) + additional;
@@ -170,7 +191,8 @@ impl MemoryDriftTracker {
         self.observe(pool, consumer, reserved);
     }
 
-    fn observe(&self, pool: &str, consumer: &str, reserved: usize) {
+    /// Returns `true` if a line was logged.
+    fn observe(&self, pool: &str, consumer: &str, reserved: usize) -> bool {
         let allocated = (self.allocated)();
         let drift = allocated as isize - reserved as isize;
 
@@ -198,15 +220,17 @@ impl MemoryDriftTracker {
         let last = self.last_logged.load(Ordering::Relaxed);
         let rose = untracked >= last.saturating_add(self.log_threshold as isize);
         if !rose && untracked >= last {
-            return;
+            return false;
         }
         let updated = self
             .last_logged
             .compare_exchange(last, untracked, Ordering::Relaxed, Ordering::Relaxed)
             .is_ok();
-        if updated && rose {
+        let logged = updated && rose;
+        if logged {
             log::info!("memory drift: {}", sample());
         }
+        logged
     }
 }
 
@@ -418,6 +442,65 @@ mod tests {
         assert_eq!(
             peak.to_string(),
             "drift=-2.0 KB allocated=0.0 B reserved=2.0 KB pool=over-reserved consumer=a"
+        );
+    }
+
+    #[test]
+    fn logs_each_rise_by_the_threshold_and_rearms_after_a_fall() {
+        let allocated = Arc::new(AtomicUsize::new(0));
+        let source = Arc::clone(&allocated);
+        let tracker =
+            MemoryDriftTracker::new(Arc::new(move || source.load(Ordering::Relaxed)))
+                .with_log_threshold(1000);
+        let observe = |bytes: usize| {
+            allocated.store(bytes, Ordering::Relaxed);
+            tracker.observe("p", "c", 0)
+        };
+
+        // Below the threshold: nothing logged.
+        assert!(!observe(999));
+        // Reaching the threshold logs and moves the baseline to 1000.
+        assert!(observe(1000));
+        assert!(!observe(1999));
+        assert!(observe(2000));
+        // Falling drift is not logged but lowers the baseline to 500...
+        assert!(!observe(500));
+        // ...so a rise of the threshold from there logs again.
+        assert!(!observe(1499));
+        assert!(observe(1500));
+    }
+
+    #[test]
+    fn negative_drift_counts_as_zero_for_logging() {
+        let (allocated, tracker) = tracker();
+        let tracker = Arc::into_inner(tracker).unwrap().with_log_threshold(1000);
+
+        assert!(!tracker.observe("p", "c", 5000));
+        allocated.store(999, Ordering::Relaxed);
+        assert!(!tracker.observe("p", "c", 0));
+        allocated.store(1000, Ordering::Relaxed);
+        assert!(tracker.observe("p", "c", 0));
+    }
+
+    #[test]
+    fn sample_observes_without_a_reservation_change() {
+        let (allocated, tracker) = tracker();
+        let pool = pool(&tracker, "q1");
+        let reservation = MemoryConsumer::new("a").register(&pool);
+        reservation.grow(100);
+
+        allocated.store(5000, Ordering::Relaxed);
+        tracker.sample("timer");
+
+        assert_eq!(
+            tracker.peak_drift(),
+            Some(DriftSample {
+                pool: "timer".to_string(),
+                consumer: String::new(),
+                reserved: 100,
+                allocated: 5000,
+                drift: 4900,
+            })
         );
     }
 

@@ -23,8 +23,8 @@
 //! [`MemoryDriftTracker`], which compares the sum of all reservations with the
 //! bytes counted by [`CountingAllocator`].
 //!
-//! Files that `SET datafusion.runtime.memory_limit` replace their pool, so
-//! their reservations after that point are not included in the total.
+//! Files that `SET datafusion.runtime.memory_limit` replace their pool; the
+//! runner wraps the replacement too (see [`rewrap_replaced_pool`]).
 //!
 //! This only logs. It never fails a test.
 
@@ -37,9 +37,12 @@ use std::{
     },
 };
 
+use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::memory_pool::{
     DriftLoggingPool, MemoryDriftTracker, MemoryPool,
 };
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::prelude::SessionContext;
 
 static ALLOCATED: AtomicIsize = AtomicIsize::new(0);
 static COUNTING: AtomicBool = AtomicBool::new(false);
@@ -63,7 +66,9 @@ impl<A> CountingAllocator<A> {
 
 /// Per-thread count is flushed to [`ALLOCATED`] once it moves this far, so
 /// threads do not contend on one atomic for every allocation. The global count
-/// is therefore accurate to within `threads * FLUSH_BYTES`.
+/// is therefore off by up to `FLUSH_BYTES` per live thread. The unflushed
+/// count of a thread that exits (e.g. an idle Tokio blocking thread) is lost,
+/// so this error can grow during a long run.
 const FLUSH_BYTES: isize = 256 * 1024;
 
 thread_local! {
@@ -130,11 +135,16 @@ pub fn allocated_bytes() -> usize {
 }
 
 /// Start counting allocations and wrap the memory pool of every test file
-/// created from now on. Only has an effect if [`CountingAllocator`] is the
-/// global allocator.
-pub fn enable_memory_drift_logging() {
+/// created from now on, logging each rise in drift of `log_threshold` bytes.
+/// Only has an effect if [`CountingAllocator`] is the global allocator.
+pub fn enable_memory_drift_logging(log_threshold: usize) {
     COUNTING.store(true, Ordering::Relaxed);
-    TRACKER.get_or_init(|| Arc::new(MemoryDriftTracker::new(Arc::new(allocated_bytes))));
+    TRACKER.get_or_init(|| {
+        Arc::new(
+            MemoryDriftTracker::new(Arc::new(allocated_bytes))
+                .with_log_threshold(log_threshold),
+        )
+    });
 }
 
 /// The process-wide tracker, if [`enable_memory_drift_logging`] was called.
@@ -151,4 +161,27 @@ pub fn wrap_pool(pool: Arc<dyn MemoryPool>, label: &str) -> Arc<dyn MemoryPool> 
         }
         None => pool,
     }
+}
+
+/// Wrap the memory pool of `ctx` again if a statement replaced it, e.g.
+/// `SET datafusion.runtime.memory_limit`, so its reservations keep being
+/// counted. Does nothing if drift logging is not enabled.
+pub(crate) fn rewrap_replaced_pool(ctx: &SessionContext, label: &str) {
+    if memory_drift_tracker().is_none() {
+        return;
+    }
+    let state = ctx.state_ref();
+    let mut state = state.write();
+    let runtime = state.runtime_env();
+    if runtime.memory_pool.is::<DriftLoggingPool>() {
+        return;
+    }
+    let pool = wrap_pool(Arc::clone(&runtime.memory_pool), label);
+    let runtime = RuntimeEnvBuilder::from_runtime_env(runtime)
+        .with_memory_pool(pool)
+        .build_arc()
+        .expect("rebuilding an existing runtime succeeds");
+    *state = SessionStateBuilder::from(state.clone())
+        .with_runtime_env(runtime)
+        .build();
 }
