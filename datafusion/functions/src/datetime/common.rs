@@ -584,3 +584,15 @@ fn scalar_value(dt: &DataType, r: Option<i64>) -> Result<ScalarValue> {
         t => Err(internal_datafusion_err!("Unsupported data type: {t:?}")),
     }
 }
+
+/// Parse the optional timezone string carried by [`DataType::Timestamp`] into a
+/// [`Tz`].
+///
+/// Returns `Ok(None)` when the timestamp type is timezone-naive.
+pub(crate) fn parse_tz(tz: Option<&Arc<str>>) -> Result<Option<Tz>> {
+    tz.map(|tz| {
+        tz.parse::<Tz>()
+            .map_err(|op| exec_datafusion_err!("failed on timezone {tz}: {op:?}"))
+    })
+    .transpose()
+}
