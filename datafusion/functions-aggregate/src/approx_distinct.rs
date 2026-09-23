@@ -151,8 +151,8 @@ fn merge_serialized<T: Hash + ?Sized>(
                 SPARSE_LIMIT * size_of::<u64>()
             );
         }
-        for chunk in bytes.chunks_exact(size_of::<u64>()) {
-            let h = u64::from_le_bytes(chunk.try_into().unwrap());
+        for chunk in bytes.as_chunks::<{ size_of::<u64>() }>().0 {
+            let h = u64::from_le_bytes(*chunk);
             hll.add_hashed(h);
         }
     }
