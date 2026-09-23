@@ -1248,18 +1248,16 @@ impl RecordBatchStore {
     }
 }
 
-/// Top-K-per-partition operator state.
+/// State shared by the per-partition top-K operators ([`PartitionedTopK`],
+/// [`PartitionedTopKRank`] and [`PartitionedTopKDenseRank`]): everything
+/// that does not depend on which ranking function is being computed.
 ///
-/// Sibling to [`TopK`]. Where `TopK` maintains a single global heap,
-/// `PartitionedTopK` maintains one [`TopKHeap`] per distinct partition
-/// key while sharing a single [`RowConverter`], [`MemoryReservation`],
-/// scratch [`Rows`] buffer, and [`TopKMetrics`] across all partitions.
-///
-/// This sharing is the point of the type: with N distinct partition
+/// Holding it once per operator is the point: with N distinct partition
 /// keys, a naive `HashMap<_, TopK>` pays N × constant overhead for
-/// `RowConverter::new`, `MemoryConsumer::register`, and metric
-/// counter setup. `PartitionedTopK` pays it once.
-pub(crate) struct PartitionedTopK {
+/// `RowConverter::new`, `MemoryConsumer::register`, and metric counter
+/// setup. Here a single [`RowConverter`], [`MemoryReservation`], scratch
+/// [`Rows`] buffer, and [`TopKMetrics`] serve all partitions.
+struct PartitionedTopKBase {
     schema: SchemaRef,
     metrics: TopKMetrics,
     reservation: MemoryReservation,
@@ -1267,7 +1265,8 @@ pub(crate) struct PartitionedTopK {
     expr: LexOrdering,
     /// Encoder for ORDER BY columns. Reused across partitions.
     row_converter: RowConverter,
-    /// Scratch row buffer reused across `insert_batch` calls.
+    /// ORDER BY encoding of the current batch, indexed by input row.
+    /// Reused across `insert_batch` calls (cleared + appended each batch).
     scratch_rows: Rows,
     /// PARTITION BY expressions.
     partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
@@ -1276,13 +1275,6 @@ pub(crate) struct PartitionedTopK {
     /// Scratch row buffer for partition-key encoding. Reused across
     /// `insert_batch` calls (cleared + appended each batch).
     partition_scratch_rows: Rows,
-    /// One heap per distinct partition key seen so far. Keyed by the
-    /// row-encoded PARTITION BY bytes (a byte-comparable encoding, so the
-    /// `Vec<u8>` hashes, compares, and sorts identically to an
-    /// `OwnedRow`) which lets `insert_batch` look partitions up with
-    /// `entry_ref` — allocating a key only on first sight of a partition
-    /// rather than once per row.
-    heaps: HashMap<Vec<u8>, TopKHeap>,
     /// Scratch map reused across `insert_batch` calls to group a batch's
     /// row indices by partition key. Drained (not reallocated) each batch
     /// so its backing table is allocated once, not per batch.
@@ -1291,9 +1283,10 @@ pub(crate) struct PartitionedTopK {
     batch_size: usize,
 }
 
-impl PartitionedTopK {
+impl PartitionedTopKBase {
     #[expect(clippy::too_many_arguments)]
-    pub(crate) fn try_new(
+    fn try_new(
+        name: &str,
         partition_id: usize,
         schema: SchemaRef,
         partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
@@ -1304,8 +1297,8 @@ impl PartitionedTopK {
         runtime: &Arc<RuntimeEnv>,
         metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Self> {
-        assert!(k > 0, "PartitionedTopK requires k > 0");
-        let reservation = MemoryConsumer::new(format!("PartitionedTopK[{partition_id}]"))
+        assert!(k > 0, "{name} requires k > 0");
+        let reservation = MemoryConsumer::new(format!("{name}[{partition_id}]"))
             .register(&runtime.memory_pool);
 
         let order_sort_fields = build_sort_fields(&order_expr, &schema)?;
@@ -1327,26 +1320,25 @@ impl PartitionedTopK {
             partition_exprs,
             partition_converter,
             partition_scratch_rows,
-            heaps: HashMap::new(),
             partition_groups: HashMap::new(),
             k,
             batch_size,
         })
     }
 
-    /// Demultiplex `batch` rows by partition key, encode the ORDER BY
-    /// columns once for the whole batch, and feed each partition's
-    /// rows into its dedicated [`TopKHeap`].
-    pub(crate) fn insert_batch(&mut self, batch: &RecordBatch) -> Result<()> {
-        let baseline = self.metrics.baseline.clone();
-        let _timer = baseline.elapsed_compute().timer();
-
+    /// Encode `batch`'s ORDER BY columns into `scratch_rows` (once, for the
+    /// whole batch) and return its row indices grouped by partition key.
+    ///
+    /// The returned map is the reused `partition_groups` scratch table:
+    /// the caller drains it and hands it back through
+    /// [`Self::finish_batch`], so its backing table is allocated once for
+    /// the operator, not once per batch.
+    fn encode_and_group(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<HashMap<Vec<u8>, Vec<u32>>> {
         let num_rows = batch.num_rows();
-        if num_rows == 0 {
-            return Ok(());
-        }
 
-        // 1. Evaluate + encode partition columns.
         let pk_arrays: Vec<ArrayRef> = self
             .partition_exprs
             .iter()
@@ -1356,25 +1348,17 @@ impl PartitionedTopK {
         self.partition_converter
             .append(&mut self.partition_scratch_rows, &pk_arrays)?;
 
-        // 2. Demultiplex row indices by partition key (per-batch).
-        //    `partition_groups` is a reused scratch map: taken out here and
-        //    drained below, so its backing table is allocated once for the
-        //    operator, not once per batch. `entry_ref` owns the key only on
-        //    Vacant, so it allocates one `Vec<u8>` per distinct partition
-        //    rather than one per row.
+        // `entry_ref` owns the key only on Vacant, so this allocates one
+        // `Vec<u8>` per distinct partition rather than one per row.
         let mut groups = std::mem::take(&mut self.partition_groups);
         groups.clear();
-        {
-            let pk_rows = &self.partition_scratch_rows;
-            for i in 0..num_rows {
-                groups
-                    .entry_ref(pk_rows.row(i).as_ref())
-                    .or_default()
-                    .push(i as u32);
-            }
+        for i in 0..num_rows {
+            groups
+                .entry_ref(self.partition_scratch_rows.row(i).as_ref())
+                .or_default()
+                .push(i as u32);
         }
 
-        // 3. Evaluate ORDER BY columns on the full batch and encode ONCE.
         let ob_arrays: Vec<ArrayRef> = self
             .expr
             .iter()
@@ -1384,9 +1368,139 @@ impl PartitionedTopK {
         self.row_converter
             .append(&mut self.scratch_rows, &ob_arrays)?;
 
-        // 4. Per-partition: take the sub-batch, walk indices, dispatch
-        //    qualifying rows into the partition's heap.
-        let k = self.k;
+        Ok(groups)
+    }
+
+    /// Take back the drained scratch map from [`Self::encode_and_group`]
+    /// (capacity retained) and record the batch's heap replacements.
+    fn finish_batch(&mut self, groups: HashMap<Vec<u8>, Vec<u32>>, replacements: usize) {
+        self.partition_groups = groups;
+        if replacements > 0 {
+            self.metrics.row_replacements.add(replacements);
+        }
+    }
+
+    /// Emit every partition in partition-key order as a stream of coalesced
+    /// `RecordBatch`es. `emit_partition` pushes one partition's rows, already
+    /// in ORDER BY order, into the coalescer.
+    fn emit<S>(
+        self,
+        states: HashMap<Vec<u8>, S>,
+        mut emit_partition: impl FnMut(S, &mut BatchCoalescer, &BaselineMetrics) -> Result<()>,
+    ) -> Result<SendableRecordBatchStream> {
+        let baseline = &self.metrics.baseline;
+        let _timer = baseline.elapsed_compute().timer();
+
+        let mut states: Vec<(Vec<u8>, S)> = states.into_iter().collect();
+        states.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+
+        let mut coalescer =
+            BatchCoalescer::new(Arc::clone(&self.schema), self.batch_size);
+        for (_pk, state) in states {
+            emit_partition(state, &mut coalescer, baseline)?;
+        }
+        coalescer.finish_buffered_batch()?;
+
+        let mut out: Vec<Result<RecordBatch>> = Vec::new();
+        while let Some(b) = coalescer.next_completed_batch() {
+            (&b).record_output(baseline);
+            out.push(Ok(b));
+        }
+
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            Arc::clone(&self.schema),
+            futures::stream::iter(out),
+        )))
+    }
+
+    /// Heap memory held by the shared state plus the per-partition `states`
+    /// map. Excludes `size_of::<Self>()`, which the owning operator's own
+    /// `size_of` already covers.
+    fn size<S>(
+        &self,
+        states: &HashMap<Vec<u8>, S>,
+        state_size: impl Fn(&S) -> usize,
+    ) -> usize {
+        // Per partition: the state plus the encoded partition key owned by
+        // the map. The key bytes are a heap allocation the table slot
+        // doesn't cover, and with wide or numerous partition keys they
+        // dominate the fixed-size slots.
+        let states_contents: usize = states
+            .iter()
+            .map(|(pk, state)| pk.capacity() + state_size(state))
+            .sum();
+        self.row_converter.size()
+            + self.partition_converter.size()
+            + self.scratch_rows.size()
+            + self.partition_scratch_rows.size()
+            + states_contents
+            + states.capacity() * (size_of::<Vec<u8>>() + size_of::<S>())
+            // Drained, not dropped, so the backing table outlives every
+            // `insert_batch` call; only the retained capacity is charged.
+            + self.partition_groups.capacity()
+                * (size_of::<Vec<u8>>() + size_of::<Vec<u32>>())
+    }
+}
+
+/// Top-K-per-partition operator state for `ROW_NUMBER()` semantics.
+///
+/// Sibling to [`TopK`]. Where `TopK` maintains a single global heap,
+/// `PartitionedTopK` maintains one [`TopKHeap`] per distinct partition
+/// key on top of the shared [`PartitionedTopKBase`].
+pub(crate) struct PartitionedTopK {
+    base: PartitionedTopKBase,
+    /// One heap per distinct partition key seen so far. Keyed by the
+    /// row-encoded PARTITION BY bytes (a byte-comparable encoding, so the
+    /// `Vec<u8>` hashes, compares, and sorts identically to an
+    /// `OwnedRow`).
+    heaps: HashMap<Vec<u8>, TopKHeap>,
+}
+
+impl PartitionedTopK {
+    #[expect(clippy::too_many_arguments)]
+    pub(crate) fn try_new(
+        partition_id: usize,
+        schema: SchemaRef,
+        partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
+        partition_sort_fields: Vec<SortField>,
+        order_expr: LexOrdering,
+        k: usize,
+        batch_size: usize,
+        runtime: &Arc<RuntimeEnv>,
+        metrics: &ExecutionPlanMetricsSet,
+    ) -> Result<Self> {
+        Ok(Self {
+            base: PartitionedTopKBase::try_new(
+                "PartitionedTopK",
+                partition_id,
+                schema,
+                partition_exprs,
+                partition_sort_fields,
+                order_expr,
+                k,
+                batch_size,
+                runtime,
+                metrics,
+            )?,
+            heaps: HashMap::new(),
+        })
+    }
+
+    /// Demultiplex `batch` rows by partition key, encode the ORDER BY
+    /// columns once for the whole batch, and feed each partition's
+    /// rows into its dedicated [`TopKHeap`].
+    pub(crate) fn insert_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+        let baseline = self.base.metrics.baseline.clone();
+        let _timer = baseline.elapsed_compute().timer();
+
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
+        let mut groups = self.base.encode_and_group(batch)?;
+
+        // Per-partition: take the sub-batch, walk indices, dispatch
+        // qualifying rows into the partition's heap.
+        let k = self.base.k;
         let mut replacements: usize = 0;
         for (pk, indices) in groups.drain() {
             let heap = self.heaps.entry(pk).or_insert_with(|| TopKHeap::new(k));
@@ -1395,7 +1509,7 @@ impl PartitionedTopK {
             // are rejected. Skip the gather + batch registration entirely
             // when nothing in this partition group can improve the heap.
             let any_qualify = indices.iter().any(|&orig_idx| {
-                let bytes = self.scratch_rows.row(orig_idx as usize);
+                let bytes = self.base.scratch_rows.row(orig_idx as usize);
                 match heap.max() {
                     Some(max_row) => bytes.as_ref() < max_row.row(),
                     None => true,
@@ -1410,7 +1524,7 @@ impl PartitionedTopK {
             let mut entry = heap.register_batch(sub_batch);
 
             for (sub_idx, &orig_idx) in indices_arr.values().iter().enumerate() {
-                let row = self.scratch_rows.row(orig_idx as usize);
+                let row = self.base.scratch_rows.row(orig_idx as usize);
                 match heap.max() {
                     Some(max_row) if row.as_ref() >= max_row.row() => {}
                     None | Some(_) => {
@@ -1424,14 +1538,8 @@ impl PartitionedTopK {
             heap.maybe_compact()?;
         }
 
-        // Return the drained scratch map (capacity retained) for the next
-        // batch to reuse.
-        self.partition_groups = groups;
-
-        if replacements > 0 {
-            self.metrics.row_replacements.add(replacements);
-        }
-        self.reservation.try_resize(self.size())?;
+        self.base.finish_batch(groups, replacements);
+        self.base.reservation.try_resize(self.size())?;
         Ok(())
     }
 
@@ -1439,68 +1547,18 @@ impl PartitionedTopK {
     /// a stream of coalesced `RecordBatch`es ordered by
     /// `(partition_keys, order_keys)`.
     pub(crate) fn emit(self) -> Result<SendableRecordBatchStream> {
-        let Self {
-            schema,
-            metrics,
-            reservation: _,
-            expr: _,
-            row_converter: _,
-            scratch_rows: _,
-            partition_exprs: _,
-            partition_converter: _,
-            partition_scratch_rows: _,
-            mut heaps,
-            partition_groups: _,
-            k: _,
-            batch_size,
-        } = self;
-        let _timer = metrics.baseline.elapsed_compute().timer();
-
-        let mut sorted_pks: Vec<Vec<u8>> = heaps.keys().cloned().collect();
-        sorted_pks.sort();
-
-        let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), batch_size);
-
-        for pk in sorted_pks {
-            let mut heap = heaps.remove(&pk).expect("key from heaps.keys()");
+        self.base.emit(self.heaps, |mut heap, coalescer, _| {
             if let Some(batch) = heap.emit()? {
                 coalescer.push_batch(batch)?;
             }
-        }
-        coalescer.finish_buffered_batch()?;
-
-        let mut out: Vec<Result<RecordBatch>> = Vec::new();
-        while let Some(b) = coalescer.next_completed_batch() {
-            (&b).record_output(&metrics.baseline);
-            out.push(Ok(b));
-        }
-
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
-            schema,
-            futures::stream::iter(out),
-        )))
+            Ok(())
+        })
     }
 
     /// Total memory currently held by this operator, including all
     /// per-partition heaps.
     fn size(&self) -> usize {
-        // Per partition: the heap plus the encoded partition key owned by
-        // the map. The key bytes are a heap allocation the table slot
-        // doesn't cover.
-        let heaps_contents: usize = self
-            .heaps
-            .iter()
-            .map(|(pk, heap)| pk.capacity() + heap.size())
-            .sum();
-        size_of::<Self>()
-            + self.row_converter.size()
-            + self.partition_converter.size()
-            + self.scratch_rows.size()
-            + self.partition_scratch_rows.size()
-            + heaps_contents
-            + self.heaps.capacity() * (size_of::<Vec<u8>>() + size_of::<TopKHeap>())
-            + self.partition_groups.capacity()
-                * (size_of::<Vec<u8>>() + size_of::<Vec<u32>>())
+        size_of::<Self>() + self.base.size(&self.heaps, TopKHeap::size)
     }
 }
 
@@ -1574,36 +1632,10 @@ impl RankPartitionState {
 ///   clear ties (boundary moved up, old ties no longer satisfy
 ///   `rk ≤ K`)
 pub(crate) struct PartitionedTopKRank {
-    schema: SchemaRef,
-    metrics: TopKMetrics,
-    reservation: MemoryReservation,
-    /// ORDER BY expressions (excludes PARTITION BY).
-    expr: LexOrdering,
-    /// Encoder for ORDER BY columns. Reused across partitions.
-    row_converter: RowConverter,
-    /// Scratch row buffer reused across `insert_batch` calls.
-    scratch_rows: Rows,
-    /// PARTITION BY expressions.
-    partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
-    /// Encoder for the partition key.
-    partition_converter: RowConverter,
-    /// Scratch row buffer for partition-key encoding. Reused across
-    /// `insert_batch` calls (cleared + appended each batch) so we
-    /// avoid allocating a fresh `Rows` buffer every batch.
-    partition_scratch_rows: Rows,
-    /// One rank state per distinct partition key seen so far. Keyed by
-    /// the row-encoded PARTITION BY bytes (a byte-comparable encoding, so
-    /// the `Vec<u8>` hashes, compares, and sorts identically to an
-    /// `OwnedRow`) which lets `insert_batch` look partitions up with
-    /// `entry_ref` — allocating a key only on first sight of a partition
-    /// rather than once per row.
+    base: PartitionedTopKBase,
+    /// One rank state per distinct partition key seen so far, keyed by
+    /// the row-encoded PARTITION BY bytes.
     states: HashMap<Vec<u8>, RankPartitionState>,
-    /// Scratch map reused across `insert_batch` calls to group a batch's
-    /// row indices by partition key. Drained (not reallocated) each batch
-    /// so its backing table is allocated once, not per batch.
-    partition_groups: HashMap<Vec<u8>, Vec<u32>>,
-    k: usize,
-    batch_size: usize,
 }
 
 impl PartitionedTopKRank {
@@ -1619,34 +1651,20 @@ impl PartitionedTopKRank {
         runtime: &Arc<RuntimeEnv>,
         metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Self> {
-        assert!(k > 0, "PartitionedTopKRank requires k > 0");
-        let reservation =
-            MemoryConsumer::new(format!("PartitionedTopKRank[{partition_id}]"))
-                .register(&runtime.memory_pool);
-
-        let order_sort_fields = build_sort_fields(&order_expr, &schema)?;
-        let row_converter = RowConverter::new(order_sort_fields)?;
-        let scratch_rows =
-            row_converter.empty_rows(batch_size, ESTIMATED_BYTES_PER_ROW * batch_size);
-
-        let partition_converter = RowConverter::new(partition_sort_fields)?;
-        let partition_scratch_rows = partition_converter
-            .empty_rows(batch_size, ESTIMATED_BYTES_PER_ROW * batch_size);
-
         Ok(Self {
-            schema,
-            metrics: TopKMetrics::new(metrics, partition_id),
-            reservation,
-            expr: order_expr,
-            row_converter,
-            scratch_rows,
-            partition_exprs,
-            partition_converter,
-            partition_scratch_rows,
+            base: PartitionedTopKBase::try_new(
+                "PartitionedTopKRank",
+                partition_id,
+                schema,
+                partition_exprs,
+                partition_sort_fields,
+                order_expr,
+                k,
+                batch_size,
+                runtime,
+                metrics,
+            )?,
             states: HashMap::new(),
-            partition_groups: HashMap::new(),
-            k,
-            batch_size,
         })
     }
 
@@ -1655,55 +1673,16 @@ impl PartitionedTopKRank {
     /// rows through the rank classifier into its dedicated heap and
     /// ties Vec.
     pub(crate) fn insert_batch(&mut self, batch: &RecordBatch) -> Result<()> {
-        let baseline = self.metrics.baseline.clone();
+        let baseline = self.base.metrics.baseline.clone();
         let _timer = baseline.elapsed_compute().timer();
 
-        let num_rows = batch.num_rows();
-        if num_rows == 0 {
+        if batch.num_rows() == 0 {
             return Ok(());
         }
+        let mut groups = self.base.encode_and_group(batch)?;
 
-        // 1. Evaluate + encode partition columns into the reusable
-        //    scratch (cleared then appended).
-        let pk_arrays: Vec<ArrayRef> = self
-            .partition_exprs
-            .iter()
-            .map(|e| e.evaluate(batch).and_then(|v| v.into_array(num_rows)))
-            .collect::<Result<_>>()?;
-        self.partition_scratch_rows.clear();
-        self.partition_converter
-            .append(&mut self.partition_scratch_rows, &pk_arrays)?;
-
-        // 2. Demultiplex row indices by partition key (per-batch).
-        //    `partition_groups` is a reused scratch map: taken out here and
-        //    drained below, so its backing table is allocated once for the
-        //    operator, not once per batch. `entry_ref` owns the key only on
-        //    Vacant, so it allocates one `Vec<u8>` per distinct partition
-        //    rather than one per row.
-        let mut groups = std::mem::take(&mut self.partition_groups);
-        groups.clear();
-        {
-            let pk_rows = &self.partition_scratch_rows;
-            for i in 0..num_rows {
-                groups
-                    .entry_ref(pk_rows.row(i).as_ref())
-                    .or_default()
-                    .push(i as u32);
-            }
-        }
-
-        // 3. Evaluate ORDER BY columns on the full batch and encode ONCE.
-        let ob_arrays: Vec<ArrayRef> = self
-            .expr
-            .iter()
-            .map(|e| e.expr.evaluate(batch).and_then(|v| v.into_array(num_rows)))
-            .collect::<Result<_>>()?;
-        self.scratch_rows.clear();
-        self.row_converter
-            .append(&mut self.scratch_rows, &ob_arrays)?;
-
-        // 4. Per-partition: classify each row and dispatch.
-        let k = self.k;
+        // Per-partition: classify each row and dispatch.
+        let k = self.base.k;
         let mut replacements: usize = 0;
 
         for (pk, indices) in groups.drain() {
@@ -1720,7 +1699,7 @@ impl PartitionedTopKRank {
                 let boundary = max_row.row();
                 if indices
                     .iter()
-                    .all(|&i| self.scratch_rows.row(i as usize).as_ref() > boundary)
+                    .all(|&i| self.base.scratch_rows.row(i as usize).as_ref() > boundary)
                 {
                     continue;
                 }
@@ -1745,7 +1724,7 @@ impl PartitionedTopKRank {
             let mut heap_entry: Option<RecordBatchEntry> = None;
 
             for (sub_idx, &orig_idx) in indices_arr.values().iter().enumerate() {
-                let row = self.scratch_rows.row(orig_idx as usize);
+                let row = self.base.scratch_rows.row(orig_idx as usize);
 
                 // Classify against the current K-th-best (the heap top).
                 // `heap.max()` returns `None` while the heap is filling,
@@ -1830,14 +1809,8 @@ impl PartitionedTopKRank {
             }
         }
 
-        // Return the drained scratch map (capacity retained) for the next
-        // batch to reuse.
-        self.partition_groups = groups;
-
-        if replacements > 0 {
-            self.metrics.row_replacements.add(replacements);
-        }
-        self.reservation.try_resize(self.size())?;
+        self.base.finish_batch(groups, replacements);
+        self.base.reservation.try_resize(self.size())?;
         Ok(())
     }
 
@@ -1847,73 +1820,22 @@ impl PartitionedTopKRank {
     /// come first (sorted by ob), then tie rows (all sharing the
     /// boundary ob).
     pub(crate) fn emit(self) -> Result<SendableRecordBatchStream> {
-        let Self {
-            schema,
-            metrics,
-            reservation: _,
-            expr: _,
-            row_converter: _,
-            scratch_rows: _,
-            partition_exprs: _,
-            partition_converter: _,
-            partition_scratch_rows: _,
-            mut states,
-            partition_groups: _,
-            k: _,
-            batch_size,
-        } = self;
-        let _timer = metrics.baseline.elapsed_compute().timer();
-
-        let mut sorted_pks: Vec<Vec<u8>> = states.keys().cloned().collect();
-        sorted_pks.sort();
-
-        let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), batch_size);
-
-        for pk in sorted_pks {
-            let RankPartitionState { mut heap, ties } =
-                states.remove(&pk).expect("key from states.keys()");
+        self.base.emit(self.states, |state, coalescer, baseline| {
+            let RankPartitionState { mut heap, ties } = state;
             if let Some(batch) = heap.emit()? {
                 coalescer.push_batch(batch)?;
             }
             for tie in ties {
-                (&tie.batch).record_output(&metrics.baseline);
+                (&tie.batch).record_output(baseline);
                 coalescer.push_batch(tie.batch)?;
             }
-        }
-        coalescer.finish_buffered_batch()?;
-
-        let mut out: Vec<Result<RecordBatch>> = Vec::new();
-        while let Some(b) = coalescer.next_completed_batch() {
-            (&b).record_output(&metrics.baseline);
-            out.push(Ok(b));
-        }
-
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
-            schema,
-            futures::stream::iter(out),
-        )))
+            Ok(())
+        })
     }
 
     /// Total memory currently held, including all per-partition states.
     fn size(&self) -> usize {
-        // Per partition: the state plus the encoded partition key owned by
-        // the map. The key bytes are a heap allocation the table slot
-        // doesn't cover.
-        let states_contents: usize = self
-            .states
-            .iter()
-            .map(|(pk, state)| pk.capacity() + state.size())
-            .sum();
-        size_of::<Self>()
-            + self.row_converter.size()
-            + self.partition_converter.size()
-            + self.scratch_rows.size()
-            + self.partition_scratch_rows.size()
-            + states_contents
-            + self.states.capacity()
-                * (size_of::<Vec<u8>>() + size_of::<RankPartitionState>())
-            + self.partition_groups.capacity()
-                * (size_of::<Vec<u8>>() + size_of::<Vec<u32>>())
+        size_of::<Self>() + self.base.size(&self.states, RankPartitionState::size)
     }
 }
 
@@ -2015,33 +1937,10 @@ impl DenseRankPartitionState {
 ///     row count is added to the `row_replacements` metric.
 ///   - `ob_key >= max` → drop the whole run; no map mutation.
 pub(crate) struct PartitionedTopKDenseRank {
-    schema: SchemaRef,
-    metrics: TopKMetrics,
-    reservation: MemoryReservation,
-    /// ORDER BY expressions (excludes PARTITION BY).
-    expr: LexOrdering,
-    /// Encoder for ORDER BY columns. Reused across partitions.
-    row_converter: RowConverter,
-    /// Scratch row buffer reused across `insert_batch` calls.
-    scratch_rows: Rows,
-    /// PARTITION BY expressions.
-    partition_exprs: Vec<Arc<dyn PhysicalExpr>>,
-    /// Encoder for the partition key.
-    partition_converter: RowConverter,
-    /// Scratch row buffer for partition-key encoding. Reused across
-    /// `insert_batch` calls (cleared + appended each batch).
-    partition_scratch_rows: Rows,
-    /// One state per distinct partition key seen so far. Keyed by the
-    /// row-encoded PARTITION BY bytes (byte-comparable encoding, so the
-    /// `Vec<u8>` hashes, compares, and sorts identically to an
-    /// `OwnedRow`) which lets `insert_batch` look partitions up with
-    /// `entry_ref` — allocating a key only on first sight of a partition
-    /// rather than once per row.
+    base: PartitionedTopKBase,
+    /// One state per distinct partition key seen so far, keyed by the
+    /// row-encoded PARTITION BY bytes.
     states: HashMap<Vec<u8>, DenseRankPartitionState>,
-    /// Scratch map reused across `insert_batch` calls to group a batch's
-    /// row indices by partition key. Drained (not reallocated) each batch
-    /// so its backing table is allocated once, not per batch.
-    partition_groups: HashMap<Vec<u8>, Vec<u32>>,
     /// Scratch map reused across partitions within a batch to bucket a
     /// partition's rows by distinct ORDER BY value. Drained (not
     /// reallocated) per partition so its backing table is allocated once,
@@ -2052,8 +1951,6 @@ pub(crate) struct PartitionedTopKDenseRank {
     /// keeps the reservation proportional to the batches actually pinned
     /// rather than to the number of entries pointing at them.
     store: RecordBatchStore,
-    k: usize,
-    batch_size: usize,
 }
 
 impl PartitionedTopKDenseRank {
@@ -2069,36 +1966,22 @@ impl PartitionedTopKDenseRank {
         runtime: &Arc<RuntimeEnv>,
         metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Self> {
-        assert!(k > 0, "PartitionedTopKDenseRank requires k > 0");
-        let reservation =
-            MemoryConsumer::new(format!("PartitionedTopKDenseRank[{partition_id}]"))
-                .register(&runtime.memory_pool);
-
-        let order_sort_fields = build_sort_fields(&order_expr, &schema)?;
-        let row_converter = RowConverter::new(order_sort_fields)?;
-        let scratch_rows =
-            row_converter.empty_rows(batch_size, ESTIMATED_BYTES_PER_ROW * batch_size);
-
-        let partition_converter = RowConverter::new(partition_sort_fields)?;
-        let partition_scratch_rows = partition_converter
-            .empty_rows(batch_size, ESTIMATED_BYTES_PER_ROW * batch_size);
-
         Ok(Self {
-            schema,
-            metrics: TopKMetrics::new(metrics, partition_id),
-            reservation,
-            expr: order_expr,
-            row_converter,
-            scratch_rows,
-            partition_exprs,
-            partition_converter,
-            partition_scratch_rows,
+            base: PartitionedTopKBase::try_new(
+                "PartitionedTopKDenseRank",
+                partition_id,
+                schema,
+                partition_exprs,
+                partition_sort_fields,
+                order_expr,
+                k,
+                batch_size,
+                runtime,
+                metrics,
+            )?,
             states: HashMap::new(),
-            partition_groups: HashMap::new(),
             ob_runs: HashMap::new(),
             store: RecordBatchStore::new(),
-            k,
-            batch_size,
         })
     }
 
@@ -2107,11 +1990,10 @@ impl PartitionedTopKDenseRank {
     /// by distinct ob value and merge each bucket into the partition
     /// state as one [`GroupEntry`].
     pub(crate) fn insert_batch(&mut self, batch: &RecordBatch) -> Result<()> {
-        let baseline = self.metrics.baseline.clone();
+        let baseline = self.base.metrics.baseline.clone();
         let _timer = baseline.elapsed_compute().timer();
 
-        let num_rows = batch.num_rows();
-        if num_rows == 0 {
+        if batch.num_rows() == 0 {
             return Ok(());
         }
 
@@ -2123,48 +2005,12 @@ impl PartitionedTopKDenseRank {
         let mut batch_entry = self.store.register(batch.clone());
         let batch_id = batch_entry.id;
 
-        // 1. Encode partition columns.
-        let pk_arrays: Vec<ArrayRef> = self
-            .partition_exprs
-            .iter()
-            .map(|e| e.evaluate(batch).and_then(|v| v.into_array(num_rows)))
-            .collect::<Result<_>>()?;
-        self.partition_scratch_rows.clear();
-        self.partition_converter
-            .append(&mut self.partition_scratch_rows, &pk_arrays)?;
+        let mut groups = self.base.encode_and_group(batch)?;
 
-        // 2. Group this batch's row indices by partition key.
-        //    `partition_groups` is a reused scratch map: taken out here
-        //    and drained below, so its backing table is allocated once
-        //    for the operator, not once per batch. `entry_ref` owns the
-        //    key only on Vacant, so it allocates one `Vec<u8>` per
-        //    distinct partition rather than one per row.
-        let mut groups = std::mem::take(&mut self.partition_groups);
-        groups.clear();
-        {
-            let pk_rows = &self.partition_scratch_rows;
-            for i in 0..num_rows {
-                groups
-                    .entry_ref(pk_rows.row(i).as_ref())
-                    .or_default()
-                    .push(i as u32);
-            }
-        }
-
-        // 3. Evaluate ORDER BY columns and encode ONCE.
-        let ob_arrays: Vec<ArrayRef> = self
-            .expr
-            .iter()
-            .map(|e| e.expr.evaluate(batch).and_then(|v| v.into_array(num_rows)))
-            .collect::<Result<_>>()?;
-        self.scratch_rows.clear();
-        self.row_converter
-            .append(&mut self.scratch_rows, &ob_arrays)?;
-
-        let k = self.k;
+        let k = self.base.k;
         let mut replacements: usize = 0;
 
-        // 4. Per-partition: bucket this batch's rows by distinct ob value
+        // Per-partition: bucket this batch's rows by distinct ob value
         //    (within-call accumulation), then merge each bucket into the
         //    partition state as a single `GroupEntry`.
         for (pk, indices) in groups.drain() {
@@ -2196,7 +2042,7 @@ impl PartitionedTopKDenseRank {
                 None
             };
             for &orig_idx in &indices {
-                let ob_row = self.scratch_rows.row(orig_idx as usize);
+                let ob_row = self.base.scratch_rows.row(orig_idx as usize);
                 if boundary.is_some_and(|b| ob_row.as_ref() > b) {
                     continue;
                 }
@@ -2270,17 +2116,11 @@ impl PartitionedTopKDenseRank {
             self.ob_runs = runs;
         }
 
-        // Return the drained scratch map (capacity retained) for the next
-        // batch to reuse.
-        self.partition_groups = groups;
-
         // Charges `batch` once if any group retained rows from it.
         self.store.insert(batch_entry);
 
-        if replacements > 0 {
-            self.metrics.row_replacements.add(replacements);
-        }
-        self.reservation.try_resize(self.size())?;
+        self.base.finish_batch(groups, replacements);
+        self.base.reservation.try_resize(self.size())?;
         Ok(())
     }
 
@@ -2290,37 +2130,12 @@ impl PartitionedTopKDenseRank {
     /// ob keys are sorted (byte-comparable encoding == sort order) so
     /// emitted rows are in ob-sorted order.
     pub(crate) fn emit(self) -> Result<SendableRecordBatchStream> {
-        let Self {
-            schema,
-            metrics,
-            reservation: _,
-            expr: _,
-            row_converter: _,
-            scratch_rows: _,
-            partition_exprs: _,
-            partition_converter: _,
-            partition_scratch_rows: _,
-            mut states,
-            partition_groups: _,
-            ob_runs: _,
-            store,
-            k: _,
-            batch_size,
-        } = self;
-        let _timer = metrics.baseline.elapsed_compute().timer();
-
-        let mut sorted_pks: Vec<Vec<u8>> = states.keys().cloned().collect();
-        sorted_pks.sort();
-
-        let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), batch_size);
-
-        for pk in sorted_pks {
-            let DenseRankPartitionState { groups, keys: _ } =
-                states.remove(&pk).expect("key from states.keys()");
+        let store = self.store;
+        self.base.emit(self.states, |state, coalescer, _| {
             // Sort the <= K distinct ob keys so rows emit ascending
             // (byte-comparable encoding == sort order).
             let mut sorted_obs: Vec<(Vec<u8>, Vec<GroupEntry>)> =
-                groups.into_iter().collect();
+                state.groups.into_iter().collect();
             sorted_obs.sort_by(|a, b| a.0.cmp(&b.0));
             for (_ob, entries) in sorted_obs {
                 for entry in entries {
@@ -2329,52 +2144,19 @@ impl PartitionedTopKDenseRank {
                         .expect("retained batch_id present in store")
                         .batch;
                     let indices = UInt32Array::from(entry.row_indices);
-                    let sub = take_record_batch(batch, &indices)?;
-                    coalescer.push_batch(sub)?;
+                    coalescer.push_batch(take_record_batch(batch, &indices)?)?;
                 }
             }
-        }
-        coalescer.finish_buffered_batch()?;
-
-        let mut out: Vec<Result<RecordBatch>> = Vec::new();
-        while let Some(b) = coalescer.next_completed_batch() {
-            (&b).record_output(&metrics.baseline);
-            out.push(Ok(b));
-        }
-
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
-            schema,
-            futures::stream::iter(out),
-        )))
+            Ok(())
+        })
     }
 
     /// Total memory currently held, including all per-partition states.
     fn size(&self) -> usize {
-        // Per partition: the state itself plus the encoded partition key
-        // owned by the map. The key bytes are a heap allocation the table
-        // slot doesn't cover, and with wide or numerous partition keys
-        // they dominate the fixed-size slots.
-        let states_contents: usize = self
-            .states
-            .iter()
-            .map(|(pk, state)| pk.capacity() + state.size())
-            .sum();
-        // `partition_groups` and `ob_runs` are drained, not dropped, so
-        // their backing tables outlive every `insert_batch` call. Both are
-        // empty by the time `size()` runs (drained above), so only the
-        // retained capacity is charged.
-        let scratch_tables = self.partition_groups.capacity()
-            * (size_of::<Vec<u8>>() + size_of::<Vec<u32>>())
-            + self.ob_runs.capacity() * (size_of::<Vec<u8>>() + size_of::<Vec<u32>>());
         size_of::<Self>()
-            + self.row_converter.size()
-            + self.partition_converter.size()
-            + self.scratch_rows.size()
-            + self.partition_scratch_rows.size()
-            + states_contents
-            + self.states.capacity()
-                * (size_of::<Vec<u8>>() + size_of::<DenseRankPartitionState>())
-            + scratch_tables
+            + self.base.size(&self.states, DenseRankPartitionState::size)
+            // Drained like `partition_groups`: only capacity is retained.
+            + self.ob_runs.capacity() * (size_of::<Vec<u8>>() + size_of::<Vec<u32>>())
             + self.store.size()
     }
 }
@@ -4857,7 +4639,7 @@ mod tests {
         assert_eq!(state.states.len(), PARTITIONS);
 
         let key_bytes: usize = state.states.keys().map(|pk| pk.capacity()).sum();
-        let scratch_bytes = state.partition_groups.capacity()
+        let scratch_bytes = state.base.partition_groups.capacity()
             * (size_of::<Vec<u8>>() + size_of::<Vec<u32>>())
             + state.ob_runs.capacity() * (size_of::<Vec<u8>>() + size_of::<Vec<u32>>());
         assert!(key_bytes >= PARTITIONS * KEY_WIDTH, "key bytes {key_bytes}");
@@ -4868,10 +4650,10 @@ mod tests {
         // fails here rather than being absorbed by the slack in some
         // other term.
         let expected = size_of::<PartitionedTopKDenseRank>()
-            + state.row_converter.size()
-            + state.partition_converter.size()
-            + state.scratch_rows.size()
-            + state.partition_scratch_rows.size()
+            + state.base.row_converter.size()
+            + state.base.partition_converter.size()
+            + state.base.scratch_rows.size()
+            + state.base.partition_scratch_rows.size()
             + key_bytes
             + state.states.values().map(|s| s.size()).sum::<usize>()
             + state.states.capacity()
