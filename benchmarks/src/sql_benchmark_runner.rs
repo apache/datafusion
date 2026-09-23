@@ -23,6 +23,9 @@ use crate::util::{CommonOpt, print_memory_stats};
 use clap::Parser;
 use criterion::{Criterion, SamplingMode};
 use datafusion::error::Result;
+use datafusion::execution::SessionStateBuilder;
+use datafusion::execution::memory_pool::{MemoryLimit, MemoryPool, PeakRecordingPool};
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DataFusionError, exec_datafusion_err};
 use std::any::Any;
@@ -31,6 +34,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::runtime::Runtime;
 
 const CRITERION_MAX_DIRECTORY_NAME_LEN: usize = 64;
@@ -615,6 +619,7 @@ pub async fn prepare_benchmark(
     config: &SqlRunConfig,
 ) -> Result<()> {
     benchmark.initialize(ctx).await?;
+    record_pool_peak_after_init(ctx)?;
     benchmark.assert(ctx).await?;
 
     if config.persist_results {
@@ -623,6 +628,44 @@ pub async fn prepare_benchmark(
         let _ = benchmark.run(ctx, true).await?;
         benchmark.verify(ctx).await?;
     }
+
+    Ok(())
+}
+
+/// Puts a [`PeakRecordingPool`] back in front of the session's memory pool
+/// when the benchmark's own SQL replaced it.
+///
+/// [`CommonOpt::runtime_env_builder`] installs the recorder when the harness
+/// has a memory limit. A suite that sets its own limit with
+/// `SET datafusion.runtime.memory_limit` (`spill_views` does this in its `init`
+/// script) makes the `SessionContext` build a new `RuntimeEnv` with a new pool,
+/// and the recorder is lost. Without this step such a suite reports no peak,
+/// with or without a harness-level limit.
+///
+/// Only a pool with a finite limit gets a recorder, the same rule as
+/// `runtime_env_builder`, so a run with no limit at all still reports nothing.
+fn record_pool_peak_after_init(ctx: &SessionContext) -> Result<()> {
+    let runtime = ctx.runtime_env();
+    let pool = &runtime.memory_pool;
+    if PeakRecordingPool::from_pool(pool.as_ref()).is_some()
+        || !matches!(pool.memory_limit(), MemoryLimit::Finite(_))
+    {
+        return Ok(());
+    }
+
+    let recorder: Arc<dyn MemoryPool> =
+        Arc::new(PeakRecordingPool::new(Arc::clone(pool)));
+    let runtime = RuntimeEnvBuilder::from_runtime_env(&runtime)
+        .with_memory_pool(recorder)
+        .build_arc()?;
+
+    // The same replacement `SET datafusion.runtime.*` makes, so everything
+    // registered on the session (tables, config) is kept.
+    let state = ctx.state_ref();
+    let mut state = state.write();
+    *state = SessionStateBuilder::from(state.clone())
+        .with_runtime_env(runtime)
+        .build();
 
     Ok(())
 }
@@ -706,6 +749,66 @@ mod tests {
         fs::write(&path, contents).unwrap();
 
         path
+    }
+
+    fn common_opt(memory_limit: Option<usize>) -> CommonOpt {
+        CommonOpt {
+            iterations: 1,
+            partitions: None,
+            batch_size: None,
+            mem_pool_type: "fair".to_string(),
+            memory_limit,
+            sort_spill_reservation_bytes: None,
+            debug: false,
+            simulate_latency: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn sql_memory_limit_keeps_the_peak_recorder() {
+        // The harness installs a recorder for its own limit; the SQL limit
+        // replaces that pool, and the recorder must follow it.
+        let ctx = make_ctx(&common_opt(Some(1024 * 1024 * 1024))).unwrap();
+        ctx.sql("SET datafusion.runtime.memory_limit = '100M'")
+            .await
+            .unwrap();
+        let pool = &ctx.runtime_env().memory_pool;
+        assert!(PeakRecordingPool::from_pool(pool.as_ref()).is_none());
+
+        record_pool_peak_after_init(&ctx).unwrap();
+
+        let pool = Arc::clone(&ctx.runtime_env().memory_pool);
+        assert!(PeakRecordingPool::from_pool(pool.as_ref()).is_some());
+        assert!(matches!(
+            pool.memory_limit(),
+            MemoryLimit::Finite(limit) if limit == 100 * 1024 * 1024
+        ));
+
+        // A query planned after the swap reserves through the recorder.
+        ctx.sql(
+            "SELECT value % 1000, count(*) FROM generate_series(1, 100000) GROUP BY 1",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+        let recorder = PeakRecordingPool::from_pool(pool.as_ref()).unwrap();
+        assert!(recorder.peak_reserved() > 0);
+
+        // A pool that already records is left alone.
+        record_pool_peak_after_init(&ctx).unwrap();
+        assert!(Arc::ptr_eq(&pool, &ctx.runtime_env().memory_pool));
+    }
+
+    #[tokio::test]
+    async fn no_memory_limit_gets_no_recorder() {
+        let ctx = make_ctx(&common_opt(None)).unwrap();
+
+        record_pool_peak_after_init(&ctx).unwrap();
+
+        let pool = &ctx.runtime_env().memory_pool;
+        assert!(PeakRecordingPool::from_pool(pool.as_ref()).is_none());
     }
 
     #[tokio::test]
