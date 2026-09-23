@@ -838,6 +838,17 @@ mod tests {
         table_scan(Some(name), &schema, None)?.build()
     }
 
+    /// A scan with one `NOT NULL` column (`a`) and one nullable column
+    /// (`grp`), for tests that need the two conjuncts of a correlated
+    /// `NOT IN` join filter to disagree on nullability.
+    fn mixed_nullability_scan(name: &str) -> Result<LogicalPlan> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("grp", DataType::Int32, true),
+        ]);
+        table_scan(Some(name), &schema, None)?.build()
+    }
+
     fn has_null_aware_left_anti_join(plan: &LogicalPlan) -> bool {
         if let LogicalPlan::Join(join) = plan
             && join.join_type == JoinType::LeftAnti
@@ -1635,6 +1646,54 @@ mod tests {
             "{}",
             optimized.display_indent_schema()
         );
+
+        Ok(())
+    }
+
+    /// `join_keys_may_be_null` walks every equality conjunct rather than
+    /// stopping at the first: a correlated `NOT IN` whose value equality is
+    /// `NOT NULL` must still come out nullable when the correlation equality,
+    /// checked second, is not.
+    #[test]
+    fn correlated_not_in_is_null_aware_when_only_the_correlation_key_is_nullable()
+    -> Result<()> {
+        let outer_scan = mixed_nullability_scan("outer_t")?;
+        let inner_scan = mixed_nullability_scan("inner_t")?;
+
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(inner_scan)
+                .filter(
+                    out_ref_col(DataType::Int32, "outer_t.grp").eq(col("inner_t.grp")),
+                )?
+                .project(vec![col("inner_t.a")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(not_in_subquery(col("outer_t.a"), subquery))?
+            .build()?;
+
+        let optimized = optimize_with_decorrelate(plan)?;
+        assert!(
+            has_null_aware_left_anti_join(&optimized),
+            "{}",
+            optimized.display_indent_schema()
+        );
+
+        Ok(())
+    }
+
+    /// An operand that mixes columns from both sides of the join can't be
+    /// attributed to either schema, so `operand_may_be_null` must fall back
+    /// to the conservative answer rather than guessing or erroring.
+    #[test]
+    fn operand_referencing_both_sides_is_treated_as_nullable() -> Result<()> {
+        let left_schema = Arc::clone(test_table_scan_with_name("left_t")?.schema());
+        let right_schema = Arc::clone(test_table_scan_with_name("right_t")?.schema());
+
+        let mixed = col("left_t.a").add(col("right_t.a"));
+
+        assert!(operand_may_be_null(&mixed, &left_schema, &right_schema)?);
 
         Ok(())
     }
