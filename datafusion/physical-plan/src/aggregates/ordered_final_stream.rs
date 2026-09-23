@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Final aggregate stream for ordered partial-state input.
+//! Final aggregate stream for partial-state input with group-completion
+//! guarantees.
 
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -32,14 +33,15 @@ use super::AggregateExec;
 use super::aggregate_hash_table::{
     FinalMarker, OrderedAggregateTable, OrderedAggregateTableMetrics,
 };
+use super::order::GroupCompletionMode;
 use super::spill::AggregateSpill;
 use crate::aggregates::AggregateMode;
 use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
 use crate::stream::EmptyRecordBatchStream;
-use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
+use crate::{RecordBatchStream, SendableRecordBatchStream};
 
-/// Final aggregate stream for `InputOrderMode::Sorted` and
-/// `InputOrderMode::PartiallySorted`.
+/// Final aggregate stream for [`GroupCompletionMode::Partial`] and
+/// [`GroupCompletionMode::Full`].
 ///
 /// See comments at [`super::ordered_partial_stream::OrderedPartialAggregateStream`] for details.
 ///
@@ -47,7 +49,7 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
 ///
 /// This section is only for implementation notes, for background, see [`super::ordered_partial_stream::OrderedPartialAggregateStream`]
 ///
-/// For partially sorted input, spilling works as follows:
+/// For partial group completion, spilling works as follows:
 ///
 /// - Reserve the table footprint plus one `u32` sort index per buffered group. The
 ///   extra index array is used in later sorting before spilling.
@@ -107,10 +109,10 @@ impl OrderedFinalAggregateStream {
             agg.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
         ));
-        debug_assert_ne!(agg.input_order_mode, InputOrderMode::Linear);
+        debug_assert_ne!(agg.group_completion_mode, GroupCompletionMode::None);
 
         let input = agg.input.execute(partition, Arc::clone(context))?;
-        Self::new_with_input(agg, context, partition, input, &agg.input_order_mode)
+        Self::new_with_input(agg, context, partition, input, &agg.group_completion_mode)
     }
 
     pub(in crate::aggregates) fn new_with_input(
@@ -118,7 +120,7 @@ impl OrderedFinalAggregateStream {
         context: &Arc<TaskContext>,
         partition: usize,
         input: SendableRecordBatchStream,
-        input_order_mode: &InputOrderMode,
+        group_completion_mode: &GroupCompletionMode,
     ) -> Result<Self> {
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let metrics = OrderedAggregateTableMetrics::new(agg, partition);
@@ -137,7 +139,7 @@ impl OrderedFinalAggregateStream {
             context,
             partition,
             input,
-            input_order_mode,
+            group_completion_mode,
             baseline_metrics,
             metrics,
             Some(spill_metrics),
@@ -157,7 +159,7 @@ impl OrderedFinalAggregateStream {
         context: &Arc<TaskContext>,
         partition: usize,
         input: SendableRecordBatchStream,
-        input_order_mode: &InputOrderMode,
+        group_completion_mode: &GroupCompletionMode,
         baseline_metrics: BaselineMetrics,
         metrics: OrderedAggregateTableMetrics,
         spill_metrics: Option<SpillMetrics>,
@@ -167,13 +169,13 @@ impl OrderedFinalAggregateStream {
             agg.mode,
             AggregateMode::Final | AggregateMode::FinalPartitioned
         ));
-        debug_assert_ne!(*input_order_mode, InputOrderMode::Linear);
+        debug_assert_ne!(*group_completion_mode, GroupCompletionMode::None);
 
         let schema = Arc::clone(&agg.schema);
         let input_schema = input.schema();
         let batch_size = context.session_config().batch_size();
 
-        let can_spill = matches!(input_order_mode, InputOrderMode::PartiallySorted(_))
+        let can_spill = matches!(group_completion_mode, GroupCompletionMode::Partial(_))
             && context.runtime_env().disk_manager.tmp_files_enabled();
         let spill_context = if can_spill {
             let Some(spill_metrics) = spill_metrics else {
@@ -185,7 +187,7 @@ impl OrderedFinalAggregateStream {
                 context,
                 partition,
                 batch_size,
-                input_order_mode,
+                group_completion_mode,
                 &input_schema,
                 spill_metrics,
             )?))
@@ -193,12 +195,12 @@ impl OrderedFinalAggregateStream {
             None
         };
 
-        let table = OrderedAggregateTable::<FinalMarker>::new_with_input_order(
+        let table = OrderedAggregateTable::<FinalMarker>::new_with_group_completion(
             agg,
             &input_schema,
             Arc::clone(&schema),
             batch_size,
-            input_order_mode,
+            group_completion_mode,
             metrics,
         )?;
         Ok(Self {
@@ -748,11 +750,11 @@ impl RecordBatchStream for OrderedFinalAggregateStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ExecutionPlan;
     use crate::aggregates::PhysicalGroupBy;
     use crate::common::collect;
     use crate::stream::RecordBatchStreamAdapter;
     use crate::test::TestMemoryExec;
+    use crate::{ExecutionPlan, InputOrderMode};
     use arrow::array::{Int64Array, StringViewArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_execution::config::SessionConfig;
@@ -855,6 +857,10 @@ mod tests {
             aggregate.input_order_mode(),
             &InputOrderMode::PartiallySorted(vec![0])
         );
+        assert_eq!(
+            aggregate.group_completion_mode,
+            GroupCompletionMode::Partial(vec![0])
+        );
 
         let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(limit));
         let context = Arc::new(
@@ -885,7 +891,7 @@ mod tests {
                 &context,
                 partition,
                 input,
-                aggregate.input_order_mode(),
+                &aggregate.group_completion_mode,
             )?;
             senders.push(sender);
             streams.push(stream);
