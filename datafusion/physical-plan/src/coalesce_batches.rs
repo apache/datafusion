@@ -498,3 +498,45 @@ impl RecordBatchStream for CoalesceBatchesStream {
         self.coalescer.schema()
     }
 }
+
+#[cfg(test)]
+#[expect(deprecated)]
+mod tests {
+    use super::*;
+    use crate::collect;
+    use crate::statistics::StatisticsContext;
+    use crate::test::scan_partitioned;
+    use datafusion_common::stats::Precision;
+    use datafusion_execution::TaskContext;
+
+    /// `fetch` stops each partition separately, so the overall statistics must
+    /// allow for the rows of every partition.
+    #[tokio::test]
+    async fn fetch_statistics_count_every_partition() -> Result<()> {
+        // Four partitions of 100 rows each.
+        let coalesce: Arc<dyn ExecutionPlan> = Arc::new(
+            CoalesceBatchesExec::new(scan_partitioned(4), 8192).with_fetch(Some(10)),
+        );
+        let emitted: usize =
+            collect(Arc::clone(&coalesce), Arc::new(TaskContext::default()))
+                .await?
+                .iter()
+                .map(|batch| batch.num_rows())
+                .sum();
+        assert_eq!(emitted, 40);
+
+        let num_rows = |partition| {
+            StatisticsContext::new()
+                .compute(
+                    coalesce.as_ref(),
+                    &StatisticsArgs::new().with_partition(partition),
+                )
+                .map(|stats| stats.num_rows)
+        };
+        assert_eq!(num_rows(None)?, Precision::Inexact(40));
+        // The scan has no statistics for a single partition, so there the fetch
+        // alone bounds the estimate.
+        assert_eq!(num_rows(Some(0))?, Precision::Inexact(10));
+        Ok(())
+    }
+}
