@@ -1,0 +1,11 @@
+description = "Sort and aggregation queries that spill StringView and BinaryView columns read from Parquet (https://github.com/apache/datafusion/issues/23564). Each query sets its own memory limit and target_partitions = 4, so it spills with any environment. The repeated subgroup sorts rows whose string payload has few distinct values, so the Parquet reader makes views into one shared dictionary buffer and the spill writer can compact that buffer. The distinct subgroup sorts and groups all-distinct strings, where compaction cannot remove data and only adds work."
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- spill_views"
+description = "Run all spill_views queries."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- spill_views --subgroup distinct"
+description = "Run only the all-distinct (cost case) queries."

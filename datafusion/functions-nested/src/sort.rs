@@ -28,7 +28,7 @@ use arrow::datatypes::{ArrowNativeTypeOp, DataType, FieldRef};
 use arrow::row::{RowConverter, Rows, SortField};
 use arrow::{compute, compute::SortOptions, downcast_primitive_array};
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_string_array};
-use datafusion_common::utils::ListCoercion;
+use datafusion_common::utils::{ListCoercion, offset_span};
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
@@ -292,15 +292,14 @@ fn sort_row<N: ArrowNativeTypeOp>(row: &mut [N], descending: bool) {
 /// values into a single `Vec` and sorts each row's slice in-place.
 fn sort_rows_no_nulls<N: ArrowNativeTypeOp, O: OffsetSizeTrait>(
     src_values: &[N],
-    offsets: &[O],
+    offsets: &OffsetBuffer<O>,
     list_nulls: Option<&NullBuffer>,
     descending: bool,
 ) -> Vec<N> {
-    let values_start = offsets[0].as_usize();
-    let values_end = offsets[offsets.len() - 1].as_usize();
+    let (values_start, total_values) = offset_span(offsets);
 
     // Copy all values into a mutable buffer
-    let mut values = src_values[values_start..values_end].to_vec();
+    let mut values = src_values[values_start..values_start + total_values].to_vec();
 
     for (row_index, window) in offsets.windows(2).enumerate() {
         if list_nulls.is_some_and(|n| n.is_null(row_index)) {
@@ -318,13 +317,12 @@ fn sort_rows_no_nulls<N: ArrowNativeTypeOp, O: OffsetSizeTrait>(
 fn sort_rows_with_nulls<N: ArrowNativeTypeOp, O: OffsetSizeTrait>(
     src_values: &[N],
     src_nulls: &NullBuffer,
-    offsets: &[O],
+    offsets: &OffsetBuffer<O>,
     list_nulls: Option<&NullBuffer>,
     descending: bool,
     nulls_first: bool,
 ) -> (Vec<N>, NullBuffer) {
-    let values_start = offsets[0].as_usize();
-    let total_values = offsets[offsets.len() - 1].as_usize() - values_start;
+    let (values_start, total_values) = offset_span(offsets);
 
     let mut out_values: Vec<N> = vec![N::default(); total_values];
     let mut validity = BooleanBufferBuilder::new(total_values);
@@ -385,8 +383,7 @@ fn array_sort_non_primitive<OffsetSize: OffsetSizeTrait>(
     let row_count = list_array.len();
     let values = list_array.values();
     let offsets = list_array.offsets();
-    let values_start = offsets[0].as_usize();
-    let total_values = offsets[row_count].as_usize() - values_start;
+    let (values_start, total_values) = offset_span(offsets);
 
     let converter = RowConverter::new(vec![SortField::new_with_options(
         values.data_type().clone(),

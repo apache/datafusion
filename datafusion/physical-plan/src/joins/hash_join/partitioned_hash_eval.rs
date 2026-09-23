@@ -293,9 +293,11 @@ impl HashTableLookupExpr {
     /// * `random_state` - SeededRandomState for hashing
     /// * `map` - Map to check membership (hash table or array map)
     /// * `description` - Description for debugging
-    /// # Note
-    /// This is public for internal testing purposes only and is not
-    /// guaranteed to be stable across versions.
+    ///
+    /// # Public Only for Internal Use:
+    /// `datafusion-proto` tests require this constructor, but it is not part of
+    /// the supported public API.
+    #[doc(hidden)]
     pub fn new(
         on_columns: Vec<PhysicalExprRef>,
         random_state: SeededRandomState,

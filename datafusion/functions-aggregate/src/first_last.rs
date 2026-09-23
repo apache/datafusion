@@ -40,7 +40,9 @@ use datafusion_common::{
     not_impl_err,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
+use datafusion_expr::utils::{
+    AggregateOrderSensitivity, format_state_name, ordering_state_fields,
+};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, ExprFunctionExt,
     GroupsAccumulator, ReversedUDAF, Signature, SortExpr, Volatility,
@@ -332,7 +334,7 @@ impl AggregateUDFImpl for FirstValue {
             )
             .into(),
         ];
-        fields.extend(args.ordering_fields.iter().cloned());
+        fields.extend(ordering_state_fields(args.name, args.ordering_fields));
         fields.push(
             Field::new(
                 format_state_name(args.name, "first_value_is_set"),
@@ -380,6 +382,12 @@ impl AggregateUDFImpl for FirstValue {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    // TODO: whether this is `DistinctHandling::Insensitive` depends on `ORDER BY`.
+    // `first_value(DISTINCT x ORDER BY y)` deduplicates `x` and leaves the `y`
+    // ordering meaningless, while `first_value(DISTINCT x ORDER BY x)` is just
+    // `min(x)`. Left at the default `Sensitive` until that is settled, even
+    // though the accumulator ignores `is_distinct` today.
 }
 
 struct FirstLastGroupsAccumulator<S: ValueState> {
@@ -1246,7 +1254,7 @@ impl AggregateUDFImpl for LastValue {
             )
             .into(),
         ];
-        fields.extend(args.ordering_fields.iter().cloned());
+        fields.extend(ordering_state_fields(args.name, args.ordering_fields));
         fields.push(
             Field::new(
                 format_state_name(args.name, "last_value_is_set"),
@@ -1294,6 +1302,12 @@ impl AggregateUDFImpl for LastValue {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         create_groups_accumulator(&args, false, self.is_input_pre_ordered, self.name())
     }
+
+    // TODO: whether this is `DistinctHandling::Insensitive` depends on `ORDER BY`.
+    // `last_value(DISTINCT x ORDER BY y)` deduplicates `x` and leaves the `y`
+    // ordering meaningless, while `last_value(DISTINCT x ORDER BY x)` is
+    // `max(x)` when `x` has no NULL. Left at the default `Sensitive` until that is settled, even
+    // though the accumulator ignores `is_distinct` today.
 }
 
 /// This accumulator is used when there is no ordering specified for the
