@@ -908,6 +908,64 @@ async fn parquet_explain_analyze() {
     );
 }
 
+/// The Parquet scan's `elapsed_compute` must cover decoding, which dominates a
+/// full scan, and not only the projection of batches that are already decoded.
+/// See <https://github.com/apache/datafusion/issues/18195>.
+#[tokio::test]
+async fn parquet_scan_elapsed_compute_includes_decoding() -> Result<()> {
+    use datafusion::datasource::source::DataSourceExec;
+    use datafusion_common::instant::Instant;
+    use std::time::Duration;
+
+    // A single partition keeps the scan on one thread, so its compute time
+    // cannot exceed the wall time of the query.
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
+    let tmp_dir = TempDir::new()?;
+    let path = tmp_dir.path().join("data.parquet");
+    let path = path.to_str().unwrap();
+    ctx.sql(&format!(
+        "COPY (SELECT value AS a, value % 1000 AS b, cast(value AS varchar) AS c \
+         FROM generate_series(1, 1000000)) TO '{path}' STORED AS PARQUET"
+    ))
+    .await?
+    .collect()
+    .await?;
+    ctx.register_parquet("t", path, ParquetReadOptions::default())
+        .await?;
+
+    let plan = ctx
+        .sql("SELECT * FROM t")
+        .await?
+        .create_physical_plan()
+        .await?;
+    let start = Instant::now();
+    collect(Arc::clone(&plan), ctx.task_ctx()).await?;
+    let wall_time = start.elapsed();
+
+    assert!(
+        plan.is::<DataSourceExec>(),
+        "expected a bare scan, got:\n{}",
+        DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
+    );
+    let elapsed_compute = Duration::from_nanos(
+        plan.metrics()
+            .unwrap()
+            .aggregate_by_name()
+            .elapsed_compute()
+            .unwrap() as u64,
+    );
+
+    // Reading a local file is cheap next to decoding it, so compute should be
+    // most of the wall time. A timer that misses decoding reports well under 1%.
+    assert!(
+        elapsed_compute * 4 > wall_time,
+        "elapsed_compute {elapsed_compute:?} should be at least a quarter of the \
+         scan's wall time {wall_time:?}"
+    );
+    Ok(())
+}
+
 // This test reproduces the behavior described in
 // https://github.com/apache/datafusion/issues/16684 where projection
 // pushdown with recursive CTEs could fail to remove unused columns
