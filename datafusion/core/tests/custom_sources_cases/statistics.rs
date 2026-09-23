@@ -296,7 +296,10 @@ async fn sql_limit() -> Result<()> {
     // and cap NDV at the new row count
     let limit_stats = StatisticsContext::new()
         .compute(physical_plan.as_ref(), &StatisticsArgs::new())?;
-    assert_eq!(limit_stats.num_rows, Precision::Exact(5));
+    // Each of the table's two partitions is limited to 5 rows before the global
+    // limit. How the 13 rows are split between the partitions is unknown, so the
+    // local limits' output is only an estimate, and so is the global count.
+    assert_eq!(limit_stats.num_rows, Precision::Inexact(5));
     // c1: NDV=2 stays at 2 (already below limit of 5)
     assert_eq!(
         limit_stats.column_statistics[0].distinct_count,
