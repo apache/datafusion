@@ -952,9 +952,6 @@ struct RepartitionRequirementStatus {
 
 /// Per-child state while enforcing a parent's distribution requirements.
 struct DistributionChildState {
-    /// Scaling a native range layout must not lose its preference over a newly
-    /// introduced hash exchange when choosing a co-partitioning reference.
-    scaled_native_range: bool,
     context: DistributionContext,
     required_input_ordering: Option<OrderingRequirements>,
     maintains_input_order: bool,
@@ -1157,8 +1154,7 @@ fn enforce_distribution_relationships(
                 let partitioning = plan.output_partitioning();
                 match partitioning {
                     Partitioning::Range(_) | Partitioning::Hash(_, _) => {
-                        let is_native =
-                            !plan.is::<RepartitionExec>() || child.scaled_native_range;
+                        let is_native = !plan.is::<RepartitionExec>();
                         satisfied_children.push((i, partitioning.clone(), is_native));
                     }
                     _ => {}
@@ -1199,8 +1195,8 @@ fn enforce_distribution_relationships(
                         .collect();
 
                     // Prefer a unique, strictly larger winner (`size_a > size_b`).
-                    // Otherwise avoid arbitrary tie-breaking, except for the new
-                    // preserved-range case below.
+                    // Otherwise, fall back to standard distribution rather
+                    // than choosing an arbitrary reference.
                     candidates
                         .iter()
                         .find(|(size_a, idx_a, _)| {
@@ -1316,7 +1312,6 @@ fn enforce_distribution_relationships(
             let plan = Arc::new(repartition) as _;
             children[child_idx].context =
                 DistributionContext::new(plan, true, vec![original_child]);
-            children[child_idx].scaled_native_range = false;
             repartitioned_for_relationship[child_idx] = true;
             changed = true;
         }
@@ -1559,7 +1554,6 @@ pub fn ensure_distribution_with_stats(
                 child.plan = new_child;
             }
 
-            let mut scaled_native_range = false;
             // Satisfy the distribution requirement if it is unmet.
             match &requirement {
                 Distribution::SinglePartition => {
@@ -1612,8 +1606,6 @@ pub fn ensure_distribution_with_stats(
                                             )
                                             .is_satisfied()
                                         {
-                                            scaled_native_range =
-                                                !child.plan.is::<RepartitionExec>();
                                             scaled
                                         } else {
                                             requirement
@@ -1659,7 +1651,6 @@ pub fn ensure_distribution_with_stats(
             }
 
             Ok(DistributionChildState {
-                scaled_native_range,
                 context: child,
                 required_input_ordering,
                 maintains_input_order: maintains,
@@ -1683,7 +1674,6 @@ pub fn ensure_distribution_with_stats(
         .into_iter()
         .map(
             |DistributionChildState {
-                 scaled_native_range: _,
                  mut context,
                  required_input_ordering,
                  maintains_input_order,

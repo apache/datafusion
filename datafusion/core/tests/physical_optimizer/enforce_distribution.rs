@@ -1303,6 +1303,73 @@ fn range_preservation_keeps_existing_native_reference() -> Result<()> {
 }
 
 #[test]
+fn scaled_range_does_not_replace_native_hash_reference() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let ordering = [PhysicalSortExpr::new_default(col("a", &schema)?)].into();
+    let samples = (10..=50)
+        .step_by(10)
+        .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
+        .collect();
+    let range = Partitioning::Range(RangePartitioning::try_new_with_samples(
+        ordering, samples, 3,
+    )?);
+    let hash = Partitioning::Hash(vec![col("a", &schema)?], 4);
+
+    let source = |partitioning: Partitioning,
+                  rows_per_partition: usize|
+     -> Result<Arc<dyn ExecutionPlan>> {
+        let partitions = (0..partitioning.partition_count())
+            .map(|index| {
+                Ok(vec![RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(Int64Array::from(vec![
+                        index as i64 * 20 + 5;
+                        rows_per_partition
+                    ]))],
+                )?])
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let source =
+            MemorySourceConfig::try_new_exec(&partitions, Arc::clone(&schema), None)?;
+        Ok(Arc::new(
+            source.as_ref().clone().with_partitioning(partitioning),
+        ))
+    };
+
+    for swap in [false, true] {
+        // The larger input must not make a newly scaled range exchange look
+        // more native than a source that already provides the required hash layout.
+        let range_source = source(range.clone(), 100)?;
+        let hash_source = source(hash.clone(), 1)?;
+        let (left, right) = if swap {
+            (hash_source, range_source)
+        } else {
+            (range_source, hash_source)
+        };
+        let join_on = vec![(col("a", &schema)?, col("a", &schema)?)];
+        let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+        let plan = TestConfig::default()
+            .with_query_execution_partitions(4)
+            .to_plan(join, &DISTRIB_DISTRIB_SORT);
+        let rendered = displayable(plan.as_ref()).indent(true).to_string();
+        let children = plan.children();
+        for child in &children {
+            assert!(
+                matches!(child.output_partitioning(), Partitioning::Hash(_, 4)),
+                "{rendered}"
+            );
+        }
+        let native_hash = usize::from(!swap);
+        assert!(children[native_hash].is::<DataSourceExec>(), "{rendered}");
+        assert!(
+            children[1 - native_hash].is::<RepartitionExec>(),
+            "{rendered}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn range_fallback_preserves_target_parallelism() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
     let input =
@@ -1507,7 +1574,7 @@ async fn range_hash_join_scaling_preserves_rows() -> Result<()> {
             let rendered = displayable(plan.as_ref()).indent(true).to_string();
             let expected_count = target;
             for child in plan.children() {
-                if target <= range.max_partition_count() {
+                if target == range.partition_count() {
                     let Partitioning::Range(actual) = child.output_partitioning() else {
                         panic!("target {target}: {rendered}");
                     };
@@ -1517,6 +1584,9 @@ async fn range_hash_join_scaling_preserves_rows() -> Result<()> {
                         range.scale(expected_count).unwrap().split_points()
                     );
                 } else {
+                    // No native reference exists at this count. Both sides use
+                    // hash partitioning; above sample capacity, range scaling
+                    // is unavailable as well.
                     let Partitioning::Hash(_, actual_count) = child.output_partitioning()
                     else {
                         panic!("target {target}: {rendered}");
