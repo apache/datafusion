@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use datafusion_common::{
     DFSchemaRef, Result, assert_or_internal_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
@@ -112,6 +114,12 @@ fn assert_valid_semantic_plan(plan: &LogicalPlan) -> Result<()> {
 /// Returns an error if the plan does not have the expected schema.
 /// Ignores metadata and nullability.
 pub fn assert_expected_schema(schema: &DFSchemaRef, plan: &LogicalPlan) -> Result<()> {
+    // A plan whose schema is the exact same Arc as `schema` is trivially
+    // compatible with it, so skip the field-by-field comparison below.
+    if Arc::ptr_eq(plan.schema(), schema) {
+        return Ok(());
+    }
+
     let compatible = plan.schema().logically_equivalent_names_and_types(schema);
 
     assert_or_internal_err!(
@@ -502,5 +510,39 @@ mod test {
         });
 
         check_inner_plan(&plan).unwrap();
+    }
+
+    #[test]
+    fn assert_expected_schema_accepts_same_arc_and_rejects_renamed_schema() {
+        use arrow::datatypes::{DataType, Field, Schema};
+
+        let arrow_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let schema: DFSchemaRef =
+            Arc::new(DFSchema::try_from_qualified_schema("t", &arrow_schema).unwrap());
+        let plan = LogicalPlan::EmptyRelation(crate::logical_plan::EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::clone(&schema),
+        });
+
+        // The fast path: the plan's schema is the exact same Arc as `schema`.
+        assert_expected_schema(&schema, &plan).unwrap();
+
+        // A schema with a different field name (same type) must still be
+        // rejected once the fast path can't apply.
+        let renamed_arrow_schema =
+            Schema::new(vec![Field::new("b", DataType::Int32, false)]);
+        let renamed_schema: DFSchemaRef = Arc::new(
+            DFSchema::try_from_qualified_schema("t", &renamed_arrow_schema).unwrap(),
+        );
+        let renamed_plan =
+            LogicalPlan::EmptyRelation(crate::logical_plan::EmptyRelation {
+                produce_one_row: false,
+                schema: renamed_schema,
+            });
+        let err = assert_expected_schema(&schema, &renamed_plan).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Failed due to a difference in schemas")
+        );
     }
 }
