@@ -235,14 +235,23 @@ impl GroupsAccumulatorAdapter {
 
         assert_eq!(values[0].len(), group_indices.len());
 
+        // groups_with_rows holds a list of group indexes that have any rows
+        // that need to be accumulated, stored in order of first appearance in
+        // this batch
+        let mut groups_with_rows = vec![];
+
         // figure out which input rows correspond to which groups.
-        // Note that self.state.indices starts empty for all groups
-        // (it is cleared out below)
+        // Note that self.state.indices starts empty for all groups (it is
+        // cleared out below), so an empty one is exactly a group that this
+        // batch has not reached yet.
         // Charge retained scratch capacity only when a push grows a vector,
         // avoiding another pass over every group after indexing.
         let mut indices_allocation_delta = 0;
         for (idx, group_index) in group_indices.iter().enumerate() {
             let indices = &mut self.states[*group_index].indices;
+            if indices.is_empty() {
+                groups_with_rows.push(*group_index);
+            }
             if indices.len() < indices.capacity() {
                 indices.push(idx as u32);
             } else {
@@ -253,27 +262,17 @@ impl GroupsAccumulatorAdapter {
         }
         self.add_allocation(indices_allocation_delta);
 
-        // groups_with_rows holds a list of group indexes that have
-        // any rows that need to be accumulated, stored in order of
-        // group_index
-
-        let mut groups_with_rows = vec![];
-
         // batch_indices holds indices into values, each group is contiguous
-        let mut batch_indices = vec![];
+        let mut batch_indices = Vec::with_capacity(group_indices.len());
 
         // offsets[i] is index into batch_indices where the rows for
-        // group_index i starts
-        let mut offsets = vec![0];
+        // groups_with_rows[i] start
+        let mut offsets = Vec::with_capacity(groups_with_rows.len() + 1);
+        offsets.push(0);
 
         let mut offset_so_far = 0;
-        for (group_index, state) in self.states.iter_mut().enumerate() {
-            let indices = &state.indices;
-            if indices.is_empty() {
-                continue;
-            }
-
-            groups_with_rows.push(group_index);
+        for &group_index in groups_with_rows.iter() {
+            let indices = &self.states[group_index].indices;
             batch_indices.extend_from_slice(indices);
             offset_so_far += indices.len();
             offsets.push(offset_so_far);
