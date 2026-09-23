@@ -481,18 +481,14 @@ impl MergeIntoOp {
 
 impl Display for MergeIntoOp {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "on=[{}]", self.on)?;
-        if !self.clauses.is_empty() {
-            write!(f, " clauses=[")?;
-            for (i, clause) in self.clauses.iter().enumerate() {
-                if i > 0 {
-                    write!(f, ", ")?;
-                }
-                write!(f, "{clause}")?;
+        write!(f, "on=[{}] clauses=[", self.on)?;
+        for (i, clause) in self.clauses.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
             }
-            write!(f, "]")?;
+            write!(f, "{clause}")?;
         }
-        Ok(())
+        write!(f, "]")
     }
 }
 
@@ -666,6 +662,9 @@ mod tests {
             merge_op.to_string(),
             "on=[id = source_id] clauses=[WHEN MATCHED AND qty > Int64(0) THEN UPDATE SET qty = source_qty]"
         );
+
+        let empty = MergeIntoOp::new("target", lit(true), vec![]);
+        assert_eq!(empty.to_string(), "on=[Boolean(true)] clauses=[]");
     }
 
     #[test]

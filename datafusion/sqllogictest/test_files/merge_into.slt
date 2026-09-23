@@ -189,14 +189,8 @@ create table delete_target(id int, val varchar);
 statement ok
 insert into delete_target values (1, 'one'), (2, 'two'), (3, 'three');
 
-statement ok
-create table delete_source(id int);
-
-statement ok
-insert into delete_source values (2);
-
 query I
-merge into delete_target using delete_source on delete_target.id = delete_source.id
+merge into delete_target using (select 2 as id) as s on delete_target.id = s.id
 when matched then delete;
 ----
 1
@@ -213,14 +207,8 @@ create table source_miss_target(id int, val varchar);
 statement ok
 insert into source_miss_target values (1, 'one'), (2, 'two'), (3, 'three');
 
-statement ok
-create table source_miss_source(id int);
-
-statement ok
-insert into source_miss_source values (2);
-
 query I
-merge into source_miss_target using source_miss_source on source_miss_target.id = source_miss_source.id
+merge into source_miss_target using (select 2 as id) as s on source_miss_target.id = s.id
 when not matched by source and source_miss_target.id = 1 then update set val = 'stale'
 when not matched by source and source_miss_target.id = 3 then delete;
 ----
@@ -238,16 +226,10 @@ create table null_pred_target(id int, val varchar);
 statement ok
 insert into null_pred_target values (1, 'old');
 
-statement ok
-create table null_pred_source(id int, val varchar);
-
-statement ok
-insert into null_pred_source values (1, 'new'), (2, 'add');
-
 query I
-merge into null_pred_target using null_pred_source on null
-when matched then update set val = null_pred_source.val
-when not matched and null then insert (id, val) values (null_pred_source.id, null_pred_source.val);
+merge into null_pred_target using source on null
+when matched then update set val = source.val
+when not matched and null then insert (id, val) values (source.id, source.val);
 ----
 0
 
@@ -259,15 +241,9 @@ select * from null_pred_target;
 statement ok
 create table default_target(id int, val varchar default 'missing', qty int);
 
-statement ok
-create table default_source(id int);
-
-statement ok
-insert into default_source values (10);
-
 query I
-merge into default_target using default_source on false
-when not matched then insert (id) values (default_source.id);
+merge into default_target using (select 10 as id) as s on false
+when not matched then insert (id) values (s.id);
 ----
 1
 
@@ -275,6 +251,24 @@ query ITI
 select * from default_target;
 ----
 10 missing NULL
+
+statement ok
+create table required_target(id int not null, val varchar not null);
+
+statement error MERGE INSERT requires a value for non-nullable column 'val'
+merge into required_target using (select 11 as id) as s on false
+when not matched then insert (id) values (s.id);
+
+query I
+merge into required_target using (select 11 as id) as s on false
+when not matched then insert (id, val) values (s.id, 'supplied');
+----
+1
+
+query IT
+select * from required_target;
+----
+11 supplied
 
 statement ok
 create table dup_target(id int, val varchar);
@@ -644,25 +638,16 @@ statement ok
 drop table delete_target;
 
 statement ok
-drop table delete_source;
-
-statement ok
 drop table source_miss_target;
-
-statement ok
-drop table source_miss_source;
 
 statement ok
 drop table null_pred_target;
 
 statement ok
-drop table null_pred_source;
-
-statement ok
 drop table default_target;
 
 statement ok
-drop table default_source;
+drop table required_target;
 
 statement ok
 drop table dup_target;

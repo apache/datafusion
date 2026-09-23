@@ -29,14 +29,14 @@ use arrow::array::{
     new_empty_array,
 };
 use arrow::compute::kernels::zip::zip;
-use arrow::compute::{and, filter_record_batch};
+use arrow::compute::{and, filter_record_batch, take_record_batch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    Constraints, DFSchema, DFSchemaRef, ScalarValue, SchemaExt, internal_datafusion_err,
-    internal_err, not_impl_err, plan_err,
+    Constraints, DFSchema, DFSchemaRef, ScalarValue, SchemaExt, exec_err,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err,
 };
 use datafusion_datasource::memory::{MemSink, MemorySourceConfig};
 use datafusion_datasource::sink::DataSinkExec;
@@ -494,21 +494,33 @@ impl MemTable {
             );
         }
 
-        let merge_arrow_schema = Arc::new(merge_schema.as_arrow().clone());
+        // MERGE evaluates matched and unmatched rows using one combined target /
+        // source batch. Either side can be represented by NULLs for an unmatched
+        // row, regardless of the table's declared nullability.
+        let merge_arrow_schema = Arc::new(Schema::new_with_metadata(
+            merge_schema
+                .as_arrow()
+                .fields()
+                .iter()
+                .map(|field| Arc::new(field.as_ref().clone().with_nullable(true)))
+                .collect::<Vec<_>>(),
+            merge_schema.as_arrow().metadata().clone(),
+        ));
         let on = on.cast_to(&DataType::Boolean, merge_schema)?;
         let on = state.create_physical_expr(on, merge_schema)?;
         let clauses = compile_merge_clauses(self, state, merge_schema, clauses)?;
-
-        Ok(Arc::new(MergeIntoExec::new(
-            self.batches.clone(),
-            Arc::clone(&self.schema),
-            Arc::clone(&self.sort_order),
+        let schema = dml_count_schema();
+        Ok(Arc::new(MergeIntoExec {
+            batches: self.batches.clone(),
+            target_schema: Arc::clone(&self.schema),
+            sort_order: Arc::clone(&self.sort_order),
             source,
-            source_schema,
-            merge_arrow_schema,
+            merge_schema: merge_arrow_schema,
             on,
             clauses,
-        )))
+            properties: dml_plan_properties(&schema),
+            schema,
+        }))
     }
 }
 
@@ -552,7 +564,6 @@ struct MergeIntoExec {
     target_schema: SchemaRef,
     sort_order: Arc<Mutex<Vec<Vec<SortExpr>>>>,
     source: Arc<dyn ExecutionPlan>,
-    source_schema: SchemaRef,
     merge_schema: SchemaRef,
     on: Arc<dyn PhysicalExpr>,
     clauses: Vec<CompiledMergeClause>,
@@ -561,119 +572,71 @@ struct MergeIntoExec {
 }
 
 impl MergeIntoExec {
-    #[expect(clippy::too_many_arguments)]
-    fn new(
-        batches: Vec<PartitionData>,
-        target_schema: SchemaRef,
-        sort_order: Arc<Mutex<Vec<Vec<SortExpr>>>>,
-        source: Arc<dyn ExecutionPlan>,
-        source_schema: SchemaRef,
-        merge_schema: SchemaRef,
-        on: Arc<dyn PhysicalExpr>,
-        clauses: Vec<CompiledMergeClause>,
-    ) -> Self {
-        let schema = dml_count_schema();
-        let properties = dml_plan_properties(&schema);
-        Self {
-            batches,
-            target_schema,
-            sort_order,
-            source,
-            source_schema,
-            merge_schema,
-            on,
-            clauses,
-            schema,
-            properties,
-        }
-    }
-
     async fn execute_merge(&self, context: Arc<TaskContext>) -> Result<ArrowRecordBatch> {
         let source_partitions =
             collect_partitioned(Arc::clone(&self.source), context).await?;
         let source_rows = partitioned_batches_to_rows(&source_partitions)?;
 
-        let mut target_batches = vec![];
+        // Lock every target partition before reading any target row and retain the
+        // locks until all replacement batches are written. This makes the target
+        // snapshot and mutation atomic with respect to other MemTable writers.
+        let mut target_partitions = Vec::with_capacity(self.batches.len());
         for partition_data in &self.batches {
-            let partition = partition_data.read().await;
+            target_partitions.push(partition_data.write().await);
+        }
+        let mut target_batches = vec![];
+        for partition in &target_partitions {
             target_batches.extend(partition.iter().cloned());
         }
         let target_rows = batches_to_rows(&target_batches)?;
 
         let null_target = null_row_for_schema(&self.target_schema)?;
-        let null_source = null_row_for_schema(&self.source_schema)?;
-
-        let mut target_matches: Vec<Option<usize>> = vec![None; target_rows.len()];
-        let mut source_matched = vec![false; source_rows.len()];
-
-        for (target_idx, target_row) in target_rows.iter().enumerate() {
-            for (source_idx, source_row) in source_rows.iter().enumerate() {
-                let combined = combined_row_batch(
-                    Arc::clone(&self.merge_schema),
-                    target_row,
-                    source_row,
-                )?;
-                if evaluate_merge_predicate(&self.on, &combined)? {
-                    if let Some(first_source_idx) = target_matches[target_idx] {
-                        return plan_err!(
-                            "MERGE INTO matched target row {target_idx} with more than one source row ({first_source_idx} and {source_idx})"
-                        );
-                    }
-                    target_matches[target_idx] = Some(source_idx);
-                    source_matched[source_idx] = true;
-                }
-            }
-        }
+        let source_schema = self.source.schema();
+        let null_source = null_row_for_schema(&source_schema)?;
+        let (target_matches, source_matched) = evaluate_merge_matches(
+            &self.on,
+            &self.target_schema,
+            &source_schema,
+            &self.merge_schema,
+            &target_rows,
+            &source_rows,
+        )?;
 
         let default_batch = one_row_empty_batch()?;
         let mut merged_rows =
             Vec::with_capacity(target_rows.len().saturating_add(source_rows.len()));
         let mut rows_affected = 0_u64;
 
-        for (target_idx, target_row) in target_rows.iter().enumerate() {
-            let (source_row, clause_kind) =
-                if let Some(source_idx) = target_matches[target_idx] {
-                    (&source_rows[source_idx], MergeIntoClauseKind::Matched)
-                } else {
-                    (&null_source, MergeIntoClauseKind::NotMatchedBySource)
-                };
-
+        let target_pairs = target_rows.iter().enumerate().map(|(idx, row)| {
+            (
+                Some(row.as_slice()),
+                target_matches[idx].map(|source_idx| source_rows[source_idx].as_slice()),
+            )
+        });
+        let source_only = source_rows
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| !source_matched[*idx])
+            .map(|(_, row)| (None, Some(row.as_slice())));
+        for (target, source) in target_pairs.chain(source_only) {
+            let clause_kind = if target.is_none() {
+                MergeIntoClauseKind::NotMatchedByTarget
+            } else if source.is_some() {
+                MergeIntoClauseKind::Matched
+            } else {
+                MergeIntoClauseKind::NotMatchedBySource
+            };
             let combined = combined_row_batch(
                 Arc::clone(&self.merge_schema),
-                target_row,
-                source_row,
+                target.unwrap_or(&null_target),
+                source.unwrap_or(&null_source),
             )?;
             let application = apply_first_merge_clause(
                 &self.clauses,
                 clause_kind,
                 &combined,
                 &default_batch,
-                Some(target_row),
-            )?;
-            if application.affected {
-                rows_affected += 1;
-            }
-            if let Some(row) = application.row {
-                merged_rows.push(row);
-            }
-        }
-
-        for (source_idx, source_row) in source_rows.iter().enumerate() {
-            if source_matched[source_idx] {
-                continue;
-            }
-
-            let combined = combined_row_batch(
-                Arc::clone(&self.merge_schema),
-                &null_target,
-                source_row,
-            )?;
-            let application = apply_first_merge_clause(
-                &self.clauses,
-                MergeIntoClauseKind::NotMatchedByTarget,
-                &combined,
-                &default_batch,
-                None,
+                target,
             )?;
             if application.affected {
                 rows_affected += 1;
@@ -686,18 +649,17 @@ impl MergeIntoExec {
         let merged_batch = rows_to_batch(Arc::clone(&self.target_schema), &merged_rows)?;
 
         *self.sort_order.lock() = vec![];
-        let mut wrote_first_partition = false;
-        for partition_data in &self.batches {
-            let mut partition = partition_data.write().await;
-            if !wrote_first_partition {
-                if merged_batch.num_rows() == 0 {
-                    partition.clear();
-                } else {
-                    *partition = vec![merged_batch.clone()];
-                }
-                wrote_first_partition = true;
-            } else {
-                partition.clear();
+        let partition_count = target_partitions.len();
+        let rows_per_partition = merged_batch.num_rows() / partition_count;
+        let partitions_with_extra_row = merged_batch.num_rows() % partition_count;
+        let mut offset = 0;
+        for (partition_idx, partition) in target_partitions.iter_mut().enumerate() {
+            let row_count = rows_per_partition
+                + usize::from(partition_idx < partitions_with_extra_row);
+            partition.clear();
+            if row_count > 0 {
+                partition.push(merged_batch.slice(offset, row_count));
+                offset += row_count;
             }
         }
 
@@ -784,9 +746,14 @@ impl ExecutionPlan for MergeIntoExec {
 
     fn execute(
         &self,
-        _partition: usize,
+        partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        if partition != 0 {
+            return internal_err!(
+                "MergeIntoExec has one partition, but partition {partition} was requested"
+            );
+        }
         let exec = self.clone();
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             Arc::clone(&self.schema),
@@ -852,25 +819,8 @@ fn compile_merge_clauses(
                     columns,
                     values,
                 )?),
-                (MergeIntoClauseKind::Matched, MergeIntoAction::Insert { .. }) => {
-                    return plan_err!("MERGE MATCHED INSERT is not supported");
-                }
-                (MergeIntoClauseKind::NotMatchedByTarget, MergeIntoAction::Update(_)) => {
-                    return plan_err!("MERGE NOT MATCHED UPDATE is not supported");
-                }
-                (MergeIntoClauseKind::NotMatchedByTarget, MergeIntoAction::Delete) => {
-                    return plan_err!("MERGE NOT MATCHED DELETE is not supported");
-                }
-                (
-                    MergeIntoClauseKind::NotMatchedBySource,
-                    MergeIntoAction::Insert { .. },
-                ) => {
-                    return plan_err!(
-                        "MERGE NOT MATCHED BY SOURCE INSERT is not supported"
-                    );
-                }
-                (MergeIntoClauseKind::NotMatched, _) => {
-                    unreachable!("canonical() never returns NotMatched")
+                (kind, action) => {
+                    return plan_err!("MERGE {kind} {action} is not supported");
                 }
             };
 
@@ -889,7 +839,7 @@ fn compile_merge_assignments(
     merge_schema: &DFSchema,
     assignments: Vec<(String, Expr)>,
 ) -> Result<Vec<CompiledMergeAssignment>> {
-    let available_columns = table.available_column_names();
+    let target_fields = table.target_fields_by_name();
     let mut seen = HashSet::new();
     assignments
         .into_iter()
@@ -897,11 +847,13 @@ fn compile_merge_assignments(
             if !seen.insert(column.clone()) {
                 return plan_err!("Duplicate column '{column}' in MERGE UPDATE");
             }
-            let (target_index, field) =
-                table.target_field(&column).ok_or_else(|| {
+            let (target_index, field) = target_fields
+                .get(column.as_str())
+                .copied()
+                .ok_or_else(|| {
                     datafusion_common::DataFusionError::Plan(format!(
                         "MERGE UPDATE failed: column '{column}' does not exist. Available columns: {}",
-                        available_columns.join(", ")
+                        table.available_column_names().join(", ")
                     ))
                 })?;
             let value = value.cast_to(field.data_type(), merge_schema)?;
@@ -924,27 +876,16 @@ fn compile_merge_insert_values(
     values: Vec<Expr>,
 ) -> Result<Vec<CompiledInsertValue>> {
     let target_width = table.schema.fields().len();
-    if columns.is_empty() {
-        if values.len() != target_width {
-            return plan_err!(
-                "MERGE INSERT has {target_width} column(s) but {} value(s)",
-                values.len()
-            );
-        }
-        return values
-            .into_iter()
-            .zip(table.schema.fields())
-            .map(|(value, field)| {
-                let value = value.cast_to(field.data_type(), merge_schema)?;
-                let expr = state.create_physical_expr(value, merge_schema)?;
-                Ok(CompiledInsertValue::MergeExpr {
-                    data_type: field.data_type().clone(),
-                    expr,
-                })
-            })
-            .collect();
-    }
-
+    let columns = if columns.is_empty() {
+        table
+            .schema
+            .fields()
+            .iter()
+            .map(|field| field.name().clone())
+            .collect()
+    } else {
+        columns
+    };
     if columns.len() != values.len() {
         return plan_err!(
             "MERGE INSERT has {} column(s) but {} value(s)",
@@ -953,11 +894,36 @@ fn compile_merge_insert_values(
         );
     }
 
-    let mut insert_values = table
-        .schema
-        .fields()
-        .iter()
-        .map(|field| {
+    let target_fields = table.target_fields_by_name();
+    let mut insert_values = vec![None; target_width];
+    for (column, value) in columns.into_iter().zip(values) {
+        let (target_index, field) = target_fields
+            .get(column.as_str())
+            .copied()
+            .ok_or_else(|| {
+                datafusion_common::DataFusionError::Plan(format!(
+                    "MERGE INSERT failed: column '{column}' does not exist. Available columns: {}",
+                    table.available_column_names().join(", ")
+                ))
+            })?;
+        if insert_values[target_index].is_some() {
+            return plan_err!("Duplicate column '{column}' in MERGE INSERT");
+        }
+        let value = value.cast_to(field.data_type(), merge_schema)?;
+        let expr = state.create_physical_expr(value, merge_schema)?;
+        insert_values[target_index] = Some(CompiledInsertValue::MergeExpr {
+            data_type: field.data_type().clone(),
+            expr,
+        });
+    }
+
+    insert_values
+        .into_iter()
+        .zip(table.schema.fields())
+        .map(|(value, field)| {
+            if let Some(value) = value {
+                return Ok(value);
+            }
             if let Some(default) = table.column_defaults.get(field.name()) {
                 let default = default.clone().cast_to(field.data_type(), empty_schema)?;
                 let expr = state.create_physical_expr(default, empty_schema)?;
@@ -965,46 +931,28 @@ fn compile_merge_insert_values(
                     data_type: field.data_type().clone(),
                     expr,
                 })
+            } else if !field.is_nullable() {
+                plan_err!(
+                    "MERGE INSERT requires a value for non-nullable column '{}'",
+                    field.name()
+                )
             } else {
                 Ok(CompiledInsertValue::Null(ScalarValue::try_new_null(
                     field.data_type(),
                 )?))
             }
         })
-        .collect::<Result<Vec<_>>>()?;
-
-    let available_columns = table.available_column_names();
-    let mut seen = HashSet::new();
-    for (column, value) in columns.into_iter().zip(values) {
-        if !seen.insert(column.clone()) {
-            return plan_err!("Duplicate column '{column}' in MERGE INSERT");
-        }
-        let (target_index, field) = table.target_field(&column).ok_or_else(|| {
-            datafusion_common::DataFusionError::Plan(format!(
-                "MERGE INSERT failed: column '{column}' does not exist. Available columns: {}",
-                available_columns.join(", ")
-            ))
-        })?;
-        let value = value.cast_to(field.data_type(), merge_schema)?;
-        let expr = state.create_physical_expr(value, merge_schema)?;
-        insert_values[target_index] = CompiledInsertValue::MergeExpr {
-            data_type: field.data_type().clone(),
-            expr,
-        };
-    }
-
-    Ok(insert_values)
+        .collect()
 }
 
 impl MemTable {
-    fn target_field(&self, column: &str) -> Option<(usize, &Field)> {
+    fn target_fields_by_name(&self) -> HashMap<&str, (usize, &Field)> {
         self.schema
             .fields()
             .iter()
             .enumerate()
-            .find_map(|(idx, field)| {
-                (field.name() == column).then_some((idx, field.as_ref()))
-            })
+            .map(|(idx, field)| (field.name().as_str(), (idx, field.as_ref())))
+            .collect()
     }
 
     fn available_column_names(&self) -> Vec<&str> {
@@ -1082,19 +1030,99 @@ fn apply_first_merge_clause(
     })
 }
 
-fn evaluate_merge_predicate(
+const MERGE_MATCH_BATCH_SIZE: usize = 8 * 1024;
+
+/// Evaluate the MERGE condition over bounded chunks of the target/source
+/// Cartesian product. Generic MERGE conditions still require considering every
+/// pair, but evaluating a batch at a time avoids constructing a RecordBatch for
+/// every individual pair.
+fn evaluate_merge_matches(
+    predicate: &Arc<dyn PhysicalExpr>,
+    target_schema: &SchemaRef,
+    source_schema: &SchemaRef,
+    merge_schema: &SchemaRef,
+    target_rows: &[Vec<ScalarValue>],
+    source_rows: &[Vec<ScalarValue>],
+) -> Result<(Vec<Option<usize>>, Vec<bool>)> {
+    let mut target_matches = vec![None; target_rows.len()];
+    let mut source_matched = vec![false; source_rows.len()];
+    if target_rows.is_empty() || source_rows.is_empty() {
+        return Ok((target_matches, source_matched));
+    }
+
+    let target_batch = rows_to_batch(Arc::clone(target_schema), target_rows)?;
+    let source_batch = rows_to_batch(Arc::clone(source_schema), source_rows)?;
+    let pair_count = target_rows
+        .len()
+        .checked_mul(source_rows.len())
+        .ok_or_else(|| {
+            datafusion_common::DataFusionError::Execution(
+                "MERGE INTO target/source pair count overflowed usize".to_string(),
+            )
+        })?;
+
+    for pair_start in (0..pair_count).step_by(MERGE_MATCH_BATCH_SIZE) {
+        let pair_end = pair_start
+            .saturating_add(MERGE_MATCH_BATCH_SIZE)
+            .min(pair_count);
+        let target_indices = UInt64Array::from_iter_values(
+            (pair_start..pair_end).map(|pair_idx| (pair_idx / source_rows.len()) as u64),
+        );
+        let source_indices = UInt64Array::from_iter_values(
+            (pair_start..pair_end).map(|pair_idx| (pair_idx % source_rows.len()) as u64),
+        );
+        let target_pairs = take_record_batch(&target_batch, &target_indices)?;
+        let source_pairs = take_record_batch(&source_batch, &source_indices)?;
+        let columns = target_pairs
+            .columns()
+            .iter()
+            .chain(source_pairs.columns())
+            .cloned()
+            .collect();
+        let combined = ArrowRecordBatch::try_new(Arc::clone(merge_schema), columns)?;
+        let matches = evaluate_merge_predicate_batch(predicate, &combined)?;
+
+        for (pair_offset, is_match) in matches.iter().enumerate() {
+            if is_match != Some(true) {
+                continue;
+            }
+            let pair_idx = pair_start + pair_offset;
+            let target_idx = pair_idx / source_rows.len();
+            let source_idx = pair_idx % source_rows.len();
+            if let Some(first_source_idx) = target_matches[target_idx] {
+                return exec_err!(
+                    "MERGE INTO matched target row {target_idx} with more than one source row ({first_source_idx} and {source_idx})"
+                );
+            }
+            target_matches[target_idx] = Some(source_idx);
+            source_matched[source_idx] = true;
+        }
+    }
+
+    Ok((target_matches, source_matched))
+}
+
+fn evaluate_merge_predicate_batch(
     predicate: &Arc<dyn PhysicalExpr>,
     batch: &RecordBatch,
-) -> Result<bool> {
+) -> Result<BooleanArray> {
     let array = predicate.evaluate(batch)?.into_array(batch.num_rows())?;
-    let bool_array = array
+    array
         .as_any()
         .downcast_ref::<BooleanArray>()
+        .cloned()
         .ok_or_else(|| {
             datafusion_common::DataFusionError::Internal(
                 "MERGE predicate did not evaluate to boolean".to_string(),
             )
-        })?;
+        })
+}
+
+fn evaluate_merge_predicate(
+    predicate: &Arc<dyn PhysicalExpr>,
+    batch: &RecordBatch,
+) -> Result<bool> {
+    let bool_array = evaluate_merge_predicate_batch(predicate, batch)?;
     Ok(!bool_array.is_null(0) && bool_array.value(0))
 }
 
