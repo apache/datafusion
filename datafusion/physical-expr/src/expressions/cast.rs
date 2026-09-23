@@ -33,7 +33,7 @@ use datafusion_common::nested_struct::{
 use datafusion_common::{Result, not_impl_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
-use datafusion_expr_common::sort_properties::ExprProperties;
+use datafusion_expr_common::sort_properties::{ExprProperties, SortProperties};
 
 const DEFAULT_CAST_OPTIONS: CastOptions<'static> = CastOptions {
     safe: false,
@@ -340,12 +340,16 @@ pub(crate) fn cast_expr_properties(
     if bigger_cast
         || (!null_on_failure && is_order_preserving_cast(&source_type, target_type))
     {
+        let strictly_order_preserving = child.strictly_order_preserving && bigger_cast;
+        let sort_properties = match child.sort_properties {
+            SortProperties::Grouped if !bigger_cast => SortProperties::Unordered,
+            sort_properties => sort_properties,
+        };
         Ok(child
             .clone()
+            .with_order(sort_properties)
             .with_range(unbounded)
-            .with_strictly_order_preserving(
-                child.strictly_order_preserving && bigger_cast,
-            ))
+            .with_strictly_order_preserving(strictly_order_preserving))
     } else {
         Ok(ExprProperties::new_unknown().with_range(unbounded))
     }
@@ -1917,6 +1921,20 @@ mod tests {
         assert!(!CastExpr::check_bigger_cast(&UInt16, &Int8));
         assert!(!CastExpr::check_bigger_cast(&UInt32, &Int16));
         assert!(!CastExpr::check_bigger_cast(&Int16, &UInt8));
+    }
+
+    #[test]
+    fn grouped_cast_requires_an_injective_conversion() -> Result<()> {
+        let grouped = ExprProperties::new_unknown()
+            .with_order(SortProperties::Grouped)
+            .with_range(Interval::make_unbounded(&Int32)?);
+
+        let widened = cast_expr_properties(&grouped, &Int64, false)?;
+        assert_eq!(widened.sort_properties, SortProperties::Grouped);
+
+        let narrowed = cast_expr_properties(&grouped, &Int8, false)?;
+        assert_eq!(narrowed.sort_properties, SortProperties::Unordered);
+        Ok(())
     }
 }
 

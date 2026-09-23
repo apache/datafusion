@@ -29,6 +29,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use super::aggregate_hash_table::OrderedAggregateTableMetrics;
+use super::order::GroupCompletionMode;
 use super::ordered_final_stream::OrderedFinalAggregateStream;
 use super::{AggregateExec, AggregateMode};
 use crate::metrics::{BaselineMetrics, SpillMetrics};
@@ -124,10 +125,10 @@ impl AggregateSpill {
     /// Creates the spill context of a stream, whose spill requests are described
     /// as `label`.
     ///
-    /// `input_order_mode` is the order of the stream's input: spill files are
-    /// sorted by the already ordered group columns first, followed by the
-    /// remaining ones, so that replay keeps the ordering the stream promised.
-    /// Fully sorted input aggregates in bounded memory and never spills.
+    /// `group_completion_mode` determines which group columns are already
+    /// contiguous. Spill files are sorted by those columns first, followed by
+    /// the remaining ones, so replay preserves the completion guarantee.
+    /// Full group completion aggregates in bounded memory and never spills.
     ///
     /// `spill_schema` is the schema of the intermediate state batches.
     #[expect(clippy::too_many_arguments)]
@@ -137,12 +138,13 @@ impl AggregateSpill {
         context: &Arc<TaskContext>,
         partition: usize,
         batch_size: usize,
-        input_order_mode: &InputOrderMode,
+        group_completion_mode: &GroupCompletionMode,
         spill_schema: &SchemaRef,
         spill_metrics: SpillMetrics,
     ) -> Result<Self> {
         let mut replay_agg = agg.clone();
         replay_agg.input_order_mode = InputOrderMode::Sorted;
+        replay_agg.group_completion_mode = GroupCompletionMode::Full;
         let group_schema = match agg.mode {
             AggregateMode::Final | AggregateMode::FinalPartitioned => {
                 agg.group_by().group_schema(spill_schema)?
@@ -162,17 +164,16 @@ impl AggregateSpill {
         };
 
         let num_group_columns = group_schema.fields().len();
-        let ordered_indices: &[usize] = match input_order_mode {
-            InputOrderMode::Linear => &[],
-            InputOrderMode::PartiallySorted(ordered_indices) => ordered_indices,
-            InputOrderMode::Sorted => {
-                return internal_err!("{label}: fully ordered input does not spill");
+        let contiguous_indices: &[usize] = match group_completion_mode {
+            GroupCompletionMode::None => &[],
+            GroupCompletionMode::Partial(contiguous_indices) => contiguous_indices,
+            GroupCompletionMode::Full => {
+                return internal_err!("{label}: fully contiguous groups do not spill");
             }
         };
-        let spill_indices = ordered_indices
-            .iter()
-            .copied()
-            .chain((0..num_group_columns).filter(|idx| !ordered_indices.contains(idx)));
+        let spill_indices = contiguous_indices.iter().copied().chain(
+            (0..num_group_columns).filter(|idx| !contiguous_indices.contains(idx)),
+        );
         let output_ordering = agg.cache.output_ordering();
         let spill_sort_exprs = spill_indices.map(|idx| {
             let output_expr = Column::new(group_schema.field(idx).name(), idx);
@@ -282,7 +283,7 @@ impl AggregateSpill {
             &context,
             partition,
             merged,
-            &InputOrderMode::Sorted,
+            &GroupCompletionMode::Full,
             baseline_metrics.clone(),
             metrics,
             None,

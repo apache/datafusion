@@ -37,13 +37,14 @@ use super::aggregate_hash_table::{
     AggregateHashTable, FinalMarker, OrderedAggregateTableMetrics, PartialMarker,
     PartialSkipMarker,
 };
+use super::order::GroupCompletionMode;
 use super::skip_partial::SkipAggregationProbe;
 use super::spill::AggregateSpill;
 use crate::metrics::{
     BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput, SpillMetrics,
 };
 use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
-use crate::{InputOrderMode, SendableRecordBatchStream, metrics};
+use crate::{SendableRecordBatchStream, metrics};
 
 /// Hash aggregation is implemented in two stages: partial and final. This
 /// stream implements the partial stage.
@@ -217,7 +218,7 @@ impl PartialHashAggregateStream {
         partition: usize,
     ) -> Result<Self> {
         debug_assert_eq!(agg.mode, super::AggregateMode::Partial);
-        debug_assert_eq!(agg.input_order_mode, InputOrderMode::Linear);
+        debug_assert_eq!(agg.group_completion_mode, GroupCompletionMode::None);
 
         let schema = Arc::clone(&agg.schema);
         let input = agg.input.execute(partition, Arc::clone(context))?;
@@ -570,7 +571,7 @@ impl FinalHashAggregateStream {
             agg.mode,
             super::AggregateMode::Final | super::AggregateMode::FinalPartitioned
         ));
-        debug_assert_eq!(agg.input_order_mode, InputOrderMode::Linear);
+        debug_assert_eq!(agg.group_completion_mode, GroupCompletionMode::None);
 
         let input = agg.input.execute(partition, Arc::clone(context))?;
         Self::new_with_input(agg, context, partition, input)
@@ -604,7 +605,7 @@ impl FinalHashAggregateStream {
                 context,
                 partition,
                 batch_size,
-                &InputOrderMode::Linear,
+                &GroupCompletionMode::None,
                 &input_schema,
                 spill_metrics,
             )?))
@@ -873,6 +874,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::InputOrderMode;
     use crate::aggregates::{AggregateMode, PhysicalGroupBy};
     use crate::common::collect;
     use crate::execution_plan::ExecutionPlan;
