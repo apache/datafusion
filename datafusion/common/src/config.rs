@@ -1050,6 +1050,32 @@ config_namespace! {
         /// unaffected and always keep the fallback.
         pub enable_nlj_coordinated_fallback: bool, default = true
 
+        /// Maximum build-side size, in bytes per output partition, that a hash
+        /// join keeps in memory. `NULL` (the default) means no limit. A join
+        /// whose build side grows past this size finishes as a sort-merge join
+        /// instead: both inputs are sorted with an external (spilling) sort and
+        /// then merged.
+        ///
+        /// This is not needed for memory safety: with
+        /// `datafusion.runtime.memory_limit` set, a hash join that cannot
+        /// reserve memory for its build side already falls back the same way.
+        /// Set it to switch over earlier, when no memory limit is configured or
+        /// to make the choice reproducible.
+        ///
+        /// The size is per output partition, so a join may hold it times
+        /// `datafusion.execution.target_partitions`: divide the memory you want
+        /// hash joins to use by that count, giving 1 GB here for an 8 GB budget
+        /// over 8 partitions.
+        ///
+        /// Requires disk spilling (see `DiskManager`); a partition that falls
+        /// back reserves about `2 * sort_spill_reservation_bytes` for its sorts,
+        /// so a budget too small to cover that still fails, inside the sort.
+        /// Only `PartitionMode::Partitioned` joins fall back.
+        ///
+        /// The sort-merge fallback is a short-term measure, so this option may
+        /// be deprecated and removed once hash joins spill natively.
+        pub hash_join_max_build_size: Option<usize>, default = None
+
         /// Number of files to read in parallel when inferring schema and statistics
         pub meta_fetch_concurrency: ConfigNonZeroUsize, default = non_zero_usize_default(32)
 

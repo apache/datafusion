@@ -214,7 +214,7 @@ impl ExternalSorterMetrics {
 ///
 ///  in_mem_batches
 /// ```
-struct ExternalSorter {
+pub(crate) struct ExternalSorter {
     // ========================================================================
     // PROPERTIES:
     // Fields that define the sorter's configuration and remain constant
@@ -331,7 +331,7 @@ impl ExternalSorter {
     /// Appends an unsorted [`RecordBatch`] to `in_mem_batches`
     ///
     /// Updates memory usage metrics, and possibly triggers spilling to disk
-    async fn insert_batch(&mut self, input: RecordBatch) -> Result<()> {
+    pub(crate) async fn insert_batch(&mut self, input: RecordBatch) -> Result<()> {
         if input.num_rows() == 0 {
             return Ok(());
         }
@@ -357,7 +357,7 @@ impl ExternalSorter {
     ///
     /// 2. A combined streaming merge incorporating both in-memory
     ///    batches and data from spill files on disk.
-    async fn sort(&mut self) -> Result<SendableRecordBatchStream> {
+    pub(crate) async fn sort(&mut self) -> Result<SendableRecordBatchStream> {
         if self.spilled_before() {
             // Sort `in_mem_batches` and spill it first. If there are many
             // `in_mem_batches` and the memory limit is almost reached, merging
@@ -417,6 +417,11 @@ impl ExternalSorter {
     /// How many spill files have been created?
     fn spill_count(&self) -> usize {
         self.metrics.spill_metrics.spill_file_count.value()
+    }
+
+    /// The spill metrics of this sorter.
+    pub(crate) fn spill_metrics(&self) -> &SpillMetrics {
+        &self.metrics.spill_metrics
     }
 
     /// Appending globally sorted batches to the in-progress spill file, and clears
@@ -479,7 +484,7 @@ impl ExternalSorter {
         Ok(())
     }
 
-    async fn abort_in_progress_spill(&mut self) {
+    pub(crate) async fn abort_in_progress_spill(&mut self) {
         if let Some((in_progress_file, _)) = &mut self.in_progress_spill_file
             && let Err(error) = in_progress_file.abort_async().await
         {
