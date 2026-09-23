@@ -393,20 +393,10 @@ impl TopK {
 
     /// Insert `batch`, remembering if any of its values are among
     /// the top k seen so far.
-    #[expect(clippy::needless_pass_by_value)]
     pub fn insert_batch(&mut self, batch: RecordBatch) -> Result<()> {
         // Updates on drop
-        let baseline = self.metrics.baseline.clone();
-        let _timer = baseline.elapsed_compute().timer();
-
-        let mut sort_keys: Vec<ArrayRef> = self
-            .expr
-            .iter()
-            .map(|expr| {
-                let value = expr.expr.evaluate(&batch)?;
-                value.into_array(batch.num_rows())
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
+        let _timer = elapsed_compute.timer();
 
         let mut selected_rows = None;
 
@@ -422,6 +412,17 @@ impl TopK {
             self.attempt_early_completion(&batch)?;
             return Ok(());
         }
+
+        // Sort keys are only needed once some row passes the threshold
+        let mut sort_keys: Vec<ArrayRef> = self
+            .expr
+            .iter()
+            .map(|expr| {
+                let value = expr.expr.evaluate(&batch)?;
+                value.into_array(num_rows)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         // only update the keys / rows if the filter does not match all rows
         if filter.null_count() > 0 || filter.has_false() {
             // Indices in `set_indices` should be correct if filter contains nulls
@@ -449,7 +450,7 @@ impl TopK {
         rows.clear();
         self.row_converter.append(rows, &sort_keys)?;
 
-        let mut batch_entry = self.heap.register_batch(batch.clone());
+        let mut batch_entry = self.heap.register_batch(batch);
 
         let replacements = match selected_rows {
             Some(filter) => {
@@ -460,6 +461,10 @@ impl TopK {
 
         if replacements > 0 {
             self.metrics.row_replacements.add(replacements);
+
+            // The heap takes ownership of the batch (and compaction may drop
+            // it), so encode its last row's prefix while it is still at hand.
+            let last_row_prefix = self.last_row_common_prefix(&batch_entry.batch)?;
 
             self.heap.insert_batch_entry(batch_entry);
 
@@ -472,14 +477,14 @@ impl TopK {
             // flag the topK as finished if we know that all
             // subsequent batches are guaranteed to be greater (by byte order, after row conversion) than the top K,
             // which means the top K won't change and the computation can be finished early.
-            self.attempt_early_completion(&batch)?;
+            self.finish_if_prefix_past_boundary(last_row_prefix.as_ref())?;
 
             // update the filter representation of our TopK heap
             self.update_filter()?;
         } else {
             // The heap did not change, but this batch's prefix may still prove
             // that no later rows can enter the TopK.
-            self.attempt_early_completion(&batch)?;
+            self.attempt_early_completion(&batch_entry.batch)?;
         }
 
         Ok(())
@@ -685,15 +690,24 @@ impl TopK {
     /// greater than either the shared dynamic-filter threshold prefix or the max
     /// row in the local heap, comparing only on the shared prefix columns.
     fn attempt_early_completion(&mut self, batch: &RecordBatch) -> Result<()> {
+        let last_row_prefix = self.last_row_common_prefix(batch)?;
+        self.finish_if_prefix_past_boundary(last_row_prefix.as_ref())
+    }
+
+    /// Encodes the shared sort prefix of the last row of `batch`.
+    ///
+    /// Returns `None` when the batch is empty (there is no last row) or when
+    /// the input ordering shares no prefix with the TopK.
+    fn last_row_common_prefix(&self, batch: &RecordBatch) -> Result<Option<Rows>> {
         // Early exit if the batch is empty as there is no last row to extract from it.
         if batch.num_rows() == 0 {
-            return Ok(());
+            return Ok(None);
         }
 
         // common_prefix_row_converter is only `Some` if the input ordering has a common prefix with the TopK,
         // so early exit if it is `None`.
         let Some(prefix_converter) = &self.common_sort_prefix_converter else {
-            return Ok(());
+            return Ok(None);
         };
 
         // Evaluate the prefix for the last row of the current batch.
@@ -707,7 +721,19 @@ impl TopK {
             last_row_idx,
             &mut batch_prefix_scratch,
         )?;
-        let batch_common_prefix_row = batch_prefix_scratch.row(0);
+        Ok(Some(batch_prefix_scratch))
+    }
+
+    /// Marks the TopK finished when a batch's last-row prefix, as produced by
+    /// [`Self::last_row_common_prefix`], lies past the shared or local boundary.
+    fn finish_if_prefix_past_boundary(
+        &mut self,
+        last_row_prefix: Option<&Rows>,
+    ) -> Result<()> {
+        let Some(batch_prefix_rows) = last_row_prefix else {
+            return Ok(());
+        };
+        let batch_common_prefix_row = batch_prefix_rows.row(0);
         let batch_common_prefix = batch_common_prefix_row.as_ref();
 
         let finished_by_shared_threshold = self
@@ -1338,8 +1364,8 @@ impl PartitionedTopK {
     /// columns once for the whole batch, and feed each partition's
     /// rows into its dedicated [`TopKHeap`].
     pub(crate) fn insert_batch(&mut self, batch: &RecordBatch) -> Result<()> {
-        let baseline = self.metrics.baseline.clone();
-        let _timer = baseline.elapsed_compute().timer();
+        let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
+        let _timer = elapsed_compute.timer();
 
         let num_rows = batch.num_rows();
         if num_rows == 0 {
@@ -2673,6 +2699,145 @@ mod tests {
                 "+---+------+",
             ],
             &results
+        );
+
+        Ok(())
+    }
+
+    /// Builds a `k = 3` TopK over `(a, b)` sorted by the single key `expr`,
+    /// with no input sort prefix.
+    fn make_single_key_topk(
+        schema: SchemaRef,
+        expr: Arc<dyn PhysicalExpr>,
+        metrics: &ExecutionPlanMetricsSet,
+    ) -> Result<TopK> {
+        TopK::try_new(
+            0,
+            schema,
+            vec![],
+            LexOrdering::from([PhysicalSortExpr {
+                expr,
+                options: SortOptions::default(),
+            }]),
+            3,
+            2,
+            Arc::new(RuntimeEnv::default()),
+            metrics,
+            make_topk_filter(),
+        )
+    }
+
+    fn heap_snapshot(topk: &TopK) -> Vec<(Vec<u8>, u32, usize)> {
+        topk.heap
+            .inner
+            .iter()
+            .map(|r| (r.row.clone(), r.batch_id, r.index))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_batch_rejected_by_threshold_leaves_heap_untouched() -> Result<()> {
+        let schema = make_ab_schema();
+        let metrics = ExecutionPlanMetricsSet::new();
+        let mut topk =
+            make_single_key_topk(Arc::clone(&schema), col("a", &schema)?, &metrics)?;
+
+        topk.insert_batch(make_ab_batch(
+            Arc::clone(&schema),
+            &[Some(3), Some(1), Some(2)],
+            &[0.0, 1.0, 2.0],
+        )?)?;
+
+        let rejected = make_ab_batch(
+            Arc::clone(&schema),
+            &[Some(7), Some(5), Some(9)],
+            &[3.0, 4.0, 5.0],
+        )?;
+        // The heap is full, so the threshold must now reject every row.
+        let threshold = topk.filter.read().expr.current()?;
+        let passing = threshold
+            .evaluate(&rejected)?
+            .into_array(rejected.num_rows())?;
+        assert!(!passing.as_boolean().has_true());
+
+        let heap_before = heap_snapshot(&topk);
+        let store_len_before = topk.heap.store.len();
+        let replacements_before = topk.metrics.row_replacements.value();
+
+        topk.insert_batch(rejected)?;
+
+        assert_eq!(heap_snapshot(&topk), heap_before);
+        assert_eq!(topk.heap.store.len(), store_len_before);
+        assert_eq!(topk.metrics.row_replacements.value(), replacements_before);
+
+        let results: Vec<_> = topk.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+---+-----+",
+                "| a | b   |",
+                "+---+-----+",
+                "| 1 | 1.0 |",
+                "| 2 | 2.0 |",
+                "| 3 | 0.0 |",
+                "+---+-----+",
+            ],
+            &results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_expression_sort_key_matches_column_sort_key() -> Result<()> {
+        let schema = make_ab_schema();
+        let column_metrics = ExecutionPlanMetricsSet::new();
+        let expr_metrics = ExecutionPlanMetricsSet::new();
+        let mut by_column = make_single_key_topk(
+            Arc::clone(&schema),
+            col("a", &schema)?,
+            &column_metrics,
+        )?;
+        let a_plus_one = Arc::new(BinaryExpr::new(
+            col("a", &schema)?,
+            Operator::Plus,
+            lit(1i32),
+        ));
+        let mut by_expr =
+            make_single_key_topk(Arc::clone(&schema), a_plus_one, &expr_metrics)?;
+
+        let inputs: [&[Option<i32>]; 4] = [
+            &[Some(8), Some(5), Some(9)],
+            &[Some(4), Some(10), Some(2)],
+            &[Some(11), Some(12)],
+            &[Some(6), Some(1), Some(7)],
+        ];
+        for a in inputs {
+            let b: Vec<f64> = a.iter().map(|v| f64::from(v.unwrap()) / 2.0).collect();
+            let batch = make_ab_batch(Arc::clone(&schema), a, &b)?;
+            by_column.insert_batch(batch.clone())?;
+            by_expr.insert_batch(batch)?;
+            assert_eq!(
+                by_expr.metrics.row_replacements.value(),
+                by_column.metrics.row_replacements.value()
+            );
+        }
+
+        let column_results: Vec<_> = by_column.emit()?.try_collect().await?;
+        let expr_results: Vec<_> = by_expr.emit()?.try_collect().await?;
+        let expected = [
+            "+---+-----+",
+            "| a | b   |",
+            "+---+-----+",
+            "| 1 | 0.5 |",
+            "| 2 | 1.0 |",
+            "| 4 | 2.0 |",
+            "+---+-----+",
+        ];
+        assert_batches_eq!(expected, &column_results);
+        assert_batches_eq!(expected, &expr_results);
+        assert_eq!(
+            output_batches_and_rows(&expr_metrics),
+            output_batches_and_rows(&column_metrics)
         );
 
         Ok(())
