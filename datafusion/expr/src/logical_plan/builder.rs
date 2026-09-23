@@ -1982,6 +1982,14 @@ pub fn add_group_by_exprs_from_dependencies(
     mut group_expr: Vec<Expr>,
     schema: &DFSchemaRef,
 ) -> Result<Vec<Expr>> {
+    // With no functional dependencies on the input schema,
+    // `get_target_functional_dependencies` below can never resolve any
+    // target indices, so skip formatting the GROUP BY expression names and
+    // return the GROUP BY list unchanged.
+    if schema.functional_dependencies().is_empty() {
+        return Ok(group_expr);
+    }
+
     // Names of the fields produced by the GROUP BY exprs for example, `GROUP BY
     // c1 + 1` produces an output field named `"c1 + 1"`
     let mut group_by_field_names = group_expr
@@ -3083,6 +3091,30 @@ mod tests {
 
         assert_snapshot!(plan, @r"
         Aggregate: groupBy=[[employee_csv.id, employee_csv.state, employee_csv.salary]], aggr=[[sum(employee_csv.salary)]]
+          TableScan: employee_csv projection=[id, state, salary]
+        ");
+
+        Ok(())
+    }
+
+    #[test]
+    fn plan_builder_aggregate_with_implicit_group_by_exprs_no_constraints() -> Result<()>
+    {
+        // With no PRIMARY KEY / UNIQUE constraint on the input, there are no
+        // functional dependencies to expand the GROUP BY with, so the GROUP
+        // BY list must be left exactly as given.
+        let table_source = table_source(&employee_schema());
+
+        let options =
+            LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
+        let plan =
+            LogicalPlanBuilder::scan("employee_csv", table_source, Some(vec![0, 3, 4]))?
+                .with_options(options)
+                .aggregate(vec![col("id")], vec![sum(col("salary"))])?
+                .build()?;
+
+        assert_snapshot!(plan, @r"
+        Aggregate: groupBy=[[employee_csv.id]], aggr=[[sum(employee_csv.salary)]]
           TableScan: employee_csv projection=[id, state, salary]
         ");
 
