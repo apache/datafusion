@@ -838,7 +838,7 @@ mod test {
     use std::sync::{Arc, LazyLock};
 
     #[test]
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     fn test_deprecated_overall_row_selection() {
         for plan in [
             ParquetAccessPlan::new_all(4),
@@ -890,7 +890,7 @@ mod test {
     }
 
     #[test]
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     fn test_deprecated_overall_row_selection_validates_length() {
         for rows in [19, 21] {
             let plan = ParquetAccessPlan::new(vec![
