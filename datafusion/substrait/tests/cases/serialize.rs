@@ -18,24 +18,38 @@
 #[cfg(test)]
 mod tests {
     use datafusion::datasource::provider_as_source;
-    use datafusion::logical_expr::{AsOfMatch, LogicalPlanBuilder, Operator};
+    use datafusion::logical_expr::LogicalPlanBuilder;
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
     use datafusion_substrait::logical_plan::producer::to_substrait_plan;
     use datafusion_substrait::serializer;
 
+    use datafusion::arrow::array::Int64Array;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::arrow::util::pretty;
+    use datafusion::common::ScalarValue;
+    use datafusion::datasource::MemTable;
     use datafusion::error::Result;
+    use datafusion::logical_expr::{
+        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+        Volatility,
+    };
     use datafusion::prelude::*;
 
     use insta::assert_snapshot;
+    use std::hash::{Hash, Hasher};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::{fs, sync::Arc};
     use substrait::proto::expression::field_reference::{ReferenceType, RootType};
+    use substrait::proto::expression::literal::LiteralType;
     use substrait::proto::expression::reference_segment;
-    use substrait::proto::expression::{ReferenceSegment, RexType};
+    use substrait::proto::expression::{IfThen, ReferenceSegment, RexType};
+    use substrait::proto::extensions::simple_extension_declaration::MappingType;
     use substrait::proto::function_argument::ArgType;
     use substrait::proto::plan_rel::RelType;
     use substrait::proto::rel_common::{Emit, EmitKind};
     use substrait::proto::r#type::{I64, Kind as TypeKind, List, Nullability, Struct};
-    use substrait::proto::{Expression, RelCommon, Type, rel};
+    use substrait::proto::{Expression, Plan, RelCommon, Type, rel};
 
     use crate::cases::roundtrip_logical_plan::higher_order_function_ctx;
 
@@ -110,10 +124,10 @@ mod tests {
         let left = LogicalPlanBuilder::scan("l", Arc::clone(&table), None)?.build()?;
         let right = LogicalPlanBuilder::scan("r", table, None)?.build()?;
         let plan = LogicalPlanBuilder::from(left)
-            .asof_join(
+            .asof_join_on(
                 right,
-                vec![(col("l.b"), col("r.b"))],
-                AsOfMatch::new(col("l.a"), Operator::GtEq, col("r.a")),
+                Some(col("l.b").eq(col("r.b"))),
+                col("l.a").gt_eq(col("r.a")),
             )?
             .build()?;
         let error = to_substrait_plan(&plan, &ctx.state())
@@ -319,6 +333,396 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    /// Substrait's `IfThen` has no base expression: every `IfClause` is a
+    /// standalone boolean condition and `then` is the value that clause yields.
+    /// A `CASE <base> WHEN <value> ...` must therefore be emitted as conditions
+    /// over `<base> = <value>`. A round trip cannot catch a regression here,
+    /// because the consumer reads back whatever the producer writes.
+    #[tokio::test]
+    async fn case_with_base_expression_emits_equality_conditions() -> Result<()> {
+        let ctx = create_context().await?;
+        let sql = "SELECT CASE a WHEN 1 THEN 'x' WHEN 2 THEN 'y' ELSE 'z' END FROM data";
+
+        let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+        let proto = to_substrait_plan(&plan, &ctx.state())?;
+
+        let equal_anchors = function_anchors(&proto, "equal");
+        assert!(!equal_anchors.is_empty(), "no `equal` function registered");
+
+        let if_then = single_if_then(&proto);
+
+        // One clause per WHEN, with no extra clause carrying the base
+        // expression. These WHEN operands are literals, so reading one on a
+        // NULL base row does nothing and no guard clause is needed.
+        assert_eq!(if_then.ifs.len(), 2);
+        assert!(if_then.r#else.is_some());
+        assert!(
+            function_anchors(&proto, "is_null").is_empty(),
+            "literal WHEN operands should not need an `is_null` guard"
+        );
+
+        for (i, clause) in if_then.ifs.iter().enumerate() {
+            let condition = clause
+                .r#if
+                .as_ref()
+                .unwrap_or_else(|| panic!("clause {i} has no condition"));
+            assert!(clause.then.is_some(), "clause {i} has no `then`");
+
+            let RexType::ScalarFunction(f) = condition.rex_type.as_ref().unwrap() else {
+                panic!("clause {i} condition is not a scalar function: {condition:?}")
+            };
+            assert!(
+                equal_anchors.contains(&f.function_reference),
+                "clause {i} condition is not an `equal` call"
+            );
+            assert_eq!(f.arguments.len(), 2, "clause {i} condition arity");
+
+            // The condition must be `<base> = <when>`, in that order: the base
+            // field reference on the left, the WHEN literal on the right.
+            let args: Vec<&Expression> = f
+                .arguments
+                .iter()
+                .map(|arg| match arg.arg_type.as_ref().unwrap() {
+                    ArgType::Value(value) => value,
+                    other => panic!("clause {i} argument is not a value: {other:?}"),
+                })
+                .collect();
+
+            let Some(RexType::Selection(field)) = args[0].rex_type.as_ref() else {
+                panic!(
+                    "clause {i} left operand is not a field reference: {:?}",
+                    args[0]
+                )
+            };
+            assert!(
+                matches!(field.root_type, Some(RootType::RootReference(_))),
+                "clause {i} left operand is not rooted at the input"
+            );
+            let Some(ReferenceType::DirectReference(ReferenceSegment {
+                reference_type:
+                    Some(reference_segment::ReferenceType::StructField(struct_field)),
+            })) = field.reference_type.as_ref()
+            else {
+                panic!("clause {i} left operand is not a direct struct reference")
+            };
+            // `data.a` is the first field of the scan.
+            assert_eq!(struct_field.field, 0, "clause {i} left operand field index");
+
+            let Some(RexType::Literal(literal)) = args[1].rex_type.as_ref() else {
+                panic!("clause {i} right operand is not a literal: {:?}", args[1])
+            };
+            assert_eq!(
+                literal.literal_type,
+                Some(LiteralType::I64(i as i64 + 1)),
+                "clause {i} right operand literal"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// The function anchors registered under `name` in `proto`.
+    fn function_anchors(proto: &Plan, name: &str) -> Vec<u32> {
+        proto
+            .extensions
+            .iter()
+            .filter_map(|e| match e.mapping_type.as_ref().unwrap() {
+                MappingType::ExtensionFunction(f) if f.name == name => {
+                    Some(f.function_anchor)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The single `IfThen` in the plan's projection.
+    fn single_if_then(proto: &Plan) -> &IfThen {
+        let root = match proto.relations.first().unwrap().rel_type.as_ref() {
+            Some(RelType::Root(root)) => root.input.as_ref().unwrap(),
+            _ => panic!("expected Root"),
+        };
+        let Some(rel::RelType::Project(project)) = root.rel_type.as_ref() else {
+            panic!("expected Project")
+        };
+        let if_thens: Vec<&IfThen> = project
+            .expressions
+            .iter()
+            .filter_map(|expr| match expr.rex_type.as_ref() {
+                Some(RexType::IfThen(if_then)) => Some(if_then.as_ref()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(if_thens.len(), 1, "expected one IfThen");
+        if_thens[0]
+    }
+
+    /// A nullable base with a WHEN operand that is neither a literal nor a
+    /// column gets the guard clause, which yields the ELSE value.
+    #[tokio::test]
+    async fn case_with_null_base_emits_guard_clause() -> Result<()> {
+        let ctx = create_context().await?;
+        let sql = "SELECT CASE a WHEN 10 / a THEN 'x' ELSE 'z' END FROM data";
+
+        let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+        let proto = to_substrait_plan(&plan, &ctx.state())?;
+
+        let if_then = single_if_then(&proto);
+        assert_eq!(if_then.ifs.len(), 2, "one guard clause plus one WHEN");
+
+        let guard = &if_then.ifs[0];
+        let guard_condition = guard.r#if.as_ref().expect("guard has no condition");
+        let RexType::ScalarFunction(guard_fn) =
+            guard_condition.rex_type.as_ref().unwrap()
+        else {
+            panic!("guard condition is not a scalar function: {guard_condition:?}")
+        };
+        assert!(
+            function_anchors(&proto, "is_null").contains(&guard_fn.function_reference),
+            "guard condition is not an `is_null` call"
+        );
+        // The guard yields what a NULL base yields: the ELSE value.
+        let Some(RexType::Literal(literal)) =
+            guard.then.as_ref().and_then(|t| t.rex_type.as_ref())
+        else {
+            panic!("guard `then` is not a literal: {:?}", guard.then)
+        };
+        assert_eq!(
+            literal.literal_type,
+            Some(LiteralType::String("z".to_string()))
+        );
+
+        Ok(())
+    }
+
+    /// The guard is only needed when the base can be NULL. A base that cannot
+    /// be NULL keeps the conditions on their own.
+    #[tokio::test]
+    async fn case_with_non_nullable_base_emits_no_null_guard() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from(vec![1, 2]))],
+        )?;
+        let ctx = SessionContext::new();
+        ctx.register_table(
+            "t",
+            Arc::new(MemTable::try_new(Arc::clone(&schema), vec![vec![batch]])?),
+        )?;
+
+        // The same WHEN operand that earns a guard over a nullable base.
+        let sql = "SELECT CASE a WHEN 10 / a THEN 'x' ELSE 'z' END FROM t";
+        let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+        let proto = to_substrait_plan(&plan, &ctx.state())?;
+
+        let if_then = single_if_then(&proto);
+        assert_eq!(
+            if_then.ifs.len(),
+            1,
+            "a non-nullable base should not add a guard clause"
+        );
+        assert!(
+            function_anchors(&proto, "is_null").is_empty(),
+            "no `is_null` should be registered for a non-nullable base"
+        );
+
+        Ok(())
+    }
+
+    /// `CaseExpr::case_when_with_expr` fills the result for rows whose base is
+    /// NULL and drops them before it evaluates the first WHEN, so a WHEN that
+    /// errors never runs on them. `<base> = <when>` evaluates both operands, so
+    /// without the guard clause the emitted plan fails on a query that succeeds.
+    #[tokio::test]
+    async fn case_with_null_base_does_not_evaluate_when_operands() -> Result<()> {
+        let ctx = SessionContext::new();
+        // `10 / b` divides by zero on the second row, whose base is NULL.
+        let sql = "SELECT CASE a WHEN 10 / b THEN 'x' ELSE 'y' END AS r \
+                   FROM (VALUES (1, 1), (NULL, 0)) AS t(a, b)";
+
+        let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+        let native = DataFrame::new(ctx.state(), plan.clone()).collect().await?;
+
+        let proto = to_substrait_plan(&plan, &ctx.state())?;
+        let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+        let roundtrip = DataFrame::new(ctx.state(), plan2).collect().await?;
+
+        let native = pretty::pretty_format_batches(&native)?.to_string();
+        assert_eq!(
+            native,
+            pretty::pretty_format_batches(&roundtrip)?.to_string()
+        );
+        assert_snapshot!(native, @r"
+        +---+
+        | r |
+        +---+
+        | y |
+        | y |
+        +---+
+        ");
+
+        // With no ELSE, the guard yields a NULL of the result type, which is
+        // what the base CASE returns for those rows.
+        let sql = "SELECT CASE a WHEN 10 / b THEN 'x' END AS r \
+                   FROM (VALUES (1, 1), (NULL, 0)) AS t(a, b)";
+        let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+        let native = DataFrame::new(ctx.state(), plan.clone()).collect().await?;
+        let proto = to_substrait_plan(&plan, &ctx.state())?;
+        let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+        let roundtrip = DataFrame::new(ctx.state(), plan2).collect().await?;
+        let native = pretty::pretty_format_batches(&native)?.to_string();
+        assert_eq!(
+            native,
+            pretty::pretty_format_batches(&roundtrip)?.to_string()
+        );
+        assert_snapshot!(native, @r"
+        +---+
+        | r |
+        +---+
+        |   |
+        |   |
+        +---+
+        ");
+
+        // A genuine error is still reported: the same WHEN over a row whose
+        // base is not NULL fails on both sides.
+        let sql = "SELECT CASE a WHEN 10 / b THEN 'x' ELSE 'y' END AS r \
+                   FROM (VALUES (1, 1), (2, 0)) AS t(a, b)";
+        let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+        assert!(
+            DataFrame::new(ctx.state(), plan.clone())
+                .collect()
+                .await
+                .is_err(),
+            "the base CASE should report the division by zero"
+        );
+        let proto = to_substrait_plan(&plan, &ctx.state())?;
+        let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+        assert!(
+            DataFrame::new(ctx.state(), plan2).collect().await.is_err(),
+            "the emitted plan should report the division by zero"
+        );
+
+        Ok(())
+    }
+
+    /// A nullary volatile function returning 1 on its first call, 2 on its
+    /// second, and so on, so that a repeated evaluation is visible in the
+    /// result rather than being random.
+    #[derive(Debug)]
+    struct CallCounter {
+        signature: Signature,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl CallCounter {
+        fn new(calls: Arc<AtomicUsize>) -> Self {
+            Self {
+                signature: Signature::nullary(Volatility::Volatile),
+                calls,
+            }
+        }
+    }
+
+    impl PartialEq for CallCounter {
+        fn eq(&self, other: &Self) -> bool {
+            self.signature == other.signature
+        }
+    }
+
+    impl Eq for CallCounter {}
+
+    impl Hash for CallCounter {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.signature.hash(state);
+        }
+    }
+
+    impl ScalarUDFImpl for CallCounter {
+        fn name(&self) -> &str {
+            "call_counter"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int64)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst) as i64 + 1;
+            Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(call))))
+        }
+    }
+
+    /// `CaseExpr` evaluates a base expression once and compares every WHEN
+    /// against that one value, so a volatile base cannot be emitted as
+    /// `<base> = <value>` conditions: each condition would evaluate it again.
+    /// The producer rejects such a plan instead of changing its meaning.
+    #[tokio::test]
+    async fn case_with_volatile_base_expression_is_rejected() -> Result<()> {
+        let ctx = create_context().await?;
+        let calls = Arc::new(AtomicUsize::new(0));
+        ctx.register_udf(ScalarUDF::from(CallCounter::new(Arc::clone(&calls))));
+
+        // One row, so the difference below is only in how often the base runs.
+        let base_sql = "SELECT CASE call_counter() WHEN 2 THEN 20 WHEN 1 THEN 10 ELSE 99 END FROM data WHERE a = 1";
+        // The same CASE after the desugaring this file applies to a base CASE.
+        let desugared_sql = "SELECT CASE WHEN call_counter() = 2 THEN 20 WHEN call_counter() = 1 THEN 10 ELSE 99 END FROM data WHERE a = 1";
+
+        // The base is evaluated once, returns 1, and matches the second WHEN.
+        assert_eq!(single_i64(&ctx, base_sql).await?, 10);
+        assert_eq!(calls.swap(0, Ordering::SeqCst), 1);
+
+        // Desugared, it is evaluated once per condition: 1 does not equal 2,
+        // then 2 does not equal 1, so the row falls through to ELSE.
+        assert_eq!(single_i64(&ctx, desugared_sql).await?, 99);
+        assert_eq!(calls.swap(0, Ordering::SeqCst), 2);
+
+        let plan = ctx.sql(base_sql).await?.into_optimized_plan()?;
+        let err = to_substrait_plan(&plan, &ctx.state())
+            .expect_err("a volatile CASE base expression must be rejected")
+            .to_string();
+        assert!(
+            err.contains("volatile CASE base expression"),
+            "unexpected error: {err}"
+        );
+
+        // `Expr::is_volatile` does not look inside a subquery's plan, but the
+        // desugaring duplicates the base all the same, so this is rejected too.
+        let subquery_sql = "SELECT CASE (SELECT call_counter()) WHEN 2 THEN 20 WHEN 1 THEN 10 ELSE 99 END FROM data WHERE a = 1";
+        let plan = ctx.sql(subquery_sql).await?.into_optimized_plan()?;
+        let err = to_substrait_plan(&plan, &ctx.state())
+            .expect_err("a volatile scalar subquery base must be rejected")
+            .to_string();
+        assert!(
+            err.contains("volatile CASE base expression"),
+            "unexpected error: {err}"
+        );
+
+        // A subquery base with nothing volatile in it is still emitted.
+        let pure_sql = "SELECT CASE (SELECT max(a) FROM data) WHEN 2 THEN 20 ELSE 99 END FROM data WHERE a = 1";
+        let plan = ctx.sql(pure_sql).await?.into_optimized_plan()?;
+        to_substrait_plan(&plan, &ctx.state())?;
+
+        Ok(())
+    }
+
+    /// Runs `sql` and returns the single `Int64` value it produces.
+    async fn single_i64(ctx: &SessionContext, sql: &str) -> Result<i64> {
+        let batches = ctx.sql(sql).await?.collect().await?;
+        let rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+        assert_eq!(rows, 1, "expected one row from `{sql}`");
+        let batch = batches.iter().find(|batch| batch.num_rows() == 1).unwrap();
+        let values = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("expected an Int64 column");
+        Ok(values.value(0))
     }
 
     fn assert_emit(rel_common: Option<&RelCommon>, output_mapping: Vec<i32>) {

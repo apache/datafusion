@@ -1663,7 +1663,7 @@ trim(LEADING trim_str FROM str)
 
 ### `octet_length`
 
-Returns the length of a string in bytes.
+Returns the length of a string or binary in bytes.
 
 ```sql
 octet_length(str)
@@ -1671,7 +1671,7 @@ octet_length(str)
 
 #### Arguments
 
-- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **str**: String or binary expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -2563,6 +2563,11 @@ date_part(part, expression)
   - doy (day of the year)
   - epoch (seconds since Unix epoch for timestamps/dates, total seconds for intervals)
   - isodow (ISO 8601 day of the week where Monday is 1 and Sunday is 7)
+  - timezone (UTC offset in seconds)
+  - timezone_hour (whole hours of the UTC offset)
+  - timezone_minute (whole minutes of the UTC offset, excluding the hours)
+
+  The `timezone`, `timezone_hour` and `timezone_minute` parts are only defined for timestamps that carry a timezone; extracting them from a timezone-naive timestamp, a date, a time or an interval is an error. They report the offset that applies at that instant, so they follow daylight saving time: `Europe/Brussels` yields `3600` in January and `7200` in July. For a negative offset each non-zero part carries the sign, so `America/St_Johns` in January yields `-3` hours and `-30` minutes. An offset smaller than one hour has a zero hour part, which cannot show a sign: `Africa/Monrovia` before 1972 yields `0` hours and `-43` minutes.
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
 
@@ -2581,6 +2586,12 @@ date_part(part, expression)
 +----------------------------------------------------+
 | 1                                                  |
 +----------------------------------------------------+
+> SELECT date_part('timezone', TIMESTAMP '2024-07-01T12:00:00' AT TIME ZONE 'Europe/Brussels') AS utc_offset_seconds;
++--------------------+
+| utc_offset_seconds |
++--------------------+
+| 7200               |
++--------------------+
 ```
 
 #### Alternative Syntax
@@ -2659,7 +2670,13 @@ _Alias of [date_trunc](#date_trunc)._
 
 ### `from_unixtime`
 
-Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`). Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`) return the corresponding timestamp.
+Converts an integer to a timestamp with second precision (`Timestamp(Second)`).
+The integer is interpreted as the number of seconds since the unix epoch
+(`1970-01-01T00:00:00Z`).
+
+If the optional `timezone` argument is omitted, the timestamp is returned in the
+session time zone (`datafusion.execution.time_zone`), which is unset (i.e.
+timezone-naive) by default.
 
 ```sql
 from_unixtime(expression[, timezone])
@@ -2668,7 +2685,7 @@ from_unixtime(expression[, timezone])
 #### Arguments
 
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **timezone**: Optional timezone to use when converting the integer to a timestamp. If not provided, the default timezone is UTC.
+- **timezone**: Optional timezone to use when converting the integer to a timestamp. If not provided, the session time zone (`datafusion.execution.time_zone`) is used, which is unset (timezone-naive) by default.
 
 #### Example
 
@@ -2679,6 +2696,15 @@ from_unixtime(expression[, timezone])
 +-----------------------------------------------------------+
 | 2020-09-08T09:42:29-04:00                                 |
 +-----------------------------------------------------------+
+
+-- Without an explicit timezone the session time zone is used
+> SET datafusion.execution.time_zone = 'America/New_York';
+> select from_unixtime(1599572549);
++----------------------------------+
+| from_unixtime(Int64(1599572549)) |
++----------------------------------+
+| 2020-09-08T09:42:29-04:00        |
++----------------------------------+
 ```
 
 ### `make_date`

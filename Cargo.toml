@@ -81,7 +81,7 @@ repository = "https://github.com/apache/datafusion"
 # Define Minimum Supported Rust Version (MSRV)
 rust-version = "1.94.0"
 # Define DataFusion version
-version = "55.0.0"
+version = "55.1.0"
 
 [workspace.dependencies]
 # We turn off default-features for some dependencies here so the workspaces which inherit them can
@@ -90,30 +90,31 @@ version = "55.0.0"
 #
 # See for more details: https://github.com/rust-lang/cargo/issues/11329
 apache-avro = { version = "0.21", default-features = false }
-arrow = { version = "59.2.0", features = [
+arrow = { version = "60.0.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
-arrow-avro = { version = "59.2.0", default-features = false, features = [
+arrow-avro = { version = "60.0.0", default-features = false, features = [
     "deflate",
     "snappy",
     "zstd",
     "bzip2",
     "xz",
 ] }
-arrow-buffer = { version = "59.2.0", default-features = false }
-arrow-data = { version = "59.2.0", default-features = false }
-arrow-flight = { version = "59.2.0", features = [
-    "flight-sql-experimental",
+arrow-buffer = { version = "60.0.0", default-features = false }
+arrow-data = { version = "60.0.0", default-features = false }
+arrow-flight = { version = "60.0.0", features = [
+    "flight-sql",
 ] }
 # Both codecs are required here to make sure that code paths like
 # file-spilling have access to all compression codecs.
-arrow-ipc = { version = "59.2.0", default-features = false, features = [
+arrow-ipc = { version = "60.0.0", default-features = false, features = [
     "lz4",
     "zstd",
 ] }
-arrow-ord = { version = "59.2.0", default-features = false }
-arrow-schema = { version = "59.2.0", default-features = false }
+arrow-ord = { version = "60.0.0", default-features = false }
+arrow-schema = { version = "60.0.0", default-features = false }
+arrow-select = { version = "60.0.0", default-features = false }
 async-trait = "0.1.89"
 bigdecimal = "0.4.8"
 bytes = "1.11"
@@ -122,44 +123,44 @@ chrono = { version = "0.4.45", default-features = false }
 criterion = "0.8"
 ctor = "1.0.7"
 dashmap = "6.2.1"
-datafusion = { path = "datafusion/core", version = "55.0.0", default-features = false }
-datafusion-catalog = { path = "datafusion/catalog", version = "55.0.0" }
-datafusion-catalog-listing = { path = "datafusion/catalog-listing", version = "55.0.0" }
-datafusion-common = { path = "datafusion/common", version = "55.0.0", default-features = false }
-datafusion-common-runtime = { path = "datafusion/common-runtime", version = "55.0.0" }
-datafusion-datasource = { path = "datafusion/datasource", version = "55.0.0", default-features = false }
-datafusion-datasource-arrow = { path = "datafusion/datasource-arrow", version = "55.0.0", default-features = false }
-datafusion-datasource-avro = { path = "datafusion/datasource-avro", version = "55.0.0", default-features = false }
-datafusion-datasource-csv = { path = "datafusion/datasource-csv", version = "55.0.0", default-features = false }
-datafusion-datasource-json = { path = "datafusion/datasource-json", version = "55.0.0", default-features = false }
-datafusion-datasource-parquet = { path = "datafusion/datasource-parquet", version = "55.0.0", default-features = false }
-datafusion-doc = { path = "datafusion/doc", version = "55.0.0" }
-datafusion-execution = { path = "datafusion/execution", version = "55.0.0", default-features = false }
-datafusion-expr = { path = "datafusion/expr", version = "55.0.0", default-features = false }
-datafusion-expr-common = { path = "datafusion/expr-common", version = "55.0.0" }
-datafusion-ffi = { path = "datafusion/ffi", version = "55.0.0" }
-datafusion-functions = { path = "datafusion/functions", version = "55.0.0" }
-datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "55.0.0" }
-datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "55.0.0" }
-datafusion-functions-nested = { path = "datafusion/functions-nested", version = "55.0.0", default-features = false }
-datafusion-functions-table = { path = "datafusion/functions-table", version = "55.0.0" }
-datafusion-functions-window = { path = "datafusion/functions-window", version = "55.0.0" }
-datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "55.0.0" }
-datafusion-macros = { path = "datafusion/macros", version = "55.0.0" }
-datafusion-optimizer = { path = "datafusion/optimizer", version = "55.0.0", default-features = false }
-datafusion-physical-expr = { path = "datafusion/physical-expr", version = "55.0.0", default-features = false }
-datafusion-physical-expr-adapter = { path = "datafusion/physical-expr-adapter", version = "55.0.0", default-features = false }
-datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "55.0.0", default-features = false }
-datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "55.0.0" }
-datafusion-physical-plan = { path = "datafusion/physical-plan", version = "55.0.0" }
-datafusion-proto = { path = "datafusion/proto", version = "55.0.0", default-features = false }
-datafusion-proto-common = { path = "datafusion/proto-common", version = "55.0.0" }
-datafusion-proto-models = { path = "datafusion/proto-models", version = "55.0.0" }
-datafusion-pruning = { path = "datafusion/pruning", version = "55.0.0" }
-datafusion-session = { path = "datafusion/session", version = "55.0.0" }
-datafusion-spark = { path = "datafusion/spark", version = "55.0.0" }
-datafusion-sql = { path = "datafusion/sql", version = "55.0.0" }
-datafusion-substrait = { path = "datafusion/substrait", version = "55.0.0" }
+datafusion = { path = "datafusion/core", version = "55.1.0", default-features = false }
+datafusion-catalog = { path = "datafusion/catalog", version = "55.1.0" }
+datafusion-catalog-listing = { path = "datafusion/catalog-listing", version = "55.1.0" }
+datafusion-common = { path = "datafusion/common", version = "55.1.0", default-features = false }
+datafusion-common-runtime = { path = "datafusion/common-runtime", version = "55.1.0" }
+datafusion-datasource = { path = "datafusion/datasource", version = "55.1.0", default-features = false }
+datafusion-datasource-arrow = { path = "datafusion/datasource-arrow", version = "55.1.0", default-features = false }
+datafusion-datasource-avro = { path = "datafusion/datasource-avro", version = "55.1.0", default-features = false }
+datafusion-datasource-csv = { path = "datafusion/datasource-csv", version = "55.1.0", default-features = false }
+datafusion-datasource-json = { path = "datafusion/datasource-json", version = "55.1.0", default-features = false }
+datafusion-datasource-parquet = { path = "datafusion/datasource-parquet", version = "55.1.0", default-features = false }
+datafusion-doc = { path = "datafusion/doc", version = "55.1.0" }
+datafusion-execution = { path = "datafusion/execution", version = "55.1.0", default-features = false }
+datafusion-expr = { path = "datafusion/expr", version = "55.1.0", default-features = false }
+datafusion-expr-common = { path = "datafusion/expr-common", version = "55.1.0" }
+datafusion-ffi = { path = "datafusion/ffi", version = "55.1.0" }
+datafusion-functions = { path = "datafusion/functions", version = "55.1.0" }
+datafusion-functions-aggregate = { path = "datafusion/functions-aggregate", version = "55.1.0" }
+datafusion-functions-aggregate-common = { path = "datafusion/functions-aggregate-common", version = "55.1.0" }
+datafusion-functions-nested = { path = "datafusion/functions-nested", version = "55.1.0", default-features = false }
+datafusion-functions-table = { path = "datafusion/functions-table", version = "55.1.0" }
+datafusion-functions-window = { path = "datafusion/functions-window", version = "55.1.0" }
+datafusion-functions-window-common = { path = "datafusion/functions-window-common", version = "55.1.0" }
+datafusion-macros = { path = "datafusion/macros", version = "55.1.0" }
+datafusion-optimizer = { path = "datafusion/optimizer", version = "55.1.0", default-features = false }
+datafusion-physical-expr = { path = "datafusion/physical-expr", version = "55.1.0", default-features = false }
+datafusion-physical-expr-adapter = { path = "datafusion/physical-expr-adapter", version = "55.1.0", default-features = false }
+datafusion-physical-expr-common = { path = "datafusion/physical-expr-common", version = "55.1.0", default-features = false }
+datafusion-physical-optimizer = { path = "datafusion/physical-optimizer", version = "55.1.0" }
+datafusion-physical-plan = { path = "datafusion/physical-plan", version = "55.1.0" }
+datafusion-proto = { path = "datafusion/proto", version = "55.1.0", default-features = false }
+datafusion-proto-common = { path = "datafusion/proto-common", version = "55.1.0" }
+datafusion-proto-models = { path = "datafusion/proto-models", version = "55.1.0" }
+datafusion-pruning = { path = "datafusion/pruning", version = "55.1.0" }
+datafusion-session = { path = "datafusion/session", version = "55.1.0" }
+datafusion-spark = { path = "datafusion/spark", version = "55.1.0" }
+datafusion-sql = { path = "datafusion/sql", version = "55.1.0" }
+datafusion-substrait = { path = "datafusion/substrait", version = "55.1.0" }
 
 doc-comment = "0.3"
 env_logger = "0.11"
@@ -175,11 +176,12 @@ itertools = "0.15"
 itoa = "1.0"
 liblzma = { version = "0.4.6", features = ["static"] }
 log = "^0.4"
+loom = "0.7"
 memchr = "2.8.1"
 num-traits = { version = "0.2" }
-object_store = { version = "0.13.2", default-features = false }
+object_store = { version = "0.14.2", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "59.2.0", default-features = false, features = [
+parquet = { version = "60.0.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
@@ -194,10 +196,10 @@ prost = "0.14.1"
 rand = "0.9"
 recursive = "0.1.1"
 regex = "1.12"
-rstest = "0.26.1"
+rstest = "0.27.0"
 serde_json = "1"
 sha2 = "^0.11.0"
-sqlparser = { version = "0.62.0", default-features = false, features = ["std", "visitor"] }
+sqlparser = { version = "0.63.0", default-features = false, features = ["std", "visitor"] }
 stacker = "0.1.24"
 strum = "0.28.0"
 strum_macros = "0.28.0"
@@ -208,7 +210,7 @@ tokio-stream = "0.1"
 tokio-util = "0.7"
 url = "2.5.7"
 uuid = "1.23"
-zstd = { version = "0.13", default-features = false }
+zstd = { version = "0.14", default-features = false }
 
 # Keep this list sorted alphabetically.
 # See https://github.com/apache/datafusion/issues/18467 for the ongoing effort of
@@ -281,7 +283,6 @@ enum_glob_use = "allow"                      # 98 hits
 explicit_into_iter_loop = "allow"            # 55 hits
 explicit_iter_loop = "allow"                 # 189 hits
 float_cmp = "allow"                          # 8 hits; exact float comparisons are often intentional here
-from_iter_instead_of_collect = "allow"       # 51 hits
 if_not_else = "allow"                        # 133 hits
 ignored_unit_patterns = "allow"              # 52 hits
 implicit_clone = "allow"                     # 198 hits
@@ -322,6 +323,11 @@ unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(datafusion_coop, values("tokio", "tokio_fallback", "per_stream"))',
     "cfg(coverage)",
     "cfg(coverage_nightly)",
+    # Enables the loom model-checked concurrency tests; see
+    # datafusion/physical-plan/src/joins/hash_join/probe_completion.rs.
+    # Namespaced rather than a bare `loom`, which tokio also reads and which
+    # would switch tokio itself into its loom build.
+    "cfg(datafusion_loom)",
 ] }
 unused_qualifications = "deny"
 

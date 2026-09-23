@@ -87,10 +87,11 @@ GET 27
 PUT 25
 DELETE 24
 
-query T
-SELECT strings['not_found'] FROM data LIMIT 1;
+# A missing key makes the result nullable even when the map and its values are not.
+query TBB
+SELECT strings['not_found'], arrow_field(strings)['nullable'], arrow_field(strings['not_found'])['nullable'] FROM data LIMIT 1;
 ----
-NULL
+NULL false true
 
 # Select non existent key, expect NULL for each row
 query I
@@ -554,8 +555,10 @@ SELECT MAP {'a': MAP {1:'a', 2:'b', 3:'c'}, 'b': MAP {2:'c', 4:'d'} }['c'];
 NULL
 
 # access map with null key
-query error
+query ?
 SELECT MAP {'a': MAP {1:'a', 2:'b', 3:'c'}, 'b': MAP {2:'c', 4:'d'} }[NULL];
+----
+NULL
 
 query ?
 SELECT MAP { 'a': 1, 'b': 3 };
@@ -597,6 +600,64 @@ NULL
 # TODO(https://github.com/apache/datafusion/pull/18394): Test accessing map with empty map as key
 # TODO(https://github.com/apache/datafusion/pull/18394): Test accessing map with null map as key
 
+# accessing map with list key: match on a later entry, absent key, match on the first entry
+query III
+SELECT MAP {[1,2]:1, [3,4]:2}[[3,4]], MAP {[1,2]:1, [3,4]:2}[[9,9]], MAP {[1,2]:1, [3,4]:2}[[1,2]];
+----
+2 NULL 1
+
+# accessing map with struct key
+query II
+SELECT MAP {named_struct('a',1):1, named_struct('a',2):2}[named_struct('a',2)],
+       MAP {named_struct('a',1):1, named_struct('a',2):2}[named_struct('a',3)];
+----
+2 NULL
+
+# accessing map with list key from a column, so the lookup runs on a batch rather than at planning time
+statement ok
+CREATE TABLE map_list_keys AS
+SELECT MAP {[1,2]:1, [3,4]:2} AS m
+UNION ALL SELECT MAP {[3,4]:5, [1,2]:6}
+UNION ALL SELECT NULL;
+
+query II rowsort
+SELECT m[[3,4]], m[[9,9]] FROM map_list_keys;
+----
+2 NULL
+5 NULL
+NULL NULL
+
+statement ok
+DROP TABLE map_list_keys;
+
+# a typed NULL key matches nothing
+query T
+SELECT MAP {1:'a', 2:'b'}[arrow_cast(NULL, 'Int64')];
+----
+NULL
+
+# dictionary-encoded map keys are looked up by value
+query I
+SELECT MAP {arrow_cast('a', 'Dictionary(Int32, Utf8)'):1, arrow_cast('b', 'Dictionary(Int32, Utf8)'):2}['b'];
+----
+2
+
+# NULLIF turns a map row NULL without clearing its entries; the lookups must
+# report NULL rather than read those entries
+statement ok
+CREATE TABLE map_nullif AS
+SELECT MAP {'a': 1, 'b': 2} AS m, MAP {'a': 1, 'b': 2} AS n
+UNION ALL SELECT MAP {'a': 3, 'b': 4}, MAP {'x': 9};
+
+query ?I? rowsort
+SELECT NULLIF(m, n), NULLIF(m, n)['b'], map_extract(NULLIF(m, n), 'b') FROM map_nullif;
+----
+NULL NULL NULL
+{a: 3, b: 4} 4 [4]
+
+statement ok
+DROP TABLE map_nullif;
+
 # accessing map with non-string key
 query I
 SELECT MAKE_MAP(1, null, 2, 33, 3, null)[2];
@@ -618,21 +679,21 @@ query ????
 select map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'a'), map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'b'),
        map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'c'), map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'd');
 ----
-[1] [NULL] [3] [NULL]
+[1] [NULL] [3] []
 
 # key is integer
 query ????
 select map_extract(MAP {1: 1, 2: NULL, 3:3}, 1), map_extract(MAP {1: 1, 2: NULL, 3:3}, 2),
        map_extract(MAP {1: 1, 2: NULL, 3:3}, 3), map_extract(MAP {1: 1, 2: NULL, 3:3}, 4);
 ----
-[1] [NULL] [3] [NULL]
+[1] [NULL] [3] []
 
 # value is list
 query ????
 select map_extract(MAP {1: [1, 2], 2: NULL, 3:[3]}, 1), map_extract(MAP {1: [1, 2], 2: NULL, 3:[3]}, 2),
        map_extract(MAP {1: [1, 2], 2: NULL, 3:[3]}, 3), map_extract(MAP {1: [1, 2], 2: NULL, 3:[3]}, 4);
 ----
-[[1, 2]] [NULL] [[3]] [NULL]
+[[1, 2]] [NULL] [[3]] []
 
 # key in map and query key are different types
 query ?????
@@ -640,7 +701,7 @@ select map_extract(MAP {1: 1, 2: 2, 3:3}, '1'), map_extract(MAP {1: 1, 2: 2, 3:3
        map_extract(MAP {1.0: 1, 2: 2, 3:3}, '1'), map_extract(MAP {'1': 1, '2': 2, '3':3}, 1.0),
        map_extract(MAP {arrow_cast('1', 'Utf8View'): 1, arrow_cast('2', 'Utf8View'): 2, arrow_cast('3', 'Utf8View'):3}, '1');
 ----
-[1] [1] [1] [NULL] [1]
+[1] [1] [1] [] [1]
 
 # null arg
 query ?
@@ -648,14 +709,47 @@ select map_extract(NULL, 'a');
 ----
 NULL
 
+# Empty maps, null lookup keys, and the element_at alias
+query ????
+select map_extract(map(CAST([] AS VARCHAR[]), CAST([] AS INT[])), 'a'), map_extract(MAP {'a': 1}, NULL),
+       element_at(MAP {'a': 1, 'b': NULL}, 'missing'), element_at(MAP {'a': 1, 'b': NULL}, 'b');
+----
+[] [] [] [NULL]
+
+# Materialize a dictionary of structs so extracting d preserves a valid dictionary
+# index pointing to a null value. A typed null instead has a null dictionary index.
+statement ok
+CREATE TABLE map_extract_dictionary_structs AS
+SELECT arrow_cast(
+    named_struct('d', CAST(NULL AS VARCHAR)),
+    'Dictionary(Int8, Struct("d": Utf8))'
+) AS s;
+
+# These non-null struct keys compare equal despite their different null encodings.
+query B??
+WITH keys AS (
+    SELECT named_struct('d', s['d']) AS stored_key,
+           named_struct('d', arrow_cast(NULL, 'Dictionary(Int8, Utf8)')) AS query_key
+    FROM map_extract_dictionary_structs
+)
+SELECT stored_key = query_key,
+       map_extract(MAP {stored_key: 42}, query_key),
+       map_extract(MAP {query_key: 42}, stored_key)
+FROM keys;
+----
+true [42] [42]
+
+statement ok
+DROP TABLE map_extract_dictionary_structs;
+
 # map_extract with columns
 query ???
 select map_extract(column1, 1), map_extract(column1, 5), map_extract(column1, 7) from map_array_table_1;
 ----
-[[1, NULL, 3]] [NULL] [NULL]
-[NULL] [[4, NULL, 6]] [NULL]
-[NULL] [NULL] [[1, NULL, 3]]
-[NULL] [NULL] [NULL]
+[[1, NULL, 3]] [] []
+[] [[4, NULL, 6]] []
+[] [] [[1, NULL, 3]]
+NULL NULL NULL
 
 query ?
 select column1[1] from map_array_table_1;
@@ -691,30 +785,35 @@ NULL
 NULL
 
 
-query error DataFusion error: Arrow error: Invalid argument error
+query ?
 SELECT column1[NULL] FROM map_array_table_1;
+----
+NULL
+NULL
+NULL
+NULL
 
 query ???
 select map_extract(column1, column2), map_extract(column1, column3), map_extract(column1, column4) from map_array_table_1;
 ----
 [[1, NULL, 3]] [[1, NULL, 3]] [[1, NULL, 3]]
 [[4, NULL, 6]] [[4, NULL, 6]] [[4, NULL, 6]]
-[NULL] [NULL] [NULL]
-[NULL] [NULL] [NULL]
+[] [] []
+NULL NULL NULL
 
 query ???
 select map_extract(column1, column2), map_extract(column1, column3), map_extract(column1, column4) from map_array_table_2;
 ----
-[[1, NULL, 3]] [NULL] [[1, NULL, 3]]
-[[4, NULL, 6]] [NULL] [[4, NULL, 6]]
-[NULL] [NULL] [NULL]
+[[1, NULL, 3]] [] [[1, NULL, 3]]
+[[4, NULL, 6]] [] [[4, NULL, 6]]
+[] [] []
 
 query ???
 select map_extract(column1, 1), map_extract(column1, 5), map_extract(column1, 7) from map_array_table_2;
 ----
-[[1, NULL, 3]] [NULL] [NULL]
-[NULL] [[4, NULL, 6]] [NULL]
-[NULL] [NULL] [[1, NULL, 3]]
+[[1, NULL, 3]] [] []
+[] [[4, NULL, 6]] []
+[] [] [[1, NULL, 3]]
 
 # Tests for map_entries
 

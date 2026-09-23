@@ -46,7 +46,7 @@ impl AggregateHashTable<FinalMarker> {
             output_schema,
             Arc::clone(&agg.input().schema()),
             batch_size,
-            vec![None; agg.aggr_expr.len()],
+            vec![None; agg.aggr_expr().len()],
         )
     }
 

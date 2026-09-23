@@ -96,7 +96,7 @@ pub(crate) fn arrow_decimal_to_str<T: DecimalType>(
 }
 
 #[cfg(feature = "postgres")]
-pub(crate) fn decimal_to_str(value: BigDecimal) -> String {
+pub(crate) fn decimal_to_str(value: &BigDecimal) -> String {
     value.to_plain_string()
 }
 
@@ -161,5 +161,12 @@ mod tests {
             ),
             "0.12345678901234567890123456789012345678"
         );
+    }
+
+    #[cfg(feature = "postgres")]
+    #[test]
+    fn test_decimal_to_str() {
+        let value = BigDecimal::from_str("1.2300").unwrap();
+        assert_eq!(decimal_to_str(&value), "1.2300");
     }
 }
