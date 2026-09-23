@@ -192,6 +192,12 @@ pub struct RowValues {
     /// Cached byte length for the current row.
     current_len: usize,
 
+    /// The offset the cache was last refreshed for. Debug builds only: used
+    /// by [`CursorValues::compare`] to assert callers only compare at the
+    /// current offset (the narrowed contract this impl relies on).
+    #[cfg(debug_assertions)]
+    current_offset: usize,
+
     /// Tracks for the memory used by in the `Rows` of this
     /// cursor. Freed on drop
     _reservation: MemoryReservation,
@@ -228,6 +234,8 @@ impl RowValues {
             len,
             current_ptr,
             current_len,
+            #[cfg(debug_assertions)]
+            current_offset: 0,
             _reservation: reservation,
         }
     }
@@ -241,6 +249,11 @@ impl RowValues {
     }
 }
 
+/// Note: this implementation deliberately narrows the [`CursorValues`]
+/// contract for [`CursorValues::compare`]: it only supports comparing the
+/// *current* offsets of `l` and `r` (as [`Cursor::cmp`] does), reading the
+/// cached slices instead of the passed indices. Debug builds assert this;
+/// callers needing arbitrary-index comparisons must not use `RowValues`.
 impl CursorValues for RowValues {
     // Reuse arrow-row's own owned-row type: `Row::owned()` copies just that
     // row's bytes out of the shared `Rows` buffer, with no `RowConverter`
@@ -267,9 +280,21 @@ impl CursorValues for RowValues {
     }
 
     fn compare(l: &Self, l_idx: usize, r: &Self, r_idx: usize) -> Ordering {
-        // Merge callers always compare at current offsets; the cache is up
-        // to date. (Debug-only: verify the invariant.)
-        debug_assert!(l_idx < l.len && r_idx < r.len);
+        // Narrowed contract (see impl docs): merge callers always compare at
+        // the current offsets, so the cached slices are the requested rows.
+        // Debug builds verify the indices match the offsets the cache was
+        // refreshed for; zero cost in release.
+        #[cfg(debug_assertions)]
+        {
+            debug_assert_eq!(
+                l_idx, l.current_offset,
+                "RowValues::compare only supports the current offset"
+            );
+            debug_assert_eq!(
+                r_idx, r.current_offset,
+                "RowValues::compare only supports the current offset"
+            );
+        }
         let _ = (l_idx, r_idx);
         l.current_slice().cmp(r.current_slice())
     }
@@ -287,6 +312,10 @@ impl CursorValues for RowValues {
         };
         self.current_ptr = ptr;
         self.current_len = len;
+        #[cfg(debug_assertions)]
+        {
+            self.current_offset = offset;
+        }
     }
 
     fn get_value(&self, idx: usize) -> OwnedRow {
@@ -754,6 +783,18 @@ mod tests {
         let cursor = new_row_values(&["solo"]);
         assert_eq!(cursor.values.len(), 1);
         assert!(!cursor.is_finished());
+    }
+
+    /// Debug builds must reject callers passing indices other than the current
+    /// offset — the narrowed contract `RowValues::compare` relies on.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "only supports the current offset")]
+    fn test_row_values_compare_rejects_non_current_offset() {
+        let a = new_row_values(&["a", "b"]);
+        let b = new_row_values(&["a", "b"]);
+        // Both cursors are at offset 0; index 1 is in bounds but stale.
+        RowValues::compare(&a.values, 1, &b.values, 1);
     }
 
     #[test]
