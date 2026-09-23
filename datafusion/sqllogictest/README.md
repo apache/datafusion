@@ -101,6 +101,29 @@ SLT_TIMING_SUMMARY=1 cargo test --test sqllogictests
 SLT_TIMING_DEBUG_SLOW_FILES=1 cargo test --test sqllogictests
 ```
 
+### Memory drift
+
+The runner compares the bytes reserved in `MemoryPool`s with the bytes actually
+allocated, to find operators whose memory is not tracked by the pool (see
+[#25650](https://github.com/apache/datafusion/issues/25650)). It is enabled by
+default and prints the largest drift seen at the end of the run. It only logs
+and never fails a test.
+
+Test files run concurrently, so the comparison is process-wide: allocated bytes
+across the whole process against reservations summed across all files. Files
+that `SET datafusion.runtime.memory_limit` replace their pool and drop out of
+the reserved total.
+
+```shell
+# Log each 64 MB rise in drift, with the file and consumer that triggered it
+RUST_LOG=datafusion_execution::memory_pool=info cargo test --test sqllogictests
+```
+
+```shell
+# Disable
+cargo test --test sqllogictests -- --memory-drift false
+```
+
 ## Cookbook: Adding Tests
 
 1. Add queries

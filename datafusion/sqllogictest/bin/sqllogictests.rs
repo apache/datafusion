@@ -23,6 +23,9 @@ use datafusion::common::{DataFusionError, Result, exec_datafusion_err, exec_err}
 use datafusion_sqllogictest::DataFusionSubstraitRoundTrip;
 use datafusion_sqllogictest::TestFile;
 use datafusion_sqllogictest::{
+    CountingAllocator, enable_memory_drift_logging, memory_drift_tracker,
+};
+use datafusion_sqllogictest::{
     CurrentlyExecutingSqlTracker, DFColumnType, DataFusion, Filter, TestContext,
     df_value_validator, read_dir_recursive, run_each_configuration, setup_scratch_dir,
     should_skip_file, should_skip_record, test_configurations, value_normalizer,
@@ -56,6 +59,9 @@ use std::time::Duration;
 
 #[cfg(feature = "postgres")]
 mod postgres_container;
+
+#[global_allocator]
+static ALLOC: CountingAllocator = CountingAllocator::new(std::alloc::System);
 
 const TEST_DIRECTORY: &str = "test_files/";
 const DATAFUSION_TESTING_TEST_DIRECTORY: &str = "../../datafusion-testing/data/";
@@ -138,6 +144,10 @@ async fn run_tests() -> Result<()> {
     }
 
     options.warn_on_ignored();
+
+    if options.memory_drift {
+        enable_memory_drift_logging();
+    }
 
     // Print parallelism info for debugging CI performance
     eprintln!(
@@ -385,6 +395,10 @@ async fn run_tests() -> Result<()> {
         num_tests,
         HumanDuration(start.elapsed())
     ))?;
+
+    if let Some(peak) = memory_drift_tracker().and_then(|t| t.peak_drift()) {
+        eprintln!("Peak memory drift: {peak}");
+    }
 
     #[cfg(feature = "postgres")]
     terminate_postgres_container().await?;
@@ -1105,6 +1119,15 @@ struct Options {
         help = "Print deterministic per-file timing summary"
     )]
     timing_summary: bool,
+
+    #[clap(
+        long,
+        env = "SLT_MEMORY_DRIFT",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        help = "Log drift between MemoryPool reservations and allocated bytes (RUST_LOG=info to see each change)"
+    )]
+    memory_drift: bool,
 
     #[clap(
         long,

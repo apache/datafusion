@@ -24,6 +24,7 @@ use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::{cmp::Ordering, sync::Arc, sync::atomic};
 
+mod drift;
 mod merge_memory_pool;
 mod peak_recording;
 mod pool;
@@ -38,6 +39,7 @@ pub mod proxy {
 pub use datafusion_common::{
     human_readable_count, human_readable_duration, human_readable_size, units,
 };
+pub use drift::*;
 pub use merge_memory_pool::{MergeMemoryPool, WorkspaceLoan};
 pub use peak_recording::*;
 pub use pool::*;

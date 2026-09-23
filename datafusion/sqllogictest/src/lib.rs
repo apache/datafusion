@@ -44,11 +44,15 @@ pub use engines::convert_schema_to_types;
 pub use engines::Postgres;
 
 mod filters;
+mod memory_drift;
 mod test_context;
 mod util;
 
 pub use config_matrix::{TestConfiguration, run_each_configuration, test_configurations};
 pub use filters::*;
+pub use memory_drift::{
+    CountingAllocator, allocated_bytes, enable_memory_drift_logging, memory_drift_tracker,
+};
 pub use test_context::TestContext;
 pub use test_file::TestFile;
 pub use util::*;
