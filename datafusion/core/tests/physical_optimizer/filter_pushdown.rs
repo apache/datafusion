@@ -3318,49 +3318,52 @@ async fn test_hashjoin_prune_only_transfer_negative_cases() {
     }
 }
 
-/// With a `fetch` on the join the rows are not unique, but the transferred
-/// copy never adds output rows, so every row still comes from the join
-/// without a fetch.
+/// With a `fetch` on the join, pruning must not change which rows fill it.
+///
+/// The filter keeps `bb`, and both inputs start with `aa`, whose duplicate
+/// matches fill a small `fetch` before any `bb` row. Pruning an outer join's
+/// other side would collapse them into one NULL-extended row and let a `bb`
+/// row in, so Left and Right joins transfer nothing here. A mark join emits
+/// one row per preserved row either way, so it keeps the transfer.
 #[tokio::test]
 async fn test_hashjoin_prune_only_transfer_with_fetch() {
     use datafusion_common::JoinSide;
 
-    for join_type in [JoinType::Left, JoinType::Right] {
+    for (join_type, transfers) in [
+        (JoinType::Left, false),
+        (JoinType::Right, false),
+        (JoinType::LeftMark, true),
+        (JoinType::RightMark, true),
+    ] {
         let key = match prune_only_preserved_side(join_type) {
             JoinSide::Left => "lk",
             _ => "rk",
         };
-        let plan = |support: bool, fetch: Option<usize>| {
-            // Only the side that is not preserved accepts filters.
-            let (left_support, right_support) = match prune_only_preserved_side(join_type)
-            {
-                JoinSide::Left => (false, support),
-                _ => (support, false),
-            };
-            let join = prune_only_join(
-                PruneOnlyJoin::new(join_type).with_support(left_support, right_support),
-            );
-            let predicate = col_lit_predicate(key, "aa", &join.schema());
-            let join = match fetch {
-                Some(_) => join.with_fetch(fetch).unwrap(),
-                None => join as Arc<dyn ExecutionPlan>,
-            };
-            Arc::new(FilterExec::try_new(predicate, join).unwrap())
-                as Arc<dyn ExecutionPlan>
-        };
-        let (_, all_rows) = prune_only_run(plan(false, None)).await;
-        for fetch in 1..=4 {
-            let (optimized, rows) = prune_only_run(plan(true, Some(fetch))).await;
-            let mut remaining = all_rows.clone();
-            for row in &rows {
-                let position = remaining.iter().position(|r| r == row);
-                assert!(
-                    position.is_some(),
-                    "{join_type} fetch={fetch}: `{row}` is not a row of the join\n{}",
-                    format_plan_for_test(&optimized)
+        for fetch in 1..=6 {
+            let run = |support: bool| {
+                // Only the side that is not preserved accepts filters.
+                let (left_support, right_support) =
+                    match prune_only_preserved_side(join_type) {
+                        JoinSide::Left => (false, support),
+                        _ => (support, false),
+                    };
+                let join = prune_only_join(
+                    PruneOnlyJoin::new(join_type)
+                        .with_support(left_support, right_support),
                 );
-                remaining.remove(position.unwrap());
-            }
+                let predicate = col_lit_predicate(key, "bb", &join.schema());
+                let join = join.with_fetch(Some(fetch)).unwrap();
+                prune_only_run(Arc::new(FilterExec::try_new(predicate, join).unwrap()))
+            };
+            let (_, expected) = run(false).await;
+            let (optimized, rows) = run(true).await;
+            let context = format!(
+                "{join_type} fetch={fetch}\n{}",
+                format_plan_for_test(&optimized)
+            );
+            assert_eq!(rows, expected, "{context}");
+            let transferred = scan_predicates(&optimized).iter().any(Option::is_some);
+            assert_eq!(transferred, transfers, "{context}");
         }
     }
 }

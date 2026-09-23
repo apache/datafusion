@@ -1002,8 +1002,14 @@ impl HashJoinExec {
             // side can turn a row that fails the filter from matched into
             // unmatched (NULL-extended, or mark = false), but every row
             // derived from it still fails the filter, which stays above the
-            // join. It never adds output rows, so a `fetch` on this join or
-            // above it cannot lose rows that pass the filter.
+            // join.
+            //
+            // An outer join also emits fewer rows for it: several matches
+            // collapse into one NULL-extended row. With a `fetch` on this
+            // join, that frees room for later rows that pass the filter and
+            // changes the result. A mark join emits one row per preserved row
+            // either way, and only the mark changes.
+            JoinType::Left | JoinType::Right if self.fetch.is_some() => KeyTransfer::None,
             JoinType::Left | JoinType::LeftMark => {
                 KeyTransfer::PruneOnly { preserved_child: 0 }
             }
