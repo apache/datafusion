@@ -992,19 +992,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_prefix_cache_does_not_satisfy_full_listing() -> Result<()> {
+    async fn test_prefix_cache_does_not_satisfy_broader_listing() -> Result<()> {
         use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
         let store = MockObjectStore::new();
-        create_file(&store, "/sales/region=US/q1.parquet").await;
-        create_file(&store, "/sales/region=US/q2.parquet").await;
+        create_file(&store, "/sales/region=US/q1/data.parquet").await;
+        create_file(&store, "/sales/region=US/q2/data.parquet").await;
         create_file(&store, "/sales/region=EU/q1.parquet").await;
 
         let runtime = RuntimeEnvBuilder::new()
             .with_object_list_cache_limit(1024 * 1024)
             .build_arc()?;
-        let session = MockSession::with_runtime_env(runtime);
+        let mut session = MockSession::with_runtime_env(runtime);
+        session
+            .config
+            .options_mut()
+            .execution
+            .listing_table_ignore_subdirectory = false;
         let url = ListingTableUrl::parse("/sales/")?;
+
+        let q1_results: Vec<String> = url
+            .list_prefixed_files(
+                &session,
+                &store,
+                Some(Path::from("region=US/q1")),
+                "parquet",
+            )
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .map(|m| m.location.to_string())
+            .collect();
+        assert_eq!(q1_results, vec!["sales/region=US/q1/data.parquet"]);
 
         let us_results: Vec<String> = url
             .list_prefixed_files(
@@ -1021,7 +1041,10 @@ mod tests {
             .collect();
         assert_eq!(
             us_results,
-            vec!["sales/region=US/q1.parquet", "sales/region=US/q2.parquet"]
+            vec![
+                "sales/region=US/q1/data.parquet",
+                "sales/region=US/q2/data.parquet"
+            ]
         );
 
         let full_results: Vec<String> = url
@@ -1036,6 +1059,7 @@ mod tests {
         assert_eq!(
             store.list_prefixes(),
             vec![
+                Some(Path::from("sales/region=US/q1")),
                 Some(Path::from("sales/region=US")),
                 Some(Path::from("sales"))
             ]

@@ -831,7 +831,9 @@ impl ListingTable {
                     .list_entries()
                     .into_keys()
                     .filter(|key| {
-                        key.table.is_none() && key.path.prefix_matches(table_prefix)
+                        key.table.is_none()
+                            && (key.path.prefix_matches(table_prefix)
+                                || table_prefix.prefix_matches(&key.path))
                     })
                     .collect();
                 for key in keys {
