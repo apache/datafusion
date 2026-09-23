@@ -58,7 +58,7 @@ impl OrderedAggregateTable<FinalMarker> {
             batch_size,
             input_order_mode,
             &AggregateMode::Final,
-            vec![None; agg.aggr_expr.len()],
+            vec![None; agg.aggr_expr().len()],
             metrics,
         )
     }

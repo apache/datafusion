@@ -145,7 +145,7 @@ impl AggregateSpill {
         replay_agg.input_order_mode = InputOrderMode::Sorted;
         let group_schema = match agg.mode {
             AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                agg.group_by.group_schema(spill_schema)?
+                agg.group_by().group_schema(spill_schema)?
             }
             AggregateMode::Single | AggregateMode::SinglePartitioned => {
                 replay_agg.mode = if agg.mode == AggregateMode::Single {
@@ -153,8 +153,8 @@ impl AggregateSpill {
                 } else {
                     AggregateMode::FinalPartitioned
                 };
-                replay_agg.group_by = Arc::new(agg.group_by.as_final());
-                agg.group_by.group_schema(&agg.input().schema())?
+                *replay_agg.group_by_mut() = Arc::new(agg.group_by().as_final());
+                agg.group_by().group_schema(&agg.input().schema())?
             }
             mode => {
                 return internal_err!("{label}: cannot replay aggregate mode {mode:?}");

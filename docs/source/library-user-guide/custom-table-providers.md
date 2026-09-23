@@ -792,6 +792,19 @@ that a `FilterExec` is unnecessary for the `date` predicate, and the second
 ensures that only the relevant directories are scanned. The actual file reading
 happens later, in the stream produced by `execute()`.
 
+## Row-Level DML: DELETE and UPDATE
+
+A custom table provider can support `DELETE` and `UPDATE` by implementing the optional [`TableProvider::delete_from()`] and [`TableProvider::update()`] methods. Their default implementations return a "not implemented" error.
+
+Each method builds an [ExecutionPlan] that changes the matching rows and returns the number of affected rows in a `count` column. Your provider decides how to apply and persist the changes. Perform the changes when the returned plan executes: these methods run during physical planning, including for `EXPLAIN`.
+
+The method documentation describes the filters, assignments, SQL semantics, and result schema that an implementation must support. [MemTable] provides an implementation of both methods over in-memory batches.
+
+For SQL syntax and examples, see the [DML section](../user-guide/sql/dml.md) of the user guide.
+
+[`tableprovider::delete_from()`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html#method.delete_from
+[`tableprovider::update()`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html#method.update
+
 ## Putting It All Together
 
 Here is a minimal but complete example of a custom table provider that generates
