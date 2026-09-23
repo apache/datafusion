@@ -34,7 +34,11 @@ Usage: $0
 Builds the HTML documentation with docs/build.sh and fails on any Sphinx
 warning. There is no write mode.
 
-Needs uv, cargo, cargo-depgraph, Graphviz dot, and make.
+Needs uv, cargo, cargo-depgraph, Graphviz dot, and make. See docs/README.md
+for the Python and Graphviz setup.
+
+Each build rewrites docs/build and docs/source/_static/data/deps.svg, which
+Git ignores. The HTML entry point is docs/build/html/index.html.
 USAGE
   exit 1
 }
