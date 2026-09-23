@@ -36,7 +36,7 @@ use log::debug;
 use crate::PhysicalExpr;
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
-    GroupByMetrics, GroupValues, new_group_values,
+    GroupByMetrics, GroupValues, new_group_values_with_borrow,
 };
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
@@ -165,6 +165,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             state_schema,
             batch_size,
             filters,
+            false,
         )
     }
 
@@ -182,6 +183,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         state_schema: SchemaRef,
         batch_size: usize,
         filters: Vec<Option<Arc<dyn PhysicalExpr>>>,
+        borrow_group_values: bool,
     ) -> Result<Self> {
         if batch_size == 0 {
             return internal_err!("AggregateHashTable requires config batch_size >= 1");
@@ -215,7 +217,11 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             .collect::<Result<_>>()?;
 
         let group_schema = agg.group_by().group_schema(&input_schema)?;
-        let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
+        let group_values = new_group_values_with_borrow(
+            group_schema,
+            &GroupOrdering::None,
+            borrow_group_values,
+        )?;
 
         Ok(Self {
             group_by_metrics: metrics.group_by,

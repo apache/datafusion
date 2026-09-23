@@ -57,12 +57,17 @@ impl AggregateHashTable<FinalMarker> {
     /// aggregation passes a copy of itself whose `group_by` refers to the
     /// state columns (see `PhysicalGroupBy::as_final`), as it does to replay
     /// its spills.
+    /// `borrow_group_values`: the table keeps the data buffers of the batches
+    /// it aggregates instead of copying every new group value out of them, see
+    /// `new_group_values_with_borrow`. Only for a table that is dropped before
+    /// those batches are, which holds for the table of one bucket.
     pub(in crate::aggregates) fn new_over_state(
         agg: &AggregateExec,
         state_schema: &SchemaRef,
         partition: usize,
         output_schema: SchemaRef,
         batch_size: usize,
+        borrow_group_values: bool,
     ) -> Result<Self> {
         Self::new_for_input(
             agg,
@@ -73,6 +78,7 @@ impl AggregateHashTable<FinalMarker> {
             Arc::clone(state_schema),
             batch_size,
             vec![None; agg.aggr_expr().len()],
+            borrow_group_values,
         )
     }
 
