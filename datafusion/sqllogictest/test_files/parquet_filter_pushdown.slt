@@ -1052,3 +1052,50 @@ set datafusion.execution.parquet.reorder_filters = false;
 
 statement ok
 DROP TABLE dict_filter_bug;
+
+# Regression: a `CASE` with no `ELSE` leaves unmatched rows UNKNOWN, not FALSE.
+# Treating them as FALSE lets the inverse predicate call a row group fully
+# matched and skip the row filter. Required columns admit no `IS NULL` rescue.
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+COPY (SELECT column1 AS a, column2 AS b FROM (VALUES (2, 1), (1, 2)))
+TO 'test_files/scratch/parquet_filter_pushdown/case_without_else.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '1');
+
+statement ok
+CREATE EXTERNAL TABLE case_without_else (a BIGINT NOT NULL, b BIGINT NOT NULL)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/case_without_else.parquet';
+
+query II
+SELECT * FROM case_without_else
+WHERE NOT (CASE WHEN a = 1 THEN false END) AND b > 0 ORDER BY a;
+----
+1 2
+
+query II
+SELECT * FROM case_without_else
+WHERE NOT (CASE WHEN a = 1 THEN false END) AND b > 0 LIMIT 1;
+----
+1 2
+
+query II
+SELECT * FROM case_without_else
+WHERE NOT (CASE WHEN a = 1 THEN false ELSE NULL END) AND b > 0 ORDER BY a;
+----
+1 2
+
+query II
+SELECT * FROM case_without_else
+WHERE NOT (CASE WHEN a = 1 THEN NULL ELSE false END) AND b > 0 ORDER BY a;
+----
+2 1
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+statement ok
+DROP TABLE case_without_else;

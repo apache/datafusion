@@ -3212,7 +3212,9 @@ async fn collect_left_input(
 
     let map = Arc::new(join_hash_map);
 
-    let membership = if num_rows == 0 {
+    // Nothing reads the strategy unless the dynamic filter accumulator exists,
+    // and that exists only when the pushdown is enabled.
+    let membership = if num_rows == 0 || !should_compute_dynamic_filters {
         PushdownStrategy::Empty
     } else {
         // If the build side is small enough we can use IN list pushdown.
@@ -3415,6 +3417,53 @@ mod tests {
             drop(reservation);
             assert_eq!(pool.reserved(), 0);
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn no_pruning_state_without_dynamic_filters() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let build = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from_iter_values(
+                (0..151).map(|i| i * 10_000),
+            ))],
+        )?;
+        let probe = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from_iter_values([
+                0, 500_000, 1_500_000,
+            ]))],
+        )?;
+        let on = vec![(
+            Arc::new(Column::new_with_schema("k", &schema)?) as _,
+            Arc::new(Column::new_with_schema("k", &schema)?) as _,
+        )];
+        let join = join(
+            TestMemoryExec::try_new_exec(&[vec![build]], Arc::clone(&schema), None)?,
+            TestMemoryExec::try_new_exec(&[vec![probe]], Arc::clone(&schema), None)?,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+        )?;
+
+        // Bounds are still collected to test perfect-hash-join candidacy, so 151
+        // keys over 1.5M would size a bitmap at the 128 KiB cap - far past this.
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(100_000, 1.0)
+            .build_arc()?;
+        let mut config = SessionConfig::new();
+        config
+            .options_mut()
+            .optimizer
+            .enable_join_dynamic_filter_pushdown = false;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_runtime(runtime)
+                .with_session_config(config),
+        );
+        let batches = common::collect(join.execute(0, task_ctx)?).await?;
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
         Ok(())
     }
 

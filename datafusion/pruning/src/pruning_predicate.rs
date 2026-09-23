@@ -1872,7 +1872,11 @@ fn build_predicate_expression(
         if !matches!(case.data_type(schema), Ok(DataType::Boolean)) {
             return unhandled_hook.handle(expr);
         }
-        // A missing `ELSE` yields NULL, which never matches, so it adds nothing.
+        // Without an `ELSE`, unmatched rows are UNKNOWN: not a match, but not
+        // FALSE either, which full-match inference must be able to tell apart.
+        if case.else_expr().is_none() {
+            return unhandled_hook.handle(expr);
+        }
         return case
             .when_then_expr()
             .iter()
