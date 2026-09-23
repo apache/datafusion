@@ -25,7 +25,7 @@
 # The assert below reads the limit back from information_schema, so it also
 # shows which limit an overridden run used. The memory pool reports the
 # limit in whole K, M or G units, so give an overridden limit in the same
-# form: 256M passes the assert, 1024M and 1.5G do not, because the pool
+# form: 128M passes the assert, 1024M and 1.5G do not, because the pool
 # reports both as 1G.
 
 load sql_benchmarks/spill_views/load/${DATASET}.sql

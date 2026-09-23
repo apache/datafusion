@@ -7,14 +7,14 @@ name = "limit-repeated"
 env = "SPILL_VIEWS_LIMIT_REPEATED"
 default = "40M"
 values = ["40M", "..."]
-help = "Sets the memory limit of the repeated subgroup. The queries must still spill, so keep the value well below the working set. Give a whole number of K, M or G units, for example 256M: the run asserts the limit that the memory pool reports back, and the pool reports 1024M as 1G."
+help = "Sets the memory limit of the repeated subgroup. The queries must still spill, so keep the value well below the working set. Give a whole number of K, M or G units, for example 128M: the run asserts the limit that the memory pool reports back, and the pool reports 1024M as 1G."
 
 [[options]]
 name = "limit-distinct"
 env = "SPILL_VIEWS_LIMIT_DISTINCT"
 default = "96M"
 values = ["96M", "..."]
-help = "Sets the memory limit of the distinct subgroup. The queries must still spill, so keep the value well below the working set. Give a whole number of K, M or G units, for example 256M: the run asserts the limit that the memory pool reports back, and the pool reports 1024M as 1G."
+help = "Sets the memory limit of the distinct subgroup. The queries must still spill, so keep the value well below the working set. Give a whole number of K, M or G units, for example 128M: the run asserts the limit that the memory pool reports back, and the pool reports 1024M as 1G."
 
 [[examples]]
 command = "cargo run --release --bin benchmark_runner -- spill_views"
@@ -25,5 +25,5 @@ command = "cargo run --release --bin benchmark_runner -- spill_views --subgroup 
 description = "Run only the all-distinct (cost case) queries."
 
 [[examples]]
-command = "cargo run --release --bin benchmark_runner -- spill_views --subgroup distinct --limit-distinct 256M"
+command = "cargo run --release --bin benchmark_runner -- spill_views --subgroup distinct --limit-distinct 128M"
 description = "Raise the memory limit of the distinct subgroup, for example when a query runs out of memory at the default."
