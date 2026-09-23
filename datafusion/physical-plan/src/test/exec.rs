@@ -331,6 +331,9 @@ pub struct BarrierExec {
     /// all streams wait on this barrier to produce
     start_data_barrier: Option<Arc<Barrier>>,
 
+    /// each stream waits on this barrier before sending each batch
+    batch_barrier: Option<Arc<Barrier>>,
+
     /// the stream wait for this to return Poll::Ready(None)
     finish_barrier: Option<Arc<(Barrier, AtomicUsize)>>,
 
@@ -349,6 +352,7 @@ impl BarrierExec {
             data,
             schema,
             start_data_barrier: barrier,
+            batch_barrier: None,
             cache: Arc::new(cache),
             finish_barrier: None,
             log: true,
@@ -362,6 +366,30 @@ impl BarrierExec {
 
     pub fn without_start_barrier(mut self) -> Self {
         self.start_data_barrier = None;
+        self
+    }
+
+    /// Wait for [`Self::wait_batch`] before sending each batch.
+    pub fn with_batch_barrier(mut self) -> Self {
+        self.batch_barrier = Some(Arc::new(Barrier::new(self.data.len() + 1)));
+        self
+    }
+
+    /// Release the next batch in each partition.
+    pub async fn wait_batch(&self) {
+        self.batch_barrier
+            .as_ref()
+            .expect("Must only be called when having a batch barrier")
+            .wait()
+            .await;
+    }
+
+    /// Declare the equivalence properties of the test data.
+    pub fn with_equivalence_properties(
+        mut self,
+        properties: EquivalenceProperties,
+    ) -> Self {
+        self.cache = Arc::new(self.cache.as_ref().clone().with_eq_properties(properties));
         self
     }
 
@@ -499,6 +527,7 @@ impl ExecutionPlan for BarrierExec {
         // task simply sends data in order after barrier is reached
         let data = self.data[partition].clone();
         let start_barrier = self.start_data_barrier.as_ref().map(Arc::clone);
+        let batch_barrier = self.batch_barrier.as_ref().map(Arc::clone);
         let finish_barrier = self.finish_barrier.as_ref().map(Arc::clone);
         let log = self.log;
         let tx = builder.tx();
@@ -510,6 +539,9 @@ impl ExecutionPlan for BarrierExec {
                 barrier.wait().await;
             }
             for batch in data {
+                if let Some(barrier) = &batch_barrier {
+                    barrier.wait().await;
+                }
                 if log {
                     println!("Partition {partition} sending batch");
                 }
