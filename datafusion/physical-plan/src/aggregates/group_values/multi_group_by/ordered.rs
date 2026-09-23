@@ -341,6 +341,7 @@ mod tests {
         use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
         use crate::test::TestMemoryExec;
         use crate::{ExecutionPlan, InputOrderMode, collect};
+        use arrow::compute::{SortOptions, take_record_batch};
         use arrow::record_batch::RecordBatch;
         use arrow::row::{RowConverter, SortField};
         use datafusion_execution::TaskContext;
@@ -377,93 +378,112 @@ mod tests {
                 .build()?,
         );
 
-        for input_batch_size in [1, 7, 31, 128] {
-            let batches = (0..257)
-                .step_by(input_batch_size)
-                .map(|offset| source.slice(offset, input_batch_size.min(257 - offset)))
-                .collect::<Vec<_>>();
-            for two_stage in [false, true] {
-                let mut results = Vec::new();
-                for sorted in [false, true] {
-                    let input = TestMemoryExec::try_new_exec(
-                        std::slice::from_ref(&batches),
-                        Arc::clone(&schema),
-                        None,
-                    )?;
-                    let input: Arc<dyn ExecutionPlan> = if sorted {
-                        let ordering = LexOrdering::new(vec![
-                            PhysicalSortExpr::new_default(col("a", &schema)?),
-                            PhysicalSortExpr::new_default(col("b", &schema)?),
-                        ])
-                        .unwrap();
-                        Arc::new(
-                            input
-                                .as_ref()
-                                .clone()
-                                .try_with_sort_information(vec![ordering])?,
-                        )
-                    } else {
-                        input
-                    };
-                    let group_by = PhysicalGroupBy::new_single(vec![
-                        (col("a", &schema)?, "a".into()),
-                        (col("b", &schema)?, "b".into()),
-                    ]);
-                    let plan = AggregateExec::try_new(
-                        if two_stage {
-                            AggregateMode::Partial
+        for descending in [false, true] {
+            let source = if descending {
+                let reverse = UInt32Array::from_iter_values((0..257).rev());
+                take_record_batch(&source, &reverse)?
+            } else {
+                source.clone()
+            };
+            for input_batch_size in [1, 7, 31, 128] {
+                let batches = (0..257)
+                    .step_by(input_batch_size)
+                    .map(|offset| {
+                        source.slice(offset, input_batch_size.min(257 - offset))
+                    })
+                    .collect::<Vec<_>>();
+                for two_stage in [false, true] {
+                    let mut results = Vec::new();
+                    for sorted in [false, true] {
+                        let input = TestMemoryExec::try_new_exec(
+                            std::slice::from_ref(&batches),
+                            Arc::clone(&schema),
+                            None,
+                        )?;
+                        let input: Arc<dyn ExecutionPlan> = if sorted {
+                            let options = if descending {
+                                SortOptions::default().desc().nulls_last()
+                            } else {
+                                SortOptions::default()
+                            };
+                            let ordering = LexOrdering::new(vec![
+                                PhysicalSortExpr::new(col("a", &schema)?, options),
+                                PhysicalSortExpr::new(col("b", &schema)?, options),
+                            ])
+                            .unwrap();
+                            Arc::new(
+                                input
+                                    .as_ref()
+                                    .clone()
+                                    .try_with_sort_information(vec![ordering])?,
+                            )
                         } else {
-                            AggregateMode::Single
-                        },
-                        group_by.clone(),
-                        vec![Arc::clone(&aggregate)],
-                        vec![Some(col("include", &schema)?)],
-                        input,
-                        Arc::clone(&schema),
-                    )?;
-                    if sorted {
-                        assert_eq!(plan.input_order_mode(), &InputOrderMode::Sorted);
-                    }
-                    let plan: Arc<dyn ExecutionPlan> = if two_stage {
+                            input
+                        };
+                        let group_by = PhysicalGroupBy::new_single(vec![
+                            (col("a", &schema)?, "a".into()),
+                            (col("b", &schema)?, "b".into()),
+                        ]);
                         let plan = AggregateExec::try_new(
-                            AggregateMode::Final,
-                            group_by,
+                            if two_stage {
+                                AggregateMode::Partial
+                            } else {
+                                AggregateMode::Single
+                            },
+                            group_by.clone(),
                             vec![Arc::clone(&aggregate)],
-                            vec![None],
-                            Arc::new(plan),
+                            vec![Some(col("include", &schema)?)],
+                            input,
                             Arc::clone(&schema),
                         )?;
                         if sorted {
                             assert_eq!(plan.input_order_mode(), &InputOrderMode::Sorted);
                         }
-                        Arc::new(plan)
-                    } else {
-                        Arc::new(plan)
-                    };
-                    let converter = RowConverter::new(
-                        plan.schema()
-                            .fields()
-                            .iter()
-                            .map(|field| SortField::new(field.data_type().clone()))
-                            .collect(),
-                    )?;
-                    let output = collect(plan, Arc::new(TaskContext::default())).await?;
-                    let mut rows = Vec::new();
-                    for batch in output {
-                        rows.extend(
-                            converter
-                                .convert_columns(batch.columns())?
+                        let plan: Arc<dyn ExecutionPlan> = if two_stage {
+                            let plan = AggregateExec::try_new(
+                                AggregateMode::Final,
+                                group_by,
+                                vec![Arc::clone(&aggregate)],
+                                vec![None],
+                                Arc::new(plan),
+                                Arc::clone(&schema),
+                            )?;
+                            if sorted {
+                                assert_eq!(
+                                    plan.input_order_mode(),
+                                    &InputOrderMode::Sorted
+                                );
+                            }
+                            Arc::new(plan)
+                        } else {
+                            Arc::new(plan)
+                        };
+                        let converter = RowConverter::new(
+                            plan.schema()
+                                .fields()
                                 .iter()
-                                .map(|row| row.as_ref().to_vec()),
-                        );
+                                .map(|field| SortField::new(field.data_type().clone()))
+                                .collect(),
+                        )?;
+                        let output =
+                            collect(plan, Arc::new(TaskContext::default())).await?;
+                        let mut rows = Vec::new();
+                        for batch in output {
+                            rows.extend(
+                                converter
+                                    .convert_columns(batch.columns())?
+                                    .iter()
+                                    .map(|row| row.as_ref().to_vec()),
+                            );
+                        }
+                        rows.sort();
+                        results.push(rows);
                     }
-                    rows.sort();
-                    results.push(rows);
+                    assert_eq!(
+                        results[0], results[1],
+                        "batch_size={input_batch_size}, two_stage={two_stage}, descending={descending}"
+                    );
                 }
-                assert_eq!(
-                    results[0], results[1],
-                    "batch_size={input_batch_size}, two_stage={two_stage}"
-                );
             }
         }
         Ok(())
