@@ -683,7 +683,7 @@ mod tests {
         assert_eq!(actual.len(), expected_rows);
         for idx in 0..expected_rows {
             let input_row = first_input_row + idx;
-            if input_row % 2 == 0 {
+            if input_row.is_multiple_of(2) {
                 assert!(!actual.is_null(idx), "row {input_row} should be valid");
                 assert_eq!(actual.value(idx), &[(input_row % 251) as u8]);
             } else {
@@ -981,7 +981,7 @@ mod tests {
             Field::new("s", DataType::Struct(struct_fields), false),
         ]));
         let batch = RecordBatch::try_new(
-            schema.clone(),
+            Arc::clone(&schema),
             vec![Arc::new(supported), Arc::new(nested)],
         )
         .unwrap();

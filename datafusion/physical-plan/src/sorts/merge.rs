@@ -116,6 +116,7 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
 }
 
 impl<C: CursorValues> SortPreservingMergeStream<C> {
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn new(
         streams: CursorStream<C>,
         schema: SchemaRef,

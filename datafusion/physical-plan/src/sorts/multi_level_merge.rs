@@ -939,6 +939,13 @@ mod tests {
         ExecutionPlanMetricsSet, SpillMetrics,
     };
 
+    type SpillMergeRun = (
+        SendableRecordBatchStream,
+        Arc<dyn MemoryPool>,
+        Arc<RuntimeEnv>,
+        SchemaRef,
+    );
+
     fn test_schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, false)]))
     }
@@ -1342,12 +1349,7 @@ mod tests {
     async fn spill_merge_output_construction_uses_the_real_pool() -> Result<()> {
         let output_budget = 64 + size_of::<i64>();
 
-        let run_once = |pool_extra: usize| -> Result<(
-            SendableRecordBatchStream,
-            Arc<dyn MemoryPool>,
-            Arc<RuntimeEnv>,
-            SchemaRef,
-        )> {
+        let run_once = |pool_extra: usize| -> Result<SpillMergeRun> {
             let env = Arc::new(RuntimeEnv::default());
             let schema = test_schema();
             let spill_manager = build_spill_manager(&env, &schema);
