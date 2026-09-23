@@ -1529,10 +1529,9 @@ pub fn similar_to(
         (true, true) => Operator::RegexNotIMatch,
     };
 
-    let translated_pattern = match pattern.downcast_ref::<crate::expressions::Literal>() {
-        Some(literal) => Arc::new(crate::expressions::Literal::new(translate_scalar(
-            literal.value(),
-        )?)) as Arc<dyn PhysicalExpr>,
+    let translated_pattern = match pattern.downcast_ref::<Literal>() {
+        Some(literal) => Arc::new(Literal::new(translate_scalar(literal.value())?))
+            as Arc<dyn PhysicalExpr>,
         None => Arc::new(SqlSimilarToPattern::new(pattern)) as Arc<dyn PhysicalExpr>,
     };
 
