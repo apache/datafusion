@@ -555,6 +555,9 @@ impl PushDecoderStreamState {
     /// removed every page — which would otherwise leave `rg_plan` trailing the
     /// decoder by one: a later prune/rebuild would then re-include an
     /// already-delivered row group (#24352) or toggle the filter for the wrong RG.
+    /// Row-group-local selections keep selections and match status aligned when
+    /// preparing or reordering the plan, but do not prevent this decoder-side
+    /// advancement, so frontier synchronization is still required.
     fn sync_rg_plan_to_decoder_frontier(&mut self) -> Result<()> {
         match self
             .decoder

@@ -585,6 +585,9 @@ impl ParquetAccessPlan {
         assert_eq!(row_group_meta_data.len(), self.row_groups.len());
         // Keep the scan policies that previously depended on the presence of
         // an overall selection, even when its partial groups are all empty.
+        // Local selections no longer require these restrictions to keep row
+        // offsets valid; enabling reordering and runtime pruning with selections
+        // is left to a follow-up (#24358).
         let has_row_selection = self
             .row_groups
             .iter()
@@ -599,6 +602,10 @@ impl ParquetAccessPlan {
             let selection = match access {
                 RowGroupAccess::Skip => continue,
                 RowGroupAccess::Scan => {
+                    // Preserve strip_empty_row_groups behavior: without an
+                    // overall selection it returned the scan list unchanged;
+                    // with one it dropped every group selecting zero rows,
+                    // including zero-row Scan groups.
                     if has_row_selection && row_group_meta_data[index].num_rows() == 0 {
                         continue;
                     }
