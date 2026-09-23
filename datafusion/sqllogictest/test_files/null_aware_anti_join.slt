@@ -983,7 +983,9 @@ query I
 SELECT x FROM nainull_o WHERE CAST(NULL AS INT) NOT IN (SELECT id FROM nainull_i) OR x = 99 ORDER BY x;
 ----
 
-# Double negation flips the outer row set: false -> true.
+# Control from the issue's own table: `NOT (NULL NOT IN (...))` is UNKNOWN,
+# same as the bare predicate, so this was already correct on `main` and must
+# stay that way.
 query I
 SELECT x FROM nainull_o WHERE NOT (CAST(NULL AS INT) NOT IN (SELECT id FROM nainull_i)) ORDER BY x;
 ----
