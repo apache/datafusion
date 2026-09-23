@@ -334,7 +334,17 @@ impl FFI_ExecutionPlan {
     pub fn new(mut plan: Arc<dyn ExecutionPlan>, runtime: Option<Handle>) -> Self {
         // Note to developers: `pass_runtime_to_children` relies on the logic here to
         // get the underlying FFI plan during calls to `new_with_children`.
-        if let Some(plan) = plan.downcast_ref::<ForeignExecutionPlan>() {
+        //
+        // This must check `plan`'s own concrete type, not the type
+        // `ExecutionPlan::downcast_delegate` redirects public downcasts to. A
+        // wrapper that transparently delegates to a `ForeignExecutionPlan` (for
+        // example one that instruments it) is not itself a `ForeignExecutionPlan`:
+        // going through the delegating `downcast_ref` here would misclassify the
+        // wrapper as its inner plan and discard the wrapper by returning the
+        // inner plan's original FFI handle.
+        if let Some(plan) =
+            (plan.as_ref() as &dyn std::any::Any).downcast_ref::<ForeignExecutionPlan>()
+        {
             return plan.plan.clone();
         }
 
@@ -728,6 +738,110 @@ pub mod tests {
             buf.trim(),
             "FFI_ExecutionPlan: empty-exec, number_of_children=0"
         );
+
+        Ok(())
+    }
+
+    /// A transparent wrapper that redirects public downcasts to its inner
+    /// plan, modeling `datafusion-tracing`'s `InstrumentedExec`.
+    ///
+    /// Only used by the `#[cfg(test)]` test below, not by the separate
+    /// `integration-tests` binaries, so it is gated the same way to avoid a
+    /// dead-code warning when this module is built only under that feature.
+    #[cfg(test)]
+    #[derive(Debug)]
+    struct DelegatingWrapperExec(Arc<dyn ExecutionPlan>);
+
+    #[cfg(test)]
+    impl DisplayAs for DelegatingWrapperExec {
+        fn fmt_as(
+            &self,
+            _t: DisplayFormatType,
+            _f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            unimplemented!()
+        }
+    }
+
+    #[cfg(test)]
+    impl ExecutionPlan for DelegatingWrapperExec {
+        fn name(&self) -> &'static str {
+            "delegating-wrapper-exec"
+        }
+
+        fn properties(&self) -> &Arc<PlanProperties> {
+            self.0.properties()
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+
+        fn replace_children(
+            self: Arc<Self>,
+            _: Vec<Arc<dyn ExecutionPlan>>,
+            _: ReplaceChildrenOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            unimplemented!()
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.replace_children(
+                children,
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            unimplemented!()
+        }
+
+        fn downcast_delegate(&self) -> Option<&dyn ExecutionPlan> {
+            Some(self.0.as_ref())
+        }
+
+        fn apply_expressions(
+            &self,
+            f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            self.0.apply_expressions(f)
+        }
+    }
+
+    /// A wrapper that transparently delegates downcasts to a foreign plan it
+    /// wraps must survive `FFI_ExecutionPlan::new`, rather than being unwound
+    /// to the plan from before the wrapper was ever applied. The `new`
+    /// shortcut for an already-foreign plan must check `plan`'s own concrete
+    /// type via `Any`, not the type the delegating `downcast_ref` redirects
+    /// to.
+    #[cfg(test)]
+    #[test]
+    fn test_ffi_execution_plan_new_preserves_a_wrapper_around_a_foreign_plan()
+    -> Result<()> {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("a", arrow::datatypes::DataType::Float32, false),
+        ]));
+
+        let inner_plan = Arc::new(EmptyExec::new(schema));
+        let mut inner_local = FFI_ExecutionPlan::new(inner_plan, None);
+        inner_local.library_marker_id = crate::mock_foreign_marker_id;
+        let inner_foreign: Arc<dyn ExecutionPlan> = (&inner_local).try_into()?;
+        assert_eq!(inner_foreign.name(), "empty-exec");
+
+        let wrapper: Arc<dyn ExecutionPlan> =
+            Arc::new(DelegatingWrapperExec(inner_foreign));
+
+        let round_tripped = FFI_ExecutionPlan::new(wrapper, None);
+        let round_tripped: Arc<dyn ExecutionPlan> = (&round_tripped).try_into()?;
+
+        assert_eq!(round_tripped.name(), "delegating-wrapper-exec");
 
         Ok(())
     }
