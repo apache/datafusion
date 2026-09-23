@@ -136,7 +136,7 @@ RUST_LOG=datafusion_execution::memory_pool=info cargo test --test sqllogictests 
 ```
 
 ```shell
-# Disable
+# Disable (allocations are still counted, but pools are not wrapped)
 cargo test --test sqllogictests -- --memory-drift false
 ```
 

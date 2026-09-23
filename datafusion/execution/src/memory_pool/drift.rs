@@ -39,10 +39,8 @@ use std::{
     },
 };
 
-use datafusion_common::{Result, human_readable_size};
+use datafusion_common::human_readable_size;
 use parking_lot::Mutex;
-
-use super::{MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation};
 
 /// Returns the number of bytes currently allocated by the process.
 ///
@@ -55,8 +53,10 @@ pub type AllocatedBytesFn = Arc<dyn Fn() -> usize + Send + Sync>;
 /// Default rise in drift, in bytes, needed before another line is logged.
 pub const DEFAULT_DRIFT_LOG_THRESHOLD: usize = 64 * 1024 * 1024;
 
-/// Compares allocated bytes against the total reserved by every
-/// [`DriftLoggingPool`] that reports to it.
+/// Compares allocated bytes against the total reserved by every pool that
+/// reports to it (see [`PeakRecordingPool::with_drift_tracker`]).
+///
+/// [`PeakRecordingPool::with_drift_tracker`]: super::PeakRecordingPool::with_drift_tracker
 ///
 /// A single tracker can be shared by many pools, e.g. one pool per
 /// `SessionContext` in a process running several at once. The reserved total
@@ -72,15 +72,14 @@ pub const DEFAULT_DRIFT_LOG_THRESHOLD: usize = 64 * 1024 * 1024;
 /// ```
 /// # use std::sync::Arc;
 /// # use datafusion_execution::memory_pool::{
-/// #     MemoryConsumer, MemoryDriftTracker, MemoryPool, DriftLoggingPool, UnboundedMemoryPool,
+/// #     MemoryConsumer, MemoryDriftTracker, MemoryPool, PeakRecordingPool, UnboundedMemoryPool,
 /// # };
 /// // A real caller would read a counting allocator or allocator stats here.
 /// let tracker = Arc::new(MemoryDriftTracker::new(Arc::new(|| 10_000)));
-/// let pool: Arc<dyn MemoryPool> = Arc::new(DriftLoggingPool::new(
-///     Arc::new(UnboundedMemoryPool::default()),
-///     Arc::clone(&tracker),
-///     "example",
-/// ));
+/// let pool: Arc<dyn MemoryPool> = Arc::new(
+///     PeakRecordingPool::new(Arc::new(UnboundedMemoryPool::default()))
+///         .with_drift_tracker(Arc::clone(&tracker), "example"),
+/// );
 ///
 /// let reservation = MemoryConsumer::new("op").register(&pool);
 /// reservation.grow(4_000);
@@ -104,8 +103,7 @@ pub struct MemoryDriftTracker {
 /// One observation of drift, recorded by [`MemoryDriftTracker`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriftSample {
-    /// Label of the [`DriftLoggingPool`] whose reservation change took this
-    /// sample, or the source passed to [`MemoryDriftTracker::sample`]. When
+    /// Label of the pool whose reservation change took this sample, or the source passed to [`MemoryDriftTracker::sample`]. When
     /// several pools share a tracker, the untracked memory can come from any
     /// of them.
     pub pool: String,
@@ -180,13 +178,13 @@ impl MemoryDriftTracker {
         self.observe(source, "", self.reserved());
     }
 
-    fn grew(&self, pool: &str, consumer: &str, additional: usize) {
+    pub(super) fn grew(&self, pool: &str, consumer: &str, additional: usize) {
         let reserved =
             self.reserved.fetch_add(additional, Ordering::Relaxed) + additional;
         self.observe(pool, consumer, reserved);
     }
 
-    fn shrank(&self, pool: &str, consumer: &str, shrink: usize) {
+    pub(super) fn shrank(&self, pool: &str, consumer: &str, shrink: usize) {
         let reserved = self.reserved.fetch_sub(shrink, Ordering::Relaxed) - shrink;
         self.observe(pool, consumer, reserved);
     }
@@ -218,7 +216,7 @@ impl MemoryDriftTracker {
         // lowers the baseline so the next rise is seen.
         let untracked = drift.max(0);
         let last = self.last_logged.load(Ordering::Relaxed);
-        let rose = untracked >= last.saturating_add(self.log_threshold as isize);
+        let rose = untracked >= last.saturating_add_unsigned(self.log_threshold);
         if !rose && untracked >= last {
             return false;
         }
@@ -244,126 +242,34 @@ impl Debug for MemoryDriftTracker {
     }
 }
 
-/// Wraps a [`MemoryPool`], reporting every reservation change to a
-/// [`MemoryDriftTracker`].
-///
-/// Every method delegates to the wrapped pool, so wrapping does not change how
-/// memory is granted, limited, or reported. As with other wrappers,
-/// downcasting the pool finds this wrapper rather than the pool it wraps.
-pub struct DriftLoggingPool {
-    inner: Arc<dyn MemoryPool>,
-    tracker: Arc<MemoryDriftTracker>,
-    label: String,
-}
-
-impl DriftLoggingPool {
-    /// Wrap `inner`, reporting to `tracker`. `label` identifies this pool in
-    /// log lines, which matters when several pools share one tracker.
-    ///
-    /// `inner` is expected to be empty: anything reserved before wrapping is
-    /// not counted.
-    pub fn new(
-        inner: Arc<dyn MemoryPool>,
-        tracker: Arc<MemoryDriftTracker>,
-        label: impl Into<String>,
-    ) -> Self {
-        Self {
-            inner,
-            tracker,
-            label: label.into(),
-        }
-    }
-
-    /// The tracker this pool reports to.
-    pub fn tracker(&self) -> &Arc<MemoryDriftTracker> {
-        &self.tracker
-    }
-}
-
-impl Debug for DriftLoggingPool {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DriftLoggingPool")
-            .field("inner", &self.inner)
-            .field("label", &self.label)
-            .finish()
-    }
-}
-
-impl Display for DriftLoggingPool {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        // Keep output identical to running without the wrapper.
-        Display::fmt(&self.inner, f)
-    }
-}
-
-impl MemoryPool for DriftLoggingPool {
-    fn name(&self) -> &str {
-        self.inner.name()
-    }
-
-    fn register(&self, consumer: &MemoryConsumer) {
-        self.inner.register(consumer);
-    }
-
-    fn unregister(&self, consumer: &MemoryConsumer) {
-        self.inner.unregister(consumer);
-    }
-
-    fn grow(&self, reservation: &MemoryReservation, additional: usize) {
-        self.inner.grow(reservation, additional);
-        self.tracker
-            .grew(&self.label, reservation.consumer().name(), additional);
-    }
-
-    fn shrink(&self, reservation: &MemoryReservation, shrink: usize) {
-        self.inner.shrink(reservation, shrink);
-        self.tracker
-            .shrank(&self.label, reservation.consumer().name(), shrink);
-    }
-
-    fn try_grow(&self, reservation: &MemoryReservation, additional: usize) -> Result<()> {
-        self.inner.try_grow(reservation, additional)?;
-        self.tracker
-            .grew(&self.label, reservation.consumer().name(), additional);
-        Ok(())
-    }
-
-    fn reserved(&self) -> usize {
-        self.inner.reserved()
-    }
-
-    fn memory_limit(&self) -> MemoryLimit {
-        self.inner.memory_limit()
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::memory_pool::{GreedyMemoryPool, UnboundedMemoryPool};
+    use crate::memory_pool::{
+        MemoryConsumer, MemoryPool, PeakRecordingPool, UnboundedMemoryPool,
+    };
 
     use super::*;
 
     /// A tracker whose allocated byte count is set by the test.
-    fn tracker() -> (Arc<AtomicUsize>, Arc<MemoryDriftTracker>) {
+    fn tracker(log_threshold: usize) -> (Arc<AtomicUsize>, Arc<MemoryDriftTracker>) {
         let allocated = Arc::new(AtomicUsize::new(0));
         let source = Arc::clone(&allocated);
-        let tracker = Arc::new(MemoryDriftTracker::new(Arc::new(move || {
-            source.load(Ordering::Relaxed)
-        })));
-        (allocated, tracker)
+        let tracker =
+            MemoryDriftTracker::new(Arc::new(move || source.load(Ordering::Relaxed)))
+                .with_log_threshold(log_threshold);
+        (allocated, Arc::new(tracker))
     }
 
     fn pool(tracker: &Arc<MemoryDriftTracker>, label: &str) -> Arc<dyn MemoryPool> {
-        Arc::new(DriftLoggingPool::new(
-            Arc::new(UnboundedMemoryPool::default()),
-            Arc::clone(tracker),
-            label,
-        ))
+        Arc::new(
+            PeakRecordingPool::new(Arc::new(UnboundedMemoryPool::default()))
+                .with_drift_tracker(Arc::clone(tracker), label),
+        )
     }
 
     #[test]
     fn records_peak_drift_and_where_it_happened() {
-        let (allocated, tracker) = tracker();
+        let (allocated, tracker) = tracker(DEFAULT_DRIFT_LOG_THRESHOLD);
         let pool = pool(&tracker, "q1");
 
         let a = MemoryConsumer::new("a").register(&pool);
@@ -391,7 +297,7 @@ mod tests {
 
     #[test]
     fn sums_reservations_across_pools_sharing_a_tracker() {
-        let (allocated, tracker) = tracker();
+        let (allocated, tracker) = tracker(DEFAULT_DRIFT_LOG_THRESHOLD);
         let one = pool(&tracker, "one");
         let two = pool(&tracker, "two");
 
@@ -414,24 +320,8 @@ mod tests {
     }
 
     #[test]
-    fn failed_growth_is_not_counted() {
-        let (_allocated, tracker) = tracker();
-        let pool: Arc<dyn MemoryPool> = Arc::new(DriftLoggingPool::new(
-            Arc::new(GreedyMemoryPool::new(1024)),
-            Arc::clone(&tracker),
-            "limited",
-        ));
-
-        let reservation = MemoryConsumer::new("a").register(&pool);
-        reservation.try_grow(600).unwrap();
-        reservation.try_grow(600).unwrap_err();
-
-        assert_eq!(tracker.reserved(), 600);
-    }
-
-    #[test]
     fn drift_can_be_negative() {
-        let (_allocated, tracker) = tracker();
+        let (_allocated, tracker) = tracker(DEFAULT_DRIFT_LOG_THRESHOLD);
         let pool = pool(&tracker, "over-reserved");
 
         let reservation = MemoryConsumer::new("a").register(&pool);
@@ -447,44 +337,38 @@ mod tests {
 
     #[test]
     fn logs_each_rise_by_the_threshold_and_rearms_after_a_fall() {
-        let allocated = Arc::new(AtomicUsize::new(0));
-        let source = Arc::clone(&allocated);
-        let tracker =
-            MemoryDriftTracker::new(Arc::new(move || source.load(Ordering::Relaxed)))
-                .with_log_threshold(1000);
-        let observe = |bytes: usize| {
+        let (allocated, tracker) = tracker(1000);
+        let observe = |bytes: usize, reserved: usize| {
             allocated.store(bytes, Ordering::Relaxed);
-            tracker.observe("p", "c", 0)
+            tracker.observe("p", "c", reserved)
         };
 
+        // Negative drift counts as zero, so the baseline stays at zero.
+        assert!(!observe(0, 5000));
         // Below the threshold: nothing logged.
-        assert!(!observe(999));
+        assert!(!observe(999, 0));
         // Reaching the threshold logs and moves the baseline to 1000.
-        assert!(observe(1000));
-        assert!(!observe(1999));
-        assert!(observe(2000));
+        assert!(observe(1000, 0));
+        assert!(!observe(1999, 0));
+        assert!(observe(2000, 0));
         // Falling drift is not logged but lowers the baseline to 500...
-        assert!(!observe(500));
+        assert!(!observe(500, 0));
         // ...so a rise of the threshold from there logs again.
-        assert!(!observe(1499));
-        assert!(observe(1500));
+        assert!(!observe(1499, 0));
+        assert!(observe(1500, 0));
     }
 
     #[test]
-    fn negative_drift_counts_as_zero_for_logging() {
-        let (allocated, tracker) = tracker();
-        let tracker = Arc::into_inner(tracker).unwrap().with_log_threshold(1000);
+    fn a_threshold_above_isize_max_never_logs() {
+        let (allocated, tracker) = tracker(usize::MAX);
 
-        assert!(!tracker.observe("p", "c", 5000));
-        allocated.store(999, Ordering::Relaxed);
+        allocated.store(1 << 40, Ordering::Relaxed);
         assert!(!tracker.observe("p", "c", 0));
-        allocated.store(1000, Ordering::Relaxed);
-        assert!(tracker.observe("p", "c", 0));
     }
 
     #[test]
     fn sample_observes_without_a_reservation_change() {
-        let (allocated, tracker) = tracker();
+        let (allocated, tracker) = tracker(DEFAULT_DRIFT_LOG_THRESHOLD);
         let pool = pool(&tracker, "q1");
         let reservation = MemoryConsumer::new("a").register(&pool);
         reservation.grow(100);
@@ -502,16 +386,5 @@ mod tests {
                 drift: 4900,
             })
         );
-    }
-
-    #[test]
-    fn delegates_to_the_wrapped_pool() {
-        let (_allocated, tracker) = tracker();
-        let inner: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(4096));
-        let wrapped = DriftLoggingPool::new(Arc::clone(&inner), tracker, "x");
-
-        assert_eq!(wrapped.name(), inner.name());
-        assert_eq!(wrapped.to_string(), inner.to_string());
-        assert!(matches!(wrapped.memory_limit(), MemoryLimit::Finite(4096)));
     }
 }

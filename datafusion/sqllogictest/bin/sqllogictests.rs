@@ -24,7 +24,8 @@ use datafusion::execution::memory_pool::DEFAULT_DRIFT_LOG_THRESHOLD;
 use datafusion_sqllogictest::DataFusionSubstraitRoundTrip;
 use datafusion_sqllogictest::TestFile;
 use datafusion_sqllogictest::{
-    CountingAllocator, enable_memory_drift_logging, memory_drift_tracker,
+    CountingAllocator, enable_memory_drift_logging, flush_thread_allocations,
+    memory_drift_tracker,
 };
 use datafusion_sqllogictest::{
     CurrentlyExecutingSqlTracker, DFColumnType, DataFusion, Filter, TestContext,
@@ -62,7 +63,7 @@ use std::time::Duration;
 mod postgres_container;
 
 #[global_allocator]
-static ALLOC: CountingAllocator = CountingAllocator::new(std::alloc::System);
+static ALLOC: CountingAllocator = CountingAllocator;
 
 const TEST_DIRECTORY: &str = "test_files/";
 const DATAFUSION_TESTING_TEST_DIRECTORY: &str = "../../datafusion-testing/data/";
@@ -95,6 +96,7 @@ fn config_change_result(
 pub fn main() -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
+        .on_thread_stop(flush_thread_allocations)
         .build()?
         .block_on(run_tests())
 }
@@ -1132,7 +1134,7 @@ struct Options {
         env = "SLT_MEMORY_DRIFT",
         default_value_t = true,
         action = clap::ArgAction::Set,
-        help = "Log drift between MemoryPool reservations and allocated bytes (RUST_LOG=info to see each change)"
+        help = "Log drift between MemoryPool reservations and allocated bytes (RUST_LOG=datafusion_execution::memory_pool=info to log each rise of --memory-drift-log-threshold bytes)"
     )]
     memory_drift: bool,
 

@@ -33,42 +33,33 @@ use std::{
     cell::Cell,
     sync::{
         Arc, OnceLock,
-        atomic::{AtomicBool, AtomicIsize, Ordering},
+        atomic::{AtomicIsize, Ordering},
     },
 };
 
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::memory_pool::{
-    DriftLoggingPool, MemoryDriftTracker, MemoryPool,
+    MemoryDriftTracker, MemoryPool, PeakRecordingPool,
 };
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::SessionContext;
 
 static ALLOCATED: AtomicIsize = AtomicIsize::new(0);
-static COUNTING: AtomicBool = AtomicBool::new(false);
 static TRACKER: OnceLock<Arc<MemoryDriftTracker>> = OnceLock::new();
 
 /// A [`GlobalAlloc`] that counts the bytes currently allocated through it,
-/// delegating the allocation itself to `A`.
+/// delegating the allocation itself to [`System`].
 ///
 /// Counts requested sizes, so allocator overhead and memory retained by the
-/// allocator are not included. Counting is off until
-/// [`enable_memory_drift_logging`] is called.
-pub struct CountingAllocator<A = System> {
-    inner: A,
-}
-
-impl<A> CountingAllocator<A> {
-    pub const fn new(inner: A) -> Self {
-        Self { inner }
-    }
-}
+/// allocator are not included. Counting starts with the process, so memory
+/// freed later was always counted when it was allocated.
+pub struct CountingAllocator;
 
 /// Per-thread count is flushed to [`ALLOCATED`] once it moves this far, so
 /// threads do not contend on one atomic for every allocation. The global count
-/// is therefore off by up to `FLUSH_BYTES` per live thread. The unflushed
-/// count of a thread that exits (e.g. an idle Tokio blocking thread) is lost,
-/// so this error can grow during a long run.
+/// is therefore off by up to `FLUSH_BYTES` per live thread. Tokio threads
+/// flush the rest when they stop (see [`flush_thread_allocations`]); the
+/// unflushed count of any other thread that exits is lost.
 const FLUSH_BYTES: isize = 256 * 1024;
 
 thread_local! {
@@ -77,9 +68,6 @@ thread_local! {
 }
 
 fn count(delta: isize) {
-    if !COUNTING.load(Ordering::Relaxed) {
-        return;
-    }
     // `try_with` because this can run while the thread is being torn down.
     let _ = UNFLUSHED.try_with(|unflushed| {
         let pending = unflushed.get() + delta;
@@ -92,11 +80,21 @@ fn count(delta: isize) {
     });
 }
 
-// SAFETY: every call is forwarded unchanged to `A`, which upholds the
+/// Flush this thread's unflushed count into the global count.
+///
+/// Registered as the Tokio runtime's `on_thread_stop` hook, which runs just
+/// before a worker or blocking thread exits, outside the allocator.
+pub fn flush_thread_allocations() {
+    let _ = UNFLUSHED.try_with(|unflushed| {
+        ALLOCATED.fetch_add(unflushed.replace(0), Ordering::Relaxed);
+    });
+}
+
+// SAFETY: every call is forwarded unchanged to `System`, which upholds the
 // `GlobalAlloc` contract. Counting has no effect on the returned memory.
-unsafe impl<A: GlobalAlloc> GlobalAlloc for CountingAllocator<A> {
+unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let ptr = unsafe { self.inner.alloc(layout) };
+        let ptr = unsafe { System.alloc(layout) };
         if !ptr.is_null() {
             count(layout.size() as isize);
         }
@@ -104,7 +102,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for CountingAllocator<A> {
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        let ptr = unsafe { self.inner.alloc_zeroed(layout) };
+        let ptr = unsafe { System.alloc_zeroed(layout) };
         if !ptr.is_null() {
             count(layout.size() as isize);
         }
@@ -112,12 +110,12 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for CountingAllocator<A> {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { self.inner.dealloc(ptr, layout) };
+        unsafe { System.dealloc(ptr, layout) };
         count(-(layout.size() as isize));
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        let new_ptr = unsafe { self.inner.realloc(ptr, layout, new_size) };
+        let new_ptr = unsafe { System.realloc(ptr, layout, new_size) };
         if !new_ptr.is_null() {
             count(new_size as isize - layout.size() as isize);
         }
@@ -125,20 +123,16 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for CountingAllocator<A> {
     }
 }
 
-/// Bytes currently allocated through [`CountingAllocator`] since counting was
-/// enabled.
-///
-/// Memory allocated before counting started and freed afterwards is
-/// subtracted, so the count is clamped at zero.
-pub fn allocated_bytes() -> usize {
+/// Bytes currently allocated through [`CountingAllocator`], clamped at zero
+/// because counts lost with exiting threads can bias it either way.
+fn allocated_bytes() -> usize {
     ALLOCATED.load(Ordering::Relaxed).max(0) as usize
 }
 
-/// Start counting allocations and wrap the memory pool of every test file
-/// created from now on, logging each rise in drift of `log_threshold` bytes.
-/// Only has an effect if [`CountingAllocator`] is the global allocator.
+/// Wrap the memory pool of every test file created from now on, logging each
+/// rise in drift of `log_threshold` bytes. Only meaningful if
+/// [`CountingAllocator`] is the global allocator.
 pub fn enable_memory_drift_logging(log_threshold: usize) {
-    COUNTING.store(true, Ordering::Relaxed);
     TRACKER.get_or_init(|| {
         Arc::new(
             MemoryDriftTracker::new(Arc::new(allocated_bytes))
@@ -156,9 +150,9 @@ pub fn memory_drift_tracker() -> Option<&'static Arc<MemoryDriftTracker>> {
 /// or return it unchanged if drift logging is not enabled.
 pub fn wrap_pool(pool: Arc<dyn MemoryPool>, label: &str) -> Arc<dyn MemoryPool> {
     match memory_drift_tracker() {
-        Some(tracker) => {
-            Arc::new(DriftLoggingPool::new(pool, Arc::clone(tracker), label))
-        }
+        Some(tracker) => Arc::new(
+            PeakRecordingPool::new(pool).with_drift_tracker(Arc::clone(tracker), label),
+        ),
         None => pool,
     }
 }
@@ -173,7 +167,7 @@ pub(crate) fn rewrap_replaced_pool(ctx: &SessionContext, label: &str) {
     let state = ctx.state_ref();
     let mut state = state.write();
     let runtime = state.runtime_env();
-    if runtime.memory_pool.is::<DriftLoggingPool>() {
+    if runtime.memory_pool.is::<PeakRecordingPool>() {
         return;
     }
     let pool = wrap_pool(Arc::clone(&runtime.memory_pool), label);
