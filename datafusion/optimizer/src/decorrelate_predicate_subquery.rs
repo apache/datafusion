@@ -34,10 +34,12 @@ use datafusion_common::{
 use datafusion_expr::expr::{Exists, InSubquery};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
-use datafusion_expr::utils::{conjunction, expr_to_columns, split_conjunction_owned};
+use datafusion_expr::utils::{
+    conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
+};
 use datafusion_expr::{
-    BinaryExpr, Expr, Filter, LogicalPlan, LogicalPlanBuilder, Operator, exists,
-    in_subquery, lit, not, not_exists, not_in_subquery, when,
+    BinaryExpr, Expr, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, Operator,
+    exists, in_subquery, lit, not, not_exists, not_in_subquery, when,
 };
 
 use log::debug;
@@ -479,7 +481,10 @@ fn mark_join(
 
 /// Check if join keys in the join filter may contain NULL values
 ///
-/// Returns true if any join key column is nullable on either side.
+/// Returns true if either side of an equality conjunct can itself be NULL, as
+/// an expression rather than just the columns it references. A `CASE` without
+/// `ELSE`, `NULLIF`, or a NULL constant is nullable even when every column it
+/// reads is declared `NOT NULL`.
 /// This is used to optimize null-aware anti joins: if all join keys are non-nullable,
 /// we can use a regular anti join instead of the more expensive null-aware variant.
 fn join_keys_may_be_null(
@@ -487,21 +492,20 @@ fn join_keys_may_be_null(
     left_schema: &DFSchemaRef,
     right_schema: &DFSchemaRef,
 ) -> Result<bool> {
-    // Extract columns from the join filter
-    let mut columns = std::collections::HashSet::new();
-    expr_to_columns(join_filter, &mut columns)?;
-
-    // Check if any column is nullable
-    for col in columns {
-        // Check in left schema
-        if let Ok(field) = left_schema.field_from_column(&col)
-            && field.as_ref().is_nullable()
-        {
+    for conjunct in split_conjunction(join_filter) {
+        let Expr::BinaryExpr(BinaryExpr {
+            left,
+            op: Operator::Eq,
+            right,
+        }) = conjunct
+        else {
+            // Only equality conjuncts become hash-join keys; a residual
+            // conjunct's nullability isn't decided here, so stay conservative.
             return Ok(true);
-        }
-        // Check in right schema
-        if let Ok(field) = right_schema.field_from_column(&col)
-            && field.as_ref().is_nullable()
+        };
+
+        if operand_may_be_null(left, left_schema, right_schema)?
+            || operand_may_be_null(right, left_schema, right_schema)?
         {
             return Ok(true);
         }
@@ -519,6 +523,35 @@ fn in_predicate_first(in_predicate: Expr, correlation: Option<Expr>) -> Expr {
     match correlation {
         Some(correlation) => in_predicate.and(correlation),
         None => in_predicate,
+    }
+}
+
+/// Whether `expr` can evaluate to NULL, resolving it against whichever side's
+/// schema its column references belong to. Falls back to `true`, the
+/// conservative answer, when that side can't be determined uniquely: treating
+/// a key as nullable costs a null-aware join, treating it as non-nullable
+/// risks wrong results.
+fn operand_may_be_null(
+    expr: &Expr,
+    left_schema: &DFSchemaRef,
+    right_schema: &DFSchemaRef,
+) -> Result<bool> {
+    let mut columns = std::collections::HashSet::new();
+    expr_to_columns(expr, &mut columns)?;
+
+    let references_left = columns
+        .iter()
+        .any(|col| left_schema.field_from_column(col).is_ok());
+    let references_right = columns
+        .iter()
+        .any(|col| right_schema.field_from_column(col).is_ok());
+
+    match (references_left, references_right) {
+        (true, true) => Ok(true),
+        (true, false) => expr.nullable(left_schema.as_ref()),
+        // A constant references neither schema; either one gives the same
+        // answer, since a literal's nullability doesn't depend on the schema.
+        (false, true) | (false, false) => expr.nullable(right_schema.as_ref()),
     }
 }
 
@@ -803,6 +836,16 @@ mod tests {
             Field::new("grp", DataType::Int32, true),
         ]);
         table_scan(Some(name), &schema, None)?.build()
+    }
+
+    fn has_null_aware_left_anti_join(plan: &LogicalPlan) -> bool {
+        if let LogicalPlan::Join(join) = plan
+            && join.join_type == JoinType::LeftAnti
+        {
+            return join.null_aware;
+        }
+
+        plan.inputs().into_iter().any(has_null_aware_left_anti_join)
     }
 
     fn has_null_aware_left_mark_join(plan: &LogicalPlan) -> bool {
@@ -1538,6 +1581,93 @@ mod tests {
             SubqueryAlias: __correlated_sq_1 [id:Int32;N]
               Projection: inner_t.id [id:Int32;N]
                 TableScan: inner_t [id:Int32;N, grp:Int32;N]
+        "
+        )
+    }
+
+    /// A NULL constant against a `NOT NULL` subquery column must still
+    /// trigger the null-aware rewrite: `join_keys_may_be_null` has to see the
+    /// constant's own nullability, not just the nullability of the columns
+    /// the join filter references.
+    /// <https://github.com/apache/datafusion/issues/25473>
+    #[test]
+    fn constant_null_not_in_subquery_is_null_aware_over_not_null_column() -> Result<()> {
+        let outer_scan = nullable_scalar_mark_scan("outer_t")?;
+        let subquery = test_subquery_with_name("inner_t")?;
+
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(not_in_subquery(
+                Expr::Literal(ScalarValue::Int32(None), None),
+                subquery,
+            ))?
+            .build()?;
+
+        let optimized = optimize_with_decorrelate(plan)?;
+        assert!(
+            has_null_aware_left_anti_join(&optimized),
+            "{}",
+            optimized.display_indent_schema()
+        );
+
+        Ok(())
+    }
+
+    /// An expression that can be NULL even though every column it reads is
+    /// `NOT NULL` (`CASE` without `ELSE`, here) must also trigger the
+    /// null-aware rewrite. `join_keys_may_be_null` has to check the
+    /// expression's own nullability rather than only the schema nullability
+    /// of the columns it references.
+    /// <https://github.com/apache/datafusion/issues/25474>
+    #[test]
+    fn nullable_expression_not_in_subquery_is_null_aware_over_not_null_columns()
+    -> Result<()> {
+        let outer_scan = test_table_scan_with_name("outer_t")?;
+        let subquery = test_subquery_with_name("inner_t")?;
+
+        let value = when(col("outer_t.a").gt(lit(100u32)), col("outer_t.a")).end()?;
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(not_in_subquery(value, subquery))?
+            .build()?;
+
+        let optimized = optimize_with_decorrelate(plan)?;
+        assert!(
+            has_null_aware_left_anti_join(&optimized),
+            "{}",
+            optimized.display_indent_schema()
+        );
+
+        Ok(())
+    }
+
+    /// The same rewrite must not fire for a correlated subquery: the
+    /// correlation predicate is a second equi-join key, and null-aware hash
+    /// joins accept only one.
+    #[test]
+    fn constant_not_in_correlated_subquery_is_not_rewritten() -> Result<()> {
+        let outer_scan = nullable_scalar_mark_scan("outer_t")?;
+        let inner_scan = nullable_scalar_mark_scan("inner_t")?;
+
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(inner_scan)
+                .filter(
+                    out_ref_col(DataType::Int32, "outer_t.grp").eq(col("inner_t.grp")),
+                )?
+                .project(vec![col("inner_t.id")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(outer_scan)
+            .filter(not_in_subquery(lit(3i32), subquery))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        LeftAnti Join:  Filter: Int32(3) = __correlated_sq_1.id AND outer_t.grp = __correlated_sq_1.grp null_aware [id:Int32;N, grp:Int32;N]
+          TableScan: outer_t [id:Int32;N, grp:Int32;N]
+          SubqueryAlias: __correlated_sq_1 [id:Int32;N, grp:Int32;N]
+            Projection: inner_t.id, inner_t.grp [id:Int32;N, grp:Int32;N]
+              TableScan: inner_t [id:Int32;N, grp:Int32;N]
         "
         )
     }
