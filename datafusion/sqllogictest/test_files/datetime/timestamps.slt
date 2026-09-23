@@ -1755,6 +1755,59 @@ physical_plan
 03)----ProjectionExec: expr=[CAST(column1@0 AS Timestamp(s)) as ts]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
+# Default bounds from nested functions retain their resolved output type.
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+statement ok
+CREATE VIEW nested_trunc_ordering AS
+SELECT arrow_cast(column1, 'Timestamp(Second)') AS ts
+FROM (VALUES (90001::bigint), (3601::bigint))
+ORDER BY ts
+LIMIT 2;
+
+query I
+SELECT arrow_cast(date_trunc('day', date_trunc('hour', ts)), 'Int64') AS bucket
+FROM nested_trunc_ordering
+ORDER BY bucket;
+----
+0
+86400
+
+query TT
+EXPLAIN SELECT date_trunc('day', date_trunc('hour', ts)) AS bucket
+FROM nested_trunc_ordering
+ORDER BY bucket;
+----
+physical_plan
+01)ProjectionExec: expr=[date_trunc(day, date_trunc(hour, ts@0)) as bucket]
+02)--SortExec: TopK(fetch=2), expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----ProjectionExec: expr=[CAST(column1@0 AS Timestamp(s)) as ts]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP VIEW nested_trunc_ordering;
+
+# Recovering a named timezone must still retain the outer sort.
+query TT
+EXPLAIN SELECT date_trunc('hour', from_unixtime(c, 'America/Goose_Bay')) AS bucket
+FROM (
+  SELECT column1 AS c
+  FROM (VALUES (562129260::bigint), (562129259::bigint))
+  ORDER BY c
+  LIMIT 2
+)
+ORDER BY bucket;
+----
+physical_plan
+01)SortExec: expr=[bucket@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[date_trunc(hour, from_unixtime(column1@0, America/Goose_Bay)) as bucket]
+03)----SortExec: TopK(fetch=2), expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+RESET datafusion.explain.physical_plan_only;
+
 statement ok
 CREATE TABLE timestamp_strings(ts varchar)
 AS VALUES

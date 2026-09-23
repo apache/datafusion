@@ -158,3 +158,58 @@ NULL
 
 statement ok
 DROP TABLE time_vals
+
+# Time arithmetic can wrap even when its input is an ordered function result.
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+statement ok
+CREATE VIEW function_time_ordering AS
+SELECT column1 AS t
+FROM (VALUES (TIME '23:30:00'), (TIME '00:30:00'))
+ORDER BY t
+LIMIT 2;
+
+query D
+SELECT date_trunc('hour', t) + INTERVAL '2 hours' AS shifted
+FROM function_time_ordering
+ORDER BY shifted;
+----
+01:00:00
+02:00:00
+
+query TT
+EXPLAIN SELECT date_trunc('hour', t) + INTERVAL '2 hours' AS shifted
+FROM function_time_ordering
+ORDER BY shifted;
+----
+physical_plan
+01)SortExec: expr=[shifted@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[date_trunc(hour, column1@0) + IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 7200000000000 } as shifted]
+03)----SortExec: TopK(fetch=2), expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query D
+SELECT date_trunc('hour', t) - INTERVAL '2 hours' AS shifted
+FROM function_time_ordering
+ORDER BY shifted;
+----
+21:00:00
+22:00:00
+
+query TT
+EXPLAIN SELECT date_trunc('hour', t) - INTERVAL '2 hours' AS shifted
+FROM function_time_ordering
+ORDER BY shifted;
+----
+physical_plan
+01)SortExec: expr=[shifted@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[date_trunc(hour, column1@0) - IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 7200000000000 } as shifted]
+03)----SortExec: TopK(fetch=2), expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP VIEW function_time_ordering;
+
+statement ok
+RESET datafusion.explain.physical_plan_only;

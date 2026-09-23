@@ -38,7 +38,6 @@ use datafusion_common::{
     Result, ScalarValue, exec_datafusion_err, exec_err, not_impl_err, plan_err,
 };
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::interval_arithmetic::Interval as ExprInterval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -283,11 +282,6 @@ impl ScalarUDFImpl for DateBinFunc {
         } else {
             Ok(SortProperties::Unordered)
         }
-    }
-
-    fn evaluate_bounds(&self, inputs: &[&ExprInterval]) -> Result<ExprInterval> {
-        // DATE_BIN returns the same type as its source argument.
-        ExprInterval::make_unbounded(&inputs[1].data_type())
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -820,11 +814,10 @@ mod tests {
     use arrow::array::types::TimestampNanosecondType;
     use arrow::array::{Array, IntervalDayTimeArray, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
-    use arrow::datatypes::{DataType, Field, FieldRef, IntervalUnit, TimeUnit};
+    use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use datafusion_common::{DataFusionError, ScalarValue};
-    use datafusion_expr::interval_arithmetic::Interval as ExprInterval;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
     use chrono::TimeDelta;
@@ -873,28 +866,6 @@ mod tests {
             err.strip_backtrace().contains("overflows i64"),
             "unexpected error: {err}"
         );
-    }
-
-    #[test]
-    fn evaluate_bounds_preserves_source_type() {
-        let stride =
-            ExprInterval::make_unbounded(&DataType::Interval(IntervalUnit::DayTime))
-                .unwrap();
-        let source_types = [
-            DataType::Timestamp(TimeUnit::Second, None),
-            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
-            DataType::Time32(TimeUnit::Millisecond),
-            DataType::Time64(TimeUnit::Microsecond),
-        ];
-        let function = DateBinFunc::new();
-
-        for source_type in source_types {
-            let source = ExprInterval::make_unbounded(&source_type).unwrap();
-            let bounds = function.evaluate_bounds(&[&stride, &source]).unwrap();
-
-            assert!(bounds.is_unbounded());
-            assert_eq!(bounds.data_type(), source_type);
-        }
     }
 
     #[test]
