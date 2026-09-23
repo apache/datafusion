@@ -189,6 +189,72 @@ fn criterion_benchmark(c: &mut Criterion) {
         "child_slice/utf8",
         list_input("utf8", vec![WIDTH; ROWS], "mixed", None, 3),
     );
+    // Unlike the backing-size controls above, these large inputs expose
+    // 1,048,576 elements. Random nulls make primitive branches unpredictable.
+    for (kind, pattern, name) in [
+        ("primitive", "random_tenth", "large/int32/random_tenth"),
+        ("primitive", "random_half", "large/int32/random_half"),
+        ("utf8", "random_tenth", "large/utf8/random_tenth"),
+        ("utf8", "random_half", "large/utf8/random_half"),
+        ("utf8_long", "random_half", "large/utf8_long/random_half"),
+        ("decimal256", "random_half", "large/decimal256/random_half"),
+        (
+            "decimal256",
+            "random_dense",
+            "large/decimal256/random_dense",
+        ),
+        (
+            "decimal256",
+            "random_dense",
+            "small/decimal256/random_dense",
+        ),
+        ("float64", "random_half", "large/float64/random_half"),
+        ("binary", "random_sparse", "binary/random_sparse"),
+        ("binary", "random_half", "binary/random_half"),
+        ("large_binary", "random_half", "large_binary/random_half"),
+    ] {
+        let rows = if name.starts_with("large/") {
+            65_536
+        } else {
+            ROWS
+        };
+        bench_input(
+            &mut group,
+            name,
+            list_input(kind, vec![16; rows], pattern, None, 0),
+        );
+    }
+    for (name, stride) in [
+        ("large/int32/null_rows_half", 2),
+        ("large/int32/null_rows_mostly", 100),
+    ] {
+        let nulls = NullBuffer::from_iter((0..65_536).map(|i| i % stride == 0));
+        bench_input(
+            &mut group,
+            name,
+            list_input("primitive", vec![16; 65_536], "random_half", Some(nulls), 0),
+        );
+    }
+    // Store bytes even in NULL element slots to measure allocation tradeoffs.
+    for (name, parent_nulls) in [
+        ("strings/null_payload", false),
+        ("strings/null_payload_null_rows", true),
+    ] {
+        let strings =
+            StringArray::from_iter_values(std::iter::repeat_n("x".repeat(256), 8192));
+        let strings = StringArray::new(
+            strings.offsets().clone(),
+            strings.values().clone(),
+            Some(NullBuffer::from_iter((0..8192).map(|i| i % 100 == 0))),
+        );
+        let input = ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Utf8, true)),
+            OffsetBuffer::from_repeated_length(16, 512),
+            Arc::new(strings),
+            parent_nulls.then(|| NullBuffer::from_iter((0..512).map(|i| i % 100 == 0))),
+        );
+        bench_input(&mut group, name, Arc::new(input));
+    }
     group.finish();
 }
 
@@ -210,6 +276,22 @@ fn bench_input(group: &mut BenchmarkGroup<WallTime>, name: &str, input: ArrayRef
 fn child(kind: &str, values: Vec<Option<i32>>) -> ArrayRef {
     match kind {
         "primitive" => Arc::new(Int32Array::from(values)),
+        "decimal256" => {
+            cast(&Int32Array::from(values), &DataType::Decimal256(40, 4)).unwrap()
+        }
+        "float64" => cast(&Int32Array::from(values), &DataType::Float64).unwrap(),
+        "binary" | "large_binary" => {
+            let strings = child("utf8", values);
+            cast(
+                strings.as_ref(),
+                &if kind == "binary" {
+                    DataType::Binary
+                } else {
+                    DataType::LargeBinary
+                },
+            )
+            .unwrap()
+        }
         "decimal128" => {
             cast(&Int32Array::from(values), &DataType::Decimal128(20, 4)).unwrap()
         }
@@ -319,6 +401,7 @@ fn list_input(
                 "sparse" => i % 100 == 0,
                 "clustered" => i % 256 < 64,
                 "random" => rng.random_bool(0.25),
+                "random_tenth" => rng.random_bool(0.10),
                 "random_sparse" => rng.random_bool(0.01),
                 "random_half" => rng.random_bool(0.5),
                 "random_dense" => rng.random_bool(0.95),
