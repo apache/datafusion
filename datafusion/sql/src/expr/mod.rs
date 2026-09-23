@@ -313,21 +313,31 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         right: Expr,
         schema: &DFSchema,
     ) -> Result<Expr> {
-        // try extension planers
-        let mut binary_expr = RawBinaryExpr { op, left, right };
+        let binary_expr = RawBinaryExpr { op, left, right };
+        match self.try_plan_binary_op(binary_expr, schema)? {
+            PlannerResult::Planned(expr) => Ok(expr),
+            PlannerResult::Original(RawBinaryExpr { op, left, right }) => {
+                self.build_binary_expr(&op, left, right)
+            }
+        }
+    }
+
+    fn try_plan_binary_op(
+        &self,
+        mut binary_expr: RawBinaryExpr,
+        schema: &DFSchema,
+    ) -> Result<PlannerResult<RawBinaryExpr>> {
         for planner in self.context_provider.get_expr_planners() {
             match planner.plan_binary_op(binary_expr, schema)? {
                 PlannerResult::Planned(expr) => {
-                    return Ok(expr);
+                    return Ok(PlannerResult::Planned(expr));
                 }
                 PlannerResult::Original(expr) => {
                     binary_expr = expr;
                 }
             }
         }
-
-        let RawBinaryExpr { op, left, right } = binary_expr;
-        self.build_binary_expr(&op, left, right)
+        Ok(PlannerResult::Original(binary_expr))
     }
 
     pub fn sql_to_expr_with_alias(
@@ -841,16 +851,28 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         path: &JsonPath,
     ) -> Result<Expr> {
         let value = self.sql_to_expr(*value, schema, planner_context)?;
+        let json_path = path.to_string();
+        let json_path = json_path.strip_prefix(":").unwrap_or(&json_path);
+        let binary_expr = RawBinaryExpr {
+            op: BinaryOperator::Custom(":".to_owned()),
+            left: value,
+            right: Expr::Literal(ScalarValue::Utf8(Some(json_path.to_owned())), None),
+        };
+        let binary_expr = match self.try_plan_binary_op(binary_expr, schema)? {
+            PlannerResult::Planned(expr) => return Ok(expr),
+            PlannerResult::Original(expr) => expr,
+        };
 
         if !path.path.is_empty()
-            && is_struct_like(&value.get_type(schema)?)
+            && matches!(&binary_expr.op, BinaryOperator::Custom(op) if op == ":")
+            && is_struct_like(&binary_expr.left.get_type(schema)?)
             && path
                 .path
                 .iter()
                 .all(|element| struct_field_name_from_json_path_elem(element).is_some())
         {
-            let original_value = value.clone();
-            let mut planned = value;
+            let mut planned = binary_expr.left.clone();
+            let mut all_fields_planned = true;
 
             for element in &path.path {
                 let field_name = struct_field_name_from_json_path_elem(element)
@@ -863,42 +885,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 };
                 match self.try_plan_field_access(field_access, schema)? {
                     PlannerResult::Planned(expr) => planned = expr,
-                    PlannerResult::Original(_) => {
-                        return self.plan_serialized_json_access(
-                            original_value,
-                            path,
-                            schema,
-                        );
+                    PlannerResult::Original(field_access) => {
+                        planned = field_access.expr;
+                        all_fields_planned = false;
+                        break;
                     }
                 }
             }
 
-            return Ok(planned);
+            if all_fields_planned {
+                return Ok(planned);
+            }
         }
 
-        self.plan_serialized_json_access(value, path, schema)
-    }
-
-    fn plan_serialized_json_access(
-        &self,
-        value: Expr,
-        path: &JsonPath,
-        schema: &DFSchema,
-    ) -> Result<Expr> {
-        let json_path = path.to_string();
-        let json_path = if let Some(json_path) = json_path.strip_prefix(":") {
-            // sqlparser's JsonPath display adds an extra `:` at the beginning.
-            json_path.to_owned()
-        } else {
-            json_path
-        };
-        self.build_logical_expr(
-            BinaryOperator::Custom(":".to_owned()),
-            value,
-            // pass json path as a string literal, let the impl parse it when needed.
-            Expr::Literal(ScalarValue::Utf8(Some(json_path)), None),
-            schema,
-        )
+        let RawBinaryExpr { op, left, right } = binary_expr;
+        self.build_binary_expr(&op, left, right)
     }
 
     fn try_plan_field_access(
