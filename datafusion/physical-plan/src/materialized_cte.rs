@@ -39,7 +39,9 @@
 //! files until it can.
 
 use std::fmt;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -50,7 +52,8 @@ use datafusion_common_runtime::JoinSet;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, SpillFile, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
-use futures::{StreamExt, TryStreamExt};
+use futures::stream::BoxStream;
+use futures::{Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
 use crate::coop::cooperative;
@@ -343,10 +346,10 @@ async fn buffer_partition(
 /// Stream the buffered partitions `partition, partition + n, ...` of `output`,
 /// where `n` is the number of output partitions of the scan.
 fn replay(
-    output: &MaterializedOutput,
+    output: Arc<MaterializedOutput>,
     partition: usize,
     output_partitions: usize,
-) -> Result<Vec<SendableRecordBatchStream>> {
+) -> Result<ReplayStream> {
     let mut streams = vec![];
     for buffered in output
         .partitions
@@ -369,7 +372,32 @@ fn replay(
             )?);
         }
     }
-    Ok(streams)
+    Ok(ReplayStream {
+        stream: futures::stream::iter(streams).flatten().boxed(),
+        _output: output,
+    })
+}
+
+/// The replay of one scan partition.
+///
+/// Holds the [`MaterializedOutput`], and with it the memory reservations of
+/// the buffered batches and of the spill reads, until the replay is dropped.
+/// The scan can outlive its plan, for example when the plan is dropped after
+/// `execute`, so the output must not be released earlier.
+struct ReplayStream {
+    stream: BoxStream<'static, Result<RecordBatch>>,
+    _output: Arc<MaterializedOutput>,
+}
+
+impl Stream for ReplayStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        self.stream.poll_next_unpin(cx)
+    }
 }
 
 /// Computes a CTE body once and runs the continuation, whose
@@ -659,10 +687,7 @@ impl ExecutionPlan for MaterializedCteScanExec {
         let baseline = BaselineMetrics::new(&self.metrics, partition);
         let stream = futures::stream::once(async move {
             let output = std::future::poll_fn(|cx| output.get_shared(cx)).await?;
-            let streams = replay(&output, partition, output_partitions)?;
-            Ok::<_, datafusion_common::DataFusionError>(
-                futures::stream::iter(streams).flatten(),
-            )
+            replay(output, partition, output_partitions)
         })
         .try_flatten()
         .inspect_ok(move |batch| baseline.record_output(batch.num_rows()));
@@ -742,7 +767,7 @@ mod tests {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let body = TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
         let buffer = Arc::new(MaterializedCteBuffer::new(0, "c"));
-        let _exec = MaterializedCteExec::new(
+        let exec = MaterializedCteExec::new(
             body,
             Arc::new(EmptyExec::new(Arc::clone(&schema))),
             Arc::clone(&buffer),
@@ -758,8 +783,8 @@ mod tests {
             .build_arc()?;
         let context = Arc::new(TaskContext::default().with_runtime(runtime));
 
-        let mut output = buffer.materialize(Arc::clone(&context))?;
-        let output = std::future::poll_fn(|cx| output.get_shared(cx)).await?;
+        let mut once = buffer.materialize(Arc::clone(&context))?;
+        let output = std::future::poll_fn(|cx| once.get_shared(cx)).await?;
         let partition = &output.partitions[0];
         assert!(
             partition.spill_files.len() > 1,
@@ -767,14 +792,28 @@ mod tests {
         );
         assert!(partition.max_spilled_batch_size > 0);
         // The pool holds the in-memory prefix and one decoded batch per scan.
-        assert_eq!(
-            context.memory_pool().reserved(),
-            partition.reservation.size() + 2 * partition.max_spilled_batch_size
-        );
-        assert!(context.memory_pool().reserved() <= memory_limit);
+        let reserved =
+            partition.reservation.size() + 2 * partition.max_spilled_batch_size;
+        assert_eq!(context.memory_pool().reserved(), reserved);
+        assert!(reserved <= memory_limit);
 
-        for scan in scans {
-            let batches = collect(scan.execute(0, Arc::clone(&context))?).await?;
+        // The replay streams keep the reservations after the plan is dropped.
+        let mut streams = scans
+            .iter()
+            .map(|scan| scan.execute(0, Arc::clone(&context)))
+            .collect::<Result<Vec<_>>>()?;
+        drop((once, output, scans, exec, buffer));
+        // Once every stream has returned a batch, only the streams hold the
+        // buffered output.
+        let mut firsts = vec![];
+        for stream in &mut streams {
+            firsts.push(stream.next().await.transpose()?.unwrap());
+        }
+        assert_eq!(context.memory_pool().reserved(), reserved);
+
+        for (stream, first) in streams.into_iter().zip(firsts) {
+            let mut batches = vec![first];
+            batches.extend(collect(stream).await?);
             let values: Vec<i32> = batches
                 .iter()
                 .flat_map(|b| {
@@ -784,6 +823,7 @@ mod tests {
                 .collect();
             assert_eq!(values, (0..10_000).collect::<Vec<_>>());
         }
+        assert_eq!(context.memory_pool().reserved(), 0);
         Ok(())
     }
 }
