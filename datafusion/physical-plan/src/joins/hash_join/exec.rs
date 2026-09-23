@@ -329,10 +329,8 @@ pub(super) struct JoinLeftData {
     probe_completion: ProbeCompletion,
     /// Whether the smaller RightAnti subquery contains a NULL key.
     pub(super) build_side_has_null: bool,
-    // Keep build buffers alive until mutable probe state has been dropped.
+    // Drop the reservation after the mutable state it also accounts for.
     build: Arc<JoinBuildData>,
-    // Mutable bitmap and null-aware state never belong to a reusable build.
-    _probe_reservation: MemoryReservation,
 }
 
 impl JoinLeftData {
@@ -3003,8 +3001,8 @@ fn concat_build_batches(
 /// * `with_visited_indices_bitmap` - Whether to track visited indices (for outer joins)
 /// * `probe_threads_count` - Number of threads that will probe this hash table
 /// * `should_compute_dynamic_filters` - Whether to compute min/max bounds for dynamic filtering
-/// * `with_null_aware_mark_state` - Whether to build the per-build-row null-indices bitmap
-///   and correlation-scope maps used by correlated null-aware `LeftMark` joins
+/// * `null_aware` - The null-aware join mode, including whether per-build-row
+///   bitmaps and correlation-scope maps are required
 ///
 /// # Memory Accounting
 /// Build batches are added to `reservation` as they arrive. They are then copied
@@ -3155,16 +3153,11 @@ async fn collect_left_input(
 
         let scratch_reservation = reservation.new_empty();
         if prepared {
-            // Allow one logical null mask per key plus the combined mask.
-            let masks = if null_equality == NullEquality::NullEqualsNothing {
-                on_left.len() + 1
-            } else {
-                0
-            };
-            scratch_reservation.try_grow(
-                max_batch_rows * size_of::<u64>()
-                    + (max_batch_rows.div_ceil(8) + 64) * masks,
-            )?;
+            scratch_reservation.try_grow(prepared::prepared_scratch_bytes(
+                max_batch_rows,
+                on_left.len(),
+                null_equality,
+            )?)?;
         }
         // The maximum is known: avoid geometric growth and its excess capacity.
         let mut hashes_buffer = Vec::with_capacity(max_batch_rows);
@@ -3218,10 +3211,9 @@ async fn collect_left_input(
     reservation.try_grow(keys_size)?;
     metrics.build_mem_used.add(keys_size);
 
-    let mut probe_reservation = reservation.new_empty();
     let allocate_bitmap = || -> Result<BooleanBufferBuilder> {
         let bitmap_size = bit_util::ceil(batch.num_rows(), 8);
-        probe_reservation.try_grow(bitmap_size)?;
+        reservation.try_grow(bitmap_size)?;
         metrics.build_mem_used.add(bitmap_size);
 
         let mut bitmap = BooleanBufferBuilder::new(batch.num_rows());
@@ -3252,8 +3244,7 @@ async fn collect_left_input(
             // Scope-only NULL marking uses a HashMap (the primary join map may
             // use ArrayMap for full-key matches, but scope keys have arbitrary
             // shape).
-            let mut scope_map =
-                new_join_hashmap(num_rows, &mut probe_reservation, &metrics)?;
+            let mut scope_map = new_join_hashmap(num_rows, &mut reservation, &metrics)?;
 
             let mut hashes_buffer = vec![0; batch.num_rows()];
             update_hash(
@@ -3290,15 +3281,14 @@ async fn collect_left_input(
                     .iter()
                     .map(|values| values.get_array_memory_size())
                     .sum::<usize>();
-            probe_reservation.try_grow(retained_size)?;
+            reservation.try_grow(retained_size)?;
             metrics.build_mem_used.add(retained_size);
 
             let scope_map = if scope_values.is_empty() {
                 None
             } else {
                 let null_rows = build_indices.len();
-                let mut map =
-                    new_join_hashmap(null_rows, &mut probe_reservation, &metrics)?;
+                let mut map = new_join_hashmap(null_rows, &mut reservation, &metrics)?;
                 let mut hashes_buffer = vec![0; null_rows];
                 create_hashes(&scope_values, &random_state, &mut hashes_buffer)?;
                 map.update_from_iter(Box::new(hashes_buffer.iter().enumerate().rev()), 0);
@@ -3357,10 +3347,15 @@ async fn collect_left_input(
 
     if prepared {
         drop(batches);
+        // Prepared keys are direct columns. IN-list arrays share these batch
+        // buffers, including through multi-key StructArray children.
         let retained = RecordBatchMemoryCounter::new().count_batch(&batch);
-        let allowance = input_bytes + copy_bytes;
-        debug_assert!(retained <= allowance);
-        reservation.shrink(allowance - retained);
+        prepared::reconcile_prepared_copy_reservation(
+            &reservation,
+            input_bytes,
+            copy_bytes,
+            retained,
+        )?;
     }
 
     let data = JoinLeftData {
@@ -3377,7 +3372,6 @@ async fn collect_left_input(
         visited_indices_bitmap: Mutex::new(visited_indices_bitmap),
         null_indices_bitmap: Mutex::new(null_indices_bitmap),
         probe_completion: ProbeCompletion::new(probe_threads_count),
-        _probe_reservation: probe_reservation,
         build_side_has_null: build_has_null,
     };
 

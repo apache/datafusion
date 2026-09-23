@@ -30,7 +30,8 @@ use crate::{
     test::TestMemoryExec,
 };
 use arrow::array::{
-    BooleanArray, FixedSizeBinaryArray, Int64Array, StringArray, StringViewArray,
+    BooleanArray, FixedSizeBinaryArray, Int64Array, NullArray, StringArray,
+    StringViewArray, StructArray,
 };
 use arrow::buffer::Buffer;
 use arrow::compute::kernels::sort::SortOptions;
@@ -695,6 +696,125 @@ fn prepared_concat_admits_validity_for_non_nullable_input_arrays() -> Result<()>
         admitted >= allocated,
         "copy admission {admitted} is smaller than allocated capacity {allocated}"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn prepared_inlist_shares_accounted_build_buffers() -> Result<()> {
+    let build = batch(vec![Some(1), Some(1_000_000), None, Some(1)]);
+    for keys in [1, 2] {
+        let on = (0..keys)
+            .map(|index| {
+                let name = build.schema().field(index).name().clone();
+                let key: PhysicalExprRef = Arc::new(Column::new(&name, index));
+                (Arc::clone(&key), key)
+            })
+            .collect();
+        let base = join(build.schema(), build.clone())?
+            .builder()
+            .with_on(on)
+            .build()?;
+        for batches in [
+            vec![build.clone()],
+            vec![build.slice(0, 2), build.slice(2, 2)],
+        ] {
+            let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1 << 20));
+            let prepared = prepare(&base, batches.clone(), Arc::clone(&pool)).await?;
+            let PushdownStrategy::InList(values) = &prepared.build.membership else {
+                panic!("expected IN-list membership");
+            };
+            let columns = prepared.build.batch.columns();
+            if keys == 1 {
+                assert!(Arc::ptr_eq(values, &columns[0]));
+            } else {
+                let values = values.as_any().downcast_ref::<StructArray>().unwrap();
+                for (value, column) in values.columns().iter().zip(columns) {
+                    assert!(Arc::ptr_eq(value, column));
+                }
+            }
+            let bytes = prepared.reserved_bytes();
+            let mut counter = RecordBatchMemoryCounter::new();
+            let batch_bytes = counter.count_batch(&prepared.build.batch);
+            assert!(bytes > batch_bytes, "hash storage must also be reserved");
+            let membership_batch =
+                RecordBatch::try_from_iter([("membership", Arc::clone(values))])?;
+            assert_eq!(counter.count_batch(&membership_batch), 0);
+            drop(membership_batch);
+
+            // Disabling IN-list membership changes no retained key buffers.
+            let mut config = ConfigOptions::default();
+            config.optimizer.hash_join_inlist_pushdown_max_size = 0;
+            let map = base
+                .prepare_build(
+                    input(batches, build.schema()),
+                    Arc::clone(&pool),
+                    Arc::new(config),
+                )
+                .await?;
+            assert!(matches!(map.build.membership, PushdownStrategy::Map(_)));
+            assert_eq!(map.reserved_bytes(), bytes);
+            assert_eq!(pool.reserved(), 2 * bytes);
+            drop(map);
+            let lease = Arc::clone(&prepared);
+            drop(prepared);
+            assert_eq!(pool.reserved(), bytes);
+            drop(lease);
+            assert_eq!(pool.reserved(), 0);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn prepared_concat_rejects_under_admission_without_shrinking() -> Result<()> {
+    let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1024));
+    let reservation = MemoryConsumer::new("prepared concat test").register(&pool);
+    // 128 bytes of map storage plus 128 bytes of input/copy allowance.
+    reservation.try_grow(256)?;
+    let error =
+        reconcile_prepared_copy_reservation(&reservation, 64, 64, 129).unwrap_err();
+    assert!(matches!(error, DataFusionError::Internal(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("exceeded its admitted copy bound")
+    );
+    assert_eq!(reservation.size(), 256);
+    assert!(reconcile_prepared_copy_reservation(&reservation, usize::MAX, 1, 0).is_err());
+    assert_eq!(reservation.size(), 256);
+    reconcile_prepared_copy_reservation(&reservation, 64, 64, 128)?;
+    assert_eq!(reservation.size(), 256);
+    reconcile_prepared_copy_reservation(&reservation, 64, 64, 80)?;
+    assert_eq!(reservation.size(), 208);
+    drop(reservation);
+    assert_eq!(pool.reserved(), 0);
+    Ok(())
+}
+
+#[test]
+fn prepared_sizing_rejects_overflow() -> Result<()> {
+    use NullEquality::{NullEqualsNothing, NullEqualsNull};
+    for (rows, keys, equality) in [
+        (usize::MAX / 8 + 1, 1, NullEqualsNull),
+        (0, usize::MAX, NullEqualsNothing),
+        (0, usize::MAX / 64, NullEqualsNothing),
+        (usize::MAX / 8, 0, NullEqualsNothing),
+    ] {
+        let error = prepared_scratch_bytes(rows, keys, equality).unwrap_err();
+        assert!(error.to_string().contains("scratch size overflow"));
+    }
+    assert!(prepared_scratch_bytes(usize::MAX / 8, 1, NullEqualsNull).is_ok());
+
+    // Null arrays can describe huge row counts without allocating data buffers.
+    // Exercise both per-batch validity multiplication and cumulative addition.
+    let array: ArrayRef = Arc::new(NullArray::new(usize::MAX));
+    for (columns, batches) in [(8, 1), (4, 2)] {
+        let batch = RecordBatch::try_from_iter(
+            (0..columns).map(|i| (format!("key{i}"), Arc::clone(&array))),
+        )?;
+        let error = prepared_copy_bytes(&vec![batch; batches]).unwrap_err();
+        assert!(error.to_string().contains("copy size overflow"));
+    }
     Ok(())
 }
 

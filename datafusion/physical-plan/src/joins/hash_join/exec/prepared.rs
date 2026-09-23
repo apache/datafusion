@@ -19,6 +19,7 @@
 
 use super::*;
 use crate::spill::spill_manager::GetSlicedSize;
+use datafusion_common::exec_datafusion_err;
 use datafusion_execution::memory_pool::MemoryPool;
 
 /// An immutable, fully prepared broadcast build, independent of any probe task.
@@ -74,7 +75,6 @@ impl PreparedHashJoinBuild {
             visited_indices_bitmap: Mutex::new(BooleanBufferBuilder::new(0)),
             null_indices_bitmap: Mutex::new(BooleanBufferBuilder::new(0)),
             probe_completion: ProbeCompletion::new(probe_threads),
-            _probe_reservation: self.build.reservation.new_empty(),
             build_side_has_null: false,
         }
     }
@@ -211,7 +211,8 @@ impl HashJoinExec {
 /// Bound copy allocations, including validity, offsets and alignment. Aliased
 /// columns count separately because concatenation materializes each column.
 pub(super) fn prepared_copy_bytes(batches: &[RecordBatch]) -> Result<usize> {
-    let mut bytes = 0;
+    let overflow = || exec_datafusion_err!("Prepared hash-join copy size overflow");
+    let mut bytes = 0usize;
     for batch in batches {
         // Concat can materialize validity for an all-valid input when another input
         // contains nulls. Arrow's slice measurement only counts existing bitmaps.
@@ -220,17 +221,73 @@ pub(super) fn prepared_copy_bytes(batches: &[RecordBatch]) -> Result<usize> {
             .iter()
             .filter(|array| array.nulls().is_none())
             .count();
-        bytes +=
-            batch.get_sliced_size()? + batch.num_rows().div_ceil(8) * missing_validity;
+        let validity_bytes = batch
+            .num_rows()
+            .div_ceil(8)
+            .checked_mul(missing_validity)
+            .ok_or_else(overflow)?;
+        bytes = bytes
+            .checked_add(batch.get_sliced_size()?)
+            .and_then(|bytes| bytes.checked_add(validity_bytes))
+            .ok_or_else(overflow)?;
     }
     // These are flat arrays: allow one alignment unit per output buffer,
     // including potential validity. Concat allocates each buffer only once.
     let buffers = batches[0]
         .columns()
         .iter()
-        .map(|array| array.to_data().buffers().len() + 1)
-        .sum::<usize>();
-    Ok(bytes + buffers * 64)
+        .try_fold(0usize, |buffers, array| {
+            buffers
+                .checked_add(array.to_data().buffers().len())
+                .and_then(|buffers| buffers.checked_add(1))
+                .ok_or_else(overflow)
+        })?;
+    buffers
+        .checked_mul(64)
+        .and_then(|padding| bytes.checked_add(padding))
+        .ok_or_else(overflow)
+}
+
+/// Bound hashes and flat-key null masks for the largest input batch.
+pub(super) fn prepared_scratch_bytes(
+    max_batch_rows: usize,
+    num_keys: usize,
+    null_equality: NullEquality,
+) -> Result<usize> {
+    let overflow = || exec_datafusion_err!("Prepared hash-join scratch size overflow");
+    let hash_bytes = max_batch_rows
+        .checked_mul(size_of::<u64>())
+        .ok_or_else(overflow)?;
+    if null_equality == NullEquality::NullEqualsNull {
+        return Ok(hash_bytes);
+    }
+    // Allow one logical null mask per key plus the combined mask.
+    let masks = num_keys.checked_add(1).ok_or_else(overflow)?;
+    let mask_bytes = max_batch_rows
+        .div_ceil(8)
+        .checked_add(64)
+        .and_then(|bytes| bytes.checked_mul(masks))
+        .ok_or_else(overflow)?;
+    hash_bytes.checked_add(mask_bytes).ok_or_else(overflow)
+}
+
+/// Release the unused copy allowance only after validating the retained size.
+pub(super) fn reconcile_prepared_copy_reservation(
+    reservation: &MemoryReservation,
+    input_bytes: usize,
+    copy_bytes: usize,
+    retained: usize,
+) -> Result<()> {
+    let allowance = input_bytes.checked_add(copy_bytes).ok_or_else(|| {
+        exec_datafusion_err!("Prepared hash-join copy allowance size overflow")
+    })?;
+    if retained > allowance {
+        return internal_err!(
+            "Prepared hash-join concat exceeded its admitted copy bound"
+        );
+    }
+    reservation.shrink(allowance - retained);
+    Ok(())
 }
 
 impl HashJoinExecBuilder {
