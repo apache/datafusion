@@ -554,6 +554,83 @@ INSERT INTO <i><b>table_name</i></b> { VALUES ( <i><b>expression</i></b> [, ...]
 </div>
 </section>
 </section>
+<section id="delete">
+<h2>DELETE<a class="headerlink" href="#delete" title="Link to this heading">#</a></h2>
+<p>Removes rows from a table.</p>
+<pre>
+DELETE FROM <i><b>table_name</b></i> [ WHERE <i><b>condition</b></i> ]
+</pre>
+<p><code class="docutils literal notranslate"><span class="pre">DELETE</span></code> returns the number of removed rows in a column named <code class="docutils literal notranslate"><span class="pre">count</span></code>.</p>
+<p>If you omit the <code class="docutils literal notranslate"><span class="pre">WHERE</span></code> clause, DataFusion removes all rows.</p>
+<p>DataFusion removes a row only if the condition is true for that row. SQL three-valued logic applies: if the condition evaluates to <code class="docutils literal notranslate"><span class="pre">NULL</span></code>, the row remains. For example, <code class="docutils literal notranslate"><span class="pre">WHERE</span> <span class="pre">value</span> <span class="pre">&gt;</span> <span class="pre">15</span></code> keeps a row with a <code class="docutils literal notranslate"><span class="pre">NULL</span></code> value, because <code class="docutils literal notranslate"><span class="pre">NULL</span> <span class="pre">&gt;</span> <span class="pre">15</span></code> is <code class="docutils literal notranslate"><span class="pre">NULL</span></code>.</p>
+<p>Not all tables support <code class="docutils literal notranslate"><span class="pre">DELETE</span></code>. See <a class="reference internal" href="#table-support-for-delete-and-update">Table support for DELETE and UPDATE</a>.</p>
+<section id="id2">
+<h3>Examples<a class="headerlink" href="#id2" title="Link to this heading">#</a></h3>
+<p>Remove the rows that match a condition:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">DELETE</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">target_table</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">count</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">     </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+</span>
+</pre></div>
+</div>
+<p>Remove all rows:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">DELETE</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">target_table</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">count</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">3</span><span class="w">     </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="update">
+<h2>UPDATE<a class="headerlink" href="#update" title="Link to this heading">#</a></h2>
+<p>Changes the values of existing rows.</p>
+<pre>
+UPDATE <i><b>table_name</b></i> SET <i><b>column</b></i> = <i><b>expression</b></i> [, ...] [ WHERE <i><b>condition</b></i> ]
+</pre>
+<p><code class="docutils literal notranslate"><span class="pre">UPDATE</span></code> returns the number of affected rows in a column named <code class="docutils literal notranslate"><span class="pre">count</span></code>.</p>
+<p>If you omit the <code class="docutils literal notranslate"><span class="pre">WHERE</span></code> clause, DataFusion changes all rows. The three-valued logic of <code class="docutils literal notranslate"><span class="pre">DELETE</span></code> also applies here.</p>
+<p>Each assignment expression reads the row values from before the statement. <code class="docutils literal notranslate"><span class="pre">SET</span> <span class="pre">a</span> <span class="pre">=</span> <span class="pre">b,</span> <span class="pre">b</span> <span class="pre">=</span> <span class="pre">a</span></code> therefore exchanges the two values.</p>
+<p>Not all tables support <code class="docutils literal notranslate"><span class="pre">UPDATE</span></code>. See <a class="reference internal" href="#table-support-for-delete-and-update">Table support for DELETE and UPDATE</a>.</p>
+<section id="id3">
+<h3>Examples<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<p>Set one column in the rows that match a condition:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">UPDATE</span><span class="w"> </span><span class="n">target_table</span><span class="w"> </span><span class="k">SET</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;Baz&#39;</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">count</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">     </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+</span>
+</pre></div>
+</div>
+<p>Set two columns, one from an expression:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">UPDATE</span><span class="w"> </span><span class="n">target_table</span><span class="w"> </span><span class="k">SET</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;Doubled&#39;</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="k">count</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+</span>
+<span class="o">|</span><span class="w"> </span><span class="mi">2</span><span class="w">     </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-------+</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="table-support-for-delete-and-update">
+<h2>Table support for DELETE and UPDATE<a class="headerlink" href="#table-support-for-delete-and-update" title="Link to this heading">#</a></h2>
+<p>Not all table providers support <code class="docutils literal notranslate"><span class="pre">DELETE</span></code> and <code class="docutils literal notranslate"><span class="pre">UPDATE</span></code>. In-memory tables created with <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">TABLE</span></code> support both statements. File-based tables created with <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code> and views do not. Support for custom table providers depends on the provider.</p>
+<section id="known-limitations">
+<h3>Known limitations<a class="headerlink" href="#known-limitations" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p>Subqueries in <code class="docutils literal notranslate"><span class="pre">DELETE</span></code> and <code class="docutils literal notranslate"><span class="pre">UPDATE</span></code> conditions can affect unintended rows: <a class="reference external" href="https://github.com/apache/datafusion/issues/24654">#24654</a>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">DELETE</span></code> and <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">UPDATE</span></code> can modify in-memory tables: <a class="reference external" href="https://github.com/apache/datafusion/issues/24656">#24656</a>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">DELETE</span></code> ignores <code class="docutils literal notranslate"><span class="pre">LIMIT</span></code>: <a class="reference external" href="https://github.com/apache/datafusion/issues/24998">#24998</a>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">UPDATE</span> <span class="pre">...</span> <span class="pre">FROM</span></code> is not supported: <a class="reference external" href="https://github.com/apache/datafusion/issues/19950">#19950</a>.</p></li>
+</ul>
+</section>
+</section>
 </section>
 
 
@@ -609,6 +686,18 @@ INSERT INTO <i><b>table_name</i></b> { VALUES ( <i><b>expression</i></b> [, ...]
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#insert">INSERT</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">Examples</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#delete">DELETE</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">Examples</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#update">UPDATE</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">Examples</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#table-support-for-delete-and-update">Table support for DELETE and UPDATE</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#known-limitations">Known limitations</a></li>
 </ul>
 </li>
 </ul>
