@@ -295,23 +295,23 @@ impl AggregateStream {
         partition: usize,
     ) -> Result<Self> {
         let agg_schema = Arc::clone(&agg.schema);
-        let agg_filter_expr = Arc::clone(&agg.filter_expr);
+        let agg_filter_expr = agg.clone_filter_exprs();
 
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let input = agg.input.execute(partition, Arc::clone(context))?;
 
-        let aggregate_expressions = aggregate_expressions(&agg.aggr_expr, &agg.mode, 0)?;
+        let aggregate_expressions = aggregate_expressions(agg.aggr_expr(), &agg.mode, 0)?;
         let filter_expressions = match agg.mode.input_mode() {
             AggregateInputMode::Raw => agg_filter_expr,
-            AggregateInputMode::Partial => vec![None; agg.aggr_expr.len()].into(),
+            AggregateInputMode::Partial => vec![None; agg.aggr_expr().len()].into(),
         };
         let aggregate_labels = agg
-            .aggr_expr
+            .aggr_expr()
             .iter()
             .map(|agg_expr| aggregate_metric_label(agg_expr))
             .collect::<Vec<_>>();
         let accumulators = create_accumulators_with_metrics(
-            &agg.aggr_expr,
+            agg.aggr_expr(),
             &aggregate_sub_metrics(
                 &agg.metrics,
                 partition,

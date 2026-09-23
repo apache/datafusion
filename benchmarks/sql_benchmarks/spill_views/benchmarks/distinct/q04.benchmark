@@ -1,0 +1,9 @@
+subgroup distinct
+
+template sql_benchmarks/spill_views/spill_views.benchmark.template
+QPAD=04
+DATASET=distinct
+NAME=q04_sort_string_all_distinct
+SPILL_LIMIT=${SPILL_VIEWS_LIMIT_DISTINCT:-96M}
+VIEW_TYPE=Utf8View
+DISTINCT_S=1000000
