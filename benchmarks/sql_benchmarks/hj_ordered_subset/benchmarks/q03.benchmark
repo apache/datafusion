@@ -1,0 +1,11 @@
+# Control: partitioned join, build side = 1% of the events, scattered over the
+# whole event_id range. The bounds cannot prune anything; only the membership
+# check of the dynamic filter rejects rows.
+subgroup partitioned
+
+template sql_benchmarks/hj_ordered_subset/hj_ordered_subset.benchmark.template
+NAME=Q03_partitioned_scattered_1_pct
+JOIN_MODE=partitioned
+PLAN_MODE=Partitioned
+BUILD_TABLE=labels_by_bucket
+BUILD_FILTER=l.bucket = 42
