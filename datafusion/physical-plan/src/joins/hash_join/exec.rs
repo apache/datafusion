@@ -91,7 +91,9 @@ use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumula
 use datafusion_physical_expr::equivalence::{
     ProjectionMapping, join_equivalence_properties,
 };
-use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::expressions::{
+    Column, DynamicFilterPhysicalExpr, OptionalFilterPhysicalExpr, lit,
+};
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
@@ -1982,9 +1984,13 @@ impl ExecutionPlan for HashJoinExec {
             && self.dynamic_filter.is_none()
             && self.allow_join_dynamic_filter_pushdown(config)
         {
-            // Add actual dynamic filter to right side (probe side)
+            // Add actual dynamic filter to right side (probe side). The join
+            // itself removes the rows that do not match, so the filter is not
+            // needed for correctness: mark the pushed copy as optional.
             let dynamic_filter = Self::create_dynamic_filter(&self.on);
-            right_child = right_child.with_self_filter(dynamic_filter);
+            right_child = right_child.with_self_filter(Arc::new(
+                OptionalFilterPhysicalExpr::new(dynamic_filter),
+            ));
         }
 
         Ok(FilterDescription::new()
@@ -2003,7 +2009,15 @@ impl ExecutionPlan for HashJoinExec {
         let right_child_self_filters = &child_pushdown_result.self_filters[1]; // We only push down filters to the right child
         // We expect 0 or 1 self filters
         if let Some(filter) = right_child_self_filters.first() {
-            let predicate = Arc::clone(&filter.predicate);
+            // The pushed self filter is `Optional(DynamicFilter)`: look through
+            // the wrapper to recover the dynamic filter this join must update.
+            let predicate = match filter
+                .predicate
+                .downcast_ref::<OptionalFilterPhysicalExpr>()
+            {
+                Some(optional) => Arc::clone(optional.inner()),
+                None => Arc::clone(&filter.predicate),
+            };
             if let Ok(dynamic_filter) =
                 Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
             {
@@ -9846,6 +9860,70 @@ mod tests {
             df.expression_id()
                 .expect("DynamicFilterPhysicalExpr always has an expression_id"),
         );
+        Ok(())
+    }
+
+    /// The join pushes its own dynamic filter as `Optional(DynamicFilter)`.
+    /// A key transfer keeps the optionality of the parent filter: an optional
+    /// parent filter stays optional, and a required parent filter stays
+    /// required.
+    #[test]
+    fn test_pushed_dynamic_filters_are_optional() -> Result<()> {
+        use crate::filter_pushdown::PushedDown;
+        use datafusion_physical_expr::utils::{as_dynamic_filter, is_optional_filter};
+
+        let (_, _, on) = build_schema_and_on()?;
+        let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![1]));
+        let right = build_table(("a2", &vec![1]), ("b1", &vec![1]), ("c2", &vec![1]));
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+
+        // Parent filters over the left join key `b1@1`.
+        let left_key: Arc<dyn PhysicalExpr> = Arc::new(Column::new("b1", 1));
+        let parent_dynamic = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&left_key)],
+            lit(true),
+        ));
+        let optional_parent: Arc<dyn PhysicalExpr> = Arc::new(
+            OptionalFilterPhysicalExpr::new(Arc::clone(&parent_dynamic) as _),
+        );
+        let required_parent: Arc<dyn PhysicalExpr> = Arc::clone(&parent_dynamic) as _;
+
+        let mut config = ConfigOptions::default();
+        config.optimizer.enable_join_dynamic_filter_pushdown = true;
+        let description = join.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![optional_parent, required_parent],
+            &config,
+        )?;
+
+        // The self filter goes to the probe side only, and it is optional.
+        let self_filters = description.self_filters();
+        assert!(self_filters[0].is_empty());
+        assert_eq!(self_filters[1].len(), 1);
+        assert!(is_optional_filter(&self_filters[1][0]));
+        assert!(as_dynamic_filter(&self_filters[1][0]).is_some());
+
+        // Both parent filters are transferred to the probe side. The transfer
+        // does not add or remove the `Optional` wrapper.
+        let right_parent_filters = &description.parent_filters()[1];
+        for (pushed, expect_optional) in right_parent_filters.iter().zip([true, false]) {
+            assert!(matches!(pushed.discriminant, PushedDown::Yes));
+            assert_eq!(is_optional_filter(&pushed.predicate), expect_optional);
+            let view = as_dynamic_filter(&pushed.predicate)
+                .expect("the transferred filter should be a dynamic filter view");
+            assert_eq!(view.expression_id(), parent_dynamic.expression_id());
+            assert_eq!(view.children()[0].to_string(), "b1@1");
+        }
         Ok(())
     }
 

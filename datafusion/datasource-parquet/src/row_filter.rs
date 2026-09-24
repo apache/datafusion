@@ -66,8 +66,10 @@
 //! - `WHERE s IS NOT NULL`  — not pushed down (references the whole struct)
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use arrow::array::BooleanArray;
+use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
@@ -77,14 +79,21 @@ use parquet::file::metadata::ParquetMetaData;
 
 use datafusion_common::Result;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::config::OptionalFilterMode;
 use datafusion_common::tree_node::TreeNode;
-use datafusion_physical_expr::utils::reassign_expr_columns;
+use datafusion_physical_expr::optional_filter_gate::{GateDecision, OptionalFilterGate};
+use datafusion_physical_expr::utils::{reassign_expr_columns, split_optional};
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
 
-use datafusion_physical_plan::metrics;
+use datafusion_physical_plan::metrics::{self, ExecutionPlanMetricsSet};
+use parking_lot::Mutex;
 
 use super::ParquetFileMetrics;
 use super::supported_predicates::supports_list_predicates;
+use crate::metrics::OptionalFilterMetrics;
+use crate::optional_filter::{
+    OptionalFilterOptions, OptionalFilterSaving, compressed_bytes_per_row,
+};
 use crate::projection_read_plan::{
     ParquetReadPlan, PushdownChecker, PushdownColumns, assemble_read_plan,
     build_read_plan_with_cast_clipping,
@@ -118,6 +127,50 @@ pub(crate) struct DatafusionArrowPredicate {
     rows_matched: metrics::Count,
     /// how long was spent evaluating this predicate
     time: metrics::Time,
+    /// The gate of an optional filter in [`OptionalFilterMode::Adaptive`].
+    /// `None` for all other filters.
+    gate: Option<SharedOptionalFilterGate>,
+}
+
+/// The [`OptionalFilterGate`] of one optional filter in one file, with its
+/// metrics.
+///
+/// A file can build more than one `RowFilter` (see
+/// [`RowFilterContext::build_row_filter`](crate::push_decoder::RowFilterContext)),
+/// but only one is in use at a time. All of them share this state, thus the
+/// gate keeps its state across row groups.
+#[derive(Debug)]
+pub(crate) struct OptionalFilterGateState {
+    gate: OptionalFilterGate,
+    metrics: OptionalFilterMetrics,
+    /// Value of [`OptionalFilterGate::pauses`] already added to `metrics`.
+    reported_pauses: usize,
+}
+
+type SharedOptionalFilterGate = Arc<Mutex<OptionalFilterGateState>>;
+
+impl OptionalFilterGateState {
+    fn begin_batch(&mut self, num_rows: usize) -> GateDecision {
+        let decision = self.gate.begin_batch(num_rows);
+        if decision == GateDecision::Skip {
+            self.metrics.add_rows_skipped(num_rows);
+        }
+        self.report_pauses();
+        decision
+    }
+
+    fn record(&mut self, rows_in: usize, rows_out: usize, elapsed: Duration) {
+        self.gate.record(rows_in, rows_out, elapsed);
+        self.metrics.add_eval_time(elapsed);
+        self.report_pauses();
+    }
+
+    fn report_pauses(&mut self) {
+        let pauses = self.gate.pauses();
+        self.metrics
+            .add_pauses(pauses.saturating_sub(self.reported_pauses));
+        self.reported_pauses = pauses;
+    }
 }
 
 impl DatafusionArrowPredicate {
@@ -142,6 +195,7 @@ impl DatafusionArrowPredicate {
             rows_pruned,
             rows_matched,
             time,
+            gate: None,
         })
     }
 }
@@ -154,16 +208,33 @@ impl ArrowPredicate for DatafusionArrowPredicate {
     fn evaluate(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray> {
         // scoped timer updates on drop
         let mut timer = self.time.timer();
+        let num_rows = batch.num_rows();
+
+        // An optional filter that the gate skips lets all rows pass.
+        let mut gate = self.gate.as_ref().map(|gate| gate.lock());
+        if let Some(gate) = gate.as_mut()
+            && gate.begin_batch(num_rows) == GateDecision::Skip
+        {
+            self.rows_matched.add(num_rows);
+            timer.stop();
+            return Ok(BooleanArray::new(BooleanBuffer::new_set(num_rows), None));
+        }
+        // The gate measures the evaluation time with its clock.
+        let start = gate.as_ref().map(|gate| gate.gate.clock().now_nanos());
 
         self.physical_expr
             .evaluate(&batch)
-            .and_then(|v| v.into_array(batch.num_rows()))
+            .and_then(|v| v.into_array(num_rows))
             .and_then(|array| {
                 let bool_arr = as_boolean_array(&array)?.clone();
                 let num_matched = bool_arr.true_count();
                 let num_pruned = bool_arr.len() - num_matched;
                 self.rows_pruned.add(num_pruned);
                 self.rows_matched.add(num_matched);
+                if let (Some(gate), Some(start)) = (gate.as_mut(), start) {
+                    let elapsed = gate.gate.clock().now_nanos().saturating_sub(start);
+                    gate.record(num_rows, num_matched, Duration::from_nanos(elapsed));
+                }
                 timer.stop();
                 Ok(bool_arr)
             })
@@ -433,7 +504,11 @@ pub fn build_row_filter(
     // that splits conjuncts, orders candidates, and wires metrics — callers
     // that build once per file go through the same code as the per-row-group
     // rebuild path in `RowFilterContext`.
-    let Some(prebuilt) = prebuild_row_filter_candidates(expr, file_schema, metadata)?
+    //
+    // Optional conjuncts are used like all other conjuncts here (the
+    // `always` optional filter mode).
+    let Some(prebuilt) =
+        prebuild_row_filter_candidates(expr, file_schema, metadata, None)?
     else {
         return Ok(None);
     };
@@ -466,12 +541,49 @@ pub(crate) struct PrebuiltRowFilterCandidate {
     /// `reorder_predicates` is enabled. Stable across row groups within a
     /// file, so we cache it once.
     required_bytes: usize,
+    /// The gate of an optional filter in [`OptionalFilterMode::Adaptive`],
+    /// shared by all `RowFilter`s built for the file. `None` for all other
+    /// filters.
+    gate: Option<SharedOptionalFilterGate>,
+    /// The measured saving that the gate reads, if the output projection of
+    /// the file is known. See [`crate::optional_filter`].
+    saving: Option<OptionalFilterSaving>,
 }
 
 impl PrebuiltRowFilterCandidate {
     pub(crate) fn reads_leaf(&self, leaf_idx: usize) -> bool {
         self.projection_mask.leaf_included(leaf_idx)
     }
+
+    /// The measured saving of a gated optional filter.
+    pub(crate) fn optional_saving(&self) -> Option<&OptionalFilterSaving> {
+        self.saving.as_ref()
+    }
+
+    /// True if this is a gated optional filter.
+    pub(crate) fn is_optional(&self) -> bool {
+        self.gate.is_some()
+    }
+}
+
+/// What [`prebuild_row_filter_candidates`] needs to handle optional
+/// conjuncts (conjuncts wrapped in an `OptionalFilterPhysicalExpr`) for one
+/// file.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct OptionalFilterRowFilterContext<'a> {
+    /// The optional filter settings of the scan.
+    pub(crate) options: &'a OptionalFilterOptions,
+    /// Metrics of the scan, for the lazily-registered gate metrics.
+    pub(crate) metrics: &'a ExecutionPlanMetricsSet,
+    /// Execution partition index.
+    pub(crate) partition: usize,
+    /// Name of the file.
+    pub(crate) filename: &'a str,
+    /// The columns that the decoder produces for the file. The gates use it
+    /// to estimate the decode time that a removed row saves (see
+    /// [`crate::optional_filter`]). If `None`, the gates use only the
+    /// configured minimum saving.
+    pub(crate) output_projection: Option<&'a ProjectionMask>,
 }
 
 /// Precompute the list of [`PrebuiltRowFilterCandidate`]s for a predicate.
@@ -485,51 +597,171 @@ impl PrebuiltRowFilterCandidate {
 ///
 /// Returns `Ok(None)` when the predicate has no push-downable conjuncts, in
 /// which case callers should skip installing a `RowFilter` entirely.
+///
+/// # Optional conjuncts
+///
+/// `optional` controls the conjuncts of the root `AND` chain that are
+/// wrapped in an `OptionalFilterPhysicalExpr` (see
+/// [`split_optional`]). The other (required) conjuncts are always used.
+///
+/// * `None` or [`OptionalFilterMode::Always`]: optional conjuncts are used
+///   like required conjuncts (the `OptionalFilterPhysicalExpr` wrapper is
+///   transparent).
+/// * [`OptionalFilterMode::PruningOnly`]: optional conjuncts are not used.
+///   Statistics pruning still uses them, because it uses the complete
+///   predicate.
+/// * [`OptionalFilterMode::Adaptive`]: each optional conjunct is a separate
+///   candidate with an [`OptionalFilterGate`], which skips the conjunct while
+///   it removes too few rows. Optional candidates come after all required
+///   candidates, see [`row_filter_from_prebuilt`].
+///
+/// A conjunct that cannot be evaluated as an `ArrowPredicate` for this file
+/// (for example because of schema evolution) is not used. For an optional
+/// conjunct this is always safe.
 pub(crate) fn prebuild_row_filter_candidates(
     expr: &Arc<dyn PhysicalExpr>,
     file_schema: &SchemaRef,
     metadata: &ParquetMetaData,
+    optional: Option<OptionalFilterRowFilterContext<'_>>,
 ) -> Result<Option<Vec<PrebuiltRowFilterCandidate>>> {
+    let mode = optional.map_or(OptionalFilterMode::Always, |o| o.options.mode);
+
     // Split into conjuncts:
     // `a = 1 AND b = 2 AND c = 3` -> [`a = 1`, `b = 2`, `c = 3`]
-    let predicates = split_conjunction(expr);
-    let candidates: Vec<FilterCandidate> = predicates
-        .into_iter()
-        .map(|expr| {
-            FilterCandidateBuilder::new(Arc::clone(expr), Arc::clone(file_schema))
-                .build(metadata)
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .collect();
+    let (required, optional_conjuncts) = match mode {
+        OptionalFilterMode::Always => (
+            split_conjunction(expr)
+                .into_iter()
+                .map(Arc::clone)
+                .collect(),
+            vec![],
+        ),
+        OptionalFilterMode::PruningOnly => (split_optional(expr).0, vec![]),
+        OptionalFilterMode::Adaptive => split_optional(expr),
+    };
 
-    if candidates.is_empty() {
-        return Ok(None);
+    let mut prebuilt = Vec::with_capacity(required.len() + optional_conjuncts.len());
+    for conjunct in required {
+        if let Some(candidate) =
+            FilterCandidateBuilder::new(conjunct, Arc::clone(file_schema))
+                .build(metadata)?
+        {
+            prebuilt.push(PrebuiltRowFilterCandidate::try_new(candidate)?);
+        }
     }
 
-    let prebuilt: Vec<PrebuiltRowFilterCandidate> = candidates
-        .into_iter()
-        .map(|candidate| {
-            let physical_expr = reassign_expr_columns(
-                Arc::clone(&candidate.expr),
-                &candidate.read_plan.projected_schema,
-            )?;
-            Ok(PrebuiltRowFilterCandidate {
-                physical_expr,
-                projection_mask: candidate.read_plan.projection_mask.clone(),
-                required_bytes: candidate.required_bytes,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
+    if let Some(optional) = optional {
+        let file_optional_count = optional_conjuncts.len();
+        for (position, conjunct) in optional_conjuncts.into_iter().enumerate() {
+            let site =
+                optional
+                    .options
+                    .site_for(&conjunct, position, file_optional_count);
+            // An optional conjunct that cannot be pushed down for this file
+            // (or that fails to build) is not needed for correctness, thus it
+            // is simply not used.
+            let candidate =
+                match FilterCandidateBuilder::new(conjunct, Arc::clone(file_schema))
+                    .build(metadata)
+                {
+                    Ok(Some(candidate)) => candidate,
+                    Ok(None) => continue,
+                    Err(e) => {
+                        log::debug!(
+                            "Ignoring optional filter that cannot be pushed down: {e}"
+                        );
+                        continue;
+                    }
+                };
+            let mut candidate = PrebuiltRowFilterCandidate::try_new(candidate)?;
+            // The gate watches the dynamic filters in the same (live)
+            // expression that the predicate evaluates, thus it sees their
+            // updates.
+            let mut gate = OptionalFilterGate::new(
+                Arc::clone(&candidate.physical_expr),
+                site,
+                optional.options.gate_config,
+            );
+            // A removed row saves the decode of the output columns that the
+            // filter does not read.
+            if let Some(output) = optional.output_projection {
+                let unread_bytes_per_row = compressed_bytes_per_row(metadata, |leaf| {
+                    output.leaf_included(leaf)
+                        && !candidate.projection_mask.leaf_included(leaf)
+                });
+                let saving = OptionalFilterSaving::new(
+                    unread_bytes_per_row,
+                    optional.options.sites.decode_cost(),
+                );
+                gate = gate.with_measured_saving(Arc::clone(&saving.saving));
+                candidate.saving = Some(saving);
+            }
+            candidate.gate = Some(Arc::new(Mutex::new(OptionalFilterGateState {
+                gate,
+                metrics: OptionalFilterMetrics::new(
+                    optional.metrics,
+                    optional.partition,
+                    optional.filename,
+                ),
+                reported_pauses: 0,
+            })));
+            prebuilt.push(candidate);
+        }
+    }
 
+    if prebuilt.is_empty() {
+        return Ok(None);
+    }
     Ok(Some(prebuilt))
+}
+
+impl PrebuiltRowFilterCandidate {
+    /// A candidate without a gate. Its expression is column-reassigned to
+    /// the projected schema of the candidate.
+    fn try_new(candidate: FilterCandidate) -> Result<Self> {
+        let physical_expr =
+            reassign_expr_columns(candidate.expr, &candidate.read_plan.projected_schema)?;
+        Ok(Self {
+            physical_expr,
+            projection_mask: candidate.read_plan.projection_mask,
+            required_bytes: candidate.required_bytes,
+            gate: None,
+            saving: None,
+        })
+    }
+}
+
+/// Returns the candidates in evaluation order: the order of `prebuilt`, or
+/// ordered by `required_bytes` if `reorder_predicates` is true. Gated
+/// optional candidates always come last (see [`row_filter_from_prebuilt`]).
+fn order_candidates(
+    prebuilt: &[PrebuiltRowFilterCandidate],
+    reorder_predicates: bool,
+) -> Vec<&PrebuiltRowFilterCandidate> {
+    // Collect references into a working list we can sort without disturbing
+    // the shared cache.
+    let mut ordered: Vec<&PrebuiltRowFilterCandidate> = prebuilt.iter().collect();
+    if reorder_predicates {
+        ordered.sort_unstable_by_key(|c| (c.is_optional(), c.required_bytes));
+    } else {
+        // `prebuild_row_filter_candidates` already puts the optional
+        // candidates last. A stable sort keeps the other order.
+        ordered.sort_by_key(|c| c.is_optional());
+    }
+    ordered
 }
 
 /// Wrap a list of prebuilt candidates into a fresh [`RowFilter`], assigning
 /// per-predicate metric counters and (optionally) reordering by
 /// `required_bytes`. This is the cheap per-row-group rebuild path — no tree
 /// walks, no column resolution, only counter allocation.
+///
+/// Gated optional candidates (see [`prebuild_row_filter_candidates`]) always
+/// come after the required candidates, also when `reorder_predicates` is
+/// true. The required candidates must run in all cases. When they run first,
+/// the optional candidates see only the rows that the required candidates
+/// let pass: the gate then measures the selectivity that the optional filter
+/// adds, and a skipped optional filter costs nothing.
 pub(crate) fn row_filter_from_prebuilt(
     prebuilt: &[PrebuiltRowFilterCandidate],
     reorder_predicates: bool,
@@ -539,13 +771,7 @@ pub(crate) fn row_filter_from_prebuilt(
     let rows_matched = &file_metrics.pushdown_rows_matched;
     let time = &file_metrics.row_pushdown_eval_time;
 
-    // Clone (cheap: Arc bumps + ProjectionMask clone) into a working list we
-    // can sort without disturbing the shared cache.
-    let mut ordered: Vec<&PrebuiltRowFilterCandidate> = prebuilt.iter().collect();
-    if reorder_predicates {
-        ordered.sort_unstable_by_key(|c| c.required_bytes);
-    }
-
+    let ordered = order_candidates(prebuilt, reorder_predicates);
     let total = ordered.len();
     let filters: Vec<Box<dyn ArrowPredicate>> = ordered
         .into_iter()
@@ -564,6 +790,7 @@ pub(crate) fn row_filter_from_prebuilt(
                 rows_pruned: predicate_rows_pruned,
                 rows_matched: predicate_rows_matched,
                 time: time.clone(),
+                gate: candidate.gate.clone(),
             }) as Box<dyn ArrowPredicate>
         })
         .collect();
@@ -2126,5 +2353,583 @@ mod test {
         );
         assert_eq!(file_metrics.pushdown_rows_pruned.value(), 2);
         assert_eq!(file_metrics.pushdown_rows_matched.value(), 2);
+    }
+}
+
+#[cfg(test)]
+mod optional_filter_tests {
+    use super::*;
+    use crate::optional_filter::OptionalFilterOptions;
+    use arrow::array::{Array, Int32Array, StructArray};
+    use arrow::datatypes::{DataType, Field, Fields};
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::conjunction;
+    use datafusion_physical_expr::expressions::{
+        BinaryExpr, DynamicFilterPhysicalExpr, IsNotNullExpr, OptionalFilterPhysicalExpr,
+        col, lit,
+    };
+    use datafusion_physical_expr::optional_filter_gate::OptionalFilterGateConfig;
+    use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
+    use datafusion_physical_expr_adapter::{
+        DefaultPhysicalExprAdapterFactory, PhysicalExprAdapterFactory,
+    };
+    use parquet::arrow::ArrowWriter;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::file::properties::WriterProperties;
+    use tempfile::NamedTempFile;
+
+    const NUM_ROWS: usize = 10_000;
+    const FILENAME: &str = "test.parquet";
+
+    /// A file with `a` (many distinct values: the largest column), `b`
+    /// (`i % 10`), `c` (`(i / 10) % 10`) and a struct column `s`.
+    fn test_file() -> (NamedTempFile, Arc<ParquetMetaData>, SchemaRef) {
+        let s_fields = Fields::from(vec![Field::new("x", DataType::Int32, true)]);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+            Field::new("s", DataType::Struct(s_fields.clone()), true),
+        ]));
+        let a: Int32Array = (0..NUM_ROWS as i32).map(|i| i * 7919).collect();
+        let b: Int32Array = (0..NUM_ROWS as i32).map(|i| i % 10).collect();
+        let c: Int32Array = (0..NUM_ROWS as i32).map(|i| (i / 10) % 10).collect();
+        let s = StructArray::new(
+            s_fields,
+            vec![Arc::new(Int32Array::from(vec![1; NUM_ROWS])) as _],
+            None,
+        );
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(a), Arc::new(b), Arc::new(c), Arc::new(s)],
+        )
+        .unwrap();
+        let file = NamedTempFile::new().unwrap();
+        // Dictionary encoding makes `b` and `c` much smaller than `a`.
+        let props = WriterProperties::builder()
+            .set_dictionary_enabled(true)
+            .build();
+        let mut writer = ArrowWriter::try_new(
+            file.reopen().unwrap(),
+            Arc::clone(&schema),
+            Some(props),
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new(file.reopen().unwrap()).unwrap();
+        let metadata = Arc::clone(builder.metadata());
+        let file_schema = Arc::clone(builder.schema());
+        (file, metadata, file_schema)
+    }
+
+    fn optional(inner: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
+        Arc::new(OptionalFilterPhysicalExpr::new(inner))
+    }
+
+    fn binary(
+        left: Arc<dyn PhysicalExpr>,
+        op: Operator,
+        right: Arc<dyn PhysicalExpr>,
+    ) -> Arc<dyn PhysicalExpr> {
+        Arc::new(BinaryExpr::new(left, op, right))
+    }
+
+    fn col_op(
+        name: &str,
+        op: Operator,
+        value: i32,
+        schema: &Schema,
+    ) -> Arc<dyn PhysicalExpr> {
+        binary(
+            col(name, schema).unwrap(),
+            op,
+            lit(ScalarValue::Int32(Some(value))),
+        )
+    }
+
+    /// Options with a very large `min_saving_ns_per_row`: the cost check of
+    /// the gates (which uses the wall clock) never pauses a filter that
+    /// removes rows, thus the tests are deterministic. See
+    /// [`options_with_saving`].
+    fn options(
+        mode: OptionalFilterMode,
+        predicate: &Arc<dyn PhysicalExpr>,
+    ) -> OptionalFilterOptions {
+        options_with_saving(mode, predicate, 1e9)
+    }
+
+    fn options_with_saving(
+        mode: OptionalFilterMode,
+        predicate: &Arc<dyn PhysicalExpr>,
+        min_saving_ns_per_row: f64,
+    ) -> OptionalFilterOptions {
+        OptionalFilterOptions::new(
+            mode,
+            OptionalFilterGateConfig {
+                min_saving_ns_per_row,
+                ..Default::default()
+            },
+            Arc::default(),
+            Some(predicate),
+        )
+    }
+
+    fn context<'a>(
+        options: &'a OptionalFilterOptions,
+        metrics: &'a ExecutionPlanMetricsSet,
+    ) -> Option<OptionalFilterRowFilterContext<'a>> {
+        Some(OptionalFilterRowFilterContext {
+            options,
+            metrics,
+            partition: 0,
+            filename: FILENAME,
+            output_projection: None,
+        })
+    }
+
+    fn prebuild(
+        predicate: &Arc<dyn PhysicalExpr>,
+        file_schema: &SchemaRef,
+        metadata: &ParquetMetaData,
+        options: &OptionalFilterOptions,
+        metrics: &ExecutionPlanMetricsSet,
+    ) -> Vec<PrebuiltRowFilterCandidate> {
+        prebuild_row_filter_candidates(
+            predicate,
+            file_schema,
+            metadata,
+            context(options, metrics),
+        )
+        .unwrap()
+        .unwrap_or_default()
+    }
+
+    /// `(expression, is_optional)` of each candidate, in evaluation order.
+    fn describe(
+        candidates: &[PrebuiltRowFilterCandidate],
+        reorder: bool,
+    ) -> Vec<(String, bool)> {
+        order_candidates(candidates, reorder)
+            .into_iter()
+            .map(|c| (c.physical_expr.to_string(), c.is_optional()))
+            .collect()
+    }
+
+    fn entry(expr: &str, optional: bool) -> (String, bool) {
+        (expr.to_string(), optional)
+    }
+
+    #[test]
+    fn candidates_for_each_mode() {
+        let (_file, metadata, file_schema) = test_file();
+        let metrics = ExecutionPlanMetricsSet::new();
+        // Optional(b > 3) AND a > 5 AND Optional(c < 10)
+        let predicate = conjunction([
+            optional(col_op("b", Operator::Gt, 3, &file_schema)),
+            col_op("a", Operator::Gt, 5, &file_schema),
+            optional(col_op("c", Operator::Lt, 10, &file_schema)),
+        ]);
+
+        // always: the same candidates as without optional filter handling.
+        let options_always = options(OptionalFilterMode::Always, &predicate);
+        let candidates = prebuild(
+            &predicate,
+            &file_schema,
+            &metadata,
+            &options_always,
+            &metrics,
+        );
+        assert_eq!(
+            describe(&candidates, false),
+            vec![
+                entry("Optional(b@0 > 3)", false),
+                entry("a@0 > 5", false),
+                entry("Optional(c@0 < 10)", false),
+            ]
+        );
+        let without_context =
+            prebuild_row_filter_candidates(&predicate, &file_schema, &metadata, None)
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            describe(&without_context, false),
+            describe(&candidates, false)
+        );
+
+        // pruning_only: only the required conjunct.
+        let options_pruning = options(OptionalFilterMode::PruningOnly, &predicate);
+        let candidates = prebuild(
+            &predicate,
+            &file_schema,
+            &metadata,
+            &options_pruning,
+            &metrics,
+        );
+        assert_eq!(describe(&candidates, false), vec![entry("a@0 > 5", false)]);
+
+        // pruning_only with optional conjuncts only: no row filter.
+        let only_optional = optional(col_op("b", Operator::Gt, 3, &file_schema));
+        let prebuilt = prebuild_row_filter_candidates(
+            &only_optional,
+            &file_schema,
+            &metadata,
+            context(&options_pruning, &metrics),
+        )
+        .unwrap();
+        assert!(prebuilt.is_none());
+
+        // adaptive: required first, then each optional inner with a gate.
+        let options_adaptive = options(OptionalFilterMode::Adaptive, &predicate);
+        let candidates = prebuild(
+            &predicate,
+            &file_schema,
+            &metadata,
+            &options_adaptive,
+            &metrics,
+        );
+        assert_eq!(
+            describe(&candidates, false),
+            vec![
+                entry("a@0 > 5", false),
+                entry("b@0 > 3", true),
+                entry("c@0 < 10", true),
+            ]
+        );
+        assert_eq!(options_adaptive.sites.len(), 2);
+    }
+
+    #[test]
+    fn optional_candidates_stay_last_when_reordered() {
+        let (_file, metadata, file_schema) = test_file();
+        let metrics = ExecutionPlanMetricsSet::new();
+        // `a` is the largest column, thus a reorder puts it last among the
+        // required conjuncts. The optional conjunct on the small column `b`
+        // still comes after all required conjuncts.
+        let predicate = conjunction([
+            optional(col_op("b", Operator::Gt, 3, &file_schema)),
+            col_op("a", Operator::Gt, 5, &file_schema),
+            col_op("c", Operator::Lt, 10, &file_schema),
+        ]);
+        let options = options(OptionalFilterMode::Adaptive, &predicate);
+        let candidates =
+            prebuild(&predicate, &file_schema, &metadata, &options, &metrics);
+        assert_eq!(
+            describe(&candidates, true),
+            vec![
+                entry("c@0 < 10", false),
+                entry("a@0 > 5", false),
+                entry("b@0 > 3", true),
+            ]
+        );
+        assert_eq!(
+            describe(&candidates, false),
+            vec![
+                entry("a@0 > 5", false),
+                entry("c@0 < 10", false),
+                entry("b@0 > 3", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejected_optional_conjunct_is_dropped() {
+        let (_file, metadata, file_schema) = test_file();
+        let metrics = ExecutionPlanMetricsSet::new();
+        // A filter on a whole struct column cannot be pushed down.
+        let struct_filter: Arc<dyn PhysicalExpr> =
+            Arc::new(IsNotNullExpr::new(col("s", &file_schema).unwrap()));
+        let predicate = conjunction([
+            col_op("a", Operator::Gt, 5, &file_schema),
+            optional(struct_filter),
+            optional(col_op("b", Operator::Gt, 3, &file_schema)),
+        ]);
+        let options = options(OptionalFilterMode::Adaptive, &predicate);
+        let candidates =
+            prebuild(&predicate, &file_schema, &metadata, &options, &metrics);
+        assert_eq!(
+            describe(&candidates, false),
+            vec![entry("a@0 > 5", false), entry("b@0 > 3", true)]
+        );
+    }
+
+    /// Read the file with a `RowFilter` from `candidates`, in batches of 100
+    /// rows. Returns the number of output rows.
+    fn read_with_row_filter(
+        file: &NamedTempFile,
+        candidates: &[PrebuiltRowFilterCandidate],
+        file_metrics: &ParquetFileMetrics,
+    ) -> usize {
+        let row_filter = row_filter_from_prebuilt(candidates, false, file_metrics);
+        let reader = ParquetRecordBatchReaderBuilder::try_new(file.reopen().unwrap())
+            .unwrap()
+            .with_batch_size(100)
+            .with_row_filter(row_filter)
+            .build()
+            .unwrap();
+        reader.map(|batch| batch.unwrap().num_rows()).sum()
+    }
+
+    fn metric(metrics: &ExecutionPlanMetricsSet, name: &str) -> usize {
+        metrics
+            .clone_inner()
+            .sum_by_name(name)
+            .map_or(0, |v| v.as_usize())
+    }
+
+    #[test]
+    fn adaptive_pauses_non_selective_optional_filter() {
+        let (file, metadata, file_schema) = test_file();
+        // 90% of the rows pass `b >= 1`: more than the default
+        // `max_pass_ratio` (0.8), thus the gate pauses the filter.
+        let predicate = optional(col_op("b", Operator::GtEq, 1, &file_schema));
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let file_metrics = ParquetFileMetrics::new(0, FILENAME, &metrics);
+        let options_always = options(OptionalFilterMode::Always, &predicate);
+        let candidates = prebuild(
+            &predicate,
+            &file_schema,
+            &metadata,
+            &options_always,
+            &metrics,
+        );
+        let rows_always = read_with_row_filter(&file, &candidates, &file_metrics);
+        assert_eq!(rows_always, NUM_ROWS * 9 / 10);
+        assert_eq!(metric(&metrics, "optional_filter_rows_skipped"), 0);
+        assert_eq!(metric(&metrics, "optional_filter_pauses"), 0);
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let file_metrics = ParquetFileMetrics::new(0, FILENAME, &metrics);
+        let options_adaptive = options(OptionalFilterMode::Adaptive, &predicate);
+        let candidates = prebuild(
+            &predicate,
+            &file_schema,
+            &metadata,
+            &options_adaptive,
+            &metrics,
+        );
+        let rows_adaptive = read_with_row_filter(&file, &candidates, &file_metrics);
+
+        let skipped = metric(&metrics, "optional_filter_rows_skipped");
+        assert!(skipped > 0, "expected skipped rows");
+        assert!(metric(&metrics, "optional_filter_pauses") > 0);
+        // Skipped rows pass without evaluation. 10% of them are rows that
+        // `always` removes.
+        assert_eq!(rows_adaptive, rows_always + skipped / 10);
+        assert_eq!(file_metrics.pushdown_rows_matched.value(), rows_adaptive);
+
+        // The pooled statistics of the site now say "paused": the gate for
+        // the next file starts paused.
+        let candidates = prebuild(
+            &predicate,
+            &file_schema,
+            &metadata,
+            &options_adaptive,
+            &metrics,
+        );
+        let gate = candidates[0].gate.as_ref().unwrap();
+        assert!(gate.lock().gate.is_paused());
+    }
+
+    #[test]
+    fn adaptive_keeps_selective_optional_filter() {
+        let (file, metadata, file_schema) = test_file();
+        // 10% of the rows pass `b = 1`.
+        let predicate = optional(col_op("b", Operator::Eq, 1, &file_schema));
+        let metrics = ExecutionPlanMetricsSet::new();
+        let file_metrics = ParquetFileMetrics::new(0, FILENAME, &metrics);
+        let options = options(OptionalFilterMode::Adaptive, &predicate);
+        let candidates =
+            prebuild(&predicate, &file_schema, &metadata, &options, &metrics);
+        let rows = read_with_row_filter(&file, &candidates, &file_metrics);
+        assert_eq!(rows, NUM_ROWS / 10);
+        assert_eq!(metric(&metrics, "optional_filter_rows_skipped"), 0);
+        assert_eq!(metric(&metrics, "optional_filter_pauses"), 0);
+    }
+
+    /// The cost check pauses a selective optional filter that costs more
+    /// than it saves. With no output projection (thus no measured saving)
+    /// and `min_saving_ns_per_row = 0`, a removed row saves nothing and any
+    /// evaluation time is too much: the gate pauses `b = 1` although it
+    /// keeps only 10% of the rows.
+    #[test]
+    fn adaptive_pauses_expensive_optional_filter() {
+        let (file, metadata, file_schema) = test_file();
+        let predicate = optional(col_op("b", Operator::Eq, 1, &file_schema));
+        let metrics = ExecutionPlanMetricsSet::new();
+        let file_metrics = ParquetFileMetrics::new(0, FILENAME, &metrics);
+        let options = options_with_saving(OptionalFilterMode::Adaptive, &predicate, 0.0);
+        let candidates =
+            prebuild(&predicate, &file_schema, &metadata, &options, &metrics);
+        let rows = read_with_row_filter(&file, &candidates, &file_metrics);
+        let skipped = metric(&metrics, "optional_filter_rows_skipped");
+        assert!(skipped > 0, "expected skipped rows");
+        assert!(metric(&metrics, "optional_filter_pauses") > 0);
+        assert!(metric(&metrics, "optional_filter_eval_time") > 0);
+        // Skipped rows pass without evaluation.
+        assert_eq!(rows, NUM_ROWS / 10 + skipped * 9 / 10);
+    }
+
+    /// With the output projection of the file, the gate of an optional
+    /// filter adds the decode time of the output columns that the filter
+    /// does not read to the configured minimum saving.
+    #[test]
+    fn saving_includes_decode_of_unread_output_columns() {
+        use crate::optional_filter::{
+            DEFAULT_DECODE_NS_PER_BYTE, OptionalFilterSavings, compressed_bytes_per_row,
+        };
+        let (_file, metadata, file_schema) = test_file();
+        // The output columns are `a`, `b` and `c` (leaves 0, 1 and 2). The
+        // optional filter reads `b`.
+        let output =
+            ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [0, 1, 2]);
+        let predicate = optional(col_op("b", Operator::Eq, 1, &file_schema));
+        let metrics = ExecutionPlanMetricsSet::new();
+        let options = options_with_saving(OptionalFilterMode::Adaptive, &predicate, 5.0);
+        let mut context = context(&options, &metrics).unwrap();
+        context.output_projection = Some(&output);
+        let candidates = prebuild_row_filter_candidates(
+            &predicate,
+            &file_schema,
+            &metadata,
+            Some(context),
+        )
+        .unwrap()
+        .unwrap();
+        let saving = candidates[0].optional_saving().unwrap();
+        let rows = NUM_ROWS as f64;
+        let column_bytes =
+            |leaf: usize| metadata.row_group(0).column(leaf).compressed_size() as f64;
+        let unread = (column_bytes(0) + column_bytes(2)) / rows;
+        assert!(unread > 0.0);
+        assert_eq!(saving.unread_bytes_per_row, unread);
+        assert_eq!(
+            compressed_bytes_per_row(&metadata, |leaf| leaf == 0 || leaf == 2),
+            unread
+        );
+        // Before any measurement: the default decode speed.
+        let gate = candidates[0].gate.as_ref().unwrap();
+        let expected = 5.0 + DEFAULT_DECODE_NS_PER_BYTE * unread;
+        assert!((gate.lock().gate.saving_ns_per_row() - expected).abs() < 1e-9);
+
+        // Output batches of 1000 rows that take 4 ns for each compressed
+        // byte of the output columns.
+        let output_bytes = (column_bytes(0) + column_bytes(1) + column_bytes(2)) / rows;
+        let savings = OptionalFilterSavings::try_new(
+            Arc::clone(options.sites.decode_cost()),
+            &metadata,
+            &output,
+            vec![saving.clone()],
+        )
+        .unwrap();
+        let nanos = (4.0 * 1000.0 * output_bytes) as u64;
+        savings.record_output_batch(1000, Duration::from_nanos(nanos));
+        let ns_per_byte = options.sites.decode_cost().ns_per_byte();
+        assert!((ns_per_byte - 4.0).abs() < 0.01, "{ns_per_byte}");
+        let expected = 5.0 + ns_per_byte * unread;
+        assert!((gate.lock().gate.saving_ns_per_row() - expected).abs() < 1e-9);
+
+        // No gated optional filter: nothing to measure.
+        assert!(
+            OptionalFilterSavings::try_new(
+                Arc::clone(options.sites.decode_cost()),
+                &metadata,
+                &output,
+                vec![],
+            )
+            .is_none()
+        );
+    }
+
+    /// The per-file rewrite (schema adaptation and simplification) keeps
+    /// the `Optional` wrapper on the root AND chain, and a dynamic filter in
+    /// it stays live in the row filter: the gate sees its updates.
+    #[test]
+    fn optional_dynamic_filter_survives_rewrite_and_stays_live() {
+        let (_file, metadata, file_schema) = test_file();
+        // The table has `b` as Int64 and the file has Int32: the adapter
+        // inserts a cast.
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int64, false),
+        ]));
+        let b = col("b", &table_schema).unwrap();
+        let b_gt = |value: i64| {
+            binary(
+                Arc::clone(&b),
+                Operator::Gt,
+                lit(ScalarValue::Int64(Some(value))),
+            )
+        };
+        let dynamic = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&b)],
+            b_gt(0),
+        ));
+        let predicate = conjunction([
+            col_op("a", Operator::Gt, 5, &table_schema),
+            optional(Arc::clone(&dynamic) as Arc<dyn PhysicalExpr>),
+        ]);
+
+        let rewriter = DefaultPhysicalExprAdapterFactory
+            .create(Arc::clone(&table_schema), Arc::clone(&file_schema))
+            .unwrap();
+        let simplifier = PhysicalExprSimplifier::new(&file_schema);
+        let rewritten = simplifier
+            .simplify(rewriter.rewrite(Arc::clone(&predicate)).unwrap())
+            .unwrap();
+        let (required, optional_filters) = split_optional(&rewritten);
+        assert_eq!(required.len(), 1);
+        assert_eq!(optional_filters.len(), 1);
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let options = options(OptionalFilterMode::Adaptive, &predicate);
+        let candidates =
+            prebuild(&rewritten, &file_schema, &metadata, &options, &metrics);
+        assert_eq!(candidates.len(), 2);
+        let optional_candidate = candidates.iter().find(|c| c.is_optional()).unwrap();
+        let gate = optional_candidate.gate.as_ref().unwrap();
+
+        // Pause the gate with non-selective batches.
+        {
+            let mut state = gate.lock();
+            for _ in 0..10 {
+                if state.gate.is_paused() {
+                    break;
+                }
+                assert_eq!(state.gate.begin_batch(100), GateDecision::Evaluate);
+                state.gate.record(100, 100, Duration::ZERO);
+            }
+            assert!(state.gate.is_paused());
+        }
+
+        // The gate sees an update of the original dynamic filter: the pause
+        // ends at once. The row filter evaluates the new expression.
+        dynamic.update(b_gt(4)).unwrap();
+        {
+            let mut state = gate.lock();
+            assert_eq!(state.gate.begin_batch(100), GateDecision::Evaluate);
+            assert!(!state.gate.is_paused());
+        }
+
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, false)])),
+            vec![Arc::new(Int32Array::from(vec![3, 4, 5]))],
+        )
+        .unwrap();
+        let result = optional_candidate
+            .physical_expr
+            .evaluate(&batch)
+            .unwrap()
+            .into_array(3)
+            .unwrap();
+        let result = as_boolean_array(&result).unwrap();
+        assert_eq!(result.null_count(), 0);
+        assert_eq!(
+            result.iter().collect::<Vec<_>>(),
+            vec![Some(false), Some(false), Some(true)]
+        );
     }
 }

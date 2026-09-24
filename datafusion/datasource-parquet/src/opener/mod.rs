@@ -26,11 +26,13 @@ use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
+use crate::optional_filter::OptionalFilterOptions;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
     DecoderBuilderConfig, InitialDecoderState, PushDecoderStreamState, RgPlanEntry,
     RowFilterContext, RowGroupPruner,
 };
+use crate::row_filter::OptionalFilterRowFilterContext;
 use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
 use crate::{
     BloomFilterStatistics, Int96Coercer, ParquetAccessPlan, ParquetFileMetrics,
@@ -305,6 +307,9 @@ pub(super) struct ParquetMorselizer {
     /// Per-scan virtual-column state (validation already performed). `None`
     /// when no virtual columns are requested — the common path.
     pub(crate) virtual_state: Option<Arc<VirtualColumnsState>>,
+    /// How the row filter handles optional conjuncts of the predicate, when
+    /// `pushdown_filters` is true.
+    pub(crate) optional_filters: OptionalFilterOptions,
 }
 
 impl fmt::Debug for ParquetMorselizer {
@@ -496,6 +501,7 @@ struct PreparedParquetOpen {
     reverse_row_groups: bool,
     sort_order_for_reorder: Option<LexOrdering>,
     preserve_order: bool,
+    optional_filters: OptionalFilterOptions,
     #[cfg(feature = "parquet_encryption")]
     file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
 }
@@ -569,6 +575,13 @@ impl DecoderReadPlans {
                 prepared.reorder_predicates,
                 prepared.file_metrics.clone(),
                 prepared.max_predicate_cache_size,
+                Some(OptionalFilterRowFilterContext {
+                    options: &prepared.optional_filters,
+                    metrics: &prepared.metrics,
+                    partition: prepared.partition_index,
+                    filename: &prepared.file_name,
+                    output_projection: Some(projection.projection_mask()),
+                }),
             )
         });
         Ok(Self {
@@ -997,6 +1010,7 @@ impl ParquetMorselizer {
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             preserve_order: self.preserve_order,
+            optional_filters: self.optional_filters.clone(),
             #[cfg(feature = "parquet_encryption")]
             file_decryption_properties: None,
         })
@@ -2204,6 +2218,7 @@ mod test {
         max_in_list_size: usize,
         reverse_row_groups: bool,
         preserve_order: bool,
+        optional_filters: OptionalFilterOptions,
     }
 
     #[test]
@@ -2427,6 +2442,7 @@ mod test {
                 max_in_list_size: MAX_IN_LIST_SIZE,
                 reverse_row_groups: false,
                 preserve_order: false,
+                optional_filters: OptionalFilterOptions::default(),
             }
         }
 
@@ -2613,6 +2629,7 @@ mod test {
                 reverse_row_groups: self.reverse_row_groups,
                 sort_order_for_reorder: None,
                 virtual_state,
+                optional_filters: self.optional_filters,
             })
         }
     }

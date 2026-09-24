@@ -236,6 +236,9 @@ When predicate pushdown is enabled, `DataSourceExec` with `ParquetSource` gains 
 - `limit_pruned_rows`: number of rows skipped by limit pruning when fully matched page ranges contain enough rows to satisfy the limit.
 - `pushdown_rows_matched`: rows that were tested by any of the above filters, and passed all of them.
 - `pushdown_rows_pruned`: rows that were tested by any of the above filters, and did not pass at least one of them.
+- `optional_filter_rows_skipped`: rows for which the scan skipped an optional filter (a filter that is not needed for correctness, such as a join dynamic filter) because the filter removed too few rows or cost more than it saved. Shown only when `datafusion.execution.optional_filter_mode` is `adaptive` and the scan skipped a filter.
+- `optional_filter_pauses`: number of times the scan paused an optional filter. Shown only when `datafusion.execution.optional_filter_mode` is `adaptive` and the scan paused a filter.
+- `optional_filter_eval_time`: time spent to evaluate optional filters (included in `row_pushdown_eval_time`). Shown only when `datafusion.execution.optional_filter_mode` is `adaptive` and the scan evaluated an optional filter.
 - `predicate_evaluation_errors`: number of times evaluating the filter expression failed (expected to be zero in normal operation)
 - `num_predicate_creation_errors`: number of errors creating predicates (expected to be zero in normal operation)
 - `bloom_filter_eval_time`: time spent parsing and evaluating Bloom Filters
