@@ -37,6 +37,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::time::Duration;
 
 use arrow::array::RecordBatch;
 use arrow::compute::BatchCoalescer;
@@ -65,7 +66,10 @@ use datafusion_physical_plan::metrics::{BaselineMetrics, Count, Gauge};
 use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
 
 use crate::ParquetFileMetrics;
-use crate::decoder_projection::{DecoderProjection, PostScanSelection};
+use crate::decoder_projection::{
+    DecoderProjection, DecoderProjectionBuilder, PostScanSelection,
+};
+use crate::filter_placement::FilePlacement;
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
 use crate::optional_filter::OptionalFilterSavings;
 use crate::row_filter::{
@@ -345,6 +349,10 @@ pub(crate) struct PushDecoderStreamState {
     /// end-of-input flushing happens exactly once no matter which terminal
     /// path reached it.
     pub(crate) flushed: bool,
+    /// Builds a new [`DecoderProjection`] when the adaptive filter placement
+    /// changes the post-scan conjuncts at a row group boundary. `Some`
+    /// exactly when [`RowFilterContext::placement`] is `Some`.
+    pub(crate) projection_builder: Option<DecoderProjectionBuilder>,
 }
 
 /// A reusable, `Arc`-shared list of prebuilt row-filter candidates.
@@ -383,6 +391,10 @@ pub(crate) struct RowFilterContext {
     /// Measures the decode time of the output batches for the gates of the
     /// optional filters. `None` if the file has no gated optional filter.
     pub(crate) optional_savings: Option<OptionalFilterSavings>,
+    /// The adaptive placement of the conjuncts (see
+    /// [`crate::filter_placement`]). `None` when it is disabled or when no
+    /// conjunct needs a decision.
+    pub(crate) placement: Option<FilePlacement>,
 }
 
 impl RowFilterContext {
@@ -429,6 +441,7 @@ impl RowFilterContext {
                         file_metrics,
                         max_predicate_cache_size,
                         optional_savings,
+                        placement: None,
                     }
                 });
                 (context, rejected)
@@ -447,6 +460,41 @@ impl RowFilterContext {
         }
     }
 
+    /// Adds the adaptive filter placement that `make` returns. `make` gets
+    /// the prebuilt candidates, before any `RowFilter` is built from them.
+    pub(crate) fn with_placement(
+        mut self,
+        make: impl FnOnce(&mut [PrebuiltRowFilterCandidate]) -> Option<FilePlacement>,
+    ) -> Self {
+        let candidates = Arc::get_mut(&mut self.prebuilt.inner)
+            .expect("no RowFilter was built from the candidates yet");
+        self.placement = make(candidates);
+        self
+    }
+
+    /// The adaptive filter placement of the file, if any.
+    pub(crate) fn placement(&self) -> Option<&FilePlacement> {
+        self.placement.as_ref()
+    }
+
+    /// True if [`Self::record_output_batch`] needs the decode time of the
+    /// output batches.
+    pub(crate) fn measures_decode(&self) -> bool {
+        self.optional_savings.is_some() || self.placement.is_some()
+    }
+
+    /// Records that the decoder produced an output batch of `rows` rows in
+    /// `elapsed`, for the gates of the optional filters and for the adaptive
+    /// filter placement.
+    pub(crate) fn record_output_batch(&self, rows: usize, elapsed: Duration) {
+        if let Some(savings) = &self.optional_savings {
+            savings.record_output_batch(rows, elapsed);
+        }
+        if let Some(placement) = &self.placement {
+            placement.record_decode(rows, elapsed);
+        }
+    }
+
     /// Whether any pushed-down predicate reads this Parquet leaf column.
     pub(crate) fn reads_leaf(&self, leaf_idx: usize) -> bool {
         self.prebuilt
@@ -461,9 +509,18 @@ impl RowFilterContext {
     ///
     /// Infallible by construction: [`Self::try_new`] only produces a context
     /// when the prebuilt candidate list is non-empty.
+    ///
+    /// With adaptive filter placement, only the candidates that are placed
+    /// in the `RowFilter` are used.
     pub(crate) fn build_row_filter(&self) -> RowFilter {
+        let placement = self.placement.as_ref();
         row_filter_from_prebuilt(
-            self.prebuilt.as_slice(),
+            self.prebuilt
+                .as_slice()
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| placement.is_none_or(|p| p.in_row_filter(*index)))
+                .map(|(_, candidate)| candidate),
             self.reorder_predicates,
             &self.file_metrics,
         )
@@ -534,19 +591,19 @@ impl PushDecoderStreamState {
 
             // Step 1: drain a batch from the active reader if any.
             if let Some(reader) = self.active_reader.as_mut() {
-                // The gates of optional filters need the decode time of the
-                // output columns (the reader does not evaluate the row
-                // filter: the decoder did that before it returned the reader).
-                let optional_savings = self
+                // The gates of optional filters and the adaptive filter
+                // placement need the decode time of the output columns (the
+                // reader does not evaluate the row filter: the decoder did
+                // that before it returned the reader).
+                let decode_ctx = self
                     .row_filter_context
                     .as_ref()
-                    .and_then(|ctx| ctx.optional_savings.as_ref());
-                let start = optional_savings.map(|_| Instant::now());
+                    .filter(|ctx| ctx.measures_decode());
+                let start = decode_ctx.map(|_| Instant::now());
                 match reader.next() {
                     Some(Ok(batch)) => {
-                        if let (Some(savings), Some(start)) = (optional_savings, start) {
-                            savings
-                                .record_output_batch(batch.num_rows(), start.elapsed());
+                        if let (Some(ctx), Some(start)) = (decode_ctx, start) {
+                            ctx.record_output_batch(batch.num_rows(), start.elapsed());
                         }
                         self.copy_arrow_reader_metrics();
 
@@ -585,6 +642,18 @@ impl PushDecoderStreamState {
                             });
                             if let Err(e) = pushed {
                                 return Some((Err(e), self));
+                            }
+                            continue;
+                        }
+
+                        // No post-scan filter, but a coalescer: the adaptive
+                        // filter placement can add a post-scan filter at a
+                        // later row group, thus the batches go through the
+                        // coalescer to keep their order, and the limit is
+                        // applied on its output.
+                        if let Some(coalescer) = self.batch_coalescer.as_mut() {
+                            if let Err(e) = coalescer.push_batch(batch) {
+                                return Some((Err(DataFusionError::from(e)), self));
                             }
                             continue;
                         }
@@ -656,11 +725,25 @@ impl PushDecoderStreamState {
                 Ok(DecodeResult::NeedsData(ranges)) => {
                     // I/O, not compute.
                     timer.stop();
+                    // The adaptive filter placement uses the fetch latency.
+                    let fetch_start = self
+                        .row_filter_context
+                        .as_ref()
+                        .and_then(|ctx| ctx.placement())
+                        .map(|_| Instant::now());
                     let data = self
                         .reader
                         .get_byte_ranges(ranges.clone())
                         .await
                         .map_err(DataFusionError::from);
+                    if let (Some(start), Some(placement)) = (
+                        fetch_start,
+                        self.row_filter_context
+                            .as_ref()
+                            .and_then(|ctx| ctx.placement()),
+                    ) {
+                        placement.record_fetch(start.elapsed());
+                    }
                     timer.restart();
                     match data {
                         Ok(data) => {
@@ -793,6 +876,11 @@ impl PushDecoderStreamState {
         &mut self,
         pruned_count: usize,
     ) -> Result<bool, DataFusionError> {
+        // The adaptive filter placement for the next RG. `Some` when it
+        // changed: then the decoder needs the new projection and a new
+        // `RowFilter`.
+        let new_projection = self.update_placement()?;
+
         // `desired_filter` is `Some(true)` when the next RG needs a real
         // filter, `Some(false)` when it is fully-matched (filter is a no-op, so
         // we suppress it), and `None` when there is no pushdown predicate at
@@ -801,10 +889,11 @@ impl PushDecoderStreamState {
             .row_filter_context
             .as_ref()
             .and_then(|_| self.rg_plan.front().map(|e| !e.fully_matched));
-        let filter_needs_toggle =
-            desired_filter.is_some_and(|want| want != self.filter_installed);
+        let filter_needs_toggle = desired_filter.is_some_and(|want| {
+            want != self.filter_installed || (want && new_projection.is_some())
+        });
 
-        if pruned_count == 0 && !filter_needs_toggle {
+        if pruned_count == 0 && !filter_needs_toggle && new_projection.is_none() {
             return Ok(false);
         }
         if self.rg_plan.is_empty() {
@@ -823,6 +912,10 @@ impl PushDecoderStreamState {
                 .map(|e| RowGroupSelection::new(e.rg_index, None))
                 .collect();
             builder = builder.with_row_group_selections(selections);
+        }
+        if let Some(projection) = new_projection {
+            builder = builder.with_projection(projection.projection_mask().clone());
+            self.decoder_projection = projection;
         }
         if filter_needs_toggle {
             let want_filter = desired_filter.expect("filter_needs_toggle ⇒ desired Some");
@@ -845,6 +938,41 @@ impl PushDecoderStreamState {
         }
         self.decoder = Some(builder.build().map_err(DataFusionError::from)?);
         Ok(false)
+    }
+
+    /// Makes the adaptive filter placement for the next RG
+    /// (`rg_plan.front()`). Returns the decoder projection for the new
+    /// placement if it changed.
+    ///
+    /// The coalescer holds batches with the schema of the current
+    /// projection. If the new post-scan conjuncts change that schema (this
+    /// can happen with nested columns), the file keeps its current placement
+    /// until its end.
+    fn update_placement(&mut self) -> Result<Option<DecoderProjection>> {
+        let (Some(builder), Some(front)) =
+            (self.projection_builder.as_ref(), self.rg_plan.front())
+        else {
+            return Ok(None);
+        };
+        let Some(placement) = self
+            .row_filter_context
+            .as_mut()
+            .and_then(|ctx| ctx.placement.as_mut())
+        else {
+            return Ok(None);
+        };
+        let previous = placement.placements();
+        let rows = placement.row_group_rows(front.rg_index);
+        if !placement.decide(rows) {
+            return Ok(None);
+        }
+        let projection = builder.build(&placement.post_scan_conjuncts())?;
+        if projection.filtered_schema() != self.decoder_projection.filtered_schema() {
+            placement.restore_and_freeze(&previous);
+            return Ok(None);
+        }
+        placement.set_decoder_mask(projection.projection_mask());
+        Ok(Some(projection))
     }
 
     /// Copies metrics from ArrowReaderMetrics (the metrics collected by the
