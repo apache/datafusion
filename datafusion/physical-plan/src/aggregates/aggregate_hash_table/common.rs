@@ -368,7 +368,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                         .into_iter()
                         .map(|cols| {
                             let batch =
-                                RecordBatch::try_new(output_schema.clone(), cols)?;
+                                RecordBatch::try_new(Arc::clone(&output_schema), cols)?;
                             debug_assert!(batch.num_rows() > 0);
                             total_memory += batch.get_array_memory_size();
                             Ok(batch)
