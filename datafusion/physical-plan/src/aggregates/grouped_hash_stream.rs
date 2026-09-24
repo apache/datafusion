@@ -76,6 +76,8 @@ use datafusion_common::utils::memory::get_record_batch_memory_size;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
+use datafusion_expr_common::blocked_groups_accumulator::{BlockedGroupsAccumulator, BlocksIndex};
+use datafusion_functions_aggregate_common::aggregate::blocked_groups_accumulator::BlockedGroupsAccumulatorAdapter;
 
 #[derive(Debug, Clone)]
 /// This object tracks the aggregation phase (input/output)
@@ -523,7 +525,7 @@ impl GroupedHashAggregateStream {
             .collect::<Vec<_>>()
             .join(", ");
         let name = format!("GroupedHashAggregateStream[{partition}] ({agg_fn_names})");
-        let group_ordering = GroupOrdering::try_new(&agg.input_order_mode)?;
+        let group_ordering = GroupOrdering::try_new(&agg.input_order_mode, batch_size)?;
         let oom_mode = match (agg.mode, &group_ordering) {
             // In partial aggregation mode, always prefer to emit incomplete results early.
             (AggregateMode::Partial, _) => OutOfMemoryMode::EmitEarly,
@@ -663,6 +665,30 @@ pub(crate) fn create_group_accumulator(
         let agg_expr_captured = Arc::clone(agg_expr);
         let factory = move || agg_expr_captured.create_accumulator();
         Ok(Box::new(GroupsAccumulatorAdapter::new(factory)))
+    }
+}
+
+/// Create an accumulator for `agg_expr` -- a [`BlockedGroupsAccumulator`] if
+/// that is supported by the aggregate, or a
+/// [`BlockedGroupsAccumulatorAdapter`] if not.
+pub(crate) fn create_blocked_group_accumulator(
+    agg_expr: &Arc<AggregateFunctionExpr>,
+    block_size: usize
+) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+    // TODO - WHAT ABOUT DYNAMIC BLOCK SIZE?
+    if let Some(agg_batch_size) = agg_expr.batch_size() {
+        assert_eq_or_internal_err!(agg_batch_size, block_size, "Block size mismatch for blocked groups accumulator");
+    }
+    if agg_expr.blocked_groups_accumulator_supported() {
+        agg_expr.create_blocked_groups_accumulator()
+    } else {
+        // Note in the log when the slow path is used
+        debug!(
+            "Creating BlockedGroupsAccumulatorAdapter for {}: {agg_expr:?}",
+            agg_expr.name()
+        );
+        let group_acc = create_group_accumulator(agg_expr)?;
+        Ok(Box::new(BlockedGroupsAccumulatorAdapter::new(group_acc, block_size)))
     }
 }
 
@@ -920,12 +946,12 @@ impl GroupedHashAggregateStream {
                     let starting_num_groups = self.group_values.len();
                     self.group_values
                         .intern(group_values, &mut self.current_group_indices)?;
-                    let group_indices = &self.current_group_indices;
+                    let group_indices_as_blocks = self.current_group_indices.iter().map(|&idx| BlocksIndex::new_in_first_block(idx)).collect::<Vec<_>>();
                     let total_num_groups = self.group_values.len();
                     if total_num_groups > starting_num_groups {
                         self.group_ordering.new_groups(
                             group_values,
-                            group_indices,
+                            &group_indices_as_blocks,
                             total_num_groups,
                         )?;
                     }
@@ -1155,9 +1181,14 @@ impl GroupedHashAggregateStream {
                     .intern(&cols, &mut self.current_group_indices)?;
                 let total_groups = self.group_values.len();
                 if total_groups > starting_groups {
+                    let current_group_indices_as_blocks = self
+                        .current_group_indices
+                        .iter()
+                        .map(|&idx| BlocksIndex::new_in_first_block(idx))
+                        .collect::<Vec<_>>();
                     self.group_ordering.new_groups(
                         &cols,
-                        &self.current_group_indices,
+                        &current_group_indices_as_blocks,
                         total_groups,
                     )?;
                 }

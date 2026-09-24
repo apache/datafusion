@@ -34,14 +34,7 @@ use datafusion_common::{
     HashMap, Result, ScalarValue, downcast_value, exec_err, internal_err, not_impl_err,
     stats::Precision, utils::expr::COUNT_STAR_EXPANSION,
 };
-use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Documentation, EmitTo, Expr, GroupSelection,
-    GroupsAccumulator, ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs,
-    TypeSignature, Volatility, WindowFunctionDefinition,
-    expr::WindowFunction,
-    function::{AccumulatorArgs, StateFieldsArgs},
-    utils::{AggregateOrderSensitivity, format_state_name},
-};
+use datafusion_expr::{expr::WindowFunction, function::{AccumulatorArgs, StateFieldsArgs}, utils::{AggregateOrderSensitivity, format_state_name}, Accumulator, AggregateUDFImpl, BlockedGroupsAccumulator, Documentation, EmitTo, Expr, GroupSelection, GroupsAccumulator, ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs, TypeSignature, Volatility, WindowFunctionDefinition, BlocksIndex, BlockedEmitTo, BlockedGroupSelection};
 use datafusion_functions_aggregate_common::aggregate::count_distinct::PrimitiveDistinctCountGroupsAccumulator;
 use datafusion_functions_aggregate_common::aggregate::{
     count_distinct::Bitmap65536DistinctCountAccumulator,
@@ -65,6 +58,7 @@ use std::{
     ops::BitAnd,
     sync::Arc,
 };
+use datafusion_expr::blocked_helpers::{BlockedVec, CopyItemBlockedVecBuilder};
 
 make_udaf_expr_and_func!(
     Count,
@@ -731,9 +725,9 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     fn evaluate_preserving(&mut self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
         selection.validate_num_groups(self.counts.len())?;
         let counts = selection
-            .iter()
-            .map(|index| self.counts[index])
-            .collect::<Vec<_>>();
+          .iter()
+          .map(|index| self.counts[index])
+          .collect::<Vec<_>>();
         Ok(Arc::new(Int64Array::from(counts)))
     }
 
@@ -821,6 +815,209 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     }
     fn size(&self) -> usize {
         self.counts.heap_size(&mut DFHeapSizeCtx::default())
+    }
+}
+
+/// An accumulator to compute the counts of [`PrimitiveArray<T>`].
+/// Stores values as native types, and does overflow checking
+///
+/// Unlike most other accumulators, COUNT never produces NULLs. If no
+/// non-null values are seen in any group the output is 0. Thus, this
+/// accumulator has no additional null or seen filter tracking.
+#[derive(Debug)]
+struct CountBlockedGroupsAccumulator {
+    /// Count per group.
+    ///
+    /// Note this is an i64 and not a u64 (or usize) because the
+    /// output type of count is `DataType::Int64`. Thus by using `i64`
+    /// for the counts, the output [`Int64Array`] can be created
+    /// without copy.
+    counts: BlockedVec<i64>,
+}
+
+impl CountBlockedGroupsAccumulator {
+    pub fn new(block_size: usize) -> Self {
+        Self { counts: BlockedVec::new(block_size) }
+    }
+}
+
+impl BlockedGroupsAccumulator for CountBlockedGroupsAccumulator {
+
+    fn batch_size(&self) -> usize {
+        self.counts.block_size()
+    }
+
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[BlocksIndex],
+        opt_filter: Option<&BooleanArray>,
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "single argument to update_batch");
+        let values = &values[0];
+
+        self.counts.push_value_n_to_len(0, total_num_groups);
+
+        accumulate_indices(
+            group_indices,
+            values.logical_nulls().as_ref(),
+            opt_filter,
+            |group_index| {
+                // SAFETY: group_index is guaranteed to be in bounds
+                let count = unsafe { self.counts.get_unchecked_mut(group_index) };
+                *count += 1;
+            },
+        );
+
+        Ok(())
+    }
+
+    fn merge_batch(
+        &mut self,
+        values: &[ArrayRef],
+        group_indices: &[BlocksIndex],
+        total_num_groups: usize,
+    ) -> Result<()> {
+        assert_eq!(values.len(), 1, "one argument to merge_batch");
+        // first batch is counts, second is partial sums
+        let partial_counts = values[0].as_primitive::<Int64Type>();
+
+        // intermediate counts are always created as non null
+        assert_eq!(partial_counts.null_count(), 0);
+        let partial_counts = partial_counts.values();
+
+        // Adds the counts with the partial counts
+        self.counts.push_value_n_to_len(0, total_num_groups);
+        group_indices.iter().zip(partial_counts.iter()).for_each(
+            |(&group_index, partial_count)| {
+                self.counts[group_index] += partial_count;
+            },
+        );
+
+        Ok(())
+    }
+
+    fn evaluate(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<ArrayRef>> {
+        let blocks = self.counts.emit(emit_to);
+
+        let blocks_ready = blocks
+          .into_iter()
+          .map(|block| {
+              // Count is always non null (null inputs just don't contribute to the overall values)
+              let array = PrimitiveArray::<Int64Type>::new(block.into(), None);
+              Arc::new(array) as ArrayRef
+          })
+          .collect::<Vec<_>>();
+
+        Ok(blocks_ready)
+    }
+
+    fn evaluate_preserving(&mut self, selection: BlockedGroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.counts.len())?;
+        let counts = selection
+          .iter()
+          .map(|index| self.counts[index])
+          .collect::<Vec<_>>();
+        Ok(Arc::new(Int64Array::from(counts)))
+    }
+
+    fn supports_evaluate_preserving(&self) -> bool {
+        true
+    }
+
+    // return arrays for counts
+    fn state(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<Vec<ArrayRef>>> {
+        let blocks = self.counts.emit(emit_to);
+
+        let blocks_ready = blocks
+          .into_iter()
+          .map(|block| {
+              // Count is always non null (null inputs just don't contribute to the overall values)
+              let array = PrimitiveArray::<Int64Type>::new(block.into(), None);
+
+              // Each state only have 1 column
+              vec![Arc::new(array) as ArrayRef]
+          })
+          .collect::<Vec<_>>();
+
+        Ok(blocks_ready)
+    }
+
+    fn state_preserving(
+        &mut self,
+        selection: BlockedGroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        self.evaluate_preserving(selection).map(|array| vec![array])
+    }
+
+    fn supports_state_preserving(&self) -> bool {
+        true
+    }
+
+    /// Converts an input batch directly to a state batch
+    ///
+    /// The state of `COUNT` is always a single Int64Array:
+    /// * `1` (for non-null, non filtered values)
+    /// * `0` (for null values)
+    fn convert_to_state(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+    ) -> Result<Vec<ArrayRef>> {
+        let values = &values[0];
+
+        let state_array = match (values.logical_nulls(), opt_filter) {
+            (None, None) => {
+                // In case there is no nulls in input and no filter, returning array of 1
+                Arc::new(Int64Array::from_value(1, values.len()))
+            }
+            (Some(nulls), None) => {
+                // If there are any nulls in input values -- casting `nulls` (true for values, false for nulls)
+                // of input array to Int64
+                let nulls = BooleanArray::new(nulls.into_inner(), None);
+                compute::cast(&nulls, &DataType::Int64)?
+            }
+            (None, Some(filter)) => {
+                // If there is only filter
+                // - applying filter null mask to filter values by bitand filter values and nulls buffers
+                //   (using buffers guarantees absence of nulls in result)
+                // - casting result of bitand to Int64 array
+                let (filter_values, filter_nulls) = filter.clone().into_parts();
+
+                let state_buf = match filter_nulls {
+                    Some(filter_nulls) => &filter_values & filter_nulls.inner(),
+                    None => filter_values,
+                };
+
+                let boolean_state = BooleanArray::new(state_buf, None);
+                compute::cast(&boolean_state, &DataType::Int64)?
+            }
+            (Some(nulls), Some(filter)) => {
+                // For both input nulls and filter
+                // - applying filter null mask to filter values by bitand filter values and nulls buffers
+                //   (using buffers guarantees absence of nulls in result)
+                // - applying values null mask to filter buffer by another bitand on filter result and
+                //   nulls from input values
+                // - casting result to Int64 array
+                let (filter_values, filter_nulls) = filter.clone().into_parts();
+
+                let filter_buf = match filter_nulls {
+                    Some(filter_nulls) => &filter_values & filter_nulls.inner(),
+                    None => filter_values,
+                };
+                let state_buf = &filter_buf & nulls.inner();
+
+                let boolean_state = BooleanArray::new(state_buf, None);
+                compute::cast(&boolean_state, &DataType::Int64)?
+            }
+        };
+
+        Ok(vec![state_array])
+    }
+
+    fn size(&self) -> usize {
+        self.counts.allocated_size()
     }
 }
 

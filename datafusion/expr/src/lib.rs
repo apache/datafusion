@@ -106,6 +106,11 @@ pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::groups_accumulator::{
     EmitTo, GroupSelection, GroupsAccumulator,
 };
+pub use datafusion_expr_common::blocked_groups_accumulator::{
+    BlockedEmitTo, BlocksIndex, BlockedGroupSelection, BlockedGroupsAccumulator,
+};
+pub use datafusion_expr_common::blocked_helpers;
+
 pub use datafusion_expr_common::operator::Operator;
 pub use datafusion_expr_common::placement::ExpressionPlacement;
 pub use datafusion_expr_common::signature::{
@@ -152,6 +157,7 @@ pub use udf::{
 };
 pub use udwf::{LimitEffect, ReversedUDWF, WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
+
 
 #[cfg(test)]
 #[ctor::ctor(unsafe)]

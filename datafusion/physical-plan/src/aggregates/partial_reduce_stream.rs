@@ -107,9 +107,7 @@ enum PartialReduceHashAggregateState {
     /// because the table ran out of memory while reading input.
     EmittingOnMemoryPressure {
         hash_table: AggregateHashTable<PartialReduceMarker>,
-        // After each incremental emitting step, `remaining_groups` is updated
-        // with batch slicing.
-        remaining_groups: RecordBatch,
+        remaining_groups: std::vec::IntoIter<RecordBatch>,
     },
     ProducingOutput {
         hash_table: AggregateHashTable<PartialReduceMarker>,
@@ -318,21 +316,22 @@ impl PartialReduceHashAggregateStream {
             Err(e) => return Self::break_with_err(e),
         };
 
-        let state_batch_result = original_state.hash_table_mut().take_state_batch();
+        let state_batch_result = original_state.hash_table_mut().take_all_state_batch();
 
         match state_batch_result {
-            Ok(Some(remaining_groups)) => {
+            // No accumulated group to emit, so early emission cannot release any
+            // memory: report the original error.
+            Ok(remaining_groups) if remaining_groups.is_empty() => Self::break_with_err(oom),
+
+            Ok(remaining_groups) => {
                 self.early_emit_count.add(1);
                 ControlFlow::Continue(
                     PartialReduceHashAggregateState::EmittingOnMemoryPressure {
                         hash_table: original_state.into_hash_table(),
-                        remaining_groups,
+                        remaining_groups: remaining_groups.into_iter(),
                     },
                 )
             }
-            // No accumulated group to emit, so early emission cannot release any
-            // memory: report the original error.
-            Ok(None) => Self::break_with_err(oom),
             Err(e) => Self::break_with_err(e),
         }
     }
@@ -350,28 +349,27 @@ impl PartialReduceHashAggregateStream {
     ) -> PartialReduceHashAggregateStateTransition {
         let PartialReduceHashAggregateState::EmittingOnMemoryPressure {
             hash_table,
-            remaining_groups: batch,
+            remaining_groups: mut batches,
         } = original_state
         else {
             unreachable!("expected the EmittingOnMemoryPressure state")
         };
 
-        let (output_batch, next_state) = if batch.num_rows() <= self.batch_size {
+        let next_batch = batches.next().expect("must have at least one batch to emit");
+
+        let (output_batch, next_state) = if batches.len() == 0 {
             // Go back to `ReadingInput`
             (
-                batch,
+                next_batch,
                 PartialReduceHashAggregateState::ReadingInput { hash_table },
             )
         } else {
             // More batches to output, continue in the current state.
-            let remaining =
-                batch.slice(self.batch_size, batch.num_rows() - self.batch_size);
-            let output = batch.slice(0, self.batch_size);
             (
-                output,
+                next_batch,
                 PartialReduceHashAggregateState::EmittingOnMemoryPressure {
                     hash_table,
-                    remaining_groups: remaining,
+                    remaining_groups: batches,
                 },
             )
         };

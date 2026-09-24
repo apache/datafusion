@@ -21,3 +21,5 @@ pub(crate) mod boolean;
 pub(crate) mod bytes;
 pub(crate) mod bytes_view;
 pub(crate) mod primitive;
+pub(crate) mod blocked_boolean;
+mod blocked_primitive;

@@ -23,18 +23,15 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_common::assert_or_internal_err;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
-
+use datafusion_expr_common::blocked_groups_accumulator::{BlockedEmitTo, BlocksIndex};
 use crate::InputOrderMode;
 use crate::PhysicalExpr;
-use crate::aggregates::group_values::{
-    AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
-    GroupByMetrics, GroupValues, new_group_values,
-};
-use crate::aggregates::grouped_hash_stream::create_group_accumulator;
+use crate::aggregates::group_values::{new_blocked_group_values, new_group_values, AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics, GroupByMetrics, GroupValues, BlockedGroupValues};
+use crate::aggregates::grouped_hash_stream::{create_blocked_group_accumulator, create_group_accumulator};
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions,
@@ -160,10 +157,10 @@ pub(super) struct OrderedAggregateTableBuffer {
     pub(super) group_ordering: GroupOrdering,
 
     /// Interned group keys, in the same group-id order used by accumulators.
-    pub(super) group_values: Box<dyn GroupValues>,
+    pub(super) group_values: Box<dyn BlockedGroupValues>,
 
     /// Scratch group id vector for the current input batch.
-    pub(super) group_indices: Vec<usize>,
+    pub(super) group_indices: Vec<BlocksIndex>,
 
     /// One item per aggregate expression.
     ///
@@ -194,9 +191,9 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             "OrderedAggregateTable requires config batch_size >= 1"
         );
 
-        let group_ordering = GroupOrdering::try_new(input_order_mode)?;
+        let group_ordering = GroupOrdering::try_new(input_order_mode, batch_size)?;
         let group_schema = agg.group_by.group_schema(input_schema)?;
-        let group_values = new_group_values(group_schema, &group_ordering)?;
+        let group_values = new_blocked_group_values(group_schema, &group_ordering, batch_size)?;
         let aggregate_arguments = aggregate_expressions(
             &agg.aggr_expr,
             aggregate_mode,
@@ -208,7 +205,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             .zip(aggregate_arguments)
             .zip(filters)
             .map(|((agg_expr, arguments), filter)| {
-                let accumulator = create_group_accumulator(agg_expr)?;
+                let accumulator = create_blocked_group_accumulator(agg_expr, batch_size)?;
                 Ok(AggregateAccumulator::new(
                     Arc::clone(agg_expr),
                     arguments,
@@ -318,28 +315,40 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
     /// active (incomplete) groups. Partial aggregation can pass those states to
     /// its final stage, while single and final aggregation sort and spill them
     /// before replay.
-    pub(in crate::aggregates) fn take_state_batch(
+    pub(in crate::aggregates) fn take_all_state_batch(
         &mut self,
-    ) -> Result<Option<RecordBatch>> {
+    ) -> Result<Vec<RecordBatch>> {
         if self.buffer.group_values.is_empty() {
-            return Ok(None);
+            return Ok(vec![]);
         }
 
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
+
         let output = self.group_by_metrics.time_emitting(|| {
-            let mut output = self.buffer.group_values.emit(EmitTo::All)?;
+            let mut blocked_output = self.buffer.group_values.emit(BlockedEmitTo::All)?;
+
+
             for (idx, acc) in self.buffer.accumulators.iter_mut().enumerate() {
-                output.extend(accumulator_metrics.time(
+                let blocked_state = accumulator_metrics.time(
                     idx,
                     AccumulatorPhase::State,
-                    || acc.state(EmitTo::All),
-                )?);
+                    || acc.state(BlockedEmitTo::All),
+                )?;
+
+                blocked_output.iter_mut().zip(blocked_state).for_each(|(output, states)| {
+                    output.extend_from_slice(states.as_ref());
+                });
             }
-            Ok::<_, datafusion_common::DataFusionError>(output)
+
+            Ok::<_, DataFusionError>(blocked_output)
         })?;
 
-        let batch = RecordBatch::try_new(Arc::clone(&self.state_schema), output)?;
-        debug_assert!(batch.num_rows() > 0);
+        let batches = output.into_iter().map(|cols| {
+            let batch = RecordBatch::try_new(Arc::clone(&self.state_schema), cols)?;
+            debug_assert!(batch.num_rows() > 0);
+
+            Ok(batch)
+        }).collect::<Result<Vec<_>>>()?;
 
         // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
         // key/index buffers too so the memory reservation can be released
@@ -349,7 +358,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         self.buffer.group_indices.shrink_to_fit();
         self.buffer.group_ordering.reset();
 
-        Ok(Some(batch))
+        Ok(batches)
     }
 
     /// Returns the [`EmitTo`], clamped to the specified batch size
@@ -362,11 +371,12 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         &self,
         group_count: usize,
         emit_to: EmitTo,
-    ) -> (EmitTo, bool) {
+    ) -> (BlockedEmitTo, bool) {
         match emit_to {
-            EmitTo::First(n) => (EmitTo::First(n.min(self.batch_size)), true),
-            EmitTo::All if group_count <= self.batch_size => (EmitTo::All, false),
-            EmitTo::All => (EmitTo::First(self.batch_size), false),
+            EmitTo::First(n) if n < self.batch_size => (BlockedEmitTo::First(n), true),
+            EmitTo::First(_) => (BlockedEmitTo::NextBlock, true),
+            EmitTo::All if group_count <= self.batch_size => (BlockedEmitTo::All, false),
+            EmitTo::All => (BlockedEmitTo::NextBlock, true),
         }
     }
 
@@ -399,7 +409,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
                         total_num_groups,
                     )?;
                 }
-                Ok::<_, datafusion_common::DataFusionError>(total_num_groups)
+                Ok::<_, DataFusionError>(total_num_groups)
             })?;
 
             group_by_metrics.time_aggregation(|| {
@@ -419,7 +429,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
                         )
                     })?;
                 }
-                Ok::<(), datafusion_common::DataFusionError>(())
+                Ok::<(), DataFusionError>(())
             })?;
         }
 
@@ -451,13 +461,16 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
         let output = self.group_by_metrics.time_emitting(|| {
             let mut output = self.buffer.group_values.emit(emit_to)?;
+            assert_eq!(output.len(), 1, "must only get single group key batch per emit");
+            let mut output = output.into_iter().next().unwrap();
             if should_remove_groups {
                 match emit_to {
-                    EmitTo::First(n) => self.buffer.group_ordering.remove_groups(n),
+                    BlockedEmitTo::First(n) => self.buffer.group_ordering.remove_groups(n),
+                    BlockedEmitTo::NextBlock => self.buffer.group_ordering.remove_groups(self.batch_size),
                     // `EmitTo::All` is only used after `input_done`, when all
                     // buffered groups are known complete and the ordering state is
                     // no longer needed.
-                    EmitTo::All => {}
+                    BlockedEmitTo::All => {}
                 }
             }
 
@@ -465,10 +478,14 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
                 output.extend(accumulator_metrics.time(
                     idx,
                     accumulator_phase,
-                    || materialize_accumulator_fn(acc, emit_to),
+                    || {
+                        let mut acc = materialize_accumulator_fn(acc, emit_to)?;
+                        assert_eq!(acc.len(), 1, "must emit single batch");
+                        Ok::<_, DataFusionError>(acc.into_iter().next().unwrap())
+                    },
                 )?);
             }
-            Ok::<_, datafusion_common::DataFusionError>(output)
+            Ok::<_, DataFusionError>(output)
         })?;
 
         let batch = RecordBatch::try_new(Arc::clone(&self.output_schema), output)?;

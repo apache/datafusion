@@ -25,7 +25,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::{Stream, StreamExt};
-
+use datafusion_functions_aggregate_common::aggregate::groups_accumulator::VecAllocExt;
 use super::AggregateExec;
 use super::aggregate_hash_table::{OrderedAggregateTable, PartialMarker};
 use crate::aggregates::AggregateMode;
@@ -239,16 +239,37 @@ impl OrderedPartialAggregateStream {
             let input_rows = batch.num_rows();
             self.reduction_factor.add_total(input_rows);
 
-            let timer = elapsed_compute.timer();
+            let mut timer = elapsed_compute.timer();
 
             table.aggregate_batch(&batch)?;
 
             // Check memory reservation. See function comments for details.
-            if let Some(batch) = self.resize_or_take_state_batch(table)? {
-                self.reduction_factor.add_part(batch.num_rows());
-                drop(timer);
-                emitter.emit(batch).await;
-                continue;
+            {
+                let (batches, mut size) = self.resize_or_take_state_batch(table)?;
+                // Exclude the first batch since we are emitting it right away
+                size -= batches.first().map_or(0, |(_, size)| *size);
+
+                let table_size = table.memory_size();
+                self.reservation.try_resize(table_size + size)?;
+
+                if !batches.is_empty() {
+                    for (index, (batch, batch_size)) in batches.into_iter().enumerate() {
+                        self.reduction_factor.add_part(batch.num_rows());
+
+                        // Exclude the first batch since size does not include it
+                        if index > 0 {
+                            size -= batch_size;
+                            self.reservation.try_resize(table_size + size)?;
+                        }
+                        drop(timer);
+                        emitter.emit(batch).await;
+                        timer = elapsed_compute.timer();
+                    }
+
+                    self.reservation.try_resize(table_size)?;
+
+                    continue;
+                }
             }
 
             let Some(batch) = table.next_output_batch()? else {
@@ -284,9 +305,9 @@ impl OrderedPartialAggregateStream {
     fn resize_or_take_state_batch(
         &mut self,
         table: &mut OrderedAggregateTable<PartialMarker>,
-    ) -> Result<Option<RecordBatch>> {
+    ) -> Result<(Vec<(RecordBatch, usize)>, usize)> {
         let oom = match self.reservation.try_resize(table.memory_size()) {
-            Ok(()) => return Ok(None),
+            Ok(()) => return Ok((vec![], 0)),
             Err(e @ DataFusionError::ResourcesExhausted(_)) => e,
             Err(e) => return Err(e),
         };
@@ -295,11 +316,19 @@ impl OrderedPartialAggregateStream {
             return Err(oom);
         }
 
-        let Some(batch) = table.take_state_batch()? else {
-            return Err(oom);
+        let mut total_size = 0;
+
+        let batches = match table.take_all_state_batch() {
+            Ok(batches) if batches.is_empty() => return Err(oom),
+            Ok(batches) => batches.into_iter().map(|b| {
+                let size = b.get_array_memory_size();
+                total_size += size;
+                (b, size)
+            }).collect::<Vec<_>>(),
+            Err(e) => return Err(e),
         };
-        self.reservation.try_resize(table.memory_size())?;
-        Ok(Some(batch))
+
+        Ok((batches, total_size))
     }
 
     /// Emits one batch after input is exhausted.

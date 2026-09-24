@@ -27,6 +27,7 @@ use std::vec;
 use arrow::datatypes::{DataType, Field, FieldRef};
 
 use datafusion_common::{Result, ScalarValue, Statistics, exec_err, not_impl_err};
+use datafusion_expr_common::blocked_groups_accumulator::BlockedGroupsAccumulator;
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -37,9 +38,9 @@ use crate::expr::{
     schema_name_from_sorts,
 };
 use crate::function::{
-    AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
+    AccumulatorArgs, BlockedAccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
 };
-use crate::groups_accumulator::GroupsAccumulator;
+use crate::groups_accumulator::{GroupsAccumulator};
 use crate::udf_eq::UdfEq;
 use crate::utils::AggregateOrderSensitivity;
 use crate::utils::format_state_name;
@@ -269,6 +270,19 @@ impl AggregateUDF {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         self.inner.create_groups_accumulator(args)
+    }
+
+    /// See [`AggregateUDFImpl::blocked_groups_accumulator_supported`] for more details.
+    pub fn blocked_groups_accumulator_supported(&self, args: BlockedAccumulatorArgs) -> bool {
+        self.inner.blocked_groups_accumulator_supported(args)
+    }
+
+    /// See [`AggregateUDFImpl::create_blocked_groups_accumulator`] for more details.
+    pub fn create_blocked_groups_accumulator(
+        &self,
+        args: BlockedAccumulatorArgs,
+    ) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+        self.inner.create_blocked_groups_accumulator(args)
     }
 
     pub fn create_sliding_accumulator(
@@ -668,6 +682,32 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         _args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         not_impl_err!("GroupsAccumulator hasn't been implemented for {self:?} yet")
+    }
+
+    /// If the aggregate expression has a specialized
+    /// [`BlockedGroupsAccumulator`] implementation. If this returns true,
+    /// `[Self::create_blocked_groups_accumulator]` will be called.
+    ///
+    /// # Notes
+    ///
+    /// Even if this function returns true, DataFusion will still use
+    /// [`Self::accumulator`] for certain queries, such as when this aggregate is
+    /// used as a window function or when there no GROUP BY columns in the
+    /// query.
+    fn blocked_groups_accumulator_supported(&self, _args: BlockedAccumulatorArgs) -> bool {
+        false
+    }
+
+    /// Return a specialized [`BlockedGroupsAccumulator`] that manages state
+    /// for all groups.
+    ///
+    /// For maximum performance, a [`BlockedGroupsAccumulator`] should be
+    /// implemented in addition to [`Accumulator`].
+    fn create_blocked_groups_accumulator(
+        &self,
+        _args: BlockedAccumulatorArgs,
+    ) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+        not_impl_err!("BlockedGroupsAccumulator hasn't been implemented for {self:?} yet")
     }
 
     /// Sliding accumulator is an alternative accumulator that can be used for

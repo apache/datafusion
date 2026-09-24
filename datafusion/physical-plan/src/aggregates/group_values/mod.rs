@@ -48,6 +48,9 @@ use crate::aggregates::{
 
 mod metrics;
 mod null_builder;
+mod blocked;
+
+pub use blocked::{BlockedGroupValues, new_blocked_group_values};
 
 pub(crate) use metrics::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
