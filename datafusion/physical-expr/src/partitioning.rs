@@ -255,19 +255,20 @@ impl RangePartitioning {
     /// `samples.len() + 1`. When it is smaller than that maximum, the samples
     /// are evenly down-sampled to derive the effective split points.
     ///
-    /// For a single ascending range key:
+    /// For a single range key:
     ///
     /// ```text
+    /// ordering = [key ASC NULLS LAST]
     /// samples = [(10), (20), (30), (40), (50)]
     /// partition_count = 3
     /// split_points = [(20), (40)]
     ///
     /// partition 0: key before 20
-    /// partition 1: key from 20 (inclusive) to 40 (exclusive)
+    /// partition 1: key between 20 (inclusive) and 40 (exclusive)
     /// partition 2: key at/after 40
     ///
-    /// scale(5) -> split_points = [(20), (30), (40), (50)]
-    /// scale(7) -> None (at most 6 partitions)
+    /// scale(5): split_points = [(20), (30), (40), (50)]
+    /// scale(7): None (at most 6 partitions)
     /// ```
     ///
     /// Retain at least `maximum_expected_partitions - 1` distinct samples to
