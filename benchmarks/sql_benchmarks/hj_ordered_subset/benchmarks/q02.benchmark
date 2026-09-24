@@ -1,0 +1,10 @@
+# Partitioned join, build side = 10 days (10% of the event_id range, ordered).
+# The bounds of the dynamic filter can prune ~90% of the events row groups.
+subgroup partitioned
+
+template sql_benchmarks/hj_ordered_subset/hj_ordered_subset.benchmark.template
+NAME=Q02_partitioned_ordered_10_days
+JOIN_MODE=partitioned
+PLAN_MODE=Partitioned
+BUILD_TABLE=labels_by_day
+BUILD_FILTER=l.day BETWEEN 40 AND 49
