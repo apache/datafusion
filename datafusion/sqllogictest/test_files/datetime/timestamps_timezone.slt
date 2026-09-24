@@ -845,9 +845,9 @@ false
 
 # date_part reads the field in the value's own time zone. This matches
 # PostgreSQL whenever the session TimeZone equals the column's zone; otherwise
-# PostgreSQL reads the field in the session TimeZone. This follows from
-# DataFusion carrying the zone on the value rather than the session, and no
-# issue tracks it as a bug.
+# PostgreSQL reads the field in the session TimeZone. PostgreSQL has only the
+# session zone, while Arrow stores the zone in each column's type, and
+# DataFusion reads fields in that zone.
 query IIR rowsort
 SELECT date_part('hour', ts), date_part('day', ts), date_part('epoch', ts) FROM day_denver
 ----
@@ -872,19 +872,24 @@ SELECT extract(hour FROM ts), extract(doy FROM ts) FROM day_denver
 18 182
 6 183
 
-# GAP vs PostgreSQL: `timezone_hour` and `timezone_minute` are standard SQL
-# date parts that PostgreSQL supports on `timestamptz` (returning 0 and 0 for
-# UTC, -6 and 0 for Denver in summer). DataFusion rejects them outright, so
-# there is no way to ask a tz-aware value for its own offset. Extracting the
-# offset via `date_part` is one of the things asked for in
-# https://github.com/apache/datafusion/issues/10368. They are implemented by
-# https://github.com/apache/datafusion/pull/25163; once that lands, these two
-# expectations become value queries.
-query error DataFusion error: Execution error: Date part 'timezone_hour' not supported
-SELECT date_part('timezone_hour', ts) FROM day_denver
+# `timezone`, `timezone_hour` and `timezone_minute` report the value's own
+# offset (https://github.com/apache/datafusion/issues/10368, implemented by
+# https://github.com/apache/datafusion/pull/25163). PostgreSQL reports the
+# session TimeZone's offset instead, for the same reason as `date_part` above.
+query III
+SELECT date_part('timezone', ts), date_part('timezone_hour', ts), date_part('timezone_minute', ts) FROM day_denver
+----
+-21600 -6 0
+-21600 -6 0
+-21600 -6 0
+-21600 -6 0
 
-query error DataFusion error: Execution error: Date part 'timezone_minute' not supported
-SELECT date_part('timezone_minute', ts) FROM day_denver
+# A half hour zone, where `timezone_minute` is not 0
+query III
+SELECT date_part('timezone', t), date_part('timezone_hour', t), date_part('timezone_minute', t)
+FROM (SELECT arrow_cast('2024-07-01T12:00:00Z', 'Timestamp(Nanosecond, Some("Asia/Kolkata"))') AS t)
+----
+19800 5 30
 
 ##########
 ## SECTION 10: to_char / from_unixtime / to_unixtime / to_timestamp* / to_local_time
@@ -1130,8 +1135,8 @@ false
 # TimeZone='UTC' subtracts a flat 168*24 hours and answers `false`. The two
 # only agree when the session zone matches the value's zone -- which is exactly
 # the alignment that test_files/pg_compat/pg_compat_timestamptz.slt sets up.
-# Like date_part in SECTION 9, this follows from the zone living on the value,
-# and no issue tracks it as a bug.
+# PostgreSQL has only the session zone, while Arrow stores the zone in each
+# column's type, and DataFusion does calendar arithmetic in that zone.
 query B
 SELECT (TIMESTAMP '2024-01-15 12:00:00' AT TIME ZONE 'America/Denver')
      = (TIMESTAMP '2024-07-01 12:00:00' AT TIME ZONE 'America/Denver') - INTERVAL '168 days'
