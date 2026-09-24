@@ -595,3 +595,36 @@ DROP TABLE co;
 
 statement ok
 DROP TABLE ci;
+
+# A subquery column with the same qualified name as the outer `IN` value.
+#
+# Inside the subquery, `a` is `sh_t`, so `a.x = b.k` bounds `sh_t.x`, not the
+# outer `a.x`. It does not keep a NULL outer value out of the scope, and the
+# join must stay null-aware. The subquery is `{7}` for every outer row, so the
+# NULL row is UNKNOWN. Results verified with DuckDB 1.5.2.
+statement ok
+CREATE TABLE sh_o(x INT, k INT) AS VALUES (NULL, 1), (7, 1), (8, 1);
+
+statement ok
+CREATE TABLE sh_t(x INT, y INT NOT NULL) AS VALUES (1, 7);
+
+query IB
+SELECT a.x, a.x IN (SELECT a.y FROM sh_t AS a WHERE a.x = b.k) AS r
+FROM sh_o AS a, (SELECT 1 AS k) AS b ORDER BY 1;
+----
+7 true
+8 false
+NULL NULL
+
+# The `NOT IN` filter drops the UNKNOWN row.
+query I
+SELECT a.x FROM sh_o AS a, (SELECT 1 AS k) AS b
+WHERE a.x NOT IN (SELECT a.y FROM sh_t AS a WHERE a.x = b.k);
+----
+8
+
+statement ok
+DROP TABLE sh_o;
+
+statement ok
+DROP TABLE sh_t;

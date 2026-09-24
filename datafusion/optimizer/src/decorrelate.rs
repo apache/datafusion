@@ -76,7 +76,9 @@ pub struct PullUpCorrelatedExpr {
     pub pulled_up_scalar_agg: bool,
     /// Every correlated conjunct that a `Filter` of the subquery applies,
     /// before `remove_duplicated_filter` drops the ones that the `IN`
-    /// predicate already covers.
+    /// predicate already covers. The outer references are kept, so that a
+    /// subquery column and an outer column with the same qualified name stay
+    /// apart.
     ///
     /// `join_filters` holds only the conjuncts that the join still needs.
     /// This list is what the subquery enforces on its own rows. The caller
@@ -193,13 +195,13 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         .iter()
                         .filter(|e| e.contains_outer())
                         .all(|&e| can_pullup_over_aggregation(e));
-                let (mut join_filters, subquery_filters) =
-                    find_join_exprs(subquery_filter_exprs)?;
-                for expr in &join_filters {
-                    if !self.correlated_filters.contains(expr) {
-                        self.correlated_filters.push(expr.clone());
+                for expr in &subquery_filter_exprs {
+                    if expr.contains_outer() && !self.correlated_filters.contains(expr) {
+                        self.correlated_filters.push((*expr).clone());
                     }
                 }
+                let (mut join_filters, subquery_filters) =
+                    find_join_exprs(subquery_filter_exprs)?;
                 if let Some(in_predicate) = &self.in_predicate_opt {
                     // in_predicate may be already included in the join filters, remove it from the join filters first.
                     join_filters = remove_duplicated_filter(join_filters, in_predicate)?;

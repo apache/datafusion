@@ -32,7 +32,9 @@ use datafusion_common::{
     Column, DFSchema, NullEquality, Result, ScalarValue, assert_or_internal_err, plan_err,
 };
 use datafusion_expr::expr::{Exists, InSubquery};
-use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
+use datafusion_expr::expr_rewriter::{
+    create_col_from_scalar_expr, strip_outer_reference,
+};
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::{conjunction, expr_to_columns, split_conjunction_owned};
 use datafusion_expr::{
@@ -556,10 +558,12 @@ impl InValue {
         Ok(key_may_be_null_in_scope(
             self.value.nullable(left_schema)?,
             &self.value_as_written,
+            true,
             scope_filters,
         ) || key_may_be_null_in_scope(
             self.subquery_column.nullable(right_schema)?,
             &self.output_expr,
+            false,
             scope_filters,
         ))
     }
@@ -588,18 +592,40 @@ impl InValue {
 /// is a comparison or an `IS NOT NULL` on the key expression itself, casts
 /// aside. Any other conjunct is assumed to let a NULL through, which keeps
 /// the join null-aware.
-fn key_may_be_null_in_scope(nullable: bool, key: &Expr, scope_filters: &[Expr]) -> bool {
+///
+/// `key_is_outer` tells on which side of the join the key is. The scope
+/// filters keep their outer references, and a side of a conjunct matches an
+/// outer key only if it names outer columns alone. A subquery column can have
+/// the same qualified name as an outer column (`FROM t AS a` inside a query
+/// over `a`), and it must not be read as the outer key.
+fn key_may_be_null_in_scope(
+    nullable: bool,
+    key: &Expr,
+    key_is_outer: bool,
+    scope_filters: &[Expr],
+) -> bool {
     if !nullable {
         return false;
     }
     let key = strip_casts(key);
     !scope_filters
         .iter()
-        .any(|filter| filter_rejects_null(filter, key))
+        .any(|filter| filter_rejects_null(filter, key, key_is_outer))
 }
 
-/// Is `filter` never TRUE when `key` is NULL?
-fn filter_rejects_null(filter: &Expr, key: &Expr) -> bool {
+/// Is `filter` never TRUE when `key` is NULL? See
+/// [`key_may_be_null_in_scope`] for `key_is_outer`.
+fn filter_rejects_null(filter: &Expr, key: &Expr, key_is_outer: bool) -> bool {
+    let is_key = |side: &Expr| {
+        let side = strip_casts(side);
+        if key_is_outer {
+            side.contains_outer()
+                && side.column_refs().is_empty()
+                && &strip_outer_reference(side.clone()) == key
+        } else {
+            !side.contains_outer() && side == key
+        }
+    };
     match filter {
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
             matches!(
@@ -610,9 +636,9 @@ fn filter_rejects_null(filter: &Expr, key: &Expr) -> bool {
                     | Operator::LtEq
                     | Operator::Gt
                     | Operator::GtEq
-            ) && (strip_casts(left) == key || strip_casts(right) == key)
+            ) && (is_key(left) || is_key(right))
         }
-        Expr::IsNotNull(expr) => strip_casts(expr) == key,
+        Expr::IsNotNull(expr) => is_key(expr),
         _ => false,
     }
 }
