@@ -153,12 +153,15 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
-    pub fn with_target_batch_bytes(mut self, target_batch_bytes: Option<usize>) -> Self {
+    pub(super) fn with_target_batch_bytes(
+        mut self,
+        target_batch_bytes: Option<usize>,
+    ) -> Self {
         self.target_batch_bytes = target_batch_bytes;
         self
     }
 
-    pub fn with_output_construction_reservation(
+    pub(super) fn with_output_construction_reservation(
         mut self,
         reservation: Option<MemoryReservation>,
     ) -> Self {

@@ -105,8 +105,13 @@ impl BatchBuilder {
         target_batch_bytes: Option<usize>,
     ) -> Self {
         let initial_reservation = reservation.size();
-        let output_construction_reservation =
-            output_construction_reservation.unwrap_or_else(|| reservation.new_empty());
+        let target_batch_bytes =
+            target_batch_bytes.filter(|_| schema_supports_byte_target(&schema));
+        let output_construction_reservation = if target_batch_bytes.is_some() {
+            output_construction_reservation.unwrap_or_else(|| reservation.new_empty())
+        } else {
+            reservation.new_empty()
+        };
         Self {
             schema,
             batches: Vec::with_capacity(stream_count * 2),
@@ -209,7 +214,7 @@ impl BatchBuilder {
                 return Err(e.into());
             }
         };
-        if self.output_construction_reservation.size() > 0 {
+        if self.target_batch_bytes.is_some() {
             let actual_size = get_record_batch_memory_size(&batch);
             if let Err(e) = try_grow_reservation_to_at_least(
                 &mut self.output_construction_reservation,
@@ -329,17 +334,11 @@ impl BatchBuilder {
             return Ok(None);
         }
 
-        let Some(target_batch_bytes) = self.target_batch_bytes else {
-            let (rows_to_emit, columns) = retry_interleave(
-                self.indices.len(),
-                self.indices.len(),
-                |rows_to_emit| self.try_interleave_columns(&self.indices[..rows_to_emit]),
-            )?;
-
-            return Ok(Some(self.finish_record_batch(rows_to_emit, columns)?));
-        };
-
-        let Some(mut estimated_bytes) = self.estimated_prefix_bytes(self.indices.len())
+        let Some((target_batch_bytes, mut estimated_bytes)) =
+            self.target_batch_bytes.and_then(|target| {
+                self.estimated_prefix_bytes(self.indices.len())
+                    .map(|estimated| (target, estimated))
+            })
         else {
             let (rows_to_emit, columns) = retry_interleave(
                 self.indices.len(),
@@ -386,7 +385,7 @@ impl BatchBuilder {
         }
 
         let (rows_to_emit, columns) =
-            match retry_interleave(rows_to_emit, initial_rows_to_emit, |rows_to_emit| {
+            match retry_interleave(rows_to_emit, rows_to_emit, |rows_to_emit| {
                 self.try_interleave_columns(&self.indices[..rows_to_emit])
             }) {
                 Ok(value) => value,
@@ -436,7 +435,8 @@ impl BatchBuilder {
 
         match data_type {
             DataType::Null => Some(0),
-            DataType::Boolean => bitmap_buffer_bytes(rows_to_emit)?.checked_mul(2),
+            DataType::Boolean => bitmap_buffer_bytes(rows_to_emit)?
+                .checked_add(self.validity_buffer_bytes(column_idx, rows_to_emit)?),
             DataType::Binary => self.byte_array_prefix_memory_upper_bound::<BinaryType>(
                 column_idx,
                 rows_to_emit,
@@ -463,13 +463,33 @@ impl BatchBuilder {
                         .and_then(aligned_buffer_bytes)
                 })
                 .and_then(|values| {
-                    bitmap_buffer_bytes(rows_to_emit)?.checked_add(values)
+                    self.validity_buffer_bytes(column_idx, rows_to_emit)?
+                        .checked_add(values)
                 }),
             _ => fixed_width(data_type).and_then(|width| {
                 rows_to_emit.checked_mul(width).and_then(|values| {
-                    bitmap_buffer_bytes(rows_to_emit)?.checked_add(values)
+                    self.validity_buffer_bytes(column_idx, rows_to_emit)?
+                        .checked_add(values)
                 })
             }),
+        }
+    }
+
+    /// Arrow allocates an output validity buffer when any input array for this
+    /// column contains nulls, even if the selected rows are all valid.
+    fn validity_buffer_bytes(
+        &self,
+        column_idx: usize,
+        rows_to_emit: usize,
+    ) -> Option<usize> {
+        if self
+            .batches
+            .iter()
+            .any(|(_, batch)| batch.column(column_idx).null_count() > 0)
+        {
+            bitmap_buffer_bytes(rows_to_emit)
+        } else {
+            Some(0)
         }
     }
 
@@ -486,10 +506,30 @@ impl BatchBuilder {
                 values_len.checked_add(array.value_length(*row_idx).as_usize())?;
         }
 
-        bitmap_buffer_bytes(rows_to_emit)?
+        self.validity_buffer_bytes(column_idx, rows_to_emit)?
             .checked_add((rows_to_emit + 1).checked_mul(size_of::<T::Offset>())?)?
             .checked_add(values_len)
     }
+}
+
+pub(super) fn schema_supports_byte_target(schema: &SchemaRef) -> bool {
+    schema
+        .fields()
+        .iter()
+        .all(|field| data_type_supports_byte_target(field.data_type()))
+}
+
+fn data_type_supports_byte_target(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Null
+            | DataType::Boolean
+            | DataType::Binary
+            | DataType::LargeBinary
+            | DataType::Utf8
+            | DataType::LargeUtf8
+    ) || matches!(data_type, DataType::FixedSizeBinary(width) if *width >= 0)
+        || fixed_width(data_type).is_some()
 }
 
 fn validity_bytes(rows: usize) -> usize {
@@ -589,7 +629,7 @@ mod tests {
     use super::*;
     use arrow::array::{
         Array, ArrayDataBuilder, BinaryArray, BooleanArray, FixedSizeBinaryArray,
-        Int32Array, ListArray, StringViewArray, StructArray,
+        Int32Array, Int64Array, ListArray, StringViewArray, StructArray,
     };
     use arrow::buffer::Buffer;
     use arrow::datatypes::{DataType, Field, Fields, Schema};
@@ -687,6 +727,26 @@ mod tests {
             true,
         )]));
         RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(fixed)]).unwrap()
+    }
+
+    fn unsupported_mixed_batch() -> RecordBatch {
+        let supported = BinaryArray::from_vec(vec![
+            b"wide-value-1".as_slice(),
+            b"wide-value-2".as_slice(),
+        ]);
+        let nested_view = StringViewArray::from(vec!["nested-1", "nested-2"]);
+        let struct_fields: Fields =
+            vec![Arc::new(Field::new("nested", DataType::Utf8View, false))].into();
+        let nested = StructArray::new(
+            struct_fields.clone(),
+            vec![Arc::new(nested_view) as _],
+            None,
+        );
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("b", DataType::Binary, false),
+            Field::new("s", DataType::Struct(struct_fields), false),
+        ]));
+        RecordBatch::try_new(schema, vec![Arc::new(supported), Arc::new(nested)]).unwrap()
     }
 
     fn assert_fixed_size_binary_output(
@@ -828,7 +888,7 @@ mod tests {
     fn test_byte_target_emits_largest_supported_prefix() {
         let batch = int_batch(vec![1, 2, 3, 4]);
         let schema = batch.schema();
-        let target = bitmap_buffer_bytes(2).unwrap() + 2 * size_of::<i32>();
+        let target = 2 * size_of::<i32>();
         let mut builder = BatchBuilder::new(
             Arc::clone(&schema),
             1,
@@ -845,6 +905,80 @@ mod tests {
         assert_int_output(&output, &[1, 2]);
         assert_eq!(builder.len(), 2);
         assert_eq!(builder.output_construction_reservation.size(), 0);
+    }
+
+    #[test]
+    fn test_byte_target_non_null_int64_uses_actual_eight_byte_estimate() {
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int64, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from(vec![1]))],
+        )
+        .unwrap();
+        let make_builder = |pool_size| {
+            let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(pool_size));
+            let output_reservation = MemoryConsumer::new("output").register(&pool);
+            let mut builder = BatchBuilder::new(
+                Arc::clone(&schema),
+                1,
+                1,
+                reservation(),
+                Some(output_reservation),
+                Some(size_of::<i64>()),
+            );
+            builder.push_batch(0, batch.clone()).unwrap();
+            builder.push_row(0);
+            (builder, pool)
+        };
+
+        let (mut builder, pool) = make_builder(size_of::<i64>() - 1);
+        let error = builder.build_record_batch().unwrap_err();
+        assert!(error.to_string().contains("Resources exhausted"));
+        assert_eq!(builder.output_construction_reservation.size(), 0);
+        assert_eq!(pool.reserved(), 0);
+
+        let (mut builder, pool) = make_builder(size_of::<i64>());
+
+        assert_eq!(builder.estimated_prefix_bytes(1), Some(size_of::<i64>()));
+        let output = builder.build_record_batch().unwrap().unwrap();
+
+        assert_eq!(get_record_batch_memory_size(&output), size_of::<i64>());
+        assert_eq!(builder.output_construction_reservation.size(), 0);
+        assert_eq!(pool.reserved(), 0);
+    }
+
+    #[test]
+    fn test_byte_target_validity_follows_all_input_arrays() {
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int64, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from(vec![Some(1), None]))],
+        )
+        .unwrap();
+        let output_budget = size_of::<i64>() + bitmap_buffer_bytes(1).unwrap();
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(output_budget));
+        let output_reservation = MemoryConsumer::new("output").register(&pool);
+        let mut builder = BatchBuilder::new(
+            schema,
+            1,
+            1,
+            reservation(),
+            Some(output_reservation),
+            Some(output_budget),
+        );
+        builder.push_batch(0, batch).unwrap();
+        // Only select the valid row. Arrow still allocates validity because the
+        // input array contains a null in another row.
+        builder.push_row(0);
+
+        assert_eq!(builder.estimated_prefix_bytes(1), Some(output_budget));
+        let output = builder.build_record_batch().unwrap().unwrap();
+
+        let actual_size = get_record_batch_memory_size(&output);
+        assert!(actual_size > size_of::<i64>());
+        assert!(actual_size <= output_budget);
+        assert_eq!(builder.output_construction_reservation.size(), 0);
+        assert_eq!(pool.reserved(), 0);
     }
 
     #[test]
@@ -1011,28 +1145,21 @@ mod tests {
 
     #[test]
     fn test_byte_target_falls_back_for_unsupported_mixed_schema() {
-        let supported = BinaryArray::from_vec(vec![
-            b"wide-value-1".as_slice(),
-            b"wide-value-2".as_slice(),
-        ]);
-        let nested_view = StringViewArray::from(vec!["nested-1", "nested-2"]);
-        let struct_fields: Fields =
-            vec![Arc::new(Field::new("nested", DataType::Utf8View, false))].into();
-        let nested = StructArray::new(
-            struct_fields.clone(),
-            vec![Arc::new(nested_view) as _],
-            None,
+        let batch = unsupported_mixed_batch();
+        let schema = batch.schema();
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1));
+        let output_reservation = MemoryConsumer::new("output").register(&pool);
+        output_reservation.try_grow(1).unwrap();
+        let mut builder = BatchBuilder::new(
+            schema,
+            1,
+            2,
+            reservation(),
+            Some(output_reservation),
+            Some(1),
         );
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("b", DataType::Binary, false),
-            Field::new("s", DataType::Struct(struct_fields), false),
-        ]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(supported), Arc::new(nested)],
-        )
-        .unwrap();
-        let mut builder = BatchBuilder::new(schema, 1, 2, reservation(), None, Some(1));
+        assert_eq!(builder.target_batch_bytes, None);
+        assert_eq!(pool.reserved(), 0);
         builder.push_batch(0, batch).unwrap();
         push_n_rows(&mut builder, 0, 2);
 
@@ -1041,5 +1168,41 @@ mod tests {
         assert_eq!(output.num_rows(), 2);
         assert!(builder.is_empty());
         assert_eq!(builder.output_construction_reservation.size(), 0);
+        assert_eq!(pool.reserved(), 0);
+    }
+
+    #[test]
+    fn test_unsupported_schema_stays_unaccounted_after_first_batch() {
+        let first = unsupported_mixed_batch();
+        let second = unsupported_mixed_batch();
+        let schema = first.schema();
+        let pool_capacity = get_record_batch_memory_size(&first);
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(pool_capacity));
+        let output_reservation = MemoryConsumer::new("output").register(&pool);
+        output_reservation.try_grow(pool_capacity).unwrap();
+        let mut builder = BatchBuilder::new(
+            schema,
+            1,
+            2,
+            reservation(),
+            Some(output_reservation),
+            Some(1),
+        );
+
+        builder.push_batch(0, first).unwrap();
+        push_n_rows(&mut builder, 0, 2);
+        let output = builder.build_record_batch().unwrap().unwrap();
+        let output_size = get_record_batch_memory_size(&output);
+        assert!(output_size <= pool_capacity);
+        assert_eq!(pool.reserved(), 0);
+
+        let contender = MemoryConsumer::new("contender").register(&pool);
+        contender.try_grow(pool_capacity).unwrap();
+        builder.push_batch(0, second).unwrap();
+        push_n_rows(&mut builder, 0, 2);
+        let output = builder.build_record_batch().unwrap().unwrap();
+
+        assert_eq!(get_record_batch_memory_size(&output), output_size);
+        assert_eq!(pool.reserved(), contender.size());
     }
 }
