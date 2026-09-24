@@ -291,6 +291,34 @@ To run either check on its own:
 [`dev/depcheck`]: https://github.com/apache/datafusion/tree/main/dev/depcheck
 [cargo-machete]: https://github.com/bnjbvr/cargo-machete
 
+## Breaking API Check
+
+`ci/scripts/check_semver.sh` compares the public API of the changed publishable
+crates with a baseline commit, the same way the "Detect breaking changes"
+workflow does. `./dev/rust_lint.sh` runs it, installs [cargo-semver-checks]
+if it is missing, and needs `protoc`.
+
+The script does not fetch. Without the baseline ref it reports a skip, so
+create the ref CI uses and refresh it before a comparison:
+
+```shell
+git fetch https://github.com/apache/datafusion.git main:refs/remotes/apache/main
+```
+
+To run the check on its own, or against another baseline:
+
+```shell
+./ci/scripts/check_semver.sh
+./ci/scripts/check_semver.sh --base-ref upstream/main
+./ci/scripts/check_semver.sh --base-ref upstream/main --package datafusion
+DATAFUSION_SEMVER_BASE_REF=upstream/main uv run ./dev/rust_lint.sh
+```
+
+Selection follows crate directories and includes uncommitted changes. Use
+`--package NAME`, which is repeatable, for a crate it does not reach.
+
+[cargo-semver-checks]: https://github.com/obi1kenobi/cargo-semver-checks
+
 ## Examples README Check
 
 `datafusion-examples/README.md` is generated from the documentation comments in
