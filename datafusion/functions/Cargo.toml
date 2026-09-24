@@ -94,6 +94,7 @@ uuid = { workspace = true, features = ["v4"], optional = true }
 arrow = { workspace = true, features = ["test_utils"] }
 criterion = { workspace = true }
 ctor = { workspace = true }
+datafusion-common = { workspace = true, features = ["test_utils"] }
 env_logger = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }

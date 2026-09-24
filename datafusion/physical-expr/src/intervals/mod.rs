@@ -18,5 +18,13 @@
 //! Interval arithmetic and constraint propagation library
 
 pub mod cp_solver;
+/// # Public Only for Internal Use:
+/// Interval arithmetic helpers shared by tests in DataFusion crates. Not part of the
+/// supported public API.
+/// See the [API health policy] for details.
+///
+/// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
+#[cfg(any(test, feature = "test_utils"))]
+#[doc(hidden)]
 pub mod test_utils;
 pub mod utils;

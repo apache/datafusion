@@ -18,7 +18,16 @@
 //! [`HashJoinExec`] Partitioned Hash Join Operator
 
 pub use exec::{HashJoinExec, HashJoinExecBuilder};
-pub use partitioned_hash_eval::{HashExpr, HashTableLookupExpr, SeededRandomState};
+/// # Public Only for Internal Use:
+/// Exposed for expression serialization tests in `datafusion-proto`. Not part of the
+/// supported public API.
+/// See the [API health policy] for details.
+///
+/// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
+#[cfg(any(test, feature = "test_utils"))]
+#[doc(hidden)]
+pub use partitioned_hash_eval::HashTableLookupExpr;
+pub use partitioned_hash_eval::{HashExpr, SeededRandomState};
 
 mod exec;
 mod inlist_builder;

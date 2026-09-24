@@ -59,6 +59,7 @@ object_store = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+datafusion-common = { workspace = true, features = ["test_utils"] }
 
 # Note: add additional linter rules in lib.rs.
 # Rust does not support workspace + new linter rules in subcrates yet

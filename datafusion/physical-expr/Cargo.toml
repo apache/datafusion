@@ -41,6 +41,8 @@ workspace = true
 name = "datafusion_physical_expr"
 
 [features]
+# Exposes internal test utilities for use by other DataFusion crates.
+test_utils = []
 recursive_protection = ["dep:recursive"]
 # Forwards the `proto` feature to `datafusion-physical-expr-common`, exposing
 # `PhysicalExpr::to_proto` and letting expressions in this crate implement it.
@@ -71,6 +73,8 @@ half = { workspace = true }
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
 criterion = { workspace = true }
+datafusion-common = { workspace = true, features = ["test_utils"] }
+datafusion-expr = { workspace = true, features = ["test_utils"] }
 datafusion-functions = { workspace = true }
 insta = { workspace = true }
 rand = { workspace = true }

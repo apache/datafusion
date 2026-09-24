@@ -24,7 +24,13 @@ pub mod spill_pool;
 use datafusion_execution::spill_file::{AsyncSpillWriter, SpillWriter};
 // Moved for refactor, re-export to keep the public API stable
 pub use datafusion_common::utils::memory::get_record_batch_memory_size;
-// Re-export SpillManager for doctests only (hidden from public docs)
+/// # Public Only for Internal Use:
+/// Exposed here for doctests and the spilling tests in `datafusion`. Not part of the
+/// supported public API.
+/// See the [API health policy] for details.
+///
+/// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
+#[cfg(any(test, feature = "test_utils"))]
 #[doc(hidden)]
 pub use spill_manager::SpillManager;
 

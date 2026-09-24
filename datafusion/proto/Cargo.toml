@@ -86,11 +86,14 @@ datafusion = { workspace = true, default-features = false, features = [
     "compression",
     "datetime_expressions",
     "nested_expressions",
+    "test_utils",
     "unicode_expressions",
 ] }
+datafusion-common = { workspace = true, features = ["test_utils"] }
 datafusion-functions = { workspace = true, default-features = true }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
+datafusion-physical-plan = { workspace = true, features = ["test_utils"] }
 doc-comment = { workspace = true }
 flate2 = { workspace = true }
 pretty_assertions = "1.4"

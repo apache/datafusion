@@ -69,6 +69,8 @@ regex-syntax = "0.8.9"
 async-trait = { workspace = true }
 criterion = { workspace = true }
 ctor = { workspace = true }
+datafusion-common = { workspace = true, features = ["test_utils"] }
+datafusion-expr = { workspace = true, features = ["test_utils"] }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window = { workspace = true }
 datafusion-functions-window-common = { workspace = true }

@@ -68,7 +68,14 @@ pub fn format_batches(results: &[RecordBatch]) -> Result<impl Display, ArrowErro
 /// // compare the formatted output of the record batch with the expected output
 /// assert_batches_eq!(expected, &[batch]);
 /// ```
+///
+/// # Public Only for Internal Use:
+/// Shared test assertions for DataFusion crates. Not part of the supported public API.
+/// See the [API health policy] for details.
+///
+/// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
 #[macro_export]
+#[doc(hidden)]
 macro_rules! assert_batches_eq {
     ($EXPECTED_LINES: expr, $CHUNKS: expr) => {
         let expected_lines: Vec<String> =
@@ -117,7 +124,14 @@ pub fn batches_to_sort_string(batches: &[RecordBatch]) -> String {
 /// Expects to be called about like this:
 ///
 /// `assert_batch_sorted_eq!(expected_lines: &[&str], batches: &[RecordBatch])`
+///
+/// # Public Only for Internal Use:
+/// Shared test assertions for DataFusion crates. Not part of the supported public API.
+/// See the [API health policy] for details.
+///
+/// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
 #[macro_export]
+#[doc(hidden)]
 macro_rules! assert_batches_sorted_eq {
     ($EXPECTED_LINES: expr, $CHUNKS: expr) => {
         let mut expected_lines: Vec<String> =
@@ -159,7 +173,14 @@ macro_rules! assert_batches_sorted_eq {
 /// messages are on the same line as the failure;
 ///
 /// Both arguments must be convertible into Strings ([`Into`]<[`String`]>)
+///
+/// # Public Only for Internal Use:
+/// Shared test assertions for DataFusion crates. Not part of the supported public API.
+/// See the [API health policy] for details.
+///
+/// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
 #[macro_export]
+#[doc(hidden)]
 macro_rules! assert_contains {
     ($ACTUAL: expr, $EXPECTED: expr) => {
         let actual_value: String = $ACTUAL.into();
@@ -182,7 +203,14 @@ macro_rules! assert_contains {
 /// messages are on the same line as the failure;
 ///
 /// Both arguments must be convertible into Strings ([`Into`]<[`String`]>)
+///
+/// # Public Only for Internal Use:
+/// Shared test assertions for DataFusion crates. Not part of the supported public API.
+/// See the [API health policy] for details.
+///
+/// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
 #[macro_export]
+#[doc(hidden)]
 macro_rules! assert_not_contains {
     ($ACTUAL: expr, $UNEXPECTED: expr) => {
         let actual_value: String = $ACTUAL.into();
@@ -318,7 +346,14 @@ pub fn get_data_dir(
     }
 }
 
+/// # Public Only for Internal Use:
+/// Array construction for test macros in DataFusion crates. Not part of the supported
+/// public API.
+/// See the [API health policy] for details.
+///
+/// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
 #[macro_export]
+#[doc(hidden)]
 macro_rules! create_array {
     (Boolean, $values: expr) => {
         std::sync::Arc::new($crate::arrow::array::BooleanArray::from($values))
@@ -377,8 +412,16 @@ macro_rules! create_array {
 ///     ("c", Utf8, vec!["alpha", "beta", "gamma"])
 /// );
 /// ```
+///
+/// # Public Only for Internal Use:
+/// Record batch construction for tests in DataFusion crates. Not part of the supported
+/// public API.
+/// See the [API health policy] for details.
+///
+/// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
 #[deprecated(since = "55.0.0", note = "Use `arrow::array::record_batch` instead")]
 #[macro_export]
+#[doc(hidden)]
 macro_rules! record_batch {
     ($(($name: expr, $type: ident, $values: expr)),*) => {
         {

@@ -60,6 +60,7 @@ num-traits = { workspace = true }
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
 criterion = { workspace = true }
+datafusion-functions-aggregate-common = { workspace = true, features = ["test_utils"] }
 rand = { workspace = true }
 
 [[bench]]

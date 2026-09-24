@@ -39,6 +39,7 @@ workspace = true
 
 [features]
 force_hash_collisions = []
+# Exposes internal test utilities for use by other DataFusion crates.
 test_utils = ["arrow/test_utils"]
 tokio_coop = []
 tokio_coop_fallback = []
@@ -93,8 +94,12 @@ tokio = { workspace = true, features = ["time"] }
 [dev-dependencies]
 arrow-data = { workspace = true }
 criterion = { workspace = true, features = ["async_futures"] }
+datafusion-common = { workspace = true, features = ["test_utils"] }
+datafusion-expr = { workspace = true, features = ["test_utils"] }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window = { workspace = true }
+datafusion-physical-expr = { workspace = true, features = ["test_utils"] }
+datafusion-physical-plan = { workspace = true, features = ["test_utils"] }
 insta = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }

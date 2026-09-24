@@ -41,6 +41,8 @@ workspace = true
 name = "datafusion_functions_aggregate_common"
 
 [features]
+# Exposes internal test utilities for use by other DataFusion crates.
+test_utils = []
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = ["datafusion-common/force_hash_collisions"]
 

@@ -115,4 +115,11 @@ pub mod udaf {
     pub use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 }
 
+/// # Public Only for Internal Use:
+/// Shared test helpers for DataFusion crates. Not part of the supported public API.
+/// See the [API health policy] for details.
+///
+/// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
+#[cfg(any(test, feature = "test_utils"))]
+#[doc(hidden)]
 pub mod test;

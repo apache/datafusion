@@ -24,9 +24,16 @@ use arrow::array::BooleanBufferBuilder;
 pub use asof_join::{AsOfJoinExec, AsOfMatchExpr};
 pub use cross_join::CrossJoinExec;
 use datafusion_physical_expr::PhysicalExprRef;
-pub use hash_join::{
-    HashExpr, HashJoinExec, HashJoinExecBuilder, HashTableLookupExpr, SeededRandomState,
-};
+/// # Public Only for Internal Use:
+/// Exposed for expression serialization tests in `datafusion-proto`. Not part of the
+/// supported public API.
+/// See the [API health policy] for details.
+///
+/// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
+#[cfg(any(test, feature = "test_utils"))]
+#[doc(hidden)]
+pub use hash_join::HashTableLookupExpr;
+pub use hash_join::{HashExpr, HashJoinExec, HashJoinExecBuilder, SeededRandomState};
 pub use nested_loop_join::{NestedLoopJoinExec, NestedLoopJoinExecBuilder};
 use parking_lot::Mutex;
 // Note: SortMergeJoin is not used in plans yet
@@ -51,9 +58,17 @@ mod array_map;
 mod join_filter;
 /// Hash map implementations for join operations.
 ///
-/// Note: This module is public for internal testing purposes only
-/// and is not guaranteed to be stable across versions.
+/// # Public Only for Internal Use:
+/// Exposed for hash join tests in `datafusion-proto`. Not part of the supported public
+/// API.
+/// See the [API health policy] for details.
+///
+/// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
+#[cfg(any(test, feature = "test_utils"))]
+#[doc(hidden)]
 pub mod join_hash_map;
+#[cfg(not(any(test, feature = "test_utils")))]
+mod join_hash_map;
 
 use array_map::ArrayMap;
 use utils::JoinHashMapType;

@@ -31,6 +31,8 @@ version.workspace = true
 all-features = true
 
 [features]
+# Exposes internal test utilities for use by other DataFusion crates.
+test_utils = []
 backtrace = ["datafusion-common/backtrace"]
 compression = ["async-compression", "liblzma", "bzip2", "flate2", "zstd", "tokio-util"]
 default = ["compression"]
@@ -83,6 +85,8 @@ zstd = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+datafusion-common = { workspace = true, features = ["test_utils"] }
+datafusion-datasource = { workspace = true, features = ["test_utils"] }
 datafusion-functions = { workspace = true }
 insta = { workspace = true }
 tempfile = { workspace = true }

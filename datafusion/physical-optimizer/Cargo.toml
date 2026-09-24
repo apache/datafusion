@@ -58,5 +58,6 @@ recursive = { workspace = true, optional = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-window = { workspace = true }
+datafusion-physical-plan = { workspace = true, features = ["test_utils"] }
 insta = { workspace = true }
 tokio = { workspace = true }

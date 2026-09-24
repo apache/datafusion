@@ -88,6 +88,14 @@ pub mod preimage;
 pub mod ptr_eq;
 #[cfg(not(feature = "sql"))]
 pub mod sql;
+/// # Public Only for Internal Use:
+/// Function stubs shared by tests in DataFusion crates. Not part of the supported
+/// public API.
+/// See the [API health policy] for details.
+///
+/// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
+#[cfg(any(test, feature = "test_utils"))]
+#[doc(hidden)]
 pub mod test;
 pub mod tree_node;
 pub mod type_coercion;

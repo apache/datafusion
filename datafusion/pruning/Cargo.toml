@@ -27,6 +27,7 @@ log = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+datafusion-common = { workspace = true, features = ["test_utils"] }
 datafusion-expr = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 insta = { workspace = true }

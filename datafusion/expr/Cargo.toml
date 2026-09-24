@@ -41,6 +41,8 @@ workspace = true
 name = "datafusion_expr"
 
 [features]
+# Exposes internal test utilities for use by other DataFusion crates.
+test_utils = []
 default = ["sql"]
 # Enables protobuf conversions for the expression types owned by this crate.
 # Off by default so consumers that never serialize plans pay nothing. Mirrors
@@ -71,6 +73,8 @@ sqlparser = { workspace = true, optional = true }
 [dev-dependencies]
 criterion = { workspace = true }
 ctor = { workspace = true }
+datafusion-common = { workspace = true, features = ["test_utils"] }
+datafusion-expr = { workspace = true, features = ["test_utils"] }
 env_logger = { workspace = true }
 insta = { workspace = true }
 # Makes sure `test_display_pg_json` behaves in a consistent way regardless of

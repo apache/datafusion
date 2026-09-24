@@ -71,8 +71,17 @@ pub use datafusion_datasource::memory::PartitionData;
 #[derive(Debug)]
 pub struct MemTable {
     schema: SchemaRef,
-    // batches used to be pub(crate), but it's needed to be public for the tests
+    /// # Public Only for Internal Use:
+    /// Batches exposed for the memory table tests in `datafusion`. Not part of the
+    /// supported public API.
+    /// See the [API health policy] for details.
+    ///
+    /// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
+    #[cfg(any(test, feature = "test_utils"))]
+    #[doc(hidden)]
     pub batches: Vec<PartitionData>,
+    #[cfg(not(any(test, feature = "test_utils")))]
+    batches: Vec<PartitionData>,
     constraints: Constraints,
     column_defaults: HashMap<String, Expr>,
     /// Optional pre-known sort order(s). Must be `SortExpr`s.

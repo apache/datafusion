@@ -75,6 +75,7 @@ workspace = true
 
 [dev-dependencies]
 ctor = { workspace = true }
+datafusion-common = { workspace = true, features = ["test_utils"] }
 insta = { workspace = true }
 insta-cmd = "0.7.0"
 rstest = { workspace = true }

@@ -67,6 +67,8 @@ stacker = { workspace = true, optional = true }
 [dev-dependencies]
 ctor = { workspace = true }
 # please do not move these dependencies to the main dependencies section
+datafusion-common = { workspace = true, features = ["test_utils"] }
+datafusion-expr = { workspace = true, features = ["test_utils"] }
 datafusion-functions = { workspace = true, default-features = true }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-nested = { workspace = true, features = ["sql"] }

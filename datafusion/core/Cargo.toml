@@ -39,6 +39,15 @@ all-features = true
 workspace = true
 
 [features]
+# Exposes internal test utilities for use by other DataFusion crates.
+test_utils = [
+    "datafusion-catalog/test_utils",
+    "datafusion-common/test_utils",
+    "datafusion-datasource/test_utils",
+    "datafusion-expr/test_utils",
+    "datafusion-physical-expr/test_utils",
+    "datafusion-physical-plan/test_utils",
+]
 # Enables the `print_config_docs`, `print_runtime_config_docs` and
 # `print_functions_docs` binaries, which regenerate the docs under
 # `docs/source/user-guide`. Off by default: they are only run by
@@ -171,6 +180,7 @@ async-trait = { workspace = true }
 criterion = { workspace = true, features = ["async_tokio", "async_futures"] }
 ctor = { workspace = true }
 dashmap = "6.2.1"
+datafusion = { workspace = true, features = ["test_utils"] }
 datafusion-doc = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 datafusion-macros = { workspace = true }

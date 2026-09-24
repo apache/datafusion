@@ -188,6 +188,13 @@ impl InputDistributionRequirements {
     /// Independent per-child requirements are intentionally ignored here, use
     /// [`Self::child_satisfaction`] for those checks. An empty result means all
     /// co-partitioning requirements are satisfied.
+    ///
+    /// # Public Only for Internal Use:
+    /// `datafusion-physical-optimizer` uses this to enforce distribution
+    /// requirements. It is not part of the supported public API.
+    /// See the [API health policy] for details.
+    ///
+    /// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
     #[doc(hidden)]
     pub fn unsatisfied_co_partitioned_children(
         &self,

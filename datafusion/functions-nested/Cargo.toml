@@ -66,6 +66,7 @@ memchr = { workspace = true }
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
 criterion = { workspace = true, features = ["async_tokio"] }
+datafusion-common = { workspace = true, features = ["test_utils"] }
 rand = { workspace = true }
 # used to test array_transform
 datafusion-physical-expr = { workspace = true }

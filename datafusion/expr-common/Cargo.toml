@@ -47,5 +47,6 @@ indexmap = { workspace = true }
 itertools = { workspace = true }
 
 [dev-dependencies]
+datafusion-common = { workspace = true, features = ["test_utils"] }
 insta = { workspace = true }
 rstest = { workspace = true }

@@ -30,6 +30,10 @@ version.workspace = true
 [package.metadata.docs.rs]
 all-features = true
 
+[features]
+# Exposes internal test utilities for use by other DataFusion crates.
+test_utils = []
+
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }

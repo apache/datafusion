@@ -58,10 +58,13 @@ pub mod url;
 pub mod write;
 pub use self::file::as_file_source;
 pub use self::url::ListingTableUrl;
+#[cfg(any(test, feature = "test_utils"))]
 use crate::file_groups::FileGroup;
 use arrow::datatypes::SchemaRef;
 use chrono::TimeZone;
-use datafusion_common::stats::{Precision, is_known_empty};
+use datafusion_common::stats::Precision;
+#[cfg(any(test, feature = "test_utils"))]
+use datafusion_common::stats::is_known_empty;
 use datafusion_common::{ColumnStatistics, Result, TableReference};
 use datafusion_common::{ScalarValue, Statistics};
 use datafusion_physical_expr::LexOrdering;
@@ -450,6 +453,14 @@ impl From<ObjectMeta> for PartitionedFile {
 /// File 2: [40, 140]
 /// File 3: [60, 160]
 /// File 4: [80, 180]
+///
+/// # Public Only for Internal Use:
+/// Used by file group tests and benchmarks. Not part of the supported public API.
+/// See the [API health policy] for details.
+///
+/// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
+#[cfg(any(test, feature = "test_utils"))]
+#[doc(hidden)]
 pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGroup> {
     let mut files = Vec::with_capacity(num_files);
     if num_files == 0 {
@@ -500,8 +511,15 @@ pub fn generate_test_files(num_files: usize, overlap_factor: f64) -> Vec<FileGro
     vec![FileGroup::new(files)]
 }
 
-// Helper function to verify that files within each group maintain sort order
-/// Used by tests and benchmarks
+/// Verifies that files within each group maintain sort order.
+///
+/// # Public Only for Internal Use:
+/// Used by file group tests and benchmarks. Not part of the supported public API.
+/// See the [API health policy] for details.
+///
+/// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
+#[cfg(any(test, feature = "test_utils"))]
+#[doc(hidden)]
 pub fn verify_sort_integrity(file_groups: &[FileGroup]) -> bool {
     for group in file_groups {
         // Known-empty files contribute no rows and may not have min/max

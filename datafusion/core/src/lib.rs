@@ -854,8 +854,23 @@ pub mod physical_plan {
     pub use datafusion_physical_plan::*;
 }
 
-// Reexport testing macros for compatibility
+/// # Public Only for Internal Use:
+/// Test assertions re-exported for compatibility across DataFusion crates. Not part of
+/// the supported public API.
+/// See the [API health policy] for details.
+///
+/// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
+#[cfg(any(test, feature = "test_utils"))]
+#[doc(hidden)]
 pub use datafusion_common::assert_batches_eq;
+/// # Public Only for Internal Use:
+/// Test assertions re-exported for compatibility across DataFusion crates. Not part of
+/// the supported public API.
+/// See the [API health policy] for details.
+///
+/// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
+#[cfg(any(test, feature = "test_utils"))]
+#[doc(hidden)]
 pub use datafusion_common::assert_batches_sorted_eq;
 
 /// re-export of [`datafusion_sql`] crate
@@ -895,10 +910,24 @@ pub mod variable {
     pub use datafusion_expr::var_provider::{VarProvider, VarType};
 }
 
+/// # Public Only for Internal Use:
+/// Shared test helpers for DataFusion crates. Not part of the supported public API.
+/// See the [API health policy] for details.
+///
+/// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(test, feature = "test_utils"))]
+#[doc(hidden)]
 pub mod test;
 
 mod schema_equivalence;
+/// # Public Only for Internal Use:
+/// Shared test helpers for DataFusion crates. Not part of the supported public API.
+/// See the [API health policy] for details.
+///
+/// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
+#[cfg(any(test, feature = "test_utils"))]
+#[doc(hidden)]
 pub mod test_util;
 
 #[cfg(doctest)]

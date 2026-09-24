@@ -43,6 +43,10 @@ Examples of non-breaking changes include:
 - Marking a function as deprecated (`#[deprecated]`)
 - Adding a new function to a `trait` with a default implementation
 
+<!-- Keep this anchor stable: Rustdoc comments link to this section. -->
+
+<a name="datafusion-internal-public-apis"></a>
+
 ### DataFusion-internal Public APIs
 
 Some internal implementation details require `pub` visibility because they are
@@ -51,24 +55,58 @@ extension points. They are hidden from generated documentation and are not part
 of DataFusion's supported public API, so they may be changed or removed without
 notice or a deprecation period. Examples include:
 
-1. Test helpers.
-2. Operator APIs required by the optimizer to inspect or rewrite execution plans
-   across crate boundaries.
+1. Test/micro-benchmark helpers.
+2. Internal utilities, such as operator APIs required by the optimizer to inspect
+   or rewrite execution plans across crate boundaries.
 
-For APIs intended only for internal use, add `#[doc(hidden)]` and a doc comment
-section headed `# Public Only for Internal Use:`. Name the crate or component
-that requires access and explain why the API is not intended for downstream use.
+Note: Exposing internal APIs for tests or microbenchmarks is not recommended,
+though some legacy code does so. For new tests and benchmarks, prefer exercising
+observable behavior to simplify maintenance.
+
+#### Test Helpers
+
+Hide shared test helpers with `#[doc(hidden)]` and gate them behind the non-default
+`test_utils` feature, declared as `test_utils = []` in `[features]`. Unit tests use
+`cfg(test)`; tests and benchmarks that link the crate enable `test_utils` in
+`[dev-dependencies]`.
+
+```txt
+/// # Public Only for Internal Use:
+/// Shared test helpers for DataFusion crates. Not part of the supported public API.
+/// See the [API health policy] for details.
+///
+/// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
+#[cfg(any(test, feature = "test_utils"))]
+#[doc(hidden)]
+pub mod test;
+```
+
+```toml
+[dev-dependencies]
+datafusion-physical-plan = { workspace = true, features = ["test_utils"] }
+```
+
+#### Internal Utilities
+
+Utilities needed across crates during normal execution cannot be gated behind
+`test_utils`. Add `#[doc(hidden)]` and a doc comment section headed 
+`# Public Only for Internal Use:`. Name the crate or component that requires access 
+and explain why the API is not intended for downstream use.
+
 For example:
 
 ```txt
-impl HashTableLookupExpr {
+impl InputDistributionRequirements {
     /// ...
     ///
     /// # Public Only for Internal Use:
-    /// `datafusion-proto` tests require this constructor, but it is not part of
-    /// the supported public API.
+    /// `datafusion-physical-optimizer` uses this to enforce distribution
+    /// requirements. It is not part of the supported public API.
+    /// See the [API health policy] for details.
+    ///
+    /// [API health policy]: https://datafusion.apache.org/contributor-guide/api-health.html#datafusion-internal-public-apis
     #[doc(hidden)]
-    pub fn new(...) {...}
+    pub fn unsatisfied_co_partitioned_children(...) {...}
 }
 ```
 

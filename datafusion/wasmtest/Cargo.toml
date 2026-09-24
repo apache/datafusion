@@ -61,6 +61,7 @@ wasm-bindgen = "0.2.99"
 
 [dev-dependencies]
 bytes = { workspace = true }
+datafusion-common = { workspace = true, features = ["test_utils"] }
 futures = { workspace = true }
 object_store = { workspace = true }
 # needs to be compiled
