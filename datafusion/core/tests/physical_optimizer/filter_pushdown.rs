@@ -1010,7 +1010,7 @@ async fn optimize_and_collect_pushdown_plan(
 // Not portable to sqllogictest: this test pins `PartitionMode::Partitioned`
 // by hand-wiring `RepartitionExec(Hash, 12)` on both join sides. A SQL
 // INNER JOIN over small parquet inputs plans as `CollectLeft`, so the
-// per-partition CASE filter this test exercises is not reachable via SQL.
+// partitioned filter this test exercises is not reachable via SQL.
 #[tokio::test]
 async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     // Rough sketch of the MRE we're trying to recreate:
@@ -1165,7 +1165,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
     -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE hash_repartition % 12 WHEN 5 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) WHEN 8 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) ELSE false END ]
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}, {c0:aa,c1:ba}]) ]
     "
     );
 
@@ -1369,6 +1369,11 @@ async fn test_hashjoin_dynamic_filter_pushdown_range_partitioned() {
     config.execution.parquet.pushdown_filters = true;
     config.optimizer.enable_dynamic_filter_pushdown = true;
     config.optimizer.preserve_file_partitions = 1;
+    // Push hash table lookups instead of `InList`s so the filter keeps the
+    // `range_partition` routing: an all-`InList` build collapses into one `InList`.
+    config
+        .optimizer
+        .hash_join_inlist_pushdown_max_distinct_values = 0;
     let (plan, batches) = optimize_and_collect_pushdown_plan(plan, config).await;
 
     // Now check what our filter looks like
@@ -1381,7 +1386,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_range_partitioned() {
     -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
     -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE range_partition WHEN 0 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) WHEN 1 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) ELSE false END ]
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE range_partition WHEN 0 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND hash_lookup WHEN 1 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND hash_lookup ELSE false END ]
     "
     );
 
