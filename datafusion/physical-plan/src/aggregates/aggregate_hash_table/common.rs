@@ -26,20 +26,22 @@ use arrow::array::{
 use arrow::compute::{filter_record_batch, prep_null_mask_filter};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{Result, assert_eq_or_internal_err, internal_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
+use datafusion_expr::{AggregateMetrics, GroupsAccumulator};
 use datafusion_expr_common::blocked_groups_accumulator::{
     BlockedEmitTo, BlockedGroupsAccumulator, BlocksIndex,
 };
+use datafusion_functions_aggregate_common::aggregate::blocked_groups_accumulator::BlockedGroupsAccumulatorAdapter;
+use datafusion_physical_expr::GroupsAccumulatorAdapter;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
+use log::debug;
 
 use crate::PhysicalExpr;
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     BlockedGroupValues, GroupByMetrics, new_blocked_group_values,
 };
-use crate::aggregates::grouped_hash_stream::
-create_blocked_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
@@ -58,6 +60,61 @@ pub(in crate::aggregates) struct PartialReduceMarker;
 pub(in crate::aggregates) struct PartialSkipMarker;
 /// Marker for partial state -> final value aggregation.
 pub(in crate::aggregates) struct FinalMarker;
+
+/// Create an accumulator for `agg_expr` -- a [`GroupsAccumulator`] if
+/// that is supported by the aggregate, or a
+/// [`GroupsAccumulatorAdapter`] if not.
+pub(in crate::aggregates) fn create_group_accumulator(
+    agg_expr: &Arc<AggregateFunctionExpr>,
+    metrics: Arc<dyn AggregateMetrics>,
+) -> Result<Box<dyn GroupsAccumulator>> {
+    if agg_expr.groups_accumulator_supported() {
+        agg_expr.create_groups_accumulator_with_metrics(metrics)
+    } else {
+        // Note in the log when the slow path is used
+        debug!(
+            "Creating GroupsAccumulatorAdapter for {}: {agg_expr:?}",
+            agg_expr.name()
+        );
+        let agg_expr = Arc::clone(agg_expr);
+        let mut adapter =
+            GroupsAccumulatorAdapter::new(move || agg_expr.create_accumulator());
+        adapter.set_metrics(metrics);
+        Ok(Box::new(adapter))
+    }
+}
+
+/// Create an accumulator for `agg_expr` -- a [`BlockedGroupsAccumulator`] if
+/// that is supported by the aggregate, or a
+/// [`BlockedGroupsAccumulatorAdapter`] if not.
+pub(in crate::aggregates) fn create_blocked_group_accumulator(
+    agg_expr: &Arc<AggregateFunctionExpr>,
+    block_size: usize,
+    metrics: Arc<dyn AggregateMetrics>,
+) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+    // TODO - WHAT ABOUT DYNAMIC BLOCK SIZE?
+    if let Some(agg_batch_size) = agg_expr.batch_size() {
+        assert_eq_or_internal_err!(
+            agg_batch_size,
+            block_size,
+            "Block size mismatch for blocked groups accumulator"
+        );
+    }
+    // TODO - native blocked accumulators do not receive `metrics` yet
+    if agg_expr.blocked_groups_accumulator_supported() {
+        agg_expr.create_blocked_groups_accumulator()
+    } else {
+        // Note in the log when the slow path is used
+        debug!(
+            "Creating BlockedGroupsAccumulatorAdapter for {}: {agg_expr:?}",
+            agg_expr.name()
+        );
+        let group_acc = create_group_accumulator(agg_expr, metrics)?;
+        Ok(Box::new(BlockedGroupsAccumulatorAdapter::new(
+            group_acc, block_size,
+        )))
+    }
+}
 
 /// Grouped hash table shared by the partial and final paths.
 ///
@@ -95,6 +152,9 @@ pub(in crate::aggregates) struct AggregateHashTable<AggrMode> {
     /// Per-aggregate timing metrics for accumulator operations.
     pub(super) aggregate_accumulator_metrics: Arc<AggregateAccumulatorMetrics>,
 
+    /// Optional internal metrics owned by each aggregate expression.
+    pub(super) aggregate_submetrics: Vec<Arc<dyn AggregateMetrics>>,
+
     /// Raw input schema, used to evaluate expressions and synthesize empty
     /// grouping-set rows.
     pub(super) input_schema: SchemaRef,
@@ -130,43 +190,49 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         }
 
         let input_schema = agg.input().schema();
+        let metrics = AggregateTableMetrics::new(agg, partition);
         let aggregate_arguments = aggregate_expressions(
-            &agg.aggr_expr,
+            agg.aggr_expr(),
             &agg.mode,
-            agg.group_by.num_group_exprs(),
+            agg.group_by().num_group_exprs(),
         )?;
         let accumulators: Vec<_> = agg
-            .aggr_expr
+            .aggr_expr()
             .iter()
             .zip(aggregate_arguments)
             .zip(filters)
-            .map(|((agg_expr, arguments), filter)| {
-                let accumulator = create_blocked_group_accumulator(agg_expr, batch_size)?;
+            .zip(metrics.submetrics.iter())
+            .map(|(((agg_expr, arguments), filter), submetrics)| {
+                let accumulator = create_blocked_group_accumulator(
+                    agg_expr,
+                    batch_size,
+                    Arc::clone(submetrics),
+                )?;
                 Ok(HashAggregateAccumulator::new(
                     Arc::clone(agg_expr),
                     arguments,
                     filter,
                     accumulator,
+                    Arc::clone(submetrics),
                 ))
             })
             .collect::<Result<_>>()?;
 
-        let group_schema = agg.group_by.group_schema(&input_schema)?;
+        let group_schema = agg.group_by().group_schema(&input_schema)?;
         let group_values =
             new_blocked_group_values(group_schema, &GroupOrdering::None, batch_size)?;
-
-        let metrics = AggregateTableMetrics::new(agg, partition);
 
         Ok(Self {
             group_by_metrics: metrics.group_by,
             aggregate_argument_metrics: metrics.aggregate_arguments,
             aggregate_accumulator_metrics: metrics.accumulator,
+            aggregate_submetrics: metrics.submetrics,
             input_schema,
             output_schema,
             state_schema,
             batch_size,
             state: AggregateHashTableState::Building(AggregateHashTableBuffer {
-                group_by: Arc::clone(&agg.group_by),
+                group_by: Arc::clone(agg.group_by()),
                 group_values,
                 batch_group_indices: Default::default(),
                 accumulators,
@@ -540,6 +606,9 @@ pub(super) struct HashAggregateAccumulator {
 
     /// Accumulator state for all groups for one aggregate expression.
     accumulator: Box<dyn BlockedGroupsAccumulator>,
+
+    /// Optional internal metrics owned by this aggregate expression.
+    submetrics: Arc<dyn AggregateMetrics>,
 }
 
 pub(super) type AggregateAccumulator = HashAggregateAccumulator;
@@ -720,26 +789,31 @@ impl HashAggregateAccumulator {
         arguments: Vec<Arc<dyn PhysicalExpr>>,
         filter: Option<Arc<dyn PhysicalExpr>>,
         accumulator: Box<dyn BlockedGroupsAccumulator>,
+        submetrics: Arc<dyn AggregateMetrics>,
     ) -> Self {
         Self {
             aggregate_expr,
             arguments,
             filter,
             accumulator,
+            submetrics,
         }
     }
 
     /// Construct a new accumulator with the same definition, but with empty internal
     /// state buffers (empty [`BlockedGroupsAccumulator`]).
     pub(super) fn empty_like(&self) -> Result<Self> {
-        let batch_size = self.accumulator.batch_size();
-        let accumulator =
-            create_blocked_group_accumulator(&self.aggregate_expr, batch_size)?;
+        let accumulator = create_blocked_group_accumulator(
+            &self.aggregate_expr,
+            self.accumulator.batch_size(),
+            Arc::clone(&self.submetrics),
+        )?;
         Ok(Self::new(
             Arc::clone(&self.aggregate_expr),
             self.arguments.clone(),
             self.filter.clone(),
             accumulator,
+            Arc::clone(&self.submetrics),
         ))
     }
 
@@ -936,6 +1010,7 @@ mod tests {
     use datafusion_physical_expr::expressions::Column;
 
     use super::*;
+    use crate::aggregates::group_values::aggregate_sub_metrics;
     use crate::metrics::ExecutionPlanMetricsSet;
 
     #[test]
@@ -1000,8 +1075,11 @@ mod tests {
                 Arc::new(BooleanArray::from(vec![true, false, true, false])),
             ],
         )?;
-        let accumulator = sum_accumulator(&schema, "include", 1)?;
         let metrics = ExecutionPlanMetricsSet::new();
+        let submetrics = aggregate_sub_metrics(&metrics, 0, ["SUM(value)"])
+            .pop()
+            .expect("one aggregate submetric factory");
+        let accumulator = sum_accumulator(&schema, "include", 1, submetrics)?;
         let group_by_metrics = GroupByMetrics::new(&metrics, 0);
         let argument_metrics = AggregateArgumentMetrics::new(&metrics, 0, ["SUM(value)"]);
         let accumulator_metrics = AggregateAccumulatorMetrics::new(
@@ -1043,6 +1121,7 @@ mod tests {
         schema: &SchemaRef,
         filter_name: &str,
         filter_index: usize,
+        submetrics: Arc<dyn AggregateMetrics>,
     ) -> Result<HashAggregateAccumulator> {
         let argument: Arc<dyn PhysicalExpr> = Arc::new(Column::new("value", 0));
         let aggregate_expr = Arc::new(
@@ -1051,12 +1130,17 @@ mod tests {
                 .alias("SUM(value)")
                 .build()?,
         );
-        let accumulator = create_blocked_group_accumulator(&aggregate_expr)?;
+        let accumulator = create_blocked_group_accumulator(
+            &aggregate_expr,
+            1,
+            Arc::clone(&submetrics),
+        )?;
         Ok(HashAggregateAccumulator::new(
             aggregate_expr,
             vec![argument],
             Some(Arc::new(Column::new(filter_name, filter_index))),
             accumulator,
+            submetrics,
         ))
     }
 

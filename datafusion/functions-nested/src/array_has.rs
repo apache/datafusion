@@ -966,9 +966,16 @@ fn array_has_any_with_scalar_general(
     };
 
     let col_list: ArrayWrapper = col_arr.as_ref().try_into()?;
-    let col_rows = converter.convert_columns(&[Arc::clone(col_list.values())])?;
     let col_offsets: Vec<usize> = col_list.offsets().collect();
     let col_nulls = col_list.nulls();
+
+    // For efficiency with sliced arrays, only convert the visible elements,
+    // not the entire underlying buffer. Indices into `col_rows` are therefore
+    // relative to `elem_start`.
+    let elem_start = col_offsets[0];
+    let elem_end = col_offsets[col_list.len()];
+    let visible_values = col_list.values().slice(elem_start, elem_end - elem_start);
+    let col_rows = converter.convert_columns(&[visible_values])?;
 
     let mut result = BooleanBufferBuilder::new(col_list.len());
     let num_scalar = scalar_rows.num_rows();
@@ -984,8 +991,8 @@ fn array_has_any_with_scalar_general(
                 result.append(false);
                 continue;
             }
-            let start = col_offsets[i];
-            let end = col_offsets[i + 1];
+            let start = col_offsets[i] - elem_start;
+            let end = col_offsets[i + 1] - elem_start;
             let found =
                 (start..end).any(|j| scalar_set.contains(col_rows.row(j).as_ref()));
             result.append(found);
@@ -997,8 +1004,8 @@ fn array_has_any_with_scalar_general(
                 result.append(false);
                 continue;
             }
-            let start = col_offsets[i];
-            let end = col_offsets[i + 1];
+            let start = col_offsets[i] - elem_start;
+            let end = col_offsets[i + 1] - elem_start;
             let found = (start..end)
                 .any(|j| (0..num_scalar).any(|k| col_rows.row(j) == scalar_rows.row(k)));
             result.append(found);
@@ -1216,8 +1223,8 @@ mod tests {
     use arrow::datatypes::Int32Type;
     use arrow::{
         array::{
-            Array, ArrayRef, AsArray, FixedSizeListArray, Int32Array, ListArray,
-            create_array,
+            Array, ArrayRef, AsArray, FixedSizeListArray, Int32Array, LargeListArray,
+            ListArray, create_array,
         },
         buffer::OffsetBuffer,
         datatypes::{DataType, Field, Schema},
@@ -1681,6 +1688,95 @@ mod tests {
         assert_eq!(
             result.as_boolean().iter().collect::<Vec<_>>(),
             vec![Some(true), Some(false)]
+        );
+    }
+
+    /// Invoke `array_has_any` with an array haystack and a scalar list of
+    /// `Int32` elements.
+    fn invoke_array_has_any_scalar(haystack: ArrayRef, scalar: Vec<i32>) -> ArrayRef {
+        let num_rows = haystack.len();
+        let haystack_type = haystack.data_type().clone();
+        let scalar = SingleRowListArrayBuilder::new(Arc::new(Int32Array::from(scalar)))
+            .build_list_scalar();
+        let scalar_type = scalar.data_type();
+        ArrayHasAny::new()
+            .invoke_with_args(ScalarFunctionArgs {
+                args: vec![
+                    ColumnarValue::Array(haystack),
+                    ColumnarValue::Scalar(scalar),
+                ],
+                arg_fields: vec![
+                    Arc::new(Field::new("haystack", haystack_type, true)),
+                    Arc::new(Field::new("scalar", scalar_type, true)),
+                ],
+                number_rows: num_rows,
+                return_field: Arc::new(Field::new("return", DataType::Boolean, true)),
+                config_options: Arc::new(ConfigOptions::default()),
+            })
+            .unwrap()
+            .into_array(num_rows)
+            .unwrap()
+    }
+
+    #[test]
+    fn test_array_has_any_scalar_sliced() {
+        // The scalar path only row-converts the visible elements of a sliced
+        // haystack, so its per-row element ranges must be relative to the
+        // start of the visible range. 1 and 70 appear only in sliced-away rows.
+        let full = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(10), None, Some(30)]),
+            None,
+            Some(vec![]),
+            Some(vec![Some(50), Some(60)]),
+            Some(vec![Some(70)]),
+        ]);
+        let sliced: ArrayRef = Arc::new(full.slice(1, 4));
+
+        // At most `SCALAR_SMALL_THRESHOLD` scalar elements: linear scan.
+        let result = invoke_array_has_any_scalar(Arc::clone(&sliced), vec![1, 70, 60]);
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(false), None, Some(false), Some(true)]
+        );
+        let result = invoke_array_has_any_scalar(Arc::clone(&sliced), vec![30]);
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(true), None, Some(false), Some(false)]
+        );
+
+        // More than `SCALAR_SMALL_THRESHOLD` scalar elements: HashSet lookup.
+        let large_scalar = vec![1, 70, 60, 101, 102, 103, 104, 105, 106, 107];
+        let result = invoke_array_has_any_scalar(sliced, large_scalar);
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(false), None, Some(false), Some(true)]
+        );
+
+        // Sliced FixedSizeList (width 2; rows 1..=2 of
+        // [[1,2],[11,12],[21,22],[31,32]] visible).
+        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let fsl_values = Arc::new(Int32Array::from(vec![1, 2, 11, 12, 21, 22, 31, 32]));
+        let fsl: ArrayRef =
+            Arc::new(FixedSizeListArray::new(field, 2, fsl_values, None).slice(1, 2));
+        let result = invoke_array_has_any_scalar(fsl, vec![1, 22, 31]);
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(false), Some(true)]
+        );
+
+        // Sliced LargeList; 1 and 70 appear only in sliced-away rows.
+        let large = LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![Some(10), None, Some(30)]),
+            Some(vec![Some(50), Some(60)]),
+            Some(vec![Some(70)]),
+        ]);
+        let large: ArrayRef = Arc::new(large.slice(1, 2));
+        let result = invoke_array_has_any_scalar(large, vec![1, 70, 60]);
+        assert_eq!(
+            result.as_boolean().iter().collect::<Vec<_>>(),
+            vec![Some(false), Some(true)]
         );
     }
 }

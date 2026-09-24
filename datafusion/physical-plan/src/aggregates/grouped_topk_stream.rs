@@ -71,19 +71,19 @@ impl GroupedTopKAggregateStream {
         limit: usize,
     ) -> Result<Self> {
         let agg_schema = Arc::clone(&aggr.schema);
-        let group_by = Arc::clone(&aggr.group_by);
+        let group_by = Arc::clone(aggr.group_by());
         let input = aggr.input.execute(partition, Arc::clone(context))?;
         let baseline_metrics = BaselineMetrics::new(&aggr.metrics, partition);
         let group_by_metrics = GroupByMetrics::new_topk(&aggr.metrics, partition);
         let aggregate_argument_metrics = AggregateArgumentMetrics::new(
             &aggr.metrics,
             partition,
-            aggr.aggr_expr
+            aggr.aggr_expr()
                 .iter()
                 .map(|agg_expr| aggregate_metric_label(agg_expr)),
         );
         let aggregate_arguments =
-            aggregate_expressions(&aggr.aggr_expr, &aggr.mode, group_by.expr.len())?;
+            aggregate_expressions(aggr.aggr_expr(), &aggr.mode, group_by.expr.len())?;
 
         let (expr, _) = &aggr.group_expr().expr()[0];
         let kt = expr.data_type(&aggr.input().schema())?;

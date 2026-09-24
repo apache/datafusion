@@ -904,6 +904,19 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     ///
     /// If the function is `ABS(a)`, and the input interval is `a: [-3, 2]`,
     /// then the output interval would be `[0, 3]`.
+    ///
+    /// # Output type
+    ///
+    /// The default implementation returns an unbounded [`DataType::Null`]
+    /// interval because the output type cannot be inferred generically.
+    /// Implementations should override this method when they can determine the
+    /// output type, even if they cannot compute precise bounds. Returning an
+    /// unbounded interval with the correct type preserves information used by
+    /// downstream physical property analysis.
+    ///
+    /// If the output type depends on argument values, only report it when those
+    /// values are known, such as from singleton input intervals. Otherwise,
+    /// keep the output type unknown.
     fn evaluate_bounds(&self, _input: &[&Interval]) -> Result<Interval> {
         // We cannot assume the input datatype is the same of output type.
         Interval::make_unbounded(&DataType::Null)

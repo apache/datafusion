@@ -29,9 +29,10 @@ use std::sync::Arc;
 
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
-    GroupByMetrics,
+    GroupByMetrics, aggregate_sub_metrics,
 };
 use crate::aggregates::{AggregateExec, AggregateMode, aggregate_metric_label};
+use datafusion_expr::AggregateMetrics;
 
 pub(super) fn accumulator_phases(mode: &AggregateMode) -> &'static [AccumulatorPhase] {
     match mode {
@@ -63,18 +64,24 @@ pub(super) struct AggregateTableMetrics {
     pub(super) group_by: GroupByMetrics,
     pub(super) aggregate_arguments: AggregateArgumentMetrics,
     pub(super) accumulator: Arc<AggregateAccumulatorMetrics>,
+    pub(super) submetrics: Vec<Arc<dyn AggregateMetrics>>,
 }
 
 impl AggregateTableMetrics {
     pub(super) fn new(agg: &AggregateExec, partition: usize) -> Self {
         let aggregate_labels = agg
-            .aggr_expr
+            .aggr_expr()
             .iter()
             .map(|agg_expr| aggregate_metric_label(agg_expr))
             .collect::<Vec<_>>();
 
         Self {
             group_by: GroupByMetrics::new(&agg.metrics, partition),
+            submetrics: aggregate_sub_metrics(
+                &agg.metrics,
+                partition,
+                aggregate_labels.iter().cloned(),
+            ),
             aggregate_arguments: AggregateArgumentMetrics::new(
                 &agg.metrics,
                 partition,
@@ -92,7 +99,7 @@ impl AggregateTableMetrics {
 
 pub(super) use common::{
     AggregateHashTable, FinalMarker, PartialMarker, PartialReduceMarker,
-    PartialSkipMarker, SingleMarker,
+    PartialSkipMarker, SingleMarker, create_group_accumulator,
 };
 pub(super) use common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetrics};
 

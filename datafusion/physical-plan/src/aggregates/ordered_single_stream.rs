@@ -23,24 +23,16 @@ use std::task::{Context, Poll};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result, internal_datafusion_err, internal_err};
+use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_physical_expr::PhysicalSortExpr;
-use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::stream::{Stream, StreamExt};
 
-use super::aggregate_hash_table::{
-    OrderedAggregateTable, OrderedAggregateTableMetrics, SingleMarker,
-};
-use super::ordered_final_stream::OrderedFinalAggregateStream;
+use super::aggregate_hash_table::{OrderedAggregateTable, SingleMarker};
+use super::spill::AggregateSpill;
 use super::{AggregateExec, create_schema};
 use crate::aggregates::AggregateMode;
 use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
-use crate::sorts::IncrementalSortIterator;
-use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
-use crate::spill::spill_manager::SpillManager;
 use crate::stream::EmptyRecordBatchStream;
 use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
 
@@ -109,30 +101,6 @@ pub(crate) struct OrderedSingleAggregateStream {
     state: Option<OrderedSingleAggregateState>,
 }
 
-/// Spill configuration and accumulated runs for partially ordered single
-/// aggregation.
-///
-/// Each spill event drains all currently buffered groups, sorts their intermediate
-/// states by the full group key, and writes them to one spill file. All files are
-/// merged and replayed after the original input ends.
-struct OrderedSingleSpillContext {
-    /// Aggregate configuration used to construct the final replay stream.
-    final_agg: AggregateExec,
-    /// Task context
-    context: Arc<TaskContext>,
-    /// Original partition index
-    partition: usize,
-    /// Target batch size from configuration
-    batch_size: usize,
-    /// Full group-key ordering, such ordering with be kept in: a) individual spill
-    /// files, b) order after final merging and streaming aggregate
-    spill_expr: LexOrdering,
-    /// Spill I/O and metrics manager.
-    spill_manager: SpillManager,
-    /// Fully sorted spill runs waiting to be merged.
-    spills: Vec<SortedSpillFile>,
-}
-
 /// See comments at `poll_next()` for details.
 enum OrderedSingleAggregateState {
     ReadingInput {
@@ -140,18 +108,18 @@ enum OrderedSingleAggregateState {
         /// None if either
         /// - Disk Manager doesn't enable temporary file creation
         /// - The group keys are fully ordered, it's expected to use bounded memory
-        spill_context: Option<Box<OrderedSingleSpillContext>>,
+        spill_context: Option<Box<AggregateSpill>>,
     },
     Spilling {
         table: OrderedAggregateTable<SingleMarker>,
-        spill_context: Box<OrderedSingleSpillContext>,
+        spill_context: Box<AggregateSpill>,
     },
     ProducingOutput {
         table: OrderedAggregateTable<SingleMarker>,
     },
     PreparingMergeInput {
         table: OrderedAggregateTable<SingleMarker>,
-        spill_context: Box<OrderedSingleSpillContext>,
+        spill_context: Box<AggregateSpill>,
     },
     MergingSpills {
         stream: SendableRecordBatchStream,
@@ -168,159 +136,6 @@ type OrderedSingleAggregateStateTransition = ControlFlow<
     (OrderedSingleAggregatePoll, OrderedSingleAggregateState),
     OrderedSingleAggregateState,
 >;
-
-impl OrderedSingleSpillContext {
-    fn new(
-        agg: &AggregateExec,
-        context: &Arc<TaskContext>,
-        partition: usize,
-        batch_size: usize,
-        input_order_mode: &InputOrderMode,
-        spill_schema: &SchemaRef,
-        spill_metrics: SpillMetrics,
-    ) -> Result<Self> {
-        let group_schema = agg.group_by.group_schema(&agg.input().schema())?;
-        let output_ordering = agg.cache.output_ordering();
-        let InputOrderMode::PartiallySorted(order_indices) = input_order_mode else {
-            return internal_err!(
-                "Ordered single spill requires partially ordered input"
-            );
-        };
-        let spill_indices = order_indices.iter().copied().chain(
-            (0..group_schema.fields().len()).filter(|idx| !order_indices.contains(idx)),
-        );
-        let spill_sort_exprs = spill_indices.map(|idx| {
-            let field = group_schema.field(idx);
-            let output_expr = Column::new(field.name(), idx);
-            let sort_options = output_ordering
-                .and_then(|ordering| ordering.get_sort_options(&output_expr))
-                .unwrap_or_default();
-            PhysicalSortExpr::new(Arc::new(output_expr), sort_options)
-        });
-        let Some(spill_expr) = LexOrdering::new(spill_sort_exprs) else {
-            return internal_err!("Ordered single spill expression is empty");
-        };
-
-        let spill_manager = SpillManager::new(
-            context.runtime_env(),
-            spill_metrics,
-            Arc::clone(spill_schema),
-        )
-        .with_compression_type(context.session_config().spill_compression());
-
-        // Spilled rows contain group keys and intermediate states. Replay must
-        // merge those states and evaluate the final aggregate values.
-        let mut final_agg = agg.clone();
-        final_agg.mode = match agg.mode {
-            AggregateMode::Single => AggregateMode::Final,
-            AggregateMode::SinglePartitioned => AggregateMode::FinalPartitioned,
-            mode => {
-                return internal_err!(
-                    "Ordered single aggregate spill cannot replay aggregate mode {mode:?}"
-                );
-            }
-        };
-        final_agg.group_by = Arc::new(agg.group_by.as_final());
-        final_agg.input_order_mode = InputOrderMode::Sorted;
-
-        Ok(Self {
-            final_agg,
-            context: Arc::clone(context),
-            partition,
-            batch_size,
-            spill_expr,
-            spill_manager,
-            spills: vec![],
-        })
-    }
-
-    fn has_spills(&self) -> bool {
-        !self.spills.is_empty()
-    }
-
-    /// Sorts and spills the aggregated groups. Memory reservation should be updated
-    /// by the caller.
-    ///
-    /// Individual spill files are ordered by the `group by` keys.
-    ///
-    /// See [`OrderedSingleAggregateStream`] for spilling details.
-    fn spill_table(
-        &mut self,
-        table: &mut OrderedAggregateTable<SingleMarker>,
-    ) -> Result<()> {
-        for batch in table.take_all_state_batch()? {
-            let sorted_iter = IncrementalSortIterator::new(
-                batch,
-                self.spill_expr.clone(),
-                self.batch_size,
-            );
-            let spill_file = self
-                .spill_manager
-                .spill_record_batch_iter_and_return_max_batch_memory(
-                    sorted_iter,
-                    "OrderedSingleAggregateSpill",
-                )?;
-
-            let Some((file, max_record_batch_memory)) = spill_file else {
-                return internal_err!(
-                    "Ordered single aggregation produced an empty spill"
-                );
-            };
-
-            self.spills.push(SortedSpillFile {
-                file,
-                max_record_batch_memory,
-            });
-        }
-
-        Ok(())
-    }
-
-    /// Merges every sorted run and finalizes it through the fully ordered path.
-    fn into_replay_stream(
-        self,
-        baseline_metrics: &BaselineMetrics,
-        metrics: OrderedAggregateTableMetrics,
-        reservation: MemoryReservation,
-    ) -> Result<SendableRecordBatchStream> {
-        let Self {
-            final_agg,
-            context,
-            partition,
-            batch_size,
-            spill_expr,
-            spill_manager,
-            spills,
-        } = self;
-
-        let spill_schema = Arc::clone(spill_manager.schema());
-        // The merge and replay table are two components of the same aggregate
-        // operator. Keep them under one consumer registration so a fair memory
-        // pool does not divide this operator's quota between its own phases.
-        let merge_reservation = reservation.new_empty();
-        let merged = StreamingMergeBuilder::new()
-            .with_schema(spill_schema)
-            .with_spill_manager(spill_manager)
-            .with_sorted_spill_files(spills)
-            .with_expressions(&spill_expr)
-            .with_metrics(baseline_metrics.intermediate())
-            .with_batch_size(batch_size)
-            .with_reservation(merge_reservation)
-            .build()?;
-        let replay = OrderedFinalAggregateStream::new_with_input_and_metrics(
-            &final_agg,
-            &context,
-            partition,
-            merged,
-            &InputOrderMode::Sorted,
-            baseline_metrics.clone(),
-            metrics,
-            None,
-            reservation,
-        )?;
-        Ok(Box::pin(replay))
-    }
-}
 
 impl OrderedSingleAggregateStream {
     pub fn new(
@@ -342,8 +157,8 @@ impl OrderedSingleAggregateStream {
         let spill_metrics = SpillMetrics::new(&agg.metrics, partition);
         let state_schema = Arc::new(create_schema(
             input_schema.as_ref(),
-            &agg.group_by,
-            &agg.aggr_expr,
+            agg.group_by(),
+            agg.aggr_expr(),
             AggregateMode::Partial,
         )?);
 
@@ -359,7 +174,8 @@ impl OrderedSingleAggregateStream {
             matches!(agg.input_order_mode, InputOrderMode::PartiallySorted(_))
                 && context.runtime_env().disk_manager.tmp_files_enabled();
         let spill_context = if can_spill {
-            Some(Box::new(OrderedSingleSpillContext::new(
+            Some(Box::new(AggregateSpill::try_new(
+                "OrderedSingleAggregateSpill",
                 agg,
                 context,
                 partition,
@@ -408,7 +224,7 @@ impl OrderedSingleAggregateStream {
     /// Reserve memory for the current aggregate table.
     fn reservation_size_for_table(
         table: &OrderedAggregateTable<SingleMarker>,
-        spill_context: Option<&OrderedSingleSpillContext>,
+        spill_context: Option<&AggregateSpill>,
     ) -> usize {
         let table_size = table.memory_size();
         if spill_context.is_some() {
@@ -592,7 +408,9 @@ impl OrderedSingleAggregateStream {
 
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
-        let mut result = spill_context.spill_table(&mut table);
+        let mut result = table
+            .take_all_state_batch()
+            .and_then(|batch| spill_context.sort_and_spill(batch));
 
         // Spilling shrinks the aggregate table and releases its accumulated
         // memory. Update the reservation accordingly.
@@ -637,7 +455,10 @@ impl OrderedSingleAggregateStream {
 
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
-        let replay = match spill_context.spill_table(&mut table) {
+        let replay = match table
+            .take_all_state_batch()
+            .and_then(|batch| spill_context.sort_and_spill(batch))
+        {
             Ok(()) => {
                 let metrics = table.metrics();
                 drop(table);

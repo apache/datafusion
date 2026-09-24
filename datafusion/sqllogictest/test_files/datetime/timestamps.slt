@@ -1655,7 +1655,106 @@ SELECT DATE_TRUNC('day', arrow_cast(TIMESTAMP '2023-08-03 14:38:50Z', 'Timestamp
 2023-08-03T14:38:50
 2023-08-03T14:38:50
 
-# date_trunc with data with timezones
+# date_trunc must not propagate ordering across named timezone transitions
+query II
+SELECT
+  arrow_cast(ts, 'Int64') AS input_epoch,
+  arrow_cast(date_trunc('hour', ts), 'Int64') AS truncated
+FROM (
+  SELECT
+    arrow_cast(
+      column1,
+      'Timestamp(Second, Some("America/Goose_Bay"))'
+    ) AS ts
+  FROM (
+    VALUES
+      (562129260::bigint),
+      (562129259::bigint)
+  )
+  ORDER BY ts
+  LIMIT 2
+)
+ORDER BY date_trunc('hour', ts);
+----
+562129260 562125600
+562129259 562129200
+
+# Typed bounds from a child function must retain named timezone metadata
+query II
+SELECT
+  c,
+  arrow_cast(
+    date_trunc('hour', from_unixtime(c, 'America/Goose_Bay')),
+    'Int64'
+  ) AS truncated
+FROM (
+  SELECT column1 AS c
+  FROM (
+    VALUES
+      (562129260::bigint),
+      (562129259::bigint)
+  )
+  ORDER BY c
+  LIMIT 2
+)
+ORDER BY date_trunc('hour', from_unixtime(c, 'America/Goose_Bay'));
+----
+562129260 562125600
+562129259 562129200
+
+# Typed bounds allow date_trunc to propagate ordering through timezone-free from_unixtime
+query TT
+EXPLAIN SELECT date_trunc('hour', from_unixtime(c)) AS truncated
+FROM (
+  SELECT column1 AS c
+  FROM (
+    VALUES
+      (7200::bigint),
+      (3600::bigint)
+  )
+  ORDER BY c
+  LIMIT 2
+)
+ORDER BY date_trunc('hour', from_unixtime(c));
+----
+logical_plan
+01)Sort: truncated ASC NULLS LAST
+02)--Projection: date_trunc(Utf8("hour"), from_unixtime(c)) AS truncated
+03)----Sort: c ASC NULLS LAST, fetch=2
+04)------Projection: column1 AS c
+05)--------Values: (Int64(7200)), (Int64(3600))
+physical_plan
+01)ProjectionExec: expr=[date_trunc(hour, from_unixtime(column1@0)) as truncated]
+02)--SortExec: TopK(fetch=2), expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Typed bounds allow date_trunc to propagate ordering through timezone-free date_bin
+query TT
+EXPLAIN SELECT date_trunc('hour', date_bin(INTERVAL '1 minute', ts)) AS truncated
+FROM (
+  SELECT arrow_cast(column1, 'Timestamp(Second)') AS ts
+  FROM (
+    VALUES
+      (7200::bigint),
+      (3600::bigint)
+  )
+  ORDER BY ts
+  LIMIT 2
+)
+ORDER BY date_trunc('hour', date_bin(INTERVAL '1 minute', ts));
+----
+logical_plan
+01)Sort: truncated ASC NULLS LAST
+02)--Projection: date_trunc(Utf8("hour"), date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }"), ts)) AS truncated
+03)----Sort: ts ASC NULLS LAST, fetch=2
+04)------Projection: CAST(column1 AS Timestamp(s)) AS ts
+05)--------Values: (Int64(7200)), (Int64(3600))
+physical_plan
+01)ProjectionExec: expr=[date_trunc(hour, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }, ts@0)) as truncated]
+02)--SortExec: TopK(fetch=2), expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----ProjectionExec: expr=[CAST(column1@0 AS Timestamp(s)) as ts]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
 statement ok
 CREATE TABLE timestamp_strings(ts varchar)
 AS VALUES

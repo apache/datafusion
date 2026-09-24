@@ -52,10 +52,8 @@ use datafusion_expr::expr::{
     AggregateFunction, AggregateFunctionParams, NullTreatment, physical_name,
 };
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
-use datafusion_expr::{
-    AggregateUDF, Expr, ReversedUDAF, SetMonotonicity,
-};
-use datafusion_expr_common::accumulator::Accumulator;
+use datafusion_expr::{AggregateUDF, Expr, ReversedUDAF, SetMonotonicity};
+use datafusion_expr_common::accumulator::{Accumulator, AggregateMetrics};
 use datafusion_expr_common::blocked_groups_accumulator::BlockedGroupsAccumulator;
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use datafusion_expr_common::type_coercion::aggregates::check_arg_count;
@@ -269,6 +267,15 @@ impl AggregateExprBuilder {
             batch_size,
         } = self;
         assert_or_internal_err!(!args.is_empty(), "args should not be empty");
+
+        // An order-insensitive aggregate ignores its ORDER BY, so drop it here.
+        // Everything derived from `order_bys` below, such as the ordering fields
+        // in the aggregate's state, then agrees that there is no ordering.
+        let order_bys = if fun.order_sensitivity().is_insensitive() {
+            vec![]
+        } else {
+            order_bys
+        };
 
         let ordering_types = order_bys
             .iter()
@@ -770,6 +777,16 @@ impl AggregateFunctionExpr {
         self.fun.accumulator(acc_args)
     }
 
+    /// Creates an accumulator and supplies optional aggregate-owned metrics.
+    pub fn create_accumulator_with_metrics(
+        &self,
+        metrics: Arc<dyn AggregateMetrics>,
+    ) -> Result<Box<dyn Accumulator>> {
+        let mut accumulator = self.create_accumulator()?;
+        accumulator.set_metrics(metrics);
+        Ok(accumulator)
+    }
+
     /// the field of the final result of this aggregation.
     pub fn state_fields(&self) -> Result<Vec<FieldRef>> {
         let args = StateFieldsArgs {
@@ -785,11 +802,7 @@ impl AggregateFunctionExpr {
 
     /// Returns the ORDER BY expressions for the aggregate function.
     pub fn order_bys(&self) -> &[PhysicalSortExpr] {
-        if self.order_sensitivity().is_insensitive() {
-            &[]
-        } else {
-            &self.order_bys
-        }
+        &self.order_bys
     }
 
     /// Indicates whether aggregator can produce the correct result with any
@@ -1002,6 +1015,16 @@ impl AggregateFunctionExpr {
         self.fun.create_blocked_groups_accumulator(blocked)
     }
 
+    /// Creates a groups accumulator and supplies optional aggregate-owned metrics.
+    pub fn create_groups_accumulator_with_metrics(
+        &self,
+        metrics: Arc<dyn AggregateMetrics>,
+    ) -> Result<Box<dyn GroupsAccumulator>> {
+        let mut accumulator = self.create_groups_accumulator()?;
+        accumulator.set_metrics(metrics);
+        Ok(accumulator)
+    }
+
     /// Construct an expression that calculates the aggregate in reverse.
     /// Typically the "reverse" expression is itself (e.g. SUM, COUNT).
     /// For aggregates that do not support calculation in reverse,
@@ -1107,10 +1130,7 @@ impl AggregateFunctionExpr {
         args: Vec<Arc<dyn PhysicalExpr>>,
         order_by_exprs: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Option<AggregateFunctionExpr> {
-        if args.len() != self.args.len()
-            || (self.order_sensitivity() != AggregateOrderSensitivity::Insensitive
-                && order_by_exprs.len() != self.order_bys.len())
-        {
+        if args.len() != self.args.len() || order_by_exprs.len() != self.order_bys.len() {
             return None;
         }
 
@@ -1248,7 +1268,9 @@ mod tests {
 
     use arrow::datatypes::Field;
     use datafusion_common::metadata::FieldMetadata;
-    use datafusion_expr::{col, test::function_stub::sum};
+    use datafusion_expr::{
+        AggregateUDFImpl, Signature, Volatility, col, test::function_stub::sum,
+    };
 
     fn aggregate_test_schema() -> Result<(Schema, DFSchema)> {
         let schema = Schema::new(vec![Field::new("column1", DataType::Int64, true)]);
@@ -1316,6 +1338,100 @@ mod tests {
                 .get("some_key")
                 .is_none()
         );
+
+        Ok(())
+    }
+
+    /// An aggregate that uses the default `AggregateUDFImpl::state_fields`,
+    /// which appends the ordering fields to the state.
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct DefaultStateUdaf {
+        signature: Signature,
+        order_insensitive: bool,
+    }
+
+    impl DefaultStateUdaf {
+        fn new(order_insensitive: bool) -> Self {
+            Self {
+                signature: Signature::any(1, Volatility::Immutable),
+                order_insensitive,
+            }
+        }
+    }
+
+    impl AggregateUDFImpl for DefaultStateUdaf {
+        fn name(&self) -> &str {
+            "default_state_udaf"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+            Ok(arg_types[0].clone())
+        }
+
+        /// Always fails, reporting how many ORDER BY expressions it was given.
+        fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+            not_impl_err!("accumulator with {} order_bys", acc_args.order_bys.len())
+        }
+
+        fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+            if self.order_insensitive {
+                AggregateOrderSensitivity::Insensitive
+            } else {
+                AggregateOrderSensitivity::HardRequirement
+            }
+        }
+    }
+
+    /// Builds `default_state_udaf(v ORDER BY k)`.
+    fn build_with_order_by(order_insensitive: bool) -> Result<AggregateFunctionExpr> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("v", DataType::Int64, true),
+            Field::new("k", DataType::Int64, true),
+        ]));
+        let fun = AggregateUDF::from(DefaultStateUdaf::new(order_insensitive));
+        AggregateExprBuilder::new(Arc::new(fun), vec![Arc::new(Column::new("v", 0))])
+            .order_by(vec![PhysicalSortExpr {
+                expr: Arc::new(Column::new("k", 1)),
+                options: SortOptions::default(),
+            }])
+            .schema(schema)
+            .alias("default_state_udaf(v) ORDER BY [k ASC NULLS LAST]")
+            .build()
+    }
+
+    #[test]
+    fn order_insensitive_aggregate_discards_order_by() -> Result<()> {
+        let expr = build_with_order_by(true)?;
+        assert!(expr.order_bys().is_empty());
+        assert!(expr.all_expressions().order_by_exprs.is_empty());
+        // Only the value: the default `state_fields` has no ordering fields to append
+        assert_eq!(expr.state_fields()?.len(), 1);
+        let err = expr.create_accumulator().unwrap_err();
+        assert!(err.message().contains("accumulator with 0 order_bys"));
+
+        // Rewriting the expressions does not bring the ORDER BY back
+        let rewritten = expr
+            .with_new_expressions(expr.expressions(), vec![])
+            .expect("rewrite is supported");
+        assert!(rewritten.order_bys().is_empty());
+        assert_eq!(rewritten.state_fields()?.len(), 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn order_sensitive_aggregate_keeps_order_by() -> Result<()> {
+        let expr = build_with_order_by(false)?;
+        assert_eq!(expr.order_bys().len(), 1);
+        assert_eq!(expr.all_expressions().order_by_exprs.len(), 1);
+        // The value, followed by the ordering field
+        assert_eq!(expr.state_fields()?.len(), 2);
+        let err = expr.create_accumulator().unwrap_err();
+        assert!(err.message().contains("accumulator with 1 order_bys"));
 
         Ok(())
     }

@@ -44,6 +44,7 @@ use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::{AggregateOrderSensitivity, format_state_name},
 };
+use datafusion_functions_aggregate_common::accumulator::BlockedAccumulatorArgs;
 use datafusion_functions_aggregate_common::aggregate::count_distinct::PrimitiveDistinctCountGroupsAccumulator;
 use datafusion_functions_aggregate_common::aggregate::{
     count_distinct::Bitmap65536DistinctCountAccumulator,
@@ -67,7 +68,6 @@ use std::{
     ops::BitAnd,
     sync::Arc,
 };
-use datafusion_functions_aggregate_common::accumulator::BlockedAccumulatorArgs;
 
 make_udaf_expr_and_func!(
     Count,
@@ -399,8 +399,13 @@ impl AggregateUDFImpl for Count {
         args.expr_fields.len() == 1 && !args.is_distinct
     }
 
-    fn create_blocked_groups_accumulator(&self, args: BlockedAccumulatorArgs) -> Result<Box<dyn BlockedGroupsAccumulator>> {
-        Ok(Box::new(CountBlockedGroupsAccumulator::new(args.batch_size)))
+    fn create_blocked_groups_accumulator(
+        &self,
+        args: BlockedAccumulatorArgs,
+    ) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+        Ok(Box::new(CountBlockedGroupsAccumulator::new(
+            args.batch_size,
+        )))
     }
 
     fn reverse_expr(&self) -> ReversedUDAF {

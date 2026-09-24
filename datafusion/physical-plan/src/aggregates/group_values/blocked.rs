@@ -1,10 +1,10 @@
-use crate::aggregates::group_values::new_group_values;
 use super::single_group_by::{
     blocked_boolean::BlockedGroupValuesBoolean,
     blocked_primitive::BlockedGroupValuesPrimitive,
 };
+use crate::aggregates::group_values::new_group_values;
 use crate::aggregates::order::GroupOrdering;
-use arrow::array::{downcast_primitive, ArrayRef};
+use arrow::array::{ArrayRef, downcast_primitive};
 use arrow_schema::{DataType, SchemaRef};
 use datafusion_common::{
     assert_eq_or_internal_err, assert_ne_or_internal_err, assert_or_internal_err,
@@ -306,7 +306,10 @@ pub fn new_blocked_group_values(
 
         macro_rules! downcast_helper {
             ($t:ty, $d:ident) => {
-                return Ok(Box::new(BlockedGroupValuesPrimitive::<$t>::new($d.clone(), block_size)))
+                return Ok(Box::new(BlockedGroupValuesPrimitive::<$t>::new(
+                    $d.clone(),
+                    block_size,
+                )))
             };
         }
 
