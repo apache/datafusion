@@ -487,6 +487,24 @@ APIs now use <code class="docutils literal notranslate"><span class="pre">Metada
 change. Use <code class="docutils literal notranslate"><span class="pre">FieldMetadata::to_hashmap</span></code> where a <code class="docutils literal notranslate"><span class="pre">HashMap</span></code> is still required.</p>
 </section>
 </section>
+<section id="parquetaccessplan-into-overall-row-selection-is-deprecated">
+<h3><code class="docutils literal notranslate"><span class="pre">ParquetAccessPlan::into_overall_row_selection</span></code> is deprecated<a class="headerlink" href="#parquetaccessplan-into-overall-row-selection-is-deprecated" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">ParquetAccessPlan::into_overall_row_selection</span></code> is deprecated starting in 56.0.0.
+DataFusion now keeps selections local to each row group during Parquet scanning.
+The method remains available with its existing conversion and selection-length
+validation behavior, so direct callers continue to work but receive a deprecation
+warning.</p>
+<p>Users who attach a <code class="docutils literal notranslate"><span class="pre">ParquetAccessPlan</span></code> to a <code class="docutils literal notranslate"><span class="pre">PartitionedFile</span></code> for DataFusion to
+read need no changes.</p>
+<p>For custom readers, use <code class="docutils literal notranslate"><span class="pre">ParquetAccessPlan::into_inner()</span></code> to obtain the
+<code class="docutils literal notranslate"><span class="pre">RowGroupAccess</span></code> entries. Their positions are the original file row-group
+indexes, and each selection uses coordinates within its own row group. When
+migrating away from the deprecated method, callers must handle conversion and
+selection-length validation themselves. Parquet’s push decoder and async reader
+accept <code class="docutils literal notranslate"><span class="pre">RowGroupSelection</span></code> values through <code class="docutils literal notranslate"><span class="pre">with_row_group_selections</span></code>; the
+synchronous reader still requires <code class="docutils literal notranslate"><span class="pre">with_row_groups</span></code> and an overall
+<code class="docutils literal notranslate"><span class="pre">with_row_selection</span></code>.</p>
+</section>
 <section id="missing-parquet-null-counts-are-treated-as-unknown">
 <h3>Missing Parquet null counts are treated as unknown<a class="headerlink" href="#missing-parquet-null-counts-are-treated-as-unknown" title="Link to this heading">#</a></h3>
 <p>DataFusion now preserves an omitted Parquet <code class="docutils literal notranslate"><span class="pre">null_count</span></code> statistic as unknown.
@@ -997,6 +1015,7 @@ expressions, which can cause resolution failure or incorrect rebinding.</p></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#field-and-schema-metadata-now-use-arrow-s-metadata-type">Field and schema metadata now use arrow’s <code class="docutils literal notranslate"><span class="pre">Metadata</span></code> type</a></li>
 </ul>
 </li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquetaccessplan-into-overall-row-selection-is-deprecated"><code class="docutils literal notranslate"><span class="pre">ParquetAccessPlan::into_overall_row_selection</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#missing-parquet-null-counts-are-treated-as-unknown">Missing Parquet null counts are treated as unknown</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#foreignsession-create-physical-plan-is-unsupported"><code class="docutils literal notranslate"><span class="pre">ForeignSession::create_physical_plan</span></code> is unsupported</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupcolumn-now-requires-values-preserving"><code class="docutils literal notranslate"><span class="pre">GroupColumn</span></code> now requires <code class="docutils literal notranslate"><span class="pre">values_preserving</span></code></a></li>
