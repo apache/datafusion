@@ -963,6 +963,7 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             schema_force_view_types: value.schema_force_view_types,
             binary_as_string: value.binary_as_string,
             skip_arrow_metadata: value.skip_arrow_metadata,
+            write_row_group_number_distinct_values: value.write_row_group_number_distinct_values,
             coerce_int96_opt: value.coerce_int96.clone().map(protobuf::parquet_options::CoerceInt96Opt::CoerceInt96),
             coerce_int96_tz_opt: value.coerce_int96_tz.clone().map(protobuf::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz),
             max_predicate_cache_size_opt: value.max_predicate_cache_size.map(|v| protobuf::parquet_options::MaxPredicateCacheSizeOpt::MaxPredicateCacheSize(v as u64)),
