@@ -28,6 +28,7 @@ use chrono::{DateTime, NaiveDateTime, Offset, TimeDelta, TimeZone};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::TypeSignature::Exact;
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
@@ -110,6 +111,14 @@ impl FromUnixtimeFunc {
     }
 }
 
+fn timezone_from_scalar(value: &ScalarValue) -> Option<Arc<str>> {
+    value
+        .try_as_str()
+        .flatten()
+        .filter(|timezone| !timezone.is_empty())
+        .map(Arc::from)
+}
+
 impl ScalarUDFImpl for FromUnixtimeFunc {
     fn name(&self) -> &str {
         "from_unixtime"
@@ -134,17 +143,9 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
             )
         } else {
             args.scalar_arguments[1]
-                .and_then(|sv| {
-                    sv.try_as_str()
-                        .flatten()
-                        .filter(|s| !s.is_empty())
-                        .map(|tz| {
-                            Field::new(
-                                self.name(),
-                                Timestamp(Second, Some(Arc::from(tz.to_string()))),
-                                true,
-                            )
-                        })
+                .and_then(timezone_from_scalar)
+                .map(|timezone| {
+                    Field::new(self.name(), Timestamp(Second, Some(timezone)), true)
                 })
                 .map(Arc::new)
                 .map_or_else(
@@ -217,6 +218,22 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
         // `Timestamp(Second)`: the mapping is one-to-one, order-preserving,
         // and maps nulls to nulls.
         Ok(true)
+    }
+
+    fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
+        let data_type = match inputs {
+            [_] => Timestamp(Second, self.timezone.clone()),
+            // Literal properties encode a constant timezone as a singleton interval.
+            [_, timezone] if timezone.lower() == timezone.upper() => {
+                match timezone_from_scalar(timezone.lower()) {
+                    Some(timezone) => Timestamp(Second, Some(timezone)),
+                    None => DataType::Null,
+                }
+            }
+            _ => DataType::Null,
+        };
+
+        Interval::make_unbounded(&data_type)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -334,6 +351,7 @@ mod test {
     use datafusion_common::ScalarValue;
     use datafusion_common::ScalarValue::Int64;
     use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::interval_arithmetic::Interval;
     use datafusion_expr::{
         ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
     };
@@ -345,6 +363,71 @@ mod test {
     /// The first second since the epoch that `chrono::NaiveDateTime` can
     /// represent (`-262143-01-01T00:00:00`).
     const MIN_UTC_SECONDS: i64 = -8334601228800;
+
+    #[test]
+    fn evaluate_bounds_preserves_output_type() {
+        let seconds = Interval::make_unbounded(&DataType::Int64).unwrap();
+
+        let function = FromUnixtimeFunc::default();
+        let bounds = function.evaluate_bounds(&[&seconds]).unwrap();
+        assert!(bounds.is_unbounded());
+        assert_eq!(bounds.data_type(), DataType::Timestamp(Second, None));
+
+        let mut options = ConfigOptions::default();
+        options.execution.time_zone = Some("America/Denver".to_string());
+        let function = FromUnixtimeFunc::new_with_config(&options);
+        let bounds = function.evaluate_bounds(&[&seconds]).unwrap();
+        assert_eq!(
+            bounds.data_type(),
+            DataType::Timestamp(Second, Some("America/Denver".into()))
+        );
+
+        let timezone = ScalarValue::Utf8(Some("+08:00".to_string()));
+        let timezone = Interval::try_new(timezone.clone(), timezone).unwrap();
+        let bounds = function.evaluate_bounds(&[&seconds, &timezone]).unwrap();
+        assert_eq!(
+            bounds.data_type(),
+            DataType::Timestamp(Second, Some("+08:00".into()))
+        );
+    }
+
+    #[test]
+    fn evaluate_bounds_keeps_unknown_timezone_unknown() {
+        let seconds = Interval::make_unbounded(&DataType::Int64).unwrap();
+        let function = FromUnixtimeFunc::default();
+
+        let unknown = Interval::make_unbounded(&DataType::Utf8).unwrap();
+        assert_eq!(
+            function
+                .evaluate_bounds(&[&seconds, &unknown])
+                .unwrap()
+                .data_type(),
+            DataType::Null
+        );
+
+        let varying = Interval::try_new(
+            ScalarValue::Utf8(Some("+08:00".to_string())),
+            ScalarValue::Utf8(Some("+09:00".to_string())),
+        )
+        .unwrap();
+        assert_eq!(
+            function
+                .evaluate_bounds(&[&seconds, &varying])
+                .unwrap()
+                .data_type(),
+            DataType::Null
+        );
+
+        let empty = ScalarValue::Utf8(Some(String::new()));
+        let empty = Interval::try_new(empty.clone(), empty).unwrap();
+        assert_eq!(
+            function
+                .evaluate_bounds(&[&seconds, &empty])
+                .unwrap()
+                .data_type(),
+            DataType::Null
+        );
+    }
 
     /// Invoke the single argument form with `datafusion.execution.time_zone`
     /// set to `timezone`.

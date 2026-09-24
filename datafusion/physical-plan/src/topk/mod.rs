@@ -1902,7 +1902,6 @@ impl PartitionedTopKRank {
                 coalescer.push_batch(batch)?;
             }
             for tie in ties {
-                (&tie.batch).record_output(&metrics.baseline);
                 coalescer.push_batch(tie.batch)?;
             }
         }
@@ -4299,6 +4298,48 @@ mod tests {
                 "+----+-----+",
             ],
             &results
+        );
+        Ok(())
+    }
+
+    /// Tie rows are emitted through the same coalescer as heap rows, so they
+    /// must be counted in `output_rows` once, not once as a tie batch and
+    /// again as part of the coalesced output batch.
+    #[tokio::test]
+    async fn test_partitioned_topk_rank_output_rows_counts_ties_once() -> Result<()> {
+        let schema = pk_val_schema(false);
+        let pk_expr: Arc<dyn PhysicalExpr> = col("pk", schema.as_ref())?;
+        let pk_sort_expr = PhysicalSortExpr {
+            expr: Arc::clone(&pk_expr),
+            options: SortOptions::default(),
+        };
+        let val_sort_expr = PhysicalSortExpr {
+            expr: col("val", schema.as_ref())?,
+            options: SortOptions::default(),
+        };
+        let metrics = ExecutionPlanMetricsSet::new();
+        let mut state = PartitionedTopKRank::try_new(
+            0,
+            Arc::clone(&schema),
+            vec![pk_expr],
+            build_sort_fields(&[pk_sort_expr], &schema)?,
+            LexOrdering::from([val_sort_expr]),
+            2,
+            8, // batch_size
+            &Arc::new(RuntimeEnv::default()),
+            &metrics,
+        )?;
+
+        // Two 5s fill the heap, the third 5 is retained as a tie.
+        let batch = pk_val_batch(&schema, vec![1, 1, 1, 1], vec![5, 5, 10, 5])?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<RecordBatch> = state.emit()?.try_collect().await?;
+        let emitted_rows: usize = results.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(emitted_rows, 3);
+        assert_eq!(
+            output_batches_and_rows(&metrics),
+            (results.len(), emitted_rows)
         );
         Ok(())
     }
