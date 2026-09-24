@@ -88,6 +88,12 @@ pub mod preimage;
 pub mod ptr_eq;
 #[cfg(not(feature = "sql"))]
 pub mod sql;
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
 pub mod test;
 pub mod tree_node;
 pub mod type_coercion;

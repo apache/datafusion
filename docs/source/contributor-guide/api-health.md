@@ -43,6 +43,10 @@ Examples of non-breaking changes include:
 - Marking a function as deprecated (`#[deprecated]`)
 - Adding a new function to a `trait` with a default implementation
 
+<!-- Keep this anchor stable: it is linked from Rust API documentation. -->
+
+<a id="internal-public-apis"></a>
+
 ### DataFusion-internal Public APIs
 
 Some internal implementation details require `pub` visibility because they are
@@ -54,6 +58,10 @@ notice or a deprecation period. Examples include:
 1. Test helpers.
 2. Operator APIs required by the optimizer to inspect or rewrite execution plans
    across crate boundaries.
+
+Do not expose internal APIs solely for tests or microbenchmarks. Some legacy code
+does so, but new tests and benchmarks should exercise observable behavior to
+simplify maintenance.
 
 For APIs intended only for internal use, add `#[doc(hidden)]` and a doc comment
 section headed `# Public Only for Internal Use:`. Name the crate or component
