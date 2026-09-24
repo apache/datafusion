@@ -163,24 +163,24 @@ fn rewrite_limit(mut limit: Limit) -> Result<Transformed<LogicalPlan>> {
                 let sort_fetch = skip + fetch;
                 Some(sort.fetch.map(|f| f.min(sort_fetch)).unwrap_or(sort_fetch))
             };
-            if new_fetch == sort.fetch {
-                if skip > 0 {
-                    original_limit(skip, fetch, LogicalPlan::Sort(sort))
-                } else {
-                    Ok(Transformed::yes(LogicalPlan::Sort(sort)))
-                }
-            } else {
-                sort.fetch = new_fetch;
-                if skip > 0 {
+            let fetch_changed = new_fetch != sort.fetch;
+            sort.fetch = new_fetch;
+            if skip > 0 {
+                if fetch_changed {
                     limit.input = Arc::new(LogicalPlan::Sort(sort));
                     Ok(Transformed::yes(LogicalPlan::Limit(limit)))
                 } else {
-                    // With `skip = 0` the Sort's fetch already caps the output,
-                    // so drop the Limit now instead of on the next pass. The
-                    // Sort then replaces the Limit as the visited node and its
-                    // own visit is skipped, so apply the TopK pushdown here.
-                    Ok(Transformed::yes(push_topk_through_join(sort)?.data))
+                    original_limit(skip, fetch, LogicalPlan::Sort(sort))
                 }
+            } else {
+                // With `skip = 0` the Sort's fetch already caps the output, so
+                // drop the Limit now instead of on the next pass. The Sort then
+                // replaces the Limit as the visited node and its own visit is
+                // skipped, so apply the TopK pushdown here. The plan changed
+                // (the Limit is gone) even if the TopK does not move.
+                let mut result = push_topk_through_join(sort)?;
+                result.transformed = true;
+                Ok(result)
             }
         }
         LogicalPlan::Projection(mut proj) => {
@@ -695,6 +695,23 @@ mod test {
         let mut passes = 0;
         optimizer.optimize(plan, &optimizer_ctx, |_, _| passes += 1)?;
         assert_eq!(passes, 2);
+        Ok(())
+    }
+
+    /// Dropping the `Limit` above a `Sort` changes the plan even when the
+    /// TopK has no join to move through, so the rule must report it.
+    #[test]
+    fn limit_push_down_sort_reports_transformed() -> Result<()> {
+        for sort_fetch in [None, Some(10), Some(5)] {
+            let plan = LogicalPlanBuilder::from(test_table_scan()?)
+                .sort_with_limit(vec![col("a").sort(true, false)], sort_fetch)?
+                .limit(0, Some(10))?
+                .build()?;
+
+            let result = PushDownLimit::new().rewrite(plan, &OptimizerContext::new())?;
+            assert!(result.transformed, "sort fetch {sort_fetch:?}");
+            assert!(matches!(result.data, LogicalPlan::Sort(_)));
+        }
         Ok(())
     }
 

@@ -1417,6 +1417,57 @@ mod test {
         )
     }
 
+    /// A `Limit` over a `Sort` that already has an equal or smaller fetch is
+    /// dropped, and the `Sort` replaces it as the visited node. The TopK must
+    /// still move through the join in the same pass.
+    fn optimize_limit_over_sort_with_fetch(limit_fetch: usize) -> Result<LogicalPlan> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                LogicalPlanBuilder::from(t2).build()?,
+                JoinType::Left,
+                (vec!["a"], vec!["a"]),
+                None,
+            )?
+            .sort_with_limit(vec![col("t1.b").sort(true, false)], Some(3))?
+            .limit(0, Some(limit_fetch))?
+            .build()?;
+
+        let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+        crate::Optimizer::with_rules(vec![Arc::new(PushDownLimit::new())]).optimize(
+            plan,
+            &optimizer_ctx,
+            |_, _| {},
+        )
+    }
+
+    #[test]
+    fn topk_pushed_through_limit_over_sort_with_same_fetch_in_one_pass() -> Result<()> {
+        insta::assert_snapshot!(optimize_limit_over_sort_with_fetch(3)?, @r"
+        Sort: t1.b ASC NULLS LAST, fetch=3
+          Left Join: t1.a = t2.a
+            Sort: t1.b ASC NULLS LAST, fetch=3
+              TableScan: t1
+            TableScan: t2
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn topk_pushed_through_limit_over_sort_with_smaller_fetch_in_one_pass() -> Result<()>
+    {
+        insta::assert_snapshot!(optimize_limit_over_sort_with_fetch(5)?, @r"
+        Sort: t1.b ASC NULLS LAST, fetch=3
+          Left Join: t1.a = t2.a
+            Sort: t1.b ASC NULLS LAST, fetch=3
+              TableScan: t1
+            TableScan: t2
+        ");
+        Ok(())
+    }
+
     /// Running the optimizer a second time on its own output must be a
     /// no-op: a rule that keeps rewriting an already-optimized plan (e.g.
     /// oscillating between two equivalent forms) would never let the
