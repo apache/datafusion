@@ -466,9 +466,7 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
                         Ok(plan)
                     })
                     .collect::<Result<Vec<_>>>()?;
-                if changed {
-                    *node = node.with_exprs_and_inputs(exprs, new_inputs)?;
-                }
+                *node = node.with_exprs_and_inputs(exprs, new_inputs)?;
                 changed
             }
         }
@@ -480,10 +478,12 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
         | LogicalPlan::Ddl(DdlStatement::CreateExternalTable(_))
         | LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(_))
         | LogicalPlan::Ddl(DdlStatement::CreateCatalog(_))
+        | LogicalPlan::Ddl(DdlStatement::CreateExternalCatalog(_))
         | LogicalPlan::Ddl(DdlStatement::CreateIndex(_))
         | LogicalPlan::Ddl(DdlStatement::DropTable(_))
         | LogicalPlan::Ddl(DdlStatement::DropView(_))
         | LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(_))
+        | LogicalPlan::Ddl(DdlStatement::DropCatalog(_))
         | LogicalPlan::Ddl(DdlStatement::CreateFunction(_))
         | LogicalPlan::Ddl(DdlStatement::DropFunction(_))
         | LogicalPlan::Statement(_) => false,

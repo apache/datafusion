@@ -273,18 +273,20 @@ impl TestFile {
         physical: &Arc<dyn PhysicalExpr>,
         plan: ParquetAccessPlan,
     ) -> usize {
-        let mut builder = ParquetRecordBatchReaderBuilder::try_new(self.bytes.clone())
+        plan.prepare(self.metadata.row_groups())
             .unwrap()
-            .with_row_groups(plan.row_group_indexes());
-        if let Some(selection) = plan
-            .into_overall_row_selection(self.metadata.row_groups())
-            .unwrap()
-        {
-            builder = builder.with_row_selection(selection);
-        }
-        builder
-            .build()
-            .unwrap()
+            .row_groups
+            .into_iter()
+            .flat_map(|rg| {
+                let mut builder =
+                    ParquetRecordBatchReaderBuilder::try_new(self.bytes.clone())
+                        .unwrap()
+                        .with_row_groups(vec![rg.selection.row_group_index()]);
+                if let Some(selection) = rg.selection.selection() {
+                    builder = builder.with_row_selection(selection.clone());
+                }
+                builder.build().unwrap()
+            })
             .map(|batch| {
                 let batch = batch.unwrap();
                 let matches = physical

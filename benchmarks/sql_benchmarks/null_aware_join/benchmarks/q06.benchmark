@@ -15,9 +15,7 @@ SELECT count(*) = (
 FROM small_outer o
 WHERE o.id_n50 NOT IN (SELECT i.id_n0 FROM small_inner i WHERE i.z < o.z);
 ----
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
-false
+true
 
 expect_plan HashJoinExec
 expect_plan null_aware
