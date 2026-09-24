@@ -718,8 +718,8 @@ where
         values: &[ArrayRef],
         opt_filter: Option<&BooleanArray>,
     ) -> Result<Vec<ArrayRef>> {
-        assert_eq!(values.len(), 1, "one argument to merge_batch");
-
+        // As in `update_batch`, only the first element holds the values; the
+        // percentile parameter and the ORDER BY columns follow it
         let input_array = values[0].as_primitive::<T>();
 
         // Directly convert the input array to states, each row will be
