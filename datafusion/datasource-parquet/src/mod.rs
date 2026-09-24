@@ -32,6 +32,7 @@ pub mod metadata;
 mod metrics;
 mod nested_schema_pruning;
 mod opener;
+mod optional_filter;
 mod page_filter;
 mod projection_read_plan;
 mod pruning;

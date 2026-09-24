@@ -26,11 +26,13 @@ use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
+use crate::optional_filter::OptionalFilterOptions;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
     DecoderBuilderConfig, InitialDecoderState, PushDecoderStreamState, RgPlanEntry,
     RowFilterContext, RowGroupPruner,
 };
+use crate::row_filter::OptionalFilterRowFilterContext;
 use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
 use crate::{
     BloomFilterStatistics, Int96Coercer, ParquetAccessPlan, ParquetFileMetrics,
@@ -306,6 +308,9 @@ pub(super) struct ParquetMorselizer {
     /// Per-scan virtual-column state (validation already performed). `None`
     /// when no virtual columns are requested — the common path.
     pub(crate) virtual_state: Option<Arc<VirtualColumnsState>>,
+    /// How the row filter handles optional conjuncts of the predicate, when
+    /// `pushdown_filters` is true.
+    pub(crate) optional_filters: OptionalFilterOptions,
 }
 
 impl fmt::Debug for ParquetMorselizer {
@@ -497,6 +502,7 @@ struct PreparedParquetOpen {
     reverse_row_groups: bool,
     sort_order_for_reorder: Option<LexOrdering>,
     preserve_order: bool,
+    optional_filters: OptionalFilterOptions,
     #[cfg(feature = "parquet_encryption")]
     file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
 }
@@ -557,9 +563,27 @@ impl DecoderReadPlans {
         // Either way every required conjunct is applied; nothing is silently
         // dropped. Optional conjuncts (see `split_optional`) are not needed
         // for correctness. They never go to the post-scan filter: they are
-        // row filter predicates or they are used only for statistics pruning.
+        // row filter predicates (as `optional_filter_mode` says) or they are
+        // used only for statistics pruning.
         // ---------------------------------------------------------------
-        let (row_filter_context, post_scan_conjuncts) =
+        let build_projection = |post_scan_conjuncts: &[Arc<dyn PhysicalExpr>]| {
+            // Build the decoder projection (mask + per-batch transform +
+            // optional post-scan filter) in a single call. Encapsulating it
+            // behind `DecoderProjection` keeps the opener's orchestration body
+            // focused on filter / decoder / stream wiring. The file-column
+            // projection excludes virtual columns and respects nested field
+            // projections.
+            DecoderProjection::try_new(
+                &prepared.projection,
+                post_scan_conjuncts,
+                &prepared.physical_file_schema,
+                metadata.parquet_schema(),
+                &prepared.output_schema,
+                prepared.virtual_state.as_deref(),
+                &prepared.file_metrics,
+            )
+        };
+        let (row_filter_context, projection) =
             match (prepared.pushdown_filters, prepared.predicate.as_ref()) {
                 // Pushdown enabled: precompute the candidate list once per file.
                 // Both the initial `RowFilter` and any per-RG rebuilds (via
@@ -567,38 +591,46 @@ impl DecoderReadPlans {
                 // (`reassign_expr_columns`) and column resolution only run once —
                 // not once per row group. Only what the `RowFilter` could not
                 // place falls through to post-scan.
-                (true, Some(predicate)) => RowFilterContext::try_new(
-                    predicate,
-                    &prepared.physical_file_schema,
-                    metadata.metadata(),
-                    prepared.reorder_predicates,
-                    prepared.file_metrics.clone(),
-                    prepared.max_predicate_cache_size,
-                ),
+                (true, Some(predicate)) => {
+                    // The gates of optional filters estimate their saving from
+                    // the output columns, thus build the projection without
+                    // post-scan conjuncts first. It is used as-is when the
+                    // `RowFilter` can place every conjunct (the usual case).
+                    let output_projection = build_projection(&[])?;
+                    let (row_filter_context, rejected) = RowFilterContext::try_new(
+                        predicate,
+                        &prepared.physical_file_schema,
+                        metadata.metadata(),
+                        prepared.reorder_predicates,
+                        prepared.file_metrics.clone(),
+                        prepared.max_predicate_cache_size,
+                        Some(OptionalFilterRowFilterContext {
+                            options: &prepared.optional_filters,
+                            metrics: &prepared.metrics,
+                            partition: prepared.partition_index,
+                            filename: &prepared.file_name,
+                            output_projection: Some(output_projection.projection_mask()),
+                        }),
+                    );
+                    let projection = if rejected.is_empty() {
+                        output_projection
+                    } else {
+                        build_projection(&rejected)?
+                    };
+                    (row_filter_context, projection)
+                }
                 // Pushdown disabled: the required conjuncts run post-scan
                 // (in-scan equivalent of a `FilterExec`). Optional conjuncts
                 // (for example hash join dynamic filters) are not needed for
                 // correctness and are expensive to evaluate for each row,
                 // thus they are used only for statistics pruning, as before
                 // the scan accepted the filters.
-                (false, Some(predicate)) => (None, split_optional(predicate).0),
-                (_, None) => (None, Vec::new()),
+                (false, Some(predicate)) => {
+                    let (required, _optional) = split_optional(predicate);
+                    (None, build_projection(&required)?)
+                }
+                (_, None) => (None, build_projection(&[])?),
             };
-
-        // Build the decoder projection (mask + per-batch transform + optional
-        // post-scan filter) in a single call. Encapsulating it behind
-        // `DecoderProjection` keeps the opener's orchestration body focused on
-        // filter / decoder / stream wiring. The file-column projection
-        // excludes virtual columns and respects nested field projections.
-        let projection = DecoderProjection::try_new(
-            &prepared.projection,
-            &post_scan_conjuncts,
-            &prepared.physical_file_schema,
-            metadata.parquet_schema(),
-            &prepared.output_schema,
-            prepared.virtual_state.as_deref(),
-            &prepared.file_metrics,
-        )?;
         Ok(Self {
             projection,
             row_filter_context,
@@ -1025,6 +1057,7 @@ impl ParquetMorselizer {
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             preserve_order: self.preserve_order,
+            optional_filters: self.optional_filters.clone(),
             #[cfg(feature = "parquet_encryption")]
             file_decryption_properties: None,
         })
@@ -2235,6 +2268,7 @@ mod test {
         max_in_list_size: usize,
         reverse_row_groups: bool,
         preserve_order: bool,
+        optional_filters: OptionalFilterOptions,
     }
 
     #[test]
@@ -2458,6 +2492,7 @@ mod test {
                 max_in_list_size: MAX_IN_LIST_SIZE,
                 reverse_row_groups: false,
                 preserve_order: false,
+                optional_filters: OptionalFilterOptions::default(),
             }
         }
 
@@ -2644,6 +2679,7 @@ mod test {
                 reverse_row_groups: self.reverse_row_groups,
                 sort_order_for_reorder: None,
                 virtual_state,
+                optional_filters: self.optional_filters,
             })
         }
     }
