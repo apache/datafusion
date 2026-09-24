@@ -29,8 +29,9 @@
 //! `(List<Int32>, Int32)` key to exercise the `ListGroupValueBuilder`.
 
 use arrow::array::{
-    ArrayRef, Decimal256Array, DurationMicrosecondArray, Float16Array, Int32Array,
-    IntervalMonthDayNanoArray, ListArray, StringArray, UInt32Array,
+    ArrayRef, Decimal32Array, Decimal64Array, Decimal256Array, DurationMicrosecondArray,
+    Float16Array, Int32Array, IntervalMonthDayNanoArray, ListArray, StringArray,
+    UInt32Array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::compute::take;
@@ -1011,6 +1012,111 @@ fn bench_list_utf8(c: &mut Criterion) {
     group.finish();
 }
 
+/// Generate `(Decimal32 | Decimal64, Int32)` batches with `num_distinct_groups`
+/// distinct keys.
+///
+/// The decimal column is built by `make_keys` so one generator serves both
+/// narrow widths. The `Int32` column is keyed identically so the combined
+/// cardinality equals `num_distinct_groups`.
+fn generate_narrow_decimal_batches(
+    num_distinct_groups: usize,
+    num_rows: usize,
+    batch_size: usize,
+    make_keys: fn(&[usize]) -> ArrayRef,
+) -> Vec<Vec<ArrayRef>> {
+    let num_full_batches = num_rows / batch_size;
+    let remainder = num_rows % batch_size;
+    let num_batches = num_full_batches + if remainder > 0 { 1 } else { 0 };
+
+    (0..num_batches)
+        .map(|batch_idx| {
+            let batch_start = batch_idx * batch_size;
+            let current_batch_size = if batch_idx == num_batches - 1 && remainder > 0 {
+                remainder
+            } else {
+                batch_size
+            };
+
+            let group_ids: Vec<usize> = (0..current_batch_size)
+                .map(|row| (batch_start + row) % num_distinct_groups)
+                .collect();
+
+            let id: Int32Array = group_ids.iter().map(|&g| g as i32).collect();
+
+            vec![make_keys(&group_ids), Arc::new(id) as ArrayRef]
+        })
+        .collect()
+}
+
+/// Experiment 14: Group count sweep for `(Decimal32, Int32)` and
+/// `(Decimal64, Int32)` keys.
+///
+/// Exercises the primitive `GroupColumn` builder for the two narrow decimal
+/// widths (4-byte `i32` and 8-byte `i64` native) on the multi-column path
+/// (previously such a schema fell back to `GroupValuesRows`).
+fn bench_narrow_decimals(c: &mut Criterion) {
+    let cases: [(&str, DataType, fn(&[usize]) -> ArrayRef); 2] = [
+        ("decimal32", DataType::Decimal32(9, 0), |group_ids| {
+            Arc::new(
+                Decimal32Array::from_iter_values(group_ids.iter().map(|&g| g as i32))
+                    .with_precision_and_scale(9, 0)
+                    .unwrap(),
+            ) as ArrayRef
+        }),
+        ("decimal64", DataType::Decimal64(18, 0), |group_ids| {
+            Arc::new(
+                Decimal64Array::from_iter_values(group_ids.iter().map(|&g| g as i64))
+                    .with_precision_and_scale(18, 0)
+                    .unwrap(),
+            ) as ArrayRef
+        }),
+    ];
+
+    for (name, data_type, make_keys) in cases {
+        let mut group = c.benchmark_group(name);
+        group.sample_size(15);
+
+        let schema: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("dec", data_type, false),
+            Field::new("id", DataType::Int32, false),
+        ]));
+
+        for num_groups in [1_000, 1_000_000] {
+            let batches = generate_narrow_decimal_batches(
+                num_groups,
+                1_000_000,
+                DEFAULT_BATCH_SIZE,
+                make_keys,
+            );
+
+            for vectorized in [true, false] {
+                let label = if vectorized {
+                    "vectorized"
+                } else {
+                    "row_based"
+                };
+                group.bench_with_input(
+                    BenchmarkId::new(label, format!("grp_{num_groups}")),
+                    &batches,
+                    |b, batches| {
+                        b.iter_batched_ref(
+                            || {
+                                (
+                                    create_group_values(&schema, vectorized),
+                                    Vec::<usize>::with_capacity(DEFAULT_BATCH_SIZE),
+                                )
+                            },
+                            |(gv, groups)| bench_intern(gv, batches, groups),
+                            criterion::BatchSize::LargeInput,
+                        );
+                    },
+                );
+            }
+        }
+        group.finish();
+    }
+}
+
 criterion_group!(
     benches,
     bench_issue_17850_regression,
@@ -1026,5 +1132,6 @@ criterion_group!(
     bench_decimal256,
     bench_list_int,
     bench_list_utf8,
+    bench_narrow_decimals,
 );
 criterion_main!(benches);
