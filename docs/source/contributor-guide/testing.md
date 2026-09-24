@@ -176,6 +176,20 @@ cargo test --doc
 As with other Rust projects, examples in doc comments in `.rs` files are
 automatically checked to ensure they work and evolve along with the code.
 
+Prefix a line with `# ` (a `#` followed by a space) to keep it compiled and
+run, but hidden from the rendered documentation. This is most useful for
+`use` statements, since readers care about the API being demonstrated, not
+its import boilerplate:
+
+````rust
+/// ```
+/// # use std::sync::Arc;
+/// let value = Arc::new(42);
+/// ```
+````
+
+Only the `let value = ...` line renders.
+
 ### User Guide Documentation
 
 Rust example code from the user guide (anything marked with \`\`\`rust) is also
