@@ -46,9 +46,12 @@ use crate::stream::EmptyRecordBatchStream;
 use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions, validate_child_count};
 use crate::{
     DisplayFormatType, ExecutionPlan,
-    metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RatioMetrics},
+    metrics::{
+        BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricsSet, RatioMetrics,
+    },
 };
 
+use arrow::array::ArrayRef;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
@@ -76,6 +79,10 @@ use datafusion_physical_expr::{
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
+
+mod conjunct_order;
+use conjunct_order::ConjunctOrder;
+use datafusion_physical_expr::filter_stats::SystemClock;
 
 const FILTER_EXEC_DEFAULT_SELECTIVITY: u8 = 20;
 const FILTER_EXEC_DEFAULT_BATCH_SIZE: usize = 8192;
@@ -645,10 +652,26 @@ impl ExecutionPlan for FilterExec {
             context.session_id(),
             context.task_id()
         );
-        let metrics = FilterExecMetrics::new(&self.metrics, partition);
+        let mut metrics = FilterExecMetrics::new(&self.metrics, partition);
+        let conjunct_order = if context
+            .session_config()
+            .options()
+            .execution
+            .adaptive_filter_reordering
+        {
+            ConjunctOrder::try_new(&self.predicate, &SystemClock::shared())
+        } else {
+            None
+        };
+        if conjunct_order.is_some() {
+            metrics.adaptive_reorders = Some(
+                MetricBuilder::new(&self.metrics).counter("adaptive_reorders", partition),
+            );
+        }
         Ok(Box::pin(FilterExecStream {
             schema: self.schema(),
             predicate: Arc::clone(&self.predicate),
+            conjunct_order,
             input: self.input.execute(partition, context)?,
             metrics,
             projection: self.projection.clone(),
@@ -1356,6 +1379,9 @@ struct FilterExecStream {
     schema: SchemaRef,
     /// The expression to filter on. This expression must evaluate to a boolean value.
     predicate: Arc<dyn PhysicalExpr>,
+    /// Evaluates `predicate` with adaptive conjunct ordering, if
+    /// `datafusion.execution.adaptive_filter_reordering` is true.
+    conjunct_order: Option<ConjunctOrder>,
     /// The input partition to filter.
     input: SendableRecordBatchStream,
     /// Runtime metrics recording
@@ -1372,6 +1398,9 @@ struct FilterExecMetrics {
     baseline_metrics: BaselineMetrics,
     /// Selectivity of the filter, calculated as output_rows / input_rows
     selectivity: RatioMetrics,
+    /// Number of streams that changed the order of the conjuncts. Present
+    /// only when `datafusion.execution.adaptive_filter_reordering` is true.
+    adaptive_reorders: Option<Count>,
     // Remember to update `docs/source/user-guide/metrics.md` when adding new metrics,
     // or modifying metrics comments
 }
@@ -1383,7 +1412,30 @@ impl FilterExecMetrics {
             selectivity: MetricBuilder::new(metrics)
                 .with_type(MetricType::Summary)
                 .ratio_metrics("selectivity", partition),
+            adaptive_reorders: None,
         }
+    }
+}
+
+impl FilterExecStream {
+    /// Evaluates `predicate` on `batch`, through `conjunct_order` if it is
+    /// set, and returns the selection mask.
+    fn evaluate_predicate(&mut self, batch: &RecordBatch) -> Result<ArrayRef> {
+        let mask = match &mut self.conjunct_order {
+            Some(order) => {
+                let was_measuring = order.is_measuring();
+                let mask = order.evaluate(batch)?;
+                if was_measuring
+                    && order.new_order().is_some()
+                    && let Some(count) = &self.metrics.adaptive_reorders
+                {
+                    count.add(1);
+                }
+                mask
+            }
+            None => self.predicate.evaluate(batch)?,
+        };
+        mask.into_array(batch.num_rows())
     }
 }
 
@@ -1451,9 +1503,7 @@ impl Stream for FilterExecStream {
                 }
                 Some(Ok(batch)) => {
                     let timer = elapsed_compute.timer();
-                    let status = self.predicate.as_ref()
-                        .evaluate(&batch)
-                        .and_then(|v| v.into_array(batch.num_rows()))
+                    let status = self.evaluate_predicate(&batch)
                         .and_then(|array| {
                             Ok(match self.projection.as_ref()  {
                                 Some(projection) => {
@@ -4213,6 +4263,54 @@ mod tests {
             statistics.column_statistics[0].distinct_count,
             Precision::Inexact(20)
         );
+        Ok(())
+    }
+
+    /// With `adaptive_filter_reordering`, `FilterExec` returns the same rows
+    /// and reports the `adaptive_reorders` metric. Whether it reorders
+    /// depends on the wall clock, thus the scenario tests of the decision are
+    /// in `conjunct_order.rs`, with a mock clock.
+    #[tokio::test]
+    async fn adaptive_filter_reordering_returns_same_rows() -> Result<()> {
+        use datafusion_execution::config::SessionConfig;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from_iter_values(0..100))],
+        )?;
+        let input: Arc<dyn ExecutionPlan> = test::TestMemoryExec::try_new_exec(
+            &[vec![batch; 20]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let a = col("a", &schema)?;
+        // The selective conjunct is last.
+        let predicate = binary(
+            binary(
+                binary(Arc::clone(&a), Operator::GtEq, lit(0i32), &schema)?,
+                Operator::And,
+                binary(Arc::clone(&a), Operator::NotEq, lit(50i32), &schema)?,
+                &schema,
+            )?,
+            Operator::And,
+            binary(Arc::clone(&a), Operator::Lt, lit(5i32), &schema)?,
+            &schema,
+        )?;
+        let single = binary(a, Operator::Lt, lit(5i32), &schema)?;
+
+        for (predicate, has_metric) in [(predicate, true), (single, false)] {
+            let mut config = SessionConfig::new();
+            config.options_mut().execution.adaptive_filter_reordering = true;
+            let context = Arc::new(TaskContext::default().with_session_config(config));
+            let filter = Arc::new(FilterExec::try_new(predicate, Arc::clone(&input))?);
+            let batches = collect(filter.execute(0, context)?).await?;
+            let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+            assert_eq!(rows, 20 * 5);
+            let reorders = filter.metrics().unwrap().sum_by_name("adaptive_reorders");
+            assert_eq!(reorders.is_some(), has_metric);
+            assert!(reorders.is_none_or(|r| r.as_usize() <= 1));
+        }
         Ok(())
     }
 }

@@ -1184,6 +1184,16 @@ config_namespace! {
         ///
         /// Disabled by default, set to a number greater than 0 for enabling it.
         pub hash_join_buffering_capacity: usize, default = 0
+
+        /// (experimental) When true, `FilterExec` measures the selectivity
+        /// and the evaluation time of each conjunct of an `AND` predicate on
+        /// the first batches of each partition. Then it evaluates first the
+        /// conjuncts that remove the most rows per unit of time. The query
+        /// result does not change, but a fallible conjunct can see different
+        /// rows: for example, a new order of `b <> 0 AND 1 / b > 2` can cause
+        /// or prevent a division by zero error. Predicates with volatile
+        /// expressions are never reordered.
+        pub adaptive_filter_reordering: bool, default = false
     }
 }
 
