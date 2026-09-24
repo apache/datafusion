@@ -669,6 +669,16 @@ the README:</p>
 <a class="reference external" href="https://github.com/apache/datafusion/blob/main/ci/scripts/check_generated_docs.sh"><code class="docutils literal notranslate"><span class="pre">ci/scripts/check_generated_docs.sh</span></code></a> script, which also runs as part of
 <code class="docutils literal notranslate"><span class="pre">./dev/rust_lint.sh</span></code>. Run it with <code class="docutils literal notranslate"><span class="pre">--write</span></code> to update the pages.</p>
 </section>
+<section id="documentation-html-build">
+<h2>Documentation HTML Build<a class="headerlink" href="#documentation-html-build" title="Link to this heading">#</a></h2>
+<p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/ci/scripts/check_docs_html.sh"><code class="docutils literal notranslate"><span class="pre">ci/scripts/check_docs_html.sh</span></code></a> builds the documentation website, the same
+build the “Test doc build” job runs. Sphinx builds with <code class="docutils literal notranslate"><span class="pre">-W</span></code>, so one warning
+fails the check. <code class="docutils literal notranslate"><span class="pre">./dev/rust_lint.sh</span></code> runs it. Run the script with <code class="docutils literal notranslate"><span class="pre">--help</span></code>
+for the tools it needs and the files it writes.</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>./ci/scripts/check_docs_html.sh
+</pre></div>
+</div>
+</section>
 <section id="benchmarks">
 <h2>Benchmarks<a class="headerlink" href="#benchmarks" title="Link to this heading">#</a></h2>
 <section id="criterion-benchmarks">
@@ -781,6 +791,7 @@ the README:</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#dependency-checks">Dependency Checks</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#examples-readme-check">Examples README Check</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#config-and-function-docs-check">Config and Function Docs Check</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#documentation-html-build">Documentation HTML Build</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#benchmarks">Benchmarks</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#criterion-benchmarks">Criterion Benchmarks</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquet-sql-benchmarks">Parquet SQL Benchmarks</a></li>
