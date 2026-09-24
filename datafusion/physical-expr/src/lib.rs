@@ -37,6 +37,7 @@ pub mod expressions;
 pub mod filter_stats;
 pub mod higher_order_function;
 pub mod intervals;
+pub mod optional_filter_gate;
 mod partitioning;
 mod physical_expr;
 pub mod planner;
