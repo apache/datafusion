@@ -1812,6 +1812,32 @@ drop table struct_ctor_null;
 statement ok
 create table leaf_merge_source(v int, s struct<a int>, env varchar) as values (1, {a: 10}, 'prod'), (2, {a: 20}, 'dev');
 
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+query TT
+explain with samples as (
+  select v, s, env from leaf_merge_source
+),
+expanded as (
+  select v, s, env from samples
+  union all
+  select v, s, env from samples where 1 = 2
+)
+select env, sum(s['a']) from expanded group by env order by env;
+----
+logical_plan
+01)Sort: expanded.env ASC NULLS LAST
+02)--Projection: expanded.env, sum(__datafusion_extracted_1) AS sum(expanded.s[a])
+03)----Aggregate: groupBy=[[expanded.env]], aggr=[[sum(CAST(__datafusion_extracted_1 AS Int64))]]
+04)------SubqueryAlias: expanded
+05)--------SubqueryAlias: samples
+06)----------Projection: leaf_merge_source.env, get_field(s, Utf8("a")) AS __datafusion_extracted_1
+07)------------TableScan: leaf_merge_source projection=[s, env]
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
 query TI
 with samples as (
   select v, s, env from leaf_merge_source

@@ -637,22 +637,17 @@ impl<'a> LeafExpressionExtractor<'a> {
     }
 }
 
-/// The way `schema` names `col`, or `None` when it does not hold it unambiguously.
+/// The way `schema` names `col`, or `None` when `schema` does not hold it
+/// or the name is ambiguous.
 ///
-/// A qualified column is taken as it stands. An unqualified one is matched on name alone
-/// and comes back carrying the qualifier the schema gives that field, so a column pushed
-/// into a projection reads as the input spells it. A name the schema holds more than once
-/// resolves to nothing rather than to an arbitrary one of them.
+/// The result always carries the qualifier the schema gives the field, so
+/// two spellings of the same input column compare equal, and a column pushed
+/// into a projection reads as the input spells it.
 fn resolve_against(schema: &DFSchema, col: &Column) -> Option<Column> {
-    match &col.relation {
-        Some(relation) => schema
-            .has_column_with_qualified_name(relation, &col.name)
-            .then(|| col.clone()),
-        None => schema
-            .qualified_field_with_unqualified_name(&col.name)
-            .ok()
-            .map(|(qualifier, field)| Column::new(qualifier.cloned(), field.name())),
-    }
+    schema
+        .qualified_field_from_column(col)
+        .ok()
+        .map(Column::from)
 }
 
 /// Build an extraction projection above the target node (shared by both passes).
@@ -721,15 +716,11 @@ fn build_extraction_projection_impl(
         // by alias expressions (e.g., CSE's __common_expr_N) exist in the output but
         // not the input, and cannot be added as pass-through Column references.
         //
-        // Both sides of that check are read in the input's own spelling. A column can
-        // arrive here unqualified while the input names it `t.c`, and the other way round:
-        // a projection of bare names over a qualified input is what eliminating one side
-        // of a union leaves behind. Resolving both sides lets a pass-through the
-        // projection already carries match the one about to be added, and pushes the one
-        // that is genuinely new under the name the input gives it. Left unresolved, the
-        // merged projection would hold `t.c` and a bare `c` together, which
-        // `Projection::try_new` rejects as ambiguous. A same-name alias such as
-        // `t.c AS c` is a pass-through as well, and counts the same as a bare `t.c`.
+        // Compare both sides in the input's spelling (see `resolve_against`).
+        // Without this, a bare `c` and a qualified `t.c` do not match, and the
+        // merged projection holds both, which `Projection::try_new` rejects as
+        // ambiguous. Eliminating the empty side of a union makes this shape.
+        // A same-name alias (`t.c AS c`) counts as a pass-through of `t.c`.
         let input_schema = existing.input.schema();
         let existing_cols: IndexSet<Column> = existing
             .expr
