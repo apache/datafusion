@@ -606,24 +606,18 @@ fn test_simplify_with_cycle_count(
 
 #[test]
 fn test_simplify_log() {
-    // These identities hold only for a base in (0, 1) union (1, inf), so they
-    // apply to a literal base whose value proves it, not to a column.
-    // Log(2, 1) ===> 0
     {
-        let expr = log(lit(2i64), lit(1));
-        test_simplify(expr, lit(0i64));
+        let expr = log(lit(2.0), lit(1.0));
+        test_simplify(expr, lit(0.0));
     }
-    // Log(2, 2) ===> 1
     {
-        let expr = log(lit(2i64), lit(2i64));
-        let expected = lit(1i64);
+        let expr = log(lit(2.0), lit(2.0));
+        let expected = lit(1.0);
         test_simplify(expr, expected);
     }
-    // Log(2, Power(2, c4)) ===> c4
     {
         let expr = log(lit(2i64), power(lit(2i64), col("c4_non_null")));
-        let expected = col("c4_non_null");
-        test_simplify(expr, expected);
+        test_simplify(expr.clone(), expr);
     }
     // Log(c3, 1) ===> Log(c3, 1), since c3 may be 1, 0 or negative
     {

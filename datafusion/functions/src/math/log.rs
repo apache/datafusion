@@ -17,8 +17,6 @@
 
 //! Math function: `log()`.
 
-use super::power::PowerFunc;
-
 use crate::utils::calculate_binary_math;
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{
@@ -28,15 +26,12 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use arrow_buffer::i256;
 use datafusion_common::types::NativeType;
-use datafusion_common::{
-    Result, ScalarValue, exec_err, internal_err, plan_datafusion_err, plan_err,
-};
-use datafusion_expr::expr::ScalarFunction;
+use datafusion_common::{Result, ScalarValue, exec_err, plan_datafusion_err, plan_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF,
-    TypeSignature, TypeSignatureClass, lit,
+    Coercion, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, TypeSignature,
+    TypeSignatureClass, lit,
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
@@ -312,16 +307,12 @@ impl ScalarUDFImpl for LogFunc {
         self.doc()
     }
 
-    /// Simplify the `log` function by the relevant rules:
-    /// 1. Log(a, 1) ===> 0
-    /// 2. Log(a, Power(a, b)) ===> b
-    /// 3. Log(a, a) ===> 1
     fn simplify(
         &self,
-        mut args: Vec<Expr>,
+        args: Vec<Expr>,
         info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
-        let mut arg_types = args
+        let arg_types = args
             .iter()
             .map(|arg| info.get_data_type(arg))
             .collect::<Result<Vec<_>>>()?;
@@ -354,76 +345,8 @@ impl ScalarUDFImpl for LogFunc {
             _ => (),
         }
 
-        let number = args.pop().unwrap();
-        let number_datatype = arg_types.pop().unwrap();
-        // default to base 10
-        let base = if let Some(base) = args.pop() {
-            base
-        } else {
-            lit(ScalarValue::new_ten(&number_datatype)?)
-        };
-
-        match number {
-            Expr::Literal(value, _)
-                if value == ScalarValue::new_one(&number_datatype)?
-                    && is_valid_log_base(&base) =>
-            {
-                Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_zero(
-                    &info.get_data_type(&base)?,
-                )?)))
-            }
-            Expr::ScalarFunction(ScalarFunction { func, mut args })
-                if is_pow(&func)
-                    && args.len() == 2
-                    && base == args[0]
-                    && is_valid_log_base(&base) =>
-            {
-                let b = args.pop().unwrap(); // length checked above
-                Ok(ExprSimplifyResult::Simplified(b))
-            }
-            number => {
-                if number == base && is_valid_log_base(&base) {
-                    Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_one(
-                        &number_datatype,
-                    )?)))
-                } else {
-                    let args = match num_args {
-                        1 => vec![number],
-                        2 => vec![base, number],
-                        _ => {
-                            return internal_err!(
-                                "Unexpected number of arguments in log::simplify"
-                            );
-                        }
-                    };
-                    Ok(ExprSimplifyResult::Original(args))
-                }
-            }
-        }
+        Ok(ExprSimplifyResult::Original(args))
     }
-}
-
-/// Returns true if the function is `PowerFunc`
-fn is_pow(func: &ScalarUDF) -> bool {
-    func.inner().is::<PowerFunc>()
-}
-
-/// Returns true when `base` is a literal that is a valid logarithm base.
-///
-/// The `log`/`power` identities hold only for a base in `(0, 1) ∪ (1, ∞)`.
-/// A base of 1 makes `log(base, x)` infinite, a base of 0 or a negative number
-/// makes it undefined, and an infinite base collapses the result to zero, so the
-/// rewrites are unsound for all of them. Only a literal proves the value, so a
-/// non-literal base keeps the original expression.
-pub(super) fn is_valid_log_base(base: &Expr) -> bool {
-    let Expr::Literal(value, _) = base else {
-        return false;
-    };
-
-    matches!(
-        value.cast_to(&DataType::Float64),
-        Ok(ScalarValue::Float64(Some(value))) if value.is_finite() && value > 0.0 && value != 1.0
-    )
 }
 
 #[cfg(test)]
@@ -784,84 +707,20 @@ mod tests {
     }
 
     #[test]
-    // Test that non-simplifiable log() expressions are unchanged after simplification
     fn test_log_simplify_original() {
         let context = SimplifyContext::default();
-        // One argument with no simplifications
-        let result = LogFunc::new().simplify(vec![lit(2)], &context).unwrap();
-        let ExprSimplifyResult::Original(args) = result else {
-            panic!("Expected ExprSimplifyResult::Original")
-        };
-        assert_eq!(args.len(), 1);
-        assert_eq!(args[0], lit(2));
-        // Two arguments with no simplifications
-        let result = LogFunc::new()
-            .simplify(vec![lit(2), lit(3)], &context)
-            .unwrap();
-        let ExprSimplifyResult::Original(args) = result else {
-            panic!("Expected ExprSimplifyResult::Original")
-        };
-        assert_eq!(args.len(), 2);
-        assert_eq!(args[0], lit(2));
-        assert_eq!(args[1], lit(3));
-    }
-
-    #[test]
-    fn test_log_simplify_rejects_degenerate_base() {
-        let context = SimplifyContext::default();
-
-        // log(base, 1) => 0, log(base, base) => 1 and log(base, power(base, b)) => b
-        // hold only for a base in (0, 1) union (1, inf).
-        for base in [
-            lit(1.0),
-            lit(0.0),
-            lit(-2.0),
-            lit(f64::NAN),
-            lit(f64::INFINITY),
+        for args in [
+            vec![lit(2)],
+            vec![lit(2), lit(3)],
+            vec![lit(2.0), lit(1.0)],
+            vec![lit(2.0), lit(2.0)],
         ] {
-            let result = LogFunc::new()
-                .simplify(vec![base.clone(), lit(1.0)], &context)
-                .unwrap();
-            assert!(
-                matches!(result, ExprSimplifyResult::Original(_)),
-                "log({base:?}, 1) must not simplify"
-            );
-
-            let result = LogFunc::new()
-                .simplify(vec![base.clone(), base.clone()], &context)
-                .unwrap();
-            assert!(
-                matches!(result, ExprSimplifyResult::Original(_)),
-                "log({base:?}, {base:?}) must not simplify"
-            );
-
-            let power = Expr::ScalarFunction(ScalarFunction::new_udf(
-                Arc::new(ScalarUDF::from(PowerFunc::new())),
-                vec![base.clone(), lit(2.0)],
-            ));
-            let result = LogFunc::new()
-                .simplify(vec![base.clone(), power], &context)
-                .unwrap();
-            assert!(
-                matches!(result, ExprSimplifyResult::Original(_)),
-                "log({base:?}, power({base:?}, 2)) must not simplify"
-            );
+            let result = LogFunc::new().simplify(args.clone(), &context).unwrap();
+            let ExprSimplifyResult::Original(actual) = result else {
+                panic!("Expected ExprSimplifyResult::Original")
+            };
+            assert_eq!(actual, args);
         }
-    }
-
-    #[test]
-    fn test_log_simplify_accepts_valid_base() {
-        let context = SimplifyContext::default();
-
-        let result = LogFunc::new()
-            .simplify(vec![lit(2.0), lit(1.0)], &context)
-            .unwrap();
-        assert!(matches!(result, ExprSimplifyResult::Simplified(_)));
-
-        let result = LogFunc::new()
-            .simplify(vec![lit(2.0), lit(2.0)], &context)
-            .unwrap();
-        assert!(matches!(result, ExprSimplifyResult::Simplified(_)));
     }
 
     #[test]
