@@ -609,6 +609,46 @@ mod tests {
         Ok(())
     }
 
+    /// `bloom_filter_length` and `sorting_columns` are absent from the other
+    /// fixtures. These files populate them so a regression that always emits
+    /// NULL still fails.
+    #[tokio::test]
+    async fn test_parquet_metadata_bloom_length_and_sorting_columns()
+    -> Result<(), DataFusionError> {
+        let ctx = SessionContext::new();
+        ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
+
+        let sql = "SELECT path_in_schema, bloom_filter_offset, bloom_filter_length \
+            FROM parquet_metadata('../parquet-testing/data/data_index_bloom_encoding_with_length.parquet')";
+        let df = ctx.sql(sql).await?;
+        let rbs = df.collect().await?;
+        assert_snapshot!(batches_to_string(&rbs), @r#"
+        +----------------+---------------------+---------------------+
+        | path_in_schema | bloom_filter_offset | bloom_filter_length |
+        +----------------+---------------------+---------------------+
+        | "String"       | 253                 | 2064                |
+        +----------------+---------------------+---------------------+
+        "#);
+
+        let sql = "SELECT row_group_id, column_id, path_in_schema, sorting_columns \
+            FROM parquet_metadata('../parquet-testing/data/sort_columns.parquet') \
+            ORDER BY row_group_id, column_id";
+        let df = ctx.sql(sql).await?;
+        let rbs = df.collect().await?;
+        assert_snapshot!(batches_to_string(&rbs), @r#"
+        +--------------+-----------+----------------+------------------------------------------------------------------------------------------------------------------------------------------------+
+        | row_group_id | column_id | path_in_schema | sorting_columns                                                                                                                                |
+        +--------------+-----------+----------------+------------------------------------------------------------------------------------------------------------------------------------------------+
+        | 0            | 0         | "a"            | [SortingColumn { column_idx: 0, descending: true, nulls_first: true }, SortingColumn { column_idx: 1, descending: false, nulls_first: false }] |
+        | 0            | 1         | "b"            | [SortingColumn { column_idx: 0, descending: true, nulls_first: true }, SortingColumn { column_idx: 1, descending: false, nulls_first: false }] |
+        | 1            | 0         | "a"            | [SortingColumn { column_idx: 0, descending: true, nulls_first: true }, SortingColumn { column_idx: 1, descending: false, nulls_first: false }] |
+        | 1            | 1         | "b"            | [SortingColumn { column_idx: 0, descending: true, nulls_first: true }, SortingColumn { column_idx: 1, descending: false, nulls_first: false }] |
+        +--------------+-----------+----------------+------------------------------------------------------------------------------------------------------------------------------------------------+
+        "#);
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_metadata_cache() -> Result<(), DataFusionError> {
         let ctx = SessionContext::new();
