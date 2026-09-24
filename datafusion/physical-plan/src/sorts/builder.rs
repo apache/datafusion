@@ -77,6 +77,12 @@ pub struct BatchBuilder {
     /// anti-starvation guarantee throughout the merge.
     initial_reservation: usize,
 
+    /// Output-construction workspace to retain across output batches.
+    ///
+    /// Spill merges can opt into retaining the workspace admitted before the
+    /// merge starts so another consumer cannot take it between stream polls.
+    initial_output_construction_reservation: usize,
+
     /// The current [`BatchCursor`] for each stream
     cursors: Vec<BatchCursor>,
 
@@ -110,8 +116,17 @@ impl BatchBuilder {
             output_construction_reservation,
             batches_mem_used: 0,
             initial_reservation,
+            initial_output_construction_reservation: 0,
             target_batch_bytes,
         }
+    }
+
+    /// Retain any output-construction reservation supplied at creation time
+    /// across successful output batches.
+    pub(crate) fn retain_output_construction_reservation(mut self) -> Self {
+        self.initial_output_construction_reservation =
+            self.output_construction_reservation.size();
+        self
     }
 
     /// Append a new batch in `stream_idx`
@@ -221,7 +236,14 @@ impl BatchBuilder {
         if self.reservation.size() > target {
             self.reservation.shrink(self.reservation.size() - target);
         }
-        self.output_construction_reservation.free();
+        if self.output_construction_reservation.size()
+            > self.initial_output_construction_reservation
+        {
+            self.output_construction_reservation.shrink(
+                self.output_construction_reservation.size()
+                    - self.initial_output_construction_reservation,
+            );
+        }
 
         Ok(batch)
     }
@@ -307,8 +329,6 @@ impl BatchBuilder {
             return Ok(None);
         }
 
-        self.output_construction_reservation.free();
-
         let Some(target_batch_bytes) = self.target_batch_bytes else {
             let (rows_to_emit, columns) = retry_interleave(
                 self.indices.len(),
@@ -346,7 +366,6 @@ impl BatchBuilder {
         }
 
         loop {
-            self.output_construction_reservation.free();
             match try_grow_reservation_to_at_least(
                 &mut self.output_construction_reservation,
                 estimated_bytes,
@@ -826,6 +845,34 @@ mod tests {
         assert_int_output(&output, &[1, 2]);
         assert_eq!(builder.len(), 2);
         assert_eq!(builder.output_construction_reservation.size(), 0);
+    }
+
+    #[test]
+    fn test_byte_target_can_retain_admitted_output_workspace() {
+        let batch = int_batch(vec![1, 2]);
+        let schema = batch.schema();
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(128));
+        let output_reservation = MemoryConsumer::new("output").register(&pool);
+        output_reservation.try_grow(128).unwrap();
+        let mut builder = BatchBuilder::new(
+            schema,
+            1,
+            2,
+            reservation(),
+            Some(output_reservation),
+            Some(128),
+        )
+        .retain_output_construction_reservation();
+        builder.push_batch(0, batch).unwrap();
+        push_n_rows(&mut builder, 0, 2);
+
+        let output = builder.build_record_batch().unwrap().unwrap();
+
+        assert_eq!(output.num_rows(), 2);
+        assert_eq!(builder.output_construction_reservation.size(), 128);
+        assert_eq!(pool.reserved(), 128);
+        drop(builder);
+        assert_eq!(pool.reserved(), 0);
     }
 
     #[test]
