@@ -273,6 +273,18 @@ fn parquet_source_predicate(child: &Arc<dyn ExecutionPlan>) -> Arc<dyn PhysicalE
         .expect("ParquetSource should have a predicate after roundtrip")
 }
 
+/// Like [`parquet_source_predicate`], for a scan predicate with several
+/// conjuncts. Returns the conjuncts in predicate order.
+fn parquet_source_conjuncts(
+    child: &Arc<dyn ExecutionPlan>,
+) -> Vec<Arc<dyn PhysicalExpr>> {
+    let predicate = parquet_source_predicate(child);
+    datafusion::physical_expr::split_conjunction(&predicate)
+        .into_iter()
+        .map(Arc::clone)
+        .collect()
+}
+
 /// Assert that two dynamic filters are equal both structurally (Debug output)
 /// and by identity (`expression_id`).
 fn assert_dynamic_filters_equal(
@@ -396,58 +408,73 @@ fn datasource_for_dynamic_filter_pushdown(
 }
 
 /// Test that plan containing a HashJoinExec with dynamic filter pushdown
-/// can be serialized and deserialized while preserving references to the dynamic filter.
+/// can be serialized and deserialized while preserving references to the dynamic
+/// filters. A partitioned join pushes two filters (bounds and membership), a
+/// collect-left join pushes one. Each must stay linked to its copy in the probe
+/// side.
 #[test]
 fn test_hash_join_with_dynamic_filter_roundtrip() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Int64, false)]));
+    for (mode, expected_filters) in [
+        (PartitionMode::CollectLeft, 1),
+        (PartitionMode::Partitioned, 2),
+    ] {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("col", DataType::Int64, false)]));
 
-    let left_child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
-    let (right_child, config) = datasource_for_dynamic_filter_pushdown(&schema);
+        let left_child = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let (right_child, config) = datasource_for_dynamic_filter_pushdown(&schema);
 
-    let on: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> = vec![(
-        Arc::new(Column::new("col", 0)),
-        Arc::new(Column::new("col", 0)),
-    )];
+        let on: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> = vec![(
+            Arc::new(Column::new("col", 0)),
+            Arc::new(Column::new("col", 0)),
+        )];
 
-    let hash_join = Arc::new(HashJoinExec::try_new(
-        left_child,
-        right_child,
-        on,
-        None,
-        &JoinType::Inner,
-        None,
-        PartitionMode::CollectLeft,
-        NullEquality::NullEqualsNothing,
-        false,
-    )?) as Arc<dyn ExecutionPlan>;
+        let hash_join = Arc::new(HashJoinExec::try_new(
+            left_child,
+            right_child,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            mode,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?) as Arc<dyn ExecutionPlan>;
 
-    // Run the optimizer rule for filter pushdown.
-    let optimizer = FilterPushdown::new_post_optimization();
-    let plan = optimizer.optimize(hash_join, &config)?;
+        // Run the optimizer rule for filter pushdown.
+        let optimizer = FilterPushdown::new_post_optimization();
+        let plan = optimizer.optimize(hash_join, &config)?;
 
-    let ctx = SessionContext::new();
-    let codec = DefaultPhysicalExtensionCodec {};
-    let converter = DeduplicatingProtoConverter {};
-    let deserialized = roundtrip_test_and_return(plan, &ctx, &codec, &converter)?;
+        let ctx = SessionContext::new();
+        let codec = DefaultPhysicalExtensionCodec {};
+        let converter = DeduplicatingProtoConverter {};
+        let deserialized = roundtrip_test_and_return(plan, &ctx, &codec, &converter)?;
 
-    // Extract the deserialized HashJoinExec and its dynamic filter.
-    let deserialized_join = deserialized
-        .downcast_ref::<HashJoinExec>()
-        .expect("Should be HashJoinExec");
-    let deserialized_hash_join_df = deserialized_join
-        .dynamic_expressions_produced()
-        .into_iter()
-        .next()
-        .expect("HashJoinExec should have a dynamic filter after roundtrip");
+        // Extract the deserialized HashJoinExec and its dynamic filters
+        // (membership, then bounds if any).
+        let deserialized_join = deserialized
+            .downcast_ref::<HashJoinExec>()
+            .expect("Should be HashJoinExec");
+        let produced = deserialized_join.dynamic_expressions_produced();
+        assert_eq!(produced.len(), expected_filters, "{mode:?}");
 
-    // Extract the dynamic filter pushed down to the probe side's ParquetSource.
-    let deserialized_predicate = parquet_source_predicate(deserialized_join.right());
+        // Extract the dynamic filters pushed down to the probe side's
+        // ParquetSource (bounds first, then membership).
+        let pushed = parquet_source_conjuncts(deserialized_join.right());
+        assert_eq!(pushed.len(), expected_filters, "{mode:?}");
 
-    // The HashJoinExec's dynamic filter and the probe side's predicate should
-    // refer to the same underlying expression.
-    let plan_df = deserialized_hash_join_df;
-    assert_dynamic_filters_equal(&plan_df, &deserialized_predicate);
-    assert_dynamic_filter_update_is_visible(&plan_df, &deserialized_predicate)?;
+        // Each dynamic filter of the HashJoinExec and its copy in the probe
+        // side's predicate should refer to the same underlying expression.
+        for (plan_df, pushed_df) in produced.iter().zip(pushed.iter().rev()) {
+            assert_ne!(plan_df.expression_id(), None);
+            assert_eq!(plan_df.expression_id(), pushed_df.expression_id());
+            assert_dynamic_filters_equal(plan_df, pushed_df);
+            assert_dynamic_filter_update_is_visible(plan_df, pushed_df)?;
+        }
+        if let [membership, bounds] = produced.as_slice() {
+            assert_ne!(membership.expression_id(), bounds.expression_id());
+        }
+    }
 
     Ok(())
 }
