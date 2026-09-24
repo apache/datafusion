@@ -174,7 +174,6 @@ impl StatisticsContext {
     /// # Example
     ///
     /// ```
-    /// # use std::sync::Arc;
     /// # use arrow::datatypes::{DataType, Field, Schema};
     /// # use datafusion_common::Statistics;
     /// # use datafusion_common::stats::Precision;
