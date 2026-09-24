@@ -1485,8 +1485,6 @@ struct FallbackCoordinatorInner {
     /// The shared left spill stream from which chunks are read. Owned by
     /// the coordinator so only one partition reads it at a time.
     left_stream: Option<SendableRecordBatchStream>,
-    /// Left schema. Set after the first leader resolves the spill future.
-    left_schema: Option<SchemaRef>,
     /// One batch carried over from the previous chunk's load: when
     /// reservation `try_grow` failed for chunk N, the offending batch is
     /// recorded here and becomes the first batch of chunk N+1.
@@ -1584,7 +1582,6 @@ impl FallbackCoordinator {
             inner: Mutex::new(FallbackCoordinatorInner {
                 reservation: None,
                 left_stream: None,
-                left_schema: None,
                 carryover: None,
                 left_exhausted: false,
                 next_chunk_index: 0,
@@ -1729,6 +1726,13 @@ impl FallbackCoordinator {
         self.cancel_notify.notify_waiters();
     }
 
+    /// Gives up the leader claim without publishing a chunk, and wakes waiters so
+    /// they do not block on a release the failed leader never makes.
+    fn abandon_load(&self) {
+        self.inner.lock().loader_in_flight = false;
+        self.notify.notify_waiters();
+    }
+
     /// Fetch `expected_chunk_index`, becoming leader to load it from the
     /// left spill stream if no other partition has done so. Returns
     /// `Ok(None)` when the left stream is exhausted and no chunk with
@@ -1804,39 +1808,17 @@ impl FallbackCoordinator {
                     carryover,
                     chunk_index,
                 } => {
-                    // Build whatever the slot did not already have. A failure
-                    // here must clear the leader flag and wake waiters, or they
-                    // block on a release the failed leader never makes.
-                    let (mut left_stream, left_schema) = match stream {
-                        Some(stream) => {
-                            let schema = {
-                                let inner = self.inner.lock();
-                                inner.left_schema.clone()
-                            };
-                            let schema = match schema {
-                                Some(schema) => schema,
-                                None => Arc::clone(&spill_data.schema),
-                            };
-                            (stream, schema)
-                        }
+                    // Build whatever the slot did not already have.
+                    let mut left_stream = match stream {
+                        Some(stream) => stream,
                         None => {
                             match spill_data.spill_manager.read_spill_as_stream(
                                 Arc::clone(&spill_data.spill_file),
                                 None,
                             ) {
-                                Ok(stream) => {
-                                    let mut inner = self.inner.lock();
-                                    inner.left_schema =
-                                        Some(Arc::clone(&spill_data.schema));
-                                    drop(inner);
-                                    (stream, Arc::clone(&spill_data.schema))
-                                }
+                                Ok(stream) => stream,
                                 Err(e) => {
-                                    {
-                                        let mut inner = self.inner.lock();
-                                        inner.loader_in_flight = false;
-                                    }
-                                    self.notify.notify_waiters();
+                                    self.abandon_load();
                                     return Err(e);
                                 }
                             }
@@ -1863,12 +1845,11 @@ impl FallbackCoordinator {
                         self.cancel();
                     }
                     let cancelled = self.cancel_notify.notified();
-                    let load = Arc::clone(&self).load_one_chunk(
-                        chunk_index,
+                    let load = self.load_one_chunk(
                         &mut left_stream,
                         &mut reservation,
                         carryover,
-                        Arc::clone(&left_schema),
+                        Arc::clone(&spill_data.schema),
                         build_time.clone(),
                     );
                     let load_result = {
@@ -1895,11 +1876,7 @@ impl FallbackCoordinator {
                         // clear the leader claim so nothing waits on us.
                         drop(left_stream);
                         drop(reservation);
-                        {
-                            let mut inner = self.inner.lock();
-                            inner.loader_in_flight = false;
-                        }
-                        self.notify.notify_waiters();
+                        self.abandon_load();
                         return exec_err!(
                             "NestedLoopJoin coordinated fallback was cancelled \
                              while a chunk was being loaded"
@@ -1960,8 +1937,7 @@ impl FallbackCoordinator {
     /// Read one chunk worth of left batches into a `JoinLeftData`,
     /// honoring the coordinator's reservation as the memory budget.
     async fn load_one_chunk(
-        self: Arc<Self>,
-        _chunk_index: usize,
+        &self,
         left_stream: &mut SendableRecordBatchStream,
         reservation: &mut MemoryReservation,
         carryover: Option<RecordBatch>,
@@ -2139,9 +2115,6 @@ type ChunkFetchFuture = BoxFuture<'static, Result<ChunkFetchOutput>>;
 pub(crate) struct SpillStateActive {
     /// The spilled left side, shared by every partition.
     left_spill: Arc<LeftSpillData>,
-    /// Left-side schema, set from the first chunk the coordinator delivers.
-    /// Used by `EmitGlobalRightUnmatched` to build NULL-padded left columns.
-    left_schema: Option<SchemaRef>,
     /// Plan-level coordinator that publishes per-chunk `JoinLeftData`
     /// shared across all right-side partitions.
     coordinator: Arc<FallbackCoordinator>,
@@ -2726,7 +2699,6 @@ impl NestedLoopJoinStream {
 
         self.spill_state = SpillState::Active(Box::new(SpillStateActive {
             left_spill,
-            left_schema: None,
             coordinator: fallback_coordinator,
             next_chunk_index: 0,
             task_context: Arc::clone(&context),
@@ -2850,7 +2822,7 @@ impl NestedLoopJoinStream {
             }
             Ok(Some((data, is_last))) => {
                 // The operator's own work on the delivered chunk: recording
-                // metrics, caching the schema and opening the right-side pass.
+                // metrics and opening the right-side pass.
                 // `load_one_chunk` times the reading it does, but a chunk can
                 // also be served straight from the coordinator's slot, in which
                 // case this is the only build work there is.
@@ -2858,9 +2830,6 @@ impl NestedLoopJoinStream {
                 let n_rows = data.batch().num_rows();
                 self.metrics.join_metrics.build_input_batches.add(1);
                 self.metrics.join_metrics.build_input_rows.add(n_rows);
-                if active.left_schema.is_none() {
-                    active.left_schema = Some(data.batch().schema());
-                }
                 self.buffered_left_data = Some(data);
                 self.left_exhausted = is_last;
                 self.left_buffered_in_one_pass = is_last && active.next_chunk_index == 0;
@@ -3228,12 +3197,7 @@ impl NestedLoopJoinStream {
                     )
                 };
 
-                let left_schema = Arc::clone(
-                    active
-                        .left_schema
-                        .as_ref()
-                        .expect("left_schema must be set"),
-                );
+                let left_schema = Arc::clone(&active.left_spill.schema);
 
                 match build_unmatched_batch(
                     &self.output_schema,
@@ -4753,7 +4717,6 @@ pub(crate) mod tests {
                 });
             } else {
                 let mut inner = coordinator.inner.lock();
-                inner.left_schema = Some(Arc::clone(&left_schema));
                 inner.left_stream = Some(left_stream);
             }
             let active = SpillStateActive {
@@ -4762,7 +4725,6 @@ pub(crate) mod tests {
                     spill_file: left_spill_file,
                     schema: Arc::clone(&left_schema),
                 }),
-                left_schema: Some(Arc::clone(&left_schema)),
                 // Preload the single left chunk into the coordinator's slot so
                 // `next_chunk` serves it from `current` without reading the
                 // spill file. That keeps this helper's premise intact: the left
@@ -6647,7 +6609,6 @@ pub(crate) mod tests {
         let spill = spill_left_for_test(build_left_table(), Arc::clone(&ctx)).await?;
         {
             let mut inner = coordinator.inner.lock();
-            inner.left_schema = Some(Arc::clone(&spill.schema));
             inner.left_stream =
                 Some(Box::pin(crate::stream::RecordBatchStreamAdapter::new(
                     Arc::clone(&spill.schema),
@@ -6687,7 +6648,6 @@ pub(crate) mod tests {
         let spill = spill_left_for_test(build_left_table(), Arc::clone(&ctx)).await?;
         {
             let mut inner = coordinator.inner.lock();
-            inner.left_schema = Some(Arc::clone(&spill.schema));
             inner.left_stream =
                 Some(Box::pin(crate::stream::RecordBatchStreamAdapter::new(
                     Arc::clone(&spill.schema),
@@ -6989,7 +6949,6 @@ pub(crate) mod tests {
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
         {
             let mut inner = coordinator.inner.lock();
-            inner.left_schema = Some(Arc::clone(&schema));
             inner.left_stream =
                 Some(Box::pin(crate::stream::RecordBatchStreamAdapter::new(
                     schema,
