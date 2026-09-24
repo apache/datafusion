@@ -429,6 +429,28 @@ FROM c_denver
 Timestamp(ns, "+05:30") 2024-01-16T00:30:00+05:30
 Timestamp(ns, "+05:30") 2024-07-01T23:30:00+05:30
 
+# 6f. named -> `::timestamptz` under a session zone.
+#
+# KNOWN WRONG (internal to DataFusion): the value already has a zone, but the
+# cast replaces it with the session zone. The instant is preserved, but the
+# Brussels zone is lost, so anything that reads the value's zone afterwards
+# (date_part, date_trunc, to_char) now works in UTC: the hour below is 11/10,
+# not 12/12. PostgreSQL has no per-value zone, so its answer under
+# TimeZone='UTC' is the same as this; the problem is that a cast to the type the
+# value already has changes what later functions return.
+# See https://github.com/apache/datafusion/issues/25166
+statement ok
+SET datafusion.execution.time_zone = 'UTC'
+
+query TPI rowsort
+SELECT arrow_typeof(column1::timestamptz), column1::timestamptz, date_part('hour', column1::timestamptz) FROM c_brussels
+----
+Timestamp(ns, "UTC") 2024-01-15T11:00:00Z 11
+Timestamp(ns, "UTC") 2024-07-01T10:00:00Z 10
+
+statement ok
+RESET datafusion.execution.time_zone
+
 ##########
 ## SECTION 7: round trips
 ##########
@@ -485,15 +507,14 @@ RESET datafusion.execution.time_zone
 ##########
 ## SECTION 8: comparison and equality across tz-aware and tz-naive
 ##
-## The pins here record two behaviours. A tz-naive side is read in the other
+## The pins here record three behaviours. A tz-naive side is read in the other
 ## operand's zone, where PostgreSQL uses the session zone:
 ## https://github.com/apache/datafusion/issues/13212
-## And `'...Z'::timestamptz` is tz-naive while the session zone is unset
+## `'...Z'::timestamptz` is tz-naive while the session zone is unset
 ## (SECTION 0): https://github.com/apache/datafusion/issues/25166
-##
-## The unwrap_cast bug, https://github.com/apache/datafusion/issues/25095, needs an explicit
-## CAST of a tz-naive column compared against a literal under a non-UTC session
-## zone. No query in this section has that shape.
+## And under a non-UTC session zone, unwrap_cast rewrites a tz-naive column
+## compared against a tz-aware literal into a different comparison:
+## https://github.com/apache/datafusion/issues/25095
 ##########
 
 statement ok
@@ -589,6 +610,39 @@ SELECT column1 FROM naive_col WHERE column1 = '2024-07-01T12:00:00Z'::timestampt
 ----
 2024-07-01T12:00:00
 
+# KNOWN WRONG. The same comparison under a non-UTC session zone. The literal is
+# now tz-aware (18:00Z, i.e. 12:00 Denver), so coercion casts the tz-naive
+# column to America/Denver, which reads its 12:00 as 12:00 Denver and should
+# match the July row. unwrap_cast then moves the cast off the column and onto
+# the literal, and that cast renders the literal as its UTC wall clock (18:00),
+# so no row matches. PostgreSQL under TimeZone='America/Denver' returns 1.
+# See https://github.com/apache/datafusion/issues/25095
+statement ok
+SET datafusion.execution.time_zone = 'America/Denver'
+
+query I
+SELECT count(*) FROM naive_col WHERE column1 = '2024-07-01T18:00:00Z'::timestamptz
+----
+0
+
+# The plan shows the rewrite: the filter compares the naive column against a
+# naive 18:00 (1719856800 s), not against 12:00.
+statement ok
+set datafusion.explain.logical_plan_only = true
+
+query TT
+EXPLAIN SELECT column1 FROM naive_col WHERE column1 = '2024-07-01T18:00:00Z'::timestamptz
+----
+logical_plan
+01)Filter: naive_col.column1 = TimestampNanosecond(1719856800000000000, None)
+02)--TableScan: naive_col projection=[column1]
+
+statement ok
+set datafusion.explain.logical_plan_only = false
+
+statement ok
+RESET datafusion.execution.time_zone
+
 # DIVERGES FROM POSTGRESQL: the tz-naive literal is read in the column's zone
 # (America/Denver), so it matches the July row. PostgreSQL reads a tz-naive
 # value in the session zone instead.
@@ -600,9 +654,10 @@ false
 true
 
 # KNOWN WRONG, and the sharpest form of the problem: with the session zone
-# unset, `'...Z'::timestamptz` is tz-naive (SECTION 0), so when it is then
-# compared against a zoned column the explicit `Z` in the literal is
-# effectively discarded and the wall clock is re-read in the column's zone.
+# unset, `'...Z'::timestamptz` is tz-naive (SECTION 0). The `Z` offset is
+# applied, so the literal holds 06:00, but it carries no zone, so when it is
+# compared against a zoned column that 06:00 is re-read as a wall clock in the
+# column's zone.
 # The query below asks for the row at 06:00 UTC and gets the row at 12:00 UTC.
 # PostgreSQL returns the 06:00Z row. See
 # https://github.com/apache/datafusion/issues/25166
@@ -789,7 +844,10 @@ true
 false
 
 # date_part reads the field in the value's own time zone. This matches
-# PostgreSQL whenever the session TimeZone equals the column's zone.
+# PostgreSQL whenever the session TimeZone equals the column's zone; otherwise
+# PostgreSQL reads the field in the session TimeZone. This follows from
+# DataFusion carrying the zone on the value rather than the session, and no
+# issue tracks it as a bug.
 query IIR rowsort
 SELECT date_part('hour', ts), date_part('day', ts), date_part('epoch', ts) FROM day_denver
 ----
@@ -857,14 +915,28 @@ SELECT to_char(ts, '%Y-%m-%dT%H:%M:%S%z') FROM day_denver
 2024-07-01T06:00:00-0600
 2024-07-01T12:00:00-0600
 
-# from_unixtime with no zone argument returns a NAIVE timestamp, ignoring
-# `datafusion.execution.time_zone`. PostgreSQL's `to_timestamp(double)` returns
-# `timestamp with time zone`.
-# See https://github.com/apache/datafusion/issues/12892
+# from_unixtime with no zone argument follows `datafusion.execution.time_zone`
+# (https://github.com/apache/datafusion/issues/12892, fixed by
+# https://github.com/apache/datafusion/pull/25161). With the session zone unset
+# the result is therefore NAIVE; PostgreSQL's `to_timestamp(double)` is always
+# `timestamp with time zone`. Same root cause as SECTION 0:
+# https://github.com/apache/datafusion/issues/25166
 query TP
 SELECT arrow_typeof(from_unixtime(1719792000)), from_unixtime(1719792000)
 ----
 Timestamp(s) 2024-07-01T00:00:00
+
+# Under a session zone the result is typed in that zone.
+statement ok
+SET datafusion.execution.time_zone = 'America/Denver'
+
+query TP
+SELECT arrow_typeof(from_unixtime(1719792000)), from_unixtime(1719792000)
+----
+Timestamp(s, "America/Denver") 2024-06-30T18:00:00-06:00
+
+statement ok
+RESET datafusion.execution.time_zone
 
 query TP
 SELECT arrow_typeof(from_unixtime(1719792000, 'America/Denver')), from_unixtime(1719792000, 'America/Denver')
@@ -890,7 +962,8 @@ SELECT to_unixtime(ts) FROM cmp_utc
 # With the session zone unset, `to_timestamp*` return NAIVE timestamps even
 # when the input string carries an explicit offset. They do follow the session
 # zone when one is set (see the `to_timestamp` case at the end of this block),
-# so the return type of these functions is config dependent.
+# so the return type of these functions is config dependent. Same root cause as
+# SECTION 0: https://github.com/apache/datafusion/issues/25166
 query TP
 SELECT arrow_typeof(to_timestamp('2024-07-01T12:00:00Z')), to_timestamp('2024-07-01T12:00:00Z')
 ----
@@ -1015,7 +1088,8 @@ statement ok
 RESET datafusion.execution.time_zone
 
 # With the session zone unset, `now()` itself is tz-naive. PostgreSQL's `now()`
-# is always `timestamp with time zone`.
+# is always `timestamp with time zone`. Same root cause as SECTION 0:
+# https://github.com/apache/datafusion/issues/25166
 query T
 SELECT arrow_typeof(now())
 ----
@@ -1056,6 +1130,8 @@ false
 # TimeZone='UTC' subtracts a flat 168*24 hours and answers `false`. The two
 # only agree when the session zone matches the value's zone -- which is exactly
 # the alignment that test_files/pg_compat/pg_compat_timestamptz.slt sets up.
+# Like date_part in SECTION 9, this follows from the zone living on the value,
+# and no issue tracks it as a bug.
 query B
 SELECT (TIMESTAMP '2024-01-15 12:00:00' AT TIME ZONE 'America/Denver')
      = (TIMESTAMP '2024-07-01 12:00:00' AT TIME ZONE 'America/Denver') - INTERVAL '168 days'
@@ -1092,7 +1168,8 @@ SELECT ts, ts + INTERVAL '1 day', ts + INTERVAL '24 hours' FROM cmp_utc
 2024-07-01T18:00:00Z 2024-07-02T18:00:00Z 2024-07-02T18:00:00Z
 
 # On a tz-NAIVE value (session zone unset) the distinction disappears entirely,
-# because there is no zone to be DST-aware about.
+# because there is no zone to be DST-aware about. The value is naive even though
+# it was written as `::timestamptz`: https://github.com/apache/datafusion/issues/25166
 query P
 SELECT '2024-03-09T19:00:00Z'::timestamptz + INTERVAL '1 day'
 ----
@@ -1204,7 +1281,9 @@ SELECT count(*) FROM cmp_utc l JOIN cmp_denver r ON l.ts = r.ts
 ----
 4
 
-# tz-aware joined against tz-naive: the naive side is treated as UTC
+# tz-aware joined against tz-naive: the naive side is read in the aware side's
+# zone (+00:00 here), not in the session zone.
+# See https://github.com/apache/datafusion/issues/13212
 query I
 SELECT count(*) FROM cmp_utc l JOIN naive_col r ON l.ts = r.column1
 ----
@@ -1260,6 +1339,7 @@ Timestamp(ns, "America/Denver") 2024-07-01T00:00:00-06:00
 # (session-zone-unset, therefore also naive) `::timestamptz` resolves to naive.
 # Under a session zone this same expression resolves to the zoned type, so the
 # result type of a CASE depends on the session config.
+# See https://github.com/apache/datafusion/issues/25166
 query TP
 SELECT arrow_typeof(x), x FROM (
   SELECT CASE WHEN false THEN '2024-07-01T00:00:00Z'::timestamptz
