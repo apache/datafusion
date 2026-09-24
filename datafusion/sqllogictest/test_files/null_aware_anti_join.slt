@@ -935,3 +935,91 @@ DROP TABLE nai_res_outer;
 
 statement ok
 DROP TABLE nai_res_inner;
+
+##########################################################
+## Correlated NOT IN whose correlation is the IN equality
+## https://github.com/apache/datafusion/issues/25480
+##########################################################
+
+# The subquery filters on `t2.id = t1.id`, so a NULL `t2.id` never reaches the
+# subquery output and `NOT IN` is never UNKNOWN. Expected results verified with
+# DuckDB.
+
+statement ok
+CREATE TABLE nai_eq_t1(id INT, z INT) AS VALUES (1,10), (2,20), (NULL,30), (4,40);
+
+statement ok
+CREATE TABLE nai_eq_t2(id INT, z INT) AS VALUES (1,5), (NULL,50), (5,10);
+
+query I
+SELECT id FROM nai_eq_t1 WHERE id NOT IN (SELECT nai_eq_t2.id FROM nai_eq_t2 WHERE nai_eq_t2.id = nai_eq_t1.id) ORDER BY id;
+----
+2
+4
+NULL
+
+query I
+SELECT id FROM nai_eq_t1 WHERE id NOT IN (SELECT nai_eq_t2.id FROM nai_eq_t2 WHERE nai_eq_t1.id = nai_eq_t2.id) ORDER BY id;
+----
+2
+4
+NULL
+
+query I
+SELECT id FROM nai_eq_t1 WHERE id IN (SELECT nai_eq_t2.id FROM nai_eq_t2 WHERE nai_eq_t2.id = nai_eq_t1.id) ORDER BY id;
+----
+1
+
+# The residual correlation keeps the subquery of id 1 non-empty, so only id 1 is FALSE.
+query I
+SELECT id FROM nai_eq_t1
+WHERE id NOT IN (
+  SELECT nai_eq_t2.id FROM nai_eq_t2
+  WHERE nai_eq_t2.id = nai_eq_t1.id AND nai_eq_t2.z < nai_eq_t1.z
+) ORDER BY id;
+----
+2
+4
+NULL
+
+# `t2.z > t1.z` never holds for the one matching pair, so every subquery is empty.
+query I
+SELECT id FROM nai_eq_t1
+WHERE id NOT IN (
+  SELECT nai_eq_t2.id FROM nai_eq_t2
+  WHERE nai_eq_t2.id = nai_eq_t1.id AND nai_eq_t2.z > nai_eq_t1.z
+) ORDER BY id;
+----
+1
+2
+4
+NULL
+
+query I
+SELECT id FROM nai_eq_t1
+WHERE id + 1 NOT IN (
+  SELECT nai_eq_t2.id FROM nai_eq_t2 WHERE nai_eq_t2.id = nai_eq_t1.id + 1
+) ORDER BY id;
+----
+1
+2
+NULL
+
+query TT
+EXPLAIN SELECT id FROM nai_eq_t1 WHERE id NOT IN (SELECT nai_eq_t2.id FROM nai_eq_t2 WHERE nai_eq_t2.id = nai_eq_t1.id);
+----
+logical_plan
+01)LeftAnti Join: nai_eq_t1.id = __correlated_sq_1.id
+02)--TableScan: nai_eq_t1 projection=[id]
+03)--SubqueryAlias: __correlated_sq_1
+04)----TableScan: nai_eq_t2 projection=[id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE nai_eq_t1;
+
+statement ok
+DROP TABLE nai_eq_t2;

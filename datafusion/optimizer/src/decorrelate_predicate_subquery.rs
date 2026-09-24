@@ -456,6 +456,8 @@ fn build_join(
         return Ok(None);
     }
 
+    let in_predicate_is_correlated = pull_up.in_predicate_is_correlated;
+
     let sub_query_alias = LogicalPlanBuilder::from(new_plan)
         .alias(alias.to_string())?
         .build()?;
@@ -602,6 +604,7 @@ fn build_join(
         // execution cannot mark UNKNOWN candidates for residual predicates.
         let null_aware = join_type == JoinType::LeftMark
             && in_predicate_opt.is_some()
+            && !in_predicate_is_correlated
             && mark_filter_is_hashable_only
             && join_keys_may_be_null(
                 &join_filter,
@@ -638,6 +641,7 @@ fn build_join(
     // null-aware semantics because NULLs cannot exist in the data.
     let null_aware = join_type == JoinType::LeftAnti
         && in_predicate_opt.is_some()
+        && !in_predicate_is_correlated
         && join_keys_may_be_null(&join_filter, left.schema(), sub_query_alias.schema())?;
 
     // join our sub query into the main plan
