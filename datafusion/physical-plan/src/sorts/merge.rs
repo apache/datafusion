@@ -28,7 +28,6 @@ use crate::metrics::BaselineMetrics;
 use crate::sorts::builder::BatchBuilder;
 use crate::sorts::cursor::{Cursor, CursorValues};
 use crate::sorts::stream::PartitionedStream;
-use crate::sorts::streaming_merge::MergeBatchMemoryBudget;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 
 use arrow::datatypes::SchemaRef;
@@ -86,9 +85,6 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
 
     /// Target batch size
     batch_size: usize,
-
-    /// Budget for retaining source batches while materializing merged output.
-    batch_memory_budget: Option<MergeBatchMemoryBudget>,
 
     /// Cursors for each input partition. `None` means the input is exhausted
     cursors: Vec<Option<Cursor<C>>>,
@@ -150,18 +146,9 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             poll_reset_epochs: vec![0; stream_count],
             loser_tree: vec![],
             batch_size,
-            batch_memory_budget: None,
             fetch,
             produced: 0,
         }
-    }
-
-    pub(super) fn with_batch_memory_budget(
-        mut self,
-        budget: Option<MergeBatchMemoryBudget>,
-    ) -> Self {
-        self.batch_memory_budget = budget;
-        self
     }
 
     pub(crate) fn into_stream(self) -> SendableRecordBatchStream
@@ -211,7 +198,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
     async fn flush_in_progress(
         &mut self,
-        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+        mut emitter: TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
         if self.in_progress.is_empty() {
             return Ok(());
@@ -297,20 +284,6 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                         );
 
                         drop(timer);
-                        if let Some(budget) = &self.batch_memory_budget {
-                            if self.in_progress.should_flush_before_input(
-                                budget.input_batch_sizes[winner_stream],
-                                budget.memory_limit,
-                                self.batch_size,
-                            )? {
-                                // Drain partial output from offset-overflow
-                                // recovery before remapping source batch indices.
-                                self.flush_in_progress(&mut emitter).await?;
-                            }
-                            if self.in_progress.is_empty() {
-                                self.in_progress.discard_consumed_batches()?;
-                            }
-                        }
                         poll_fn(|cx| self.maybe_poll_stream(cx, winner_stream)).await?;
                         timer = elapsed_compute.timer();
                     }
@@ -321,7 +294,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             }
 
             // 4. Flush any remaining rows in `self.in_progress`
-            self.flush_in_progress(&mut emitter).await?;
+            self.flush_in_progress(emitter).await?;
 
             Ok(())
         })

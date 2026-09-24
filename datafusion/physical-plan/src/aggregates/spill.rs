@@ -276,6 +276,7 @@ impl AggregateSpill {
             .with_batch_size(batch_size)
             .with_reservation(merge_reservation)
             .with_replay_headroom()
+            .with_intermediate_merge_sizing()
             .build()?;
         let replay = OrderedFinalAggregateStream::new_with_input_and_metrics(
             &replay_agg,
