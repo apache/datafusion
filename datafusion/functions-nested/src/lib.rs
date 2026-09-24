@@ -56,6 +56,7 @@ pub mod array_transform;
 pub mod arrays_zip;
 pub mod cardinality;
 pub mod concat;
+pub mod concat_rewrite;
 pub mod cosine_distance;
 pub mod dimension;
 pub mod distance;
@@ -251,6 +252,8 @@ pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
         }
         Ok(()) as Result<()>
     })?;
+
+    registry.register_function_rewrite(Arc::new(concat_rewrite::ConcatArrayRewrite))?;
 
     Ok(())
 }

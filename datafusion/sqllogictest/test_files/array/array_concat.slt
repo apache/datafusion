@@ -438,5 +438,15 @@ from values (make_array(1, 2));
 ----
 [1, 2, 3] List(Int64)
 
+query ?
+select concat(make_array(1, 2, 3), make_array(4, 5));
+----
+[1, 2, 3, 4, 5]
+
+query ?
+select concat(NULL::integer[], NULL::integer[]);
+----
+NULL
+
 
 include ./cleanup.slt.part
