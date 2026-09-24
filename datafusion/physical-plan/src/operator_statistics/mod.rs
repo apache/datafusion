@@ -62,19 +62,51 @@
 //!
 //! # Example
 //!
-//! ```ignore
-//! use datafusion_physical_plan::operator_statistics::*;
-//!
-//! // Create an empty registry
-//! let mut registry = StatisticsRegistry::new();
-//!
-//! // Register custom provider (higher priority)
-//! registry.register(Arc::new(MyHistogramProvider));
-//!
-//! // Compute statistics through the chain
-//! let stats = StatisticsContext::new_with_registry(registry)
-//!     .compute_extended(plan.as_ref(), &StatisticsArgs::new())?;
 //! ```
+//! use std::sync::Arc;
+//! use arrow::datatypes::Schema;
+//! use datafusion_common::stats::Precision;
+//! use datafusion_common::{Result, Statistics};
+//! use datafusion_physical_plan::ExecutionPlan;
+//! use datafusion_physical_plan::operator_statistics::{
+//!     ExtendedStatistics, StatisticsProvider, StatisticsRegistry, StatisticsResult,
+//! };
+//! use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+//! use datafusion_physical_plan::test::exec::StatisticsExec;
+//!
+//! #[derive(Debug)]
+//! struct MyProvider;
+//!
+//! impl StatisticsProvider for MyProvider {
+//!     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
+//!         plan.downcast_ref::<StatisticsExec>().is_some()
+//!     }
+//!
+//!     fn compute_statistics(
+//!         &self,
+//!         plan: &dyn ExecutionPlan,
+//!         _child_stats: &[ExtendedStatistics],
+//!     ) -> Result<StatisticsResult> {
+//!         let base = plan.statistics_from_inputs(&[], &StatisticsArgs::new())?;
+//!         Ok(StatisticsResult::Computed(ExtendedStatistics::new_arc(base)))
+//!     }
+//! }
+//!
+//! let plan = StatisticsExec::new(Statistics::new_unknown(&Schema::empty()), Schema::empty());
+//!
+//! let mut registry = StatisticsRegistry::new();
+//! registry.register(Arc::new(MyProvider));
+//!
+//! let stats = StatisticsContext::new_with_registry(registry)
+//!     .compute_extended(&plan, &StatisticsArgs::new())?;
+//! assert_eq!(stats.base().num_rows, Precision::Absent);
+//! # Ok::<(), datafusion_common::DataFusionError>(())
+//! ```
+//!
+//! See [`StatisticsContext::compute_extended`] for an example that also
+//! attaches a custom extension to the computed statistics.
+//!
+//! [`StatisticsContext::compute_extended`]: crate::statistics::StatisticsContext::compute_extended
 
 use std::fmt::{self, Debug};
 use std::sync::Arc;
@@ -104,21 +136,26 @@ use crate::union::UnionExec;
 ///
 /// # Example
 ///
-/// ```ignore
-/// // Define a custom statistics extension
+/// ```
+/// use arrow::datatypes::Schema;
+/// use datafusion_common::Statistics;
+/// use datafusion_physical_plan::operator_statistics::ExtendedStatistics;
+///
+/// // Pearson correlation between two columns, identified by schema index.
 /// #[derive(Debug, Clone)]
-/// struct HistogramStats {
-///     buckets: Vec<(i64, i64, usize)>, // (min, max, count)
+/// struct ColumnCorrelation {
+///     columns: (usize, usize),
+///     coefficient: f64,
 /// }
 ///
-/// // Set extension in a planner
-/// let mut stats = ExtendedStatistics::from(base_stats);
-/// stats.set_extension(HistogramStats { buckets: vec![] });
+/// let mut stats = ExtendedStatistics::from(Statistics::new_unknown(&Schema::empty()));
+/// stats.set_extension(ColumnCorrelation {
+///     columns: (0, 1),
+///     coefficient: 0.92,
+/// });
 ///
-/// // Retrieve in a consumer
-/// if let Some(hist) = stats.get_extension::<HistogramStats>() {
-///     // Use histogram for better estimation
-/// }
+/// let correlation = stats.get_extension::<ColumnCorrelation>().unwrap();
+/// assert_eq!(correlation.coefficient, 0.92);
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct ExtendedStatistics {
