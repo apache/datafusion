@@ -222,12 +222,11 @@ pub struct RangePartitioning {
 impl RangePartitioning {
     /// Creates range partitioning metadata without validating split points.
     ///
-    /// Prefer [`Self::try_new_with_samples`] to validate the boundaries and retain
-    /// additional samples for scaling up. [`Self::try_new`] remains available for
-    /// validated exact boundaries.
+    /// Use [`Self::try_new`] to validate exact boundaries, or
+    /// [`Self::try_new_with_samples`] to retain additional samples for scaling up.
     #[deprecated(
         since = "56.0.0",
-        note = "Use RangePartitioning::try_new_with_samples instead"
+        note = "Use RangePartitioning::try_new or try_new_with_samples instead"
     )]
     pub fn new(ordering: LexOrdering, split_points: Vec<SplitPoint>) -> Self {
         let split_points: Arc<[SplitPoint]> = Arc::from(split_points);
@@ -256,14 +255,24 @@ impl RangePartitioning {
     /// `samples.len() + 1`. When it is smaller than that maximum, the samples
     /// are evenly down-sampled to derive the effective split points.
     ///
-    /// Retain at least `maximum_expected_partitions - 1` samples to support that
-    /// many partitions later. For example, samples at `[10, 20, ..., 90]` with
-    /// `partition_count = 4` produce effective split points `[30, 50, 70]` and
-    /// can later scale to any count from 1 through 10. Supplying approximately
-    /// `K * target_partitions` samples therefore leaves room to scale by about
-    /// `K`; choose `K` for the workload. Small inputs may not have enough distinct
-    /// values, in which case [`Self::scale`] returns `None` above the supported
-    /// maximum.
+    /// For a single ascending range key:
+    ///
+    /// ```text
+    /// samples = [(10), (20), (30), (40), (50)]
+    /// partition_count = 3
+    /// split_points = [(20), (40)]
+    ///
+    /// partition 0: key before 20
+    /// partition 1: key from 20 (inclusive) to 40 (exclusive)
+    /// partition 2: key at/after 40
+    ///
+    /// scale(5) -> split_points = [(20), (30), (40), (50)]
+    /// scale(7) -> None (at most 6 partitions)
+    /// ```
+    ///
+    /// Retain at least `maximum_expected_partitions - 1` distinct samples to
+    /// support that many partitions later. Small inputs may not have enough
+    /// distinct values to do so.
     pub fn try_new_with_samples(
         ordering: LexOrdering,
         samples: Vec<SplitPoint>,
