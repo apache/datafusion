@@ -392,28 +392,16 @@ mod tests {
             );
 
             if tagged {
-                // Where the inputs disagree, the primary table's metadata wins,
-                // also on the columns read from a secondary input. Comparing
-                // the complete map, not just the "table" key, catches a
-                // secondary-only key ("only_in_secondary") leaking through:
-                // the primary table's own schema metadata never carries that
-                // key, so its presence would fail this exact-equality check.
-                //
-                // This holds for the plan as `from_substrait_plan` returns it,
-                // right after conversion. It is a schema-level (not per-field)
-                // property, and DataFusion's optimizer can recompute a join's
-                // or a projection's schema-level metadata from its children
-                // whenever it decides anything in the plan changed - even
-                // something unrelated - which can reintroduce
-                // "only_in_secondary". See `intersect_rel`'s doc comment. The
-                // per-field metadata checked below is not affected by that and
-                // is asserted again on the optimized, physical and batch
-                // schemas.
-                let expected_schema_metadata =
-                    HashMap::from([("table".to_string(), "data".to_string())]);
+                // Schema-level metadata is a join of both inputs' maps, per
+                // `intersect_rel`'s doc comment, so a secondary-only key
+                // ("only_in_secondary") can appear alongside the primary
+                // table's own keys; only that a conflicting key resolves to
+                // the primary table's value is asserted here. Per-field
+                // metadata has no such leak and is checked exactly below,
+                // and again on the optimized, physical and batch schemas.
                 assert_eq!(
-                    plan.schema().metadata(),
-                    &expected_schema_metadata,
+                    plan.schema().metadata().get("table"),
+                    Some(&"data".to_string()),
                     "schema metadata of {file}"
                 );
                 for field in plan.schema().fields() {
@@ -431,12 +419,9 @@ mod tests {
             }
 
             // The physical plan and the batches it produces must carry the same
-            // schema as the *optimized* logical plan: physical planning runs on
-            // the optimizer's output, not on `plan` as `from_substrait_plan`
-            // returned it, and (per the doc comment above) the optimizer is not
-            // guaranteed to preserve schema-level metadata that this function
-            // set. Field-level metadata and nullability are unaffected and are
-            // checked here too, so a regression in either still fails this.
+            // schema as the *optimized* logical plan, since physical planning
+            // runs on the optimizer's output, not on `plan` as
+            // `from_substrait_plan` returned it.
             let optimized = ctx.state().optimize(&plan)?;
             let logical_schema = Arc::clone(optimized.schema().inner());
             if tagged {

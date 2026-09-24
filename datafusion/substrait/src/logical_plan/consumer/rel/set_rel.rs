@@ -17,10 +17,9 @@
 
 use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::arrow::datatypes::Field;
-use datafusion::common::{DFSchema, JoinType, NullEquality, not_impl_err, substrait_err};
+use datafusion::common::{JoinType, NullEquality, not_impl_err, substrait_err};
 use datafusion::logical_expr::{
-    Cast, Expr, LogicalPlan, LogicalPlanBuilder, Projection, projection_schema,
-    requalify_sides_if_needed,
+    Cast, Expr, LogicalPlan, LogicalPlanBuilder, requalify_sides_if_needed,
 };
 use std::sync::Arc;
 use substrait::proto::set_rel::SetOp;
@@ -113,44 +112,22 @@ async fn intersect_rels(
 /// Joining against distinct right rows keeps each left row at most once, as the
 /// semi join does.
 ///
-/// Differing metadata does not change which path is taken, as it is no part of
-/// nullability. The result describes the left input's metadata exactly at the
-/// field level, and does so at the schema level for the plan this function
-/// returns, though not necessarily after later rewrites; see the two notes
-/// below.
+/// Differing metadata does not change which path is taken. A column read from
+/// the right is cast to an explicit target field carrying the left field's
+/// metadata; an explicit-field cast target's metadata is used exactly as
+/// given rather than merged into the source's, so this drops a key only the
+/// right field carried and keeps the left field's metadata exactly. A
+/// `Field`'s own metadata travels with it through any later rewrite, so this
+/// holds for the plan this function returns and for any rewrite of it.
 ///
-/// At the field level: a column read from the right is cast to an explicit
-/// target field carrying the left field's metadata, and an explicit-field
-/// cast target replaces the source's metadata outright rather than merging
-/// into it, so a key only the right input's field carries is dropped rather
-/// than surviving into the result. A column read from the left is already
-/// exactly the left input's own field, so it needs no such treatment. This is
-/// robust: a `Field`'s own metadata travels with it through any later
-/// rewrite, since a rebuilt schema is still assembled from the same `Field`s.
-///
-/// At the schema level: [`build_join_schema`](datafusion::logical_expr::build_join_schema)
-/// chains the two inputs' schema metadata maps (right's entries, then
-/// left's), so a conflicting key resolves to the left's value but a key
-/// present only on the right's schema survives, and [`projection_schema`]
-/// copies that merged map verbatim onto a projection built directly on top
-/// of the join. The projection this function returns is therefore built with
-/// an explicit schema instead, whose metadata is the left input's own schema
-/// metadata, unmodified - correct for the plan as returned here, and for a
-/// caller that reads its schema without executing it.
-///
-/// That schema-level fix is not preserved through arbitrary later rewrites,
-/// unlike the field-level one. `LogicalPlan::recompute_schema` rebuilds a
-/// `Join`'s or a `Projection`'s schema-level metadata from its (possibly
-/// rewritten) children's *current* schema-level metadata, discarding
-/// whatever this function set. DataFusion's optimizer calls it whenever it
-/// judges anything in the plan changed, including something unrelated
-/// elsewhere in the same query, so by the time this plan reaches physical
-/// planning its schema-level metadata may again be the join's merged one
-/// rather than the left input's. This holds even for the simplest two-input,
-/// non-correlated case, with no join filter or `INTERSECTION_PRIMARY` union
-/// involved. There is currently no supported way from this crate to opt a
-/// join's or a projection's schema-level metadata out of that
-/// recomputation.
+/// Schema-level (as opposed to per-field) metadata gets no such treatment:
+/// [`build_join_schema`](datafusion::logical_expr::build_join_schema) merges
+/// the two inputs' schema metadata with the left's value winning a
+/// conflicting key, and that merged map is what the projection built on top
+/// of the join reports - the same as the semi join
+/// [`LogicalPlanBuilder::intersect`] takes for the cases this function
+/// doesn't rewrite. A key only the right input's schema carries can
+/// therefore still appear in the result's schema-level metadata.
 ///
 /// [Set Operation rules]: https://substrait.io/relations/logical_relations/#set-operation
 fn intersect_rel(
@@ -222,10 +199,6 @@ fn intersect_rel(
         })
         .collect::<Vec<_>>();
 
-    // Captured before `left` is consumed by `join_detailed` below: this is
-    // the metadata the projection's schema must end up with, not the join's.
-    let left_schema_metadata = left.schema().metadata().clone();
-
     let joined = left
         .join_detailed(
             right,
@@ -236,43 +209,7 @@ fn intersect_rel(
         )?
         .build()?;
 
-    // `projection_schema` would copy the join's own schema metadata, which
-    // (per `build_join_schema`) can carry a key that only the right side's
-    // schema has. Build the fields the normal way, then swap in the left
-    // input's schema metadata so the projection's schema, like its fields,
-    // describes the left input exactly.
-    //
-    // This is correct for the plan `intersect_rel` returns, but it is not
-    // preserved through arbitrary later rewrites: `LogicalPlan::Join` and
-    // `LogicalPlan::Projection` both recompute their schema's metadata from
-    // their (possibly rewritten) children whenever `recompute_schema` runs on
-    // them (see its match arms in `datafusion/expr/src/logical_plan/plan.rs`),
-    // which happens whenever the surrounding optimizer decides anything in
-    // the plan changed - even something unrelated elsewhere in the same
-    // query. There is no supported way from this crate to make a join's or a
-    // projection's schema-level metadata (as opposed to per-field metadata,
-    // which is carried on the `Field`s themselves and does survive) opt out
-    // of that recomputation. See the discussion on this PR for confirmation
-    // this is a general limitation, not specific to this construction.
-    let projected_schema = projection_schema(&joined, &exprs)?;
-    let schema = Arc::new(
-        DFSchema::new_with_metadata(
-            projected_schema
-                .iter()
-                .map(|(qualifier, field)| (qualifier.cloned(), Arc::clone(field)))
-                .collect(),
-            left_schema_metadata,
-        )?
-        .with_functional_dependencies(
-            projected_schema.functional_dependencies().clone(),
-        )?,
-    );
-
-    Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
-        exprs,
-        Arc::new(joined),
-        schema,
-    )?))
+    LogicalPlanBuilder::from(joined).project(exprs)?.build()
 }
 
 async fn except_rels(
