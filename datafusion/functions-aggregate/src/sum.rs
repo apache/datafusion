@@ -20,9 +20,9 @@
 use arrow::array::{Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, AsArray};
 use arrow::datatypes::Field;
 use arrow::datatypes::{
-    ArrowNativeType,
-    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DataType, Decimal128Type, Decimal256Type, Decimal32Type,
-    Decimal64Type, DurationMicrosecondType,
+    ArrowNativeType, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
+    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType, Decimal32Type,
+    Decimal64Type, Decimal128Type, Decimal256Type, DurationMicrosecondType,
     DurationMillisecondType, DurationNanosecondType, DurationSecondType, FieldRef,
     Float64Type, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
     IntervalYearMonthType, TimeUnit, UInt64Type,
@@ -31,15 +31,19 @@ use datafusion_common::hash_utils::RandomState;
 use datafusion_common::internal_err;
 use datafusion_common::stats::Precision;
 use datafusion_common::types::{
-    NativeType, logical_float64, logical_int16, logical_int32,
-    logical_int64, logical_int8, logical_uint16, logical_uint32, logical_uint64, logical_uint8,
+    NativeType, logical_float64, logical_int8, logical_int16, logical_int32,
+    logical_int64, logical_uint8, logical_uint16, logical_uint32, logical_uint64,
 };
 use datafusion_common::{HashMap, Result, ScalarValue, exec_err, not_impl_err};
 use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::expr_fn::cast;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Coercion, Documentation, Expr, GroupsAccumulator, Operator, ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs, TypeSignature, TypeSignatureClass, Volatility};
+use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, Coercion, Documentation, Expr, GroupsAccumulator,
+    Operator, ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs, TypeSignature,
+    TypeSignatureClass, Volatility,
+};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::aggregate::sum_distinct::DistinctSumAccumulator;
 use datafusion_macros::user_doc;

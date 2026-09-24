@@ -1,5 +1,4 @@
 use super::single_group_by::{
-    blocked_boolean::BlockedGroupValuesBoolean,
     blocked_primitive::BlockedGroupValuesPrimitive,
 };
 use crate::aggregates::group_values::new_group_values;
@@ -313,9 +312,6 @@ pub fn new_blocked_group_values(
 
         downcast_primitive! {
             d => (downcast_helper, d),
-            DataType::Boolean => {
-                return Ok(Box::new(BlockedGroupValuesBoolean::new(block_size)));
-            },
             _ => {}
         }
     }
