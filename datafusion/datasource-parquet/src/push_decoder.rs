@@ -58,7 +58,7 @@ use parquet::file::metadata::ParquetMetaData;
 
 use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_physical_expr::expressions::DynamicFilterTracking;
-use datafusion_physical_expr::split_conjunction;
+use datafusion_physical_expr::utils::split_optional;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::{BaselineMetrics, Count, Gauge};
 use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
@@ -412,15 +412,15 @@ impl RowFilterContext {
                 (context, rejected)
             }
             Err(e) => {
-                // Whole-file build failure: route every conjunct post-scan
-                // rather than silently dropping the predicate.
+                // Whole-file build failure: route every required conjunct
+                // post-scan rather than silently dropping the predicate.
+                // Optional conjuncts are not needed for correctness, thus
+                // they are not evaluated after the scan.
                 debug!(
                     "Ignoring error prebuilding row filter candidates: {e}; \
-                     all conjuncts will be evaluated post-scan"
+                     all required conjuncts will be evaluated post-scan"
                 );
-                let rejected =
-                    split_conjunction(predicate).into_iter().cloned().collect();
-                (None, rejected)
+                (None, split_optional(predicate).0)
             }
         }
     }

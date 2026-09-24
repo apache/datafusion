@@ -78,7 +78,7 @@ use parquet::file::metadata::ParquetMetaData;
 use datafusion_common::Result;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::TreeNode;
-use datafusion_physical_expr::utils::reassign_expr_columns;
+use datafusion_physical_expr::utils::{is_optional_filter, reassign_expr_columns};
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
 
 use datafusion_physical_plan::metrics;
@@ -416,11 +416,14 @@ fn size_of_columns(columns: &[usize], metadata: &ParquetMetaData) -> Result<usiz
 /// `Ok((row_filter, rejected))` where:
 /// * `row_filter` is `Some` if at least one conjunct can be evaluated as an
 ///   `ArrowPredicate`, `None` otherwise.
-/// * `rejected` holds the conjuncts that *cannot* be evaluated as an
+/// * `rejected` holds the required conjuncts that *cannot* be evaluated as an
 ///   `ArrowPredicate` (for example whole-struct references or columns missing
 ///   from this file's physical schema). The caller MUST apply these elsewhere
 ///   — e.g. as a post-scan filter — otherwise the predicate is relaxed and the
-///   query returns wrong results.
+///   query returns wrong results. Optional conjuncts (see
+///   [`split_optional`](datafusion_physical_expr::utils::split_optional))
+///   that cannot be evaluated are not used and are not in `rejected`: they
+///   are not needed for correctness.
 ///
 /// `Err(e)` if an error occurs while building the filter.
 ///
@@ -493,6 +496,11 @@ impl PrebuiltRowFilterCandidate {
 /// entirely. The second element holds the conjuncts that cannot be evaluated
 /// as an `ArrowPredicate` on this file; see [`build_row_filter`] for why the
 /// caller must apply them elsewhere.
+///
+/// An optional conjunct (an `OptionalFilterPhysicalExpr` on the root `AND`
+/// chain) that cannot be evaluated as an `ArrowPredicate` for this file is
+/// not used. It is not in the rejected conjuncts either, thus the caller does
+/// not evaluate it after the scan. This is always safe.
 #[expect(clippy::type_complexity)]
 pub(crate) fn prebuild_row_filter_candidates(
     expr: &Arc<dyn PhysicalExpr>,
@@ -512,6 +520,26 @@ pub(crate) fn prebuild_row_filter_candidates(
     let mut candidates: Vec<FilterCandidate> = Vec::with_capacity(predicates.len());
     let mut rejected: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
     for predicate in predicates {
+        // An optional conjunct that cannot be pushed down for this file is not
+        // needed for correctness: do not use it, and do not send it to the
+        // post-scan filter.
+        if is_optional_filter(predicate) {
+            match FilterCandidateBuilder::new(
+                Arc::clone(predicate),
+                Arc::clone(file_schema),
+            )
+            .build(metadata)
+            {
+                Ok(Some(candidate)) => candidates.push(candidate),
+                Ok(None) => {}
+                Err(e) => {
+                    log::debug!(
+                        "Ignoring optional filter that cannot be pushed down: {e}"
+                    );
+                }
+            }
+            continue;
+        }
         match FilterCandidateBuilder::new(Arc::clone(predicate), Arc::clone(file_schema))
             .build(metadata)?
         {

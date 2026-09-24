@@ -61,7 +61,7 @@ use datafusion_common::{
 use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking, Literal};
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
-use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::utils::{collect_columns, split_optional};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -558,7 +558,10 @@ impl DecoderReadPlans {
         //   `RowFilter` machinery cannot evaluate on this file — the rejected
         //   conjuncts returned by `RowFilterContext::try_new`).
         //
-        // Either way every conjunct is applied; nothing is silently dropped.
+        // Either way every required conjunct is applied; nothing is silently
+        // dropped. Optional conjuncts (see `split_optional`) are not needed
+        // for correctness. They never go to the post-scan filter: they are
+        // row filter predicates or they are used only for statistics pruning.
         // ---------------------------------------------------------------
         // A pruning-only predicate is applied by a `FilterExec` above the
         // scan: the scan uses it only to prune.
@@ -582,15 +585,13 @@ impl DecoderReadPlans {
                     prepared.file_metrics.clone(),
                     prepared.max_predicate_cache_size,
                 ),
-                // Pushdown disabled: the whole predicate runs post-scan (in-scan
-                // equivalent of a `FilterExec`).
-                (false, Some(predicate)) => (
-                    None,
-                    datafusion_physical_expr::split_conjunction(predicate)
-                        .into_iter()
-                        .cloned()
-                        .collect(),
-                ),
+                // Pushdown disabled: the required conjuncts run post-scan
+                // (in-scan equivalent of a `FilterExec`). Optional conjuncts
+                // (for example hash join dynamic filters) are not needed for
+                // correctness and are expensive to evaluate for each row,
+                // thus they are used only for statistics pruning, as before
+                // the scan accepted the filters.
+                (false, Some(predicate)) => (None, split_optional(predicate).0),
                 (_, None) => (None, Vec::new()),
             };
 
@@ -5396,13 +5397,101 @@ mod test {
     /// post-scan filter, so only the rows with a non-null struct survive.
     #[tokio::test]
     async fn rejected_struct_conjunct_runs_post_scan_not_dropped() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let (schema, file) = write_struct_file(&store).await;
+
+        // `s IS NOT NULL` references a whole struct, which `PushdownChecker`
+        // flags as non-primitive — `FilterCandidateBuilder::build` returns
+        // `Ok(None)` and the conjunct lands in `rejected`.
+        let predicate = logical2physical(&col("s").is_not_null(), &schema);
+
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_predicate(predicate)
+            // The RowFilter path: emulates the post-`try_pushdown_filters`
+            // state where the parent `FilterExec` has already been removed
+            // and the scan owns the conjunct.
+            .with_pushdown_filters(true)
+            .build();
+
+        let stream = open_file(&morselizer, file).await.unwrap();
+        let (_, rows) = count_batches_and_rows(stream).await;
+
+        // 2 rows have a non-null struct. Before the fix this returned 3
+        // (the conjunct was silently dropped).
+        assert_eq!(
+            rows, 2,
+            "expected 2 rows with non-null struct; the rejected conjunct must \
+             be applied post-scan, not silently dropped"
+        );
+    }
+
+    /// An optional conjunct is not needed for correctness. The scan never
+    /// evaluates it after the decode: not when `pushdown_filters` is false,
+    /// and not when the `RowFilter` rejects it for the file. A required
+    /// conjunct in the same situations is evaluated after the decode.
+    #[tokio::test]
+    async fn optional_conjunct_is_never_evaluated_post_scan() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let (schema, file) = write_struct_file(&store).await;
+
+        // `s IS NOT NULL` is rejected by the `RowFilter` (whole struct).
+        // `id > 1` can be a `RowFilter` predicate.
+        let rejected = logical2physical(&col("s").is_not_null(), &schema);
+        let pushable = logical2physical(&col("id").gt(lit(1)), &schema);
+        let optional = |expr: &Arc<dyn PhysicalExpr>| -> Arc<dyn PhysicalExpr> {
+            Arc::new(
+                datafusion_physical_expr::expressions::OptionalFilterPhysicalExpr::new(
+                    Arc::clone(expr),
+                ),
+            )
+        };
+
+        // (predicate, pushdown_filters, expected rows, expected post-scan rows)
+        let cases: Vec<(Arc<dyn PhysicalExpr>, bool, usize, usize)> = vec![
+            // Required conjuncts: applied post-scan (#22384).
+            (Arc::clone(&rejected), false, 2, 3),
+            (Arc::clone(&rejected), true, 2, 3),
+            (Arc::clone(&pushable), false, 2, 3),
+            // Optional conjuncts: never evaluated post-scan.
+            (optional(&rejected), false, 3, 0),
+            (optional(&rejected), true, 3, 0),
+            (optional(&pushable), false, 3, 0),
+            // An optional conjunct that the `RowFilter` accepts is a row
+            // filter predicate.
+            (optional(&pushable), true, 2, 0),
+        ];
+        for (predicate, pushdown, expected_rows, expected_post_scan_rows) in cases {
+            let metrics = ExecutionPlanMetricsSet::new();
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_predicate(Arc::clone(&predicate))
+                .with_pushdown_filters(pushdown)
+                .with_metrics(metrics.clone())
+                .build();
+            let stream = open_file(&morselizer, file.clone()).await.unwrap();
+            let (_, rows) = count_batches_and_rows(stream).await;
+            let post_scan_rows = counter_metric_value(&metrics, "post_scan_rows_pruned")
+                + counter_metric_value(&metrics, "post_scan_rows_matched");
+            assert_eq!(
+                (rows, post_scan_rows),
+                (expected_rows, expected_post_scan_rows),
+                "predicate {predicate}, pushdown_filters {pushdown}"
+            );
+        }
+    }
+
+    /// Writes a file with the columns `id` (Int32: 1, 2, 3) and `s`
+    /// (Struct{value: Int32, label: Utf8}; row 1 is null).
+    async fn write_struct_file(
+        store: &Arc<dyn ObjectStore>,
+    ) -> (SchemaRef, PartitionedFile) {
         use arrow::array::{Int32Array, StringArray, StructArray};
         use arrow::buffer::NullBuffer;
         use arrow::datatypes::Fields;
 
-        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-
-        // Schema: id (Int32), s (Struct{value: Int32, label: Utf8}).
         let struct_fields: Fields = vec![
             Arc::new(Field::new("value", DataType::Int32, true)),
             Arc::new(Field::new("label", DataType::Utf8, true)),
@@ -5432,7 +5521,7 @@ mod test {
         .unwrap();
 
         let data_size = write_parquet_batches(
-            Arc::clone(&store),
+            Arc::clone(store),
             "rejected.parquet",
             vec![batch],
             None,
@@ -5440,32 +5529,7 @@ mod test {
         .await;
 
         let file = PartitionedFile::new("rejected.parquet".to_string(), data_size as u64);
-
-        // `s IS NOT NULL` references a whole struct, which `PushdownChecker`
-        // flags as non-primitive — `FilterCandidateBuilder::build` returns
-        // `Ok(None)` and the conjunct lands in `rejected`.
-        let predicate = logical2physical(&col("s").is_not_null(), &schema);
-
-        let morselizer = ParquetMorselizerBuilder::new()
-            .with_store(Arc::clone(&store))
-            .with_schema(Arc::clone(&schema))
-            .with_predicate(predicate)
-            // The RowFilter path: emulates the post-`try_pushdown_filters`
-            // state where the parent `FilterExec` has already been removed
-            // and the scan owns the conjunct.
-            .with_pushdown_filters(true)
-            .build();
-
-        let stream = open_file(&morselizer, file).await.unwrap();
-        let (_, rows) = count_batches_and_rows(stream).await;
-
-        // 2 rows have a non-null struct. Before the fix this returned 3
-        // (the conjunct was silently dropped).
-        assert_eq!(
-            rows, 2,
-            "expected 2 rows with non-null struct; the rejected conjunct must \
-             be applied post-scan, not silently dropped"
-        );
+        (schema, file)
     }
 
     /// Helpers for tests that exercise parquet virtual columns
