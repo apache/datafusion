@@ -22,15 +22,15 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, Float64Array, GenericListArray, NullBufferBuilder,
-    OffsetSizeTrait, Scalar, new_empty_array,
+    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, Float64Array, GenericListArray,
+    NullBufferBuilder, OffsetSizeTrait, Scalar, new_empty_array,
 };
-use arrow::buffer::{NullBuffer, OffsetBuffer};
+use arrow::buffer::{BooleanBuffer, NullBuffer, OffsetBuffer};
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_float64_array, as_generic_list_array,
     as_large_list_array, as_large_list_view_array, as_list_array, as_list_view_array,
 };
-use datafusion_common::utils::offset_span_len;
+use datafusion_common::utils::{offset_span, offset_span_len};
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 
 use datafusion_expr::ColumnarValue;
@@ -48,6 +48,56 @@ pub(crate) fn empty_list_values<O: OffsetSizeTrait>(
         values,
         list.nulls().cloned(),
     ))
+}
+
+/// Build result row offsets and exclude elements stored under NULL list rows.
+///
+/// `keep` is a bitmap identifying which elements in the list's visible span
+/// should be preserved. The returned bitmap uses the same indexing, with bits
+/// for NULL list rows cleared. Selected elements may themselves be NULL; their
+/// validity is the caller's responsibility when copying values.
+pub(crate) fn prepare_list_filter<O: OffsetSizeTrait>(
+    list: &GenericListArray<O>,
+    keep: &BooleanBuffer,
+) -> (OffsetBuffer<O>, BooleanBuffer) {
+    let list_offsets = list.offsets();
+    let (first_offset, span_len) = offset_span(list_offsets);
+    debug_assert_eq!(keep.len(), span_len);
+    let mut offsets = Vec::with_capacity(list.len() + 1);
+    offsets.push(O::zero());
+    let mut kept_count = 0;
+    // NULL list rows are usually empty, so reuse `keep` until a NULL row stores
+    // elements. Copy the bits of the preceding rows when that first happens.
+    let mut keep_mask: Option<BooleanBufferBuilder> = None;
+    for (row, window) in list_offsets.windows(2).enumerate() {
+        let start = window[0].as_usize() - first_offset;
+        let len = window[1].as_usize() - window[0].as_usize();
+        let bit_start = keep.offset() + start;
+        if list.is_valid(row) {
+            kept_count += keep.inner().count_set_bits_offset(bit_start, len);
+            if let Some(keep_mask) = &mut keep_mask {
+                keep_mask.append_packed_range(bit_start..bit_start + len, keep.values());
+            }
+        } else if len != 0 {
+            keep_mask
+                .get_or_insert_with(|| {
+                    let mut builder = BooleanBufferBuilder::new(keep.len());
+                    builder.append_packed_range(keep.offset()..bit_start, keep.values());
+                    builder
+                })
+                .append_n(len, false);
+        }
+        offsets.push(O::usize_as(kept_count));
+    }
+    let keep_mask = keep_mask
+        .map(BooleanBufferBuilder::build)
+        .unwrap_or_else(|| keep.clone());
+    debug_assert_eq!(keep_mask.len(), keep.len());
+    // SAFETY: offsets start at zero and `kept_count` never decreases. The count
+    // cannot exceed the input's element span, which fits in `O`, so converting
+    // it to `O` cannot overflow.
+    let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
+    (offsets, keep_mask)
 }
 
 /// Computes the return type of a function that produces a list with the same
@@ -529,6 +579,59 @@ pub(crate) mod tests {
     use arrow::datatypes::Int64Type;
     use datafusion_common::utils::SingleRowListArrayBuilder;
 
+    /// Compare `prepare_list_filter` with a per-row reference on a sliced list
+    /// with the given row lengths and validity, returning the input and output
+    /// bitmaps so callers can check whether the input was reused.
+    fn check_list_filter<O: OffsetSizeTrait>(
+        lengths: [usize; 8],
+        valid: [bool; 8],
+    ) -> (BooleanBuffer, BooleanBuffer) {
+        let list = GenericListArray::<O>::new(
+            Arc::new(Field::new_list_field(DataType::Int32, true)),
+            OffsetBuffer::from_lengths(lengths),
+            // The helper must permit selecting NULL elements.
+            arrow::array::new_null_array(&DataType::Int32, lengths.iter().sum()),
+            Some(NullBuffer::from(valid.to_vec())),
+        )
+        .slice(1, 7);
+        let (first, len) = offset_span(list.offsets());
+        // Use an offset that is not a multiple of the bitmap's three-bit period.
+        let keep = BooleanBuffer::collect_bool(len + 1, |i| i % 3 != 0).slice(1, len);
+        let mut expected = keep.iter().collect::<Vec<_>>();
+        let mut expected_offsets = vec![0];
+        for (row, window) in list.offsets().windows(2).enumerate() {
+            let start = window[0].as_usize() - first;
+            let end = window[1].as_usize() - first;
+            if list.is_null(row) {
+                expected[start..end].fill(false);
+            }
+            expected_offsets.push(expected[..end].iter().filter(|&&v| v).count());
+        }
+        let (offsets, mask) = prepare_list_filter(&list, &keep);
+        assert_eq!(mask.iter().collect::<Vec<_>>(), expected);
+        assert_eq!(
+            offsets.iter().map(|o| o.as_usize()).collect::<Vec<_>>(),
+            expected_offsets
+        );
+        (keep, mask)
+    }
+
+    #[test]
+    fn list_filter_mask_handles_slices_and_hidden_elements() {
+        let valid = [true, false, true, false, false, true, true, false];
+        // After slicing off the first row: an empty NULL row, a NULL row storing
+        // an element after a valid row, consecutive NULL rows, and a trailing one.
+        let hidden = [2, 0, 2, 1, 2, 0, 3, 2];
+        // NULL rows without elements leave the bitmap untouched.
+        let empty = [2, 0, 2, 0, 0, 3, 3, 0];
+        let (keep, mask) = check_list_filter::<i32>(hidden, valid);
+        assert!(!mask.inner().ptr_eq(keep.inner()));
+        let (keep, mask) = check_list_filter::<i32>(empty, valid);
+        assert!(mask.inner().ptr_eq(keep.inner()));
+        check_list_filter::<i64>(hidden, valid);
+        check_list_filter::<i64>(empty, valid);
+    }
+
     /// Only test internal functions, array-related sql functions will be tested in sqllogictest `array.slt`
     #[test]
     fn test_align_array_dimensions() {
@@ -659,8 +762,9 @@ pub(crate) mod tests {
                 let result = run(&sliced)?;
                 let expected = run(&compact.slice(offset, len))?;
                 assert_eq!(result.as_ref(), expected.as_ref());
+                // Compare buffers, since evaluating through a plan re-wraps arrays.
                 assert!(
-                    Arc::ptr_eq(&result, &sliced)
+                    result.to_data().ptr_eq(&sliced.to_data())
                         || result.get_buffer_memory_size() < 1024,
                     "{data_type}: {} bytes for {len} rows",
                     result.get_buffer_memory_size()
