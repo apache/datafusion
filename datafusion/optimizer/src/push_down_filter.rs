@@ -1141,6 +1141,32 @@ impl OptimizerRule for PushDownFilter {
                 result.map_data(|plan| Ok(with_filters(keep_predicates, plan)))
             }
             LogicalPlan::Join(join) => push_down_join(join, Some(filter.predicate)),
+            LogicalPlan::AsOfJoin(mut join) => {
+                // ASOF emits exactly one output row per left row without
+                // changing left values, so deterministic left-only predicates
+                // can run before matching. Right or mixed predicates must stay
+                // above the join because unmatched right fields are NULL-padded.
+                let (push_predicates, keep_predicates): (Vec<_>, Vec<_>) =
+                    split_conjunction_owned(filter.predicate)
+                        .into_iter()
+                        .partition(|predicate| {
+                            !predicate.is_volatile()
+                                && predicate.column_refs().iter().all(|column| {
+                                    join.left.schema().is_column_from_schema(column)
+                                })
+                        });
+
+                let result = if let Some(predicate) = conjunction(push_predicates) {
+                    filter.predicate = predicate;
+                    filter.input = join.left;
+                    join.left = Arc::new(LogicalPlan::Filter(filter));
+                    Transformed::yes(LogicalPlan::AsOfJoin(join))
+                } else {
+                    Transformed::no(LogicalPlan::AsOfJoin(join))
+                };
+
+                result.map_data(|plan| Ok(with_filters(keep_predicates, plan)))
+            }
             LogicalPlan::TableScan(mut scan) => {
                 let filter_predicates = split_conjunction(&filter.predicate);
                 // Filters containing scalar subqueries cannot be pushed to
