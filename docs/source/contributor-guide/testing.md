@@ -320,6 +320,19 @@ the README:
 [`dev/update_function_docs.sh`]: https://github.com/apache/datafusion/blob/main/dev/update_function_docs.sh
 [`ci/scripts/check_generated_docs.sh`]: https://github.com/apache/datafusion/blob/main/ci/scripts/check_generated_docs.sh
 
+## Documentation HTML Build
+
+[`ci/scripts/check_docs_html.sh`] builds the documentation website, the same
+build the "Test doc build" job runs. Sphinx builds with `-W`, so one warning
+fails the check. `./dev/rust_lint.sh` runs it. Run the script with `--help`
+for the tools it needs and the files it writes.
+
+```shell
+./ci/scripts/check_docs_html.sh
+```
+
+[`ci/scripts/check_docs_html.sh`]: https://github.com/apache/datafusion/blob/main/ci/scripts/check_docs_html.sh
+
 ## Benchmarks
 
 ### Criterion Benchmarks
