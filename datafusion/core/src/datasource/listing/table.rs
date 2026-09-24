@@ -1626,6 +1626,77 @@ mod tests {
         Ok(())
     }
 
+    /// Files written with `keep_partition_by_columns = true` physically contain
+    /// the partition column, so the (inferred) file schema and the declared
+    /// partition columns overlap. The table schema must list the column once.
+    /// See <https://github.com/apache/datafusion/issues/17420>
+    #[test]
+    fn test_partition_column_present_in_file_schema_is_not_duplicated() -> Result<()> {
+        let partition_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8));
+        let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
+            .with_file_extension_opt(Some(""))
+            .with_table_partition_cols(vec![("pid".to_string(), partition_type.clone())]);
+
+        let table_path = ListingTableUrl::parse("test:///bucket/test/")?;
+        let file_schema = Schema::new(vec![
+            Field::new("a", DataType::Boolean, false),
+            Field::new("pid", DataType::Utf8, false),
+        ]);
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(opt)
+            .with_schema(Arc::new(file_schema));
+
+        let table = ListingTable::try_new(config)?;
+        let schema = table.schema();
+
+        let names = schema
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["a", "pid"]);
+        // The partition column keeps the declared partition type, as it does
+        // when the file schema is given explicitly in CREATE EXTERNAL TABLE.
+        assert_eq!(schema.field_with_name("pid")?.data_type(), &partition_type);
+
+        Ok(())
+    }
+
+    /// Two partition columns present in the file, one of them mid-schema. The
+    /// remaining file fields keep their order and the partition columns follow
+    /// in their configured order, not their order in the file.
+    #[test]
+    fn test_overlapping_partition_columns_order() -> Result<()> {
+        let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
+            .with_file_extension_opt(Some(""))
+            .with_table_partition_cols(vec![
+                ("month".to_string(), DataType::Utf8),
+                ("year".to_string(), DataType::Utf8),
+            ]);
+        let file_schema = Schema::new(vec![
+            Field::new("a", DataType::Boolean, false),
+            Field::new("year", DataType::Utf8, true),
+            Field::new("b", DataType::Int32, false),
+            Field::new("month", DataType::Utf8, true),
+            Field::new("c", DataType::Float64, true),
+        ]);
+        let config =
+            ListingTableConfig::new(ListingTableUrl::parse("test:///bucket/test/")?)
+                .with_listing_options(opt)
+                .with_schema(Arc::new(file_schema));
+
+        let schema = ListingTable::try_new(config)?.schema();
+        let names = schema
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["a", "b", "c", "month", "year"]);
+
+        Ok(())
+    }
+
     #[cfg(feature = "parquet")]
     #[tokio::test]
     async fn test_table_stats_behaviors() -> Result<()> {
