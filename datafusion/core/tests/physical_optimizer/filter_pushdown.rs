@@ -1144,7 +1144,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
           -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
           -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
           -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
+          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ]
     "
     );
 
@@ -1165,7 +1165,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
     -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ]
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb ] AND DynamicFilter [ struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ]
     "
     );
 
@@ -1360,7 +1360,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_range_partitioned() {
           -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
           -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
           -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
-          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
+          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ]
     "
     );
 
@@ -1386,7 +1386,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_range_partitioned() {
     -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
     -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE range_partition WHEN 0 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND hash_lookup WHEN 1 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND hash_lookup ELSE false END ]
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ (a@0 >= aa AND a@0 <= aa OR a@0 >= ab AND a@0 <= ab) AND (b@1 >= ba AND b@1 <= ba OR b@1 >= bb AND b@1 <= bb) ] AND DynamicFilter [ CASE range_partition WHEN 0 THEN hash_lookup WHEN 1 THEN hash_lookup ELSE false END ]
     "
     );
 
@@ -3834,7 +3834,7 @@ async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
     -   RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
     -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true
     -   RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
-    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ]
     "
     );
 
@@ -3859,7 +3859,7 @@ async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
     -   RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
     -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true
     -   RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
-    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ false ]
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ false ] AND DynamicFilter [ false ]
     "
     );
 }

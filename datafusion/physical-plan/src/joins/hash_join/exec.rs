@@ -920,13 +920,43 @@ pub struct HashJoinExec {
     fetch: Option<usize>,
 }
 
+/// The dynamic filters that a hash join updates with the results of the build
+/// side once that is done.
+///
+/// The join pushes two filters to the probe side: one for the build-side
+/// bounds and one for the membership check (see
+/// [`HashJoinExec::gather_filters_for_pushdown`]). At least one of them is set:
+/// the join keeps only the filters that reached a consumer.
 #[derive(Clone)]
 struct HashJoinExecDynamicFilter {
-    /// Dynamic filter that we'll update with the results of the build side once that is done.
-    filter: Arc<DynamicFilterPhysicalExpr>,
+    /// The membership check (`InList` or hash table lookup, routed by
+    /// partition in partitioned mode). When `bounds` is `None`, this filter
+    /// also holds the bounds (`bounds AND membership`).
+    membership: Option<Arc<DynamicFilterPhysicalExpr>>,
+    /// The build-side bounds (`col >= min AND col <= max`). In partitioned
+    /// mode, the union of the bounds of all partitions.
+    bounds: Option<Arc<DynamicFilterPhysicalExpr>>,
     /// Build accumulator to collect build-side information (hash maps and/or bounds) from each partition.
     /// It is lazily initialized during execution to make sure we use the actual execution time partition counts.
     build_accumulator: OnceLock<Arc<SharedBuildAccumulator>>,
+}
+
+impl HashJoinExecDynamicFilter {
+    fn new(
+        membership: Option<Arc<DynamicFilterPhysicalExpr>>,
+        bounds: Option<Arc<DynamicFilterPhysicalExpr>>,
+    ) -> Self {
+        Self {
+            membership,
+            bounds,
+            build_accumulator: OnceLock::new(),
+        }
+    }
+
+    /// The dynamic filters of this join, membership first.
+    fn filters(&self) -> impl Iterator<Item = &Arc<DynamicFilterPhysicalExpr>> {
+        self.membership.iter().chain(self.bounds.iter())
+    }
 }
 
 impl fmt::Debug for HashJoinExec {
@@ -1193,7 +1223,9 @@ impl HashJoinExec {
         note = "Use ExecutionPlan::dynamic_expressions_produced instead"
     )]
     pub fn dynamic_filter_expr(&self) -> Option<&Arc<DynamicFilterPhysicalExpr>> {
-        self.dynamic_filter.as_ref().map(|df| &df.filter)
+        self.dynamic_filter
+            .as_ref()
+            .and_then(|df| df.membership.as_ref().or(df.bounds.as_ref()))
     }
 
     /// Set the dynamic filter on this hash join.
@@ -1218,27 +1250,67 @@ impl HashJoinExec {
         self.set_dynamic_filter(filter)
     }
 
-    /// Set the dynamic filter on this hash join, resetting any internal state
-    /// that depends on an existing one and validating that the filter's
-    /// children reference valid columns in the probe (right) side's schema.
+    /// Returns the dynamic filter in a self filter that this join pushed to
+    /// the probe side, if a node in the probe side holds it.
     ///
-    /// Only used to restore the filter when decoding a serialized plan: every
-    /// other code path installs the filter in
+    /// Note that we don't check `PushedDownPredicate::discriminant`: a node
+    /// that replies `PushedDown::No` may still retain the filter for
+    /// statistics pruning, so the reply does not tell us whether anyone will
+    /// actually read the filter. Instead we look for a consumer holding the
+    /// expression in the probe subtree.
+    ///
+    /// `self` here is the join with its post-pushdown children, so anything
+    /// that accepted the filter is already wired into `self.right`. Searching
+    /// from `self` would always find the producer expression pushed by this
+    /// join. This is the last chance to make the decision: the Post-phase
+    /// `FilterPushdown` rule is the final rule that mutates the plan.
+    fn consumed_dynamic_filter(
+        &self,
+        predicate: &Arc<dyn PhysicalExpr>,
+    ) -> Result<Option<Arc<DynamicFilterPhysicalExpr>>> {
+        let predicate = Arc::clone(predicate);
+        let Ok(dynamic_filter) = Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
+        else {
+            return Ok(None);
+        };
+        let has_consumer = dynamic_filter
+            .expression_id()
+            .map(|id| plan_contains_expression_id(&self.right, id))
+            .transpose()?
+            .unwrap_or(false);
+        Ok(has_consumer.then_some(dynamic_filter))
+    }
+
+    /// Set one dynamic filter on this hash join, which holds both the bounds
+    /// and the membership check. See [`Self::set_dynamic_filters`].
+    fn set_dynamic_filter(self, filter: Arc<DynamicFilterPhysicalExpr>) -> Result<Self> {
+        self.set_dynamic_filters(Some(filter), None)
+    }
+
+    /// Set the membership and bounds dynamic filters on this hash join (see
+    /// [`HashJoinExecDynamicFilter`]), resetting any internal state that
+    /// depends on existing ones and validating that the filters' children
+    /// reference valid columns in the probe (right) side's schema. Without a
+    /// bounds filter, the membership filter also holds the bounds. If both are
+    /// `None`, the join has no dynamic filter.
+    ///
+    /// Only used to restore the filters when decoding a serialized plan: every
+    /// other code path installs the filters in
     /// [`ExecutionPlan::handle_child_pushdown_result`].
-    fn set_dynamic_filter(
+    fn set_dynamic_filters(
         mut self,
-        filter: Arc<DynamicFilterPhysicalExpr>,
+        membership: Option<Arc<DynamicFilterPhysicalExpr>>,
+        bounds: Option<Arc<DynamicFilterPhysicalExpr>>,
     ) -> Result<Self> {
         let probe_schema = self.right.schema();
-        for child in filter.children() {
-            child.data_type(&probe_schema)?;
+        for filter in membership.iter().chain(bounds.iter()) {
+            for child in filter.children() {
+                child.data_type(&probe_schema)?;
+            }
         }
-        self.dynamic_filter = Some(HashJoinExecDynamicFilter {
-            filter,
-            // Initialize with an empty accumulator which will be lazily populated
-            // during execution.
-            build_accumulator: OnceLock::new(),
-        });
+        // The accumulator is empty and lazily populated during execution.
+        self.dynamic_filter = (membership.is_some() || bounds.is_some())
+            .then(|| HashJoinExecDynamicFilter::new(membership, bounds));
         Ok(self)
     }
 
@@ -1587,19 +1659,16 @@ impl ExecutionPlan for HashJoinExec {
             .filter
             .iter()
             .map(|filter| Arc::clone(filter.expression()));
-        let dynamic_filter = self.dynamic_filter.iter().map(|dynamic_filter| {
-            Arc::<DynamicFilterPhysicalExpr>::clone(&dynamic_filter.filter)
-                as Arc<dyn PhysicalExpr>
-        });
-        crate::apply_expression_roots(join_keys.chain(filter).chain(dynamic_filter), f)
+        let dynamic_filters = self.dynamic_expressions_produced();
+        crate::apply_expression_roots(join_keys.chain(filter).chain(dynamic_filters), f)
     }
 
     fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
         self.dynamic_filter
             .iter()
-            .map(|dynamic_filter| {
-                Arc::<DynamicFilterPhysicalExpr>::clone(&dynamic_filter.filter)
-                    as Arc<dyn PhysicalExpr>
+            .flat_map(HashJoinExecDynamicFilter::filters)
+            .map(|filter| {
+                Arc::<DynamicFilterPhysicalExpr>::clone(filter) as Arc<dyn PhysicalExpr>
             })
             .collect()
     }
@@ -1683,7 +1752,8 @@ impl ExecutionPlan for HashJoinExec {
         let build_accumulator = enable_dynamic_filter_pushdown
             .then(|| {
                 self.dynamic_filter.as_ref().map(|df| {
-                    let filter = Arc::clone(&df.filter);
+                    let membership_filter = df.membership.as_ref().map(Arc::clone);
+                    let bounds_filter = df.bounds.as_ref().map(Arc::clone);
                     let on_right = self
                         .on
                         .iter()
@@ -1694,7 +1764,8 @@ impl ExecutionPlan for HashJoinExec {
                             self.mode,
                             self.left.as_ref(),
                             self.right.as_ref(),
-                            filter,
+                            membership_filter,
+                            bounds_filter,
                             on_right,
                             repartition_random_state,
                             self.null_equality,
@@ -1982,9 +2053,29 @@ impl ExecutionPlan for HashJoinExec {
             && self.dynamic_filter.is_none()
             && self.allow_join_dynamic_filter_pushdown(config)
         {
-            // Add actual dynamic filter to right side (probe side)
-            let dynamic_filter = Self::create_dynamic_filter(&self.on);
-            right_child = right_child.with_self_filter(dynamic_filter);
+            // Add actual dynamic filters to right side (probe side).
+            //
+            // A partitioned join pushes two filters: first the build-side
+            // bounds, then the membership check. Two filters, not one filter
+            // with an `AND`, let each consumer use them independently. The
+            // bounds are the union of the bounds of all partitions and do not
+            // need the routing `CASE` of the membership check, so the pruning
+            // code can use them. A collect-left join pushes one filter that
+            // holds both (`bounds AND membership`): it has no routing `CASE`,
+            // so the pruning code can already use its bounds. See
+            // `SharedBuildAccumulator` for the filter contents.
+            //
+            // `handle_child_pushdown_result` relies on this order.
+            let dynamic_filter =
+                || Self::create_dynamic_filter(&self.on) as Arc<dyn PhysicalExpr>;
+            right_child = if self.mode == PartitionMode::Partitioned {
+                right_child.with_self_filters(vec![
+                    dynamic_filter(), // bounds
+                    dynamic_filter(), // membership
+                ])
+            } else {
+                right_child.with_self_filter(dynamic_filter())
+            };
         }
 
         Ok(FilterDescription::new()
@@ -2001,43 +2092,38 @@ impl ExecutionPlan for HashJoinExec {
         let mut result = FilterPushdownPropagation::if_any(child_pushdown_result.clone());
         assert_eq!(child_pushdown_result.self_filters.len(), 2); // Should always be 2, we have 2 children
         let right_child_self_filters = &child_pushdown_result.self_filters[1]; // We only push down filters to the right child
-        // We expect 0 or 1 self filters
-        if let Some(filter) = right_child_self_filters.first() {
-            let predicate = Arc::clone(&filter.predicate);
-            if let Ok(dynamic_filter) =
-                Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
-            {
-                // Note that we don't check `PushedDownPredicate::discriminant`: a node
-                // that replies `PushedDown::No` may still retain the filter for
-                // statistics pruning, so the reply does not tell us whether anyone will
-                // actually read the filter. Instead we look for a consumer holding the
-                // expression in the probe subtree.
-                //
-                // `self` here is the join with its post-pushdown children, so anything
-                // that accepted the filter is already wired into `self.right`. Searching
-                // from `self` would always find the producer expression pushed by this
-                // join. This is the last chance to make the decision: the Post-phase
-                // `FilterPushdown` rule is the final rule that mutates the plan.
-                let has_consumer = dynamic_filter
-                    .expression_id()
-                    .map(|id| plan_contains_expression_id(&self.right, id))
-                    .transpose()?
-                    .unwrap_or(false);
-                if has_consumer {
-                    // Our self filter reached a consumer: rebuild the node holding onto
-                    // the dynamic filter so that `execute` populates it from the build
-                    // side. If it did not, we leave `dynamic_filter` as `None` and skip
-                    // the (not cheap) bounds accumulation entirely.
-                    let new_node = self
-                        .builder()
-                        .with_dynamic_filter(Some(HashJoinExecDynamicFilter {
-                            filter: dynamic_filter,
-                            build_accumulator: OnceLock::new(),
-                        }))
-                        .build_exec()?;
-                    result = result.with_updated_node(new_node);
-                }
+
+        // We expect 0 self filters, 1 (collect-left: bounds and membership
+        // in one filter) or 2 (partitioned: the bounds filter, then the
+        // membership filter). See `gather_filters_for_pushdown`. Keep each
+        // one that reached a consumer.
+        let consumed = right_child_self_filters
+            .iter()
+            .map(|filter| self.consumed_dynamic_filter(&filter.predicate))
+            .collect::<Result<Vec<_>>>()?;
+        let (bounds, membership) = match consumed.as_slice() {
+            [] => (None, None),
+            [membership] => (None, membership.clone()),
+            [bounds, membership] => (bounds.clone(), membership.clone()),
+            _ => {
+                return internal_err!(
+                    "HashJoinExec expected 0, 1 or 2 self filters, got {}",
+                    consumed.len()
+                );
             }
+        };
+        if membership.is_some() || bounds.is_some() {
+            // Our self filters reached a consumer: rebuild the node holding onto
+            // the dynamic filters so that `execute` populates them from the build
+            // side. If none did, we leave `dynamic_filter` as `None` and skip
+            // the (not cheap) bounds accumulation entirely.
+            let new_node = self
+                .builder()
+                .with_dynamic_filter(Some(HashJoinExecDynamicFilter::new(
+                    membership, bounds,
+                )))
+                .build_exec()?;
+            result = result.with_updated_node(new_node);
         }
         Ok(result)
     }
@@ -2124,14 +2210,21 @@ impl ExecutionPlan for HashJoinExec {
             .map(|f| crate::joins::proto::join_filter_to_proto(f, ctx))
             .transpose()?;
 
-        let dynamic_filter = dynamic_filter
-            .as_ref()
-            .map(|df| {
-                let df_expr: Arc<dyn PhysicalExpr> =
-                    Arc::clone(&df.filter) as Arc<dyn PhysicalExpr>;
-                ctx.encode_expr(&df_expr)
-            })
-            .transpose()?;
+        let encode_dynamic_filter = |filter: Option<&Arc<DynamicFilterPhysicalExpr>>| {
+            filter
+                .map(|filter| {
+                    ctx.encode_expr(&(Arc::clone(filter) as Arc<dyn PhysicalExpr>))
+                })
+                .transpose()
+        };
+        let dynamic_filter_bounds = encode_dynamic_filter(
+            dynamic_filter.as_ref().and_then(|df| df.bounds.as_ref()),
+        )?;
+        let dynamic_filter = encode_dynamic_filter(
+            dynamic_filter
+                .as_ref()
+                .and_then(|df| df.membership.as_ref()),
+        )?;
 
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
@@ -2159,6 +2252,7 @@ impl ExecutionPlan for HashJoinExec {
                         null_aware: *null_aware,
                         dynamic_filter,
                         fetch: fetch.map(|f| f as u64),
+                        dynamic_filter_bounds,
                     },
                 )),
             ),
@@ -2197,6 +2291,7 @@ impl HashJoinExec {
             null_aware,
             dynamic_filter,
             fetch,
+            dynamic_filter_bounds,
         } = &**hashjoin;
 
         let left = ctx.decode_required_child(left.as_deref(), "HashJoinExec", "left")?;
@@ -2262,7 +2357,7 @@ impl HashJoinExec {
             .map(|fetch| usize_from_wire(fetch, "HashJoinExec", "fetch"))
             .transpose()?;
 
-        let mut hash_join = HashJoinExecBuilder::new(left, right, on, join_type)
+        let hash_join = HashJoinExecBuilder::new(left, right, on, join_type)
             .with_filter(filter)
             .with_projection(projection)
             .with_partition_mode(partition_mode)
@@ -2271,20 +2366,35 @@ impl HashJoinExec {
             .with_fetch(fetch)
             .build()?;
 
-        if let Some(dynamic_filter_proto) = dynamic_filter {
-            // The dynamic filter is a `DynamicFilterPhysicalExpr` over the probe
-            // (right) side; decode against the right schema then downcast.
-            let dynamic_filter_expr =
-                ctx.decode_expr(dynamic_filter_proto, right_schema.as_ref())?;
-            let df = (dynamic_filter_expr as Arc<dyn Any + Send + Sync>)
-                .downcast::<DynamicFilterPhysicalExpr>()
-                .map_err(|_| {
-                    internal_datafusion_err!(
-                        "HashJoinExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
-                    )
-                })?;
-            hash_join = hash_join.set_dynamic_filter(df)?;
-        }
+        // The dynamic filters are `DynamicFilterPhysicalExpr`s over the probe
+        // (right) side; decode against the right schema then downcast. A plan
+        // without `dynamic_filter_bounds` restores one filter that holds both
+        // the bounds and the membership check.
+        let decode_dynamic_filter = |proto: Option<&protobuf::PhysicalExprNode>,
+                                     field: &str|
+         -> Result<
+            Option<Arc<DynamicFilterPhysicalExpr>>,
+        > {
+            proto
+                .map(|proto| {
+                    let expr = ctx.decode_expr(proto, right_schema.as_ref())?;
+                    (expr as Arc<dyn Any + Send + Sync>)
+                        .downcast::<DynamicFilterPhysicalExpr>()
+                        .map_err(|_| {
+                            internal_datafusion_err!(
+                                "HashJoinExec {field} did not decode to a DynamicFilterPhysicalExpr"
+                            )
+                        })
+                })
+                .transpose()
+        };
+        let membership =
+            decode_dynamic_filter(dynamic_filter.as_ref(), "dynamic_filter")?;
+        let bounds = decode_dynamic_filter(
+            dynamic_filter_bounds.as_ref(),
+            "dynamic_filter_bounds",
+        )?;
+        let hash_join = hash_join.set_dynamic_filters(membership, bounds)?;
 
         Ok(Arc::new(hash_join))
     }
@@ -2363,6 +2473,7 @@ mod proto_tests {
             null_aware: false,
             dynamic_filter: None,
             fetch: None,
+            dynamic_filter_bounds: None,
         }
     }
 
@@ -3717,10 +3828,10 @@ mod tests {
             NullEquality::NullEqualsNothing,
             false,
         )?;
-        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
-            filter: Arc::clone(&dynamic_filter),
-            build_accumulator: OnceLock::new(),
-        });
+        join.dynamic_filter = Some(HashJoinExecDynamicFilter::new(
+            Some(Arc::clone(&dynamic_filter)),
+            None,
+        ));
 
         Ok((join, dynamic_filter))
     }
@@ -9041,10 +9152,10 @@ mod tests {
             NullEquality::NullEqualsNull,
             false,
         )?;
-        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
-            filter: Arc::clone(&dynamic_filter),
-            build_accumulator: OnceLock::new(),
-        });
+        join.dynamic_filter = Some(HashJoinExecDynamicFilter::new(
+            Some(Arc::clone(&dynamic_filter)),
+            None,
+        ));
 
         // (1) Building the hash table must not fail on the dictionary key.
         let stream = join.execute(0, task_ctx)?;
@@ -9157,10 +9268,10 @@ mod tests {
             NullEquality::NullEqualsNull,
             false,
         )?;
-        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
-            filter: Arc::clone(&dynamic_filter),
-            build_accumulator: OnceLock::new(),
-        });
+        join.dynamic_filter = Some(HashJoinExecDynamicFilter::new(
+            Some(Arc::clone(&dynamic_filter)),
+            None,
+        ));
 
         let batches = crate::execution_plan::collect(Arc::new(join), task_ctx).await?;
 
@@ -9852,6 +9963,56 @@ mod tests {
             df.expression_id()
                 .expect("DynamicFilterPhysicalExpr always has an expression_id"),
         );
+        Ok(())
+    }
+
+    /// A partitioned join pushes two dynamic filters to the probe side (the
+    /// bounds, then the membership check), each with its own expression id.
+    /// A collect-left join pushes one dynamic filter that holds both.
+    #[test]
+    fn test_pushed_dynamic_filters_by_partition_mode() -> Result<()> {
+        let mut config = ConfigOptions::default();
+        config.optimizer.enable_join_dynamic_filter_pushdown = true;
+
+        for (mode, expected_filters) in [
+            (PartitionMode::Partitioned, 2),
+            (PartitionMode::CollectLeft, 1),
+        ] {
+            let (_, _, on) = build_schema_and_on()?;
+            let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![1]));
+            let right = build_table(("a2", &vec![1]), ("b1", &vec![1]), ("c2", &vec![1]));
+            let join = HashJoinExec::try_new(
+                left,
+                right,
+                on,
+                None,
+                &JoinType::Inner,
+                None,
+                mode,
+                NullEquality::NullEqualsNothing,
+                false,
+            )?;
+            let description = join.gather_filters_for_pushdown(
+                FilterPushdownPhase::Post,
+                vec![],
+                &config,
+            )?;
+
+            // The self filters go to the probe side only.
+            let self_filters = description.self_filters();
+            assert!(self_filters[0].is_empty());
+            assert_eq!(self_filters[1].len(), expected_filters, "{mode:?}");
+            let ids = self_filters[1]
+                .iter()
+                .map(|filter| {
+                    filter
+                        .downcast_ref::<DynamicFilterPhysicalExpr>()
+                        .expect("the self filter should be a dynamic filter")
+                        .expression_id()
+                })
+                .collect::<std::collections::HashSet<_>>();
+            assert_eq!(ids.len(), expected_filters, "{mode:?}");
+        }
         Ok(())
     }
 

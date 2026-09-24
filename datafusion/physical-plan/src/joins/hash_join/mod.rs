@@ -20,6 +20,7 @@
 pub use exec::{HashJoinExec, HashJoinExecBuilder};
 pub use partitioned_hash_eval::{HashExpr, HashTableLookupExpr, SeededRandomState};
 
+mod bounds_union;
 mod exec;
 mod inlist_builder;
 mod partitioned_hash_eval;
