@@ -99,7 +99,13 @@ impl PhysicalOptimizerRule for CombinePartialFinalAggregate {
                     input_agg_exec.input_schema(),
                 )
                 .map(|combined_agg| {
-                    combined_agg.with_limit_options(agg_exec.limit_options())
+                    #[expect(
+                        deprecated,
+                        reason = "preserve legacy limit hints while combining aggregates"
+                    )]
+                    let combined_agg =
+                        combined_agg.with_limit_options(agg_exec.limit_options());
+                    combined_agg
                 })
                 .ok()
                 .map(Arc::new)

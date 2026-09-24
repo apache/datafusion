@@ -37,7 +37,7 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::{
-    AggregateExec, AggregateMode, LimitOptions, PhysicalGroupBy,
+    AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -260,7 +260,9 @@ fn aggregations_with_limit_combined() -> datafusion_common::Result<()> {
             schema,
         )
         .unwrap()
-        .with_limit_options(Some(LimitOptions::new(5))),
+        .try_optimize_distinct_soft_limit(5)
+        .unwrap()
+        .data,
     );
     let plan: Arc<dyn ExecutionPlan> = final_agg;
     // should combine the Partial/Final AggregateExecs to a Single AggregateExec
