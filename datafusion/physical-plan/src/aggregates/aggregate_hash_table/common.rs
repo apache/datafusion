@@ -949,7 +949,12 @@ impl HashAggregateAccumulator {
         &mut self,
         emit_to: BlockedEmitTo,
     ) -> Result<Vec<Vec<ArrayRef>>> {
-        Ok(vec![self.evaluate(emit_to)?])
+        // One output column per block
+        Ok(self
+            .evaluate(emit_to)?
+            .into_iter()
+            .map(|block| vec![block])
+            .collect())
     }
 
     /// Evaluating partial aggregate results according to `EmitTo`, and reset inner
