@@ -96,7 +96,8 @@ mod tests {
     use super::*;
     use crate::ScalarFunctionExpr;
     use crate::expressions::{
-        BinaryExpr, CastExpr, Literal, NotExpr, TryCastExpr, col, in_list, lit,
+        BinaryExpr, CastExpr, Literal, NotExpr, OptionalFilterPhysicalExpr, TryCastExpr,
+        col, in_list, lit,
     };
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::ScalarValue;
@@ -235,6 +236,35 @@ mod tests {
 
         let expected = inner_expr;
         assert_not_simplify(&simplifier, double_not, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_not_optional_filter_unchanged() -> Result<()> {
+        let schema = not_test_schema();
+        let simplifier = PhysicalExprSimplifier::new(&schema);
+        let optional = |e: Arc<dyn PhysicalExpr>| -> Arc<dyn PhysicalExpr> {
+            Arc::new(OptionalFilterPhysicalExpr::new(e))
+        };
+
+        // NOT(Optional(c > 5)) is unchanged: the NOT must not move into the
+        // Optional, because NOT(c > 5) is a required filter.
+        let c_gt_5: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            col("c", &schema)?,
+            Operator::Gt,
+            lit(ScalarValue::Int32(Some(5))),
+        ));
+        let expr: Arc<dyn PhysicalExpr> =
+            Arc::new(NotExpr::new(optional(Arc::clone(&c_gt_5))));
+        assert_not_simplify(&simplifier, Arc::clone(&expr), expr);
+
+        // NOT(Optional(NOT(a))) is unchanged: no double negation elimination
+        // across the Optional.
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(NotExpr::new(optional(Arc::new(
+            NotExpr::new(col("a", &schema)?),
+        ))));
+        assert_not_simplify(&simplifier, Arc::clone(&expr), expr);
+
         Ok(())
     }
 
