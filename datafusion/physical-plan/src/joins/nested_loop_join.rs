@@ -78,7 +78,7 @@ use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::equivalence::{
     ProjectionMapping, join_equivalence_properties,
 };
-use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
+use datafusion_physical_expr::utils::as_dynamic_filter;
 
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use futures::future::BoxFuture;
@@ -901,7 +901,9 @@ impl ExecutionPlan for NestedLoopJoinExec {
                 .iter()
                 .zip(&mut child_description.parent_filters)
             {
-                if !filter.is::<DynamicFilterPhysicalExpr>() {
+                // Producers push their dynamic filters as
+                // `Optional(DynamicFilter)`, so look through the wrapper.
+                if as_dynamic_filter(filter).is_none() {
                     *pushed = PushedDownPredicate::unsupported(Arc::clone(filter));
                 }
             }
@@ -4227,7 +4229,9 @@ pub(crate) mod tests {
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_execution::spill_file::{SpillFile, SpillWriter, TempFileFactory};
     use datafusion_expr::Operator;
-    use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
+    use datafusion_physical_expr::expressions::{
+        BinaryExpr, DynamicFilterPhysicalExpr, Literal, OptionalFilterPhysicalExpr,
+    };
     use datafusion_physical_expr::{Partitioning, PhysicalExpr};
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
@@ -4371,6 +4375,47 @@ pub(crate) mod tests {
                     .all(|f| matches!(f.discriminant, PushedDown::No))
             );
         }
+        Ok(())
+    }
+
+    /// Producers push their dynamic filters as `Optional(DynamicFilter)`. The
+    /// NLJ must route the wrapped filter like a bare dynamic filter, and keep
+    /// the wrapper on the pushed copy.
+    #[test]
+    fn test_nlj_routes_optional_dynamic_filter() -> Result<()> {
+        use crate::filter_pushdown::PushedDown;
+        use datafusion_physical_expr::expressions::lit;
+
+        let join = NestedLoopJoinExec::try_new(
+            build_left_table(),
+            build_right_table(),
+            None,
+            &JoinType::Inner,
+            None,
+        )?;
+        let column: Arc<dyn PhysicalExpr> =
+            Arc::new(Column::new(join.schema().field(0).name(), 0));
+        let source = Arc::new(DynamicFilterPhysicalExpr::new(vec![column], lit(true)));
+        let optional: Arc<dyn PhysicalExpr> =
+            Arc::new(OptionalFilterPhysicalExpr::new(Arc::clone(&source) as _));
+
+        let filters = join
+            .gather_filters_for_pushdown(
+                FilterPushdownPhase::Post,
+                vec![optional],
+                &ConfigOptions::default(),
+            )?
+            .parent_filters();
+
+        // Column 0 is a left column, so only the left child accepts it.
+        let left_filter = &filters[0][0];
+        assert!(matches!(left_filter.discriminant, PushedDown::Yes));
+        assert!(left_filter.predicate.is::<OptionalFilterPhysicalExpr>());
+        assert_eq!(
+            as_dynamic_filter(&left_filter.predicate).and_then(|df| df.expression_id()),
+            source.expression_id()
+        );
+        assert!(matches!(filters[1][0].discriminant, PushedDown::No));
         Ok(())
     }
 

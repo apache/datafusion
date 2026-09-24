@@ -73,7 +73,9 @@ use datafusion_execution::memory_pool::{
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::expressions::{
+    DynamicFilterPhysicalExpr, OptionalFilterPhysicalExpr, lit,
+};
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
@@ -1632,7 +1634,11 @@ impl ExecutionPlan for SortExec {
         if let Some(filter) = &self.filter
             && config.optimizer.enable_topk_dynamic_filter_pushdown
         {
-            child = child.with_self_filter(filter.read().expr());
+            // The TopK itself keeps only the top `fetch` rows, so the filter
+            // is not needed for correctness: mark the pushed copy as optional.
+            child = child.with_self_filter(Arc::new(OptionalFilterPhysicalExpr::new(
+                filter.read().expr(),
+            )));
         }
 
         Ok(FilterDescription::new().with_child(child))

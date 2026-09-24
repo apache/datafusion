@@ -51,8 +51,8 @@ use datafusion_functions_aggregate::{
 };
 use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr,
-    expressions::{DynamicFilterPhysicalExpr, IsNullExpr, cast, col},
-    utils::conjunction,
+    expressions::{IsNullExpr, cast, col},
+    utils::{as_dynamic_filter, conjunction},
 };
 use datafusion_physical_expr::{
     Partitioning, RangePartitioning, ScalarFunctionExpr, SplitPoint,
@@ -941,7 +941,7 @@ async fn test_topk_filter_passes_through_coalesce_partitions() {
         Ok:
           - SortExec: TopK(fetch=1), expr=[b@1 DESC NULLS LAST], preserve_partitioning=[false]
           -   CoalescePartitionsExec
-          -     DataSourceExec: file_groups={2 groups: [[test1.parquet], [test2.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
+          -     DataSourceExec: file_groups={2 groups: [[test1.parquet], [test2.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=Optional(DynamicFilter [ empty ])
     "
     );
 }
@@ -1144,7 +1144,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
           -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
           -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
           -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
+          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=Optional(DynamicFilter [ empty ])
     "
     );
 
@@ -1165,7 +1165,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
     -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE hash_repartition % 12 WHEN 5 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) WHEN 8 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) ELSE false END ]
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=Optional(DynamicFilter [ CASE hash_repartition % 12 WHEN 5 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) WHEN 8 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) ELSE false END ])
     "
     );
 
@@ -1360,7 +1360,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_range_partitioned() {
           -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
           -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
           -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
-          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
+          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=Optional(DynamicFilter [ empty ])
     "
     );
 
@@ -1381,7 +1381,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_range_partitioned() {
     -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
     -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE range_partition WHEN 0 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) WHEN 1 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) ELSE false END ]
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=Optional(DynamicFilter [ CASE range_partition WHEN 0 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) WHEN 1 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) ELSE false END ])
     "
     );
 
@@ -1490,7 +1490,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
           -     HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
           -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
           -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
+          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=Optional(DynamicFilter [ empty ])
     "
     );
 
@@ -1509,7 +1509,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
     -     HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0), (b@1, b@1)]
     -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ]
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=Optional(DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ])
     "
     );
 
@@ -2820,7 +2820,7 @@ async fn test_hashjoin_dynamic_filter_transferred_through_nested_join() {
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[t], file_type=test, pushdown_supported=true
           -     HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(m@0, x@0)]
           -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[m, c], file_type=test, pushdown_supported=false
-          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[x, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ]
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[x, e], file_type=test, pushdown_supported=true, predicate=Optional(DynamicFilter [ empty ]) AND Optional(DynamicFilter [ empty ])
     "
     );
 
@@ -2839,7 +2839,7 @@ async fn test_hashjoin_dynamic_filter_transferred_through_nested_join() {
     -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[t], file_type=test, pushdown_supported=true
     -     HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(m@0, x@0)]
     -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[m, c], file_type=test, pushdown_supported=false
-    -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[x, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ x@0 >= aa AND x@0 <= ad AND x@0 IN (SET) ([aa, ab, ac, ad]) ] AND DynamicFilter [ x@0 >= aa AND x@0 <= ab AND x@0 IN (SET) ([aa, ab]) ]
+    -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[x, e], file_type=test, pushdown_supported=true, predicate=Optional(DynamicFilter [ x@0 >= aa AND x@0 <= ad AND x@0 IN (SET) ([aa, ab, ac, ad]) ]) AND Optional(DynamicFilter [ x@0 >= aa AND x@0 <= ab AND x@0 IN (SET) ([aa, ab]) ])
     "
     );
 
@@ -3829,7 +3829,7 @@ async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
     -   RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
     -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true
     -   RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
-    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ empty ]
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true, predicate=Optional(DynamicFilter [ empty ])
     "
     );
 
@@ -3854,7 +3854,7 @@ async fn test_hashjoin_dynamic_filter_all_partitions_empty() {
     -   RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
     -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true
     -   RepartitionExec: partitioning=Hash([a@0, b@1], 4), input_partitions=1
-    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ false ]
+    -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b], file_type=test, pushdown_supported=true, predicate=Optional(DynamicFilter [ false ])
     "
     );
 }
@@ -4620,7 +4620,7 @@ async fn test_filter_with_projection_pushdown() {
 /// Test that ExecutionPlan::apply_expressions() can discover dynamic filters across the plan tree.
 ///
 /// Not portable to sqllogictest: asserts by walking the plan tree with
-/// `apply_expressions` + `downcast_ref::<DynamicFilterPhysicalExpr>` and
+/// `apply_expressions` + `as_dynamic_filter` and
 /// counting nodes. Neither API is observable from SQL.
 #[tokio::test]
 async fn test_discover_dynamic_filters_via_expressions_api() {
@@ -4629,7 +4629,9 @@ async fn test_discover_dynamic_filters_via_expressions_api() {
 
         // Check expressions from this node using apply_expressions
         let _ = plan.apply_expressions(&mut |expr| {
-            if let Some(_df) = expr.downcast_ref::<DynamicFilterPhysicalExpr>() {
+            // Producers push their dynamic filters as
+            // `Optional(DynamicFilter)`, so look through the wrapper.
+            if let Some(_df) = as_dynamic_filter(expr) {
                 count += 1;
             }
             Ok(TreeNodeRecursion::Continue)

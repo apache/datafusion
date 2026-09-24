@@ -274,6 +274,22 @@ fn parquet_source_predicate(child: &Arc<dyn ExecutionPlan>) -> Arc<dyn PhysicalE
         .expect("ParquetSource should have a predicate after roundtrip")
 }
 
+/// Extract the dynamic filter that a producer pushed down to the parquet scan
+/// at the bottom of the plan tree. Producers mark their dynamic filters as
+/// optional, so the predicate must be `Optional(DynamicFilter)` after the
+/// roundtrip. Returns the inner dynamic filter.
+fn pushed_optional_dynamic_filter(
+    child: &Arc<dyn ExecutionPlan>,
+) -> Arc<dyn PhysicalExpr> {
+    let predicate = parquet_source_predicate(child);
+    let optional = predicate
+        .downcast_ref::<OptionalFilterPhysicalExpr>()
+        .unwrap_or_else(|| {
+            panic!("pushed dynamic filter should be optional, got {predicate}")
+        });
+    Arc::clone(optional.inner())
+}
+
 /// Assert that two dynamic filters are equal both structurally (Debug output)
 /// and by identity (`expression_id`).
 fn assert_dynamic_filters_equal(
@@ -504,7 +520,8 @@ fn test_hash_join_with_dynamic_filter_roundtrip() -> Result<()> {
         .expect("HashJoinExec should have a dynamic filter after roundtrip");
 
     // Extract the dynamic filter pushed down to the probe side's ParquetSource.
-    let deserialized_predicate = parquet_source_predicate(deserialized_join.right());
+    let deserialized_predicate =
+        pushed_optional_dynamic_filter(deserialized_join.right());
 
     // The HashJoinExec's dynamic filter and the probe side's predicate should
     // refer to the same underlying expression.
@@ -659,7 +676,7 @@ fn test_aggregate_with_dynamic_filter_roundtrip() -> Result<()> {
         .expect("AggregateExec should have a dynamic filter after roundtrip");
 
     // Extract the dynamic filter pushed down to the child ParquetSource.
-    let deserialized_predicate = parquet_source_predicate(deserialized_agg.input());
+    let deserialized_predicate = pushed_optional_dynamic_filter(deserialized_agg.input());
 
     // The AggregateExec's dynamic filter and the child's predicate should
     // refer to the same underlying expression.
@@ -784,7 +801,8 @@ fn test_sort_topk_with_dynamic_filter_roundtrip() -> Result<()> {
         .expect("SortExec should have a dynamic filter after roundtrip");
 
     // Extract the dynamic filter pushed down to the child ParquetSource.
-    let deserialized_predicate = parquet_source_predicate(deserialized_sort.input());
+    let deserialized_predicate =
+        pushed_optional_dynamic_filter(deserialized_sort.input());
 
     // The SortExec's dynamic filter and the child's predicate should
     // refer to the same underlying expression.
