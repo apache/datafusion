@@ -414,10 +414,15 @@ impl FilterExec {
                 );
                 (selectivity, filtered_num_rows, cs)
             } else {
-                // Without interval boundaries, use the default selectivity and
-                // apply the row-count constraints that still follow from the
-                // filter predicate.
-                let selectivity = default_selectivity as f64 / 100.0;
+                // Without interval boundaries, attempt a heuristic fallback for selectivities.
+                // For instance, an equality filter against an unresolved scalar subquery will
+                // fail `check_support`, but we can still estimate selectivity as `1.0 / NDV`.
+                let selectivity = compute_fallback_selectivity(
+                    predicate,
+                    &input_stats.column_statistics,
+                    default_selectivity,
+                );
+
                 let filtered_num_rows =
                     input_num_rows.with_estimated_selectivity(selectivity);
                 let mut cs = input_stats.to_inexact().column_statistics;
@@ -455,7 +460,56 @@ impl FilterExec {
             column_statistics,
         })
     }
+}
 
+/// Fallback heuristic for when interval analysis is unsupported (e.g. scalar subqueries).
+/// Iterates over conjunctions; uses `1.0 / NDV` for equalities involving a column with known NDV,
+/// and applies `default_selectivity` for all other predicates.
+fn compute_fallback_selectivity(
+    predicate: &Arc<dyn PhysicalExpr>,
+    column_statistics: &[ColumnStatistics],
+    default_selectivity: u8,
+) -> f64 {
+    let exprs = split_conjunction(predicate);
+    let mut selectivity = 1.0;
+
+    for expr in exprs {
+        let mut handled = false;
+        if let Some(binary) = expr.downcast_ref::<BinaryExpr>() {
+            if binary.op() == &Operator::Eq {
+                let col = if let Some(c) = binary.left().downcast_ref::<Column>() {
+                    Some(c)
+                } else if let Some(c) = binary.right().downcast_ref::<Column>() {
+                    Some(c)
+                } else {
+                    None
+                };
+
+                if let Some(c) = col {
+                    if let Some(stat) = column_statistics.get(c.index()) {
+                        match stat.distinct_count {
+                            Precision::Exact(ndv) | Precision::Inexact(ndv)
+                                if ndv > 0 =>
+                            {
+                                selectivity *= 1.0 / (ndv as f64);
+                                handled = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        if !handled {
+            selectivity *= default_selectivity as f64 / 100.0;
+        }
+    }
+
+    selectivity
+}
+
+impl FilterExec {
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
