@@ -26,10 +26,11 @@
 //! select * from data limit 10;
 //! ```
 
-use arrow::array::{ArrayRef, Int32Array, StringArray};
+use arrow::array::{ArrayRef, Int32Array, Int64Array, StringArray};
 use arrow::compute::concat_batches;
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
+use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::metrics::{MetricValue, MetricsSet};
 use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::{
@@ -808,4 +809,92 @@ async fn pushed_down_predicate_reports_the_original_error() {
         ),
         "expected the original cast error, got {root:?}"
     );
+}
+
+/// A MIN/MAX dynamic filter must survive a file that lacks the aggregated
+/// column. That file's Partial aggregate evaluates to a typed null
+/// (`Int64(NULL)`), which must not replace the real MIN published later.
+///
+/// With one partition the files are read in order `01_missing`, `02_high`,
+/// `03_low`, so the bad interleaving happens on every run. Without the fix,
+/// the MIN bound stays null, the filter becomes `latency_ms > 204`, and
+/// `03_low` is pruned, returning MIN = 200.
+#[tokio::test]
+async fn aggregate_dynamic_filter_ignores_typed_null_bound() {
+    let tempdir = TempDir::new_in(Path::new(".")).unwrap();
+    let dir = tempdir.path();
+
+    let write = |name: &str, col_name: &str, array: ArrayRef| {
+        let batch = RecordBatch::try_from_iter([(col_name, array)]).unwrap();
+        let file = File::create(dir.join(name)).unwrap();
+        let mut writer = ArrowWriter::try_new(file, batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+    };
+    write(
+        "01_missing.parquet",
+        "host",
+        Arc::new(StringArray::from(vec!["h1"; 5])),
+    );
+    write(
+        "02_high.parquet",
+        "latency_ms",
+        Arc::new(Int64Array::from(vec![200, 201, 202, 203, 204])),
+    );
+    write(
+        "03_low.parquet",
+        "latency_ms",
+        Arc::new(Int64Array::from(vec![100, 101, 102, 103, 104])),
+    );
+
+    // One partition keeps the file order fixed. Drop the rule that would
+    // otherwise fold Partial/Final into a Single aggregate, which does not
+    // create a dynamic filter.
+    let default_state = SessionStateBuilder::new().with_default_features().build();
+    let rules = default_state
+        .physical_optimizers()
+        .iter()
+        .filter(|rule| rule.name() != "CombinePartialFinalAggregate")
+        .cloned()
+        .collect();
+    let config = SessionConfig::new().with_target_partitions(1);
+    let state = SessionStateBuilder::new()
+        .with_config(config)
+        .with_default_features()
+        .with_physical_optimizer_rules(rules)
+        .build();
+    let ctx = SessionContext::new_with_state(state);
+
+    ctx.sql(&format!(
+        "CREATE EXTERNAL TABLE t (latency_ms BIGINT, host VARCHAR) \
+         STORED AS PARQUET LOCATION '{}/'",
+        dir.display()
+    ))
+    .await
+    .unwrap();
+
+    let df = ctx
+        .sql("SELECT min(latency_ms), max(latency_ms) FROM t")
+        .await
+        .unwrap();
+    let plan = df.create_physical_plan().await.unwrap();
+    let plan_str = displayable(plan.as_ref()).indent(false).to_string();
+    assert!(
+        plan_str.contains("mode=Partial") && plan_str.contains("DynamicFilter"),
+        "expected a Partial aggregate with a dynamic filter:\n{plan_str}"
+    );
+
+    let batches = collect(plan, ctx.task_ctx()).await.unwrap();
+    let batch = concat_batches(&batches[0].schema(), &batches).unwrap();
+    let min = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    let max = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    assert_eq!((min.value(0), max.value(0)), (100, 204), "\n{plan_str}");
 }
