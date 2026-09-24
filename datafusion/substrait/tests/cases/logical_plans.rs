@@ -406,4 +406,31 @@ mod tests {
         );
         Ok(())
     }
+
+    // A higher order function can be the value argument of another one, where its own
+    // lambda parameter has to be resolved too.
+    #[tokio::test]
+    async fn nested_higher_order_function_with_dictionary_encoded_lambda_parameter()
+    -> Result<()> {
+        let proto_plan = read_json(
+            "tests/testdata/test_plans/nested_any_match_dictionary_list_element.substrait.json",
+        );
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        let df = DataFrame::new(ctx.state(), plan);
+
+        // Without resolution of the inner function this fails in physical planning.
+        df.clone().show().await?;
+
+        // Both parameters are resolved to the encoding the list actually carries.
+        assert_snapshot!(
+        df.into_optimized_plan()?,
+        @r#"
+        Projection: array_any_match(array_transform(t.tags, (p0) -> p0), (p1) -> p1 = Dictionary(UInt32, Utf8("c"))) AS matched
+          TableScan: t projection=[tags]
+        "#
+        );
+        Ok(())
+    }
 }
