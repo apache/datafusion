@@ -23,6 +23,7 @@ use std::sync::Arc;
 use crate::DefaultParquetFileReaderFactory;
 use crate::ParquetFileReaderFactory;
 use crate::ParquetFileSchemaProvider;
+use crate::filter_placement::{PlacementOptions, PlacementSites};
 use crate::opener::ParquetMorselizer;
 use crate::opener::build_pruning_predicates;
 use crate::opener::build_virtual_columns_state;
@@ -346,6 +347,13 @@ pub struct ParquetSource {
     /// partitions and files of this scan. The gates of the optional filters
     /// use it. Replaced each time the predicate changes.
     optional_filter_decode_cost: Arc<DecodeCost>,
+    /// `datafusion.execution.adaptive_filter_placement`, see
+    /// [`crate::filter_placement`].
+    adaptive_filter_placement: bool,
+    /// Pooled measurements of the adaptive filter placement, shared by all
+    /// partitions and files of this scan. Replaced each time the predicate
+    /// changes.
+    filter_placement_sites: Arc<PlacementSites>,
 }
 
 impl ParquetSource {
@@ -377,6 +385,8 @@ impl ParquetSource {
             optional_filter_mode: OptionalFilterMode::default(),
             optional_filter_gate_config: OptionalFilterGateConfig::default(),
             optional_filter_decode_cost: Arc::default(),
+            adaptive_filter_placement: false,
+            filter_placement_sites: Arc::default(),
         }
     }
 
@@ -410,6 +420,7 @@ impl ParquetSource {
         let mut conf = self.clone();
         conf.predicate = Some(Arc::clone(&predicate));
         conf.optional_filter_decode_cost = Arc::default();
+        conf.filter_placement_sites = Arc::default();
         conf
     }
 
@@ -713,6 +724,11 @@ impl FileSource for ParquetSource {
                 gate_config: self.optional_filter_gate_config,
                 decode_cost: Arc::clone(&self.optional_filter_decode_cost),
             },
+            filter_placement: PlacementOptions::new(
+                self.adaptive_filter_placement && self.pushdown_filters(),
+                Arc::clone(&self.filter_placement_sites),
+                self.predicate.as_ref(),
+            ),
         }))
     }
 
@@ -966,6 +982,8 @@ impl FileSource for ParquetSource {
         source.optional_filter_mode = config.execution.optional_filter_mode;
         source.optional_filter_gate_config = (&config.execution).into();
         source.optional_filter_decode_cost = Arc::default();
+        source.adaptive_filter_placement = config.execution.adaptive_filter_placement;
+        source.filter_placement_sites = Arc::default();
         let source = Arc::new(source);
         // The parquet scan always accepts pushable filters: report each
         // pushable filter as accepted (`Yes`) so the parent `FilterExec` is
@@ -1234,6 +1252,10 @@ impl FileSource for ParquetSource {
             optional_filter_gate_config: _,
             // Runtime state, recreated when the source is decoded.
             optional_filter_decode_cost: _,
+            // Not serialized: the decoded source does not use adaptive
+            // filter placement.
+            adaptive_filter_placement: _,
+            filter_placement_sites: _,
         } = self;
 
         if schema_provider.is_some() {
