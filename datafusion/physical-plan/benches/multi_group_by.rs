@@ -1026,7 +1026,7 @@ fn generate_narrow_decimal_batches(
 ) -> Vec<Vec<ArrayRef>> {
     let num_full_batches = num_rows / batch_size;
     let remainder = num_rows % batch_size;
-    let num_batches = num_full_batches + if remainder > 0 { 1 } else { 0 };
+    let num_batches = num_full_batches + usize::from(remainder > 0);
 
     (0..num_batches)
         .map(|batch_idx| {
@@ -1055,7 +1055,8 @@ fn generate_narrow_decimal_batches(
 /// widths (4-byte `i32` and 8-byte `i64` native) on the multi-column path
 /// (previously such a schema fell back to `GroupValuesRows`).
 fn bench_narrow_decimals(c: &mut Criterion) {
-    let cases: [(&str, DataType, fn(&[usize]) -> ArrayRef); 2] = [
+    type MakeKeys = fn(&[usize]) -> ArrayRef;
+    let cases: [(&str, DataType, MakeKeys); 2] = [
         ("decimal32", DataType::Decimal32(9, 0), |group_ids| {
             Arc::new(
                 Decimal32Array::from_iter_values(group_ids.iter().map(|&g| g as i32))
