@@ -30,6 +30,8 @@
 //! DataFusion is a library and does not choose the global allocator, so the
 //! allocated byte count is supplied by the caller, e.g. from a counting
 //! [`GlobalAlloc`](std::alloc::GlobalAlloc) wrapper or allocator statistics.
+//!
+//! [`MemoryPool`]: super::MemoryPool
 
 use std::{
     fmt::{Debug, Display, Formatter},
