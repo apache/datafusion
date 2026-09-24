@@ -176,28 +176,17 @@ impl StatisticsContext {
     /// ```
     /// use std::sync::Arc;
     /// use arrow::datatypes::{DataType, Field, Schema};
-    /// use datafusion_common::{ColumnStatistics, Statistics};
+    /// use datafusion_common::Statistics;
     /// use datafusion_common::stats::Precision;
     /// use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
     /// use datafusion_physical_plan::test::exec::StatisticsExec;
     ///
     /// let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-    /// let overall_stats = Statistics {
-    ///     num_rows: Precision::Exact(100),
-    ///     total_byte_size: Precision::Exact(400),
-    ///     column_statistics: vec![ColumnStatistics::new_unknown()],
-    /// };
+    /// let overall_stats =
+    ///     Statistics::new_unknown(&schema).with_num_rows(Precision::Exact(100));
     /// let partition_stats = vec![
-    ///     Statistics {
-    ///         num_rows: Precision::Exact(60),
-    ///         total_byte_size: Precision::Exact(240),
-    ///         column_statistics: vec![ColumnStatistics::new_unknown()],
-    ///     },
-    ///     Statistics {
-    ///         num_rows: Precision::Exact(40),
-    ///         total_byte_size: Precision::Exact(160),
-    ///         column_statistics: vec![ColumnStatistics::new_unknown()],
-    ///     },
+    ///     Statistics::new_unknown(&schema).with_num_rows(Precision::Exact(60)),
+    ///     Statistics::new_unknown(&schema).with_num_rows(Precision::Exact(40)),
     /// ];
     /// let plan = StatisticsExec::new(overall_stats, schema)
     ///     .with_partition_statistics(partition_stats);
