@@ -174,12 +174,12 @@ impl StatisticsContext {
     /// # Example
     ///
     /// ```
-    /// use std::sync::Arc;
-    /// use arrow::datatypes::{DataType, Field, Schema};
-    /// use datafusion_common::Statistics;
-    /// use datafusion_common::stats::Precision;
-    /// use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
-    /// use datafusion_physical_plan::test::exec::StatisticsExec;
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{DataType, Field, Schema};
+    /// # use datafusion_common::Statistics;
+    /// # use datafusion_common::stats::Precision;
+    /// # use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+    /// # use datafusion_physical_plan::test::exec::StatisticsExec;
     ///
     /// let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
     /// let overall_stats =
