@@ -157,7 +157,7 @@ impl DynamicFilterTracker {
     }
 
     /// `true` once every watched filter has completed and been dropped.
-    fn is_exhausted(&self) -> bool {
+    pub(crate) fn is_exhausted(&self) -> bool {
         self.subscriptions.is_empty()
     }
 }
