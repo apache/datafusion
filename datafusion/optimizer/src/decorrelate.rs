@@ -31,7 +31,8 @@ use datafusion_common::{
 use datafusion_expr::expr::Alias;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
-    collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
+    collect_subquery_cols, collect_subquery_join_exprs, conjunction, find_join_exprs,
+    split_conjunction,
 };
 use datafusion_expr::{
     BinaryExpr, Cast, EmptyRelation, Expr, ExprSchemable, FetchType, LogicalPlan,
@@ -74,6 +75,19 @@ pub struct PullUpCorrelatedExpr {
     /// whether we have converted a scalar aggregation into a group aggregation. When unnesting
     /// lateral joins, we need to produce a left outer join in such cases.
     pub pulled_up_scalar_agg: bool,
+    /// A correlated column wrapped in an expression (e.g. `CAST(t2.b AS INT)`)
+    /// gets grouped by that entire expression instead of the bare column,
+    /// aliased to a generated name, once, in the `Aggregate` this column
+    /// belongs to. Every later reference to that column, in a
+    /// `Projection` above it for instance, needs to use the same alias
+    /// instead of the now unresolvable bare column. This records the
+    /// mapping the first time it's made.
+    correlated_col_aliases: HashMap<Column, Expr>,
+    /// `LIMIT 0` forces the subquery to zero rows unconditionally, regardless
+    /// of whether the correlation matched, collapsing it to an `EmptyRelation`.
+    /// Join-compensation needs this flag to
+    /// distinguish "empty" from its usual "matched" default.
+    pub forces_empty_result: bool,
 }
 
 impl Default for PullUpCorrelatedExpr {
@@ -95,6 +109,8 @@ impl PullUpCorrelatedExpr {
             collected_count_expr_map: HashMap::new(),
             pull_up_having_expr: None,
             pulled_up_scalar_agg: false,
+            correlated_col_aliases: HashMap::new(),
+            forces_empty_result: false,
         }
     }
 
@@ -214,6 +230,49 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     None
                 };
 
+                if self.pull_up_having_expr.is_some()
+                    && let Some(expr) = conjunction(subquery_filters.clone())
+                {
+                    let unqualified_expr = expr
+                        .transform_up(|e| {
+                            if let Expr::Column(Column { name, .. }) = &e {
+                                Ok(Transformed::yes(Expr::Column(
+                                    Column::new_unqualified(name),
+                                )))
+                            } else {
+                                Ok(Transformed::no(e))
+                            }
+                        })
+                        .data()?;
+                    let combined = match self.pull_up_having_expr.take() {
+                        Some(existing) => existing.and(unqualified_expr),
+                        None => unqualified_expr,
+                    };
+                    self.pull_up_having_expr = Some(combined);
+                    let new_plan =
+                        LogicalPlanBuilder::from((*plan_filter.input).clone()).build()?;
+                    let mut carried_correlated_cols = correlated_subquery_cols;
+                    if let Some(existing) =
+                        self.correlated_subquery_cols_map.get(&*plan_filter.input)
+                    {
+                        carried_correlated_cols.extend(existing.iter().cloned());
+                    }
+                    self.correlated_subquery_cols_map
+                        .insert(new_plan.clone(), carried_correlated_cols);
+                    if !expr_result_map_for_count_bug.is_empty() {
+                        self.collected_count_expr_map
+                            .insert(new_plan.clone(), expr_result_map_for_count_bug);
+                    } else if let Some(input_map) = self
+                        .collected_count_expr_map
+                        .get(&*plan_filter.input)
+                        .cloned()
+                    {
+                        self.collected_count_expr_map
+                            .insert(new_plan.clone(), input_map);
+                    }
+                    return Ok(Transformed::yes(new_plan));
+                }
+
                 match (&pull_up_expr_opt, &self.pull_up_having_expr) {
                     (Some(_), Some(_)) => {
                         // Error path
@@ -252,15 +311,18 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     &mut local_correlated_cols,
                 );
                 // add missing columns to Projection
-                let mut missing_exprs =
-                    self.collect_missing_exprs(&projection.expr, &local_correlated_cols)?;
+                let mut missing_exprs = self.collect_missing_exprs(
+                    &projection.expr,
+                    &local_correlated_cols,
+                    projection.input.schema(),
+                )?;
 
                 let mut expr_result_map_for_count_bug = HashMap::new();
                 if let Some(expr_result_map) =
                     self.collected_count_expr_map.get(&*projection.input)
                 {
                     proj_exprs_evaluation_result_on_empty_batch(
-                        &projection.expr,
+                        &missing_exprs,
                         projection.input.schema(),
                         expr_result_map,
                         &mut expr_result_map_for_count_bug,
@@ -303,6 +365,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 let mut missing_exprs = self.collect_missing_exprs(
                     &aggregate.group_expr,
                     &local_correlated_cols,
+                    aggregate.input.schema(),
                 )?;
 
                 // if the original group expressions are empty, need to handle the Count bug
@@ -346,8 +409,16 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 );
                 let mut new_correlated_cols = BTreeSet::new();
                 for col in local_correlated_cols.iter() {
-                    new_correlated_cols
-                        .insert(Column::new(Some(alias.alias.clone()), col.name.clone()));
+                    let requalified =
+                        Column::new(Some(alias.alias.clone()), col.name.clone());
+                    // A column already folded into a group-by alias (see
+                    // `collect_missing_exprs`) needs that mapping carried
+                    // forward under its requalified name.
+                    if let Some(existing_alias) = self.correlated_col_aliases.get(col) {
+                        self.correlated_col_aliases
+                            .insert(requalified.clone(), existing_alias.clone());
+                    }
+                    new_correlated_cols.insert(requalified);
                 }
 
                 let new_plan = if alias.input.schema().fields().len()
@@ -383,6 +454,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     // Correlated exist subquery, remove the limit(so that correlated expressions can pull up)
                     (true, false) => Transformed::yes(match limit.get_fetch_type()? {
                         FetchType::Literal(Some(0)) => {
+                            self.forces_empty_result = true;
                             LogicalPlan::EmptyRelation(EmptyRelation {
                                 produce_one_row: false,
                                 schema: Arc::clone(limit.input.schema()),
@@ -405,9 +477,10 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
 
 impl PullUpCorrelatedExpr {
     fn collect_missing_exprs(
-        &self,
+        &mut self,
         exprs: &[Expr],
         correlated_subquery_cols: &BTreeSet<Column>,
+        subquery_schema: &DFSchemaRef,
     ) -> Result<Vec<Expr>> {
         let mut missing_exprs = vec![];
         for expr in exprs {
@@ -415,26 +488,84 @@ impl PullUpCorrelatedExpr {
                 missing_exprs.push(expr.clone())
             }
         }
+        // A correlated column compared bare (`t1.a = t2.b`) only ever
+        // matches one row per value, so grouping the subquery's own
+        // aggregate by that column is enough. But if the join filter
+        // wraps it in an expression (`t1.a = CAST(t2.b AS INT)`), two
+        // different column values can compare equal after the cast, and
+        // grouping by the bare column would compute the aggregate once
+        // per underlying value instead of once per outer row it actually
+        // joins against. Grouping by the wrapping expression instead
+        // keeps those together, matching what the join predicate itself
+        // treats as equal.
+        let join_filter_exprs =
+            collect_subquery_join_exprs(&self.join_filters, subquery_schema)?;
         for col in correlated_subquery_cols.iter() {
-            let col_expr = Expr::Column(col.clone());
-            if !missing_exprs.contains(&col_expr) {
+            if let Some(existing_alias) = self.correlated_col_aliases.get(col) {
+                if !collides_with_existing(&missing_exprs, existing_alias) {
+                    missing_exprs.push(existing_alias.clone())
+                }
+                continue;
+            }
+            let wrapped = join_filter_exprs
+                .iter()
+                .find(|e| e.column_refs().len() == 1 && e.column_refs().contains(col));
+            let col_expr = match wrapped {
+                Some(e) if !matches!(e, Expr::Column(_)) => {
+                    let alias_name = format!("__correlated_group_expr_{}", col.name);
+                    let aliased = e.clone().alias(alias_name.clone());
+                    let reference = Expr::Column(Column::new_unqualified(&alias_name));
+                    self.join_filters = self
+                        .join_filters
+                        .iter()
+                        .map(|f| {
+                            f.clone()
+                                .transform_up(|node| {
+                                    if &node == e {
+                                        Ok(Transformed::yes(reference.clone()))
+                                    } else {
+                                        Ok(Transformed::no(node))
+                                    }
+                                })
+                                .data()
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    self.correlated_col_aliases.insert(col.clone(), reference);
+                    aliased
+                }
+                _ => Expr::Column(col.clone()),
+            };
+            if !collides_with_existing(&missing_exprs, &col_expr) {
                 missing_exprs.push(col_expr)
             }
         }
         if let Some(pull_up_having) = &self.pull_up_having_expr {
-            let filter_apply_columns = pull_up_having.column_refs();
-            for col in filter_apply_columns {
-                // add to missing_exprs if not already there
-                let contains = missing_exprs
+            for col in pull_up_having.column_refs() {
+                let col_expr = Expr::Column(col.clone());
+                // `col` is unqualified but the projection may already have
+                // it as `agg.c`. Check by bare name so that doesn't get
+                // added twice.
+                let already_present = missing_exprs
                     .iter()
-                    .any(|expr| matches!(expr, Expr::Column(c) if c == col));
-                if !contains {
-                    missing_exprs.push(Expr::Column(col.clone()))
+                    .any(|expr| matches!(expr, Expr::Column(c) if c.name == col.name))
+                    || collides_with_existing(&missing_exprs, &col_expr);
+                if !already_present {
+                    missing_exprs.push(col_expr)
                 }
             }
         }
         Ok(missing_exprs)
     }
+}
+
+/// True if `candidate` collides with an existing entry's schema name,
+/// e.g. a bare column already wrapped in an equally-named `CAST`.
+/// Colliding means `LogicalPlanBuilder::project` would reject it as a duplicate.
+fn collides_with_existing(exprs: &[Expr], candidate: &Expr) -> bool {
+    let candidate_name = candidate.schema_name().to_string();
+    exprs
+        .iter()
+        .any(|expr| expr.schema_name().to_string() == candidate_name)
 }
 
 fn can_pullup_over_aggregation(expr: &Expr) -> bool {
@@ -491,7 +622,7 @@ fn remove_duplicated_filter(
             Expr::BinaryExpr(b) => b.op.swap() == Some(b.op),
             _ => true,
         },
-        "remove_duplicated_filter: in_predicate must use a commutative operator"
+        "in_predicate must use a commutative operator"
     );
 
     Ok(filters
@@ -617,9 +748,14 @@ fn filter_exprs_evaluation_result_on_empty_batch(
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
         match &result_expr {
-            // evaluate to false or null on empty batch, no need to pull up
             Expr::Literal(ScalarValue::Null, _)
-            | Expr::Literal(ScalarValue::Boolean(Some(false)), _) => None,
+            | Expr::Literal(ScalarValue::Boolean(None), _)
+            | Expr::Literal(ScalarValue::Boolean(Some(false)), _) => {
+                for (name, exprs) in input_expr_result_map_for_count_bug {
+                    expr_result_map_for_count_bug.insert(name.clone(), exprs.clone());
+                }
+                None
+            }
             // evaluate to true on empty batch, need to pull up the expr
             Expr::Literal(ScalarValue::Boolean(Some(true)), _) => {
                 for (name, exprs) in input_expr_result_map_for_count_bug {
