@@ -1403,7 +1403,9 @@ message HashJoinExecNode {
   JoinFilter filter = 8;
   repeated uint32 projection = 9;
   bool null_aware = 10;
-  // Optional dynamic filter expression for pushing down to the probe side.
+  // Optional dynamic filter expression for pushing down to the probe side:
+  // the membership check. When `dynamic_filter_bounds` is absent, it also
+  // holds the build-side bounds.
   PhysicalExprNode dynamic_filter = 11;
   // Optional row limit pushed into the join by the `limit_pushdown` rule.
   //
@@ -1413,6 +1415,10 @@ message HashJoinExecNode {
   // turning old plans into empty results. With `optional`, absent decodes to
   // `None`, which is the correct reading of an older message.
   optional uint64 fetch = 12;
+  // Optional dynamic filter expression for pushing down to the probe side:
+  // the build-side bounds, separate from the membership check in
+  // `dynamic_filter`.
+  PhysicalExprNode dynamic_filter_bounds = 13;
 }
 
 enum StreamPartitionMode {
