@@ -5161,6 +5161,27 @@ statement ok
 drop table bit_distinct;
 
 
+# A NULL-typed bitwise aggregate with GROUP BY has no integer groups
+# accumulator, so it must fall back to the scalar accumulator instead of
+# erroring with "GroupsAccumulator not supported for bit_and with Null".
+statement ok
+create table bit_null (tag varchar) as values ('A'), ('A'), ('B');
+
+query ???
+SELECT bit_and(NULL), bit_or(NULL), bit_xor(NULL) FROM bit_null;
+----
+NULL NULL NULL
+
+query ???T
+SELECT bit_and(NULL), bit_or(NULL), bit_xor(NULL), tag FROM bit_null GROUP BY tag ORDER BY tag;
+----
+NULL NULL NULL A
+NULL NULL NULL B
+
+statement ok
+drop table bit_null;
+
+
 # bit_and_i32
 statement ok
 create table t (c int) as values (4), (7), (15);
