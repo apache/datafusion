@@ -176,6 +176,20 @@ cargo test --doc
 As with other Rust projects, examples in doc comments in `.rs` files are
 automatically checked to ensure they work and evolve along with the code.
 
+Prefix a line with `# ` (a `#` followed by a space) to keep it compiled and
+run, but hidden from the rendered documentation. This is most useful for
+`use` statements, since readers care about the API being demonstrated, not
+its import boilerplate:
+
+````rust
+/// ```
+/// # use std::sync::Arc;
+/// let value = Arc::new(42);
+/// ```
+````
+
+Only the `let value = ...` line renders.
+
 ### User Guide Documentation
 
 Rust example code from the user guide (anything marked with \`\`\`rust) is also
@@ -319,6 +333,19 @@ the README:
 [`dev/update_config_docs.sh`]: https://github.com/apache/datafusion/blob/main/dev/update_config_docs.sh
 [`dev/update_function_docs.sh`]: https://github.com/apache/datafusion/blob/main/dev/update_function_docs.sh
 [`ci/scripts/check_generated_docs.sh`]: https://github.com/apache/datafusion/blob/main/ci/scripts/check_generated_docs.sh
+
+## Documentation HTML Build
+
+[`ci/scripts/check_docs_html.sh`] builds the documentation website, the same
+build the "Test doc build" job runs. Sphinx builds with `-W`, so one warning
+fails the check. `./dev/rust_lint.sh` runs it. Run the script with `--help`
+for the tools it needs and the files it writes.
+
+```shell
+./ci/scripts/check_docs_html.sh
+```
+
+[`ci/scripts/check_docs_html.sh`]: https://github.com/apache/datafusion/blob/main/ci/scripts/check_docs_html.sh
 
 ## Benchmarks
 

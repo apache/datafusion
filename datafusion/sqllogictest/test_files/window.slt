@@ -4482,6 +4482,63 @@ NULL 19
 statement ok
 set datafusion.execution.batch_size = 100;
 
+statement ok
+CREATE TABLE shifts AS VALUES
+    (1, 10), (2, 20), (3, 30), (4, 40),
+    (5, NULL), (6, NULL), (7, 70), (8, 80), (9, NULL);
+
+# A partially populated lookahead cache must scan past NULLs to find
+# the requested non-null row. Negative offsets reverse the direction.
+query IIIIII
+SELECT column1, column2,
+       LEAD(column2, 2) IGNORE NULLS OVER w,
+       LAG(column2, -2, -1) IGNORE NULLS OVER w,
+       LAG(column2, 2) IGNORE NULLS OVER w,
+       LEAD(column2, -2) IGNORE NULLS OVER w
+FROM shifts
+WINDOW w AS (ORDER BY column1)
+ORDER BY column1;
+----
+1 10 30 30 NULL NULL
+2 20 40 40 NULL NULL
+3 30 70 70 10 10
+4 40 80 80 20 20
+5 NULL 80 80 30 30
+6 NULL 80 80 30 30
+7 70 NULL -1 30 30
+8 80 NULL -1 40 40
+9 NULL NULL -1 70 70
+
+# The result must be the same when input arrives in separate batches.
+statement ok
+SET datafusion.execution.batch_size = 1;
+
+query IIIIII
+SELECT column1, column2,
+       LEAD(column2, 2) IGNORE NULLS OVER w,
+       LAG(column2, -2, -1) IGNORE NULLS OVER w,
+       LAG(column2, 2) IGNORE NULLS OVER w,
+       LEAD(column2, -2) IGNORE NULLS OVER w
+FROM shifts
+WINDOW w AS (ORDER BY column1)
+ORDER BY column1;
+----
+1 10 30 30 NULL NULL
+2 20 40 40 NULL NULL
+3 30 70 70 10 10
+4 40 80 80 20 20
+5 NULL 80 80 30 30
+6 NULL 80 80 30 30
+7 70 NULL -1 30 30
+8 80 NULL -1 40 40
+9 NULL NULL -1 70 70
+
+statement ok
+SET datafusion.execution.batch_size = 100;
+
+statement ok
+DROP TABLE shifts;
+
 # Tests schema and data are in sync for mixed nulls and not nulls values for builtin window function
 query T
 select lag(a) over (order by a ASC NULLS FIRST) as x1
@@ -7128,6 +7185,12 @@ select count(*) over (order by x) from (values (map(['a'], [1])), (map(['a'], [2
 # the offending type, not the first ORDER BY type
 statement error Error during planning: RANGE window frames are not supported for ORDER BY type Map
 select count(*) over (order by d, m) from (values (arrow_cast(1, 'Duration(Second)'), map(['a'], [1])), (arrow_cast(1, 'Duration(Second)'), map(['a'], [2]))) t(d, m)
+
+# the trailing key check also runs when the first ORDER BY type supports offset
+# arithmetic; otherwise these maps are treated as peers because their keys are
+# equal even though their values differ
+statement error Error during planning: RANGE window frames are not supported for ORDER BY type Map
+select count(*) over (order by i, m) from (values (1, map(['a'], [1])), (1, map(['a'], [2]))) t(i, m)
 
 query ??I
 select d, e, count(*) over (order by d, e) from (values (arrow_cast(1, 'Duration(Second)'), arrow_cast(2, 'Duration(Millisecond)')), (arrow_cast(1, 'Duration(Second)'), arrow_cast(1, 'Duration(Millisecond)'))) t(d, e) order by 3

@@ -430,7 +430,7 @@ jobs:
       - name: Install llvm-tools-preview
         run: rustup component add llvm-tools-preview
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375  # v2.87.12
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3  # v2.87.16
         with:
           tool: cargo-llvm-cov
       - name: Rust Dependency Cache
@@ -455,7 +455,7 @@ jobs:
                 exit 1
               fi
       - name: Upload coverage to codecov.io
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
         with:
           files: target/codecov.json
           fail_ci_if_error: false
@@ -480,22 +480,21 @@ jobs:
         with:
           save-if: false # set in linux-test
           shared-key: "amd-ci"
-      # The storage integration tests start MinIO containers. Pulling the image
+      # The storage integration tests start RustFS containers. Pulling the image
       # once up front keeps the pull off the critical path of the tests, which
       # would otherwise pull it several times concurrently and occasionally fail
       # with transient Docker transport errors. The tests retry the pull
       # themselves, so a failure here is only a warning.
       #
-      # MINIO_IMAGE must match what the tests start: the tag comes from the
-      # `minio` module of `testcontainers-modules`, the registry from
-      # MINIO_IMAGE_NAME in `datafusion-cli/tests/cli_integration.rs`. The
-      # `minio_image_matches_ci_prepull` test fails if either drifts.
-      - name: Pre-pull MinIO image
+      # RUSTFS_IMAGE must match RUSTFS_IMAGE_NAME and RUSTFS_IMAGE_TAG in
+      # `datafusion-cli/tests/cli_integration.rs`. The
+      # `rustfs_image_matches_ci_prepull` test fails if they differ.
+      - name: Pre-pull RustFS image
         env:
-          MINIO_IMAGE: quay.io/minio/minio:RELEASE.2025-02-28T09-55-16Z
+          RUSTFS_IMAGE: docker.io/rustfs/rustfs:1.0.0
         run: |
-          ci/scripts/retry timeout 120 docker pull "$MINIO_IMAGE" \
-            || echo "::warning::Could not pre-pull $MINIO_IMAGE, the tests will pull it themselves"
+          ci/scripts/retry timeout 120 docker pull "$RUSTFS_IMAGE" \
+            || echo "::warning::Could not pre-pull $RUSTFS_IMAGE, the tests will pull it themselves"
       - name: Run tests (excluding doctests)
         env:
           RUST_BACKTRACE: 1
@@ -584,18 +583,22 @@ jobs:
     name: build and run with wasm-pack
     if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
     runs-on: ubuntu-24.04
+    env:
+      # Use the preinstalled Clang 18 even if the runner's default Clang changes.
+      CC_wasm32_unknown_unknown: clang-18
+      CXX_wasm32_unknown_unknown: clang++-18
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - parallel:
           - name: Setup for wasm32
             run: |
               rustup target add wasm32-unknown-unknown
-          - name: Install dependencies
+          - name: Check preinstalled Clang
             run: |
-              sudo apt-get update -qq
-              sudo apt-get install -y -qq clang
+              clang-18 --version
+              clang++-18 --version
           - name: Setup wasm-pack
-            uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375  # v2.87.12
+            uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3  # v2.87.16
             with:
               tool: wasm-pack
       - name: Run tests with headless mode
@@ -828,7 +831,7 @@ jobs:
         with:
           rust-version: stable
       - name: Install taplo
-        uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375  # v2.87.12
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3  # v2.87.16
         with:
           tool: taplo-cli@0.9
       # if you encounter an error, try running 'taplo format' to fix the formatting automatically.
@@ -910,7 +913,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Install cargo-msrv
-        uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375  # v2.87.12
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3  # v2.87.16
         with:
           tool: cargo-msrv
 
