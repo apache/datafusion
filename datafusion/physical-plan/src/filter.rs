@@ -20,6 +20,7 @@ use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, ready};
+use std::time::Duration;
 
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use itertools::Itertools;
@@ -47,16 +48,16 @@ use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions, validate_child_count
 use crate::{
     DisplayFormatType, ExecutionPlan,
     metrics::{
-        BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricsSet, RatioMetrics,
+        BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricsSet, RatioMetrics, Time,
     },
 };
 
 use arrow::array::ArrayRef;
-use arrow::compute::filter_record_batch;
+use arrow::compute::{and, filter_record_batch};
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::config::ConfigOptions;
+use datafusion_common::config::{ConfigOptions, OptionalFilterMode};
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
@@ -70,7 +71,10 @@ use datafusion_physical_expr::expressions::{
     BinaryExpr, Column, InListExpr, IsNotNullExpr, Literal, lit,
 };
 use datafusion_physical_expr::intervals::utils::check_support;
-use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::optional_filter_gate::{
+    GateDecision, OptionalFilterGate, OptionalFilterGateConfig,
+};
+use datafusion_physical_expr::utils::{collect_columns, split_optional};
 use datafusion_physical_expr::{
     AcrossPartitions, AnalysisContext, ConstExpr, ExprBoundaries, PhysicalExpr, analyze,
     conjunction, split_conjunction,
@@ -463,6 +467,52 @@ impl FilterExec {
         })
     }
 
+    /// Returns the predicate that a stream evaluates on each batch, and the
+    /// gates of the optional conjuncts that the stream evaluates adaptively,
+    /// as set by `datafusion.execution.optional_filter_mode`:
+    ///
+    /// * `always`: the predicate unchanged, and no gates.
+    /// * `pruning_only`: the required conjuncts only. `FilterExec` cannot
+    ///   prune, thus it does not use the optional conjuncts.
+    /// * `adaptive`: the required conjuncts, and one gate for each optional
+    ///   conjunct. The gates belong to the stream only. For the work that a
+    ///   removed row saves, they use only
+    ///   `datafusion.execution.optional_filter_min_saving_ns_per_row`:
+    ///   `FilterExec` cannot measure the work of the operators after it.
+    ///
+    /// Only an optional conjunct on the root `AND` chain can be removed (see
+    /// [`split_optional`]). For example, `NOT(Optional(x))` is required.
+    fn stream_predicate(
+        &self,
+        context: &TaskContext,
+    ) -> (Arc<dyn PhysicalExpr>, Vec<OptionalFilterGate>) {
+        let options = &context.session_config().options().execution;
+        let mode = options.optional_filter_mode;
+        if mode == OptionalFilterMode::Always {
+            return (Arc::clone(&self.predicate), vec![]);
+        }
+        let (required, optional) = split_optional(&self.predicate);
+        if optional.is_empty() {
+            return (Arc::clone(&self.predicate), vec![]);
+        }
+        // An ordinary `AND` chain of `BinaryExpr`, or `true` if all
+        // conjuncts are optional.
+        let required = conjunction(required);
+        match mode {
+            OptionalFilterMode::Always | OptionalFilterMode::PruningOnly => {
+                (required, vec![])
+            }
+            OptionalFilterMode::Adaptive => {
+                let config = OptionalFilterGateConfig::from(options);
+                let gates = optional
+                    .into_iter()
+                    .map(|filter| OptionalFilterGate::new(filter, config))
+                    .collect();
+                (required, gates)
+            }
+        }
+    }
+
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
@@ -652,14 +702,21 @@ impl ExecutionPlan for FilterExec {
             context.session_id(),
             context.task_id()
         );
+        let (predicate, optional_filters) = self.stream_predicate(&context);
         let mut metrics = FilterExecMetrics::new(&self.metrics, partition);
+        if !optional_filters.is_empty() {
+            metrics.optional_filters =
+                Some(OptionalFilterMetrics::new(&self.metrics, partition));
+        }
+        // The reordering applies to the required conjuncts. The optional
+        // conjuncts that run behind gates are evaluated after them.
         let conjunct_order = if context
             .session_config()
             .options()
             .execution
             .adaptive_filter_reordering
         {
-            ConjunctOrder::try_new(&self.predicate, &SystemClock::shared())
+            ConjunctOrder::try_new(&predicate, &SystemClock::shared())
         } else {
             None
         };
@@ -670,8 +727,9 @@ impl ExecutionPlan for FilterExec {
         }
         Ok(Box::pin(FilterExecStream {
             schema: self.schema(),
-            predicate: Arc::clone(&self.predicate),
+            predicate,
             conjunct_order,
+            optional_filters,
             input: self.input.execute(partition, context)?,
             metrics,
             projection: self.projection.clone(),
@@ -1378,10 +1436,16 @@ struct FilterExecStream {
     /// Output schema after the projection
     schema: SchemaRef,
     /// The expression to filter on. This expression must evaluate to a boolean value.
+    ///
+    /// If `optional_filters` is not empty, this is the conjunction of the
+    /// required conjuncts only.
     predicate: Arc<dyn PhysicalExpr>,
     /// Evaluates `predicate` with adaptive conjunct ordering, if
     /// `datafusion.execution.adaptive_filter_reordering` is true.
     conjunct_order: Option<ConjunctOrder>,
+    /// The gates of the optional conjuncts that this stream evaluates
+    /// adaptively, after `predicate`. See [`FilterExec::stream_predicate`].
+    optional_filters: Vec<OptionalFilterGate>,
     /// The input partition to filter.
     input: SendableRecordBatchStream,
     /// Runtime metrics recording
@@ -1401,6 +1465,9 @@ struct FilterExecMetrics {
     /// Number of streams that changed the order of the conjuncts. Present
     /// only when `datafusion.execution.adaptive_filter_reordering` is true.
     adaptive_reorders: Option<Count>,
+    /// Metrics of the adaptive optional filters. Present only when the stream
+    /// evaluates optional filters adaptively.
+    optional_filters: Option<OptionalFilterMetrics>,
     // Remember to update `docs/source/user-guide/metrics.md` when adding new metrics,
     // or modifying metrics comments
 }
@@ -1413,14 +1480,55 @@ impl FilterExecMetrics {
                 .with_type(MetricType::Summary)
                 .ratio_metrics("selectivity", partition),
             adaptive_reorders: None,
+            optional_filters: None,
+        }
+    }
+}
+
+/// The metrics of the optional filters that `FilterExec` evaluates when
+/// `datafusion.execution.optional_filter_mode` is `adaptive`.
+struct OptionalFilterMetrics {
+    /// Rows that went past an optional filter without evaluation, because
+    /// the gate of the filter paused it. A row is counted one time for each
+    /// optional filter that it went past.
+    rows_skipped: Count,
+    /// Number of times that a gate paused an optional filter.
+    pauses: Count,
+    /// Time spent to evaluate the optional filters (and to combine their
+    /// results with the selection mask).
+    eval_time: Time,
+}
+
+impl OptionalFilterMetrics {
+    fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
+        Self {
+            rows_skipped: MetricBuilder::new(metrics)
+                .counter("optional_filter_rows_skipped", partition),
+            pauses: MetricBuilder::new(metrics)
+                .counter("optional_filter_pauses", partition),
+            eval_time: MetricBuilder::new(metrics)
+                .subset_time("optional_filter_eval_time", partition),
         }
     }
 }
 
 impl FilterExecStream {
-    /// Evaluates `predicate` on `batch`, through `conjunct_order` if it is
-    /// set, and returns the selection mask.
+    /// Evaluates the filter on `batch` and returns the selection mask.
+    ///
+    /// First evaluates `predicate` (the required conjuncts), through
+    /// `conjunct_order` if it is set. Then, for each
+    /// optional filter that its gate does not skip, evaluates the filter on
+    /// the full batch and combines the result with the mask. The gate records
+    /// the rows that passed the mask before and after the filter, thus it
+    /// measures only the rows that the filter removes in addition to the
+    /// conjuncts before it.
+    ///
+    /// The optional filter is evaluated on all rows (not only the rows that
+    /// passed so far) because this is simple and does not copy the batch. This
+    /// is also what `BinaryExpr` does for `a AND b`, unless `a` keeps few
+    /// rows. When no row is left, the optional filters are not evaluated.
     fn evaluate_predicate(&mut self, batch: &RecordBatch) -> Result<ArrayRef> {
+        let num_rows = batch.num_rows();
         let mask = match &mut self.conjunct_order {
             Some(order) => {
                 let was_measuring = order.is_measuring();
@@ -1434,8 +1542,42 @@ impl FilterExecStream {
                 mask
             }
             None => self.predicate.evaluate(batch)?,
-        };
-        mask.into_array(batch.num_rows())
+        }
+        .into_array(num_rows)?;
+        if self.optional_filters.is_empty() {
+            return Ok(mask);
+        }
+        let mut mask = as_boolean_array(&mask)?.clone();
+        for gate in &mut self.optional_filters {
+            let rows_in = mask.true_count();
+            if rows_in == 0 {
+                break;
+            }
+            let pauses = gate.pauses();
+            match gate.begin_batch() {
+                GateDecision::Skip => {
+                    if let Some(metrics) = &self.metrics.optional_filters {
+                        metrics.rows_skipped.add(rows_in);
+                    }
+                }
+                GateDecision::Evaluate => {
+                    let start = gate.clock().now_nanos();
+                    let result = gate.filter().evaluate(batch)?.into_array(num_rows)?;
+                    mask = and(&mask, as_boolean_array(&result)?)?;
+                    let elapsed = Duration::from_nanos(
+                        gate.clock().now_nanos().saturating_sub(start),
+                    );
+                    gate.record(rows_in, mask.true_count(), elapsed);
+                    if let Some(metrics) = &self.metrics.optional_filters {
+                        metrics.eval_time.add_duration(elapsed);
+                    }
+                }
+            }
+            if let Some(metrics) = &self.metrics.optional_filters {
+                metrics.pauses.add(gate.pauses() - pauses);
+            }
+        }
+        Ok(Arc::new(mask))
     }
 }
 
@@ -1580,6 +1722,11 @@ fn collect_columns_from_predicate_inner(
 
     let predicates = split_conjunction(predicate);
     for p in predicates {
+        // An optional conjunct (`OptionalFilterPhysicalExpr`) is not a
+        // `BinaryExpr`, thus it is ignored here. This is necessary: a stream
+        // can skip an optional conjunct, so the output does not always
+        // satisfy it. The other analyses of the predicate (constants,
+        // statistics) also ignore optional conjuncts for this reason.
         if let Some(binary) = p.downcast_ref::<BinaryExpr>() {
             // Only extract pairs where at least one side is a Column reference.
             // Pairs like `complex_expr = literal` should not create equivalence
@@ -4312,5 +4459,256 @@ mod tests {
             assert!(reorders.is_none_or(|r| r.as_usize() <= 1));
         }
         Ok(())
+    }
+
+    mod optional_filters {
+        use super::*;
+        use datafusion_execution::config::SessionConfig;
+        use datafusion_physical_expr::expressions::OptionalFilterPhysicalExpr;
+
+        const BATCHES: usize = 20;
+        const ROWS_PER_BATCH: i32 = 100;
+
+        fn schema() -> SchemaRef {
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+            ]))
+        }
+
+        /// One partition of `BATCHES` batches. Column `a` is `0..100` in each
+        /// batch, column `b` is `a + 1`.
+        fn input() -> Result<Arc<dyn ExecutionPlan>> {
+            let schema = schema();
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from_iter_values(0..ROWS_PER_BATCH)),
+                    Arc::new(Int32Array::from_iter_values(1..=ROWS_PER_BATCH)),
+                ],
+            )?;
+            let batches = vec![batch; BATCHES];
+            Ok(test::TestMemoryExec::try_new_exec(
+                &[batches],
+                schema,
+                None,
+            )?)
+        }
+
+        fn optional(inner: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
+            Arc::new(OptionalFilterPhysicalExpr::new(inner))
+        }
+
+        /// `a < value`
+        fn a_lt(value: i32) -> Result<Arc<dyn PhysicalExpr>> {
+            let schema = schema();
+            binary(col("a", &schema)?, Operator::Lt, lit(value), &schema)
+        }
+
+        fn and_expr(
+            left: Arc<dyn PhysicalExpr>,
+            right: Arc<dyn PhysicalExpr>,
+        ) -> Arc<dyn PhysicalExpr> {
+            Arc::new(BinaryExpr::new(left, Operator::And, right))
+        }
+
+        /// A context with `mode`. The work that a removed row saves is set
+        /// very high, thus the cost check of the gates (which uses the wall
+        /// clock) never pauses a filter that removes rows, and the tests are
+        /// deterministic. See [`context_with_saving`].
+        fn context(mode: OptionalFilterMode) -> Arc<TaskContext> {
+            context_with_saving(mode, 1e9)
+        }
+
+        /// A context with `mode` and
+        /// `optional_filter_min_saving_ns_per_row = saving_ns_per_row`.
+        fn context_with_saving(
+            mode: OptionalFilterMode,
+            saving_ns_per_row: f64,
+        ) -> Arc<TaskContext> {
+            let mut config = SessionConfig::new();
+            config.options_mut().execution.optional_filter_mode = mode;
+            config
+                .options_mut()
+                .execution
+                .optional_filter_min_saving_ns_per_row = saving_ns_per_row;
+            Arc::new(TaskContext::default().with_session_config(config))
+        }
+
+        /// Runs `filter` with `context` and returns the sorted values of `a`.
+        async fn run(
+            filter: &Arc<FilterExec>,
+            context: Arc<TaskContext>,
+        ) -> Result<Vec<i32>> {
+            let batches = collect(filter.execute(0, context)?).await?;
+            let mut values: Vec<i32> = batches
+                .iter()
+                .flat_map(|b| {
+                    b.column(0)
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .unwrap()
+                        .values()
+                        .to_vec()
+                })
+                .collect();
+            values.sort_unstable();
+            Ok(values)
+        }
+
+        /// Runs a new `FilterExec` for `predicate` in `mode`. Returns the
+        /// values of `a` and the metrics.
+        async fn run_mode(
+            predicate: &Arc<dyn PhysicalExpr>,
+            mode: OptionalFilterMode,
+        ) -> Result<(Vec<i32>, MetricsSet)> {
+            let filter = Arc::new(FilterExec::try_new(Arc::clone(predicate), input()?)?);
+            let values = run(&filter, context(mode)).await?;
+            Ok((values, filter.metrics().unwrap()))
+        }
+
+        fn count(metrics: &MetricsSet, name: &str) -> Option<usize> {
+            metrics.sum_by_name(name).map(|v| v.as_usize())
+        }
+
+        /// Values of `a` for which `keep` is true, in all batches.
+        fn expected(keep: impl Fn(i32) -> bool) -> Vec<i32> {
+            let mut values: Vec<i32> = (0..BATCHES)
+                .flat_map(|_| (0..ROWS_PER_BATCH).filter(|v| keep(*v)))
+                .collect();
+            values.sort_unstable();
+            values
+        }
+
+        /// The optional conjunct `a < 80` removes no row that `a < 50` keeps.
+        /// All modes return the same rows, and the adaptive mode pauses the
+        /// optional conjunct.
+        #[tokio::test]
+        async fn non_selective_optional_filter_is_paused() -> Result<()> {
+            let predicate = and_expr(a_lt(50)?, optional(a_lt(80)?));
+            let want = expected(|a| a < 50);
+            for mode in [
+                OptionalFilterMode::Always,
+                OptionalFilterMode::PruningOnly,
+                OptionalFilterMode::Adaptive,
+            ] {
+                let (values, metrics) = run_mode(&predicate, mode).await?;
+                assert_eq!(values, want, "mode {mode:?}");
+                if mode != OptionalFilterMode::Adaptive {
+                    assert_eq!(count(&metrics, "optional_filter_pauses"), None);
+                    assert_eq!(count(&metrics, "optional_filter_rows_skipped"), None);
+                }
+            }
+
+            // With the default gate configuration (windows of 2 batches, a
+            // first pause of 4 batches that doubles), the gate evaluates
+            // batches 1-2, 7-8 and 17-18, and skips the other 14 batches.
+            // In each batch, 50 rows reach the optional conjunct.
+            let (_, metrics) = run_mode(&predicate, OptionalFilterMode::Adaptive).await?;
+            assert_eq!(count(&metrics, "optional_filter_pauses"), Some(3));
+            assert_eq!(
+                count(&metrics, "optional_filter_rows_skipped"),
+                Some(14 * 50)
+            );
+            Ok(())
+        }
+
+        /// The optional conjunct `a < 10` keeps 10% of the rows, thus the
+        /// adaptive mode never pauses it. `pruning_only` does not evaluate it.
+        #[tokio::test]
+        async fn selective_optional_filter_is_evaluated() -> Result<()> {
+            let predicate = optional(a_lt(10)?);
+
+            let (values, _) = run_mode(&predicate, OptionalFilterMode::Always).await?;
+            assert_eq!(values, expected(|a| a < 10));
+
+            let (values, metrics) =
+                run_mode(&predicate, OptionalFilterMode::Adaptive).await?;
+            assert_eq!(values, expected(|a| a < 10));
+            assert_eq!(count(&metrics, "optional_filter_pauses"), Some(0));
+            assert_eq!(count(&metrics, "optional_filter_rows_skipped"), Some(0));
+
+            let (values, _) =
+                run_mode(&predicate, OptionalFilterMode::PruningOnly).await?;
+            assert_eq!(values, expected(|_| true));
+            Ok(())
+        }
+
+        /// The cost check pauses a selective optional conjunct when it costs
+        /// more than the rows that it removes save. With a saving of 0 ns for
+        /// each removed row, any evaluation time is too much: the gate pauses
+        /// `a < 10` although it keeps only 10% of the rows. The result does
+        /// not change.
+        #[tokio::test]
+        async fn expensive_optional_filter_is_paused() -> Result<()> {
+            let predicate = optional(a_lt(10)?);
+            let filter = Arc::new(FilterExec::try_new(Arc::clone(&predicate), input()?)?);
+            let context = context_with_saving(OptionalFilterMode::Adaptive, 0.0);
+            let values = run(&filter, context).await?;
+            // Skipped batches let all rows pass.
+            assert!(values.len() > expected(|a| a < 10).len());
+            let metrics = filter.metrics().unwrap();
+            // The first window (2 batches) pauses the filter.
+            assert!(count(&metrics, "optional_filter_pauses").unwrap() >= 1);
+            assert!(count(&metrics, "optional_filter_rows_skipped").unwrap() > 0);
+            assert!(
+                metrics
+                    .sum_by_name("optional_filter_eval_time")
+                    .unwrap()
+                    .as_usize()
+                    > 0
+            );
+            Ok(())
+        }
+
+        /// `NOT(Optional(x))` is not on the root `AND` chain, thus it is
+        /// required: no mode skips it.
+        #[tokio::test]
+        async fn optional_filter_under_not_is_never_skipped() -> Result<()> {
+            let predicate: Arc<dyn PhysicalExpr> =
+                Arc::new(NotExpr::new(optional(a_lt(50)?)));
+            for mode in [
+                OptionalFilterMode::Always,
+                OptionalFilterMode::PruningOnly,
+                OptionalFilterMode::Adaptive,
+            ] {
+                let (values, metrics) = run_mode(&predicate, mode).await?;
+                assert_eq!(values, expected(|a| a >= 50), "mode {mode:?}");
+                assert_eq!(count(&metrics, "optional_filter_pauses"), None);
+            }
+            Ok(())
+        }
+
+        /// A stream can skip an optional conjunct, thus the plan properties
+        /// must not use it: `Optional(a = b)` does not make `a` and `b`
+        /// equivalent, and `Optional(a = 5)` does not make `a` constant.
+        #[test]
+        fn optional_equality_does_not_feed_equivalence_classes() -> Result<()> {
+            let schema = schema();
+            let a = col("a", &schema)?;
+            let b = col("b", &schema)?;
+            let a_eq_b = binary(Arc::clone(&a), Operator::Eq, Arc::clone(&b), &schema)?;
+            let a_eq_5 = binary(Arc::clone(&a), Operator::Eq, lit(5i32), &schema)?;
+
+            // Without the wrapper, both conjuncts are used.
+            let required = and_expr(Arc::clone(&a_eq_b), Arc::clone(&a_eq_5));
+            let (equal_pairs, _) = collect_columns_from_predicate_inner(&required);
+            assert_eq!(equal_pairs.len(), 2);
+            let filter = FilterExec::try_new(required, input()?)?;
+            let eq_properties = filter.properties().equivalence_properties();
+            assert!(eq_properties.eq_group().exprs_equal(&a, &b));
+            assert!(eq_properties.is_expr_constant(&a).is_some());
+
+            // With the wrapper, neither conjunct is used.
+            let optional = and_expr(optional(a_eq_b), optional(a_eq_5));
+            let (equal_pairs, ne_pairs) = collect_columns_from_predicate_inner(&optional);
+            assert!(equal_pairs.is_empty());
+            assert!(ne_pairs.is_empty());
+            let filter = FilterExec::try_new(optional, input()?)?;
+            let eq_properties = filter.properties().equivalence_properties();
+            assert!(!eq_properties.eq_group().exprs_equal(&a, &b));
+            assert!(eq_properties.is_expr_constant(&a).is_none());
+            Ok(())
+        }
     }
 }
