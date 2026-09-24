@@ -21,8 +21,8 @@ use arrow::array::{
 };
 use arrow::datatypes::{
     DECIMAL256_MAX_PRECISION, DataType, Field, FieldRef, Fields, Int32Type,
-    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Schema, SchemaRef,
-    TimeUnit, UnionFields, UnionMode,
+    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, Metadata, Schema,
+    SchemaRef, TimeUnit, UnionFields, UnionMode,
 };
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::file_format::json::{JsonFormat, JsonFormatFactory};
@@ -676,9 +676,10 @@ async fn roundtrip_logical_plan_dml_merge_into() -> Result<()> {
         other => panic!("expected TableScan, got {other:?}"),
     };
 
-    let merge = WriteOp::MergeInto(Box::new(MergeIntoOp {
-        on: col("a").eq(lit(1_i64)),
-        clauses: vec![
+    let merge = WriteOp::MergeInto(Box::new(MergeIntoOp::new(
+        "target_alias",
+        col("target_alias.a").eq(lit(1_i64)),
+        vec![
             MergeIntoClause {
                 kind: MergeIntoClauseKind::Matched,
                 predicate: Some(col("b").gt(lit(ScalarValue::Decimal128(
@@ -710,7 +711,7 @@ async fn roundtrip_logical_plan_dml_merge_into() -> Result<()> {
                 action: MergeIntoAction::Delete,
             },
         ],
-    }));
+    )));
 
     let plan = LogicalPlan::Dml(DmlStatement::new(
         "t1".into(),
@@ -722,6 +723,16 @@ async fn roundtrip_logical_plan_dml_merge_into() -> Result<()> {
     let bytes = logical_plan_to_bytes(&plan)?;
     let round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
     assert_eq!(format!("{plan}"), format!("{round_trip}"));
+    let LogicalPlan::Dml(round_trip) = round_trip else {
+        panic!("expected DML plan")
+    };
+    let WriteOp::MergeInto(round_trip) = round_trip.op else {
+        panic!("expected MERGE operation")
+    };
+    assert_eq!(
+        round_trip.target_qualifier(),
+        &TableReference::bare("target_alias")
+    );
     Ok(())
 }
 
@@ -746,6 +757,9 @@ fn parse_write_op_merge_into_without_payload_errors() {
 fn dml_node_with_merge_payload(payload: protobuf::MergeIntoOpNode) -> protobuf::DmlNode {
     protobuf::DmlNode {
         dml_type: protobuf::dml_node::Type::MergeInto.into(),
+        table_name: Some(protobuf::TableReference::from(TableReference::bare(
+            "target",
+        ))),
         merge_into: Some(Box::new(payload)),
         ..Default::default()
     }
@@ -758,10 +772,29 @@ fn parse_merge_into_op_missing_on_errors() {
     let node = dml_node_with_merge_payload(protobuf::MergeIntoOpNode {
         on: None,
         clauses: vec![],
+        target_qualifier: None,
     });
     let err = from_proto::parse_write_op(&node, ctx.task_ctx().as_ref(), &codec)
         .expect_err("missing `on` must fail");
     assert!(err.to_string().contains("`on`"), "unexpected error: {err}");
+}
+
+#[test]
+fn parse_merge_into_op_without_target_qualifier_uses_table_name() {
+    let ctx = SessionContext::new();
+    let codec = DefaultLogicalExtensionCodec {};
+    let on = serialize_expr(&lit(true), &codec).unwrap();
+    let node = dml_node_with_merge_payload(protobuf::MergeIntoOpNode {
+        on: Some(Box::new(on)),
+        clauses: vec![],
+        target_qualifier: None,
+    });
+
+    let op = from_proto::parse_write_op(&node, ctx.task_ctx().as_ref(), &codec).unwrap();
+    let WriteOp::MergeInto(op) = op else {
+        panic!("expected MERGE operation")
+    };
+    assert_eq!(op.target_qualifier(), &TableReference::bare("target"));
 }
 
 #[test]
@@ -780,6 +813,7 @@ fn parse_merge_into_clause_unknown_kind_errors() {
                 )),
             }),
         }],
+        target_qualifier: None,
     });
     let err = from_proto::parse_write_op(&node, ctx.task_ctx().as_ref(), &codec)
         .expect_err("unknown clause kind tag must fail");
@@ -801,6 +835,7 @@ fn parse_merge_into_clause_missing_action_errors() {
             predicate: None,
             action: None,
         }],
+        target_qualifier: None,
     });
     let err = from_proto::parse_write_op(&node, ctx.task_ctx().as_ref(), &codec)
         .expect_err("missing clause `action` must fail");
@@ -822,6 +857,7 @@ fn parse_merge_into_action_missing_oneof_errors() {
             predicate: None,
             action: Some(protobuf::MergeIntoActionNode { action: None }),
         }],
+        target_qualifier: None,
     });
     let err = from_proto::parse_write_op(&node, ctx.task_ctx().as_ref(), &codec)
         .expect_err("missing action oneof must fail");
@@ -1677,9 +1713,7 @@ async fn roundtrip_logical_plan_prepared_statement_with_metadata() -> Result<()>
             "".to_string(),
             vec![
                 Field::new("", DataType::Int32, true)
-                    .with_metadata(
-                        [("some_key".to_string(), "some_value".to_string())].into(),
-                    )
+                    .with_metadata(Metadata::new().with("some_key", "some_value"))
                     .into(),
             ],
         )

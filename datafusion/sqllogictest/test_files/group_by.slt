@@ -3075,6 +3075,33 @@ FRA 50 200
 GRC 30 80
 TUR 75 100
 
+# An ORDER BY on an order-insensitive aggregator is ignored, so its partial
+# state must not include ordering fields, with or without GROUP BY. MIN and MAX
+# use the default state fields; SUM is a control that already defines its own.
+query TRRR
+SELECT country, MIN(amount ORDER BY ts DESC) AS min1,
+  MAX(amount ORDER BY ts DESC) AS max1,
+  SUM(amount ORDER BY ts DESC) AS sum1
+  FROM sales_global
+  GROUP BY country
+  ORDER BY country
+----
+FRA 50 200 250
+GRC 30 80 110
+TUR 75 100 175
+
+# Without GROUP BY too. The filter makes the input multi-partition, so the
+# aggregation runs in Partial and Final modes; over the single partition of
+# `sales_global` alone it would run in Single mode and never build a state.
+query RRR
+SELECT MIN(amount ORDER BY ts DESC) AS min1,
+  MAX(amount ORDER BY ts DESC) AS max1,
+  SUM(amount ORDER BY ts DESC) AS sum1
+  FROM sales_global
+  WHERE amount > 0
+----
+30 200 535
+
 # Conversion in between FIRST_VALUE and LAST_VALUE to resolve
 # contradictory requirements should work in multi partitions.
 query TT
@@ -5853,3 +5880,45 @@ select k, d, count(*) from decimal256_multi_group group by k, d order by k, d;
 
 statement ok
 drop table decimal256_multi_group;
+
+# Test multi group by int + Decimal32 / Decimal64
+#
+# Unlike the Decimal128 / Decimal256 cases above, these two widths are not
+# reachable from a SQL `DECIMAL(p, s)` declaration -- that maps to Decimal128 or
+# Decimal256 by precision -- so the key has to be built with arrow_cast. The
+# arrow_typeof queries pin that the group key really is the narrow type, so
+# these cases cannot silently degrade into more Decimal128 coverage.
+statement ok
+create table narrow_decimal_multi_group (k int, d decimal(9, 2)) as values
+  (1, 100.00), (1, 100.00), (1, 250.00), (2, 100.00), (2, NULL);
+
+query T
+select distinct arrow_typeof(arrow_cast(d, 'Decimal32(9, 2)')) from narrow_decimal_multi_group;
+----
+Decimal32(9, 2)
+
+query IRI
+select k, arrow_cast(d, 'Decimal32(9, 2)'), count(*)
+from narrow_decimal_multi_group group by 1, 2 order by 1, 2;
+----
+1 100.00 2
+1 250.00 1
+2 100.00 1
+2 NULL 1
+
+query T
+select distinct arrow_typeof(arrow_cast(d, 'Decimal64(18, 2)')) from narrow_decimal_multi_group;
+----
+Decimal64(18, 2)
+
+query IRI
+select k, arrow_cast(d, 'Decimal64(18, 2)'), count(*)
+from narrow_decimal_multi_group group by 1, 2 order by 1, 2;
+----
+1 100.00 2
+1 250.00 1
+2 100.00 1
+2 NULL 1
+
+statement ok
+drop table narrow_decimal_multi_group;
