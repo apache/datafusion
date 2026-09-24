@@ -111,6 +111,63 @@ pub struct GroupsAccumulatorAdapter {
 
     /// Optional aggregate-owned metric timed once for a grouped update batch.
     grouped_update_metric: OnceLock<Option<Arc<dyn AggregateMetric>>>,
+
+    /// Buffers reused by every call to `invoke_per_accumulator`
+    scratch: Scratch,
+}
+
+/// Per-batch buffers of [`GroupsAccumulatorAdapter`], kept between batches so
+/// that each batch does not allocate them again. Their capacity is part of
+/// [`GroupsAccumulatorAdapter::allocation_bytes`].
+#[derive(Default)]
+struct Scratch {
+    /// Group indexes that have rows in the batch, in order of first
+    /// appearance in the batch
+    groups_with_rows: Vec<usize>,
+
+    /// `offsets[i]` is the index into `batch_indices` where the rows for
+    /// `groups_with_rows[i]` start
+    offsets: Vec<usize>,
+
+    /// Indices into the batch rows, with the rows of each group contiguous
+    batch_indices: Vec<u32>,
+}
+
+/// A scratch buffer keeps its capacity after a batch unless that capacity is
+/// more than this many entries and more than [`SCRATCH_RETAIN_RATIO`] times
+/// what the batch used. Then it shrinks to the smaller of the two. This stops
+/// one unusually large batch from holding memory for all the batches after it.
+const MAX_RETAINED_SCRATCH_ENTRIES: usize = 64 * 1024;
+
+/// See [`MAX_RETAINED_SCRATCH_ENTRIES`]
+const SCRATCH_RETAIN_RATIO: usize = 4;
+
+impl Scratch {
+    fn allocated_size(&self) -> usize {
+        self.groups_with_rows.allocated_size()
+            + self.offsets.allocated_size()
+            + self.batch_indices.allocated_size()
+    }
+
+    /// Shrink each buffer that is much larger than the batch that just used
+    /// it. Call this after the batch, before the buffers are cleared for the
+    /// next batch.
+    fn release_oversized(&mut self) {
+        fn release_if_oversized<T>(buffer: &mut Vec<T>) {
+            let keep = SCRATCH_RETAIN_RATIO * buffer.len();
+            if buffer.capacity() > MAX_RETAINED_SCRATCH_ENTRIES
+                && buffer.capacity() > keep
+            {
+                // The batch is done with the contents, so clear them first
+                // and the shrink has nothing to copy
+                buffer.clear();
+                buffer.shrink_to(MAX_RETAINED_SCRATCH_ENTRIES.min(keep));
+            }
+        }
+        release_if_oversized(&mut self.groups_with_rows);
+        release_if_oversized(&mut self.offsets);
+        release_if_oversized(&mut self.batch_indices);
+    }
 }
 
 /// Maximum number of prepared group inputs retained while timing an
@@ -154,6 +211,7 @@ impl GroupsAccumulatorAdapter {
             allocation_bytes: 0,
             metrics: None,
             grouped_update_metric: OnceLock::new(),
+            scratch: Scratch::default(),
         }
     }
 
@@ -235,14 +293,58 @@ impl GroupsAccumulatorAdapter {
 
         assert_eq!(values[0].len(), group_indices.len());
 
+        // Take the scratch buffers out of `self` for the batch, and put them
+        // back on every return path, including errors
+        let mut scratch = std::mem::take(&mut self.scratch);
+        let scratch_size_pre = scratch.allocated_size();
+        let result = self.invoke_per_accumulator_with_scratch(
+            &mut scratch,
+            values,
+            group_indices,
+            opt_filter,
+            f,
+        );
+        scratch.release_oversized();
+        self.adjust_allocation(scratch_size_pre, scratch.allocated_size());
+        self.scratch = scratch;
+        result
+    }
+
+    /// Body of [`Self::invoke_per_accumulator`], with its scratch buffers
+    fn invoke_per_accumulator_with_scratch<F>(
+        &mut self,
+        scratch: &mut Scratch,
+        values: &[ArrayRef],
+        group_indices: &[usize],
+        opt_filter: Option<&BooleanArray>,
+        f: F,
+    ) -> Result<()>
+    where
+        F: Fn(&mut dyn Accumulator, &[ArrayRef]) -> Result<()>,
+    {
+        let Scratch {
+            groups_with_rows,
+            offsets,
+            batch_indices,
+        } = scratch;
+
+        // groups_with_rows holds a list of group indexes that have any rows
+        // that need to be accumulated, stored in order of first appearance in
+        // this batch
+        groups_with_rows.clear();
+
         // figure out which input rows correspond to which groups.
-        // Note that self.state.indices starts empty for all groups
-        // (it is cleared out below)
+        // Note that self.state.indices starts empty for all groups (it is
+        // cleared out below), so an empty one is exactly a group that this
+        // batch has not reached yet.
         // Charge retained scratch capacity only when a push grows a vector,
         // avoiding another pass over every group after indexing.
         let mut indices_allocation_delta = 0;
         for (idx, group_index) in group_indices.iter().enumerate() {
             let indices = &mut self.states[*group_index].indices;
+            if indices.is_empty() {
+                groups_with_rows.push(*group_index);
+            }
             if indices.len() < indices.capacity() {
                 indices.push(idx as u32);
             } else {
@@ -253,38 +355,42 @@ impl GroupsAccumulatorAdapter {
         }
         self.add_allocation(indices_allocation_delta);
 
-        // groups_with_rows holds a list of group indexes that have
-        // any rows that need to be accumulated, stored in order of
-        // group_index
-
-        let mut groups_with_rows = vec![];
-
         // batch_indices holds indices into values, each group is contiguous
-        let mut batch_indices = vec![];
+        batch_indices.clear();
+        batch_indices
+            .try_reserve(group_indices.len())
+            .map_err(|e| {
+                arrow_datafusion_err!(arrow::error::ArrowError::MemoryError(
+                    e.to_string()
+                ))
+            })?;
 
         // offsets[i] is index into batch_indices where the rows for
-        // group_index i starts
-        let mut offsets = vec![0];
+        // groups_with_rows[i] start
+        offsets.clear();
+        offsets.push(0);
 
         let mut offset_so_far = 0;
-        for (group_index, state) in self.states.iter_mut().enumerate() {
-            let indices = &state.indices;
-            if indices.is_empty() {
-                continue;
-            }
-
-            groups_with_rows.push(group_index);
+        for &group_index in groups_with_rows.iter() {
+            let indices = &self.states[group_index].indices;
             batch_indices.extend_from_slice(indices);
             offset_so_far += indices.len();
             offsets.push(offset_so_far);
         }
-        let batch_indices = batch_indices.into();
+        // Move the buffer into an array without a copy, for the take kernels
+        let indices_array =
+            PrimitiveArray::<UInt32Type>::from(std::mem::take(batch_indices));
 
         // reorder the values and opt_filter by batch_indices so that
         // all values for each group are contiguous, then invoke the
         // accumulator once per group with values
-        let values = take_arrays(values, &batch_indices, None)?;
-        let opt_filter = get_filter_at_indices(opt_filter, &batch_indices)?;
+        let values = take_arrays(values, &indices_array, None)?;
+        let opt_filter = get_filter_at_indices(opt_filter, &indices_array)?;
+
+        // The take kernels only borrow the indices, so the array holds the
+        // only reference to the buffer and we can get it back without a copy
+        let (_, indices_buffer, _) = indices_array.into_parts();
+        *batch_indices = indices_buffer.into_inner().into_vec().unwrap_or_default();
 
         let grouped_update_metric = self.grouped_metric();
 
@@ -399,6 +505,15 @@ impl GroupsAccumulatorAdapter {
         self.allocation_bytes = self.allocation_bytes.saturating_sub(size)
     }
 
+    /// Release the scratch buffers when no group is left, so that an adapter
+    /// that has emitted every group holds no memory
+    fn free_scratch_if_empty(&mut self) {
+        if self.states.is_empty() {
+            let scratch = std::mem::take(&mut self.scratch);
+            self.free_allocation(scratch.allocated_size());
+        }
+    }
+
     /// Release the allocation held by a state that is being emitted.
     fn free_state_allocation(&mut self, state: &AccumulatorState) {
         self.free_allocation(state.size());
@@ -457,6 +572,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         let result = ScalarValue::iter_to_array(results);
 
         self.adjust_allocation(vec_size_pre, self.states.allocated_size());
+        self.free_scratch_if_empty();
 
         result
     }
@@ -521,6 +637,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
             }
         }
         self.adjust_allocation(vec_size_pre, self.states.allocated_size());
+        self.free_scratch_if_empty();
 
         Ok(arrays)
     }
@@ -821,7 +938,14 @@ mod tests {
         let retained_indices = adapter.states[0].indices.allocated_size();
         assert!(retained_indices > 0);
         assert!(adapter.states[0].indices.is_empty());
-        assert_eq!(adapter.size(), allocation_before_update + retained_indices);
+        // The indices buffer comes back from the take kernels without a copy
+        assert!(adapter.scratch.batch_indices.capacity() >= 4);
+        let retained_scratch = adapter.scratch.allocated_size();
+        assert!(retained_scratch > 0);
+        assert_eq!(
+            adapter.size(),
+            allocation_before_update + retained_indices + retained_scratch
+        );
 
         let allocation_after_first_update = adapter.size();
         adapter.update_batch(&[values], &[0, 0, 0, 0], None, 1)?;
@@ -1086,6 +1210,7 @@ mod tests {
                     .iter()
                     .map(AccumulatorState::size)
                     .sum::<usize>()
+                + accumulator.scratch.allocated_size()
         );
         accumulator.update_batch(&[values], &[0, 1], None, 2)?;
 
@@ -1130,6 +1255,7 @@ mod tests {
                     .iter()
                     .map(AccumulatorState::size)
                     .sum::<usize>()
+                + accumulator.scratch.allocated_size()
         );
         Ok(())
     }
@@ -1156,6 +1282,49 @@ mod tests {
         let values: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
         assert!(accumulator.convert_to_state(&[values], None).is_err());
         assert_eq!(metric_updates.load(Ordering::Relaxed), 1);
+        Ok(())
+    }
+
+    /// One large batch must not make the adapter keep its scratch capacity
+    /// for the smaller batches after it.
+    #[test]
+    fn adapter_releases_oversized_scratch() -> Result<()> {
+        const NUM_GROUPS: usize = 2 * MAX_RETAINED_SCRATCH_ENTRIES;
+        let mut adapter = GroupsAccumulatorAdapter::new(|| {
+            Ok(Box::new(MaxAccumulator::try_new(&DataType::Int64)?)
+                as Box<dyn Accumulator>)
+        });
+
+        // every row is a different group, so the scratch buffers need one
+        // entry for each row
+        let group_indices: Vec<usize> = (0..NUM_GROUPS).collect();
+        let values: ArrayRef =
+            Arc::new(Int64Array::from_iter_values(0..NUM_GROUPS as i64));
+        adapter.update_batch(&[values], &group_indices, None, NUM_GROUPS)?;
+        let large_scratch = adapter.scratch.allocated_size();
+        assert!(large_scratch >= NUM_GROUPS * size_of::<usize>());
+        let size_after_large_batch = adapter.size();
+
+        // a batch with one row shrinks each large buffer to
+        // SCRATCH_RETAIN_RATIO times what it used: one group, two offsets and
+        // one row index
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![1]));
+        adapter.update_batch(&[values], &[0], None, NUM_GROUPS)?;
+        let small_scratch = adapter.scratch.allocated_size();
+        assert!(small_scratch < large_scratch);
+        assert_eq!(
+            adapter.scratch.groups_with_rows.capacity(),
+            SCRATCH_RETAIN_RATIO
+        );
+        assert_eq!(adapter.scratch.offsets.capacity(), 2 * SCRATCH_RETAIN_RATIO);
+        assert_eq!(
+            adapter.scratch.batch_indices.capacity(),
+            SCRATCH_RETAIN_RATIO
+        );
+        assert_eq!(
+            adapter.size(),
+            size_after_large_batch - large_scratch + small_scratch
+        );
         Ok(())
     }
 
