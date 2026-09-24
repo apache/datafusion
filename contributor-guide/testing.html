@@ -558,6 +558,18 @@ locally with the following command:</p>
 <h3>API Documentation Examples<a class="headerlink" href="#api-documentation-examples" title="Link to this heading">#</a></h3>
 <p>As with other Rust projects, examples in doc comments in <code class="docutils literal notranslate"><span class="pre">.rs</span></code> files are
 automatically checked to ensure they work and evolve along with the code.</p>
+<p>Prefix a line with <code class="docutils literal notranslate"><span class="pre">#</span> </code> (a <code class="docutils literal notranslate"><span class="pre">#</span></code> followed by a space) to keep it compiled and
+run, but hidden from the rendered documentation. This is most useful for
+<code class="docutils literal notranslate"><span class="pre">use</span></code> statements, since readers care about the API being demonstrated, not
+its import boilerplate:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="sd">///</span>
+<span class="err">```</span>
+<span class="sd">/// # use std::sync::Arc;</span>
+<span class="sd">/// let value = Arc::new(42);</span>
+<span class="sd">/// ```</span>
+</pre></div>
+</div>
+<p>Only the <code class="docutils literal notranslate"><span class="pre">let</span> <span class="pre">value</span> <span class="pre">=</span> <span class="pre">...</span></code> line renders.</p>
 </section>
 <section id="user-guide-documentation">
 <h3>User Guide Documentation<a class="headerlink" href="#user-guide-documentation" title="Link to this heading">#</a></h3>
