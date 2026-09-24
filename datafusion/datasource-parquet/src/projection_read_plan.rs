@@ -324,8 +324,8 @@ impl<'schema> PushdownChecker<'schema> {
         Some(TreeNodeRecursion::Jump)
     }
 
-    /// Records `struct_col IS [NOT] NULL` as an access to the struct's first
-    /// leaf, whose definition levels rebuild the struct's null bitmap.
+    /// Records `struct_col IS [NOT] NULL` as an access to a descendant field,
+    /// whose definition levels rebuild the struct's null bitmap.
     fn check_struct_null_check(
         &mut self,
         node: &Arc<dyn PhysicalExpr>,
@@ -336,7 +336,8 @@ impl<'schema> PushdownChecker<'schema> {
             .or_else(|| node.downcast_ref::<IsNotNullExpr>().map(IsNotNullExpr::arg))?;
         let column = arg.downcast_ref::<Column>()?;
         let index = self.file_schema.index_of(column.name()).ok()?;
-        let field_path = first_leaf_path(self.file_schema.field(index).data_type())?;
+        let field_path =
+            first_non_struct_field_path(self.file_schema.field(index).data_type())?;
 
         self.struct_field_accesses.push(StructFieldAccess {
             root_index: index,
@@ -549,20 +550,25 @@ impl TreeNodeVisitor<'_> for PushdownChecker<'_> {
     }
 }
 
-/// The field path from a Struct down to its first non-Struct child, or `None`
-/// when `data_type` is not a Struct or no child has a leaf.
-fn first_leaf_path(data_type: &DataType) -> Option<Vec<String>> {
+/// The field path from a Struct down to a non-Struct child, preferring
+/// non-nested fields at each level. Returns `None` if `data_type` is not a
+/// Struct or has no non-Struct descendant.
+fn first_non_struct_field_path(data_type: &DataType) -> Option<Vec<String>> {
     let DataType::Struct(fields) = data_type else {
         return None;
     };
 
-    fields.iter().find_map(|field| {
-        let mut path = vec![field.name().clone()];
-        if matches!(field.data_type(), DataType::Struct(_)) {
-            path.extend(first_leaf_path(field.data_type())?);
-        }
-        Some(path)
-    })
+    fields
+        .iter()
+        .filter(|field| !field.data_type().is_nested())
+        .chain(fields.iter().filter(|field| field.data_type().is_nested()))
+        .find_map(|field| {
+            let mut path = vec![field.name().clone()];
+            if matches!(field.data_type(), DataType::Struct(_)) {
+                path.extend(first_non_struct_field_path(field.data_type())?);
+            }
+            Some(path)
+        })
 }
 
 /// Result of checking which columns are required for filter pushdown.
@@ -2027,7 +2033,7 @@ mod test {
     }
 
     #[test]
-    fn first_leaf_path_descends_to_the_first_primitive() {
+    fn first_non_struct_field_path_prefers_scalar_fields() {
         let inner = DataType::Struct(
             vec![
                 Arc::new(Field::new("inner", DataType::Int32, true)),
@@ -2037,14 +2043,20 @@ mod test {
         );
         let outer = DataType::Struct(
             vec![
-                Arc::new(Field::new("outer", inner, true)),
+                Arc::new(Field::new("outer", inner.clone(), true)),
                 Arc::new(Field::new("tag", DataType::Utf8, true)),
             ]
             .into(),
         );
 
         assert_eq!(
-            first_leaf_path(&outer),
+            first_non_struct_field_path(&outer),
+            Some(vec!["tag".to_string()])
+        );
+        let nested_only =
+            DataType::Struct(vec![Arc::new(Field::new("outer", inner, true))].into());
+        assert_eq!(
+            first_non_struct_field_path(&nested_only),
             Some(vec!["outer".to_string(), "inner".to_string()])
         );
         // A non-Struct child ends the path; its own leaves are what gets read.
@@ -2057,8 +2069,23 @@ mod test {
             .into(),
         );
         assert_eq!(
-            first_leaf_path(&list_first),
+            first_non_struct_field_path(&list_first),
             Some(vec!["items".to_string()])
+        );
+        let list_before_scalar = DataType::Struct(
+            vec![
+                Arc::new(Field::new_list(
+                    "items",
+                    Field::new("item", DataType::Int32, true),
+                    true,
+                )),
+                Arc::new(Field::new("tag", DataType::Utf8, true)),
+            ]
+            .into(),
+        );
+        assert_eq!(
+            first_non_struct_field_path(&list_before_scalar),
+            Some(vec!["tag".to_string()])
         );
         // An empty first child is skipped.
         let empty_first = DataType::Struct(
@@ -2068,9 +2095,24 @@ mod test {
             ]
             .into(),
         );
-        assert_eq!(first_leaf_path(&empty_first), Some(vec!["b".to_string()]));
-        assert_eq!(first_leaf_path(&DataType::Int32), None);
-        assert_eq!(first_leaf_path(&DataType::Struct(Fields::empty())), None);
+        assert_eq!(
+            first_non_struct_field_path(&empty_first),
+            Some(vec!["b".to_string()])
+        );
+        assert_eq!(first_non_struct_field_path(&DataType::Int32), None);
+        assert_eq!(
+            first_non_struct_field_path(&DataType::Struct(Fields::empty())),
+            None
+        );
+        let only_empty = DataType::Struct(
+            vec![Arc::new(Field::new(
+                "empty",
+                DataType::Struct(Fields::empty()),
+                true,
+            ))]
+            .into(),
+        );
+        assert_eq!(first_non_struct_field_path(&only_empty), None);
     }
 
     #[test]
