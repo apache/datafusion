@@ -755,6 +755,13 @@ pub(crate) struct DynamicFilterSubscription {
 }
 
 impl DynamicFilterSubscription {
+    /// The latest generation of the filter that this subscription observed:
+    /// the generation at [`DynamicFilterPhysicalExpr::subscribe`] time, or
+    /// the generation of the last change that [`Self::observe`] reported.
+    pub(crate) fn last_generation(&self) -> u64 {
+        self.last_generation
+    }
+
     /// Observe the latest state of the filter.
     ///
     /// Reports whether the filter's expression advanced since the previous call

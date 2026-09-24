@@ -69,15 +69,36 @@ impl DynamicFilterTracking {
     /// Walk `predicate` once and classify its dynamic-filter content,
     /// subscribing to every filter that is not yet complete.
     pub fn classify(predicate: &Arc<dyn PhysicalExpr>) -> Self {
+        Self::classify_with_generation_tag(predicate).0
+    }
+
+    /// Same as [`Self::classify`], but also returns the generation tag of
+    /// `predicate` at classification time.
+    ///
+    /// The tag is the wrapping sum of the generations of all dynamic filters
+    /// in `predicate` (0 for a [`Self::Static`] predicate). Two callers that
+    /// classify the same predicate get the same tag if no filter changed
+    /// between the two calls. For [`Self::Watching`], use
+    /// [`DynamicFilterTracker::generation_tag`] after
+    /// [`DynamicFilterTracker::changed`] returns `true` to get the new tag.
+    /// For the other variants the tag never changes.
+    pub(crate) fn classify_with_generation_tag(
+        predicate: &Arc<dyn PhysicalExpr>,
+    ) -> (Self, u64) {
         let mut subscriptions = Vec::new();
+        let mut completed_generations = 0u64;
         let mut found_any = false;
         predicate
             .apply(|expr| {
                 if let Some(filter) = expr.downcast_ref::<DynamicFilterPhysicalExpr>() {
                     found_any = true;
                     // Already-complete filters can never change again, so there
-                    // is no point subscribing to them.
-                    if !filter.is_complete() {
+                    // is no point subscribing to them. Keep their (final)
+                    // generation for the generation tag.
+                    if filter.is_complete() {
+                        completed_generations = completed_generations
+                            .wrapping_add(filter.current_generation());
+                    } else {
                         subscriptions.push(filter.subscribe());
                     }
                 }
@@ -85,13 +106,19 @@ impl DynamicFilterTracking {
             })
             .expect("traversal closure is infallible");
 
-        if !found_any {
+        let tracker = DynamicFilterTracker {
+            subscriptions,
+            completed_generations,
+        };
+        let generation_tag = tracker.generation_tag();
+        let tracking = if !found_any {
             DynamicFilterTracking::Static
-        } else if subscriptions.is_empty() {
+        } else if tracker.subscriptions.is_empty() {
             DynamicFilterTracking::AllComplete
         } else {
-            DynamicFilterTracking::Watching(DynamicFilterTracker { subscriptions })
-        }
+            DynamicFilterTracking::Watching(tracker)
+        };
+        (tracking, generation_tag)
     }
 
     /// `true` if the predicate contains any dynamic filter (complete or not),
@@ -123,6 +150,10 @@ pub struct DynamicFilterTracker {
     /// Subscriptions to the not-yet-complete dynamic filters. Entries are
     /// dropped as their filters complete, so the set only shrinks.
     subscriptions: Vec<DynamicFilterSubscription>,
+    /// Wrapping sum of the final generations of the complete filters: the
+    /// filters that were complete at classification time and the filters
+    /// whose subscriptions were dropped. See [`Self::generation_tag`].
+    completed_generations: u64,
 }
 
 impl DynamicFilterTracker {
@@ -134,13 +165,40 @@ impl DynamicFilterTracker {
     /// returns `false`.
     pub fn changed(&mut self) -> bool {
         let mut changed = false;
+        let completed_generations = &mut self.completed_generations;
         self.subscriptions.retain_mut(|subscription| {
             let change = subscription.observe();
             changed |= change.changed;
+            if change.complete {
+                // Keep the final generation so the generation tag does not
+                // change when the subscription is dropped.
+                *completed_generations =
+                    completed_generations.wrapping_add(subscription.last_generation());
+            }
             // Keep the subscription only while the filter can still change.
             !change.complete
         });
         changed
+    }
+
+    /// A tag that identifies the generations of the watched filters, as
+    /// observed by the last call to [`Self::changed`] (or at classification
+    /// time, before the first call).
+    ///
+    /// The tag is the wrapping sum of the latest observed generation of every
+    /// dynamic filter in the predicate, complete or not. It is equal to the
+    /// tag that [`DynamicFilterTracking::classify_with_generation_tag`]
+    /// returns for the same predicate, if no filter changed since the last
+    /// observation. It does not change when a filter completes without an
+    /// update. A generation only increases, thus in practice two different
+    /// tags mean that a filter changed. Computing it does not walk the
+    /// predicate: it only reads the watched subscriptions.
+    pub(crate) fn generation_tag(&self) -> u64 {
+        self.subscriptions
+            .iter()
+            .fold(self.completed_generations, |tag, subscription| {
+                tag.wrapping_add(subscription.last_generation())
+            })
     }
 }
 
@@ -157,7 +215,7 @@ impl DynamicFilterTracker {
     }
 
     /// `true` once every watched filter has completed and been dropped.
-    fn is_exhausted(&self) -> bool {
+    pub(crate) fn is_exhausted(&self) -> bool {
         self.subscriptions.is_empty()
     }
 }
@@ -327,5 +385,75 @@ mod tests {
         filter_b.mark_complete();
         assert!(!tracker.changed());
         assert!(tracker.is_exhausted());
+    }
+
+    #[test]
+    fn generation_tag_of_static_predicate_is_zero() {
+        let (tracking, tag) =
+            DynamicFilterTracking::classify_with_generation_tag(&lit(true));
+        assert!(matches!(tracking, DynamicFilterTracking::Static));
+        assert_eq!(tag, 0);
+    }
+
+    #[test]
+    fn generation_tag_follows_observed_updates() {
+        let (predicate, filter) = dynamic_predicate();
+        let (mut tracking, initial_tag) =
+            DynamicFilterTracking::classify_with_generation_tag(&predicate);
+        let tracker = tracking.watcher().unwrap();
+        assert_eq!(tracker.generation_tag(), initial_tag);
+
+        // The tag changes only when the tracker observes the update.
+        filter.update(lit(false)).unwrap();
+        assert_eq!(tracker.generation_tag(), initial_tag);
+        assert!(tracker.changed());
+        let updated_tag = tracker.generation_tag();
+        assert_ne!(updated_tag, initial_tag);
+
+        // A new classification of the same predicate gets the same tag.
+        let (_, tag) = DynamicFilterTracking::classify_with_generation_tag(&predicate);
+        assert_eq!(tag, updated_tag);
+    }
+
+    #[test]
+    fn generation_tag_is_stable_when_filter_completes() {
+        let (predicate, filter) = dynamic_predicate();
+        let (mut tracking, _) =
+            DynamicFilterTracking::classify_with_generation_tag(&predicate);
+        let tracker = tracking.watcher().unwrap();
+
+        filter.update(lit(false)).unwrap();
+        assert!(tracker.changed());
+        let tag = tracker.generation_tag();
+
+        // Completion drops the subscription but keeps its final generation.
+        filter.mark_complete();
+        assert!(!tracker.changed());
+        assert!(tracker.is_exhausted());
+        assert_eq!(tracker.generation_tag(), tag);
+
+        // A predicate classified after completion gets the same tag.
+        let (tracking, complete_tag) =
+            DynamicFilterTracking::classify_with_generation_tag(&predicate);
+        assert!(matches!(tracking, DynamicFilterTracking::AllComplete));
+        assert_eq!(complete_tag, tag);
+    }
+
+    #[test]
+    fn generation_tag_of_coalesced_update_and_complete() {
+        let (predicate, filter) = dynamic_predicate();
+        let (mut tracking, initial_tag) =
+            DynamicFilterTracking::classify_with_generation_tag(&predicate);
+        let tracker = tracking.watcher().unwrap();
+
+        filter.update(lit(false)).unwrap();
+        filter.mark_complete();
+        assert!(tracker.changed());
+        assert!(tracker.is_exhausted());
+        assert_ne!(tracker.generation_tag(), initial_tag);
+
+        let (_, complete_tag) =
+            DynamicFilterTracking::classify_with_generation_tag(&predicate);
+        assert_eq!(tracker.generation_tag(), complete_tag);
     }
 }
