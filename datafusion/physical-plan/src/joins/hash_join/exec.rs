@@ -3253,11 +3253,15 @@ async fn collect_left_input(
                     .map(Arc::new),
                 _ => None,
             };
-            if let Some(bitmap) = pruning_bitmap.as_ref() {
-                // Held for the join's lifetime, so charge it like the maps.
-                reservation.try_grow(bitmap.size())?;
-                metrics.build_mem_used.add(bitmap.size());
-            }
+            // Held for the join's lifetime, so charge it like the maps; it is
+            // optional, so skip it rather than fail when the pool is full.
+            let pruning_bitmap = pruning_bitmap.filter(|bitmap| {
+                let ok = reservation.try_grow(bitmap.size()).is_ok();
+                if ok {
+                    metrics.build_mem_used.add(bitmap.size());
+                }
+                ok
+            });
             PushdownStrategy::Map(Arc::clone(&map), pruning_bitmap)
         }
     };
@@ -3420,50 +3424,54 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn no_pruning_state_without_dynamic_filters() -> Result<()> {
+    /// Runs a join whose 200 keys spread over 2M would size a pruning bitmap
+    /// at the 128 KiB cap, and reports the bytes the build side reserved.
+    async fn build_mem_used(limit: usize, dynamic_filters: bool) -> Result<usize> {
         let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
-        let build = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(Int64Array::from_iter_values(
-                (0..151).map(|i| i * 10_000),
-            ))],
-        )?;
-        let probe = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(Int64Array::from_iter_values([
-                0, 500_000, 1_500_000,
-            ]))],
-        )?;
+        let batch = |keys: Vec<i64>| {
+            let column = Arc::new(Int64Array::from(keys)) as ArrayRef;
+            let batch = RecordBatch::try_new(Arc::clone(&schema), vec![column])?;
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
+        };
         let on = vec![(
             Arc::new(Column::new_with_schema("k", &schema)?) as _,
             Arc::new(Column::new_with_schema("k", &schema)?) as _,
         )];
-        let join = join(
-            TestMemoryExec::try_new_exec(&[vec![build]], Arc::clone(&schema), None)?,
-            TestMemoryExec::try_new_exec(&[vec![probe]], Arc::clone(&schema), None)?,
-            on,
-            &JoinType::Inner,
-            NullEquality::NullEqualsNothing,
-        )?;
+        let build = batch((0..200).map(|i| i * 10_000).collect())?;
+        let probe = batch(vec![0, 500_000, 1_500_000])?;
+        let join = if dynamic_filters {
+            hash_join_with_dynamic_filter(build, probe, on, JoinType::Inner)?.0
+        } else {
+            join(
+                build,
+                probe,
+                on,
+                &JoinType::Inner,
+                NullEquality::NullEqualsNothing,
+            )?
+        };
 
-        // Bounds are still collected to test perfect-hash-join candidacy, so 151
-        // keys over 1.5M would size a bitmap at the 128 KiB cap - far past this.
         let runtime = RuntimeEnvBuilder::new()
-            .with_memory_limit(100_000, 1.0)
+            .with_memory_limit(limit, 1.0)
             .build_arc()?;
-        let mut config = SessionConfig::new();
-        config
-            .options_mut()
-            .optimizer
-            .enable_join_dynamic_filter_pushdown = false;
-        let task_ctx = Arc::new(
-            TaskContext::default()
-                .with_runtime(runtime)
-                .with_session_config(config),
-        );
+        let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
         let batches = common::collect(join.execute(0, task_ctx)?).await?;
         assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
+        Ok(join
+            .metrics()
+            .unwrap()
+            .sum_by_name("build_mem_used")
+            .unwrap()
+            .as_usize())
+    }
+
+    /// The bitmap is pruning-only: never built when no dynamic filter will read
+    /// it, and dropped rather than fatal when the pool cannot fit it.
+    #[tokio::test]
+    async fn pruning_bitmap_is_optional() -> Result<()> {
+        assert!(build_mem_used(1_000_000, false).await? < 100_000);
+        assert!(build_mem_used(1_000_000, true).await? > 100_000);
+        build_mem_used(100_000, true).await?;
         Ok(())
     }
 
