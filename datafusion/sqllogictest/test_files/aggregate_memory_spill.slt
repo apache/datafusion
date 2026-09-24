@@ -227,11 +227,18 @@ FROM (
   GROUP BY (v * 7) % 100000
 )
 ----
-<slt:ignore>
-06)----------AggregateExec: mode=FinalPartitioned, gby=[t.v * Int64(7) % Int64(100000)@0 as t.v * Int64(7) % Int64(100000)], aggr=[sum(t.v)], metrics=[<slt:ignore>spilled_rows=<slt:ignore>K,<slt:ignore>]
-<slt:ignore>
-08)--------------AggregateExec: mode=Partial, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000)], aggr=[sum(t.v)], metrics=[<slt:ignore>early_emit_count=<slt:ignore>]
-<slt:ignore>
+Plan with Metrics
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*), sum(total)@1 as sum(total)], metrics=[output_rows=1, elapsed_compute=1.21µs, output_bytes=16.0 B, output_batches=1, expr_0_eval_time=83ns, expr_1_eval_time=83ns]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1)), sum(total)], metrics=[output_rows=1, elapsed_compute=10.87µs, output_bytes=16.0 B, output_batches=1, agg_expr_0_arguments_time=2.21µs, agg_expr_0_evaluate_time=84ns, agg_expr_0_merge_time=1.42µs, agg_expr_1_arguments_time=874ns, agg_expr_1_evaluate_time=542ns, agg_expr_1_merge_time=625ns]
+03)----CoalescePartitionsExec, metrics=[output_rows=4, elapsed_compute=10.88µs, output_bytes=64.0 B, output_batches=4]
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1)), sum(total)], metrics=[output_rows=4, elapsed_compute=2.83ms, output_bytes=64.0 B, output_batches=4, agg_expr_0_arguments_time=1.15ms, agg_expr_0_state_time=792ns, agg_expr_0_update_time=69.44µs, agg_expr_1_arguments_time=318.22µs, agg_expr_1_state_time=5.04µs, agg_expr_1_update_time=614.71µs]
+05)--------ProjectionExec: expr=[sum(t.v)@1 as total], metrics=[output_rows=100.0 K, elapsed_compute=655.07µs, output_bytes=787.4 KB, output_batches=788, expr_0_eval_time=101.83µs]
+06)----------AggregateExec: mode=FinalPartitioned, gby=[t.v * Int64(7) % Int64(100000)@0 as t.v * Int64(7) % Int64(100000)], aggr=[sum(t.v)], metrics=[output_rows=100.0 K, elapsed_compute=208.54ms, output_bytes=2.3 MB, output_batches=788, spill_count=50, spilled_bytes=1745.7 KB, spilled_rows=100.0 K, agg_expr_0_arguments_time=655.75µs, agg_expr_0_evaluate_time=255.91µs, agg_expr_0_merge_time=4.66ms, agg_expr_0_state_time=50.09µs, aggregate_arguments_time=1.78ms, aggregation_time=5.16ms, emitting_time=13.09ms, time_calculating_group_ids=71.15ms]
+07)------------RepartitionExec: partitioning=Hash([t.v * Int64(7) % Int64(100000)@0], 4), input_partitions=4, metrics=[output_rows=100.0 K, elapsed_compute=2.69ms, output_bytes=1569.6 KB, output_batches=784, spill_count=4, spilled_bytes=116.3 KB, spilled_rows=6.66 K, fetch_time=100.82ms, repartition_time=8.97ms, send_time=69.85ms]
+08)--------------AggregateExec: mode=Partial, gby=[v@0 * 7 % 100000 as t.v * Int64(7) % Int64(100000)], aggr=[sum(t.v)], metrics=[output_rows=100.0 K, elapsed_compute=64.08ms, output_bytes=88.3 MB, output_batches=782, spill_count=0, spilled_bytes=0.0 B, spilled_rows=0, early_emit_count=24, skipped_aggregation_rows=0, agg_expr_0_arguments_time=439.04µs, agg_expr_0_convert_to_state_time=4ns, agg_expr_0_state_time=17.08µs, agg_expr_0_update_time=2.22ms, aggregate_arguments_time=1.06ms, aggregation_time=2.50ms, emitting_time=65.05µs, time_calculating_group_ids=58.47ms, reduction_factor=100% (100.0 K/100.0 K)]
+09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true, metrics=[output_rows=100.0 K, elapsed_compute=1.69ms, output_bytes=783.0 KB, output_batches=782, spill_count=4, spilled_bytes=72.2 KB, spilled_rows=7.94 K, fetch_time=5.07ms, repartition_time=1ns, send_time=29.76ms]
+10)------------------ProjectionExec: expr=[value@0 as v], metrics=[output_rows=100.0 K, elapsed_compute=702.38µs, output_bytes=782.0 KB, output_batches=782, expr_0_eval_time=103.47µs]
+11)--------------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=128], metrics=[output_rows=100.0 K, elapsed_compute=3.74ms, output_bytes=782.0 KB, output_batches=782]
 
 # Restore settings to slt runner defaults
 statement ok
