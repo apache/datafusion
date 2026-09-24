@@ -406,3 +406,23 @@ debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
+
+[patch.crates-io]
+arrow = { git = "https://github.com/zhuqi-lucas/arrow-rs", rev = "f18aaab7d2124648013bf41017038306afc1ba37" }
+arrow-arith = { git = "https://github.com/zhuqi-lucas/arrow-rs", rev = "f18aaab7d2124648013bf41017038306afc1ba37" }
+arrow-array = { git = "https://github.com/zhuqi-lucas/arrow-rs", rev = "f18aaab7d2124648013bf41017038306afc1ba37" }
+arrow-avro = { git = "https://github.com/zhuqi-lucas/arrow-rs", rev = "f18aaab7d2124648013bf41017038306afc1ba37" }
+arrow-buffer = { git = "https://github.com/zhuqi-lucas/arrow-rs", rev = "f18aaab7d2124648013bf41017038306afc1ba37" }
+arrow-cast = { git = "https://github.com/zhuqi-lucas/arrow-rs", rev = "f18aaab7d2124648013bf41017038306afc1ba37" }
+arrow-cmp = { git = "https://github.com/zhuqi-lucas/arrow-rs", rev = "f18aaab7d2124648013bf41017038306afc1ba37" }
+arrow-csv = { git = "https://github.com/zhuqi-lucas/arrow-rs", rev = "f18aaab7d2124648013bf41017038306afc1ba37" }
+arrow-data = { git = "https://github.com/zhuqi-lucas/arrow-rs", rev = "f18aaab7d2124648013bf41017038306afc1ba37" }
+arrow-flight = { git = "https://github.com/zhuqi-lucas/arrow-rs", rev = "f18aaab7d2124648013bf41017038306afc1ba37" }
+arrow-ipc = { git = "https://github.com/zhuqi-lucas/arrow-rs", rev = "f18aaab7d2124648013bf41017038306afc1ba37" }
+arrow-json = { git = "https://github.com/zhuqi-lucas/arrow-rs", rev = "f18aaab7d2124648013bf41017038306afc1ba37" }
+arrow-ord = { git = "https://github.com/zhuqi-lucas/arrow-rs", rev = "f18aaab7d2124648013bf41017038306afc1ba37" }
+arrow-row = { git = "https://github.com/zhuqi-lucas/arrow-rs", rev = "f18aaab7d2124648013bf41017038306afc1ba37" }
+arrow-schema = { git = "https://github.com/zhuqi-lucas/arrow-rs", rev = "f18aaab7d2124648013bf41017038306afc1ba37" }
+arrow-select = { git = "https://github.com/zhuqi-lucas/arrow-rs", rev = "f18aaab7d2124648013bf41017038306afc1ba37" }
+arrow-string = { git = "https://github.com/zhuqi-lucas/arrow-rs", rev = "f18aaab7d2124648013bf41017038306afc1ba37" }
+parquet = { git = "https://github.com/zhuqi-lucas/arrow-rs", rev = "f18aaab7d2124648013bf41017038306afc1ba37" }
