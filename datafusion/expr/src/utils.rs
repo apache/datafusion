@@ -1444,6 +1444,10 @@ pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> Result<LogicalPlan
 /// # Return value
 ///
 /// Tuple of (expressions containing joins, remaining non-join expressions)
+#[deprecated(
+    since = "56.0.0",
+    note = "This decorrelation helper is intended for internal optimizer use and has no public replacement"
+)]
 pub fn find_join_exprs(exprs: Vec<&Expr>) -> Result<(Vec<Expr>, Vec<Expr>)> {
     let mut joins = vec![];
     let mut others = vec![];
