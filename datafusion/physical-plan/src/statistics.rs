@@ -170,6 +170,50 @@ impl StatisticsContext {
     ///
     /// With no providers registered this is the plain built-in walk: only the
     /// `statistics` cache is touched, so it carries no extension overhead.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use arrow::datatypes::{DataType, Field, Schema};
+    /// use datafusion_common::{ColumnStatistics, Statistics};
+    /// use datafusion_common::stats::Precision;
+    /// use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+    /// use datafusion_physical_plan::test::exec::StatisticsExec;
+    ///
+    /// let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+    /// let overall_stats = Statistics {
+    ///     num_rows: Precision::Exact(100),
+    ///     total_byte_size: Precision::Exact(400),
+    ///     column_statistics: vec![ColumnStatistics::new_unknown()],
+    /// };
+    /// let partition_stats = vec![
+    ///     Statistics {
+    ///         num_rows: Precision::Exact(60),
+    ///         total_byte_size: Precision::Exact(240),
+    ///         column_statistics: vec![ColumnStatistics::new_unknown()],
+    ///     },
+    ///     Statistics {
+    ///         num_rows: Precision::Exact(40),
+    ///         total_byte_size: Precision::Exact(160),
+    ///         column_statistics: vec![ColumnStatistics::new_unknown()],
+    ///     },
+    /// ];
+    /// let plan = StatisticsExec::new(overall_stats, schema)
+    ///     .with_partition_statistics(partition_stats);
+    ///
+    /// let context = StatisticsContext::new();
+    ///
+    /// // Statistics for the whole plan (all partitions combined).
+    /// let overall = context.compute(&plan, &StatisticsArgs::new())?;
+    /// assert_eq!(overall.num_rows, Precision::Exact(100));
+    ///
+    /// // Statistics for a single partition.
+    /// let args = StatisticsArgs::new().with_partition(Some(0));
+    /// let per_partition = context.compute(&plan, &args)?;
+    /// assert_eq!(per_partition.num_rows, Precision::Exact(60));
+    /// # Ok::<(), datafusion_common::DataFusionError>(())
+    /// ```
     pub fn compute(
         &self,
         plan: &dyn ExecutionPlan,
