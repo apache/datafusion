@@ -35,13 +35,13 @@ use arrow::array::{
 };
 use arrow::array::{
     ArrowPrimitiveType, BooleanArray, Datum, GenericListArray, Int32Array, Int64Array,
-    MutableArrayData, PrimitiveArray, make_array,
+    MutableArrayData, PrimitiveArray, layout, make_array,
 };
 use arrow::array::{LargeListViewArray, ListViewArray};
-use arrow::buffer::{OffsetBuffer, ScalarBuffer};
+use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::length::length;
-use arrow::compute::{SortColumn, SortOptions, partition};
+use arrow::compute::{SortColumn, SortOptions, nullif, partition};
 use arrow::datatypes::{
     ArrowNativeType, DataType, Field, Int32Type, Int64Type, SchemaRef,
 };
@@ -1447,7 +1447,7 @@ fn fsl_values_row_number(list_size: i32, array_len: usize) -> Result<Int32Array>
 /// OR-reduction) decides whether to fall through to the rewriting path.
 /// Only arrays that actually contain `-0.0` pay for a new buffer.
 pub fn normalize_float_zero(array: &ArrayRef) -> ArrayRef {
-    use arrow::array::{Float16Array, Float32Array, Float64Array};
+    use arrow::array::{Float16Array, Float32Array, Float64Array, make_array};
     use arrow::datatypes::{Float16Type, Float32Type, Float64Type};
     // -0.0 has only the sign bit set; no other finite or NaN value shares
     // this bit pattern, so a strict-equality scan reliably gates the rewrite.
@@ -1499,7 +1499,47 @@ pub fn normalize_float_zero(array: &ArrayRef) -> ArrayRef {
             });
             Arc::new(normalized)
         }
+        dt if has_float_leaf(dt) => {
+            let data = array.to_data();
+            let children = data
+                .child_data()
+                .iter()
+                .map(|child| normalize_float_zero(&make_array(child.clone())).to_data())
+                .collect::<Vec<_>>();
+            if children
+                .iter()
+                .zip(data.child_data())
+                .all(|(new, old)| new.ptr_eq(old))
+            {
+                return Arc::clone(array);
+            }
+            make_array(
+                data.into_builder()
+                    .child_data(children)
+                    .build()
+                    .expect("rewriting float leaves preserves the array layout"),
+            )
+        }
         _ => Arc::clone(array),
+    }
+}
+
+pub fn has_float_leaf(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Float16 | DataType::Float32 | DataType::Float64 => true,
+        DataType::List(f)
+        | DataType::LargeList(f)
+        | DataType::ListView(f)
+        | DataType::LargeListView(f)
+        | DataType::FixedSizeList(f, _)
+        | DataType::Map(f, _)
+        | DataType::RunEndEncoded(_, f) => has_float_leaf(f.data_type()),
+        DataType::Struct(fields) => fields.iter().any(|f| has_float_leaf(f.data_type())),
+        DataType::Union(fields, _) => {
+            fields.iter().any(|(_, f)| has_float_leaf(f.data_type()))
+        }
+        DataType::Dictionary(_, values) => has_float_leaf(values),
+        _ => false,
     }
 }
 
@@ -1521,6 +1561,49 @@ pub fn normalize_float_zero_scalar(scalar: ScalarValue) -> ScalarValue {
     }
 }
 
+/// Apply a struct's nulls to one of its fields.
+///
+/// Arrays with validity bitmaps share their value buffers; unions and
+/// run-end encoded arrays are rebuilt.
+pub fn apply_parent_nulls(
+    col: &ArrayRef,
+    parent_nulls: Option<&NullBuffer>,
+) -> Result<ArrayRef> {
+    let Some(parent_nulls) = parent_nulls else {
+        // If there are no parent nulls to apply, we can just return
+        return Ok(Arc::clone(col));
+    };
+
+    // NullArray is already entirely null and cannot have a validity bitmap.
+    // If we have 0 parent nulls, we can also avoid extra work.
+    if col.data_type().is_null() || parent_nulls.null_count() == 0 {
+        return Ok(Arc::clone(col));
+    }
+
+    if layout(col.data_type()).can_contain_null_mask {
+        // `nullif` marks a row null where the mask is true and keeps the
+        // field's own nulls. Only the validity bitmap is rebuilt; the value
+        // buffers and child arrays are shared with `col`.
+        let null_parents = BooleanArray::new(!parent_nulls.inner(), None);
+        return Ok(nullif(col.as_ref(), &null_parents)?);
+    }
+
+    // Unions and run-end encoded arrays have no validity bitmap of their own
+    // and represent nulls in their children. Rebuild the array so null parents
+    // become null values in those children.
+    let data = col.to_data();
+    let mut mutable = MutableArrayData::new(vec![&data], true, data.len());
+    let mut end = 0;
+    for (start, valid_end) in parent_nulls.valid_slices() {
+        mutable.try_extend_nulls(start - end)?;
+        mutable.try_extend(0, start, valid_end)?;
+        end = valid_end;
+    }
+    mutable.try_extend_nulls(data.len() - end)?;
+
+    Ok(make_array(mutable.freeze()))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1528,12 +1611,49 @@ mod tests {
     use super::*;
     use crate::ScalarValue::Null;
     use arrow::{
-        array::{Float64Array, Int32Array},
-        buffer::NullBuffer,
+        array::{Float64Array, Int32Array, NullArray},
         datatypes::Int32Type,
     };
     #[cfg(feature = "sql")]
     use sqlparser::ast::Ident;
+
+    #[test]
+    fn test_apply_parent_nulls_sliced() -> Result<()> {
+        let child = Arc::new(
+            Int32Array::from(vec![Some(1), None, Some(3), Some(4), Some(5)]).slice(1, 3),
+        ) as ArrayRef;
+        let parent_nulls =
+            NullBuffer::from(vec![true, true, true, false, true]).slice(1, 3);
+        let result = apply_parent_nulls(&child, Some(&parent_nulls))?;
+        assert_eq!(
+            result.as_ref(),
+            &Int32Array::from(vec![None, Some(3), None])
+        );
+        assert!(result.to_data().buffers()[0].ptr_eq(&child.to_data().buffers()[0]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_apply_parent_nulls_noop() -> Result<()> {
+        let child = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])) as ArrayRef;
+        for parent_nulls in [None, Some(NullBuffer::new_valid(3))] {
+            assert!(Arc::ptr_eq(
+                &apply_parent_nulls(&child, parent_nulls.as_ref())?,
+                &child,
+            ));
+        }
+        let child = Arc::new(NullArray::new(3)) as ArrayRef;
+        assert!(Arc::ptr_eq(
+            &apply_parent_nulls(&child, Some(&NullBuffer::new_null(3)))?,
+            &child,
+        ));
+        let empty = child.slice(0, 0);
+        assert!(Arc::ptr_eq(
+            &apply_parent_nulls(&empty, Some(&NullBuffer::new_valid(0)))?,
+            &empty,
+        ));
+        Ok(())
+    }
 
     #[test]
     fn test_offset_span() {

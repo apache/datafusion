@@ -130,6 +130,7 @@ declare -a WRITE_STEPS=(
   "ci/scripts/typos_check.sh|true"
   "ci/scripts/doc_prettier_check.sh|true"
   "ci/scripts/check_examples_docs.sh|true"
+  "ci/scripts/check_generated_docs.sh|true"
 )
 
 declare -a READONLY_STEPS=(

@@ -31,21 +31,8 @@ if ! command -v cargo-audit &> /dev/null; then
   exit 1
 fi
 
-# RUSTSEC-2026-0194 and RUSTSEC-2026-0195 are in quick-xml, reached through
-# object_store. Remove them once object_store upgrades to quick-xml >= 0.41.0.
-# https://github.com/apache/datafusion/issues/23297
-IGNORED_ADVISORIES=(
-  RUSTSEC-2026-0194
-  RUSTSEC-2026-0195
-)
-
-IGNORE_ARGS=()
-for advisory in "${IGNORED_ADVISORIES[@]}"; do
-  IGNORE_ARGS+=(--ignore "${advisory}")
-done
-
 cd "${ROOT_DIR}"
 
-echo "[${SCRIPT_NAME}] \`cargo audit ${IGNORE_ARGS[*]}\`"
+echo "[${SCRIPT_NAME}] \`cargo audit\`"
 # The guarded expansion keeps `set -u` happy on bash 3.2 (macOS) if the list is empty.
-cargo audit ${IGNORE_ARGS[@]+"${IGNORE_ARGS[@]}"}
+cargo audit
