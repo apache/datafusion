@@ -269,7 +269,7 @@ SELECT
     WHEN i < 200 THEN 2000 + (i - 100)
     WHEN i < 300 THEN 3000 + (i - 200)
     ELSE (i - 300)
-  END AS BIGINT) AS b
+  END AS INT) AS b
 FROM generate_series(0, 399) AS t(i);
 
 statement ok
@@ -285,6 +285,9 @@ OPTIONS (
 statement ok
 drop table rgsel_src;
 
+# `b` is stored as INT32 but declared BIGINT, so the schema adapter wraps every
+# reference in a widening `CAST(b AS BIGINT)`. The hash-lookup pruning expr must
+# see through that cast rather than silently losing the bitmap below.
 statement ok
 CREATE EXTERNAL TABLE rgsel (a BIGINT NOT NULL, b BIGINT NOT NULL)
 STORED AS PARQUET
