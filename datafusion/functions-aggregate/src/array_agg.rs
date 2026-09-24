@@ -339,6 +339,20 @@ impl ArrayAggAccumulator {
     }
 }
 
+/// Returns the mask of non-null rows in `values` when `ignore_nulls` is set
+/// and some row is null.
+fn non_null_mask(values: &dyn Array, ignore_nulls: bool) -> Option<BooleanArray> {
+    if !ignore_nulls {
+        return None;
+    }
+    let nulls = values.logical_nulls()?;
+    if nulls.null_count() == 0 {
+        return None;
+    }
+    // The validity bitmap is the keep mask: a row is kept when it is valid.
+    Some(BooleanArray::new(nulls.into_inner(), None))
+}
+
 impl Accumulator for ArrayAggAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         // Append value like Int64Array(1,2,3)
@@ -924,20 +938,12 @@ impl DistinctArrayAggAccumulator {
         // Filter nulls out upfront when ignore_nulls is set so they are
         // never inserted into the dedup state.
         let filtered;
-        let col: &ArrayRef = if self.ignore_nulls {
-            if let Some(nulls) = val.logical_nulls() {
-                if nulls.null_count() > 0 {
-                    let mask: BooleanArray = nulls.iter().map(Some).collect();
-                    filtered = filter(val.as_ref(), &mask)?;
-                    &filtered
-                } else {
-                    val
-                }
-            } else {
-                val
+        let col: &ArrayRef = match non_null_mask(val.as_ref(), self.ignore_nulls) {
+            Some(mask) => {
+                filtered = filter(val.as_ref(), &mask)?;
+                &filtered
             }
-        } else {
-            val
+            None => val,
         };
 
         if col.is_empty() {
@@ -1122,20 +1128,12 @@ impl Accumulator for DistinctArrayAggAccumulator {
         // Mirror the null-filtering logic from update_batch so we only
         // retract values that were actually inserted.
         let filtered;
-        let col: &ArrayRef = if self.ignore_nulls {
-            if let Some(nulls) = val.logical_nulls() {
-                if nulls.null_count() > 0 {
-                    let mask: BooleanArray = nulls.iter().map(Some).collect();
-                    filtered = filter(val.as_ref(), &mask)?;
-                    &filtered
-                } else {
-                    val
-                }
-            } else {
-                val
+        let col: &ArrayRef = match non_null_mask(val.as_ref(), self.ignore_nulls) {
+            Some(mask) => {
+                filtered = filter(val.as_ref(), &mask)?;
+                &filtered
             }
-        } else {
-            val
+            None => val,
         };
 
         if col.is_empty() {
@@ -1500,12 +1498,8 @@ impl OrderSensitiveArrayAggAccumulator {
             );
         }
 
-        let nulls = ignore_nulls
-            .then(|| values.logical_nulls())
-            .flatten()
-            .filter(|nulls| nulls.null_count() > 0);
-        let (values, filtered_ordering_values) = if let Some(nulls) = nulls {
-            let mask: BooleanArray = nulls.iter().map(Some).collect();
+        let mask = non_null_mask(values.as_ref(), ignore_nulls);
+        let (values, filtered_ordering_values) = if let Some(mask) = mask {
             let values = filter(values.as_ref(), &mask)?;
             let ordering_values = ordering_values
                 .iter()
