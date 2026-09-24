@@ -74,6 +74,18 @@ pub struct PullUpCorrelatedExpr {
     /// whether we have converted a scalar aggregation into a group aggregation. When unnesting
     /// lateral joins, we need to produce a left outer join in such cases.
     pub pulled_up_scalar_agg: bool,
+    /// Every correlated conjunct that a `Filter` of the subquery applies,
+    /// before `remove_duplicated_filter` drops the ones that the `IN`
+    /// predicate already covers. The outer references are kept, so that a
+    /// subquery column and an outer column with the same qualified name stay
+    /// apart.
+    ///
+    /// `join_filters` holds only the conjuncts that the join still needs.
+    /// This list is what the subquery enforces on its own rows. The caller
+    /// uses it to tell if a join key can be NULL inside the scope of an outer
+    /// row: `x IN (SELECT y FROM .. WHERE y = x)` keeps every NULL `y` out of
+    /// its result, although `join_filters` no longer says so.
+    pub correlated_filters: Vec<Expr>,
 }
 
 impl Default for PullUpCorrelatedExpr {
@@ -95,6 +107,7 @@ impl PullUpCorrelatedExpr {
             collected_count_expr_map: HashMap::new(),
             pull_up_having_expr: None,
             pulled_up_scalar_agg: false,
+            correlated_filters: Vec::new(),
         }
     }
 
@@ -182,6 +195,11 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         .iter()
                         .filter(|e| e.contains_outer())
                         .all(|&e| can_pullup_over_aggregation(e));
+                for expr in &subquery_filter_exprs {
+                    if expr.contains_outer() && !self.correlated_filters.contains(expr) {
+                        self.correlated_filters.push((*expr).clone());
+                    }
+                }
                 let (mut join_filters, subquery_filters) =
                     find_join_exprs(subquery_filter_exprs)?;
                 if let Some(in_predicate) = &self.in_predicate_opt {
