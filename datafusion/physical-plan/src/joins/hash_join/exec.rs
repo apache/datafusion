@@ -77,7 +77,9 @@ use arrow::util::bit_util;
 use arrow_schema::{DataType, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::utils::memory::{RecordBatchMemoryCounter, estimate_memory_size};
+use datafusion_common::utils::memory::{
+    RecordBatchMemoryCounter, estimate_memory_size, get_record_batch_memory_size,
+};
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
     plan_err, project_schema,
@@ -107,8 +109,14 @@ pub(crate) const HASH_JOIN_SEED: SeededRandomState =
 
 const ARRAY_MAP_CREATED_COUNT_METRIC_NAME: &str = "array_map_created_count";
 
+/// Decides whether the build side should be joined with an [`ArrayMap`]
+/// (perfect hash join), returning the `(min, max)` key range to build it over.
+///
+/// On `Some`, the memory of the [`ArrayMap`] has already been added to
+/// `reservation`; the caller concatenates the build batches and creates the map
+/// with [`ArrayMap::try_new`].
 #[expect(clippy::too_many_arguments)]
-fn try_create_array_map(
+fn array_map_key_range(
     bounds: Option<&PartitionBounds>,
     schema: &SchemaRef,
     batches: &[RecordBatch],
@@ -117,7 +125,7 @@ fn try_create_array_map(
     perfect_hash_join_small_build_threshold: usize,
     perfect_hash_join_min_key_density: f64,
     null_equality: NullEquality,
-) -> Result<Option<(ArrayMap, RecordBatch, Vec<ArrayRef>)>> {
+) -> Result<Option<(u64, u64)>> {
     // `bounds` are also collected for dynamic filters, on any key type, so the
     // key type cannot be inferred from their presence.
     if !is_perfect_hash_join_candidate(on_left, schema)? {
@@ -184,12 +192,7 @@ fn try_create_array_map(
     let mem_size = ArrayMap::estimate_memory_size(min_val, max_val, num_row);
     reservation.try_grow(mem_size)?;
 
-    let batch = concat_batches(schema, batches)?;
-    let left_values = evaluate_expressions_to_arrays(on_left, &batch)?;
-
-    let array_map = ArrayMap::try_new(&left_values[0], min_val, max_val)?;
-
-    Ok(Some((array_map, batch, left_values)))
+    Ok(Some((min_val, max_val)))
 }
 
 /// The build rows whose scalar `NOT IN` value key is NULL, used by correlated
@@ -693,7 +696,7 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
 /// 4. build_side.num_rows() < u32::MAX
 /// 5. NullEqualsNothing || (NullEqualsNull && build side doesn't contain null)
 ///
-/// See [`try_create_array_map`] for more details.
+/// See [`array_map_key_range`] for more details.
 ///
 /// Note that when using [`PartitionMode::Partitioned`], the build side is split into multiple
 /// partitions. This can cause a dense build side to become sparse within each partition,
@@ -2791,7 +2794,7 @@ impl BuildSideState {
 /// (perfect hash join): a single join key of a supported integer type.
 ///
 /// Only a candidate: the final decision also depends on the observed key
-/// range and density, see [`try_create_array_map`].
+/// range and density, see [`array_map_key_range`].
 fn is_perfect_hash_join_candidate(
     on_left: &[PhysicalExprRef],
     schema: &SchemaRef,
@@ -2842,6 +2845,75 @@ fn new_join_hashmap(
     }
 }
 
+/// Estimates the memory newly allocated for `array`'s share of a concatenated
+/// array.
+///
+/// Concatenating view arrays copies only the views and keeps sharing the data
+/// buffers of the inputs, which are already accounted for.
+fn estimate_concat_allocation(array: &dyn Array) -> Result<usize> {
+    match array.data_type() {
+        DataType::Utf8View | DataType::BinaryView => {
+            let nulls = array
+                .nulls()
+                .map(|_| bit_util::ceil(array.len(), 8))
+                .unwrap_or_default();
+            Ok(array.len() * size_of::<u128>() + nulls)
+        }
+        _ => Ok(array.to_data().get_slice_memory_size()?),
+    }
+}
+
+/// Concatenates the build side `batches` into a single batch, in reverse order
+/// if `reverse` is set, keeping `reservation` ahead of the actual memory usage.
+///
+/// `inputs_reserved` is the memory `reservation` already holds for `batches`.
+/// The copy is reserved before it is made, and once `batches` are dropped the
+/// reservation is trimmed to the memory retained by the returned batch.
+fn concat_build_batches(
+    schema: &SchemaRef,
+    batches: Vec<RecordBatch>,
+    reverse: bool,
+    inputs_reserved: usize,
+    reservation: &mut MemoryReservation,
+    metrics: &BuildProbeJoinMetrics,
+) -> Result<RecordBatch> {
+    // Concatenating a single batch is zero-copy
+    let copy_size = if batches.len() > 1 {
+        let mut copy_size = 0;
+        for batch in &batches {
+            for array in batch.columns() {
+                copy_size += estimate_concat_allocation(array.as_ref())?;
+            }
+        }
+        copy_size
+    } else {
+        0
+    };
+    reservation.try_grow(copy_size)?;
+    metrics.build_mem_used.add(copy_size);
+
+    let batch = if reverse {
+        concat_batches(schema, batches.iter().rev())?
+    } else {
+        concat_batches(schema, batches.iter())?
+    };
+    drop(batches);
+
+    // The inputs are gone: only hold on to what the concatenated batch retains,
+    // which includes any buffers it still shares with the inputs.
+    let held = inputs_reserved + copy_size;
+    let retained = get_record_batch_memory_size(&batch);
+    if retained > held {
+        reservation.try_grow(retained - held)?;
+        metrics.build_mem_used.add(retained - held);
+    } else {
+        reservation.shrink(held - retained);
+        metrics.build_mem_used.sub(held - retained);
+    }
+
+    Ok(batch)
+}
+
 /// Collects all batches from the left (build) side stream and creates a hash map for joining.
 ///
 /// This function is responsible for:
@@ -2861,6 +2933,13 @@ fn new_join_hashmap(
 /// * `should_compute_dynamic_filters` - Whether to compute min/max bounds for dynamic filtering
 /// * `with_null_aware_mark_state` - Whether to build the per-build-row null-indices bitmap
 ///   and correlation-scope maps used by correlated null-aware `LeftMark` joins
+///
+/// # Memory Accounting
+/// Build batches are added to `reservation` as they arrive. They are then copied
+/// into a single batch, see [`concat_build_batches`]: the copy is reserved
+/// before it is made, and the reservation is trimmed to what the single batch
+/// retains once the input batches are dropped. Join key arrays that do not
+/// share the buffers of that batch are reserved as well.
 ///
 /// # Dynamic Filter Coordination
 /// When `should_compute_dynamic_filters` is true, this function computes the min/max bounds
@@ -2935,8 +3014,9 @@ async fn collect_left_input(
         metrics,
         mut reservation,
         bounds_accumulators,
-        memory_counter: _,
+        memory_counter,
     } = state;
+    let inputs_reserved = memory_counter.memory_usage();
 
     // Compute bounds
     let mut bounds = match bounds_accumulators {
@@ -2950,8 +3030,8 @@ async fn collect_left_input(
         _ => None,
     };
 
-    let (join_hash_map, batch, left_values) =
-        if let Some((array_map, batch, left_value)) = try_create_array_map(
+    let (join_hash_map, batch, left_values) = if let Some((min_val, max_val)) =
+        array_map_key_range(
             bounds.as_ref(),
             &schema,
             &batches,
@@ -2961,48 +3041,75 @@ async fn collect_left_input(
             config.execution.perfect_hash_join_min_key_density,
             null_equality,
         )? {
-            array_map_created_count.add(1);
-            metrics.build_mem_used.add(array_map.size());
+        let batch = concat_build_batches(
+            &schema,
+            batches,
+            false,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )?;
+        let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
+        let array_map = ArrayMap::try_new(&left_values[0], min_val, max_val)?;
 
-            (Map::ArrayMap(array_map), batch, left_value)
-        } else {
-            // Estimation of memory size, required for hashtable, prior to allocation.
-            // Final result can be verified using `RawTable.allocation_info()`
-            // Use `u32` indices for the JoinHashMap when num_rows ≤ u32::MAX, otherwise use the
-            // `u64` indice variant
-            // Arc is used instead of Box to allow sharing with SharedBuildAccumulator for hash map pushdown
-            let mut hashmap = new_join_hashmap(num_rows, &mut reservation, &metrics)?;
+        array_map_created_count.add(1);
+        metrics.build_mem_used.add(array_map.size());
 
-            let mut hashes_buffer = Vec::new();
-            let mut offset = 0;
+        (Map::ArrayMap(array_map), batch, left_values)
+    } else {
+        // Estimation of memory size, required for hashtable, prior to allocation.
+        // Final result can be verified using `RawTable.allocation_info()`
+        // Use `u32` indices for the JoinHashMap when num_rows ≤ u32::MAX, otherwise use the
+        // `u64` indice variant
+        // Arc is used instead of Box to allow sharing with SharedBuildAccumulator for hash map pushdown
+        let mut hashmap = new_join_hashmap(num_rows, &mut reservation, &metrics)?;
 
-            let batches_iter = batches.iter().rev();
+        let mut hashes_buffer = Vec::new();
+        let mut offset = 0;
 
-            // Updating hashmap starting from the last batch
-            for batch in batches_iter.clone() {
-                hashes_buffer.clear();
-                hashes_buffer.resize(batch.num_rows(), 0);
-                update_hash(
-                    &on_left,
-                    batch,
-                    &mut *hashmap,
-                    offset,
-                    &random_state,
-                    &mut hashes_buffer,
-                    0,
-                    true,
-                    null_equality,
-                )?;
-                offset += batch.num_rows();
-            }
+        // Updating hashmap starting from the last batch
+        for batch in batches.iter().rev() {
+            hashes_buffer.clear();
+            hashes_buffer.resize(batch.num_rows(), 0);
+            update_hash(
+                &on_left,
+                batch,
+                &mut *hashmap,
+                offset,
+                &random_state,
+                &mut hashes_buffer,
+                0,
+                true,
+                null_equality,
+            )?;
+            offset += batch.num_rows();
+        }
 
-            // Merge all batches into a single batch, so we can directly index into the arrays
-            let batch = concat_batches(&schema, batches_iter.clone())?;
+        // Merge all batches into a single batch, so we can directly index into the arrays
+        let batch = concat_build_batches(
+            &schema,
+            batches,
+            true,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )?;
 
-            let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
+        let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
 
-            (Map::HashMap(hashmap), batch, left_values)
-        };
+        (Map::HashMap(hashmap), batch, left_values)
+    };
+
+    // Join keys that are plain columns share the buffers of `batch`, any other
+    // expression evaluates to new arrays that are kept for the whole join.
+    let mut key_counter = RecordBatchMemoryCounter::new();
+    key_counter.count_batch(&batch);
+    let keys_size = left_values
+        .iter()
+        .map(|values| key_counter.count_array(values.as_ref()))
+        .sum::<usize>();
+    reservation.try_grow(keys_size)?;
+    metrics.build_mem_used.add(keys_size);
 
     let allocate_bitmap = || -> Result<BooleanBufferBuilder> {
         let bitmap_size = bit_util::ceil(batch.num_rows(), 8);
@@ -3227,8 +3334,9 @@ mod tests {
     };
 
     use arrow::array::{
-        Array, ArrayRef, AsArray, Date32Array, DictionaryArray, Int32Array, Int64Array,
-        StructArray, UInt32Array, UInt64Array,
+        Array, ArrayRef, AsArray, BinaryViewArray, Date32Array, DictionaryArray,
+        Int32Array, Int64Array, StringArray, StringViewArray, StructArray, UInt32Array,
+        UInt64Array,
     };
     use arrow::buffer::NullBuffer;
     use arrow::datatypes::{DataType, Field, Int32Type};
@@ -3239,6 +3347,9 @@ mod tests {
         exec_err, internal_err,
     };
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::memory_pool::{
+        GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
+    };
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
@@ -7202,6 +7313,344 @@ mod tests {
             );
         }
 
+        Ok(())
+    }
+
+    /// Build side batches of `num_batches` x `num_rows` rows with distinct
+    /// buffers: an Int32 key, a Utf8, a Utf8View and a BinaryView payload.
+    fn concat_test_batches(num_batches: usize, num_rows: usize) -> Vec<RecordBatch> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int32, false),
+            Field::new("s", DataType::Utf8, true),
+            Field::new("v", DataType::Utf8View, true),
+            Field::new("bv", DataType::BinaryView, true),
+        ]));
+        (0..num_batches)
+            .map(|b| {
+                let start = (b * num_rows) as i32;
+                let keys = Int32Array::from_iter_values(start..start + num_rows as i32);
+                let strings = (0..num_rows)
+                    .map(|i| (i % 7 != 0).then(|| format!("string-{b}-{i}")))
+                    .collect::<StringArray>();
+                let views = (0..num_rows)
+                    .map(|i| {
+                        (i % 5 != 0).then(|| format!("a long string view value {b}-{i}"))
+                    })
+                    .collect::<StringViewArray>();
+                let binary_views = (0..num_rows)
+                    .map(|i| {
+                        (i % 3 != 0).then(|| format!("a long binary view value {b}-{i}"))
+                    })
+                    .collect::<BinaryViewArray>();
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(keys),
+                        Arc::new(strings),
+                        Arc::new(views),
+                        Arc::new(binary_views),
+                    ],
+                )
+                .unwrap()
+            })
+            .collect()
+    }
+
+    /// Reserves `batches` the way `collect_left_input` does.
+    fn reserve_inputs(
+        batches: &[RecordBatch],
+        pool: &Arc<dyn MemoryPool>,
+    ) -> Result<(MemoryReservation, usize)> {
+        let reservation = MemoryConsumer::new("HashJoinInput").register(pool);
+        let mut counter = RecordBatchMemoryCounter::new();
+        for batch in batches {
+            reservation.try_grow(counter.count_batch(batch))?;
+        }
+        Ok((reservation, counter.memory_usage()))
+    }
+
+    #[test]
+    fn concat_build_batches_matches_concat_batches() -> Result<()> {
+        let batches = concat_test_batches(4, 100);
+        let schema = batches[0].schema();
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+
+        for reverse in [false, true] {
+            let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+            let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+            let expected = if reverse {
+                concat_batches(&schema, batches.iter().rev())?
+            } else {
+                concat_batches(&schema, batches.iter())?
+            };
+            let batch = concat_build_batches(
+                &schema,
+                batches.clone(),
+                reverse,
+                inputs_reserved,
+                &mut reservation,
+                &metrics,
+            )?;
+            assert_eq!(batch, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn concat_build_batches_reserves_copy() -> Result<()> {
+        let batches = concat_test_batches(4, 1000);
+        let schema = batches[0].schema();
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+        let inputs: usize = batches.iter().map(get_record_batch_memory_size).sum();
+
+        // The inputs fit, but not together with their concatenated copy
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(inputs * 5 / 4));
+        let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+        assert_eq!(inputs_reserved, inputs);
+        let err = concat_build_batches(
+            &schema,
+            batches.clone(),
+            false,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )
+        .unwrap_err();
+        assert_contains!(err.to_string(), "Resources exhausted");
+        drop(reservation);
+
+        // With room for the copy, the reservation ends up at what is retained
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(inputs * 2));
+        let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+        let batch = concat_build_batches(
+            &schema,
+            batches,
+            false,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )?;
+        assert_eq!(reservation.size(), get_record_batch_memory_size(&batch));
+        assert_eq!(pool.reserved(), reservation.size());
+        Ok(())
+    }
+
+    /// Concatenating a single batch is zero-copy, so nothing more is reserved.
+    #[test]
+    fn concat_build_batches_single_batch_not_reserved_twice() -> Result<()> {
+        let batches = concat_test_batches(1, 1000);
+        let schema = batches[0].schema();
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+        let inputs = get_record_batch_memory_size(&batches[0]);
+
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(inputs));
+        let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+        let batch = concat_build_batches(
+            &schema,
+            batches,
+            true,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )?;
+        assert_eq!(batch.num_rows(), 1000);
+        assert_eq!(reservation.size(), inputs);
+        Ok(())
+    }
+
+    /// Only the views of a view array are copied, its data buffers stay shared.
+    #[rstest]
+    fn concat_build_batches_view_data_not_reserved_twice(
+        #[values("v", "bv")] column: &str,
+    ) -> Result<()> {
+        let batches = concat_test_batches(4, 1000);
+        let column = batches[0].schema().index_of(column)?;
+        let batches = batches
+            .into_iter()
+            .map(|batch| batch.project(&[column]))
+            .collect::<Result<Vec<_>, _>>()?;
+        let schema = batches[0].schema();
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+        let inputs: usize = batches.iter().map(get_record_batch_memory_size).sum();
+        let views = 4 * 1000 * size_of::<u128>();
+        assert!(inputs > 2 * views);
+
+        let pool: Arc<dyn MemoryPool> =
+            Arc::new(GreedyMemoryPool::new(inputs + views * 5 / 4));
+        let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+        let batch = concat_build_batches(
+            &schema,
+            batches,
+            false,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )?;
+        assert_eq!(reservation.size(), get_record_batch_memory_size(&batch));
+        Ok(())
+    }
+
+    /// The build side is concatenated into a single batch, and that copy must
+    /// be visible to the memory pool while the input batches are still alive.
+    #[rstest]
+    #[tokio::test]
+    async fn join_build_concat_is_reserved(
+        #[values(PartitionMode::CollectLeft, PartitionMode::Partitioned)]
+        mode: PartitionMode,
+        #[values(false, true)] use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let num_rows = 4000;
+        let values = (0..num_rows).collect::<Vec<i32>>();
+        let batches = (0..4)
+            .map(|_| build_table_i32(("a1", &values), ("b1", &values), ("c1", &values)))
+            .collect::<Vec<_>>();
+        let inputs: usize = batches.iter().map(get_record_batch_memory_size).sum();
+        let left_schema = batches[0].schema();
+        let right = build_table(
+            ("a2", &vec![10, 11]),
+            ("b2", &vec![12, 13]),
+            ("c2", &vec![14, 15]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("a1", &left_schema)?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        )];
+
+        // Reserved on top of the inputs and their copy
+        let build_rows = batches.len() * num_rows as usize;
+        let map = if use_perfect_hash_join_as_possible {
+            ArrayMap::estimate_memory_size(0, num_rows as u64 - 1, build_rows)
+        } else {
+            estimate_memory_size::<(u32, u64)>(build_rows, size_of::<JoinHashMapU32>())?
+                + build_rows * size_of::<u32>()
+        };
+
+        for (limit, fits) in [(map + inputs * 3 / 2, false), (map + inputs * 3, true)] {
+            let left = TestMemoryExec::try_new_exec(
+                std::slice::from_ref(&batches),
+                Arc::clone(&left_schema),
+                None,
+            )?;
+            let join = HashJoinExec::try_new(
+                left,
+                Arc::clone(&right),
+                on.clone(),
+                None,
+                &JoinType::Inner,
+                None,
+                mode,
+                NullEquality::NullEqualsNothing,
+                false,
+            )?;
+
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(limit, 1.0)
+                .build_arc()?;
+            let task_ctx = prepare_task_ctx(8192, use_perfect_hash_join_as_possible);
+            let task_ctx = Arc::new(
+                TaskContext::default()
+                    .with_session_config(task_ctx.session_config().clone())
+                    .with_runtime(runtime),
+            );
+
+            let result = common::collect(join.execute(0, task_ctx)?).await;
+            if fits {
+                result?;
+            } else {
+                assert_contains!(
+                    result.unwrap_err().to_string(),
+                    "Resources exhausted: Additional allocation failed for HashJoinInput"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Join keys that are not plain columns evaluate to new arrays, which are
+    /// kept for the whole join and must be reserved.
+    #[rstest]
+    #[tokio::test]
+    async fn join_build_key_arrays_are_reserved(
+        #[values(false, true)] use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let num_rows = 16000;
+        let values = (0..num_rows).collect::<Vec<i32>>();
+        // A single build batch, so that there is no concatenated copy
+        let batch = build_table_i32(("a1", &values), ("b1", &values), ("c1", &values));
+        let inputs = get_record_batch_memory_size(&batch);
+        let keys = inputs / 3;
+        let left_schema = batch.schema();
+        let right = build_table(
+            ("a2", &vec![10, 11]),
+            ("b2", &vec![12, 13]),
+            ("c2", &vec![14, 15]),
+        );
+
+        let map = if use_perfect_hash_join_as_possible {
+            ArrayMap::estimate_memory_size(1, num_rows as u64, num_rows as usize)
+        } else {
+            estimate_memory_size::<(u32, u64)>(
+                num_rows as usize,
+                size_of::<JoinHashMapU32>(),
+            )? + num_rows as usize * size_of::<u32>()
+        };
+
+        for (computed_key, limit, fits) in [
+            (false, inputs + map + keys / 2, true),
+            (true, inputs + map + keys / 2, false),
+            (true, inputs + map + keys * 2, true),
+        ] {
+            let column = Arc::new(Column::new_with_schema("a1", &left_schema)?) as _;
+            let left_key: PhysicalExprRef = if computed_key {
+                Arc::new(BinaryExpr::new(
+                    column,
+                    Operator::Plus,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                ))
+            } else {
+                column
+            };
+            let on = vec![(
+                left_key,
+                Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+            )];
+            let left = TestMemoryExec::try_new_exec(
+                &[vec![batch.clone()]],
+                Arc::clone(&left_schema),
+                None,
+            )?;
+            let join = HashJoinExec::try_new(
+                left,
+                Arc::clone(&right),
+                on,
+                None,
+                &JoinType::Inner,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                false,
+            )?;
+
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(limit, 1.0)
+                .build_arc()?;
+            let task_ctx = prepare_task_ctx(8192, use_perfect_hash_join_as_possible);
+            let task_ctx = Arc::new(
+                TaskContext::default()
+                    .with_session_config(task_ctx.session_config().clone())
+                    .with_runtime(runtime),
+            );
+
+            let result = common::collect(join.execute(0, task_ctx)?).await;
+            if fits {
+                result?;
+            } else {
+                assert_contains!(
+                    result.unwrap_err().to_string(),
+                    "Resources exhausted: Additional allocation failed for HashJoinInput"
+                );
+            }
+        }
         Ok(())
     }
 
