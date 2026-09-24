@@ -52,7 +52,9 @@ use super::{
 };
 use crate::protobuf::physical_expr_node::ExprType;
 use crate::{convert_required, protobuf};
-use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
+use datafusion_physical_expr::expressions::{
+    DynamicFilterPhysicalExpr, OptionalFilterPhysicalExpr,
+};
 
 /// Parses a physical sort expression from a protobuf.
 ///
@@ -361,6 +363,9 @@ pub fn parse_physical_expr_with_converter(
         }
         ExprType::DynamicFilter(_) => {
             DynamicFilterPhysicalExpr::try_from_proto(proto, &decode_ctx)?
+        }
+        ExprType::OptionalFilter(_) => {
+            OptionalFilterPhysicalExpr::try_from_proto(proto, &decode_ctx)?
         }
         ExprType::SqlSimilarToPattern(_) => {
             SqlSimilarToPattern::try_from_proto(proto, &decode_ctx)?
