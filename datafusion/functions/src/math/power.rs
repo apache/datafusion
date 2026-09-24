@@ -16,6 +16,7 @@
 // under the License.
 
 //! Math function: `power()`.
+use super::common::is_rewritable_log_base;
 use super::log::LogFunc;
 
 use crate::utils::calculate_binary_math;
@@ -183,7 +184,7 @@ impl ScalarUDFImpl for PowerFunc {
                 if is_log(&func)
                     && args.len() == 2
                     && base == args[0]
-                    && !base_nullable =>
+                    && is_rewritable_log_base(&base) =>
             {
                 let b = args.pop().unwrap(); // length checked above
                 let b_type = info.get_data_type(&b)?;
@@ -208,6 +209,41 @@ fn is_log(func: &ScalarUDF) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::sync::Arc;
+
+    #[test]
+    // Test that power(a, log(a, b)) is only simplified for a base > 0 and != 1
+    fn test_power_simplify_base_value() {
+        let context = SimplifyContext::default();
+        let log = Arc::new(ScalarUDF::from(LogFunc::new()));
+        let log_of = |base: f64| {
+            Expr::ScalarFunction(ScalarFunction::new_udf(
+                Arc::clone(&log),
+                vec![lit(base), lit(3.0)],
+            ))
+        };
+
+        // Degenerate bases must be evaluated, not rewritten
+        for base in [1.0, 0.0, -2.0] {
+            let result = PowerFunc::new()
+                .simplify(vec![lit(base), log_of(base)], &context)
+                .unwrap();
+            let ExprSimplifyResult::Original(args) = result else {
+                panic!("Expected ExprSimplifyResult::Original for base {base}")
+            };
+            assert_eq!(args, vec![lit(base), log_of(base)]);
+        }
+
+        // A valid base still simplifies to the log's argument
+        let result = PowerFunc::new()
+            .simplify(vec![lit(2.0), log_of(2.0)], &context)
+            .unwrap();
+        let ExprSimplifyResult::Simplified(expr) = result else {
+            panic!("Expected ExprSimplifyResult::Simplified")
+        };
+        assert_eq!(expr, lit(3.0));
+    }
 
     #[test]
     fn test_float64_power_checked_zero_negative_exp() {

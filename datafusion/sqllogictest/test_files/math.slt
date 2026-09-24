@@ -1213,7 +1213,7 @@ physical_plan
 01)ProjectionExec: expr=[log(column1@0, 1) as l1, log(column1@0, column1@0) as la, power(column1@0, 0) as p0, power(column1@0, log(column1@0, column2@1)) as pl]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
-# Non-nullable bases still use the existing simplifications
+# A column base is never simplified: its rows may hold 1, 0 or a negative value
 query TT
 EXPLAIN SELECT
   log(a, 1) AS l1,
@@ -1223,13 +1223,81 @@ EXPLAIN SELECT
 FROM (VALUES (2.0::double, 3.0::double)) AS t(a, b);
 ----
 logical_plan
-01)Projection: Float64(0) AS l1, Float64(1) AS la, Float64(1) AS p0, t.b AS pl
+01)Projection: log(t.a, Float64(1)) AS l1, log(t.a, t.a) AS la, Float64(1) AS p0, power(t.a, log(t.a, t.b)) AS pl
 02)--SubqueryAlias: t
-03)----Projection: column2 AS b
+03)----Projection: column1 AS a, column2 AS b
 04)------Values: (Float64(2), Float64(3))
 physical_plan
-01)ProjectionExec: expr=[0 as l1, 1 as la, 1 as p0, column2@1 as pl]
+01)ProjectionExec: expr=[log(column1@0, 1) as l1, log(column1@0, column1@0) as la, 1 as p0, power(column1@0, log(column1@0, column2@1)) as pl]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A literal base greater than 0 and not equal to 1 still simplifies
+query TT
+EXPLAIN SELECT
+  log(2, 1) AS l1,
+  log(2, 2) AS la,
+  power(2, log(2, b)) AS pl
+FROM (VALUES (3.0::double)) AS t(b);
+----
+logical_plan
+01)Projection: Float64(0) AS l1, Float64(1) AS la, t.b AS pl
+02)--SubqueryAlias: t
+03)----Projection: column1 AS b
+04)------Values: (Float64(3))
+physical_plan
+01)ProjectionExec: expr=[0 as l1, 1 as la, column1@0 as pl]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# https://github.com/apache/datafusion/issues/25137
+statement ok
+CREATE VIEW nn AS SELECT * FROM (VALUES (1.0), (0.0), (-2.0), (2.0)) s(a);
+
+statement ok
+CREATE VIEW nb AS SELECT a FROM (VALUES (1.0),(0.0),(-2.0),(2.0),(NULL)) s(a) WHERE a IS NOT NULL;
+
+statement ok
+CREATE VIEW exponents AS SELECT * FROM (VALUES (2.0), (3.0)) s(b);
+
+query RRR
+SELECT a, log(a, 1.0), log(a, a) FROM nn;
+----
+1 NaN NaN
+0 0 NaN
+-2 NaN NaN
+2 0 1
+
+query RRR
+SELECT a, log(a, 1.0), log(a, a) FROM nb;
+----
+1 NaN NaN
+0 0 NaN
+-2 NaN NaN
+2 0 1
+
+query RRR
+SELECT b, power(1.0, log(1.0, b)), log(1.0, power(1.0, b)) FROM exponents;
+----
+2 1 NaN
+3 1 NaN
+
+query I
+SELECT count(*) FROM exponents WHERE power(1.0, log(1.0, b)) = 2.0;
+----
+0
+
+query RR
+SELECT power(1.0, log(1.0, 2.0)), log(1.0, 2.0);
+----
+1 Infinity
+
+statement ok
+DROP VIEW nn;
+
+statement ok
+DROP VIEW nb;
+
+statement ok
+DROP VIEW exponents;
 
 # Float 16/32/64 for log
 query RT
