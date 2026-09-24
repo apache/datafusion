@@ -18,10 +18,7 @@
 //! [`datafusion_expr::HigherOrderUDF`] definitions for array_filter function.
 
 use arrow::{
-    array::{
-        Array, ArrayRef, AsArray, BooleanArray, LargeListArray, ListArray,
-        OffsetSizeTrait,
-    },
+    array::{Array, ArrayRef, AsArray, GenericListArray, OffsetSizeTrait},
     buffer::OffsetBuffer,
     compute::filter as arrow_filter,
     datatypes::{DataType, Field, FieldRef},
@@ -38,8 +35,8 @@ use std::sync::Arc;
 use crate::utils::empty_list_values;
 
 use crate::lambda_utils::{
-    SingleListLambdaResult, coerce_single_list_arg, evaluate_single_list_predicate,
-    single_list_lambda_parameters, value_lambda_pair,
+    EvaluatedListLambda, SingleListLambdaResult, coerce_single_list_arg,
+    evaluate_single_list_predicate, single_list_lambda_parameters, value_lambda_pair,
 };
 
 make_higher_order_function_expr_and_func!(
@@ -145,49 +142,10 @@ impl HigherOrderUDFImpl for ArrayFilter {
             }
         };
 
-        // Scalar predicate short-circuit: x -> true or x -> false/null
-        if let ColumnarValue::Scalar(ScalarValue::Boolean(b)) =
-            &evaluated.evaluated_result
-        {
-            return match b {
-                Some(true) => Ok(ColumnarValue::Array(evaluated.original_list)),
-                _ => Ok(ColumnarValue::Array(empty_filtered_list(
-                    &evaluated.original_list,
-                    field,
-                )?)),
-            };
-        }
-
-        let predicate = evaluated.boolean_predicate(self.name())?;
-
         // ListView and LargeListView are coerced to List/LargeList by coerce_value_types.
         let filtered_list = match evaluated.original_list.data_type() {
-            DataType::List(_) => {
-                let (filtered_values, new_offsets) = filter_list_values(
-                    &evaluated.flattened_values,
-                    &predicate,
-                    &evaluated.adjusted_offsets::<i32>(),
-                )?;
-                Arc::new(ListArray::new(
-                    field,
-                    new_offsets,
-                    filtered_values,
-                    evaluated.nulls().cloned(),
-                )) as ArrayRef
-            }
-            DataType::LargeList(_) => {
-                let (filtered_values, new_offsets) = filter_list_values(
-                    &evaluated.flattened_values,
-                    &predicate,
-                    &evaluated.adjusted_offsets::<i64>(),
-                )?;
-                Arc::new(LargeListArray::new(
-                    field,
-                    new_offsets,
-                    filtered_values,
-                    evaluated.nulls().cloned(),
-                ))
-            }
+            DataType::List(_) => filter_list::<i32>(self.name(), evaluated, field)?,
+            DataType::LargeList(_) => filter_list::<i64>(self.name(), evaluated, field)?,
             other => exec_err!("expected list, got {other}")?,
         };
 
@@ -203,28 +161,27 @@ impl HigherOrderUDFImpl for ArrayFilter {
     }
 }
 
-/// Returns a list array with every non-null sublist emptied, preserving the null buffer.
-/// Used for the `x -> false` / `x -> null` scalar predicate short-circuit.
-fn empty_filtered_list(list_array: &ArrayRef, field: FieldRef) -> Result<ArrayRef> {
-    Ok(match list_array.data_type() {
-        DataType::List(_) => empty_list_values(list_array.as_list::<i32>(), field),
-        DataType::LargeList(_) => empty_list_values(list_array.as_list::<i64>(), field),
-        other => return exec_err!("expected list, got {other}"),
-    })
-}
+/// Apply the evaluated predicate and rebuild the result's row offsets.
+fn filter_list<O: OffsetSizeTrait>(
+    name: &str,
+    evaluated: EvaluatedListLambda,
+    field: FieldRef,
+) -> Result<ArrayRef> {
+    let list = evaluated.original_list.as_list::<O>();
+    if let ColumnarValue::Scalar(ScalarValue::Boolean(b)) = &evaluated.evaluated_result {
+        return match b {
+            Some(true) => Ok(evaluated.original_list),
+            _ => Ok(empty_list_values(list, field)),
+        };
+    }
 
-/// Filters flat list values using a boolean predicate, returning filtered values and
-/// recomputed per-sublist offsets. Null predicate values are treated as false.
-fn filter_list_values<O: OffsetSizeTrait>(
-    values: &ArrayRef,
-    predicate: &BooleanArray,
-    offsets: &OffsetBuffer<O>,
-) -> Result<(ArrayRef, OffsetBuffer<O>)> {
-    let num_sublists = offsets.len().saturating_sub(1);
+    let predicate = evaluated.boolean_predicate(name)?;
+    let offsets = list.offsets();
+    let first_offset = offsets[0].as_usize();
     let has_nulls = predicate.null_count() > 0;
-    let new_offsets = OffsetBuffer::<O>::from_lengths((0..num_sublists).map(|i| {
-        let start = offsets[i].as_usize();
-        let end = offsets[i + 1].as_usize();
+    let new_offsets = OffsetBuffer::<O>::from_lengths(offsets.windows(2).map(|w| {
+        let start = w[0].as_usize() - first_offset;
+        let end = w[1].as_usize() - first_offset;
         if has_nulls {
             (start..end)
                 .filter(|&j| predicate.is_valid(j) && predicate.value(j))
@@ -237,13 +194,18 @@ fn filter_list_values<O: OffsetSizeTrait>(
         }
     }));
 
-    if new_offsets.last() == offsets.last() {
-        return Ok((Arc::clone(values), offsets.clone()));
+    if new_offsets.last().as_usize() == evaluated.flattened_values.len() {
+        return Ok(evaluated.original_list);
     }
 
     // arrow_filter treats null predicate values as false
-    let filtered_values = arrow_filter(values.as_ref(), predicate)?;
-    Ok((filtered_values, new_offsets))
+    let filtered_values = arrow_filter(evaluated.flattened_values.as_ref(), &predicate)?;
+    Ok(Arc::new(GenericListArray::<O>::new(
+        field,
+        new_offsets,
+        filtered_values,
+        list.nulls().cloned(),
+    )))
 }
 
 #[cfg(test)]
