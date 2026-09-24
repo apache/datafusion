@@ -1647,6 +1647,9 @@ statement ok
 DROP TABLE day_denver
 
 statement ok
+DROP TABLE dst_origin
+
+statement ok
 DROP TABLE dst_span
 
 statement ok
