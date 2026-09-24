@@ -1728,7 +1728,7 @@ physical_plan
 02)--SortExec: TopK(fetch=2), expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
-# Typed bounds allow date_trunc to propagate ordering through timezone-free date_bin
+# date_bin remains conservatively unordered because per-row failures become NULL
 query TT
 EXPLAIN SELECT date_trunc('hour', date_bin(INTERVAL '1 minute', ts)) AS truncated
 FROM (
@@ -1750,10 +1750,31 @@ logical_plan
 04)------Projection: CAST(column1 AS Timestamp(s)) AS ts
 05)--------Values: (Int64(7200)), (Int64(3600))
 physical_plan
-01)ProjectionExec: expr=[date_trunc(hour, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }, ts@0)) as truncated]
-02)--SortExec: TopK(fetch=2), expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
-03)----ProjectionExec: expr=[CAST(column1@0 AS Timestamp(s)) as ts]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortExec: expr=[truncated@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--ProjectionExec: expr=[date_trunc(hour, date_bin(IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 60000000000 }, ts@0)) as truncated]
+03)----SortExec: TopK(fetch=2), expr=[ts@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------ProjectionExec: expr=[CAST(column1@0 AS Timestamp(s)) as ts]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# date_bin can return NULL for out-of-range values, so its output does not
+# necessarily preserve the source's NULL ordering.
+query P
+SELECT date_trunc('second', date_bin(INTERVAL '1 second', ts)) AS b
+FROM (
+  SELECT arrow_cast(column1, 'Timestamp(Second)') AS ts
+  FROM (VALUES
+    (-10000000000::bigint),
+    (0::bigint),
+    (10000000000::bigint)
+  )
+  ORDER BY ts
+  LIMIT 3
+)
+ORDER BY b ASC NULLS LAST
+----
+1970-01-01T00:00:00
+NULL
+NULL
 
 statement ok
 CREATE TABLE timestamp_strings(ts varchar)
