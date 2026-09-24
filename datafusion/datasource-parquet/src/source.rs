@@ -53,6 +53,7 @@ use datafusion_functions::core::file_row_index::FileRowIndexFunc;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
 use datafusion_physical_expr::optional_filter_gate::OptionalFilterGateConfig;
 use datafusion_physical_expr::projection::ProjectionExprs;
+use datafusion_physical_expr::utils::debug_assert_optional_on_root_chain;
 use datafusion_physical_expr::{EquivalenceProperties, conjunction};
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_adapter::rewrite::{
@@ -918,6 +919,10 @@ impl FileSource for ParquetSource {
             }
             None => conjunction(allowed_filters),
         };
+        // Optional filters (for example the dynamic filters of hash joins,
+        // TopK and aggregates) must stay direct conjuncts of the root AND
+        // chain, so that a later stage can find them with `split_optional`.
+        debug_assert_optional_on_root_chain(&predicate);
         source.predicate = Some(predicate);
         source = source.with_pushdown_filters(pushdown_filters);
         // Optional filters (for example dynamic filters from joins) are
