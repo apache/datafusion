@@ -3464,7 +3464,9 @@ mod test {
         );
 
         // A predicate the statistics cannot disprove still reads the file,
-        // so the skip above is not simply "prune everything".
+        // so the skip above is not simply "prune everything". The scan
+        // accepts the filter and applies it post-scan, so only the matching
+        // row survives.
         let metrics = ExecutionPlanMetricsSet::new();
         let expr = col("a").eq(lit(2));
         let predicate = logical2physical(&expr, &table_schema);
@@ -3472,7 +3474,7 @@ mod test {
         let stream = open_file(&opener, file).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
-        assert_eq!(num_rows, 3);
+        assert_eq!(num_rows, 1);
         assert_eq!(pruned_row_groups_statistics(&metrics), 0);
     }
 
@@ -3590,11 +3592,19 @@ mod test {
             .build();
         let stream = open_file(&opener, file).await.unwrap();
         let (_, num_rows) = count_batches_and_rows(stream).await;
-        // The row group is read and its rows handed up for the filter above
-        // to apply, which is the missing-column path this test protects.
+        // The row group is read (not pruned), which is the missing-column
+        // path this test protects. The scan then applies the predicate
+        // post-scan: `b` is NULL in every row of this file, so `b = 2` rejects
+        // them all.
         assert_eq!(
-            num_rows, 3,
-            "the file must be scanned, not pruned, on the missing-column path"
+            num_rows, 0,
+            "the file must be scanned and filtered, not pruned, on the \
+             missing-column path"
+        );
+        assert_eq!(
+            counter_metric_value(&metrics, "post_scan_rows_pruned"),
+            3,
+            "every row must be read and then rejected by the post-scan filter"
         );
         assert_eq!(
             pruned_row_groups_statistics(&metrics),
