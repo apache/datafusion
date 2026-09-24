@@ -185,16 +185,16 @@ impl StatisticsContext {
     /// # Example
     ///
     /// ```
-    /// use std::sync::Arc;
-    /// use arrow::datatypes::{DataType, Field, Schema};
-    /// use datafusion_common::{ColumnStatistics, Result, Statistics};
-    /// use datafusion_common::stats::Precision;
-    /// use datafusion_physical_plan::ExecutionPlan;
-    /// use datafusion_physical_plan::operator_statistics::{
-    ///     ExtendedStatistics, StatisticsProvider, StatisticsRegistry, StatisticsResult,
-    /// };
-    /// use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
-    /// use datafusion_physical_plan::test::exec::StatisticsExec;
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{DataType, Field, Schema};
+    /// # use datafusion_common::{ColumnStatistics, Result, Statistics};
+    /// # use datafusion_common::stats::Precision;
+    /// # use datafusion_physical_plan::ExecutionPlan;
+    /// # use datafusion_physical_plan::operator_statistics::{
+    /// #     ExtendedStatistics, StatisticsProvider, StatisticsRegistry, StatisticsResult,
+    /// # };
+    /// # use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+    /// # use datafusion_physical_plan::test::exec::StatisticsExec;
     ///
     /// // Pearson correlation between two columns, identified by schema index.
     /// #[derive(Debug, Clone)]

@@ -63,16 +63,16 @@
 //! # Example
 //!
 //! ```
-//! use std::sync::Arc;
-//! use arrow::datatypes::Schema;
-//! use datafusion_common::stats::Precision;
-//! use datafusion_common::{Result, Statistics};
-//! use datafusion_physical_plan::ExecutionPlan;
-//! use datafusion_physical_plan::operator_statistics::{
-//!     ExtendedStatistics, StatisticsProvider, StatisticsRegistry, StatisticsResult,
-//! };
-//! use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
-//! use datafusion_physical_plan::test::exec::StatisticsExec;
+//! # use std::sync::Arc;
+//! # use arrow::datatypes::Schema;
+//! # use datafusion_common::stats::Precision;
+//! # use datafusion_common::{Result, Statistics};
+//! # use datafusion_physical_plan::ExecutionPlan;
+//! # use datafusion_physical_plan::operator_statistics::{
+//! #     ExtendedStatistics, StatisticsProvider, StatisticsRegistry, StatisticsResult,
+//! # };
+//! # use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+//! # use datafusion_physical_plan::test::exec::StatisticsExec;
 //!
 //! #[derive(Debug)]
 //! struct MyProvider;
@@ -137,9 +137,9 @@ use crate::union::UnionExec;
 /// # Example
 ///
 /// ```
-/// use arrow::datatypes::Schema;
-/// use datafusion_common::Statistics;
-/// use datafusion_physical_plan::operator_statistics::ExtendedStatistics;
+/// # use arrow::datatypes::Schema;
+/// # use datafusion_common::Statistics;
+/// # use datafusion_physical_plan::operator_statistics::ExtendedStatistics;
 ///
 /// // Pearson correlation between two columns, identified by schema index.
 /// #[derive(Debug, Clone)]
