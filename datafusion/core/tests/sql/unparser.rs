@@ -51,8 +51,8 @@ use datafusion_catalog::memory::MemorySchemaProvider;
 use datafusion_catalog::{CatalogProvider, MemoryCatalogProvider, SchemaProvider};
 use datafusion_common::Column;
 use datafusion_expr::Expr;
-use datafusion_sql::unparser::Unparser;
 use datafusion_sql::unparser::dialect::{DefaultDialect, DuckDBDialect};
+use datafusion_sql::unparser::{Unparser, plan_to_sql};
 use itertools::Itertools;
 use recursive::{set_minimum_stack_size, set_stack_allocation_size};
 
@@ -744,6 +744,31 @@ async fn optimized_duckdb_unparse_top_level_sort_over_agg_uses_select_alias() ->
         "aggregate output must not reference out-of-scope alias cs: {sql}",
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn optimized_filter_with_subquery_alias() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.sql("create table t (a int)").await?.collect().await?;
+    let df = ctx
+        .sql(
+            "
+            select *
+            from (
+                select a
+                from t
+            ) t2
+            where a = 1
+        ",
+        )
+        .await?;
+    let plan = df.into_optimized_plan()?;
+    let sql = plan_to_sql(&plan)?.to_string();
+    assert_eq!(
+        sql,
+        "SELECT * FROM (SELECT t.a FROM t WHERE (t.a = 1)) AS t2"
+    );
     Ok(())
 }
 
