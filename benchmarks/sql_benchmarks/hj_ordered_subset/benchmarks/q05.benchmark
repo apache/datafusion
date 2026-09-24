@@ -1,0 +1,9 @@
+# Same as Q02 with a CollectLeft join.
+subgroup collect_left
+
+template sql_benchmarks/hj_ordered_subset/hj_ordered_subset.benchmark.template
+NAME=Q05_collect_left_ordered_10_days
+JOIN_MODE=collect_left
+PLAN_MODE=CollectLeft
+BUILD_TABLE=labels_by_day
+BUILD_FILTER=l.day BETWEEN 40 AND 49
