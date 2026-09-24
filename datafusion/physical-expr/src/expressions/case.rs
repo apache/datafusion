@@ -2832,6 +2832,53 @@ mod tests {
         Ok(())
     }
 
+    #[rstest::rstest]
+    #[case::literal(lit("invalid"))]
+    #[case::and_left(Arc::new(BinaryExpr::new(
+        lit("invalid"),
+        Operator::And,
+        make_col("flag", 0)
+    )))]
+    #[case::and_right(Arc::new(BinaryExpr::new(
+        make_col("flag", 0),
+        Operator::And,
+        lit("invalid")
+    )))]
+    #[case::or_left(Arc::new(BinaryExpr::new(
+        lit("invalid"),
+        Operator::Or,
+        make_col("flag", 0)
+    )))]
+    #[case::or_right(Arc::new(BinaryExpr::new(
+        make_col("flag", 0),
+        Operator::Or,
+        lit("invalid")
+    )))]
+    #[case::not(Arc::new(NotExpr::new(lit("invalid"))))]
+    fn test_case_expression_nullability_with_invalid_predicate(
+        #[case] predicate: Arc<dyn PhysicalExpr>,
+    ) -> Result<()> {
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "flag",
+                Arc::new(BooleanArray::from(vec![Some(true), Some(false), None]))
+                    as ArrayRef,
+            ),
+            (
+                "value",
+                Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])) as ArrayRef,
+            ),
+        ])?;
+        let schema = batch.schema();
+        let expr = when_then_else(&predicate, &col("value", &schema)?, &lit(0))?;
+        let error = expr
+            .nullable(&schema)
+            .expect_err("invalid predicates must fail nullability inference");
+        assert!(error.to_string().contains("invalid"), "{error}");
+        assert!(expr.evaluate(&batch).is_err());
+        Ok(())
+    }
+
     fn case_expression_nullability(col_is_nullable: bool) -> Result<()> {
         let schema =
             Schema::new(vec![Field::new("foo", DataType::Int32, col_is_nullable)]);
