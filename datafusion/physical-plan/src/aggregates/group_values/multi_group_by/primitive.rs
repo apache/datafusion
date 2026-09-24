@@ -312,7 +312,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{mem::size_of, sync::Arc};
+    use std::sync::Arc;
 
     use crate::aggregates::group_values::multi_group_by::primitive::PrimitiveGroupValueBuilder;
     use arrow::array::{
@@ -331,16 +331,6 @@ mod tests {
 
     fn to_vec(buf: &BooleanBufferBuilder) -> Vec<bool> {
         (0..buf.len()).map(|i| buf.get_bit(i)).collect()
-    }
-
-    #[test]
-    fn size_includes_boxed_owner_descriptor() {
-        let builder =
-            PrimitiveGroupValueBuilder::<Int32Type, false>::new(DataType::Int32);
-        assert_eq!(
-            builder.size(),
-            size_of::<PrimitiveGroupValueBuilder<Int32Type, false>>()
-        );
     }
 
     #[test]

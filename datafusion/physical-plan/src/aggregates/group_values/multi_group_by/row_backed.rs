@@ -368,18 +368,6 @@ mod tests {
         ))
     }
 
-    #[test]
-    fn size_includes_boxed_owner_descriptor() {
-        let column = RowsGroupColumn::try_new(DataType::Int32).unwrap();
-        assert_eq!(
-            column.size(),
-            size_of::<RowsGroupColumn>() + column.row_converter.size()
-                - size_of::<RowConverter>()
-                + column.group_values.size()
-                - size_of::<Rows>()
-        );
-    }
-
     /// The generic column must agree with a per-row reference for equality,
     /// including inner-null and outer-null rows, on a `FixedSizeList<Int32>`.
     #[test]

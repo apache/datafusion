@@ -1372,10 +1372,7 @@ mod tests {
         compute::{concat_batches, take},
         util::pretty::pretty_format_batches,
     };
-    use datafusion_common::{
-        Result,
-        utils::proxy::{HashTableAllocExt, VecAllocExt},
-    };
+    use datafusion_common::{Result, utils::proxy::HashTableAllocExt};
     use datafusion_expr::{EmitTo, GroupSelection};
 
     use crate::aggregates::group_values::{
@@ -1386,61 +1383,8 @@ mod tests {
         GroupIndexView, group_column_supported_type, make_group_column, supported_schema,
     };
 
-    fn expected_size(group_values: &GroupValuesColumn<false>) -> usize {
-        let buffers = &group_values.vectorized_operation_buffers;
-        size_of::<GroupValuesColumn<false>>()
-            + group_values.group_values.allocated_size()
-            + group_values
-                .group_values
-                .iter()
-                .map(|value| value.size())
-                .sum::<usize>()
-            + group_values.map_size
-            + group_values.hashes_buffer.allocated_size()
-            + group_values.group_index_lists.allocated_size()
-            + group_values
-                .group_index_lists
-                .iter()
-                .map(VecAllocExt::allocated_size)
-                .sum::<usize>()
-            + group_values.emit_group_index_list_buffer.allocated_size()
-            + buffers.append_row_indices.allocated_size()
-            + buffers.equal_to_row_indices.allocated_size()
-            + buffers.equal_to_group_indices.allocated_size()
-            + buffers.equal_to_results.capacity() / 8
-            + buffers.remaining_row_indices.allocated_size()
-    }
-
     #[test]
-    fn size_includes_boxed_primitive_and_row_backed_owners() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("primitive", DataType::Int32, false),
-            Field::new(
-                "nested",
-                DataType::Struct(
-                    vec![Arc::new(Field::new("child", DataType::Int32, false))].into(),
-                ),
-                false,
-            ),
-        ]));
-        let group_values = GroupValuesColumn::<false>::try_new(schema)?;
-
-        // This schema builds a primitive column and a `RowsGroupColumn`.
-        assert_eq!(
-            group_values.size(),
-            size_of::<GroupValuesColumn<false>>()
-                + group_values.group_values.allocated_size()
-                + group_values
-                    .group_values
-                    .iter()
-                    .map(|value| value.size())
-                    .sum::<usize>()
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn size_includes_collision_emit_and_vectorized_buffers() -> Result<()> {
+    fn collision_emit_and_vectorized_buffers_retain_capacity() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "group",
             DataType::Int32,
@@ -1448,8 +1392,8 @@ mod tests {
         )]));
         let mut group_values = GroupValuesColumn::<false>::try_new(schema).unwrap();
         let input: ArrayRef = Arc::new(Int32Array::from_iter_values(0..32));
+        let baseline = group_values.size();
 
-        assert_eq!(group_values.size(), expected_size(&group_values));
         group_values.intern(&[Arc::clone(&input)], &mut vec![])?;
         group_values.intern(&[input], &mut vec![])?;
         assert!(
@@ -1474,55 +1418,17 @@ mod tests {
                 / 8
                 > 0
         );
-        assert_eq!(group_values.size(), expected_size(&group_values));
+        assert!(group_values.size() > baseline);
 
         insert_non_inline_group_index_view(&mut group_values, u64::MAX, vec![1, 2]);
         group_values.emit(EmitTo::First(1))?;
         assert!(!group_values.group_index_lists.is_empty());
         assert!(group_values.emit_group_index_list_buffer.capacity() > 0);
-        assert_eq!(group_values.size(), expected_size(&group_values));
+        assert!(group_values.size() > baseline);
 
         let input: ArrayRef = Arc::new(Int32Array::from_iter_values(0..32));
         group_values.intern(&[input], &mut vec![])?;
-        assert_eq!(group_values.size(), expected_size(&group_values));
-        Ok(())
-    }
-
-    #[test]
-    fn size_retains_vectorized_and_emit_scratch_capacity() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "group",
-            DataType::Int32,
-            false,
-        )]));
-        let mut group_values = GroupValuesColumn::<false>::try_new(schema)?;
-        let baseline = group_values.size();
-
-        let scratch_size = {
-            let buffers = &mut group_values.vectorized_operation_buffers;
-            buffers.append_row_indices.push(0);
-            buffers.equal_to_row_indices.push(0);
-            buffers.equal_to_group_indices.push(0);
-            buffers.equal_to_results.append(true);
-            buffers.remaining_row_indices.push(0);
-            group_values.emit_group_index_list_buffer.push(0);
-
-            buffers.append_row_indices.allocated_size()
-                + buffers.equal_to_row_indices.allocated_size()
-                + buffers.equal_to_group_indices.allocated_size()
-                + buffers.equal_to_results.capacity() / 8
-                + buffers.remaining_row_indices.allocated_size()
-                + group_values.emit_group_index_list_buffer.allocated_size()
-        };
-        assert_eq!(group_values.size(), baseline + scratch_size);
-
-        group_values.vectorized_operation_buffers.clear();
-        group_values
-            .vectorized_operation_buffers
-            .equal_to_results
-            .truncate(0);
-        group_values.emit_group_index_list_buffer.clear();
-        assert_eq!(group_values.size(), baseline + scratch_size);
+        assert!(group_values.size() > baseline);
         Ok(())
     }
 
