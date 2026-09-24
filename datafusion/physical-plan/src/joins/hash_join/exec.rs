@@ -9090,6 +9090,12 @@ mod tests {
             .options_mut()
             .optimizer
             .enable_dynamic_filter_pushdown = true;
+        // Push hash table lookups instead of `InList`s: when every partition pushes
+        // an `InList`, the routed `CASE` collapses into a single `InList`.
+        session_config
+            .options_mut()
+            .optimizer
+            .hash_join_inlist_pushdown_max_distinct_values = 0;
         let task_ctx =
             Arc::new(TaskContext::default().with_session_config(session_config));
 

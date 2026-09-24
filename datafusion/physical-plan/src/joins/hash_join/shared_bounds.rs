@@ -33,6 +33,7 @@ use crate::joins::hash_join::partitioned_hash_eval::{
 };
 use crate::repartition::RangeExpr;
 use arrow::array::ArrayRef;
+use arrow::compute::concat;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{
@@ -271,6 +272,15 @@ pub(crate) struct SharedBuildAccumulator {
     /// three-valued logic can collapse the result, so the pushed filter keeps NULL rows.
     null_aware: bool,
 }
+
+/// Ceiling on the combined size of the per-partition `InList` arrays that
+/// [`SharedBuildAccumulator::union_inlist_filter`] will concatenate.
+///
+/// Each partition's list is independently capped by
+/// `hash_join_inlist_pushdown_max_size`, so without a combined cap the union
+/// grows with the partition count. Past this size, keeping the routed `CASE`
+/// (where each probe row only probes one list) is the cheaper shape.
+const MAX_UNIONED_INLIST_BYTES: usize = 1024 * 1024;
 
 /// Strategy for filter pushdown (decided at collection time)
 #[derive(Clone)]
@@ -657,7 +667,19 @@ impl SharedBuildAccumulator {
     /// Builds one routed probe-side filter from finalized partitioned build data.
     /// Empty partitions reject their routed rows, while canceled partitions stay
     /// permissive because their build contents are unknown.
+    ///
+    /// When every non-empty partition pushes an `InList`, the routed `CASE` is
+    /// replaced by one `InList` over the union of the lists. See
+    /// [`Self::union_inlist_filter`].
     fn build_partitioned_filter(&self, partitions: Vec<PartitionStatus>) -> Result<()> {
+        if let Some((filter_expr, keys_have_null)) =
+            self.union_inlist_filter(&partitions)?
+        {
+            return self
+                .dynamic_filter
+                .update(self.preserve_probe_nulls(filter_expr, keys_have_null)?);
+        }
+
         let mut partition_filters = Vec::with_capacity(partitions.len());
         let mut real_partition_ids = Vec::new();
         let mut empty_partition_ids = Vec::new();
@@ -798,6 +820,73 @@ impl SharedBuildAccumulator {
             .update(self.preserve_probe_nulls(filter_expr, keys_have_null)?)
     }
 
+    /// Collapses an all-`InList` partitioned build into one `InList` over the
+    /// union of the per-partition lists, instead of a `CASE` that routes each
+    /// probe row to the list of its partition.
+    ///
+    /// This is exact, not a relaxation: routing is a deterministic function of
+    /// the key columns, so every build row with key `K` is in the partition that
+    /// a probe row with key `K` routes to. A test of `K` against the union thus
+    /// accepts the same rows as the routed `CASE`. The result does not compute
+    /// the routing hash for each probe row, and unlike a `CASE`, pruning can use
+    /// an `InList`.
+    ///
+    /// The per-partition bounds are dropped: every key in a partition's list is
+    /// inside that partition's bounds, so the bounds reject no additional rows.
+    ///
+    /// Returns the filter and whether any build key is NULL, or `None` when the
+    /// collapse does not apply: fewer than two partitions have rows, a partition
+    /// is canceled or pushes a hash table, the lists have different types, or
+    /// the union is larger than [`MAX_UNIONED_INLIST_BYTES`].
+    fn union_inlist_filter(
+        &self,
+        partitions: &[PartitionStatus],
+    ) -> Result<Option<(Arc<dyn PhysicalExpr>, bool)>> {
+        let mut arrays: Vec<&ArrayRef> = Vec::with_capacity(partitions.len());
+        let mut total_bytes = 0;
+        let mut keys_have_null = false;
+        for partition in partitions {
+            let PartitionStatus::Reported(PartitionData {
+                pushdown,
+                keys_have_null: partition_keys_have_null,
+                ..
+            }) = partition
+            else {
+                return Ok(None);
+            };
+            let values = match pushdown {
+                PushdownStrategy::InList(values) => values,
+                PushdownStrategy::Empty => continue,
+                PushdownStrategy::Map(_) => return Ok(None),
+            };
+            total_bytes += values.get_array_memory_size();
+            if total_bytes > MAX_UNIONED_INLIST_BYTES
+                || arrays
+                    .first()
+                    .is_some_and(|first| first.data_type() != values.data_type())
+            {
+                return Ok(None);
+            }
+            keys_have_null |= partition_keys_have_null;
+            arrays.push(values);
+        }
+
+        // With zero or one non-empty partition, `build_partitioned_filter`
+        // already skips the `CASE`.
+        if arrays.len() < 2 {
+            return Ok(None);
+        }
+
+        let union = concat(&arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>())?;
+        let filter_expr = create_membership_predicate(
+            &self.on_right,
+            PushdownStrategy::InList(union),
+            &HASH_JOIN_SEED,
+            self.probe_schema.as_ref(),
+        )?;
+        Ok(filter_expr.map(|expr| (expr, keys_have_null)))
+    }
+
     /// Keeps probe rows with a NULL key when the join semantics need them.
     ///
     /// The build-side predicate drops probe rows whose key is NULL. A null-aware join
@@ -910,6 +999,7 @@ pub(super) fn completed_partitions_for_test(acc: &SharedBuildAccumulator) -> usi
 mod tests {
     use super::*;
 
+    use crate::joins::join_hash_map::JoinHashMapU32;
     use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int32Array};
     use arrow::compute::SortOptions;
     use arrow::record_batch::RecordBatch;
@@ -983,6 +1073,12 @@ mod tests {
 
     fn in_list(values: &[i32]) -> PushdownStrategy {
         PushdownStrategy::InList(Arc::new(Int32Array::from(values.to_vec())) as ArrayRef)
+    }
+
+    fn map_pushdown() -> PushdownStrategy {
+        PushdownStrategy::Map(Arc::new(Map::HashMap(Box::new(
+            JoinHashMapU32::with_capacity(1),
+        ))))
     }
 
     fn bounds(min: i32, max: i32) -> PartitionBounds {
@@ -1140,6 +1236,77 @@ mod tests {
         let expr = current_expr(&acc);
         in_list_expr(&expr);
         assert!(expr.downcast_ref::<CaseExpr>().is_none());
+    }
+
+    #[test]
+    fn partitioned_all_inlist_collapses_to_a_single_union_inlist() {
+        let acc = make_partitioned_expr_accumulator_for_test(3);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[1, 4]), bounds(1, 4)),
+            reported(in_list(&[2, 5]), bounds(2, 5)),
+            reported(PushdownStrategy::Empty, no_bounds()),
+        ]))
+        .unwrap();
+
+        // Routing is a function of the key, so a probe key can only match the
+        // list of the partition it routes to: the union is exact, and neither the
+        // `CASE` nor the per-partition bounds are necessary.
+        let expr = current_expr(&acc);
+        assert_in_list_column_values(&expr, "probe_key", 0, &[1, 4, 2, 5]);
+    }
+
+    #[test]
+    fn partitioned_mixed_strategies_keep_the_routing_case() {
+        let acc = make_partitioned_expr_accumulator_for_test(2);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[1, 2]), bounds(1, 2)),
+            reported(map_pushdown(), bounds(3, 4)),
+        ]))
+        .unwrap();
+
+        // One partition needs a hash table lookup, so routing is necessary.
+        let expr = current_expr(&acc);
+        assert_eq!(case_expr(&expr).when_then_expr().len(), 2);
+    }
+
+    #[test]
+    fn partitioned_canceled_partition_keeps_the_routing_case() {
+        let acc = make_partitioned_expr_accumulator_for_test(3);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[1]), no_bounds()),
+            reported(in_list(&[2]), no_bounds()),
+            PartitionStatus::CanceledUnknown,
+        ]))
+        .unwrap();
+
+        // The canceled partition's keys are unknown, so the union is incomplete
+        // and the rows routed to that partition must stay permissive.
+        let expr = current_expr(&acc);
+        let case = case_expr(&expr);
+        assert_eq!(case.when_then_expr().len(), 2);
+        assert_literal_bool(
+            case.else_expr().expect("expected permissive fallback"),
+            true,
+        );
+    }
+
+    #[test]
+    fn partitioned_oversized_inlist_union_keeps_the_routing_case() {
+        let acc = make_partitioned_expr_accumulator_for_test(2);
+        let half = MAX_UNIONED_INLIST_BYTES / size_of::<i32>() / 2 + 1;
+        let values = (0..half as i32).collect::<Vec<_>>();
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&values), no_bounds()),
+            reported(in_list(&values), no_bounds()),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert_eq!(case_expr(&expr).when_then_expr().len(), 2);
     }
 
     #[test]
@@ -1497,8 +1664,9 @@ mod tests {
     fn partitioned_null_keys_in_one_partition_widen_whole_routed_filter() {
         let acc = null_equal_partitioned_accumulator(2);
 
+        // One partition pushes a hash table, so the filter keeps the routed `CASE`.
         acc.build_filter(FinalizeInput::Partitioned(vec![
-            reported(in_list(&[1]), no_bounds()),
+            reported(map_pushdown(), no_bounds()),
             reported_with_null_keys(in_list(&[2]), no_bounds()),
         ]))
         .unwrap();
@@ -1516,6 +1684,28 @@ mod tests {
             1,
             "the routed filter must be widened once, not per branch"
         );
+    }
+
+    /// The collapsed `InList` must be widened by the NULL flag of every partition,
+    /// not only of the first one.
+    #[test]
+    fn partitioned_null_keys_in_one_partition_widen_union_inlist() {
+        let acc = null_equal_partitioned_accumulator(2);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[1]), no_bounds()),
+            reported_with_null_keys(in_list(&[2]), no_bounds()),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert_top_binary_op(&expr, Operator::Or);
+        let widened = binary_expr(&expr);
+        assert!(
+            widened.left().downcast_ref::<IsNullExpr>().is_some(),
+            "expected the IS NULL disjunct first, got: {expr}"
+        );
+        assert_in_list_column_values(widened.right(), "probe_key", 0, &[1, 2]);
     }
 
     /// A canceled partition's build content is unknown, so it may hold a NULL key:
