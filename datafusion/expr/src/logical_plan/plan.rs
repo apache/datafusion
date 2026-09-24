@@ -5149,7 +5149,7 @@ impl Unnest {
                                 ));
                                 Ok(get_unnested_columns(
                                     &r.output_column.name,
-                                    original_field.data_type(),
+                                    original_field,
                                     r.depth,
                                 )?
                                 .into_iter()
@@ -5160,7 +5160,7 @@ impl Unnest {
                         if transformed_columns.is_empty() {
                             transformed_columns = get_unnested_columns(
                                 &column_to_unnest.name,
-                                original_field.data_type(),
+                                original_field,
                                 1,
                             )?;
                             match original_field.data_type() {
@@ -5240,9 +5240,10 @@ impl Unnest {
 // the recursion level
 fn get_unnested_columns(
     col_name: &String,
-    data_type: &DataType,
+    field: &Field,
     depth: usize,
 ) -> Result<Vec<(Column, Arc<Field>)>> {
+    let data_type = field.data_type();
     let mut qualified_columns = Vec::with_capacity(1);
 
     match data_type {
@@ -5266,7 +5267,11 @@ fn get_unnested_columns(
             qualified_columns.extend(fields.iter().map(|f| {
                 let new_name = format!("{}.{}", col_name, f.name());
                 let column = Column::from_name(&new_name);
-                let new_field = f.as_ref().clone().with_name(new_name);
+                let new_field = f
+                    .as_ref()
+                    .clone()
+                    .with_name(new_name)
+                    .with_nullable(field.is_nullable() || f.is_nullable());
                 // let column = Column::from((None, &f));
                 (column, Arc::new(new_field))
             }))

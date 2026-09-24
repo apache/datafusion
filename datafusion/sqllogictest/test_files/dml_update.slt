@@ -253,7 +253,15 @@ statement ok
 INSERT INTO test_update_error VALUES (1, 'test');
 
 statement error No field named nonexistent
-UPDATE test_update_error SET nonexistent = 'value';
+EXPLAIN UPDATE test_update_error SET nonexistent = 'value';
+
+statement error No field named nonexistent
+EXPLAIN UPDATE test_update_error SET name = 'value' WHERE nonexistent = 1;
+
+query IT
+SELECT * FROM test_update_error;
+----
+1 test
 
 statement ok
 DROP TABLE test_update_error;
@@ -282,5 +290,78 @@ SELECT * FROM test_update_div;
 2 2 50
 3 5 20
 
+# Planning must not evaluate assignments, but execution must report their errors.
+statement ok
+EXPLAIN UPDATE test_update_div SET result = 100 / divisor;
+
+statement error Divide by zero
+UPDATE test_update_div SET result = 100 / divisor;
+
+query III rowsort
+SELECT * FROM test_update_div;
+----
+1 0 0
+2 2 50
+3 5 20
+
 statement ok
 DROP TABLE test_update_div;
+
+# Test that EXPLAIN UPDATE prints the plan and updates nothing.
+# Regression test for https://github.com/apache/datafusion/issues/24656:
+# the update used to run while the physical plan was built.
+statement ok
+CREATE TABLE test_update_explain AS VALUES (1, 'a'), (2, 'b'), (3, 'c');
+
+statement ok
+EXPLAIN UPDATE test_update_explain SET column1 = column1 + 10 WHERE column1 > 1;
+
+query IT rowsort
+SELECT * FROM test_update_explain;
+----
+1 a
+2 b
+3 c
+
+# EXPLAIN ANALYZE runs the plan, so it does update. Each matching value goes
+# up by ten once, so a second run of the plan would show 22 and 23.
+statement ok
+EXPLAIN ANALYZE UPDATE test_update_explain SET column1 = column1 + 10 WHERE column1 > 1;
+
+query IT rowsort
+SELECT * FROM test_update_explain;
+----
+1 a
+12 b
+13 c
+
+statement ok
+DROP TABLE test_update_explain;
+
+# A nullable source can be assigned to a NOT NULL column when selected values
+# are non-null. Selecting its NULL must fail at execution.
+statement ok
+CREATE TABLE test_update_not_null (id INT NOT NULL, value INT);
+
+statement ok
+INSERT INTO test_update_not_null VALUES (1, 10), (2, NULL);
+
+query I
+UPDATE test_update_not_null SET id = value WHERE value IS NOT NULL;
+----
+1
+
+statement ok
+EXPLAIN UPDATE test_update_not_null SET id = value;
+
+statement error non-nullable but contains null
+UPDATE test_update_not_null SET id = value;
+
+query II rowsort
+SELECT * FROM test_update_not_null;
+----
+10 10
+2 NULL
+
+statement ok
+DROP TABLE test_update_not_null;

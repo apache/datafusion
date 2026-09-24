@@ -400,8 +400,38 @@ pub trait TableProvider: Any + Debug + Sync + Send {
 
     /// Delete rows matching the filter predicates.
     ///
-    /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
-    /// Empty `filters` deletes all rows.
+    /// Returns an [`ExecutionPlan`] producing one row in a single non-null
+    /// `UInt64` column named `count`, containing the number of deleted rows.
+    /// The default implementation returns a "not implemented" error.
+    ///
+    /// # Filters
+    ///
+    /// `filters` contains logical [`Expr`] predicates on the target table.
+    /// The planner collects them from filters and pushed-down table scan
+    /// predicates, splits `AND` conjunctions, removes table qualifiers, and
+    /// deduplicates them. For example, `t.id = 1 AND t.value > 15` becomes
+    /// separate `id = 1` and `value > 15` expressions.
+    ///
+    /// Delete a row only when every predicate evaluates to true. SQL
+    /// three-valued logic applies: a false or `NULL` predicate leaves the row
+    /// unchanged. Empty `filters` deletes all rows, as for `DELETE FROM t`
+    /// without a `WHERE` clause.
+    ///
+    /// # Execution
+    ///
+    /// This method is called during physical planning, including for `EXPLAIN`.
+    /// Perform mutations when the returned plan executes, rather than while
+    /// constructing it, so planning does not change the table.
+    ///
+    /// # Limitations
+    ///
+    /// The method receives no row limit ([#24998]). Subqueries in DML
+    /// expressions are not fully supported ([#24654]); in particular, a
+    /// subquery rewritten into a join can cause predicates to be lost before
+    /// this method is called.
+    ///
+    /// [#24998]: https://github.com/apache/datafusion/issues/24998
+    /// [#24654]: https://github.com/apache/datafusion/issues/24654
     // Hand-written `#[async_trait]` expansion to reduce compile time. See
     // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn delete_from<'life0, 'life1, 'async_trait>(
@@ -422,8 +452,43 @@ pub trait TableProvider: Any + Debug + Sync + Send {
 
     /// Update rows matching the filter predicates.
     ///
-    /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
-    /// Empty `filters` updates all rows.
+    /// Returns an [`ExecutionPlan`] producing one row in a single non-null
+    /// `UInt64` column named `count`, containing the number of affected rows.
+    /// The default implementation returns a "not implemented" error.
+    ///
+    /// # Filters
+    ///
+    /// `filters` follows the same conventions as [`Self::delete_from`]:
+    /// predicates are combined with `AND`, table qualifiers are removed, and
+    /// only rows for which every predicate is true are updated. A false or
+    /// `NULL` predicate leaves the row unchanged. Empty `filters` updates all
+    /// rows.
+    ///
+    /// # Assignments
+    ///
+    /// `assignments` contains `(column_name, Expr)` pairs from the `SET`
+    /// clause. The planner removes identity assignments and strips table
+    /// qualifiers from the expressions. Leave columns without an assignment
+    /// unchanged.
+    ///
+    /// Evaluate every assignment against the row values from before the
+    /// statement, and only for matching rows. For example, `SET a = b, b = a`
+    /// exchanges the two values; an expression such as `100 / divisor` must
+    /// not be evaluated on rows excluded by the filters.
+    ///
+    /// # Execution
+    ///
+    /// Like [`Self::delete_from`], this method is called during physical
+    /// planning, including for `EXPLAIN`. Perform mutations when the returned
+    /// plan executes so planning does not change the table.
+    ///
+    /// # Limitations
+    ///
+    /// Subqueries have the same limitations as in [`Self::delete_from`]
+    /// ([#24654]). `UPDATE ... FROM` is not supported ([#19950]).
+    ///
+    /// [#24654]: https://github.com/apache/datafusion/issues/24654
+    /// [#19950]: https://github.com/apache/datafusion/issues/19950
     // Hand-written `#[async_trait]` expansion to reduce compile time. See
     // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn update<'life0, 'life1, 'async_trait>(
