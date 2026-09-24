@@ -1540,8 +1540,14 @@ fn min_max_non_null_exprs(
         let max = required_columns
             .max_column_expr(column, column_expr, field)
             .ok()?;
+        // A cast on `column_expr` (widening it towards min/max's target type)
+        // does not affect nullability, so check it on the bare column beneath.
+        let bare_expr = match column_expr.downcast_ref::<phys_expr::CastExpr>() {
+            Some(cast) => cast.expr(),
+            None => column_expr,
+        };
         let non_null =
-            build_is_null_column_expr(column_expr, schema, required_columns, true)?;
+            build_is_null_column_expr(bare_expr, schema, required_columns, true)?;
         Some((min, max, non_null))
     })();
     if statistics.is_none() {
@@ -1564,7 +1570,17 @@ fn build_hash_lookup_pruning_expr(
     let [column_expr] = on_columns[..] else {
         return None;
     };
-    let column = column_expr.downcast_ref::<phys_expr::Column>()?;
+    // The schema adapter often wraps the column in a same-type or widening cast
+    // (a nullable table column over a REQUIRED file column, or a narrower file
+    // type). `stat_column_expr` rewrites only the inner `Column`, keeping it.
+    let column = match column_expr.downcast_ref::<phys_expr::CastExpr>() {
+        Some(cast) => {
+            let column = cast.expr().downcast_ref::<phys_expr::Column>()?;
+            let from = schema.fields().get(column.index())?.data_type();
+            cast.is_bigger_cast(from).then_some(column)?
+        }
+        None => column_expr.downcast_ref::<phys_expr::Column>()?,
+    };
     let field = schema.fields().get(column.index())?;
     if field.name() != column.name() {
         return None;
@@ -2492,6 +2508,7 @@ mod tests {
     use datafusion_physical_plan::joins::key_range_bitmap::KeyRangeBitmap;
     use datafusion_physical_plan::joins::{Map, SeededRandomState};
     use itertools::Itertools;
+    use rstest::rstest;
 
     #[derive(Debug, Default)]
     /// Mock statistic provider for tests
@@ -7474,6 +7491,53 @@ mod tests {
         // Containers 0 and 2 sit in the gap between 30 and 100000; container 1
         // holds 20. The bitmap excludes the first and third.
         assert_eq!(result, vec![false, true, false]);
+    }
+
+    #[rstest]
+    #[case::widening_i32_to_i64(DataType::Int32, DataType::Int64, true)]
+    #[case::widening_u32_to_i64(DataType::UInt32, DataType::Int64, true)]
+    #[case::widening_u16_to_i64(DataType::UInt16, DataType::Int64, true)]
+    #[case::same_type_i64_to_i64(DataType::Int64, DataType::Int64, true)]
+    #[case::narrowing_i64_to_i32(DataType::Int64, DataType::Int32, false)]
+    #[case::narrowing_u32_to_i16(DataType::UInt32, DataType::Int16, false)]
+    fn test_hash_lookup_pruning_through_cast(
+        #[case] file_type: DataType,
+        #[case] cast_type: DataType,
+        #[case] pruned: bool,
+    ) {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("b", file_type.clone(), true)]));
+        let column: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("b", 0));
+        let cast_column: Arc<dyn PhysicalExpr> =
+            Arc::new(phys_expr::CastExpr::new(column, cast_type, None));
+        let lookup = hash_lookup(&cast_column, &[10, 20, 30, 100_000]);
+
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .try_build(lookup)
+            .unwrap();
+
+        let to_file_type = |values: Vec<Option<i64>>| -> ArrayRef {
+            let values: ArrayRef = Arc::new(values.into_iter().collect::<Int64Array>());
+            arrow::compute::cast(&values, &file_type).unwrap()
+        };
+        let statistics = TestStatistics::new().with(
+            "b",
+            ContainerStats::new()
+                .with_min(to_file_type(vec![Some(5000), Some(15), Some(50000)]))
+                .with_max(to_file_type(vec![Some(8000), Some(25), Some(60000)])),
+        );
+
+        let result = predicate.prune(&statistics).unwrap();
+        // Containers 0 and 2 sit in the gap between 30 and 100000; container 1
+        // holds 20. A working cast excludes the first and third; a declined one
+        // falls back to keeping every container.
+        let expected = if pruned {
+            vec![false, true, false]
+        } else {
+            vec![true, true, true]
+        };
+        assert_eq!(result, expected);
     }
 
     #[test]

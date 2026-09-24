@@ -795,7 +795,7 @@ async fn prepared_inlist_shares_accounted_build_buffers() -> Result<()> {
                     Arc::new(config),
                 )
                 .await?;
-            assert!(matches!(map.build.membership, PushdownStrategy::Map(_)));
+            assert!(matches!(map.build.membership, PushdownStrategy::Map(_, _)));
             assert_eq!(map.reserved_bytes(), bytes);
             assert_eq!(pool.reserved(), 2 * bytes);
             drop(map);
@@ -888,7 +888,7 @@ async fn prepared_byte_keys_use_hash_membership() -> Result<()> {
         assert!(prepared.build.bounds.is_none());
         assert!(matches!(
             &prepared.build.membership,
-            PushdownStrategy::Map(_)
+            PushdownStrategy::Map(_, _)
         ));
         let task = with_probe_filter(base)?
             .builder()

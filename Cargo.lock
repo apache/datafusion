@@ -2642,6 +2642,7 @@ dependencies = [
  "insta",
  "itertools 0.15.0",
  "log",
+ "rstest",
 ]
 
 [[package]]
