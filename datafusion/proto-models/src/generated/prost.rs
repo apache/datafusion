@@ -2149,7 +2149,9 @@ pub struct HashJoinExecNode {
     pub projection: ::prost::alloc::vec::Vec<u32>,
     #[prost(bool, tag = "10")]
     pub null_aware: bool,
-    /// Optional dynamic filter expression for pushing down to the probe side.
+    /// Optional dynamic filter expression for pushing down to the probe side:
+    /// the membership check. When `dynamic_filter_bounds` is absent, it also
+    /// holds the build-side bounds.
     #[prost(message, optional, tag = "11")]
     pub dynamic_filter: ::core::option::Option<PhysicalExprNode>,
     /// Optional row limit pushed into the join by the `limit_pushdown` rule.
@@ -2161,6 +2163,11 @@ pub struct HashJoinExecNode {
     /// `None`, which is the correct reading of an older message.
     #[prost(uint64, optional, tag = "12")]
     pub fetch: ::core::option::Option<u64>,
+    /// Optional dynamic filter expression for pushing down to the probe side:
+    /// the build-side bounds, separate from the membership check in
+    /// `dynamic_filter`.
+    #[prost(message, optional, tag = "13")]
+    pub dynamic_filter_bounds: ::core::option::Option<PhysicalExprNode>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SymmetricHashJoinExecNode {
