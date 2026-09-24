@@ -19,7 +19,7 @@ mod literal_lookup_table;
 
 use super::{Column, Literal};
 use crate::expressions::{
-    CastExpr, LambdaVariable, NegativeExpr, NotExpr, lit, try_cast,
+    BinaryExpr, CastExpr, LambdaVariable, NegativeExpr, NotExpr, lit, try_cast,
 };
 use crate::{PhysicalExpr, ScalarFunctionExpr};
 use arrow::array::*;
@@ -35,6 +35,8 @@ use datafusion_common::{
     internal_datafusion_err, internal_err,
 };
 use datafusion_expr::ColumnarValue;
+use datafusion_expr_common::interval_arithmetic::NullableInterval;
+use datafusion_expr_common::operator::Operator;
 use indexmap::IndexMap;
 use std::borrow::Cow;
 use std::collections::BTreeSet;
@@ -1292,19 +1294,14 @@ impl PhysicalExpr for CaseExpr {
                 Ok(e) => e,
             };
 
-            // Try to const evaluate the modified `when` expression.
-            let predicate_result = match evaluate_predicate(&with_null) {
+            let can_be_true = match evaluate_predicate(&with_null).and_then(|bounds| {
+                bounds.contains_value(ScalarValue::Boolean(Some(true)))
+            }) {
                 Err(e) => return Some(Err(e)),
                 Ok(b) => b,
             };
 
-            match predicate_result {
-                // Evaluation was inconclusive or true, so the 'then' expression is reachable
-                None | Some(true) => Some(Ok(())),
-                // Evaluation proves the branch will never be taken.
-                // The most common pattern for this is `WHEN x IS NOT NULL THEN x`.
-                Some(false) => None,
-            }
+            if can_be_true { Some(Ok(())) } else { None }
         });
 
         if let Some(nullable_then) = nullable_then {
@@ -1516,12 +1513,8 @@ impl CaseExpr {
     }
 }
 
-/// Attempts to const evaluate the given `predicate`.
-/// Returns:
-/// - `Some(true)` if the predicate evaluates to a truthy value.
-/// - `Some(false)` if the predicate evaluates to a falsy value.
-/// - `None` if the predicate could not be evaluated.
-fn evaluate_predicate(predicate: &Arc<dyn PhysicalExpr>) -> Result<Option<bool>> {
+/// Uses three-valued bounds when input columns prevent constant evaluation.
+fn evaluate_predicate(predicate: &Arc<dyn PhysicalExpr>) -> Result<NullableInterval> {
     // Create a dummy record with no columns and one row
     let batch = RecordBatch::try_new_with_options(
         Arc::new(Schema::empty()),
@@ -1531,15 +1524,24 @@ fn evaluate_predicate(predicate: &Arc<dyn PhysicalExpr>) -> Result<Option<bool>>
 
     // Evaluate the predicate and interpret the result as a boolean
     let result = match predicate.evaluate(&batch) {
-        // An error during evaluation means we couldn't const evaluate the predicate, so return `None`
-        Err(_) => None,
-        Ok(ColumnarValue::Array(array)) => Some(
+        Err(_) => {
+            if let Some(expr) = predicate.downcast_ref::<BinaryExpr>()
+                && matches!(expr.op(), Operator::And | Operator::Or)
+            {
+                return evaluate_predicate(expr.left())?
+                    .apply_operator(expr.op(), &evaluate_predicate(expr.right())?);
+            }
+            if let Some(expr) = predicate.downcast_ref::<NotExpr>() {
+                return evaluate_predicate(expr.arg())?.not();
+            }
+            return Ok(NullableInterval::ANY_TRUTH_VALUE);
+        }
+        Ok(ColumnarValue::Array(array)) => {
             ScalarValue::try_from_array(array.as_ref(), 0)?
-                .cast_to(&DataType::Boolean)?,
-        ),
-        Ok(ColumnarValue::Scalar(scalar)) => Some(scalar.cast_to(&DataType::Boolean)?),
+        }
+        Ok(ColumnarValue::Scalar(scalar)) => scalar,
     };
-    Ok(result.map(|v| matches!(v, ScalarValue::Boolean(Some(true)))))
+    Ok(result.cast_to(&DataType::Boolean)?.into())
 }
 
 fn replace_with_null(
@@ -1594,7 +1596,7 @@ mod tests {
     use super::*;
 
     use crate::expressions;
-    use crate::expressions::{BinaryExpr, binary, cast, col, is_not_null};
+    use crate::expressions::{binary, cast, col, is_not_null};
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::Field;
@@ -1603,7 +1605,6 @@ mod tests {
     use datafusion_common::plan_err;
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
     use datafusion_expr::type_coercion::binary::type_union_coercion;
-    use datafusion_expr_common::operator::Operator;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
     use half::f16;
 
@@ -2794,6 +2795,41 @@ mod tests {
     #[test]
     fn test_case_expression_nullability_with_not_nullable_column() -> Result<()> {
         case_expression_nullability(false)
+    }
+
+    #[rstest::rstest]
+    #[case::and(Operator::And, false, false)]
+    #[case::or(Operator::Or, false, true)]
+    #[case::not_and(Operator::And, true, true)]
+    #[case::not_or(Operator::Or, true, false)]
+    fn test_case_expression_nullability_with_independent_columns(
+        #[case] op: Operator,
+        #[case] negated: bool,
+        #[case] nullable: bool,
+        #[values(false, true)] reverse: bool,
+    ) -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]);
+        let a: Arc<dyn PhysicalExpr> = col("a", &schema)?;
+        let left: Arc<dyn PhysicalExpr> =
+            binary(Arc::clone(&a), Operator::Gt, lit(1), &schema)?;
+        let right: Arc<dyn PhysicalExpr> =
+            binary(col("b", &schema)?, Operator::Lt, lit(3), &schema)?;
+        let predicate: Arc<dyn PhysicalExpr> = if reverse {
+            binary(right, op, left, &schema)?
+        } else {
+            binary(left, op, right, &schema)?
+        };
+        let predicate: Arc<dyn PhysicalExpr> = if negated {
+            expressions::not(predicate)?
+        } else {
+            predicate
+        };
+
+        assert_nullability(when_then_else(&predicate, &a, &lit(0))?, &schema, nullable);
+        Ok(())
     }
 
     fn case_expression_nullability(col_is_nullable: bool) -> Result<()> {
