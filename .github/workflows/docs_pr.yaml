@@ -26,12 +26,14 @@ on:
   push:
     paths:
       - "docs/**"
+      - "ci/scripts/check_docs_html.sh"
     branches:
       - main
       - branch-*
   pull_request:
     paths:
       - "docs/**"
+      - "ci/scripts/check_docs_html.sh"
   # manual trigger
   # https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow
   workflow_dispatch:
@@ -63,7 +65,4 @@ jobs:
         with:
           tool: cargo-depgraph@1.6
       - name: Build docs html and check for warnings
-        run: |
-          set -x
-          cd docs
-          uv run --package datafusion-docs ./build.sh # fails on errors
+        run: ./ci/scripts/check_docs_html.sh # fails on errors
