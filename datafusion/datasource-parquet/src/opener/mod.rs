@@ -30,13 +30,13 @@ use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
     DecoderBuilderConfig, InitialDecoderState, PushDecoderStreamState, RgPlanEntry,
-    RowGroupPruner,
+    RowFilterContext, RowGroupPruner,
 };
 use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
 use crate::schema_coercion::coerce_physical_file_schema;
 use crate::{
     BloomFilterStatistics, ParquetAccessPlan, ParquetFileMetrics,
-    ParquetFileReaderFactory, ParquetRowSelection, ParquetVirtualColumn,
+    ParquetFileReaderFactory, ParquetRowSelection, ParquetVirtualColumn, RowGroupAccess,
 };
 use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
@@ -77,7 +77,9 @@ use datafusion_execution::parquet_encryption::EncryptionFactory;
 use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+use parquet::arrow::arrow_reader::{
+    ArrowReaderMetadata, ArrowReaderOptions, MaskRunIter,
+};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::parquet_column;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMetaData};
@@ -521,6 +523,65 @@ struct FiltersPreparedParquetOpen {
 struct RowGroupsPrunedParquetOpen {
     prepared: FiltersPreparedParquetOpen,
     row_groups: RowGroupAccessPlanFilter,
+    /// Built lazily for external-selection index checks and reused by the stream.
+    decoder_read_plans: Option<DecoderReadPlans>,
+}
+
+/// Per-file projection and filter plans shared by index loading and decoding.
+struct DecoderReadPlans {
+    projection: DecoderProjection,
+    row_filter_context: Option<RowFilterContext>,
+}
+
+impl DecoderReadPlans {
+    fn try_new(
+        prepared: &PreparedParquetOpen,
+        metadata: &ArrowReaderMetadata,
+    ) -> Result<Self> {
+        // Build the decoder projection (mask + per-batch transform) in a
+        // single call. Encapsulating it behind `DecoderProjection` keeps the
+        // opener's orchestration body focused on filter / decoder / stream
+        // wiring. The file-column projection excludes virtual columns and
+        // respects nested field projections.
+        let projection = DecoderProjection::try_new(
+            &prepared.projection,
+            &prepared.physical_file_schema,
+            metadata.parquet_schema(),
+            &prepared.output_schema,
+            prepared.virtual_state.as_deref(),
+        )?;
+        let pushdown_predicate = prepared
+            .pushdown_filters
+            .then_some(prepared.predicate.as_ref())
+            .flatten();
+        // Precompute the candidate list once per file. Both the initial
+        // `RowFilter` and any per-RG rebuilds (via
+        // `RowFilterContext::build_row_filter`) reuse it, so tree walks
+        // (`reassign_expr_columns`) and column resolution only run once —
+        // not once per row group.
+        let row_filter_context = pushdown_predicate.and_then(|predicate| {
+            RowFilterContext::try_new(
+                predicate,
+                &prepared.physical_file_schema,
+                metadata.metadata(),
+                prepared.reorder_predicates,
+                prepared.file_metrics.clone(),
+                prepared.max_predicate_cache_size,
+            )
+        });
+        Ok(Self {
+            projection,
+            row_filter_context,
+        })
+    }
+
+    fn reads_leaf(&self, leaf_idx: usize) -> bool {
+        self.projection.projection_mask().leaf_included(leaf_idx)
+            || self
+                .row_filter_context
+                .as_ref()
+                .is_some_and(|context| context.reads_leaf(leaf_idx))
+    }
 }
 
 /// State of [`ParquetOpenState`]
@@ -587,8 +648,8 @@ impl ParquetOpenState {
                 )))
             }
             ParquetOpenState::PruneWithStatistics(prepared) => {
-                let prepared_row_groups = (*prepared).prune_row_groups()?;
-                if prepared_row_groups.should_load_page_index() {
+                let mut prepared_row_groups = (*prepared).prune_row_groups()?;
+                if prepared_row_groups.should_load_page_index()? {
                     Ok(ParquetOpenState::LoadPageIndex(
                         prepared_row_groups.load_page_index().boxed(),
                     ))
@@ -1225,6 +1286,7 @@ impl FiltersPreparedParquetOpen {
             return Ok(RowGroupsPrunedParquetOpen {
                 prepared: self,
                 row_groups,
+                decoder_read_plans: None,
             });
         }
 
@@ -1270,6 +1332,7 @@ impl FiltersPreparedParquetOpen {
         Ok(RowGroupsPrunedParquetOpen {
             prepared: self,
             row_groups,
+            decoder_read_plans: None,
         })
     }
 }
@@ -1278,24 +1341,74 @@ impl RowGroupsPrunedParquetOpen {
     /// Returns true if the reader would benefit from a page index load, given
     /// the current pruning predicate and row group access plan.
     ///
-    /// The page index is used for data page pruning, and it is only useful
-    /// when:
+    /// Offset indexes also allow an existing row selection to skip data pages,
+    /// even without a predicate or when row-group statistics fully match it.
+    /// Otherwise, the page index is useful for predicate-based pruning when:
     ///
     /// 1. There is at least one row group that may have filtered rows
     ///    (if it is fully matched we know no rows will be filtered)
     ///
     /// 2. There is a page index for at least one predicate column (some
     ///    parquet writers do not write the page index).
-    fn should_load_page_index(&self) -> bool {
+    fn should_load_page_index(&mut self) -> Result<bool> {
+        if !self.prepared.loaded.prepared.enable_page_index {
+            return Ok(false);
+        }
+        let row_groups = &self.row_groups;
+        let parquet_metadata = self.prepared.loaded.reader_metadata.metadata();
+        // External row selections need offset indexes to skip pages without
+        // decoding them. They do not require column statistics or a predicate.
+        let mut selected_row_groups = row_groups
+            .row_group_indexes()
+            .filter(|&idx| {
+                let RowGroupAccess::Selection(selection) =
+                    &row_groups.access_plan().inner()[idx]
+                else {
+                    return false;
+                };
+                // Runs alternate between selected and skipped rows, so two runs
+                // suffice. Stream bitmap runs without materializing all selectors.
+                match selection.as_mask() {
+                    Some(mask) => MaskRunIter::new(mask).nth(1).is_some(),
+                    None => selection.iter().nth(1).is_some(),
+                }
+            })
+            .peekable();
+        if selected_row_groups.peek().is_some() {
+            // Resolve the actual decoder and row-filter projections once. Keep
+            // both plans for build_stream instead of constructing a separate
+            // combined projection solely for this index check.
+            let read_plans = match &self.decoder_read_plans {
+                Some(plans) => plans,
+                None => self.decoder_read_plans.insert(DecoderReadPlans::try_new(
+                    &self.prepared.loaded.prepared,
+                    &self.prepared.loaded.reader_metadata,
+                )?),
+            };
+            // Partial indexes are supported: only a column read from a row group
+            // with a partial selection needs an offset index to benefit.
+            if selected_row_groups.any(|idx| {
+                parquet_metadata
+                    .row_group(idx)
+                    .columns()
+                    .iter()
+                    .enumerate()
+                    .any(|(leaf_idx, column)| {
+                        read_plans.reads_leaf(leaf_idx)
+                            && column.offset_index_offset().is_some()
+                    })
+            }) {
+                return Ok(true);
+            }
+        }
         let Some(page_pruning_predicate) = self.prepared.page_pruning_predicate.as_ref()
         else {
-            return false;
+            return Ok(false);
         };
-        let row_groups = &self.row_groups;
         let fully_matched = row_groups.is_fully_matched();
         // if all row groups are fully matched, nothing can be pruned
         if row_groups.row_group_indexes().all(|idx| fully_matched[idx]) {
-            return false;
+            return Ok(false);
         }
 
         // Check the file's footer metadata to see if a page index was written
@@ -1303,10 +1416,9 @@ impl RowGroupsPrunedParquetOpen {
         //
         // Note: offsets are recorded in the footer, so we can determine if a
         // page index exists before attempting to read it.
-        let parquet_metadata = self.prepared.loaded.reader_metadata.metadata();
         let arrow_schema = &self.prepared.loaded.prepared.physical_file_schema;
         let parquet_schema = parquet_metadata.file_metadata().schema_descr();
-        page_pruning_predicate.predicate_column_names().any(|name| {
+        Ok(page_pruning_predicate.predicate_column_names().any(|name| {
             let Some((leaf_idx, _)) = parquet_column(parquet_schema, arrow_schema, name)
             else {
                 return false;
@@ -1316,7 +1428,7 @@ impl RowGroupsPrunedParquetOpen {
                 column.column_index_offset().is_some()
                     && column.offset_index_offset().is_some()
             })
-        })
+        }))
     }
 
     /// Load the page index if pruning requires it and metadata did not include it.
@@ -1328,7 +1440,14 @@ impl RowGroupsPrunedParquetOpen {
                 .loaded
                 .options
                 .clone()
-                .with_page_index_policy(PageIndexPolicy::Optional),
+                .with_offset_index_policy(PageIndexPolicy::Optional)
+                .with_column_index_policy(
+                    if self.prepared.page_pruning_predicate.is_some() {
+                        PageIndexPolicy::Optional
+                    } else {
+                        PageIndexPolicy::Skip
+                    },
+                ),
         )
         .await?;
 
@@ -1426,6 +1545,7 @@ impl RowGroupsPrunedParquetOpen {
         let RowGroupsPrunedParquetOpen {
             prepared,
             mut row_groups,
+            decoder_read_plans,
         } = self;
         let FiltersPreparedParquetOpen {
             loaded,
@@ -1523,17 +1643,15 @@ impl RowGroupsPrunedParquetOpen {
 
         let arrow_reader_metrics = ArrowReaderMetrics::enabled();
 
-        // Build the decoder projection (mask + per-batch transform) in a
-        // single call. Encapsulating it behind `DecoderProjection` keeps the
-        // opener's orchestration body focused on filter / decoder / stream
-        // wiring.
-        let decoder_projection = DecoderProjection::try_new(
-            &prepared.projection,
-            &prepared.physical_file_schema,
-            reader_metadata.parquet_schema(),
-            &prepared.output_schema,
-            prepared.virtual_state.as_deref(),
-        )?;
+        // Reuse plans built for the external-selection index check. Other
+        // scans defer this work until the stream is built.
+        let DecoderReadPlans {
+            projection: decoder_projection,
+            row_filter_context: precomputed_context,
+        } = match decoder_read_plans {
+            Some(plans) => plans,
+            None => DecoderReadPlans::try_new(&prepared, &reader_metadata)?,
+        };
 
         // Lazily-registered suppression counter shared by the open-time first-RG
         // skip below and the stream's per-RG toggle (registered on first use so
@@ -1551,26 +1669,6 @@ impl RowGroupsPrunedParquetOpen {
             filter_installed,
             row_filter_context,
         } = {
-            let pushdown_predicate = prepared
-                .pushdown_filters
-                .then_some(prepared.predicate.as_ref())
-                .flatten();
-            // Precompute the prebuilt candidate list once per file. Both the
-            // initial `RowFilter` and any per-RG rebuilds (via
-            // `RowFilterContext::build`) reuse it, so tree walks
-            // (`reassign_expr_columns`) and column resolution only run once —
-            // not once per row group.
-            let precomputed_context = pushdown_predicate.and_then(|predicate| {
-                crate::push_decoder::RowFilterContext::try_new(
-                    predicate,
-                    &prepared.physical_file_schema,
-                    &file_metadata,
-                    prepared.reorder_predicates,
-                    prepared.file_metrics.clone(),
-                    prepared.max_predicate_cache_size,
-                )
-            });
-
             // Build the prepared access plan first — `prepare_access_plan` may
             // call `reorder_by_statistics` (for `sort_order_for_reorder`) and
             // `reverse` (for `reverse_row_groups`), both of which mutate
@@ -1955,12 +2053,14 @@ pub(crate) async fn load_page_index<T: AsyncFileReader>(
     options: ArrowReaderOptions,
 ) -> Result<ArrowReaderMetadata> {
     let parquet_metadata = reader_metadata.metadata();
-    let missing_column_index = !parquet_metadata
-        .page_index()
-        .is_some_and(|page_index| page_index.has_column_indexes());
-    let missing_offset_index = !parquet_metadata
-        .page_index()
-        .is_some_and(|page_index| page_index.has_offset_indexes());
+    let missing_column_index = options.column_index_policy() != PageIndexPolicy::Skip
+        && !parquet_metadata
+            .page_index()
+            .is_some_and(|page_index| page_index.has_column_indexes());
+    let missing_offset_index = options.offset_index_policy() != PageIndexPolicy::Skip
+        && !parquet_metadata
+            .page_index()
+            .is_some_and(|page_index| page_index.has_offset_indexes());
     // You may ask yourself: why are we even checking if the page index is already loaded here?
     // Didn't we explicitly *not* load it above?
     // Well it's possible that a custom implementation of `AsyncFileReader` gives you
@@ -1970,7 +2070,8 @@ pub(crate) async fn load_page_index<T: AsyncFileReader>(
         let m = Arc::try_unwrap(Arc::clone(parquet_metadata))
             .unwrap_or_else(|e| e.as_ref().clone());
         let mut reader = ParquetMetaDataReader::new_with_metadata(m)
-            .with_page_index_policy(PageIndexPolicy::Optional);
+            .with_column_index_policy(options.column_index_policy())
+            .with_offset_index_policy(options.offset_index_policy());
         reader.load_page_index(input).await?;
         let new_parquet_metadata = reader.finish()?;
         let new_arrow_reader =
@@ -2202,6 +2303,15 @@ mod test {
         predicate: Option<Expr>,
         plan: ParquetAccessPlan,
     ) -> bool {
+        should_load_page_index_with_projection(metadata, predicate, plan, None)
+    }
+
+    fn should_load_page_index_with_projection(
+        metadata: ParquetMetaData,
+        predicate: Option<Expr>,
+        plan: ParquetAccessPlan,
+        projection: Option<&[usize]>,
+    ) -> bool {
         use crate::RowGroupAccessPlanFilter;
         let arrow_schema: SchemaRef = Arc::new(
             parquet_to_arrow_schema(metadata.file_metadata().schema_descr(), None)
@@ -2213,16 +2323,20 @@ mod test {
         });
 
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let morselizer = ParquetMorselizerBuilder::new()
+        let mut builder = ParquetMorselizerBuilder::new()
             .with_store(store)
             .with_schema(Arc::clone(&arrow_schema))
-            .build();
+            .with_enable_page_index(true);
+        if let Some(projection) = projection {
+            builder = builder.with_projection_indices(projection);
+        }
+        let morselizer = builder.build();
         let file = PartitionedFile::new("test.parquet".to_string(), 100);
         let prepared = morselizer.prepare_open_file(file).unwrap();
         let options = ArrowReaderOptions::new();
         let reader_metadata =
             ArrowReaderMetadata::try_new(Arc::new(metadata), options.clone()).unwrap();
-        let open = RowGroupsPrunedParquetOpen {
+        let mut open = RowGroupsPrunedParquetOpen {
             prepared: FiltersPreparedParquetOpen {
                 loaded: MetadataLoadedParquetOpen {
                     prepared,
@@ -2233,8 +2347,9 @@ mod test {
                 page_pruning_predicate,
             },
             row_groups: RowGroupAccessPlanFilter::new(plan),
+            decoder_read_plans: None,
         };
-        open.should_load_page_index()
+        open.should_load_page_index().unwrap()
     }
 
     impl ParquetMorselizerBuilder {
@@ -4419,6 +4534,362 @@ mod test {
             rows_without_page_index, 100,
             "without page index all rows are returned"
         );
+    }
+
+    #[test]
+    fn should_load_page_index_with_row_selection() {
+        use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
+
+        let mut plan = ParquetAccessPlan::new_all(1);
+        plan.scan_selection(
+            0,
+            RowSelection::from(vec![RowSelector::skip(9), RowSelector::select(1)]),
+        );
+        // Offset indexes alone suffice, even without column statistics.
+        let metadata = page_index_metadata(&[("a", true)], 1);
+        let row_group = metadata.row_group(0).clone();
+        let column = row_group
+            .column(0)
+            .clone()
+            .into_builder()
+            .set_column_index_offset(None)
+            .set_column_index_length(None)
+            .build()
+            .unwrap();
+        let row_group = row_group
+            .into_builder()
+            .set_column_metadata(vec![column])
+            .build()
+            .unwrap();
+        let metadata = metadata
+            .into_builder()
+            .set_row_groups(vec![row_group])
+            .build();
+        assert!(should_load_page_index(metadata.clone(), None, plan.clone()));
+
+        plan.mark_fully_matched(0);
+        assert!(should_load_page_index(
+            metadata.clone(),
+            Some(col("a").is_not_null()),
+            plan.clone(),
+        ));
+        assert!(!should_load_page_index(
+            page_index_metadata(&[("a", false)], 1),
+            None,
+            plan.clone(),
+        ));
+        let all_skipped = ParquetAccessPlan::new(vec![RowGroupAccess::Selection(
+            RowSelection::from(vec![RowSelector::skip(10)]),
+        )]);
+        assert!(!should_load_page_index(metadata.clone(), None, all_skipped,));
+        plan.skip(0);
+        assert!(!should_load_page_index(metadata.clone(), None, plan));
+
+        let plan = ParquetAccessPlan::new(vec![RowGroupAccess::Selection(
+            RowSelection::from(vec![RowSelector::select(10)]),
+        )]);
+        assert!(!should_load_page_index(metadata.clone(), None, plan));
+
+        // Exercise both representations, including empty and uniform selections.
+        for bits in [
+            vec![],
+            vec![true; 10],
+            vec![false; 10],
+            vec![true, false],
+            vec![false, true],
+            vec![true, false, true, false],
+        ] {
+            let expected = bits.contains(&true) && bits.contains(&false);
+            let selectors = RowSelection::from(
+                bits.iter()
+                    .map(|&selected| {
+                        if selected {
+                            RowSelector::select(1)
+                        } else {
+                            RowSelector::skip(1)
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            let mask = RowSelection::from_boolean_buffer(
+                arrow::buffer::BooleanBuffer::from(bits),
+            );
+            for selection in [selectors, mask] {
+                let plan =
+                    ParquetAccessPlan::new(vec![RowGroupAccess::Selection(selection)]);
+                assert_eq!(
+                    should_load_page_index(metadata.clone(), None, plan),
+                    expected,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn should_load_page_index_with_row_selection_checks_projection() {
+        use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
+
+        let metadata = page_index_metadata(&[("a", false), ("b", true)], 1);
+        let plan = ParquetAccessPlan::new(vec![RowGroupAccess::Selection(
+            RowSelection::from(vec![RowSelector::skip(9), RowSelector::select(1)]),
+        )]);
+        for (projection, expected) in [
+            (vec![0], false),
+            (vec![1], true),
+            (vec![0, 1], true),
+            (vec![], false),
+        ] {
+            assert_eq!(
+                should_load_page_index_with_projection(
+                    metadata.clone(),
+                    None,
+                    plan.clone(),
+                    Some(&projection),
+                ),
+                expected,
+            );
+        }
+        for projection in [vec![0], vec![1], vec![0, 1], vec![]] {
+            assert_eq!(
+                should_load_page_index_with_projection(
+                    page_index_metadata(&[("a", true), ("b", true)], 1),
+                    None,
+                    plan.clone(),
+                    Some(&projection),
+                ),
+                !projection.is_empty(),
+            );
+        }
+        // A missing index in a skipped row group does not prevent loading.
+        let mixed_metadata = page_index_metadata(&[("a", true)], 1)
+            .into_builder()
+            .set_row_groups(vec![
+                page_index_metadata(&[("a", true)], 1).row_group(0).clone(),
+                page_index_metadata(&[("a", false)], 1).row_group(0).clone(),
+            ])
+            .build();
+        let mixed_plan =
+            ParquetAccessPlan::new(vec![plan.inner()[0].clone(), RowGroupAccess::Skip]);
+        assert!(should_load_page_index(
+            mixed_metadata.clone(),
+            None,
+            mixed_plan
+        ));
+        // An index in a skipped or fully scanned row group does not help the
+        // partially selected row group that lacks an index.
+        for access in [RowGroupAccess::Skip, RowGroupAccess::Scan] {
+            let mixed_plan =
+                ParquetAccessPlan::new(vec![access, plan.inner()[0].clone()]);
+            assert!(!should_load_page_index(
+                mixed_metadata.clone(),
+                None,
+                mixed_plan
+            ));
+        }
+        // Projection restriction applies only to the external-selection path.
+        assert!(should_load_page_index_with_projection(
+            metadata,
+            Some(col("b").gt(lit(5i32))),
+            plan,
+            Some(&[0]),
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_load_page_index_policies_and_cached_offset_index() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+        let schema = batch.schema();
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .build();
+        let data_len = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            vec![batch],
+            Some(props),
+        )
+        .await;
+        let metrics = ExecutionPlanMetricsSet::new();
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(store)
+            .with_schema(schema)
+            .with_metrics(metrics.clone())
+            .build();
+        let file = PartitionedFile::new("test.parquet".to_string(), data_len as u64);
+        let mut loaded = opener
+            .prepare_open_file(file)
+            .unwrap()
+            .load()
+            .await
+            .unwrap();
+        let options = loaded
+            .options
+            .clone()
+            .with_column_index_policy(PageIndexPolicy::Skip)
+            .with_offset_index_policy(PageIndexPolicy::Optional);
+        let metadata = load_page_index(
+            loaded.reader_metadata,
+            &mut loaded.prepared.async_file_reader,
+            options.clone(),
+        )
+        .await
+        .unwrap();
+        let page_index = metadata.metadata().page_index().unwrap();
+        assert!(page_index.has_offset_indexes());
+        assert!(!page_index.has_column_indexes());
+        let bytes_scanned = counter_metric_value(&metrics, "bytes_scanned");
+        let cached = load_page_index(
+            metadata.clone(),
+            &mut loaded.prepared.async_file_reader,
+            options.clone(),
+        )
+        .await
+        .unwrap();
+        assert!(Arc::ptr_eq(metadata.metadata(), cached.metadata()));
+        assert_eq!(
+            counter_metric_value(&metrics, "bytes_scanned"),
+            bytes_scanned
+        );
+
+        // A later predicate scan must still load the missing column index.
+        let metadata = load_page_index(
+            cached,
+            &mut loaded.prepared.async_file_reader,
+            options.with_column_index_policy(PageIndexPolicy::Optional),
+        )
+        .await
+        .unwrap();
+        let page_index = metadata.metadata().page_index().unwrap();
+        assert!(page_index.has_offset_indexes());
+        assert!(page_index.has_column_indexes());
+        assert!(counter_metric_value(&metrics, "bytes_scanned") > bytes_scanned);
+    }
+
+    #[tokio::test]
+    async fn test_page_index_with_external_row_selection() {
+        use arrow::datatypes::Int32Type;
+        use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
+        use parquet::file::properties::{
+            EnabledStatistics, WriterProperties, WriterVersion,
+        };
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let values: Vec<i32> = (0..10_000).collect();
+        let output_values: Vec<i32> = (10_000..20_000).collect();
+        let batch = record_batch!(
+            ("a", Int32, values.clone()),
+            ("b", Int32, output_values.clone())
+        )
+        .unwrap();
+        let schema = batch.schema();
+        let props = WriterProperties::builder()
+            .set_writer_version(WriterVersion::PARQUET_1_0)
+            .set_dictionary_enabled(false)
+            .set_statistics_enabled(EnabledStatistics::Chunk)
+            .set_data_page_row_count_limit(100)
+            .set_write_batch_size(100)
+            .build();
+        let data_len = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            vec![batch],
+            Some(props),
+        )
+        .await;
+        let mut plan = ParquetAccessPlan::new_all(1);
+        plan.scan_selection(
+            0,
+            RowSelection::from(vec![RowSelector::skip(9_900), RowSelector::select(100)]),
+        );
+        let file = PartitionedFile::new("test.parquet".to_string(), data_len as u64)
+            .with_extension(plan);
+
+        // Both no predicate and a predicate matching the entire row group must
+        // still use the external selection to avoid reading unrelated pages.
+        for fully_matched_predicate in [false, true] {
+            let mut bytes_scanned = Vec::new();
+            for enabled in [false, true] {
+                let metrics = ExecutionPlanMetricsSet::new();
+                let mut builder = ParquetMorselizerBuilder::new()
+                    .with_store(Arc::clone(&store))
+                    .with_schema(Arc::clone(&schema))
+                    .with_projection_indices(&[0])
+                    .with_enable_page_index(enabled)
+                    .with_row_group_stats_pruning(true)
+                    .with_pushdown_filters(false)
+                    .with_metrics(metrics.clone());
+                if fully_matched_predicate {
+                    builder = builder.with_predicate(logical2physical(
+                        &col("a").gt_eq(lit(0i32)),
+                        &schema,
+                    ));
+                }
+                let result = collect_int32_values(
+                    open_file(&builder.build(), file.clone()).await.unwrap(),
+                )
+                .await;
+                assert_eq!(result, values[9_900..]);
+                bytes_scanned.push(counter_metric_value(&metrics, "bytes_scanned"));
+            }
+            assert!(
+                bytes_scanned[1] < bytes_scanned[0],
+                "offset indexes should reduce I/O: {bytes_scanned:?}"
+            );
+        }
+        // Filter columns still read pages when the output projection is empty.
+        // Filter-only columns must trigger index loading, but must not leak
+        // into the output projection when the cached plans are reused.
+        for projection in [vec![], vec![1]] {
+            let mut bytes_scanned = Vec::new();
+            for enabled in [false, true] {
+                let metrics = ExecutionPlanMetricsSet::new();
+                let opener = ParquetMorselizerBuilder::new()
+                    .with_store(Arc::clone(&store))
+                    .with_schema(Arc::clone(&schema))
+                    .with_projection_indices(&projection)
+                    .with_pushdown_filters(true)
+                    .with_enable_page_index(enabled)
+                    .with_predicate(logical2physical(
+                        &col("a").gt_eq(lit(9950i32)),
+                        &schema,
+                    ))
+                    .with_metrics(metrics.clone())
+                    .build();
+                let batches = open_file(&opener, file.clone())
+                    .await
+                    .unwrap()
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+                    50
+                );
+                assert!(
+                    batches
+                        .iter()
+                        .all(|batch| batch.num_columns() == projection.len())
+                );
+                if !projection.is_empty() {
+                    let result: Vec<i32> = batches
+                        .iter()
+                        .flat_map(|batch| {
+                            assert_eq!(batch.schema().field(0).name(), "b");
+                            batch
+                                .column(0)
+                                .as_primitive::<Int32Type>()
+                                .values()
+                                .iter()
+                                .copied()
+                        })
+                        .collect();
+                    assert_eq!(result, output_values[9950..]);
+                }
+                bytes_scanned.push(counter_metric_value(&metrics, "bytes_scanned"));
+            }
+            assert!(bytes_scanned[1] < bytes_scanned[0], "{bytes_scanned:?}");
+        }
     }
 
     #[test]
