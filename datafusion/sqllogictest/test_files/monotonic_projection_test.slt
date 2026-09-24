@@ -238,11 +238,8 @@ logical_plan
 03)----Filter: concat_equality_ordered.c = concat(concat_equality_ordered.a, concat_equality_ordered.b)
 04)------TableScan: concat_equality_ordered projection=[c, a, b], partial_filters=[concat_equality_ordered.c = concat(concat_equality_ordered.a, concat_equality_ordered.b)]
 physical_plan
-01)SortPreservingMergeExec: [a@0 ASC NULLS LAST, b@1 ASC NULLS LAST]
-02)--SortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[true]
-03)----FilterExec: c@0 = concat(a@1, b@2), projection=[a@1, b@2]
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
-05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/monotonic_projection_test/concat_equality_ordered.parquet]]}, projection=[c, a, b], output_ordering=[c@0 ASC NULLS LAST, a@1 ASC NULLS LAST, b@2 ASC NULLS LAST], file_type=parquet, predicate=c@0 = concat(a@1, b@2)
+01)SortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/monotonic_projection_test/concat_equality_ordered.parquet]]}, projection=[a, b], file_type=parquet, predicate=c@0 = concat(a@1, b@2), sort_order_for_reorder=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST]
 
 query TT
 SELECT a, b
