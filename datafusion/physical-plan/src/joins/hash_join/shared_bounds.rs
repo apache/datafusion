@@ -18,6 +18,7 @@
 //! Utilities for shared build-side information. Used in dynamic filter pushdown in Hash Joins.
 // TODO: include the link to the Dynamic Filter blog post.
 
+use std::cmp::Ordering;
 use std::fmt;
 use std::sync::Arc;
 
@@ -27,7 +28,9 @@ use crate::Partitioning;
 use crate::joins::Map;
 use crate::joins::PartitionMode;
 use crate::joins::hash_join::exec::HASH_JOIN_SEED;
-use crate::joins::hash_join::inlist_builder::build_struct_fields;
+use crate::joins::hash_join::inlist_builder::{
+    build_struct_fields, sorted_distinct_inlist_values,
+};
 use crate::joins::hash_join::partitioned_hash_eval::{
     HashExpr, HashTableLookupExpr, SeededRandomState,
 };
@@ -156,10 +159,25 @@ fn create_bounds_predicate(
     on_right: &[PhysicalExprRef],
     bounds: &PartitionBounds,
 ) -> Option<Arc<dyn PhysicalExpr>> {
+    create_column_bounds_predicate(
+        on_right,
+        (0..on_right.len()).map(|col_idx| bounds.get_column_bounds(col_idx)),
+    )
+}
+
+/// Creates a predicate `col >= min AND col <= max` for each key column that has
+/// bounds, combined with `AND`. Item `i` of `column_bounds` holds the bounds of
+/// `on_right[i]`, or `None` when that column has no bounds.
+///
+/// Returns `None` if no column has bounds.
+fn create_column_bounds_predicate<'a>(
+    on_right: &[PhysicalExprRef],
+    column_bounds: impl IntoIterator<Item = Option<&'a ColumnBounds>>,
+) -> Option<Arc<dyn PhysicalExpr>> {
     let mut column_predicates = Vec::new();
 
-    for (col_idx, right_expr) in on_right.iter().enumerate() {
-        if let Some(column_bounds) = bounds.get_column_bounds(col_idx) {
+    for (right_expr, column_bounds) in on_right.iter().zip(column_bounds) {
+        if let Some(column_bounds) = column_bounds {
             // Create predicate: col >= min AND col <= max
             let min_expr = Arc::new(BinaryExpr::new(
                 Arc::clone(right_expr),
@@ -190,6 +208,47 @@ fn create_bounds_predicate(
                 .unwrap(),
         )
     }
+}
+
+/// Combines the bounds of the given partitions into, for each of the
+/// `num_columns` key columns, one range that contains the bounds of every
+/// partition.
+///
+/// A column gets `None` when a partition has no bounds for it or when two
+/// bounds cannot be compared. NULL bounds are skipped: they occur only when
+/// every key of the column in that partition is NULL, and a NULL key cannot
+/// satisfy a range check in any case. If every bound of a column is NULL, the
+/// column gets `None`.
+fn combined_column_bounds(
+    num_columns: usize,
+    partition_bounds: &[&PartitionBounds],
+) -> Vec<Option<ColumnBounds>> {
+    (0..num_columns)
+        .map(|col_idx| {
+            let mut combined: Option<ColumnBounds> = None;
+            for bounds in partition_bounds {
+                let column_bounds = bounds.get_column_bounds(col_idx)?;
+                if column_bounds.min.is_null() || column_bounds.max.is_null() {
+                    continue;
+                }
+                combined = Some(match combined {
+                    None => column_bounds.clone(),
+                    Some(ColumnBounds { min, max }) => {
+                        let min = match column_bounds.min.partial_cmp(&min)? {
+                            Ordering::Less => column_bounds.min.clone(),
+                            _ => min,
+                        };
+                        let max = match column_bounds.max.partial_cmp(&max)? {
+                            Ordering::Greater => column_bounds.max.clone(),
+                            _ => max,
+                        };
+                        ColumnBounds::new(min, max)
+                    }
+                });
+            }
+            combined
+        })
+        .collect()
 }
 
 /// Combines a membership predicate and a bounds predicate with logical AND.
@@ -273,8 +332,8 @@ pub(crate) struct SharedBuildAccumulator {
     null_aware: bool,
 }
 
-/// Ceiling on the combined size of the per-partition `InList` arrays that
-/// [`SharedBuildAccumulator::union_inlist_filter`] will concatenate.
+/// Ceiling on the size of the deduplicated union `InList` array that
+/// [`SharedBuildAccumulator::union_inlist_filter`] will push.
 ///
 /// Each partition's list is independently capped by
 /// `hash_join_inlist_pushdown_max_size`, so without a combined cap the union
@@ -831,25 +890,34 @@ impl SharedBuildAccumulator {
     /// the routing hash for each probe row, and unlike a `CASE`, pruning can use
     /// an `InList`.
     ///
-    /// The per-partition bounds are dropped: every key in a partition's list is
-    /// inside that partition's bounds, so the bounds reject no additional rows.
+    /// The union is deduplicated and sorted (see
+    /// [`sorted_distinct_inlist_values`]). The per-partition lists hold one
+    /// entry per build row, not per distinct key, and the pruning code uses an
+    /// `InList` only up to `max_in_list_size` entries.
+    ///
+    /// The per-partition bounds are replaced by one range per key column that
+    /// contains the bounds of all partitions: `col >= min AND col <= max AND
+    /// col IN (...)`. Every key in the union is inside this range, so the range
+    /// rejects no additional rows, but the pruning code can use it when the
+    /// list has more than `max_in_list_size` entries.
     ///
     /// Returns the filter and whether any build key is NULL, or `None` when the
     /// collapse does not apply: fewer than two partitions have rows, a partition
     /// is canceled or pushes a hash table, the lists have different types, or
-    /// the union is larger than [`MAX_UNIONED_INLIST_BYTES`].
+    /// the deduplicated union is larger than [`MAX_UNIONED_INLIST_BYTES`].
     fn union_inlist_filter(
         &self,
         partitions: &[PartitionStatus],
     ) -> Result<Option<(Arc<dyn PhysicalExpr>, bool)>> {
         let mut arrays: Vec<&ArrayRef> = Vec::with_capacity(partitions.len());
-        let mut total_bytes = 0;
+        let mut partition_bounds: Vec<&PartitionBounds> =
+            Vec::with_capacity(partitions.len());
         let mut keys_have_null = false;
         for partition in partitions {
             let PartitionStatus::Reported(PartitionData {
+                bounds,
                 pushdown,
                 keys_have_null: partition_keys_have_null,
-                ..
             }) = partition
             else {
                 return Ok(None);
@@ -859,16 +927,15 @@ impl SharedBuildAccumulator {
                 PushdownStrategy::Empty => continue,
                 PushdownStrategy::Map(_) => return Ok(None),
             };
-            total_bytes += values.get_array_memory_size();
-            if total_bytes > MAX_UNIONED_INLIST_BYTES
-                || arrays
-                    .first()
-                    .is_some_and(|first| first.data_type() != values.data_type())
+            if arrays
+                .first()
+                .is_some_and(|first| first.data_type() != values.data_type())
             {
                 return Ok(None);
             }
             keys_have_null |= partition_keys_have_null;
             arrays.push(values);
+            partition_bounds.push(bounds);
         }
 
         // With zero or one non-empty partition, `build_partitioned_filter`
@@ -877,14 +944,28 @@ impl SharedBuildAccumulator {
             return Ok(None);
         }
 
+        // Each partition's list is at most `hash_join_inlist_pushdown_max_size`,
+        // so the concatenation is at most the partition count times that size.
         let union = concat(&arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>())?;
-        let filter_expr = create_membership_predicate(
+        let union = sorted_distinct_inlist_values(union)?;
+        if union.get_array_memory_size() > MAX_UNIONED_INLIST_BYTES {
+            return Ok(None);
+        }
+
+        let membership_expr = create_membership_predicate(
             &self.on_right,
             PushdownStrategy::InList(union),
             &HASH_JOIN_SEED,
             self.probe_schema.as_ref(),
         )?;
-        Ok(filter_expr.map(|expr| (expr, keys_have_null)))
+        let combined_bounds =
+            combined_column_bounds(self.on_right.len(), &partition_bounds);
+        let bounds_expr = create_column_bounds_predicate(
+            &self.on_right,
+            combined_bounds.iter().map(Option::as_ref),
+        );
+        Ok(combine_membership_and_bounds(membership_expr, bounds_expr)
+            .map(|expr| (expr, keys_have_null)))
     }
 
     /// Keeps probe rows with a NULL key when the join semantics need them.
@@ -999,8 +1080,9 @@ pub(super) fn completed_partitions_for_test(acc: &SharedBuildAccumulator) -> usi
 mod tests {
     use super::*;
 
+    use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
     use crate::joins::join_hash_map::JoinHashMapU32;
-    use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int32Array};
+    use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int32Array, StringArray};
     use arrow::compute::SortOptions;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::SplitPoint;
@@ -1250,10 +1332,161 @@ mod tests {
         .unwrap();
 
         // Routing is a function of the key, so a probe key can only match the
-        // list of the partition it routes to: the union is exact, and neither the
-        // `CASE` nor the per-partition bounds are necessary.
+        // list of the partition it routes to: the union is exact, and the `CASE`
+        // is not necessary. The per-partition bounds are replaced by one range
+        // that contains all of them.
         let expr = current_expr(&acc);
-        assert_in_list_column_values(&expr, "probe_key", 0, &[1, 4, 2, 5]);
+        assert_eq!(
+            expr.to_string(),
+            "probe_key@0 >= 1 AND probe_key@0 <= 5 AND probe_key@0 IN (SET) ([1, 2, 4, 5])"
+        );
+        let union = binary_expr(&expr).right();
+        assert_in_list_column_values(union, "probe_key", 0, &[1, 2, 4, 5]);
+    }
+
+    #[test]
+    fn partitioned_union_inlist_drops_duplicates_within_and_across_partitions() {
+        let acc = make_partitioned_expr_accumulator_for_test(3);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[7, 3, 7, 7, 3]), no_bounds()),
+            reported(in_list(&[5, 5, 3]), no_bounds()),
+            reported(in_list(&[9, 9]), no_bounds()),
+        ]))
+        .unwrap();
+
+        // The per-partition lists hold one entry per build row. The union holds
+        // each distinct key once, in sorted order.
+        let expr = current_expr(&acc);
+        assert_in_list_column_values(&expr, "probe_key", 0, &[3, 5, 7, 9]);
+    }
+
+    #[test]
+    fn partitioned_union_inlist_keeps_one_null_key() {
+        let acc = null_equal_partitioned_accumulator(2);
+        let with_nulls = |values: Vec<Option<i32>>| {
+            PushdownStrategy::InList(Arc::new(Int32Array::from(values)) as ArrayRef)
+        };
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported_with_null_keys(
+                with_nulls(vec![Some(2), None, Some(2), None]),
+                bounds(2, 2),
+            ),
+            reported_with_null_keys(with_nulls(vec![None, Some(1)]), bounds(1, 1)),
+        ]))
+        .unwrap();
+
+        // The NULL keys collapse into one NULL, and the filter still keeps the
+        // probe NULLs that a null-equal join can match.
+        let expr = current_expr(&acc);
+        assert_eq!(
+            expr.to_string(),
+            "probe_key@0 IS NULL OR probe_key@0 >= 1 AND probe_key@0 <= 2 AND probe_key@0 IN (SET) ([NULL, 1, 2])"
+        );
+    }
+
+    #[test]
+    fn partitioned_union_inlist_bounds_skip_all_null_partitions() {
+        let acc = null_equal_partitioned_accumulator(2);
+        let null_bounds = PartitionBounds::new(vec![ColumnBounds::new(
+            ScalarValue::Int32(None),
+            ScalarValue::Int32(None),
+        )]);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[4, 6]), bounds(4, 6)),
+            reported_with_null_keys(
+                PushdownStrategy::InList(
+                    Arc::new(Int32Array::from(vec![None, None])) as ArrayRef
+                ),
+                null_bounds,
+            ),
+        ]))
+        .unwrap();
+
+        // A partition with only NULL keys has NULL bounds. It adds nothing to
+        // the range, because a NULL key cannot pass a range check.
+        let expr = current_expr(&acc);
+        assert_eq!(
+            expr.to_string(),
+            "probe_key@0 IS NULL OR probe_key@0 >= 4 AND probe_key@0 <= 6 AND probe_key@0 IN (SET) ([NULL, 4, 6])"
+        );
+    }
+
+    #[test]
+    fn partitioned_union_inlist_without_bounds_in_one_partition_has_no_range() {
+        let acc = make_partitioned_expr_accumulator_for_test(2);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&[1, 2]), bounds(1, 2)),
+            reported(in_list(&[3]), no_bounds()),
+        ]))
+        .unwrap();
+
+        // The bounds of the second partition are unknown, so no range covers
+        // all partitions.
+        let expr = current_expr(&acc);
+        assert_in_list_column_values(&expr, "probe_key", 0, &[1, 2, 3]);
+    }
+
+    #[test]
+    fn partitioned_multi_column_union_inlist_is_deduplicated_with_bounds() {
+        let probe_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+        ]));
+        let on_right: Vec<PhysicalExprRef> =
+            vec![Arc::new(Column::new("a", 0)), Arc::new(Column::new("b", 1))];
+        let mut acc = make_accumulator_for_test(
+            AccumulatedBuildData::Partitioned {
+                partitions: vec![PartitionStatus::Pending; 2],
+                completed_partitions: 0,
+            },
+            on_right,
+        );
+        acc.probe_schema = probe_schema;
+
+        let struct_list = |a: Vec<i32>, b: Vec<&str>| {
+            PushdownStrategy::InList(
+                build_struct_inlist_values(&[
+                    Arc::new(Int32Array::from(a)) as ArrayRef,
+                    Arc::new(StringArray::from(b)) as ArrayRef,
+                ])
+                .unwrap()
+                .unwrap(),
+            )
+        };
+        let two_column_bounds = |a: (i32, i32), b: (&str, &str)| {
+            PartitionBounds::new(vec![
+                ColumnBounds::new(
+                    ScalarValue::Int32(Some(a.0)),
+                    ScalarValue::Int32(Some(a.1)),
+                ),
+                ColumnBounds::new(ScalarValue::from(b.0), ScalarValue::from(b.1)),
+            ])
+        };
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            // `(2, x)` is present twice; `(1, x)` and `(1, y)` differ only in `b`.
+            reported(
+                struct_list(vec![2, 1, 2, 1], vec!["x", "y", "x", "x"]),
+                two_column_bounds((1, 2), ("x", "y")),
+            ),
+            reported(
+                struct_list(vec![3, 3], vec!["w", "w"]),
+                two_column_bounds((3, 3), ("w", "w")),
+            ),
+        ]))
+        .unwrap();
+
+        // Deduplication is on the whole tuple, and each column gets its own
+        // range.
+        let expr = current_expr(&acc);
+        assert_eq!(
+            expr.to_string(),
+            "a@0 >= 1 AND a@0 <= 3 AND b@1 >= w AND b@1 <= y AND struct(a@0, b@1) IN (SET) ([{c0:1,c1:x}, {c0:1,c1:y}, {c0:2,c1:x}, {c0:3,c1:w}])"
+        );
     }
 
     #[test]
@@ -1296,17 +1529,37 @@ mod tests {
     #[test]
     fn partitioned_oversized_inlist_union_keeps_the_routing_case() {
         let acc = make_partitioned_expr_accumulator_for_test(2);
-        let half = MAX_UNIONED_INLIST_BYTES / size_of::<i32>() / 2 + 1;
-        let values = (0..half as i32).collect::<Vec<_>>();
+        let half = (MAX_UNIONED_INLIST_BYTES / size_of::<i32>() / 2 + 1) as i32;
+        let low = (0..half).collect::<Vec<_>>();
+        let high = (half..2 * half).collect::<Vec<_>>();
 
         acc.build_filter(FinalizeInput::Partitioned(vec![
-            reported(in_list(&values), no_bounds()),
-            reported(in_list(&values), no_bounds()),
+            reported(in_list(&low), no_bounds()),
+            reported(in_list(&high), no_bounds()),
         ]))
         .unwrap();
 
         let expr = current_expr(&acc);
         assert_eq!(case_expr(&expr).when_then_expr().len(), 2);
+    }
+
+    #[test]
+    fn partitioned_inlist_union_cap_applies_after_deduplication() {
+        let acc = make_partitioned_expr_accumulator_for_test(2);
+        // Before deduplication the two lists are larger than the cap, but they
+        // hold only two distinct keys.
+        let half = MAX_UNIONED_INLIST_BYTES / size_of::<i32>() / 2 + 1;
+        let ones = vec![1; half];
+        let twos = vec![2; half];
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(in_list(&ones), no_bounds()),
+            reported(in_list(&twos), no_bounds()),
+        ]))
+        .unwrap();
+
+        let expr = current_expr(&acc);
+        assert_in_list_column_values(&expr, "probe_key", 0, &[1, 2]);
     }
 
     #[test]
