@@ -27,6 +27,7 @@ use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::joins::Map;
 use crate::joins::MapOffset;
 use crate::joins::PartitionMode;
+use crate::joins::SharedBitmapBuilder;
 use crate::joins::hash_join::exec::{JoinLeftData, NullAwareMode};
 use crate::joins::hash_join::probe_completion::ProbeSideSummary;
 use crate::joins::hash_join::shared_bounds::{
@@ -1377,10 +1378,9 @@ fn null_aware_left_mark_column(
 /// pairs through a hash lookup; without scope keys every pair is a candidate.
 /// The join filter, if any, then decides which candidates count.
 ///
-/// A build row stays UNKNOWN once it is marked, so candidates whose build row
-/// is already marked are skipped, and the join filter is not evaluated for
-/// them. Without scope keys this also ends the pairing as soon as no unmarked
-/// build row is left.
+/// A build row stays UNKNOWN once it is marked, so the pairing skips the build
+/// rows that are already marked, and the join filter is not evaluated for
+/// them. See [`UnmarkedPairs`].
 #[expect(clippy::too_many_arguments)]
 fn mark_null_candidates_for_probe_batch(
     build_side: &BuildSideReadyState,
@@ -1411,7 +1411,7 @@ fn mark_null_candidates_for_probe_batch(
 
     // Keeps the candidate pairs that pass the join filter and marks their
     // build rows as UNKNOWN.
-    let mut mark = |build_indices: UInt64Array, probe_indices: UInt32Array| {
+    let mark = |build_indices: UInt64Array, probe_indices: UInt32Array| {
         let (build_indices, probe_indices) =
             retain_unmarked(left_data, build_indices, probe_indices);
         if build_indices.is_empty() {
@@ -1441,45 +1441,68 @@ fn mark_null_candidates_for_probe_batch(
         }
         Ok(())
     };
+    // The scope maps pair rows by the hash of their scope keys; keep only the
+    // pairs whose scope keys are equal.
+    let mark_scope_matches = |build_indices: UInt64Array, probe_indices: UInt32Array| {
+        let (build_indices, probe_indices) = equal_rows_arr(
+            &build_indices,
+            &probe_indices,
+            build_scope_values,
+            probe_scope_values,
+            NullEquality::NullEqualsNothing,
+        )?;
+        mark(build_indices, probe_indices)
+    };
+
+    // With scope keys, the probe rows whose scope keys hold a NULL are in no
+    // scope. The others are looked up by the hash of their scope keys.
+    let probe_rows_in_scope = if probe_scope_values.is_empty() {
+        None
+    } else {
+        hashes_buffer.clear();
+        hashes_buffer.resize(state.batch.num_rows(), 0);
+        create_hashes(probe_scope_values, random_state, hashes_buffer)?;
+        Some(matchable_join_keys(
+            probe_scope_values,
+            NullEquality::NullEqualsNothing,
+        ))
+    };
+    let in_scope = |probe_row: &u32| match &probe_rows_in_scope {
+        Some(Some(valid)) => valid.is_valid(*probe_row as usize),
+        _ => true,
+    };
 
     // Case 1: build rows with a NULL value key are UNKNOWN as soon as any
     // probe row in their correlation scope passes the filter.
     if let Some(null_rows) = null_value_build_rows {
+        let probe_rows = (0..state.batch.num_rows() as u32).filter(in_scope);
         match &null_rows.scope_map {
             Some(scope_map) => {
-                hashes_buffer.clear();
-                hashes_buffer.resize(state.batch.num_rows(), 0);
-                create_hashes(probe_scope_values, random_state, hashes_buffer)?;
-
-                for_each_scope_match(
-                    scope_map.as_ref(),
-                    &null_rows.scope_values,
-                    probe_scope_values,
-                    hashes_buffer,
+                let mut pairs = UnmarkedPairs::new(
+                    left_data.null_indices_bitmap(),
                     batch_size,
+                    mark_scope_matches,
+                );
+                // The map indexes only the NULL-valued build rows; translate
+                // its positions back to build row indices.
+                pairs.scope_matches(
+                    scope_map.as_ref(),
+                    |position| null_rows.build_indices.value(position as usize),
+                    probe_rows,
+                    hashes_buffer,
                     probe_indices_buffer,
                     build_indices_buffer,
-                    |positions, probe_indices| {
-                        // The map indexes only the NULL-valued build rows;
-                        // translate its positions back to build row indices.
-                        let build_indices = UInt64Array::from_iter_values(
-                            positions
-                                .values()
-                                .iter()
-                                .map(|p| null_rows.build_indices.value(*p as usize)),
-                        );
-                        mark(build_indices, probe_indices)
-                    },
                 )?;
+                pairs.finish()?;
             }
             None => {
-                for_each_unmarked_cross_product(
-                    left_data,
-                    null_rows.build_indices.values().iter().copied(),
-                    0..state.batch.num_rows() as u32,
-                    batch_size,
-                    &mut mark,
+                let mut pairs =
+                    UnmarkedPairs::new(left_data.null_indices_bitmap(), batch_size, mark);
+                pairs.cross_product(
+                    null_rows.build_indices.values().to_vec(),
+                    probe_rows,
                 )?;
+                pairs.finish()?;
             }
         }
     }
@@ -1488,96 +1511,39 @@ fn mark_null_candidates_for_probe_batch(
     // scope that passes the filter an UNKNOWN candidate.
     if probe_has_null_values {
         let null_mask = arrow::compute::is_null(probe_value_key.as_ref())?;
-        let null_probe_rows = UInt32Array::from_iter_values(
-            null_mask.values().set_indices().map(|i| i as u32),
-        );
+        let null_probe_rows = null_mask
+            .values()
+            .set_indices()
+            .map(|i| i as u32)
+            .filter(in_scope);
 
         match left_data.null_aware_scope_map() {
             Some(scope_map) => {
-                let probe_null_scope_values = probe_scope_values
-                    .iter()
-                    .map(|values| {
-                        Ok(arrow::compute::filter(values.as_ref(), &null_mask)?)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                hashes_buffer.clear();
-                hashes_buffer.resize(null_probe_rows.len(), 0);
-                create_hashes(&probe_null_scope_values, random_state, hashes_buffer)?;
-
-                for_each_scope_match(
-                    scope_map,
-                    build_scope_values,
-                    &probe_null_scope_values,
-                    hashes_buffer,
+                let mut pairs = UnmarkedPairs::new(
+                    left_data.null_indices_bitmap(),
                     batch_size,
+                    mark_scope_matches,
+                );
+                pairs.scope_matches(
+                    scope_map,
+                    |build_row| build_row,
+                    null_probe_rows,
+                    hashes_buffer,
                     probe_indices_buffer,
                     build_indices_buffer,
-                    |build_indices, positions| {
-                        // The lookup ran over only the NULL-valued probe rows;
-                        // translate its positions back to probe row indices.
-                        let probe_indices = UInt32Array::from_iter_values(
-                            positions
-                                .values()
-                                .iter()
-                                .map(|p| null_probe_rows.value(*p as usize)),
-                        );
-                        mark(build_indices, probe_indices)
-                    },
                 )?;
+                pairs.finish()?;
             }
             None => {
-                for_each_unmarked_cross_product(
-                    left_data,
-                    0..left_data.batch().num_rows() as u64,
-                    null_probe_rows.values().iter().copied(),
-                    batch_size,
-                    &mut mark,
+                let mut pairs =
+                    UnmarkedPairs::new(left_data.null_indices_bitmap(), batch_size, mark);
+                pairs.cross_product(
+                    (0..left_data.batch().num_rows() as u64).collect(),
+                    null_probe_rows,
                 )?;
+                pairs.finish()?;
             }
         }
-    }
-
-    Ok(())
-}
-
-/// Calls `f` with all correlation-scope matches between `build_scope_values`
-/// and `probe_scope_values`, as chunks of at most `batch_size` pairs of
-/// (position in `build_scope_values`, position in `probe_scope_values`).
-#[expect(clippy::too_many_arguments)]
-fn for_each_scope_match(
-    scope_map: &dyn JoinHashMapType,
-    build_scope_values: &[ArrayRef],
-    probe_scope_values: &[ArrayRef],
-    hashes_buffer: &[u64],
-    batch_size: usize,
-    probe_indices_buffer: &mut Vec<u32>,
-    build_indices_buffer: &mut Vec<u64>,
-    mut f: impl FnMut(UInt64Array, UInt32Array) -> Result<()>,
-) -> Result<()> {
-    let mut offset = (0, None);
-    loop {
-        let (build_indices, probe_indices, next_offset) = lookup_join_hashmap(
-            scope_map,
-            build_scope_values,
-            probe_scope_values,
-            NullEquality::NullEqualsNothing,
-            hashes_buffer,
-            None,
-            batch_size,
-            offset,
-            probe_indices_buffer,
-            build_indices_buffer,
-        )?;
-
-        if !build_indices.is_empty() {
-            f(build_indices, probe_indices)?;
-        }
-
-        let Some(next_offset) = next_offset else {
-            break;
-        };
-        offset = next_offset;
     }
 
     Ok(())
@@ -1603,57 +1569,252 @@ fn retain_unmarked(
     (build.into(), probe.into())
 }
 
-/// Calls `f` with the pairs of `build_rows` x `probe_rows` whose build row is
-/// not marked UNKNOWN, as chunks of at most `batch_size` pairs.
+/// Pairs build rows with probe rows for
+/// [`mark_null_candidates_for_probe_batch`] and calls `f` with the pairs, as
+/// chunks of at most `batch_size` pairs.
 ///
-/// `f` marks build rows, so the unmarked build rows are found again after each
-/// chunk. The pairing stops when no unmarked build row is left.
-fn for_each_unmarked_cross_product(
-    left_data: &JoinLeftData,
-    build_rows: impl Iterator<Item = u64>,
-    probe_rows: impl Iterator<Item = u32>,
+/// `f` marks build rows, and a marked build row cannot become unmarked. So
+/// the pairing drops the marked build rows again after each chunk, and a
+/// build row stops producing pairs soon after it is marked.
+struct UnmarkedPairs<'a, F> {
+    /// The UNKNOWN marks of the build rows.
+    null_indices_bitmap: &'a SharedBitmapBuilder,
     batch_size: usize,
-    mut f: impl FnMut(UInt64Array, UInt32Array) -> Result<()>,
-) -> Result<()> {
-    let retain_unmarked_rows = |rows: &mut Vec<u64>| {
-        let bitmap = left_data.null_indices_bitmap().lock();
-        rows.retain(|idx| !bitmap.get_bit(*idx as usize));
-    };
+    build_chunk: Vec<u64>,
+    probe_chunk: Vec<u32>,
+    /// Whether `f` was called since the build rows were last refreshed.
+    marks_since_refresh: bool,
+    f: F,
+}
 
-    let mut build_rows: Vec<u64> = build_rows.collect();
-    retain_unmarked_rows(&mut build_rows);
+impl<'a, F> UnmarkedPairs<'a, F>
+where
+    F: FnMut(UInt64Array, UInt32Array) -> Result<()>,
+{
+    fn new(
+        null_indices_bitmap: &'a SharedBitmapBuilder,
+        batch_size: usize,
+        f: F,
+    ) -> Self {
+        Self {
+            null_indices_bitmap,
+            batch_size,
+            build_chunk: Vec::with_capacity(batch_size),
+            probe_chunk: Vec::with_capacity(batch_size),
+            marks_since_refresh: false,
+            f,
+        }
+    }
 
-    let mut build_chunk = Vec::with_capacity(batch_size);
-    let mut probe_chunk = Vec::with_capacity(batch_size);
-    let mut marks_since_refresh = false;
-    for probe_row in probe_rows {
-        // Refresh only after a chunk was sent, so the cost of the refresh
-        // stays proportional to the pairs already evaluated.
-        if marks_since_refresh {
-            retain_unmarked_rows(&mut build_rows);
-            marks_since_refresh = false;
-        }
-        if build_rows.is_empty() {
-            break;
-        }
-        for build_row in &build_rows {
-            build_chunk.push(*build_row);
-            probe_chunk.push(probe_row);
-            if build_chunk.len() == batch_size {
-                f(
-                    std::mem::replace(&mut build_chunk, Vec::with_capacity(batch_size))
-                        .into(),
-                    std::mem::replace(&mut probe_chunk, Vec::with_capacity(batch_size))
-                        .into(),
-                )?;
-                marks_since_refresh = true;
+    /// Pairs each of `probe_rows` with each unmarked row of `build_rows`. The
+    /// pairing stops when no unmarked build row is left.
+    fn cross_product(
+        &mut self,
+        mut build_rows: Vec<u64>,
+        probe_rows: impl Iterator<Item = u32>,
+    ) -> Result<()> {
+        self.retain_unmarked_rows(&mut build_rows);
+        self.pair_unmarked(&mut build_rows, probe_rows)
+    }
+
+    /// Pairs each of `probe_rows` with the build rows that share the hash of
+    /// its correlation scope keys in `scope_map`. `build_row` translates the
+    /// positions stored in `scope_map` to build row indices. Rows with equal
+    /// hashes can have different scope keys, so `f` must still check that the
+    /// scope keys are equal.
+    ///
+    /// The pairing starts with a lookup per probe row, like the join itself,
+    /// and skips the build rows that are marked. But each probe row still
+    /// finds all the build rows in its scope, so a marked build row costs a
+    /// little for every later probe row in its scope. When those costs add up
+    /// to more than a sort of the probe rows, the rest of the probe rows are
+    /// grouped by hash: each hash is then looked up once, and its group is
+    /// paired like a cross product.
+    fn scope_matches(
+        &mut self,
+        scope_map: &dyn JoinHashMapType,
+        build_row: impl Fn(u64) -> u64,
+        probe_rows: impl Iterator<Item = u32>,
+        probe_hashes: &[u64],
+        probe_indices_buffer: &mut Vec<u32>,
+        build_indices_buffer: &mut Vec<u64>,
+    ) -> Result<()> {
+        let probe_rows: Vec<u32> = probe_rows.collect();
+        let hashes: Vec<u64> = probe_rows
+            .iter()
+            .map(|row| probe_hashes[*row as usize])
+            .collect();
+
+        // A sort costs about as much as this many skipped matches per probe
+        // row.
+        const SKIPPED_MATCHES_PER_SORTED_ROW: usize = 8;
+        let max_skipped_matches = SKIPPED_MATCHES_PER_SORTED_ROW * probe_rows.len();
+        let mut skipped_matches = 0;
+        let mut offset = (0, None);
+        loop {
+            let next_offset = self.lookup_unmarked(
+                scope_map,
+                &hashes,
+                offset,
+                &build_row,
+                &mut skipped_matches,
+                probe_indices_buffer,
+                build_indices_buffer,
+            );
+            for (position, build_row) in
+                probe_indices_buffer.iter().zip(build_indices_buffer.iter())
+            {
+                self.push(*build_row, probe_rows[*position as usize])?;
+            }
+            let Some(next_offset) = next_offset else {
+                return Ok(());
+            };
+            offset = next_offset;
+            if skipped_matches > max_skipped_matches {
+                break;
             }
         }
+
+        // Group the probe rows from the one being looked up. Its build rows
+        // that were already paired are paired again, which changes no mark.
+        let mut rest: Vec<(u64, u32)> = hashes[offset.0..]
+            .iter()
+            .copied()
+            .zip(probe_rows[offset.0..].iter().copied())
+            .collect();
+        rest.sort_unstable_by_key(|(hash, _)| *hash);
+        let groups: Vec<_> = rest.chunk_by(|a, b| a.0 == b.0).collect();
+        let group_hashes: Vec<u64> = groups.iter().map(|group| group[0].0).collect();
+
+        let mut build_rows = vec![];
+        let mut offset = (0, None);
+        loop {
+            // A lookup chunk holds the build rows of one or more groups, in
+            // group order.
+            let next_offset = self.lookup_unmarked(
+                scope_map,
+                &group_hashes,
+                offset,
+                &build_row,
+                &mut skipped_matches,
+                probe_indices_buffer,
+                build_indices_buffer,
+            );
+            let mut matches = build_indices_buffer.as_slice();
+            for group in probe_indices_buffer.chunk_by(|a, b| a == b) {
+                let group_matches;
+                (group_matches, matches) = matches.split_at(group.len());
+                build_rows.clear();
+                build_rows.extend_from_slice(group_matches);
+                // A build row belongs to one group only, so the marks made
+                // for the earlier groups do not concern these build rows.
+                self.marks_since_refresh = false;
+                self.pair_unmarked(
+                    &mut build_rows,
+                    groups[group[0] as usize].iter().map(|(_, row)| *row),
+                )?;
+            }
+            let Some(next_offset) = next_offset else {
+                return Ok(());
+            };
+            offset = next_offset;
+        }
     }
-    if !build_chunk.is_empty() {
-        f(build_chunk.into(), probe_chunk.into())?;
+
+    /// Looks up the next chunk of matches of `hashes` in `scope_map`, from
+    /// `offset`, into the buffers: the position in `hashes`, and the build
+    /// row translated with `build_row`. Drops the matches whose build row is
+    /// marked, and adds their number to `skipped_matches`.
+    #[expect(clippy::too_many_arguments)]
+    fn lookup_unmarked(
+        &self,
+        scope_map: &dyn JoinHashMapType,
+        hashes: &[u64],
+        offset: MapOffset,
+        build_row: impl Fn(u64) -> u64,
+        skipped_matches: &mut usize,
+        probe_indices: &mut Vec<u32>,
+        build_indices: &mut Vec<u64>,
+    ) -> Option<MapOffset> {
+        let next_offset = scope_map.get_matched_indices_with_limit_offset(
+            hashes,
+            None,
+            self.batch_size,
+            offset,
+            probe_indices,
+            build_indices,
+        );
+        let bitmap = self.null_indices_bitmap.lock();
+        let mut kept = 0;
+        for i in 0..build_indices.len() {
+            let row = build_row(build_indices[i]);
+            if !bitmap.get_bit(row as usize) {
+                build_indices[kept] = row;
+                probe_indices[kept] = probe_indices[i];
+                kept += 1;
+            }
+        }
+        *skipped_matches += build_indices.len() - kept;
+        build_indices.truncate(kept);
+        probe_indices.truncate(kept);
+        next_offset
     }
-    Ok(())
+
+    /// Sends the pairs that are left.
+    fn finish(mut self) -> Result<()> {
+        self.send()
+    }
+
+    /// Pairs each of `probe_rows` with each of `build_rows`, which must hold
+    /// no build row that was marked before the last chunk was sent.
+    fn pair_unmarked(
+        &mut self,
+        build_rows: &mut Vec<u64>,
+        probe_rows: impl Iterator<Item = u32>,
+    ) -> Result<()> {
+        for probe_row in probe_rows {
+            // Refresh only after a chunk was sent, so the cost of the refresh
+            // stays proportional to the pairs already evaluated.
+            if self.marks_since_refresh {
+                self.retain_unmarked_rows(build_rows);
+            }
+            if build_rows.is_empty() {
+                break;
+            }
+            for build_row in build_rows.iter() {
+                self.push(*build_row, probe_row)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn push(&mut self, build_row: u64, probe_row: u32) -> Result<()> {
+        self.build_chunk.push(build_row);
+        self.probe_chunk.push(probe_row);
+        if self.build_chunk.len() == self.batch_size {
+            self.send()?;
+        }
+        Ok(())
+    }
+
+    fn send(&mut self) -> Result<()> {
+        if self.build_chunk.is_empty() {
+            return Ok(());
+        }
+        let build_chunk =
+            std::mem::replace(&mut self.build_chunk, Vec::with_capacity(self.batch_size));
+        let probe_chunk =
+            std::mem::replace(&mut self.probe_chunk, Vec::with_capacity(self.batch_size));
+        (self.f)(build_chunk.into(), probe_chunk.into())?;
+        self.marks_since_refresh = true;
+        Ok(())
+    }
+
+    fn retain_unmarked_rows(&mut self, rows: &mut Vec<u64>) {
+        let bitmap = self.null_indices_bitmap.lock();
+        rows.retain(|idx| !bitmap.get_bit(*idx as usize));
+        self.marks_since_refresh = false;
+    }
 }
 
 impl Stream for HashJoinStream {
@@ -1737,5 +1898,62 @@ mod tests {
         handle.cancel_pending();
 
         assert_eq!(handle.state(), &BuildReportState::Finalized);
+    }
+
+    /// A correlation scope with many build rows and many probe rows: once a
+    /// chunk of pairs marks the build rows, the rest of the probe rows in the
+    /// scope must not pair with them again.
+    #[test]
+    fn unmarked_pairs_stop_pairing_marked_scope_rows() -> Result<()> {
+        use crate::joins::join_hash_map::JoinHashMapU64;
+        use arrow::array::BooleanBufferBuilder;
+        use parking_lot::Mutex;
+
+        // Build rows 0..60 are in the scope with hash 1, rows 60..100 in the
+        // scope with hash 2. The probe rows alternate between both scopes.
+        let build_hashes: Vec<u64> = (0..100).map(|row| 1 + (row >= 60) as u64).collect();
+        let probe_hashes: Vec<u64> = (0..1000).map(|row| 1 + row % 2).collect();
+        let mut scope_map = JoinHashMapU64::with_capacity(build_hashes.len());
+        scope_map.update_from_iter(Box::new(build_hashes.iter().enumerate().rev()), 0);
+
+        for batch_size in [1, 16] {
+            let mut bitmap = BooleanBufferBuilder::new(build_hashes.len());
+            bitmap.append_n(build_hashes.len(), false);
+            let bitmap = Mutex::new(bitmap);
+
+            // Every candidate pair passes: mark its build row.
+            let mut pairs = 0;
+            let mut unmarked_pairs = UnmarkedPairs::new(
+                &bitmap,
+                batch_size,
+                |build: UInt64Array, probe: UInt32Array| {
+                    pairs += build.len();
+                    for (build_row, probe_row) in
+                        build.values().iter().zip(probe.values())
+                    {
+                        assert_eq!(
+                            build_hashes[*build_row as usize],
+                            probe_hashes[*probe_row as usize]
+                        );
+                        bitmap.lock().set_bit(*build_row as usize, true);
+                    }
+                    Ok(())
+                },
+            );
+            unmarked_pairs.scope_matches(
+                &scope_map,
+                |build_row| build_row,
+                0..probe_hashes.len() as u32,
+                &probe_hashes,
+                &mut vec![],
+                &mut vec![],
+            )?;
+            unmarked_pairs.finish()?;
+
+            assert_eq!(bitmap.lock().finish().count_set_bits(), build_hashes.len());
+            // A lookup per probe row would give 500 * 60 + 500 * 40 pairs.
+            assert!(pairs < 200, "batch_size {batch_size}: {pairs} pairs");
+        }
+        Ok(())
     }
 }

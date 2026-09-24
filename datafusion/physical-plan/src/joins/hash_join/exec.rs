@@ -202,14 +202,12 @@ fn try_create_array_map(
 /// match of every probe row.
 pub(super) struct NullValueBuildRows {
     /// Hash table keyed by the correlation scope values of the NULL-valued
-    /// build rows. Stored positions index into `scope_values`/`build_indices`,
-    /// not the full build batch. `None` when the join has no correlation
-    /// scope keys, so every probe row is in scope.
+    /// build rows. Stored positions index into `build_indices`, not the full
+    /// build batch. `None` when the join has no correlation scope keys, so
+    /// every probe row is in scope.
     pub(super) scope_map: Option<Box<dyn JoinHashMapType>>,
-    /// Correlation scope key values of the NULL-valued build rows.
-    pub(super) scope_values: Vec<ArrayRef>,
-    /// Maps positions in `map`/`scope_values` back to row indices in the full
-    /// build batch.
+    /// Maps positions in `scope_map` back to row indices in the full build
+    /// batch.
     pub(super) build_indices: UInt64Array,
 }
 
@@ -3066,14 +3064,9 @@ async fn collect_left_input(
                 .map(|values| Ok(arrow::compute::filter(values.as_ref(), &null_mask)?))
                 .collect::<Result<Vec<_>>>()?;
 
-            // `scope_values` and `build_indices` are retained for the lifetime
-            // of the join, so charge them to the reservation like the maps and
-            // bitmaps above.
-            let retained_size = build_indices.get_array_memory_size()
-                + scope_values
-                    .iter()
-                    .map(|values| values.get_array_memory_size())
-                    .sum::<usize>();
+            // `build_indices` is retained for the lifetime of the join, so
+            // charge it to the reservation like the maps and bitmaps above.
+            let retained_size = build_indices.get_array_memory_size();
             reservation.try_grow(retained_size)?;
             metrics.build_mem_used.add(retained_size);
 
@@ -3090,7 +3083,6 @@ async fn collect_left_input(
 
             Some(NullValueBuildRows {
                 scope_map,
-                scope_values,
                 build_indices,
             })
         } else {
