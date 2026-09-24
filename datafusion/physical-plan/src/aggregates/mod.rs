@@ -3886,9 +3886,8 @@ mod tests {
         )];
 
         let task_ctx = if spill {
-            // Smaller than the complete grouping-set state. Partial early
-            // emission must materialize and release state incrementally.
-            new_spill_ctx(4, 500)
+            // Includes the descriptor-aware empty grouping-set table state.
+            new_spill_ctx(4, 700)
         } else {
             Arc::new(TaskContext::default())
         };
