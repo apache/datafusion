@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Criterion benchmarks for Hash Join with RightSemi/RightAnti joins with Int32 keys.
+//! Criterion benchmarks for hash join build sizing and RightSemi/RightAnti joins.
 //!
 //! ## Key Benchmark Axes
 //!
@@ -48,9 +48,9 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::{JoinType, NullEquality};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::col;
-use datafusion_physical_plan::collect;
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, utils::JoinOn};
 use datafusion_physical_plan::test::TestMemoryExec;
+use datafusion_physical_plan::{ExecutionPlan, collect};
 use tokio::runtime::Runtime;
 
 /// Build RecordBatches with Int32 keys.
@@ -92,10 +92,7 @@ fn build_batches(
     batches
 }
 
-fn make_exec(
-    batches: &[RecordBatch],
-    schema: &SchemaRef,
-) -> Arc<dyn datafusion_physical_plan::ExecutionPlan> {
+fn make_exec(batches: &[RecordBatch], schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
     TestMemoryExec::try_new_exec(&[batches.to_vec()], Arc::clone(schema), None).unwrap()
 }
 
@@ -108,8 +105,8 @@ fn schema() -> SchemaRef {
 }
 
 fn do_hash_join(
-    left: Arc<dyn datafusion_physical_plan::ExecutionPlan>,
-    right: Arc<dyn datafusion_physical_plan::ExecutionPlan>,
+    left: Arc<dyn ExecutionPlan>,
+    right: Arc<dyn ExecutionPlan>,
     join_type: JoinType,
     rt: &Runtime,
 ) -> usize {
@@ -442,5 +439,89 @@ fn bench_hash_join_semi_anti(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_hash_join_semi_anti);
+/// Isolate generic hash-table construction from probe fanout and ArrayMap selection.
+fn bench_hash_join_build(c: &mut Criterion) {
+    const ROWS: usize = 1_000_000;
+    let rt = Runtime::new().unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Utf8, false)]));
+    let probe = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(StringArray::from(vec!["absent"]))],
+    )
+    .unwrap();
+    let mut group = c.benchmark_group("hash_join_build");
+
+    for distribution in [
+        "duplicates",
+        "mid_20k",
+        "mid_100k",
+        "mostly_unique",
+        "unique",
+        "unique_prefix",
+        "duplicate_prefix",
+    ] {
+        // Allocate independent arrays so retained slices do not inflate memory metrics.
+        let build: Vec<_> = (0..ROWS)
+            .step_by(8192)
+            .map(|start| {
+                let keys = StringArray::from_iter_values(
+                    (start..(start + 8192).min(ROWS)).map(|row| {
+                        let key = match distribution {
+                            "duplicates" => row % 64,
+                            "mid_20k" => row % 20_000,
+                            "mid_100k" => row % 100_000,
+                            "mostly_unique" => row % 900_000,
+                            "unique" => row,
+                            _ => {
+                                // Identical key multisets in opposite input order.
+                                let row = if distribution == "duplicate_prefix" {
+                                    ROWS - 1 - row
+                                } else {
+                                    row
+                                };
+                                if row < ROWS / 2 { row + 64 } else { row % 64 }
+                            }
+                        };
+                        format!("key_{key}")
+                    }),
+                );
+                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(keys)]).unwrap()
+            })
+            .collect();
+        let run = || {
+            let join = Arc::new(
+                HashJoinExec::try_new(
+                    make_exec(&build, &schema),
+                    make_exec(std::slice::from_ref(&probe), &schema),
+                    vec![(col("key", &schema).unwrap(), col("key", &schema).unwrap())],
+                    None,
+                    &JoinType::Inner,
+                    None,
+                    PartitionMode::CollectLeft,
+                    NullEquality::NullEqualsNothing,
+                    false,
+                )
+                .unwrap(),
+            );
+            let output = rt
+                .block_on(collect(join.clone(), Arc::new(TaskContext::default())))
+                .unwrap();
+            let metrics = join.metrics().unwrap();
+            (
+                output.iter().map(RecordBatch::num_rows).sum::<usize>(),
+                metrics.sum_by_name("build_input_rows").unwrap().as_usize(),
+                metrics.sum_by_name("build_mem_used").unwrap().as_usize(),
+            )
+        };
+        // An absent probe avoids materializing duplicate matches, but must build the index.
+        let (output_rows, build_rows, build_bytes) = run();
+        assert_eq!(output_rows, 0);
+        assert_eq!(build_rows, ROWS);
+        eprintln!("hash_join_build/{distribution}: build_mem_used={build_bytes} bytes");
+        group.bench_function(distribution, |b| b.iter(run));
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench_hash_join_semi_anti, bench_hash_join_build);
 criterion_main!(benches);

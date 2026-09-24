@@ -30,8 +30,8 @@ use hashbrown::hash_table::Entry::{Occupied, Vacant};
 
 /// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
 ///
-/// By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the build side,
-/// we make sure that we don't have to re-hash the hashmap, which needs access to the key (the hash in this case) value.
+/// The lookup table needs one entry per distinct hash. The separate row-index
+/// chain retains every build row, including rows with duplicate keys.
 ///
 /// E.g. 1 -> [3, 6, 8] indicates that the column values map to rows 3, 6 and 8 for hash value 1
 /// As the key is a hash value, we need to check possible hash collisions in the probe stage
@@ -149,7 +149,6 @@ pub struct JoinHashMapU32 {
 }
 
 impl JoinHashMapU32 {
-    #[cfg(test)]
     pub(crate) fn new(map: HashTable<(u64, u32)>, next: Vec<u32>) -> Self {
         Self { map, next }
     }
@@ -229,7 +228,6 @@ pub struct JoinHashMapU64 {
 }
 
 impl JoinHashMapU64 {
-    #[cfg(test)]
     pub(crate) fn new(map: HashTable<(u64, u64)>, next: Vec<u64>) -> Self {
         Self { map, next }
     }
@@ -308,6 +306,18 @@ pub fn update_from_iter<'a, T>(
     map: &mut HashTable<(u64, T)>,
     next: &mut [T],
     iter: Box<dyn Iterator<Item = (usize, &'a u64)> + Send + 'a>,
+    deleted_offset: usize,
+) where
+    T: Copy + TryFrom<usize> + PartialOrd,
+    <T as TryFrom<usize>>::Error: Debug,
+{
+    update_from_iter_inner(map, next, iter, deleted_offset);
+}
+
+pub(crate) fn update_from_iter_inner<'a, T>(
+    map: &mut HashTable<(u64, T)>,
+    next: &mut [T],
+    iter: impl Iterator<Item = (usize, &'a u64)> + Send + 'a,
     deleted_offset: usize,
 ) where
     T: Copy + TryFrom<usize> + PartialOrd,

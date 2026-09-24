@@ -31,6 +31,7 @@ use crate::filter_pushdown::{
 };
 use crate::joins::Map;
 use crate::joins::array_map::ArrayMap;
+use crate::joins::hash_join::compact_hash_map::build_compact_hash_map;
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
 use crate::joins::hash_join::probe_completion::{ProbeCompletion, ProbeSideSummary};
 use crate::joins::hash_join::shared_bounds::{
@@ -2950,6 +2951,8 @@ async fn collect_left_input(
         _ => None,
     };
 
+    let mut hash_peak = 0;
+    let memory_before_hash = metrics.build_mem_used.value();
     let (join_hash_map, batch, left_values) =
         if let Some((array_map, batch, left_value)) = try_create_array_map(
             bounds.as_ref(),
@@ -2966,38 +2969,34 @@ async fn collect_left_input(
 
             (Map::ArrayMap(array_map), batch, left_value)
         } else {
-            // Estimation of memory size, required for hashtable, prior to allocation.
-            // Final result can be verified using `RawTable.allocation_info()`
-            // Use `u32` indices for the JoinHashMap when num_rows ≤ u32::MAX, otherwise use the
-            // `u64` indice variant
-            // Arc is used instead of Box to allow sharing with SharedBuildAccumulator for hash map pushdown
-            let mut hashmap = new_join_hashmap(num_rows, &mut reservation, &metrics)?;
-
-            let mut hashes_buffer = Vec::new();
-            let mut offset = 0;
-
-            let batches_iter = batches.iter().rev();
-
-            // Updating hashmap starting from the last batch
-            for batch in batches_iter.clone() {
-                hashes_buffer.clear();
-                hashes_buffer.resize(batch.num_rows(), 0);
-                update_hash(
+            let before = reservation.size();
+            let hashmap: Box<dyn JoinHashMapType> = if num_rows > u32::MAX as usize {
+                let (table, next) = build_compact_hash_map::<u64>(
+                    &batches,
                     &on_left,
-                    batch,
-                    &mut *hashmap,
-                    offset,
+                    num_rows,
                     &random_state,
-                    &mut hashes_buffer,
-                    0,
-                    true,
                     null_equality,
+                    &reservation,
+                    &mut hash_peak,
                 )?;
-                offset += batch.num_rows();
-            }
+                Box::new(JoinHashMapU64::new(table, next))
+            } else {
+                let (table, next) = build_compact_hash_map::<u32>(
+                    &batches,
+                    &on_left,
+                    num_rows,
+                    &random_state,
+                    null_equality,
+                    &reservation,
+                    &mut hash_peak,
+                )?;
+                Box::new(JoinHashMapU32::new(table, next))
+            };
+            metrics.build_mem_used.add(reservation.size() - before);
 
             // Merge all batches into a single batch, so we can directly index into the arrays
-            let batch = concat_batches(&schema, batches_iter.clone())?;
+            let batch = concat_batches(&schema, batches.iter().rev())?;
 
             let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
 
@@ -3137,6 +3136,12 @@ async fn collect_left_input(
     let build_has_null = null_aware == Some(NullAwareMode::RightAnti)
         && !left_values.is_empty()
         && left_values[0].logical_null_count() > 0;
+
+    // Hash growth and scratch preceded the bitmap and auxiliary allocations.
+    // Report their peak without adding allocations that were not live together.
+    metrics
+        .build_mem_used
+        .set_max(memory_before_hash + hash_peak);
 
     let data = JoinLeftData {
         map,
