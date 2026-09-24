@@ -1721,12 +1721,14 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        LeftAnti Join:  Filter: Int32(3) = __correlated_sq_1.id AND outer_t.grp = __correlated_sq_1.grp null_aware [id:Int32;N, grp:Int32;N]
-          TableScan: outer_t [id:Int32;N, grp:Int32;N]
-          SubqueryAlias: __correlated_sq_1 [id:Int32;N, grp:Int32;N]
-            Projection: inner_t.id, inner_t.grp [id:Int32;N, grp:Int32;N]
-              TableScan: inner_t [id:Int32;N, grp:Int32;N]
+            @"
+        Projection: outer_t.id, outer_t.grp [id:Int32;N, grp:Int32;N]
+          LeftAnti Join:  Filter: __correlated_sq_1_value = __correlated_sq_1.id AND outer_t.grp = __correlated_sq_1.grp null_aware [id:Int32;N, grp:Int32;N, __correlated_sq_1_value:Int32]
+            Projection: outer_t.id, outer_t.grp, Int32(3) AS __correlated_sq_1_value [id:Int32;N, grp:Int32;N, __correlated_sq_1_value:Int32]
+              TableScan: outer_t [id:Int32;N, grp:Int32;N]
+            SubqueryAlias: __correlated_sq_1 [id:Int32;N, grp:Int32;N]
+              Projection: inner_t.id, inner_t.grp [id:Int32;N, grp:Int32;N]
+                TableScan: inner_t [id:Int32;N, grp:Int32;N]
         "
         )
     }
