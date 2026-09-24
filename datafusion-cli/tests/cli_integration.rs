@@ -26,11 +26,12 @@ use insta_cmd::{assert_cmd_snapshot, get_cargo_bin};
 use std::path::PathBuf;
 use std::time::Duration;
 use std::{env, fs};
-use testcontainers_modules::minio;
-use testcontainers_modules::testcontainers::core::{CmdWaitFor, ExecCommand, Mount};
+use testcontainers_modules::testcontainers::core::{
+    CmdWaitFor, ExecCommand, IntoContainerPort, Mount,
+};
 use testcontainers_modules::testcontainers::runners::AsyncRunner;
 use testcontainers_modules::testcontainers::{
-    ContainerAsync, Image, ImageExt, TestcontainersError,
+    ContainerAsync, GenericImage, ImageExt, TestcontainersError,
 };
 
 fn cli() -> Command {
@@ -46,43 +47,46 @@ fn make_settings() -> Settings {
     settings
 }
 
-const MINIO_ROOT_USER: &str = "TEST-DataFusionLogin";
-const MINIO_ROOT_PASSWORD: &str = "TEST-DataFusionPassword";
+const RUSTFS_ACCESS_KEY: &str = "TEST-DataFusionLogin";
+const RUSTFS_SECRET_KEY: &str = "TEST-DataFusionPassword";
 
-/// Registry override for the image pinned by `testcontainers-modules`.
+/// S3 compatible server used by the storage integration tests.
 ///
-/// MinIO withdrew `minio/minio` from Docker Hub on 2026-09-11. quay.io still
-/// serves the same tag, so only the registry changes here. An unblock, not a
-/// fix: see <https://github.com/apache/datafusion/issues/25215>.
-const MINIO_IMAGE_NAME: &str = "quay.io/minio/minio";
+/// MinIO withdrew its images from Docker Hub and quay.io, see
+/// <https://github.com/apache/datafusion/issues/25705>.
+const RUSTFS_IMAGE_NAME: &str = "rustfs/rustfs";
+const RUSTFS_IMAGE_TAG: &str = "1.0.0";
 
-/// How many times to try bringing up the MinIO container before failing.
+/// Endpoint of the server as seen from inside its own container.
+const RUSTFS_INTERNAL_ENDPOINT: &str = "http://localhost:9000";
+
+/// How many times to try bringing up the RustFS container before failing.
 ///
-/// Both the image pull and the `mc` calls that provision the bucket fail
+/// Both the image pull and the calls that provision the bucket fail
 /// intermittently on CI with transient errors such as
 /// `bytes remaining on stream`. Retrying is much cheaper than a flaky run.
-const MINIO_SETUP_ATTEMPTS: u32 = 3;
+const RUSTFS_SETUP_ATTEMPTS: u32 = 3;
 
-/// Delay before the first retry of the MinIO setup, doubled on each attempt.
-const MINIO_SETUP_RETRY_DELAY: Duration = Duration::from_secs(5);
+/// Delay before the first retry of the RustFS setup, doubled on each attempt.
+const RUSTFS_SETUP_RETRY_DELAY: Duration = Duration::from_secs(5);
 
-/// Time budget for a single MinIO setup attempt. A stalled image pull or `mc`
-/// invocation is retried instead of hanging the whole test run.
-const MINIO_SETUP_TIMEOUT: Duration = Duration::from_mins(3);
+/// Time budget for a single RustFS setup attempt. A stalled image pull or
+/// provisioning call is retried instead of hanging the whole test run.
+const RUSTFS_SETUP_TIMEOUT: Duration = Duration::from_mins(3);
 
-/// Starts a MinIO container preloaded with the test data, retrying transient
+/// Starts a RustFS container preloaded with the test data, retrying transient
 /// Docker failures.
 ///
 /// Returns `None` when the test should be skipped, that is when
 /// `TEST_STORAGE_INTEGRATION` is unset or the registry is rate limiting the
 /// image pull. Panics if the container cannot be started for any other reason.
-async fn start_minio_or_skip() -> Option<ContainerAsync<minio::MinIO>> {
+async fn start_rustfs_or_skip() -> Option<ContainerAsync<GenericImage>> {
     if env::var("TEST_STORAGE_INTEGRATION").is_err() {
         eprintln!("Skipping external storages integration tests");
         return None;
     }
 
-    match setup_minio_container().await {
+    match setup_rustfs_container().await {
         Ok(container) => Some(container),
         Err(e) if is_docker_pull_rate_limit(&e) => {
             eprintln!("Skipping test: Docker pull rate limit reached: {e}");
@@ -105,30 +109,30 @@ fn is_retryable(error: &str) -> bool {
         && !error.contains("failed to initialize a docker client")
 }
 
-async fn setup_minio_container() -> Result<ContainerAsync<minio::MinIO>, String> {
-    let mut delay = MINIO_SETUP_RETRY_DELAY;
-    let mut last_error = String::from("MinIO container setup was not attempted at all");
+async fn setup_rustfs_container() -> Result<ContainerAsync<GenericImage>, String> {
+    let mut delay = RUSTFS_SETUP_RETRY_DELAY;
+    let mut last_error = String::from("RustFS container setup was not attempted at all");
 
-    for attempt in 1..=MINIO_SETUP_ATTEMPTS {
+    for attempt in 1..=RUSTFS_SETUP_ATTEMPTS {
         last_error = match tokio::time::timeout(
-            MINIO_SETUP_TIMEOUT,
-            try_setup_minio_container(),
+            RUSTFS_SETUP_TIMEOUT,
+            try_setup_rustfs_container(),
         )
         .await
         {
             Ok(Ok(container)) => return Ok(container),
             Ok(Err(e)) => e,
             Err(_) => format!(
-                "Timed out after {MINIO_SETUP_TIMEOUT:?} while starting the MinIO container"
+                "Timed out after {RUSTFS_SETUP_TIMEOUT:?} while starting the RustFS container"
             ),
         };
 
-        if attempt == MINIO_SETUP_ATTEMPTS || !is_retryable(&last_error) {
+        if attempt == RUSTFS_SETUP_ATTEMPTS || !is_retryable(&last_error) {
             break;
         }
 
         eprintln!(
-            "MinIO container setup failed (attempt {attempt}/{MINIO_SETUP_ATTEMPTS}), \
+            "RustFS container setup failed (attempt {attempt}/{RUSTFS_SETUP_ATTEMPTS}), \
              retrying in {delay:?}: {last_error}"
         );
         tokio::time::sleep(delay).await;
@@ -138,25 +142,25 @@ async fn setup_minio_container() -> Result<ContainerAsync<minio::MinIO>, String>
     Err(last_error)
 }
 
-/// A single attempt at starting and provisioning a MinIO container.
+/// A single attempt at starting and provisioning a RustFS container.
 ///
 /// The container is removed again if provisioning fails, so that the next
 /// attempt starts from a clean state.
-async fn try_setup_minio_container() -> Result<ContainerAsync<minio::MinIO>, String> {
-    let container = start_minio_container().await?;
+async fn try_setup_rustfs_container() -> Result<ContainerAsync<GenericImage>, String> {
+    let container = start_rustfs_container().await?;
 
-    match provision_minio_container(&container).await {
+    match provision_rustfs_container(&container).await {
         Ok(()) => Ok(container),
         Err(e) => {
             if let Err(rm_error) = container.rm().await {
-                eprintln!("Failed to remove the MinIO container: {rm_error}");
+                eprintln!("Failed to remove the RustFS container: {rm_error}");
             }
             Err(e)
         }
     }
 }
 
-async fn start_minio_container() -> Result<ContainerAsync<minio::MinIO>, String> {
+async fn start_rustfs_container() -> Result<ContainerAsync<GenericImage>, String> {
     let data_path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../datafusion/core/tests/data");
 
@@ -164,10 +168,10 @@ async fn start_minio_container() -> Result<ContainerAsync<minio::MinIO>, String>
         .canonicalize()
         .expect("Failed to get absolute path for test data");
 
-    minio::MinIO::default()
-        .with_name(MINIO_IMAGE_NAME)
-        .with_env_var("MINIO_ROOT_USER", MINIO_ROOT_USER)
-        .with_env_var("MINIO_ROOT_PASSWORD", MINIO_ROOT_PASSWORD)
+    GenericImage::new(RUSTFS_IMAGE_NAME, RUSTFS_IMAGE_TAG)
+        .with_exposed_port(9000.tcp())
+        .with_env_var("RUSTFS_ACCESS_KEY", RUSTFS_ACCESS_KEY)
+        .with_env_var("RUSTFS_SECRET_KEY", RUSTFS_SECRET_KEY)
         .with_mount(Mount::bind_mount(
             absolute_data_path.to_str().unwrap(),
             "/source",
@@ -176,31 +180,52 @@ async fn start_minio_container() -> Result<ContainerAsync<minio::MinIO>, String>
         .await
         .map_err(|e| match e {
             TestcontainersError::Client(e) => format!(
-                "Failed to start MinIO container. Ensure Docker is running and accessible: {e}"
+                "Failed to start RustFS container. Ensure Docker is running and accessible: {e}"
             ),
-            e => format!("Failed to start MinIO container: {e}"),
+            e => format!("Failed to start RustFS container: {e}"),
         })
 }
 
-/// Waits for MinIO to be healthy and uploads the test files.
+/// Waits for RustFS to be ready, creates the `data` bucket and uploads the
+/// test files into it.
 ///
-/// This is done via the `mc` CLI shipped in the image to avoid an s3 dependency.
-async fn provision_minio_container(
-    container: &ContainerAsync<minio::MinIO>,
+/// This is done via the `curl` binary shipped in the image, which signs the
+/// S3 requests itself, to avoid an s3 dependency.
+async fn provision_rustfs_container(
+    container: &ContainerAsync<GenericImage>,
 ) -> Result<(), String> {
+    let signed_curl = format!(
+        "curl -sSf --aws-sigv4 aws:amz:us-east-1:s3 \
+         --user {RUSTFS_ACCESS_KEY}:{RUSTFS_SECRET_KEY}"
+    );
+
     let commands = [
-        ExecCommand::new(["/usr/bin/mc", "ready", "local"]),
         ExecCommand::new([
-            "/usr/bin/mc",
-            "alias",
-            "set",
-            "localminio",
-            "http://localhost:9000",
-            MINIO_ROOT_USER,
-            MINIO_ROOT_PASSWORD,
+            "curl",
+            "-sSf",
+            "-o",
+            "/dev/null",
+            "--retry",
+            "30",
+            "--retry-delay",
+            "1",
+            "--retry-all-errors",
+            &format!("{RUSTFS_INTERNAL_ENDPOINT}/health/ready"),
         ]),
-        ExecCommand::new(["/usr/bin/mc", "mb", "localminio/data"]),
-        ExecCommand::new(["/usr/bin/mc", "cp", "-r", "/source/", "localminio/data/"]),
+        ExecCommand::new([
+            "sh",
+            "-c",
+            &format!("{signed_curl} -X PUT {RUSTFS_INTERNAL_ENDPOINT}/data"),
+        ]),
+        ExecCommand::new([
+            "sh",
+            "-c",
+            &format!(
+                "cd /source && find . -type f | while IFS= read -r f; do \
+                 {signed_curl} -T \"$f\" \"{RUSTFS_INTERNAL_ENDPOINT}/data/${{f#./}}\" \
+                 || exit 1; done"
+            ),
+        ]),
     ];
 
     for command in commands {
@@ -226,11 +251,11 @@ async fn provision_minio_container(
     Ok(())
 }
 
-/// CI pre-pulls the MinIO image so that the storage integration tests do not
+/// CI pre-pulls the RustFS image so that the storage integration tests do not
 /// have to pull it themselves. Guard against that pre-pull going stale when
-/// `testcontainers-modules` bumps the image it uses.
+/// the image used by the tests changes.
 #[test]
-fn minio_image_matches_ci_prepull() {
+fn rustfs_image_matches_ci_prepull() {
     let workflow =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.github/workflows/rust.yml");
 
@@ -239,25 +264,12 @@ fn minio_image_matches_ci_prepull() {
         return;
     };
 
-    let image = minio::MinIO::default();
-
-    // The override only redirects the registry, so it would silently stop
-    // tracking upstream if the crate ever pinned a different image.
-    assert!(
-        MINIO_IMAGE_NAME.ends_with(&format!("/{}", image.name())),
-        "`testcontainers-modules` now uses `{}`, which MINIO_IMAGE_NAME \
-         (`{MINIO_IMAGE_NAME}`) no longer mirrors.",
-        image.name()
-    );
-
-    // Match the assignment: `minio/minio:<tag>` is a substring of the quay
-    // reference and would pass either way.
-    let image_ref = format!("{MINIO_IMAGE_NAME}:{}", image.tag());
+    let image_ref = format!("{RUSTFS_IMAGE_NAME}:{RUSTFS_IMAGE_TAG}");
 
     assert!(
-        contents.contains(&format!("MINIO_IMAGE: {image_ref}")),
-        "{} does not pre-pull `{image_ref}`. Update MINIO_IMAGE in the \
-         `Pre-pull MinIO image` step to match the image used by the tests.",
+        contents.contains(&format!("RUSTFS_IMAGE: {image_ref}")),
+        "{} does not pre-pull `{image_ref}`. Update RUSTFS_IMAGE in the \
+         `Pre-pull RustFS image` step to match the image used by the tests.",
         workflow.display()
     );
 }
@@ -695,7 +707,7 @@ fn test_cli_wide_result_set_no_crash() {
 
 #[tokio::test]
 async fn test_cli() {
-    let Some(container) = start_minio_or_skip().await else {
+    let Some(container) = start_rustfs_or_skip().await else {
         return;
     };
 
@@ -709,8 +721,8 @@ async fn test_cli() {
         assert_cmd_snapshot!(
             cli()
                 .env_clear()
-                .env("AWS_ACCESS_KEY_ID", MINIO_ROOT_USER)
-                .env("AWS_SECRET_ACCESS_KEY", MINIO_ROOT_PASSWORD)
+                .env("AWS_ACCESS_KEY_ID", RUSTFS_ACCESS_KEY)
+                .env("AWS_SECRET_ACCESS_KEY", RUSTFS_SECRET_KEY)
                 .env("AWS_ENDPOINT", format!("http://localhost:{port}"))
                 .env("AWS_ALLOW_HTTP", "true")
                 .pass_stdin(input)
@@ -722,7 +734,7 @@ async fn test_cli() {
 async fn test_aws_options() {
     // Separate test is needed to pass aws as options in sql and not via env
 
-    let Some(container) = start_minio_or_skip().await else {
+    let Some(container) = start_rustfs_or_skip().await else {
         return;
     };
 
@@ -736,8 +748,8 @@ async fn test_aws_options() {
 STORED AS CSV
 LOCATION 's3://data/cars.csv'
 OPTIONS(
-    'aws.access_key_id' '{MINIO_ROOT_USER}',
-    'aws.secret_access_key' '{MINIO_ROOT_PASSWORD}',
+    'aws.access_key_id' '{RUSTFS_ACCESS_KEY}',
+    'aws.secret_access_key' '{RUSTFS_SECRET_KEY}',
     'aws.endpoint' 'http://localhost:{port}',
     'aws.allow_http' 'true'
 );
@@ -812,7 +824,7 @@ fn test_backtrace_output(#[case] query: &str) {
 
 #[tokio::test]
 async fn test_s3_url_fallback() {
-    let Some(container) = start_minio_or_skip().await else {
+    let Some(container) = start_rustfs_or_skip().await else {
         return;
     };
 
@@ -833,13 +845,13 @@ OPTIONS (
 SELECT * FROM partitioned_data ORDER BY column_1, column_2 LIMIT 5;
 "#;
 
-    assert_cmd_snapshot!(cli().with_minio(&container).await.pass_stdin(input));
+    assert_cmd_snapshot!(cli().with_rustfs(&container).await.pass_stdin(input));
 }
 
 /// Validate object store profiling output
 #[tokio::test]
 async fn test_object_store_profiling() {
-    let Some(container) = start_minio_or_skip().await else {
+    let Some(container) = start_rustfs_or_skip().await else {
         return;
     };
 
@@ -885,27 +897,29 @@ SELECT * from CARS LIMIT 1;
 SELECT * from CARS LIMIT 1;
 "#;
 
-    assert_cmd_snapshot!(cli().with_minio(&container).await.pass_stdin(input));
+    assert_cmd_snapshot!(cli().with_rustfs(&container).await.pass_stdin(input));
 }
 
-/// Extension trait to Add the minio connection information to a Command
+/// Extension trait to Add the RustFS connection information to a Command
 #[async_trait]
-trait MinioCommandExt {
-    async fn with_minio(&mut self, container: &ContainerAsync<minio::MinIO>)
-    -> &mut Self;
-}
-
-#[async_trait]
-impl MinioCommandExt for Command {
-    async fn with_minio(
+trait RustfsCommandExt {
+    async fn with_rustfs(
         &mut self,
-        container: &ContainerAsync<minio::MinIO>,
+        container: &ContainerAsync<GenericImage>,
+    ) -> &mut Self;
+}
+
+#[async_trait]
+impl RustfsCommandExt for Command {
+    async fn with_rustfs(
+        &mut self,
+        container: &ContainerAsync<GenericImage>,
     ) -> &mut Self {
         let port = container.get_host_port_ipv4(9000).await.unwrap();
 
         self.env_clear()
-            .env("AWS_ACCESS_KEY_ID", MINIO_ROOT_USER)
-            .env("AWS_SECRET_ACCESS_KEY", MINIO_ROOT_PASSWORD)
+            .env("AWS_ACCESS_KEY_ID", RUSTFS_ACCESS_KEY)
+            .env("AWS_SECRET_ACCESS_KEY", RUSTFS_SECRET_KEY)
             .env("AWS_ENDPOINT", format!("http://localhost:{port}"))
             .env("AWS_ALLOW_HTTP", "true")
     }
