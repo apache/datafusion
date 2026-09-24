@@ -144,9 +144,6 @@ pub(crate) struct PartialHashAggregateStream {
     /// Input batches containing raw rows, not partial aggregate state.
     input: SendableRecordBatchStream,
 
-    /// Target output batch size from configuration.
-    batch_size: usize,
-
     /// Memory reservation for group keys and accumulators.
     reservation: MemoryReservation,
 
@@ -271,7 +268,6 @@ impl PartialHashAggregateStream {
         Ok(Self {
             schema,
             input,
-            batch_size,
             baseline_metrics,
             reservation,
             reduction_factor,

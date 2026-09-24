@@ -20,9 +20,9 @@
 use arrow::array::{Array, ArrayRef, ArrowNativeTypeOp, ArrowNumericType, AsArray};
 use arrow::datatypes::Field;
 use arrow::datatypes::{
-    ArrowNativeType, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
-    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType, Decimal32Type,
-    Decimal64Type, Decimal128Type, Decimal256Type, DurationMicrosecondType,
+    ArrowNativeType,
+    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DataType, Decimal128Type, Decimal256Type, Decimal32Type,
+    Decimal64Type, DurationMicrosecondType,
     DurationMillisecondType, DurationNanosecondType, DurationSecondType, FieldRef,
     Float64Type, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
     IntervalYearMonthType, TimeUnit, UInt64Type,
@@ -31,22 +31,20 @@ use datafusion_common::hash_utils::RandomState;
 use datafusion_common::internal_err;
 use datafusion_common::stats::Precision;
 use datafusion_common::types::{
-    NativeType, logical_float64, logical_int8, logical_int16, logical_int32,
-    logical_int64, logical_uint8, logical_uint16, logical_uint32, logical_uint64,
+    NativeType, logical_float64, logical_int16, logical_int32,
+    logical_int64, logical_int8, logical_uint16, logical_uint32, logical_uint64, logical_uint8,
 };
 use datafusion_common::{HashMap, Result, ScalarValue, exec_err, not_impl_err};
 use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::expr_fn::cast;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
-use datafusion_expr::{Accumulator, AggregateUDFImpl, BlockedGroupsAccumulator, Coercion, Documentation, Expr, GroupsAccumulator, Operator, ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs, TypeSignature, TypeSignatureClass, Volatility};
+use datafusion_expr::{Accumulator, AggregateUDFImpl, Coercion, Documentation, Expr, GroupsAccumulator, Operator, ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs, TypeSignature, TypeSignatureClass, Volatility};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
-use datafusion_functions_aggregate_common::aggregate::blocked_groups_accumulator::blocked_prim_op::BlockedPrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::aggregate::sum_distinct::DistinctSumAccumulator;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions::{CastExpr, Column};
 use std::mem::{size_of, size_of_val};
-use datafusion_functions_aggregate_common::accumulator::BlockedAccumulatorArgs;
 
 make_udaf_expr_and_func!(
     Sum,
@@ -308,26 +306,6 @@ impl AggregateUDFImpl for Sum {
             ($t:ty, $dt:expr) => {
                 Ok(Box::new(PrimitiveGroupsAccumulator::<$t, _>::new(
                     &$dt,
-                    |x, y| *x = x.add_wrapping(y),
-                )))
-            };
-        }
-        downcast_sum!(args, helper)
-    }
-
-    fn blocked_groups_accumulator_supported(&self, args: BlockedAccumulatorArgs) -> bool {
-        !args.is_distinct
-    }
-
-    fn create_blocked_groups_accumulator(
-        &self,
-        args: BlockedAccumulatorArgs,
-    ) -> Result<Box<dyn BlockedGroupsAccumulator>> {
-        macro_rules! helper {
-            ($t:ty, $dt:expr) => {
-                Ok(Box::new(BlockedPrimitiveGroupsAccumulator::<$t, _>::new(
-                    &$dt,
-                    args.batch_size,
                     |x, y| *x = x.add_wrapping(y),
                 )))
             };

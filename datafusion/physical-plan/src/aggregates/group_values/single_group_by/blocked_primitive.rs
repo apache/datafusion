@@ -24,7 +24,6 @@ use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_common::hash_utils::RandomState;
-use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr_common::blocked_groups_accumulator::BlocksIndex;
 use datafusion_expr_common::blocked_helpers::BlockedVec;
 use hashbrown::hash_table::HashTable;
@@ -80,7 +79,7 @@ impl<T: ArrowPrimitiveType> BlockedGroupValuesPrimitive<T> {
             // NOTE: The inner builder must be constructed as there is at least one null
             buffer.finish().unwrap()
         });
-        PrimitiveArray::<T>::new(values.into(), nulls)
+        PrimitiveArray::<T>::new(values, nulls)
     }
 
     fn build_no_nulls_primitive_arc(
@@ -105,7 +104,7 @@ impl<T: ArrowPrimitiveType> BlockedGroupValuesPrimitive<T> {
             buffer.finish().unwrap()
         };
         Arc::new(
-            PrimitiveArray::<T>::new(values.into(), Some(nulls))
+            PrimitiveArray::<T>::new(values, Some(nulls))
                 .with_data_type(data_type),
         )
     }
@@ -219,7 +218,7 @@ where
         };
 
         // If nothing left
-        let null_group = if self.values.len() == 0 {
+        let null_group = if self.values.is_empty() {
             self.map.clear();
 
             assert_eq!(self.null_group.map_or(0, |index| index.block_index()), 0);

@@ -79,9 +79,6 @@ pub(crate) struct PartialReduceHashAggregateStream {
     /// Input batches containing partial aggregate state rows.
     input: SendableRecordBatchStream,
 
-    /// Target output batch size from configuration.
-    batch_size: usize,
-
     /// Execution metrics shared with the aggregate plan node.
     baseline_metrics: BaselineMetrics,
 
@@ -210,7 +207,6 @@ impl PartialReduceHashAggregateStream {
         Ok(Self {
             schema,
             input,
-            batch_size,
             baseline_metrics,
             reservation,
             early_emit_count,

@@ -18,9 +18,6 @@
 //! Utilities for implementing GroupsAccumulator
 //! Adapter that makes [`GroupsAccumulator`] out of [`Accumulator`]
 
-pub mod accumulate;
-pub mod blocked_prim_op;
-
 use arrow::array::{ArrayRef, BooleanArray};
 use datafusion_common::Result;
 use datafusion_expr_common::blocked_groups_accumulator::{

@@ -266,13 +266,11 @@ impl BlockedGroupValues for BlockedGroupValuesAdapter {
             self.block_size()
         );
 
-        let output = if self.len() == n {
+        if self.len() == n {
             self.inner.emit(EmitTo::All)
         } else {
             self.inner.emit(EmitTo::First(n))
-        };
-
-        Ok(output?)
+        }
     }
 
     fn clear_shrink(&mut self, num_rows: usize) {
