@@ -555,6 +555,9 @@ where
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
+        if self.all_values.is_empty() {
+            return ScalarValue::new_primitive::<T>(None, &self.data_type);
+        }
         let percentile = effective_percentile(&self.percentile, self.is_descending)?;
         let value = calculate_percentile::<T, I>(&mut self.all_values, percentile)?;
         ScalarValue::new_primitive::<T>(value, &self.data_type)
@@ -940,8 +943,11 @@ where
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let percentile = effective_percentile(&self.percentile, self.is_descending)?;
         let mut values: Vec<T::Native> = self.counts.keys().map(|v| v.0).collect();
+        if values.is_empty() {
+            return ScalarValue::new_primitive::<T>(None, &self.data_type);
+        }
+        let percentile = effective_percentile(&self.percentile, self.is_descending)?;
         let value = calculate_percentile::<T, I>(&mut values, percentile)?;
         ScalarValue::new_primitive::<T>(value, &self.data_type)
     }

@@ -2791,6 +2791,22 @@ SELECT percentile_cont(x, m) FROM (VALUES (10,0.5),(20,0.5),(30,0.5),(40,0.5)) A
 25
 
 query R
+SELECT percentile_cont(x, m) FROM (VALUES (10,0.5),(20,0.5),(30,0.5),(40,0.5)) AS t(x,m) WHERE x > 1000
+----
+NULL
+
+query R
+SELECT approx_percentile_cont(x, m) FROM (VALUES (10,0.5),(20,0.5),(30,0.5),(40,0.5)) AS t(x,m) WHERE x > 1000
+----
+NULL
+
+query R
+SELECT percentile_cont(DISTINCT x, m) FROM (VALUES (10,0.5),(20,0.5),(30,0.5),(40,0.5)) AS t(x,m) WHERE x > 1000
+----
+NULL
+
+
+query R
 SELECT approx_percentile_cont_with_weight(y, 1, m) AS median FROM (SELECT t.x + 1 as y, 0.5 as m FROM (VALUES (10), (20), (30)) AS t(x))
 ----
 21
