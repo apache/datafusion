@@ -642,6 +642,65 @@
 </div>
 <p>Like other traits, it also maintains the mapping of the Catalog’s name to the CatalogProvider.</p>
 </section>
+<section id="catalog-provider-factories">
+<h2>Catalog Provider Factories<a class="headerlink" href="#catalog-provider-factories" title="Link to this heading">#</a></h2>
+<p>The catalogs above are all registered programmatically, ahead of time,
+before a query ever runs. Sometimes it is useful to let users attach a
+catalog dynamically from SQL instead — for example, a catalog backed by a
+remote catalog service such as an Iceberg REST catalog. This is exactly
+analogous to how <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProviderFactory.html"><code class="docutils literal notranslate"><span class="pre">TableProviderFactory</span></code></a> lets <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code>
+create a <code class="docutils literal notranslate"><span class="pre">TableProvider</span></code> “on the fly”: <code class="docutils literal notranslate"><span class="pre">CatalogProviderFactory</span></code> lets
+<code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">CATALOG</span> <span class="pre">...</span> <span class="pre">STORED</span> <span class="pre">AS</span> <span class="pre">&lt;catalog_type&gt;</span> <span class="pre">...</span></code> create a
+<code class="docutils literal notranslate"><span class="pre">CatalogProvider</span></code> on the fly.</p>
+<p>To support <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">CATALOG</span></code>, implement <code class="docutils literal notranslate"><span class="pre">CatalogProviderFactory</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">Arc</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">async_trait</span><span class="p">::</span><span class="n">async_trait</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">catalog</span><span class="p">::{</span><span class="n">CatalogProvider</span><span class="p">,</span><span class="w"> </span><span class="n">CatalogProviderFactory</span><span class="p">,</span><span class="w"> </span><span class="n">MemoryCatalogProvider</span><span class="p">,</span><span class="w"> </span><span class="n">Session</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">common</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::</span><span class="n">CreateExternalCatalog</span><span class="p">;</span>
+
+<span class="cp">#[derive(Debug)]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">MyCatalogProviderFactory</span><span class="w"> </span><span class="p">{}</span>
+
+<span class="cp">#[async_trait]</span>
+<span class="k">impl</span><span class="w"> </span><span class="n">CatalogProviderFactory</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyCatalogProviderFactory</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">create</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">_state</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">Session</span><span class="p">,</span>
+<span class="w">        </span><span class="n">cmd</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">CreateExternalCatalog</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">CatalogProvider</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// `cmd.location` and `cmd.options` carry whatever was supplied in the</span>
+<span class="w">        </span><span class="c1">// `LOCATION` and `OPTIONS` clauses of the SQL statement; a real</span>
+<span class="w">        </span><span class="c1">// implementation would use them to connect to the remote catalog</span>
+<span class="w">        </span><span class="c1">// service. This example just returns an empty in-memory catalog.</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">MemoryCatalogProvider</span><span class="p">::</span><span class="n">new</span><span class="p">()))</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Then register it on the <code class="docutils literal notranslate"><span class="pre">SessionState</span></code>, keyed by the <code class="docutils literal notranslate"><span class="pre">STORED</span> <span class="pre">AS</span></code> value that
+should resolve to it:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">execution</span><span class="p">::</span><span class="n">session_state</span><span class="p">::</span><span class="n">SessionStateBuilder</span><span class="p">;</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">state</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionStateBuilder</span><span class="p">::</span><span class="n">new</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_default_features</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">with_catalog_factory</span><span class="p">(</span><span class="s">&quot;MY_CATALOG_TYPE&quot;</span><span class="p">.</span><span class="n">to_string</span><span class="p">(),</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">MyCatalogProviderFactory</span><span class="w"> </span><span class="p">{}))</span>
+<span class="w">    </span><span class="p">.</span><span class="n">build</span><span class="p">();</span>
+</pre></div>
+</div>
+<p>With the factory registered, users can attach and detach the catalog from
+SQL:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">CATALOG</span><span class="w"> </span><span class="n">my_catalog</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">MY_CATALOG_TYPE</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;s3://bucket/warehouse&#39;</span>
+<span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;warehouse&#39;</span><span class="w"> </span><span class="s1">&#39;my_catalog&#39;</span><span class="p">);</span>
+
+<span class="k">DROP</span><span class="w"> </span><span class="k">CATALOG</span><span class="w"> </span><span class="n">my_catalog</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>See <a class="reference internal" href="../user-guide/sql/ddl.html#create-external-catalog"><span class="std std-ref">DDL: <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">CATALOG</span></code></span></a>
+for the full SQL syntax.</p>
+</section>
 <section id="recap">
 <h2>Recap<a class="headerlink" href="#recap" title="Link to this heading">#</a></h2>
 <p>To recap, you need to:</p>
@@ -708,6 +767,7 @@
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#implementing-memorycatalogprovider">Implementing <code class="docutils literal notranslate"><span class="pre">MemoryCatalogProvider</span></code></a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#implementing-memorycatalogproviderlist">Implementing <code class="docutils literal notranslate"><span class="pre">MemoryCatalogProviderList</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#catalog-provider-factories">Catalog Provider Factories</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#recap">Recap</a></li>
 </ul>
   </nav></div>

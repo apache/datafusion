@@ -453,14 +453,57 @@
 <h1>DDL<a class="headerlink" href="#ddl" title="Link to this heading">#</a></h1>
 <p>DDL stands for “Data Definition Language” and relates to creating and
 modifying catalog objects such as Tables.</p>
-<section id="create-database">
-<h2>CREATE DATABASE<a class="headerlink" href="#create-database" title="Link to this heading">#</a></h2>
-<p>Create catalog with specified name.</p>
+<section id="create-catalog-create-database">
+<h2>CREATE CATALOG / CREATE DATABASE<a class="headerlink" href="#create-catalog-create-database" title="Link to this heading">#</a></h2>
+<p>Create catalog with specified name. In DataFusion, <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">DATABASE</span></code> is an alias for <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">CATALOG</span></code>.</p>
 <pre>
-CREATE DATABASE [ IF NOT EXISTS ] <i><b>catalog</i></b>
+CREATE CATALOG [ IF NOT EXISTS ] <i><b>catalog</i></b>
 </pre>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- create catalog cat</span>
-<span class="k">CREATE</span><span class="w"> </span><span class="k">DATABASE</span><span class="w"> </span><span class="n">cat</span><span class="p">;</span>
+<span class="k">CREATE</span><span class="w"> </span><span class="k">CATALOG</span><span class="w"> </span><span class="n">cat</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
+<section id="create-external-catalog">
+<h2>CREATE EXTERNAL CATALOG<a class="headerlink" href="#create-external-catalog" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">CATALOG</span></code> registers a catalog built by a registered
+<a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/catalog/trait.CatalogProviderFactory.html"><code class="docutils literal notranslate"><span class="pre">CatalogProviderFactory</span></code></a>, such as a catalog backed by a remote catalog
+service (for example, an Iceberg REST catalog), so that it can be queried
+alongside DataFusion’s built-in catalogs. A <code class="docutils literal notranslate"><span class="pre">CatalogProviderFactory</span></code> must
+first be registered on the <code class="docutils literal notranslate"><span class="pre">SessionState</span></code> with a key matching the
+<code class="docutils literal notranslate"><span class="pre">STORED</span> <span class="pre">AS</span></code> clause below — see the <a class="reference internal" href="../../library-user-guide/catalogs.html#catalog-provider-factories"><span class="std std-ref">Catalog Provider Factories</span></a> section of
+the Library User Guide for how to implement and register one.</p>
+<p>The supported syntax is:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="p">[</span><span class="k">OR</span><span class="w"> </span><span class="k">REPLACE</span><span class="p">]</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">CATALOG</span>
+<span class="p">[</span><span class="w"> </span><span class="k">IF</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="p">]</span>
+<span class="o">&lt;</span><span class="k">catalog_name</span><span class="o">&gt;</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="o">&lt;</span><span class="n">catalog_type</span><span class="o">&gt;</span>
+<span class="p">[</span><span class="w"> </span><span class="k">LOCATION</span><span class="w"> </span><span class="o">&lt;</span><span class="n">literal</span><span class="o">&gt;</span><span class="w"> </span><span class="p">]</span>
+<span class="p">[</span><span class="w"> </span><span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span><span class="o">&lt;</span><span class="n">key_value_list</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">]</span>
+
+<span class="o">&lt;</span><span class="n">key_value_list</span><span class="o">&gt;</span><span class="w"> </span><span class="p">:</span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="o">&lt;</span><span class="n">literal</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&lt;</span><span class="n">literal</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="o">&lt;</span><span class="n">literal</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&lt;</span><span class="n">literal</span><span class="o">&gt;</span><span class="p">,</span><span class="w"> </span><span class="p">...)</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">catalog_type</span></code> identifies which registered <code class="docutils literal notranslate"><span class="pre">CatalogProviderFactory</span></code> to
+invoke; it is looked up the same way <code class="docutils literal notranslate"><span class="pre">file_type</span></code> is for
+<a class="reference internal" href="#create-external-table"><code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">TABLE</span></code></a>.</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">CREATE</span><span class="w"> </span><span class="k">EXTERNAL</span><span class="w"> </span><span class="k">CATALOG</span><span class="w"> </span><span class="n">my_catalog</span>
+<span class="n">STORED</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">ICEBERG</span>
+<span class="k">LOCATION</span><span class="w"> </span><span class="s1">&#39;s3://bucket/warehouse&#39;</span>
+<span class="k">OPTIONS</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;catalog.uri&#39;</span><span class="w"> </span><span class="s1">&#39;http://rest-catalog:8181&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;warehouse&#39;</span><span class="w"> </span><span class="s1">&#39;my_catalog&#39;</span><span class="p">);</span>
+</pre></div>
+</div>
+</section>
+<section id="drop-catalog">
+<h2>DROP CATALOG<a class="headerlink" href="#drop-catalog" title="Link to this heading">#</a></h2>
+<p>Removes a catalog previously registered with <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">EXTERNAL</span> <span class="pre">CATALOG</span></code> from
+DataFusion’s catalog list.</p>
+<pre>
+DROP CATALOG [ IF EXISTS ] <b><i>catalog_name</i></b>;
+</pre>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">DROP</span><span class="w"> </span><span class="k">CATALOG</span><span class="w"> </span><span class="n">my_catalog</span><span class="p">;</span>
+<span class="c1">-- or use &#39;if exists&#39; to silently ignore if the catalog doesn&#39;t exist</span>
+<span class="k">DROP</span><span class="w"> </span><span class="k">CATALOG</span><span class="w"> </span><span class="k">IF</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="n">nonexistent_catalog</span><span class="p">;</span>
 </pre></div>
 </div>
 </section>
@@ -873,7 +916,9 @@ DROP VIEW [ IF EXISTS ] <b><i>view_name</i></b>;
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#create-database">CREATE DATABASE</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#create-catalog-create-database">CREATE CATALOG / CREATE DATABASE</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#create-external-catalog">CREATE EXTERNAL CATALOG</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#drop-catalog">DROP CATALOG</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#create-schema">CREATE SCHEMA</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#create-external-table">CREATE EXTERNAL TABLE</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#example-parquet">Example: Parquet</a></li>
