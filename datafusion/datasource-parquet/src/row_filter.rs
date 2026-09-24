@@ -81,10 +81,9 @@ use datafusion_common::Result;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::config::OptionalFilterMode;
 use datafusion_common::tree_node::TreeNode;
+use datafusion_physical_expr::expressions::OptionalFilterPhysicalExpr;
 use datafusion_physical_expr::optional_filter_gate::{GateDecision, OptionalFilterGate};
-use datafusion_physical_expr::utils::{
-    is_optional_filter, reassign_expr_columns, split_optional,
-};
+use datafusion_physical_expr::utils::{is_optional_filter, reassign_expr_columns};
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
 
 use datafusion_physical_plan::metrics::{self, ExecutionPlanMetricsSet};
@@ -92,6 +91,7 @@ use parking_lot::Mutex;
 
 use super::ParquetFileMetrics;
 use super::supported_predicates::supports_list_predicates;
+use crate::filter_placement::ConjunctStats;
 use crate::metrics::OptionalFilterMetrics;
 use crate::optional_filter::{
     OptionalFilterOptions, OptionalFilterSaving, compressed_bytes_per_row,
@@ -132,6 +132,10 @@ pub(crate) struct DatafusionArrowPredicate {
     /// The gate of an optional filter in [`OptionalFilterMode::Adaptive`].
     /// `None` for all other filters.
     gate: Option<SharedOptionalFilterGate>,
+    /// The measurements of the conjunct for the adaptive filter placement
+    /// (see [`crate::filter_placement`]). `None` if the placement does not
+    /// manage the conjunct.
+    placement_stats: Option<Arc<ConjunctStats>>,
 }
 
 /// The [`OptionalFilterGate`] of one optional filter in one file, with its
@@ -149,7 +153,7 @@ pub(crate) struct OptionalFilterGateState {
     reported_pauses: usize,
 }
 
-type SharedOptionalFilterGate = Arc<Mutex<OptionalFilterGateState>>;
+pub(crate) type SharedOptionalFilterGate = Arc<Mutex<OptionalFilterGateState>>;
 
 impl OptionalFilterGateState {
     fn begin_batch(&mut self, num_rows: usize) -> GateDecision {
@@ -165,6 +169,26 @@ impl OptionalFilterGateState {
         self.gate.record(rows_in, rows_out, elapsed);
         self.metrics.add_eval_time(elapsed);
         self.report_pauses();
+    }
+
+    /// True if the gate skips the next batch.
+    pub(crate) fn is_paused(&self) -> bool {
+        self.gate.is_paused()
+    }
+
+    /// Counts down up to `batches` batches of `rows_per_batch` rows that the
+    /// scan did not evaluate the filter on, while the gate is paused. The
+    /// adaptive filter placement calls this when it removed the paused
+    /// filter from the `RowFilter` (see [`crate::filter_placement`]). Stops
+    /// when the gate stops the pause, for example because the filter
+    /// changed.
+    pub(crate) fn skip_batches(&mut self, batches: usize, rows_per_batch: usize) {
+        for _ in 0..batches {
+            if !self.gate.is_paused() {
+                break;
+            }
+            self.begin_batch(rows_per_batch);
+        }
     }
 
     fn report_pauses(&mut self) {
@@ -198,6 +222,7 @@ impl DatafusionArrowPredicate {
             rows_matched,
             time,
             gate: None,
+            placement_stats: None,
         })
     }
 }
@@ -233,6 +258,9 @@ impl ArrowPredicate for DatafusionArrowPredicate {
                 let num_pruned = bool_arr.len() - num_matched;
                 self.rows_pruned.add(num_pruned);
                 self.rows_matched.add(num_matched);
+                if let Some(stats) = &self.placement_stats {
+                    stats.record_evaluation(&bool_arr);
+                }
                 if let (Some(gate), Some(start)) = (gate.as_mut(), start) {
                     let elapsed = gate.gate.clock().now_nanos().saturating_sub(start);
                     gate.record(num_rows, num_matched, Duration::from_nanos(elapsed));
@@ -557,6 +585,14 @@ pub(crate) struct PrebuiltRowFilterCandidate {
     /// The measured saving that the gate reads, if the output projection of
     /// the file is known. See [`crate::optional_filter`].
     saving: Option<OptionalFilterSaving>,
+    /// Position of the conjunct in the root `AND` chain of the file
+    /// predicate.
+    position: usize,
+    /// The conjunct in terms of the file schema (the inner expression for a
+    /// gated optional filter).
+    source_expr: Arc<dyn PhysicalExpr>,
+    /// See [`DatafusionArrowPredicate::placement_stats`].
+    placement_stats: Option<Arc<ConjunctStats>>,
 }
 
 impl PrebuiltRowFilterCandidate {
@@ -572,6 +608,29 @@ impl PrebuiltRowFilterCandidate {
     /// True if this is a gated optional filter.
     pub(crate) fn is_optional(&self) -> bool {
         self.gate.is_some()
+    }
+
+    /// The gate of a gated optional filter.
+    pub(crate) fn gate(&self) -> Option<&SharedOptionalFilterGate> {
+        self.gate.as_ref()
+    }
+
+    /// Position of the conjunct in the root `AND` chain of the file
+    /// predicate.
+    pub(crate) fn position(&self) -> usize {
+        self.position
+    }
+
+    /// The conjunct in terms of the file schema (the inner expression for a
+    /// gated optional filter).
+    pub(crate) fn source_expr(&self) -> &Arc<dyn PhysicalExpr> {
+        &self.source_expr
+    }
+
+    /// Records the evaluations of this candidate in `stats`, for the
+    /// adaptive filter placement.
+    pub(crate) fn set_placement_stats(&mut self, stats: Arc<ConjunctStats>) {
+        self.placement_stats = Some(stats);
     }
 }
 
@@ -614,7 +673,8 @@ pub(crate) struct OptionalFilterRowFilterContext<'a> {
 ///
 /// `optional` controls the conjuncts of the root `AND` chain that are
 /// wrapped in an `OptionalFilterPhysicalExpr` (see
-/// [`split_optional`]). The other (required) conjuncts are always used.
+/// [`split_optional`](datafusion_physical_expr::utils::split_optional)).
+/// The other (required) conjuncts are always used.
 ///
 /// * `None` or [`OptionalFilterMode::Always`]: optional conjuncts are used
 ///   like required conjuncts (the `OptionalFilterPhysicalExpr` wrapper is
@@ -644,25 +704,27 @@ pub(crate) fn prebuild_row_filter_candidates(
 )> {
     let mode = optional.map_or(OptionalFilterMode::Always, |o| o.options.mode);
 
-    // Split into conjuncts:
+    // Split into conjuncts, with their position in the root `AND` chain:
     // `a = 1 AND b = 2 AND c = 3` -> [`a = 1`, `b = 2`, `c = 3`]
-    let (required, optional_conjuncts) = match mode {
-        OptionalFilterMode::Always => (
-            split_conjunction(expr)
-                .into_iter()
-                .map(Arc::clone)
-                .collect(),
-            vec![],
-        ),
-        OptionalFilterMode::PruningOnly => (split_optional(expr).0, vec![]),
-        OptionalFilterMode::Adaptive => split_optional(expr),
-    };
+    let mut required = vec![];
+    let mut optional_conjuncts = vec![];
+    for (position, conjunct) in split_conjunction(expr).into_iter().enumerate() {
+        match (conjunct.downcast_ref::<OptionalFilterPhysicalExpr>(), mode) {
+            (None, _) | (Some(_), OptionalFilterMode::Always) => {
+                required.push((position, Arc::clone(conjunct)))
+            }
+            (Some(_), OptionalFilterMode::PruningOnly) => {}
+            (Some(optional), OptionalFilterMode::Adaptive) => {
+                optional_conjuncts.push((position, Arc::clone(optional.inner())))
+            }
+        }
+    }
 
     // Required conjuncts that cannot be evaluated as ArrowPredicates are
     // returned to the caller so they are never silently dropped.
     let mut prebuilt = Vec::with_capacity(required.len() + optional_conjuncts.len());
     let mut rejected: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
-    for conjunct in required {
+    for (position, conjunct) in required {
         // In the `always` mode, `required` also holds the optional conjuncts
         // (still wrapped). An optional conjunct that cannot be pushed down
         // for this file is not needed for correctness: do not use it, and do
@@ -671,9 +733,8 @@ pub(crate) fn prebuild_row_filter_candidates(
             match FilterCandidateBuilder::new(conjunct, Arc::clone(file_schema))
                 .build(metadata)
             {
-                Ok(Some(candidate)) => {
-                    prebuilt.push(PrebuiltRowFilterCandidate::try_new(candidate)?)
-                }
+                Ok(Some(candidate)) => prebuilt
+                    .push(PrebuiltRowFilterCandidate::try_new(candidate, position)?),
                 Ok(None) => {}
                 Err(e) => {
                     log::debug!(
@@ -687,14 +748,14 @@ pub(crate) fn prebuild_row_filter_candidates(
             .build(metadata)?
         {
             Some(candidate) => {
-                prebuilt.push(PrebuiltRowFilterCandidate::try_new(candidate)?)
+                prebuilt.push(PrebuiltRowFilterCandidate::try_new(candidate, position)?)
             }
             None => rejected.push(conjunct),
         }
     }
 
     if let Some(optional) = optional {
-        for conjunct in optional_conjuncts {
+        for (position, conjunct) in optional_conjuncts {
             // An optional conjunct that cannot be pushed down for this file
             // (or that fails to build) is not needed for correctness, thus it
             // is simply not used.
@@ -711,7 +772,7 @@ pub(crate) fn prebuild_row_filter_candidates(
                         continue;
                     }
                 };
-            let mut candidate = PrebuiltRowFilterCandidate::try_new(candidate)?;
+            let mut candidate = PrebuiltRowFilterCandidate::try_new(candidate, position)?;
             // The gate watches the dynamic filters in the same (live)
             // expression that the predicate evaluates, thus it sees their
             // updates.
@@ -753,9 +814,11 @@ pub(crate) fn prebuild_row_filter_candidates(
 }
 
 impl PrebuiltRowFilterCandidate {
-    /// A candidate without a gate. Its expression is column-reassigned to
-    /// the projected schema of the candidate.
-    fn try_new(candidate: FilterCandidate) -> Result<Self> {
+    /// A candidate without a gate, for the conjunct at `position` in the
+    /// root `AND` chain of the file predicate. Its expression is
+    /// column-reassigned to the projected schema of the candidate.
+    fn try_new(candidate: FilterCandidate, position: usize) -> Result<Self> {
+        let source_expr = Arc::clone(&candidate.expr);
         let physical_expr =
             reassign_expr_columns(candidate.expr, &candidate.read_plan.projected_schema)?;
         Ok(Self {
@@ -764,6 +827,9 @@ impl PrebuiltRowFilterCandidate {
             required_bytes: candidate.required_bytes,
             gate: None,
             saving: None,
+            position,
+            source_expr,
+            placement_stats: None,
         })
     }
 }
@@ -771,13 +837,13 @@ impl PrebuiltRowFilterCandidate {
 /// Returns the candidates in evaluation order: the order of `prebuilt`, or
 /// ordered by `required_bytes` if `reorder_predicates` is true. Gated
 /// optional candidates always come last (see [`row_filter_from_prebuilt`]).
-fn order_candidates(
-    prebuilt: &[PrebuiltRowFilterCandidate],
+fn order_candidates<'a>(
+    prebuilt: impl IntoIterator<Item = &'a PrebuiltRowFilterCandidate>,
     reorder_predicates: bool,
-) -> Vec<&PrebuiltRowFilterCandidate> {
+) -> Vec<&'a PrebuiltRowFilterCandidate> {
     // Collect references into a working list we can sort without disturbing
     // the shared cache.
-    let mut ordered: Vec<&PrebuiltRowFilterCandidate> = prebuilt.iter().collect();
+    let mut ordered: Vec<&PrebuiltRowFilterCandidate> = prebuilt.into_iter().collect();
     if reorder_predicates {
         ordered.sort_unstable_by_key(|c| (c.is_optional(), c.required_bytes));
     } else {
@@ -799,8 +865,8 @@ fn order_candidates(
 /// the optional candidates see only the rows that the required candidates
 /// let pass: the gate then measures the selectivity that the optional filter
 /// adds, and a skipped optional filter costs nothing.
-pub(crate) fn row_filter_from_prebuilt(
-    prebuilt: &[PrebuiltRowFilterCandidate],
+pub(crate) fn row_filter_from_prebuilt<'a>(
+    prebuilt: impl IntoIterator<Item = &'a PrebuiltRowFilterCandidate>,
     reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
 ) -> RowFilter {
@@ -828,6 +894,7 @@ pub(crate) fn row_filter_from_prebuilt(
                 rows_matched: predicate_rows_matched,
                 time: time.clone(),
                 gate: candidate.gate.clone(),
+                placement_stats: candidate.placement_stats.clone(),
             }) as Box<dyn ArrowPredicate>
         })
         .collect();
@@ -3007,7 +3074,8 @@ mod optional_filter_tests {
         let rewritten = simplifier
             .simplify(rewriter.rewrite(Arc::clone(&predicate)).unwrap())
             .unwrap();
-        let (required, optional_filters) = split_optional(&rewritten);
+        let (required, optional_filters) =
+            datafusion_physical_expr::utils::split_optional(&rewritten);
         assert_eq!(required.len(), 1);
         assert_eq!(optional_filters.len(), 1);
 
@@ -3058,5 +3126,86 @@ mod optional_filter_tests {
             result.iter().collect::<Vec<_>>(),
             vec![Some(false), Some(false), Some(true)]
         );
+    }
+
+    /// The adaptive filter placement of a file with a required conjunct and
+    /// a gated optional conjunct. The gate decisions use the durations
+    /// passed to `record`, thus the test is deterministic.
+    #[test]
+    fn file_placement_follows_gate_and_measurements() {
+        use crate::filter_placement::{FilePlacement, Placement, PlacementOptions};
+        use arrow::array::BooleanArray;
+        use datafusion_physical_plan::metrics::Count;
+
+        let (_file, metadata, file_schema) = test_file();
+        // a > 5 AND Optional(b >= 0). The optional conjunct removes no row.
+        let predicate = conjunction([
+            col_op("a", Operator::Gt, 5, &file_schema),
+            optional(col_op("b", Operator::GtEq, 0, &file_schema)),
+        ]);
+        let options = options(OptionalFilterMode::Adaptive);
+        let metrics = ExecutionPlanMetricsSet::new();
+        let mut candidates =
+            prebuild(&predicate, &file_schema, &metadata, &options, &metrics);
+        let placement_options =
+            PlacementOptions::new(true, Arc::default(), Some(&predicate));
+        let output = ProjectionMask::all();
+        let batch_size = 100;
+        let changes = Count::new();
+        let mut placement = FilePlacement::try_new(
+            &mut candidates,
+            &predicate,
+            &placement_options,
+            &output,
+            &metadata,
+            batch_size,
+            1000,
+            changes.clone(),
+        )
+        .unwrap();
+        let required = candidates.iter().position(|c| !c.is_optional()).unwrap();
+        let gated = candidates.iter().position(|c| c.is_optional()).unwrap();
+        // Initial rule: the required conjunct does not read `b` and `c`,
+        // thus it starts as a row filter. The gate is not paused.
+        assert_eq!(placement.placements(), vec![Placement::RowFilter; 2]);
+
+        // The gate pauses the optional filter: it removed no row in its
+        // first window (`sample_batches` = 2).
+        let gate = Arc::clone(candidates[gated].gate().unwrap());
+        for _ in 0..2 {
+            let mut gate = gate.lock();
+            assert_eq!(gate.begin_batch(batch_size), GateDecision::Evaluate);
+            gate.record(batch_size, batch_size, Duration::from_micros(1));
+        }
+        assert!(gate.lock().is_paused());
+        assert!(placement.decide(1000));
+        assert!(!placement.in_row_filter(gated));
+        assert!(placement.in_row_filter(required));
+        assert_eq!(changes.value(), 1);
+
+        // The pause (`initial_pause_batches` = 4) ends while the scan skips
+        // the next row group (10 batches): the filter is a row filter again.
+        assert!(placement.decide(1000));
+        assert!(placement.in_row_filter(gated));
+        assert!(!gate.lock().is_paused());
+
+        // The required conjunct removes every second row: no run of removed
+        // rows that the decoder can skip, thus it moves to the post-scan
+        // filter.
+        let scattered: BooleanArray = (0..20_000).map(|i| Some(i % 2 == 0)).collect();
+        let stats = candidates[required].placement_stats.clone().unwrap();
+        stats.record_evaluation(&scattered);
+        assert!(placement.decide(1000));
+        assert!(!placement.in_row_filter(required));
+        let post_scan = placement.post_scan_conjuncts();
+        assert_eq!(post_scan.len(), 1);
+        assert_eq!(post_scan[0].expr.to_string(), "a@0 > 5");
+
+        // A frozen placement does not change.
+        let before = placement.placements();
+        placement.restore_and_freeze(&[Placement::RowFilter, Placement::RowFilter]);
+        assert!(!placement.decide(1000));
+        assert_ne!(placement.placements(), before);
+        assert_eq!(changes.value(), 3);
     }
 }
