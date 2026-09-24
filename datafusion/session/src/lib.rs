@@ -46,6 +46,7 @@
 //! * Query state persistence
 
 pub mod catalog;
+pub mod physical_analyzer;
 pub mod physical_optimizer;
 pub mod planner;
 pub mod schema;
@@ -55,6 +56,7 @@ pub mod table;
 pub use crate::catalog::{
     CatalogProvider, CatalogProviderList, EmptyCatalogProviderList,
 };
+pub use crate::physical_analyzer::PhysicalAnalyzerRule;
 pub use crate::physical_optimizer::{PhysicalOptimizerContext, PhysicalOptimizerRule};
 pub use crate::planner::{
     ExtensionPlanner, PhysicalPlanner, QueryPlanner, UnsupportedQueryPlanner,

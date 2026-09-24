@@ -26,6 +26,7 @@
 #![cfg_attr(test, allow(clippy::needless_pass_by_value))]
 
 pub mod aggregate_statistics;
+pub mod analyzer;
 pub mod combine_partial_final_agg;
 pub mod ensure_coop;
 pub mod ensure_requirements;
@@ -51,4 +52,5 @@ pub mod update_aggr_exprs;
 pub mod utils;
 pub mod window_topn;
 
+pub use analyzer::{PhysicalAnalyzer, PhysicalAnalyzerRule};
 pub use optimizer::{ConfigOnlyContext, PhysicalOptimizerContext, PhysicalOptimizerRule};

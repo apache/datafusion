@@ -35,7 +35,9 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
-use crate::{PhysicalOptimizerRule, QueryPlanner, UnsupportedQueryPlanner};
+use crate::{
+    PhysicalAnalyzerRule, PhysicalOptimizerRule, QueryPlanner, UnsupportedQueryPlanner,
+};
 
 /// Interface for accessing [`SessionState`] from the catalog and data source.
 ///
@@ -132,6 +134,17 @@ pub trait Session: Send + Sync {
     /// on the optimizer; any real session should override this method (for
     /// example by returning `SessionState::physical_optimizers`).
     fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
+        &[]
+    }
+
+    /// Return the physical analyzer rules for this session.
+    ///
+    /// Analyzer rules run before the physical optimizer rules and make the plan
+    /// *valid* (for example by enforcing the distribution and ordering
+    /// requirements every operator declares). The default implementation
+    /// returns **no rules**; any real session should override this method (for
+    /// example by returning `SessionState::physical_analyzers`).
+    fn physical_analyzers(&self) -> &[Arc<dyn PhysicalAnalyzerRule + Send + Sync>] {
         &[]
     }
 
