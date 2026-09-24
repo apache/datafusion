@@ -8147,6 +8147,59 @@ mod tests {
         Ok(())
     }
 
+    /// The dictionary counterpart of
+    /// [`test_null_aware_left_mark_probe_null_in_other_partition`], where the
+    /// probe NULL exists in a dictionary value instead of the key bitmap.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_left_mark_probe_logical_null_in_other_partition(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        for order in [[0, 1], [1, 0]] {
+            let left = build_table_dict_key(
+                "c1",
+                vec![Some(1), Some(4)],
+                vec![0, 1],
+                "dummy",
+                vec![Some(10), Some(40)],
+            );
+            let right = build_two_partition_dict_probe_with_logical_null_in_partition_0();
+
+            let on = vec![(
+                Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+            )];
+
+            let join = HashJoinExec::try_new(
+                left,
+                right,
+                on,
+                None,
+                &JoinType::LeftMark,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                true,
+            )?;
+
+            let batches = collect_partitions_in_order(&join, &order, &task_ctx).await?;
+
+            allow_duplicates! {
+                assert_snapshot!(batches_to_sort_string(&batches), @r"
+                +----+-------+------+
+                | c1 | dummy | mark |
+                +----+-------+------+
+                | 1  | 10    | true |
+                | 4  | 40    |      |
+                +----+-------+------+
+                ");
+            }
+        }
+        Ok(())
+    }
+
     /// Test null-aware anti join when build side (left) contains NULL keys
     /// Expected: rows with NULL keys should not be output
     #[apply(hash_join_exec_configs)]
@@ -9062,6 +9115,72 @@ mod tests {
             assert_snapshot!(batches_to_sort_string(&batches), @r"
             ++
             ++
+            ");
+        }
+        Ok(())
+    }
+
+    /// A dictionary key that points to a NULL dictionary value is a NULL build
+    /// key even when the dictionary key bitmap itself has no NULLs.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_left_mark_build_logical_null(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        let left = build_table_dict_key(
+            "c1",
+            vec![Some(1), None, Some(4)],
+            vec![0, 1, 2],
+            "dummy",
+            vec![Some(10), Some(0), Some(40)],
+        );
+        let left_key = left
+            .execute(0, Arc::clone(&task_ctx))?
+            .next()
+            .await
+            .unwrap()?;
+        assert_eq!(left_key.column(0).null_count(), 0);
+        assert_eq!(left_key.column(0).logical_null_count(), 1);
+
+        let right = build_table_dict_key(
+            "c2",
+            vec![Some(1), Some(2), Some(3)],
+            vec![0, 1, 2],
+            "dummy",
+            vec![Some(100), Some(200), Some(300)],
+        );
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+        )];
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftMark,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+-------+-------+
+            | c1 | dummy | mark  |
+            +----+-------+-------+
+            |    | 0     |       |
+            | 1  | 10    | true  |
+            | 4  | 40    | false |
+            +----+-------+-------+
             ");
         }
         Ok(())
