@@ -56,6 +56,7 @@ use parquet::arrow::push_decoder::{
 };
 use parquet::file::metadata::ParquetMetaData;
 
+use datafusion_common::instant::Instant;
 use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_physical_expr::expressions::DynamicFilterTracking;
 use datafusion_physical_expr::utils::split_optional;
@@ -66,8 +67,10 @@ use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
 use crate::ParquetFileMetrics;
 use crate::decoder_projection::{DecoderProjection, PostScanSelection};
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
+use crate::optional_filter::OptionalFilterSavings;
 use crate::row_filter::{
-    PrebuiltRowFilterCandidate, prebuild_row_filter_candidates, row_filter_from_prebuilt,
+    OptionalFilterRowFilterContext, PrebuiltRowFilterCandidate,
+    prebuild_row_filter_candidates, row_filter_from_prebuilt,
 };
 use crate::row_group_filter::RowGroupPruningStatistics;
 
@@ -377,6 +380,9 @@ pub(crate) struct RowFilterContext {
     pub(crate) reorder_predicates: bool,
     pub(crate) file_metrics: ParquetFileMetrics,
     pub(crate) max_predicate_cache_size: Option<usize>,
+    /// Measures the decode time of the output batches for the gates of the
+    /// optional filters. `None` if the file has no gated optional filter.
+    pub(crate) optional_savings: Option<OptionalFilterSavings>,
 }
 
 impl RowFilterContext {
@@ -396,18 +402,34 @@ impl RowFilterContext {
         reorder_predicates: bool,
         file_metrics: ParquetFileMetrics,
         max_predicate_cache_size: Option<usize>,
+        optional: Option<OptionalFilterRowFilterContext<'_>>,
     ) -> (Option<Self>, Vec<Arc<dyn PhysicalExpr>>) {
         match prebuild_row_filter_candidates(
             predicate,
             physical_file_schema,
             file_metadata.as_ref(),
+            optional,
         ) {
             Ok((prebuilt, rejected)) => {
-                let context = prebuilt.map(|prebuilt| Self {
-                    prebuilt: PrebuiltRowFilterCandidateList::new(prebuilt),
-                    reorder_predicates,
-                    file_metrics,
-                    max_predicate_cache_size,
+                let context = prebuilt.map(|prebuilt| {
+                    let optional_savings = optional.and_then(|optional| {
+                        OptionalFilterSavings::try_new(
+                            Arc::clone(&optional.options.decode_cost),
+                            file_metadata,
+                            optional.output_projection?,
+                            prebuilt
+                                .iter()
+                                .filter_map(|c| c.optional_saving().cloned())
+                                .collect(),
+                        )
+                    });
+                    Self {
+                        prebuilt: PrebuiltRowFilterCandidateList::new(prebuilt),
+                        reorder_predicates,
+                        file_metrics,
+                        max_predicate_cache_size,
+                        optional_savings,
+                    }
                 });
                 (context, rejected)
             }
@@ -512,8 +534,20 @@ impl PushDecoderStreamState {
 
             // Step 1: drain a batch from the active reader if any.
             if let Some(reader) = self.active_reader.as_mut() {
+                // The gates of optional filters need the decode time of the
+                // output columns (the reader does not evaluate the row
+                // filter: the decoder did that before it returned the reader).
+                let optional_savings = self
+                    .row_filter_context
+                    .as_ref()
+                    .and_then(|ctx| ctx.optional_savings.as_ref());
+                let start = optional_savings.map(|_| Instant::now());
                 match reader.next() {
                     Some(Ok(batch)) => {
+                        if let (Some(savings), Some(start)) = (optional_savings, start) {
+                            savings
+                                .record_output_batch(batch.num_rows(), start.elapsed());
+                        }
                         self.copy_arrow_reader_metrics();
 
                         // Apply the in-scan post-scan filter (if any). The
