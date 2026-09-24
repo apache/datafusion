@@ -28,7 +28,11 @@ use arrow::datatypes::Schema;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::{Column, Result, ScalarValue};
 use datafusion_datasource::FileRange;
-use datafusion_pruning::PruningPredicate;
+use datafusion_pruning::{ConjunctPruningStats, PruningPredicate};
+
+/// Receives the pruning result of each conjunct of a predicate, see
+/// [`RowGroupAccessPlanFilter::prune_by_statistics_with_conjunct_stats`].
+type ConjunctStatsSink<'a> = &'a dyn Fn(&[ConjunctPruningStats]);
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::basic::ColumnOrder;
 use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
@@ -288,6 +292,7 @@ impl RowGroupAccessPlanFilter {
             None,
             predicate,
             metrics,
+            None,
         );
     }
 
@@ -314,9 +319,36 @@ impl RowGroupAccessPlanFilter {
             file_metadata.column_orders().map(Vec::as_slice),
             predicate,
             metrics,
+            None,
         );
     }
 
+    /// Same as [`Self::prune_by_statistics_with_metadata`], and also gives
+    /// the pruning result of each conjunct of the predicate to
+    /// `conjunct_stats`. `predicate` must be built with
+    /// `PruningPredicateBuilder::with_conjunct_stats`, otherwise
+    /// `conjunct_stats` is not called.
+    pub(crate) fn prune_by_statistics_with_conjunct_stats(
+        &mut self,
+        arrow_schema: &Schema,
+        metadata: &ParquetMetaData,
+        predicate: &PruningPredicate,
+        metrics: &ParquetFileMetrics,
+        conjunct_stats: ConjunctStatsSink<'_>,
+    ) {
+        let file_metadata = metadata.file_metadata();
+        self.prune_by_statistics_inner(
+            arrow_schema,
+            file_metadata.schema_descr(),
+            metadata.row_groups(),
+            file_metadata.column_orders().map(Vec::as_slice),
+            predicate,
+            metrics,
+            Some(conjunct_stats),
+        );
+    }
+
+    #[expect(clippy::too_many_arguments)]
     fn prune_by_statistics_inner(
         &mut self,
         arrow_schema: &Schema,
@@ -325,6 +357,7 @@ impl RowGroupAccessPlanFilter {
         column_orders: Option<&[ColumnOrder]>,
         predicate: &PruningPredicate,
         metrics: &ParquetFileMetrics,
+        conjunct_stats: Option<ConjunctStatsSink<'_>>,
     ) {
         // scoped timer updates on drop
         let _timer_guard = metrics.statistics_eval_time.timer();
@@ -345,7 +378,23 @@ impl RowGroupAccessPlanFilter {
         };
 
         // try to prune the row groups in a single call
-        match predicate.prune(&pruning_stats) {
+        let values = match conjunct_stats {
+            // An error of the conjunct statistics does not stop the pruning.
+            Some(conjunct_stats) => match predicate
+                .prune_with_conjunct_stats(&pruning_stats)
+            {
+                Ok((values, stats)) => {
+                    conjunct_stats(&stats);
+                    Ok(values)
+                }
+                Err(e) => {
+                    log::debug!("Error evaluating per-conjunct pruning statistics {e}");
+                    predicate.prune(&pruning_stats)
+                }
+            },
+            None => predicate.prune(&pruning_stats),
+        };
+        match values {
             Ok(values) => {
                 let mut fully_contained_candidates_original_idx: Vec<usize> = Vec::new();
                 for (idx, &value) in row_group_indexes.iter().zip(values.iter()) {

@@ -28,6 +28,7 @@ use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::OptionalFilterPhysicalExpr;
 use datafusion_physical_expr::filter_stats::duration_nanos;
 use datafusion_physical_expr::utils::is_optional_filter;
+use datafusion_pruning::ConjunctPruningStats;
 use parking_lot::Mutex;
 
 use crate::optional_filter::DEFAULT_DECODE_NS_PER_BYTE;
@@ -122,6 +123,15 @@ impl ConjunctStats {
         self.rows_in.fetch_add(rows_in, Ordering::Relaxed);
         self.rows_out.fetch_add(rows_out, Ordering::Relaxed);
         self.skippable_rows.fetch_add(skippable, Ordering::Relaxed);
+    }
+
+    /// Records the row group statistics pruning result of the conjunct for
+    /// one file.
+    pub(crate) fn record_pruning(&self, stats: ConjunctPruningStats) {
+        self.row_groups_pruned
+            .fetch_add(stats.containers_pruned as u64, Ordering::Relaxed);
+        self.row_groups_kept
+            .fetch_add(stats.containers_kept as u64, Ordering::Relaxed);
     }
 
     /// The pooled values. The values are not read at the same instant.
@@ -296,6 +306,10 @@ mod tests {
         stats.record_evaluation(&bools(values));
         stats.record_evaluation(&bools(vec![Some(true); 64]));
         stats.record_evaluation(&bools(vec![None; 64]));
+        stats.record_pruning(ConjunctPruningStats {
+            containers_pruned: 3,
+            containers_kept: 1,
+        });
         let observation = stats.observation();
         assert_eq!(
             observation,
@@ -303,11 +317,12 @@ mod tests {
                 rows_in: 256,
                 rows_out: 65,
                 skippable_rows: 128,
-                row_groups_pruned: 0,
-                row_groups_kept: 0,
+                row_groups_pruned: 3,
+                row_groups_kept: 1,
             }
         );
         assert_eq!(observation.skippable_fraction(), Some(0.5));
+        assert_eq!(observation.pruned_fraction(), Some(0.75));
         assert_eq!(Observation::default().skippable_fraction(), None);
         assert_eq!(Observation::default().pruned_fraction(), None);
     }

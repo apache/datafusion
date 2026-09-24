@@ -51,6 +51,7 @@ use std::time::Duration;
 use datafusion_physical_expr::utils::is_optional_filter;
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
 use datafusion_physical_expr_common::metrics::Count;
+use datafusion_pruning::ConjunctPruningStats;
 use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::ParquetMetaData;
 
@@ -87,6 +88,29 @@ impl PlacementOptions {
             enabled,
             sites,
             scan_conjunct_count,
+        }
+    }
+
+    /// Adds the row group statistics pruning result of each conjunct of the
+    /// file predicate `predicate` to the pooled measurements (the statistics
+    /// prior of the placement decision). `stats` has one entry for each
+    /// conjunct of `split_conjunction(predicate)`.
+    pub(crate) fn record_pruning(
+        &self,
+        predicate: &Arc<dyn PhysicalExpr>,
+        stats: &[ConjunctPruningStats],
+    ) {
+        let conjuncts = split_conjunction(predicate);
+        if conjuncts.len() != stats.len() {
+            return;
+        }
+        for (position, stats) in stats.iter().enumerate() {
+            // Optional conjuncts are not placed with these measurements.
+            if !is_optional_filter(conjuncts[position]) {
+                self.sites
+                    .stats_for(&conjuncts, position, self.scan_conjunct_count)
+                    .record_pruning(*stats);
+            }
         }
     }
 }

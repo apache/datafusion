@@ -1363,6 +1363,7 @@ impl MetadataLoadedParquetOpen {
             &physical_file_schema,
             &prepared.predicate_creation_errors,
             prepared.max_in_list_size,
+            prepared.filter_placement.enabled,
         );
 
         // Only build page pruning predicate if page index is enabled
@@ -1447,12 +1448,28 @@ impl FiltersPreparedParquetOpen {
         // If there is a predicate that can be evaluated against the metadata
         if let Some(predicate) = self.pruning_predicate.as_ref().map(|p| p.as_ref()) {
             if prepared.enable_row_group_stats_pruning {
-                row_groups.prune_by_statistics_with_metadata(
-                    &prepared.physical_file_schema,
-                    &file_metadata,
-                    predicate,
-                    &prepared.file_metrics,
-                );
+                match (prepared.filter_placement.enabled, &prepared.predicate) {
+                    // The adaptive filter placement uses the pruning result of
+                    // each conjunct as a prior.
+                    (true, Some(file_predicate)) => row_groups
+                        .prune_by_statistics_with_conjunct_stats(
+                            &prepared.physical_file_schema,
+                            &file_metadata,
+                            predicate,
+                            &prepared.file_metrics,
+                            &|stats| {
+                                prepared
+                                    .filter_placement
+                                    .record_pruning(file_predicate, stats)
+                            },
+                        ),
+                    _ => row_groups.prune_by_statistics_with_metadata(
+                        &prepared.physical_file_schema,
+                        &file_metadata,
+                        predicate,
+                        &prepared.file_metrics,
+                    ),
+                }
             } else {
                 // Update metrics: statistics unavailable, so all row groups are
                 // matched (not pruned)
@@ -2244,17 +2261,23 @@ pub(crate) fn build_page_pruning_predicate(
     ))
 }
 
+///
+/// With `conjunct_stats`, the predicate also prepares the per-conjunct
+/// statistics that the adaptive filter placement uses (see
+/// `PruningPredicateBuilder::with_conjunct_stats`).
 pub(crate) fn build_pruning_predicates(
     predicate: Option<&Arc<dyn PhysicalExpr>>,
     file_schema: &SchemaRef,
     predicate_creation_errors: &Count,
     max_in_list_size: usize,
+    conjunct_stats: bool,
 ) -> Option<Arc<PruningPredicate>> {
     let predicate = predicate.as_ref()?;
     PruningPredicateBuilder::new()
         .with_file_schema(Arc::clone(file_schema))
         .with_error_counter(predicate_creation_errors)
         .with_max_in_list_size(max_in_list_size)
+        .with_conjunct_stats(conjunct_stats)
         .build(Arc::clone(predicate))
 }
 
@@ -5862,6 +5885,48 @@ mod test {
             assert_eq!(scan.row_filter_rows(), 0);
             assert_eq!(scan.post_scan_rows(), TOTAL_ROWS);
             assert_eq!(scan.count("filter_placement_changes"), 0);
+        }
+
+        /// Row group statistics prune half of the row groups with `a < 20`:
+        /// the data is clustered on `a`, thus the row groups that are left
+        /// pass most rows. With this prior, the conjunct starts in the
+        /// post-scan filter. Without statistics pruning there is no prior and
+        /// it starts as a row filter.
+        #[tokio::test]
+        async fn statistics_prior_starts_clustered_filter_post_scan() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (schema, file) = write_file(&store, |i| (i / 1000) as i32).await;
+            let predicate = logical2physical(&col("a").lt(lit(20)), &schema);
+            let run = |stats_pruning: bool| {
+                let store = Arc::clone(&store);
+                let schema = Arc::clone(&schema);
+                let predicate = Arc::clone(&predicate);
+                let file = file.clone();
+                async move {
+                    let metrics = ExecutionPlanMetricsSet::new();
+                    let morselizer = ParquetMorselizerBuilder::new()
+                        .with_store(store)
+                        .with_schema(schema)
+                        .with_predicate(predicate)
+                        .with_pushdown_filters(true)
+                        .with_filter_placement(true)
+                        .with_row_group_stats_pruning(stats_pruning)
+                        .with_metrics(metrics.clone())
+                        .build();
+                    let stream = open_file(&morselizer, file).await.unwrap();
+                    let (_, rows) = count_batches_and_rows(stream).await;
+                    Scan { rows, metrics }
+                }
+            };
+
+            let with_prior = run(true).await;
+            assert_eq!(with_prior.rows, 20_000);
+            assert_eq!(with_prior.row_filter_rows(), 0);
+            assert_eq!(with_prior.post_scan_rows(), 2 * ROWS_PER_ROW_GROUP);
+
+            let without_prior = run(false).await;
+            assert_eq!(without_prior.rows, 20_000);
+            assert!(without_prior.row_filter_rows() > 0);
         }
 
         /// An optional filter that removes no rows is paused by its gate. At
