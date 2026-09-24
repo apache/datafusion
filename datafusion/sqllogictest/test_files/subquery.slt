@@ -730,8 +730,6 @@ logical_plan
 06)--EmptyRelation: rows=1
 
 #simple_uncorrelated_scalar_subquery2
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query TT
 explain select (select count(*) from t1) as b, (select count(1) from t2)
 ----
@@ -1254,8 +1252,6 @@ where t1.t1_id > 40 or t1.t1_id in (select t2.t2_id from t2 where t1.t1_int > 0)
 44 d 4
 
 # not_in_subquery_to_join_with_correlated_outer_filter_disjunction
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query TT
 explain select t1.t1_id,
        t1.t1_name,
@@ -1266,7 +1262,7 @@ where t1.t1_id = 11 or t1.t1_id + 12 not in (select t2.t2_id + 1 from t2 where t
 logical_plan
 01)Projection: t1.t1_id, t1.t1_name, t1.t1_int
 02)--Filter: t1.t1_id = Int32(11) OR NOT __correlated_sq_1.mark
-03)----LeftMark Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.t2.t2_id + Int64(1) Filter: t1.t1_int > Int32(0)
+03)----LeftMark Join: CAST(t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.t2.t2_id + Int64(1) Filter: t1.t1_int > Int32(0) null_aware
 04)------TableScan: t1 projection=[t1_id, t1_name, t1_int]
 05)------SubqueryAlias: __correlated_sq_1
 06)--------Projection: CAST(t2.t2_id AS Int64) + Int64(1)
