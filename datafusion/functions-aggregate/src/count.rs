@@ -34,7 +34,16 @@ use datafusion_common::{
     HashMap, Result, ScalarValue, downcast_value, exec_err, internal_err, not_impl_err,
     stats::Precision, utils::expr::COUNT_STAR_EXPANSION,
 };
-use datafusion_expr::{expr::WindowFunction, function::{AccumulatorArgs, StateFieldsArgs}, utils::{AggregateOrderSensitivity, format_state_name}, Accumulator, AggregateUDFImpl, BlockedGroupsAccumulator, Documentation, EmitTo, Expr, GroupSelection, GroupsAccumulator, ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs, TypeSignature, Volatility, WindowFunctionDefinition, BlocksIndex, BlockedEmitTo, BlockedGroupSelection};
+use datafusion_expr::blocked_helpers::BlockedVec;
+use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, BlockedEmitTo, BlockedGroupSelection,
+    BlockedGroupsAccumulator, BlocksIndex, Documentation, EmitTo, Expr, GroupSelection,
+    GroupsAccumulator, ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs,
+    TypeSignature, Volatility, WindowFunctionDefinition,
+    expr::WindowFunction,
+    function::{AccumulatorArgs, StateFieldsArgs},
+    utils::{AggregateOrderSensitivity, format_state_name},
+};
 use datafusion_functions_aggregate_common::aggregate::count_distinct::PrimitiveDistinctCountGroupsAccumulator;
 use datafusion_functions_aggregate_common::aggregate::{
     count_distinct::Bitmap65536DistinctCountAccumulator,
@@ -58,7 +67,7 @@ use std::{
     ops::BitAnd,
     sync::Arc,
 };
-use datafusion_expr::blocked_helpers::{BlockedVec, CopyItemBlockedVecBuilder};
+use datafusion_functions_aggregate_common::accumulator::BlockedAccumulatorArgs;
 
 make_udaf_expr_and_func!(
     Count,
@@ -384,6 +393,14 @@ impl AggregateUDFImpl for Count {
             return Ok(Box::new(CountGroupsAccumulator::new()));
         }
         create_distinct_count_groups_accumulator(&args)
+    }
+
+    fn blocked_groups_accumulator_supported(&self, args: BlockedAccumulatorArgs) -> bool {
+        args.expr_fields.len() == 1 && !args.is_distinct
+    }
+
+    fn create_blocked_groups_accumulator(&self, args: BlockedAccumulatorArgs) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+        Ok(Box::new(CountBlockedGroupsAccumulator::new(args.batch_size)))
     }
 
     fn reverse_expr(&self) -> ReversedUDAF {
@@ -725,9 +742,9 @@ impl GroupsAccumulator for CountGroupsAccumulator {
     fn evaluate_preserving(&mut self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
         selection.validate_num_groups(self.counts.len())?;
         let counts = selection
-          .iter()
-          .map(|index| self.counts[index])
-          .collect::<Vec<_>>();
+            .iter()
+            .map(|index| self.counts[index])
+            .collect::<Vec<_>>();
         Ok(Arc::new(Int64Array::from(counts)))
     }
 
@@ -837,12 +854,13 @@ struct CountBlockedGroupsAccumulator {
 
 impl CountBlockedGroupsAccumulator {
     pub fn new(block_size: usize) -> Self {
-        Self { counts: BlockedVec::new(block_size) }
+        Self {
+            counts: BlockedVec::new(block_size),
+        }
     }
 }
 
 impl BlockedGroupsAccumulator for CountBlockedGroupsAccumulator {
-
     fn batch_size(&self) -> usize {
         self.counts.block_size()
     }
@@ -902,23 +920,26 @@ impl BlockedGroupsAccumulator for CountBlockedGroupsAccumulator {
         let blocks = self.counts.emit(emit_to);
 
         let blocks_ready = blocks
-          .into_iter()
-          .map(|block| {
-              // Count is always non null (null inputs just don't contribute to the overall values)
-              let array = PrimitiveArray::<Int64Type>::new(block.into(), None);
-              Arc::new(array) as ArrayRef
-          })
-          .collect::<Vec<_>>();
+            .into_iter()
+            .map(|block| {
+                // Count is always non null (null inputs just don't contribute to the overall values)
+                let array = PrimitiveArray::<Int64Type>::new(block.into(), None);
+                Arc::new(array) as ArrayRef
+            })
+            .collect::<Vec<_>>();
 
         Ok(blocks_ready)
     }
 
-    fn evaluate_preserving(&mut self, selection: BlockedGroupSelection<'_>) -> Result<ArrayRef> {
+    fn evaluate_preserving(
+        &mut self,
+        selection: BlockedGroupSelection<'_>,
+    ) -> Result<ArrayRef> {
         selection.validate_num_groups(self.counts.len())?;
         let counts = selection
-          .iter()
-          .map(|index| self.counts[index])
-          .collect::<Vec<_>>();
+            .iter()
+            .map(|index| self.counts[index])
+            .collect::<Vec<_>>();
         Ok(Arc::new(Int64Array::from(counts)))
     }
 
@@ -931,15 +952,15 @@ impl BlockedGroupsAccumulator for CountBlockedGroupsAccumulator {
         let blocks = self.counts.emit(emit_to);
 
         let blocks_ready = blocks
-          .into_iter()
-          .map(|block| {
-              // Count is always non null (null inputs just don't contribute to the overall values)
-              let array = PrimitiveArray::<Int64Type>::new(block.into(), None);
+            .into_iter()
+            .map(|block| {
+                // Count is always non null (null inputs just don't contribute to the overall values)
+                let array = PrimitiveArray::<Int64Type>::new(block.into(), None);
 
-              // Each state only have 1 column
-              vec![Arc::new(array) as ArrayRef]
-          })
-          .collect::<Vec<_>>();
+                // Each state only have 1 column
+                vec![Arc::new(array) as ArrayRef]
+            })
+            .collect::<Vec<_>>();
 
         Ok(blocks_ready)
     }

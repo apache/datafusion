@@ -19,13 +19,6 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result};
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
-use futures::stream::{Stream, StreamExt};
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::VecAllocExt;
 use super::AggregateExec;
 use super::aggregate_hash_table::{OrderedAggregateTable, PartialMarker};
 use crate::aggregates::AggregateMode;
@@ -33,6 +26,12 @@ use crate::aggregates::order::GroupOrdering;
 use crate::metrics::{BaselineMetrics, MetricBuilder, SpillMetrics};
 use crate::stream::{EmptyRecordBatchStream, ObservedStream, RecordBatchStreamAdapter};
 use crate::{InputOrderMode, SendableRecordBatchStream, metrics};
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
+use futures::stream::{Stream, StreamExt};
 
 /// Partial aggregate stream for `InputOrderMode::Sorted` and
 /// `InputOrderMode::PartiallySorted`.
@@ -320,11 +319,14 @@ impl OrderedPartialAggregateStream {
 
         let batches = match table.take_all_state_batch() {
             Ok(batches) if batches.is_empty() => return Err(oom),
-            Ok(batches) => batches.into_iter().map(|b| {
-                let size = b.get_array_memory_size();
-                total_size += size;
-                (b, size)
-            }).collect::<Vec<_>>(),
+            Ok(batches) => batches
+                .into_iter()
+                .map(|b| {
+                    let size = b.get_array_memory_size();
+                    total_size += size;
+                    (b, size)
+                })
+                .collect::<Vec<_>>(),
             Err(e) => return Err(e),
         };
 

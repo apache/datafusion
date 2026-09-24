@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ops::{Deref, DerefMut};
 use arrow::datatypes::{DataType, FieldRef, Schema};
 use datafusion_common::Result;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 /// [`AccumulatorArgs`] contains information about how an aggregate
@@ -105,10 +105,13 @@ impl DerefMut for BlockedAccumulatorArgs<'_> {
 
 impl<'a> BlockedAccumulatorArgs<'a> {
     /// Returns the return type of the aggregate function.
-    pub fn from_accumulator_args(accumulator_args: AccumulatorArgs<'a>, batch_size: usize) -> Self {
+    pub fn from_accumulator_args(
+        accumulator_args: AccumulatorArgs<'a>,
+        batch_size: usize,
+    ) -> Self {
         Self {
             accumulator_args,
-            batch_size
+            batch_size,
         }
     }
 }

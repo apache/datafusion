@@ -1,15 +1,19 @@
-use arrow::array::{downcast_primitive, ArrayRef};
-use arrow_schema::{DataType, SchemaRef, TimeUnit};
-use datafusion_common::{assert_eq_or_internal_err, assert_ne_or_internal_err, assert_or_internal_err, not_impl_err, unwrap_or_internal_err};
-use datafusion_expr_common::blocked_groups_accumulator::{BlockedEmitTo, BlockedGroupSelection, BlocksIndex};
-use datafusion_expr_common::groups_accumulator::EmitTo;
-use datafusion_physical_expr_common::binary_map::OutputType;
-use crate::aggregates::group_values::{multi_group_by, new_group_values};
-use crate::aggregates::group_values::single_group_by::blocked_boolean::BlockedGroupValuesBoolean;
-use crate::aggregates::group_values::single_group_by::boolean::GroupValuesBoolean;
-use crate::aggregates::group_values::single_group_by::bytes::GroupValuesBytes;
-use crate::aggregates::group_values::single_group_by::bytes_view::GroupValuesBytesView;
+use crate::aggregates::group_values::new_group_values;
+use super::single_group_by::{
+    blocked_boolean::BlockedGroupValuesBoolean,
+    blocked_primitive::BlockedGroupValuesPrimitive,
+};
 use crate::aggregates::order::GroupOrdering;
+use arrow::array::{downcast_primitive, ArrayRef};
+use arrow_schema::{DataType, SchemaRef};
+use datafusion_common::{
+    assert_eq_or_internal_err, assert_ne_or_internal_err, assert_or_internal_err,
+    not_impl_err, unwrap_or_internal_err,
+};
+use datafusion_expr_common::blocked_groups_accumulator::{
+    BlockedEmitTo, BlockedGroupSelection, BlocksIndex,
+};
+use datafusion_expr_common::groups_accumulator::EmitTo;
 
 /// Stores the group values during hash aggregation.
 ///
@@ -48,199 +52,232 @@ use crate::aggregates::order::GroupOrdering;
 /// (usize) which is assigned by instances of this trait. Group ids are
 /// continuous without gaps, starting from 0.
 pub trait BlockedGroupValues: Send {
-  fn block_size(&self) -> usize;
+    fn block_size(&self) -> usize;
 
-  /// Calculates the group id for each input row of `cols`, assigning new
-  /// group ids as necessary.
-  ///
-  /// When the function returns, `groups`  must contain the group id for each
-  /// row in `cols`.
-  ///
-  /// If a row has the same value as a previous row, the same group id is
-  /// assigned. If a row has a new value, the next available group id is
-  /// assigned.
-  fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<BlocksIndex>) -> datafusion_common::Result<()>;
+    /// Calculates the group id for each input row of `cols`, assigning new
+    /// group ids as necessary.
+    ///
+    /// When the function returns, `groups`  must contain the group id for each
+    /// row in `cols`.
+    ///
+    /// If a row has the same value as a previous row, the same group id is
+    /// assigned. If a row has a new value, the next available group id is
+    /// assigned.
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<BlocksIndex>,
+    ) -> datafusion_common::Result<()>;
 
-  /// Returns the number of bytes of memory used by this [`BlockedGroupValues`].
-  ///
-  /// May be expensive; check the implementation before calling on hot paths.
-  fn size(&self) -> usize;
+    /// Returns the number of bytes of memory used by this [`BlockedGroupValues`].
+    ///
+    /// May be expensive; check the implementation before calling on hot paths.
+    fn size(&self) -> usize;
 
-  /// Returns true if this [`BlockedGroupValues`] is empty
-  fn is_empty(&self) -> bool;
+    /// Returns true if this [`BlockedGroupValues`] is empty
+    fn is_empty(&self) -> bool;
 
-  /// The number of values (distinct group values) stored in this [`BlockedGroupValues`]
-  fn len(&self) -> usize;
+    /// The number of values (distinct group values) stored in this [`BlockedGroupValues`]
+    fn len(&self) -> usize;
 
-  /// Materializes selected group values without changing the stored values or
-  /// their group indices.
-  ///
-  /// Rows are returned in the order specified by `selection`. An empty
-  /// selection returns one correctly typed empty array per group-value column.
-  ///
-  /// This method requires exclusive access because implementations may mutate
-  /// internal caches or builders, even though stored values are unchanged.
-  fn values_preserving(
-    &mut self,
-    _selection: BlockedGroupSelection<'_>,
-  ) -> datafusion_common::Result<Vec<ArrayRef>> {
-    not_impl_err!("Preserving group values are not implemented")
-  }
-
-  /// Returns `true` if [`Self::values_preserving`] is implemented.
-  fn supports_values_preserving(&self) -> bool {
-    false
-  }
-
-  /// Emits the group values
-  fn emit(&mut self, emit_to: BlockedEmitTo) -> datafusion_common::Result<Vec<Vec<ArrayRef>>> {
-    match emit_to {
-      BlockedEmitTo::All => {
-        self.emit_all()
-      }
-      BlockedEmitTo::NextBlock => {
-        let len = self.len();
-        let block_size = self.block_size();
-
-        if len == 0 {
-          return Ok(vec![]);
-        }
-
-        if len <= block_size {
-          return self.emit_all();
-        }
-
-        let block = self.emit_block()?;
-        let block = unwrap_or_internal_err!(block);
-
-        // Assert that all arrays length equal block size since length is greater than block size
-        for arr in &block {
-          assert_eq_or_internal_err!(arr.len(), block_size);
-        }
-
-        Ok(vec![block])
-      }
-      BlockedEmitTo::First(n) => {
-        assert_ne_or_internal_err!(n, 0);
-        assert_or_internal_err!(n <= self.len(), "n ({n}) must be less than or equal current length ({})", self.len());
-        assert_or_internal_err!(n < self.block_size(), "n ({n}) must be less than current block size ({})", self.block_size());
-
-        if n == self.len() {
-          self.emit_all()
-        } else {
-          self.emit_first_n(n).map(|first_n| vec![first_n])
-        }
-      }
+    /// Materializes selected group values without changing the stored values or
+    /// their group indices.
+    ///
+    /// Rows are returned in the order specified by `selection`. An empty
+    /// selection returns one correctly typed empty array per group-value column.
+    ///
+    /// This method requires exclusive access because implementations may mutate
+    /// internal caches or builders, even though stored values are unchanged.
+    fn values_preserving(
+        &mut self,
+        _selection: BlockedGroupSelection<'_>,
+    ) -> datafusion_common::Result<Vec<ArrayRef>> {
+        not_impl_err!("Preserving group values are not implemented")
     }
-  }
 
-  /// Emit all group values
-  fn emit_all(&mut self) -> datafusion_common::Result<Vec<Vec<ArrayRef>>>;
+    /// Returns `true` if [`Self::values_preserving`] is implemented.
+    fn supports_values_preserving(&self) -> bool {
+        false
+    }
 
-  /// Emit the next block
-  /// returns Ok(None) when there are no blocks
-  fn emit_block(&mut self) -> datafusion_common::Result<Option<Vec<ArrayRef>>>;
+    /// Emits the group values
+    fn emit(
+        &mut self,
+        emit_to: BlockedEmitTo,
+    ) -> datafusion_common::Result<Vec<Vec<ArrayRef>>> {
+        match emit_to {
+            BlockedEmitTo::All => self.emit_all(),
+            BlockedEmitTo::NextBlock => {
+                let len = self.len();
+                let block_size = self.block_size();
 
-  /// Emit first `n` values and shift all values to fit into blocks
-  ///
-  /// `n` must be smaller than [`Self::block_size`] and larger than `0`
-  /// `n` must be smaller or equal to [`Self::len`]
-  fn emit_first_n(&mut self, n: usize) -> datafusion_common::Result<Vec<ArrayRef>>;
+                if len == 0 {
+                    return Ok(vec![]);
+                }
 
-  // TODO - add into iterator which move the entry state into an iterator that will output ready batches
-  //        this is so it won't need to update the underlying hash map whenever calling emit block
-  //        this is for the case when we need to emit all, but we don't want to materialize all right away
-  //        but we want to skip the internal hash map updates, so the iterator will avoid that while clearing memory
-  //        the iterator should expose `allocated_size()` function
+                if len <= block_size {
+                    return self.emit_all();
+                }
 
-  /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
-  fn clear_shrink(&mut self, num_rows: usize);
+                let block = self.emit_block()?;
+                let block = unwrap_or_internal_err!(block);
+
+                // Assert that all arrays length equal block size since length is greater than block size
+                for arr in &block {
+                    assert_eq_or_internal_err!(arr.len(), block_size);
+                }
+
+                Ok(vec![block])
+            }
+            BlockedEmitTo::First(n) => {
+                assert_ne_or_internal_err!(n, 0);
+                assert_or_internal_err!(
+                    n <= self.len(),
+                    "n ({n}) must be less than or equal current length ({})",
+                    self.len()
+                );
+                assert_or_internal_err!(
+                    n < self.block_size(),
+                    "n ({n}) must be less than current block size ({})",
+                    self.block_size()
+                );
+
+                if n == self.len() {
+                    self.emit_all()
+                } else {
+                    self.emit_first_n(n).map(|first_n| vec![first_n])
+                }
+            }
+        }
+    }
+
+    /// Emit all group values
+    fn emit_all(&mut self) -> datafusion_common::Result<Vec<Vec<ArrayRef>>>;
+
+    /// Emit the next block
+    /// returns Ok(None) when there are no blocks
+    fn emit_block(&mut self) -> datafusion_common::Result<Option<Vec<ArrayRef>>>;
+
+    /// Emit first `n` values and shift all values to fit into blocks
+    ///
+    /// `n` must be smaller than [`Self::block_size`] and larger than `0`
+    /// `n` must be smaller or equal to [`Self::len`]
+    fn emit_first_n(&mut self, n: usize) -> datafusion_common::Result<Vec<ArrayRef>>;
+
+    // TODO - add into iterator which move the entry state into an iterator that will output ready batches
+    //        this is so it won't need to update the underlying hash map whenever calling emit block
+    //        this is for the case when we need to emit all, but we don't want to materialize all right away
+    //        but we want to skip the internal hash map updates, so the iterator will avoid that while clearing memory
+    //        the iterator should expose `allocated_size()` function
+
+    /// Clear the contents and shrink the capacity to the size of the batch (free up memory usage)
+    fn clear_shrink(&mut self, num_rows: usize);
 }
-
 
 // This is just an adapter until all is implemented
 pub struct BlockedGroupValuesAdapter {
-  block_size: usize,
-  inner: Box<dyn crate::aggregates::group_values::GroupValues>,
+    block_size: usize,
+    inner: Box<dyn crate::aggregates::group_values::GroupValues>,
 }
 
 impl BlockedGroupValuesAdapter {
-  pub fn new(block_size: usize, inner: Box<dyn crate::aggregates::group_values::GroupValues>) -> Self {
-    Self { block_size, inner }
-  }
+    pub fn new(
+        block_size: usize,
+        inner: Box<dyn crate::aggregates::group_values::GroupValues>,
+    ) -> Self {
+        Self { block_size, inner }
+    }
 }
 
 impl BlockedGroupValues for BlockedGroupValuesAdapter {
-  fn block_size(&self) -> usize {
-    self.block_size
-  }
-
-  fn intern(&mut self, cols: &[ArrayRef], groups: &mut Vec<BlocksIndex>) -> datafusion_common::Result<()> {
-    let block_size = self.block_size;
-    let mut group_indices_flattened = groups.iter().map(|i| i.into_index_in_fixed_block_size(block_size)).collect::<Vec<_>>();
-    self.inner.intern(cols, &mut group_indices_flattened)?;
-    *groups = group_indices_flattened.iter().map(|index| BlocksIndex::from_index_in_fixed_block_size(*index, block_size)).collect::<Vec<_>>();
-
-    Ok(())
-  }
-
-  fn size(&self) -> usize {
-    self.inner.size()
-  }
-
-  fn is_empty(&self) -> bool {
-    self.inner.is_empty()
-  }
-
-  fn len(&self) -> usize {
-    self.inner.len()
-  }
-
-  fn emit_all(&mut self) -> datafusion_common::Result<Vec<Vec<ArrayRef>>> {
-    let mut blocks = vec![];
-
-    while self.len() > self.block_size {
-      blocks.push(self.inner.emit(EmitTo::First(self.block_size))?);
+    fn block_size(&self) -> usize {
+        self.block_size
     }
 
-    if self.len() > 0 {
-      blocks.push(self.inner.emit(EmitTo::All)?);
+    fn intern(
+        &mut self,
+        cols: &[ArrayRef],
+        groups: &mut Vec<BlocksIndex>,
+    ) -> datafusion_common::Result<()> {
+        let block_size = self.block_size;
+        let mut group_indices_flattened = groups
+            .iter()
+            .map(|i| i.into_index_in_fixed_block_size(block_size))
+            .collect::<Vec<_>>();
+        self.inner.intern(cols, &mut group_indices_flattened)?;
+        *groups = group_indices_flattened
+            .iter()
+            .map(|index| BlocksIndex::from_index_in_fixed_block_size(*index, block_size))
+            .collect::<Vec<_>>();
+
+        Ok(())
     }
 
-    Ok(blocks)
-  }
-
-  fn emit_block(&mut self) -> datafusion_common::Result<Option<Vec<ArrayRef>>> {
-    if self.len() == 0 {
-      return Ok(None);
+    fn size(&self) -> usize {
+        self.inner.size()
     }
 
-    let output = if self.len() <= self.block_size {
-      self.inner.emit(EmitTo::All)
-    } else {
-      self.inner.emit(EmitTo::First(self.block_size))
-    };
+    fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
 
-    Ok(Some(output?))
-  }
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
 
-  fn emit_first_n(&mut self, n: usize) -> datafusion_common::Result<Vec<ArrayRef>> {
-    assert_ne_or_internal_err!(n, 0);
-    assert_or_internal_err!(n <= self.len(), "n ({n}) must be less than or equal current length ({})", self.len());
-    assert_or_internal_err!(n < self.block_size(), "n ({n}) must be less than current block size ({})", self.block_size());
+    fn emit_all(&mut self) -> datafusion_common::Result<Vec<Vec<ArrayRef>>> {
+        let mut blocks = vec![];
 
-    let output = if self.len() == n {
-      self.inner.emit(EmitTo::All)
-    } else {
-      self.inner.emit(EmitTo::First(n))
-    };
+        while self.len() > self.block_size {
+            blocks.push(self.inner.emit(EmitTo::First(self.block_size))?);
+        }
 
-    Ok(output?)
-  }
+        if self.len() > 0 {
+            blocks.push(self.inner.emit(EmitTo::All)?);
+        }
 
-  fn clear_shrink(&mut self, num_rows: usize) {
-    self.inner.clear_shrink(num_rows)
-  }
+        Ok(blocks)
+    }
+
+    fn emit_block(&mut self) -> datafusion_common::Result<Option<Vec<ArrayRef>>> {
+        if self.len() == 0 {
+            return Ok(None);
+        }
+
+        let output = if self.len() <= self.block_size {
+            self.inner.emit(EmitTo::All)
+        } else {
+            self.inner.emit(EmitTo::First(self.block_size))
+        };
+
+        Ok(Some(output?))
+    }
+
+    fn emit_first_n(&mut self, n: usize) -> datafusion_common::Result<Vec<ArrayRef>> {
+        assert_ne_or_internal_err!(n, 0);
+        assert_or_internal_err!(
+            n <= self.len(),
+            "n ({n}) must be less than or equal current length ({})",
+            self.len()
+        );
+        assert_or_internal_err!(
+            n < self.block_size(),
+            "n ({n}) must be less than current block size ({})",
+            self.block_size()
+        );
+
+        let output = if self.len() == n {
+            self.inner.emit(EmitTo::All)
+        } else {
+            self.inner.emit(EmitTo::First(n))
+        };
+
+        Ok(output?)
+    }
+
+    fn clear_shrink(&mut self, num_rows: usize) {
+        self.inner.clear_shrink(num_rows)
+    }
 }
 
 /// Return a specialized implementation of [`BlockedGroupValues`] for the given schema.
@@ -260,19 +297,32 @@ impl BlockedGroupValues for BlockedGroupValuesAdapter {
 /// `GroupValuesColumn`: crate::aggregates_blocked::group_values::multi_group_by::GroupValuesColumn
 /// `GroupValuesRows`: crate::aggregates_blocked::group_values::GroupValuesRows
 pub fn new_blocked_group_values(
-  schema: SchemaRef,
-  group_ordering: &GroupOrdering,
-  block_size: usize,
+    schema: SchemaRef,
+    group_ordering: &GroupOrdering,
+    block_size: usize,
 ) -> datafusion_common::Result<Box<dyn BlockedGroupValues>> {
-  if schema.fields.len() == 1 {
-    let d = schema.fields[0].data_type();
+    if schema.fields.len() == 1 {
+        let d = schema.fields[0].data_type();
 
-    if matches!(d, DataType::Boolean) {
-      return Ok(Box::new(BlockedGroupValuesBoolean::new(block_size)));
+        macro_rules! downcast_helper {
+            ($t:ty, $d:ident) => {
+                return Ok(Box::new(BlockedGroupValuesPrimitive::<$t>::new($d.clone(), block_size)))
+            };
+        }
+
+        downcast_primitive! {
+            d => (downcast_helper, d),
+            DataType::Boolean => {
+                return Ok(Box::new(BlockedGroupValuesBoolean::new(block_size)));
+            },
+            _ => {}
+        }
     }
-  }
 
-  let group_values = new_group_values(schema, group_ordering)?;
+    let group_values = new_group_values(schema, group_ordering)?;
 
-  Ok(Box::new(BlockedGroupValuesAdapter::new(block_size, group_values)))
+    Ok(Box::new(BlockedGroupValuesAdapter::new(
+        block_size,
+        group_values,
+    )))
 }

@@ -23,10 +23,12 @@ use arrow::array::{Array, BooleanArray, BooleanBufferBuilder, PrimitiveArray};
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::ArrowPrimitiveType;
 
-use datafusion_common::Result;
-use datafusion_expr_common::blocked_groups_accumulator::{BlockedEmitTo, BlockedGroupSelection, BlocksIndex};
-use datafusion_expr_common::blocked_helpers::{BlockedBooleanBufferBuilder, BlockedVec};
 use crate::aggregate::groups_accumulator::accumulate::accumulate;
+use datafusion_common::Result;
+use datafusion_expr_common::blocked_groups_accumulator::{
+    BlockedEmitTo, BlockedGroupSelection, BlocksIndex,
+};
+use datafusion_expr_common::blocked_helpers::BlockedBooleanBufferBuilder;
 
 /// If the input has nulls, then the accumulator must potentially
 /// handle each input null value specially (e.g. for `SUM` to mark the
@@ -48,9 +50,11 @@ pub enum BlockedSeenValues {
 }
 
 impl BlockedSeenValues {
-
     pub fn new(block_size: usize) -> Self {
-        BlockedSeenValues::All { num_values: 0, block_size }
+        BlockedSeenValues::All {
+            num_values: 0,
+            block_size,
+        }
     }
 
     pub fn block_size(&self) -> usize {
@@ -67,9 +71,15 @@ impl BlockedSeenValues {
     ///
     /// The builder is then ensured to have at least `total_num_groups` length,
     /// with any new entries initialized to false.
-    fn get_builder(&mut self, total_num_groups: usize) -> &mut BlockedBooleanBufferBuilder {
+    fn get_builder(
+        &mut self,
+        total_num_groups: usize,
+    ) -> &mut BlockedBooleanBufferBuilder {
         match self {
-            BlockedSeenValues::All { num_values, block_size } => {
+            BlockedSeenValues::All {
+                num_values,
+                block_size,
+            } => {
                 let mut builder = BlockedBooleanBufferBuilder::new(*block_size);
                 builder.push_value_n(true, *num_values);
                 if total_num_groups > *num_values {
@@ -102,8 +112,10 @@ fn new_groups_are_dense(
     first_new_group: usize,
     total_num_groups: usize,
 ) -> bool {
-    let first_new_group = BlocksIndex::from_index_in_fixed_block_size(first_new_group, block_size);
-    let total_num_groups = BlocksIndex::from_index_in_fixed_block_size(total_num_groups, block_size);
+    let first_new_group =
+        BlocksIndex::from_index_in_fixed_block_size(first_new_group, block_size);
+    let total_num_groups =
+        BlocksIndex::from_index_in_fixed_block_size(total_num_groups, block_size);
 
     if first_new_group == total_num_groups {
         return true;
@@ -159,7 +171,10 @@ pub struct BlockedNullState {
 impl BlockedNullState {
     pub fn new(block_size: usize) -> Self {
         Self {
-            seen_values: BlockedSeenValues::All { num_values: 0, block_size },
+            seen_values: BlockedSeenValues::All {
+                num_values: 0,
+                block_size,
+            },
         }
     }
 
@@ -167,9 +182,7 @@ impl BlockedNullState {
     pub fn size(&self) -> usize {
         match &self.seen_values {
             BlockedSeenValues::All { .. } => 0,
-            BlockedSeenValues::Some { values } => {
-                values.allocated_size()
-            },
+            BlockedSeenValues::Some { values } => values.allocated_size(),
         }
     }
 
@@ -205,8 +218,16 @@ impl BlockedNullState {
         // sparse group indices despite not passing a filter to the accumulator.
         if opt_filter.is_none()
             && values.null_count() == 0
-            && let BlockedSeenValues::All { num_values, block_size } = &mut self.seen_values
-            && new_groups_are_dense(group_indices, *block_size, *num_values, total_num_groups)
+            && let BlockedSeenValues::All {
+                num_values,
+                block_size,
+            } = &mut self.seen_values
+            && new_groups_are_dense(
+                group_indices,
+                *block_size,
+                *num_values,
+                total_num_groups,
+            )
         {
             accumulate(group_indices, values, None, value_fn);
             *num_values = total_num_groups;
@@ -248,8 +269,16 @@ impl BlockedNullState {
         // sparse group indices despite not passing a filter to the accumulator.
         if opt_filter.is_none()
             && values.null_count() == 0
-            && let BlockedSeenValues::All { num_values, block_size } = &mut self.seen_values
-            && new_groups_are_dense(group_indices, *block_size, *num_values, total_num_groups)
+            && let BlockedSeenValues::All {
+                num_values,
+                block_size,
+            } = &mut self.seen_values
+            && new_groups_are_dense(
+                group_indices,
+                *block_size,
+                *num_values,
+                total_num_groups,
+            )
         {
             group_indices
                 .iter()
@@ -330,7 +359,10 @@ impl BlockedNullState {
     ) -> Result<Option<NullBuffer>> {
         let selected_len = selection.len();
         match &self.seen_values {
-            BlockedSeenValues::All { num_values, block_size: _ } => {
+            BlockedSeenValues::All {
+                num_values,
+                block_size: _,
+            } => {
                 selection.validate_num_groups(*num_values)?;
                 Ok(None)
             }
@@ -352,40 +384,45 @@ impl BlockedNullState {
     /// resets the internal state appropriately
     pub fn build(&mut self, emit_to: BlockedEmitTo) -> Vec<Option<NullBuffer>> {
         let block_size = self.seen_values.block_size();
-        let old_seen = std::mem::replace(&mut self.seen_values, BlockedSeenValues::new(block_size));
+        let old_seen =
+            std::mem::replace(&mut self.seen_values, BlockedSeenValues::new(block_size));
 
         match old_seen {
-            BlockedSeenValues::All { num_values, block_size } => {
-                match emit_to {
-                    BlockedEmitTo::All => vec![None; num_values.div_ceil(block_size)],
-                    BlockedEmitTo::NextBlock => {
-                        self.seen_values = BlockedSeenValues::All { num_values: num_values.saturating_sub(block_size), block_size };
+            BlockedSeenValues::All {
+                num_values,
+                block_size,
+            } => match emit_to {
+                BlockedEmitTo::All => vec![None; num_values.div_ceil(block_size)],
+                BlockedEmitTo::NextBlock => {
+                    self.seen_values = BlockedSeenValues::All {
+                        num_values: num_values.saturating_sub(block_size),
+                        block_size,
+                    };
 
-                        if num_values == 0 {
-                            vec![]
-                        } else {
-                            vec![None]
-                        }
-                    }
-                    BlockedEmitTo::First(n) => {
-                        assert!(n < block_size, "emit_to First(n) must be less than block_size");
-                        self.seen_values = BlockedSeenValues::All { num_values: num_values.saturating_sub(n), block_size };
-                        if num_values == 0 {
-                            vec![]
-                        } else {
-                            vec![None]
-                        }
-                    }
+                    if num_values == 0 { vec![] } else { vec![None] }
                 }
-            }
+                BlockedEmitTo::First(n) => {
+                    assert!(
+                        n < block_size,
+                        "emit_to First(n) must be less than block_size"
+                    );
+                    self.seen_values = BlockedSeenValues::All {
+                        num_values: num_values.saturating_sub(n),
+                        block_size,
+                    };
+                    if num_values == 0 { vec![] } else { vec![None] }
+                }
+            },
             BlockedSeenValues::Some { mut values } => {
                 let emitted = values.emit(emit_to);
 
                 self.seen_values = BlockedSeenValues::Some { values };
 
-                emitted.into_iter().map(|block| Some(NullBuffer::new(block))).collect()
+                emitted
+                    .into_iter()
+                    .map(|block| Some(NullBuffer::new(block)))
+                    .collect()
             }
         }
     }
 }
-

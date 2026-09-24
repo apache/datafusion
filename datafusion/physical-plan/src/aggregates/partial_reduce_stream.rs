@@ -321,7 +321,9 @@ impl PartialReduceHashAggregateStream {
         match state_batch_result {
             // No accumulated group to emit, so early emission cannot release any
             // memory: report the original error.
-            Ok(remaining_groups) if remaining_groups.is_empty() => Self::break_with_err(oom),
+            Ok(remaining_groups) if remaining_groups.is_empty() => {
+                Self::break_with_err(oom)
+            }
 
             Ok(remaining_groups) => {
                 self.early_emit_count.add(1);
@@ -355,7 +357,9 @@ impl PartialReduceHashAggregateStream {
             unreachable!("expected the EmittingOnMemoryPressure state")
         };
 
-        let next_batch = batches.next().expect("must have at least one batch to emit");
+        let next_batch = batches
+            .next()
+            .expect("must have at least one batch to emit");
 
         let (output_batch, next_state) = if batches.len() == 0 {
             // Go back to `ReadingInput`

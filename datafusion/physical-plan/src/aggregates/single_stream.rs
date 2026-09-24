@@ -278,14 +278,17 @@ impl SingleSpillContext {
             //        CHANGE TO sort iterator that will sort multiple batches instead of one batches without concat
             //        and will output multiple batches
 
-            let sorted_iter =
-              IncrementalSortIterator::new(batch, self.spill_expr.clone(), self.batch_size);
+            let sorted_iter = IncrementalSortIterator::new(
+                batch,
+                self.spill_expr.clone(),
+                self.batch_size,
+            );
             let spill_file = self
-              .spill_manager
-              .spill_record_batch_iter_and_return_max_batch_memory(
-                  sorted_iter,
-                  "SingleHashAggregateSpill",
-              )?;
+                .spill_manager
+                .spill_record_batch_iter_and_return_max_batch_memory(
+                    sorted_iter,
+                    "SingleHashAggregateSpill",
+                )?;
 
             let Some((file, max_record_batch_memory)) = spill_file else {
                 return internal_err!("Single hash aggregation produced an empty spill");

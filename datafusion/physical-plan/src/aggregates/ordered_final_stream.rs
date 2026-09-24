@@ -189,17 +189,22 @@ impl OrderedFinalSpillContext {
         table: &mut OrderedAggregateTable<FinalMarker>,
     ) -> Result<()> {
         for batch in table.take_all_state_batch()? {
-            let sorted_iter =
-              IncrementalSortIterator::new(batch, self.spill_expr.clone(), self.batch_size);
+            let sorted_iter = IncrementalSortIterator::new(
+                batch,
+                self.spill_expr.clone(),
+                self.batch_size,
+            );
             let spill_file = self
-              .spill_manager
-              .spill_record_batch_iter_and_return_max_batch_memory(
-                  sorted_iter,
-                  "OrderedFinalAggregateSpill",
-              )?;
+                .spill_manager
+                .spill_record_batch_iter_and_return_max_batch_memory(
+                    sorted_iter,
+                    "OrderedFinalAggregateSpill",
+                )?;
 
             let Some((file, max_record_batch_memory)) = spill_file else {
-                return internal_err!("Ordered final aggregation produced an empty spill");
+                return internal_err!(
+                    "Ordered final aggregation produced an empty spill"
+                );
             };
 
             self.spills.push(SortedSpillFile {

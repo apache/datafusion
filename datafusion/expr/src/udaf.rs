@@ -38,9 +38,10 @@ use crate::expr::{
     schema_name_from_sorts,
 };
 use crate::function::{
-    AccumulatorArgs, BlockedAccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
+    AccumulatorArgs, AggregateFunctionSimplification, BlockedAccumulatorArgs,
+    StateFieldsArgs,
 };
-use crate::groups_accumulator::{GroupsAccumulator};
+use crate::groups_accumulator::GroupsAccumulator;
 use crate::udf_eq::UdfEq;
 use crate::utils::AggregateOrderSensitivity;
 use crate::utils::format_state_name;
@@ -273,7 +274,10 @@ impl AggregateUDF {
     }
 
     /// See [`AggregateUDFImpl::blocked_groups_accumulator_supported`] for more details.
-    pub fn blocked_groups_accumulator_supported(&self, args: BlockedAccumulatorArgs) -> bool {
+    pub fn blocked_groups_accumulator_supported(
+        &self,
+        args: BlockedAccumulatorArgs,
+    ) -> bool {
         self.inner.blocked_groups_accumulator_supported(args)
     }
 
@@ -694,7 +698,10 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// [`Self::accumulator`] for certain queries, such as when this aggregate is
     /// used as a window function or when there no GROUP BY columns in the
     /// query.
-    fn blocked_groups_accumulator_supported(&self, _args: BlockedAccumulatorArgs) -> bool {
+    fn blocked_groups_accumulator_supported(
+        &self,
+        _args: BlockedAccumulatorArgs,
+    ) -> bool {
         false
     }
 
@@ -1661,6 +1668,17 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         self.inner.create_groups_accumulator(args)
+    }
+
+    fn blocked_groups_accumulator_supported(&self, args: BlockedAccumulatorArgs) -> bool {
+        self.inner.blocked_groups_accumulator_supported(args)
+    }
+
+    fn create_blocked_groups_accumulator(
+        &self,
+        args: BlockedAccumulatorArgs,
+    ) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+        self.inner.create_blocked_groups_accumulator(args)
     }
 
     fn create_sliding_accumulator(

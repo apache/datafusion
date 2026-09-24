@@ -46,9 +46,9 @@ use crate::aggregates::{
     order::GroupOrdering,
 };
 
+mod blocked;
 mod metrics;
 mod null_builder;
-mod blocked;
 
 pub use blocked::{BlockedGroupValues, new_blocked_group_values};
 

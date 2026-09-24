@@ -28,13 +28,18 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, internal_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_expr::{EmitTo, GroupsAccumulator};
-use datafusion_expr_common::blocked_groups_accumulator::{BlockedEmitTo, BlockedGroupsAccumulator, BlocksIndex};
+use datafusion_expr_common::blocked_groups_accumulator::{
+    BlockedEmitTo, BlockedGroupsAccumulator, BlocksIndex,
+};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 
 use crate::PhysicalExpr;
-use crate::aggregates::group_values::{new_blocked_group_values, new_group_values, AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics, GroupByMetrics, GroupValues, BlockedGroupValues};
-use crate::aggregates::grouped_hash_stream::{create_blocked_group_accumulator, create_group_accumulator};
+use crate::aggregates::group_values::{
+    AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
+    BlockedGroupValues, GroupByMetrics, new_blocked_group_values,
+};
+use crate::aggregates::grouped_hash_stream::
+create_blocked_group_accumulator;
 use crate::aggregates::order::GroupOrdering;
 use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
@@ -147,7 +152,8 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             .collect::<Result<_>>()?;
 
         let group_schema = agg.group_by.group_schema(&input_schema)?;
-        let group_values = new_blocked_group_values(group_schema, &GroupOrdering::None, batch_size)?;
+        let group_values =
+            new_blocked_group_values(group_schema, &GroupOrdering::None, batch_size)?;
 
         let metrics = AggregateTableMetrics::new(agg, partition);
 
@@ -263,49 +269,56 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         let accumulator_metrics = Arc::clone(&self.aggregate_accumulator_metrics);
 
         let mut output =
-          match std::mem::replace(&mut self.state, AggregateHashTableState::Done) {
-              AggregateHashTableState::Outputting(mut state) => {
-                  if state.group_values.is_empty() {
-                      return Ok(None);
-                  }
+            match std::mem::replace(&mut self.state, AggregateHashTableState::Done) {
+                AggregateHashTableState::Outputting(mut state) => {
+                    if state.group_values.is_empty() {
+                        return Ok(None);
+                    }
 
-                  // Accumulator output consumes internal state. Materialize all
-                  // groups once, then slice the materialized batch on later polls.
-                  let blocked_columns = self.group_by_metrics.time_emitting(|| {
-                      let mut blocked_columns = state.group_values.emit(BlockedEmitTo::All)?;
-                      for (idx, acc) in state.accumulators.iter_mut().enumerate() {
-                          let acc_cols = accumulator_metrics.time(
-                              idx,
-                              accumulator_phase,
-                              || materialize_accumulator_fn(acc, BlockedEmitTo::All),
-                          )?;
+                    // Accumulator output consumes internal state. Materialize all
+                    // groups once, then slice the materialized batch on later polls.
+                    let blocked_columns = self.group_by_metrics.time_emitting(|| {
+                        let mut blocked_columns =
+                            state.group_values.emit(BlockedEmitTo::All)?;
+                        for (idx, acc) in state.accumulators.iter_mut().enumerate() {
+                            let acc_cols = accumulator_metrics.time(
+                                idx,
+                                accumulator_phase,
+                                || materialize_accumulator_fn(acc, BlockedEmitTo::All),
+                            )?;
 
-                          blocked_columns.iter_mut().zip(acc_cols).for_each(|(output, acc_cols)| {
-                              output.extend_from_slice(acc_cols.as_ref());
-                          });
-                      }
-                      Ok::<_, datafusion_common::DataFusionError>(blocked_columns)
-                  })?;
+                            blocked_columns.iter_mut().zip(acc_cols).for_each(
+                                |(output, acc_cols)| {
+                                    output.extend_from_slice(acc_cols.as_ref());
+                                },
+                            );
+                        }
+                        Ok::<_, datafusion_common::DataFusionError>(blocked_columns)
+                    })?;
 
-                  let mut total_memory = 0;
+                    let mut total_memory = 0;
 
-                  let batches = blocked_columns.into_iter().map(|cols| {
-                      let batch = RecordBatch::try_new(output_schema.clone(), cols)?;
-                      debug_assert!(batch.num_rows() > 0);
-                      total_memory += batch.get_array_memory_size();
-                      Ok(batch)
-                  }).collect::<Vec<_>>();
+                    let batches = blocked_columns
+                        .into_iter()
+                        .map(|cols| {
+                            let batch =
+                                RecordBatch::try_new(output_schema.clone(), cols)?;
+                            debug_assert!(batch.num_rows() > 0);
+                            total_memory += batch.get_array_memory_size();
+                            Ok(batch)
+                        })
+                        .collect::<Vec<_>>();
 
-                  MaterializedAggregateOutput::new(batches, total_memory)
-              }
-              AggregateHashTableState::OutputtingMaterialized(output) => output,
-              AggregateHashTableState::Done => return Ok(None),
-              AggregateHashTableState::Building(_) => {
-                  return internal_err!(
+                    MaterializedAggregateOutput::new(batches, total_memory)
+                }
+                AggregateHashTableState::OutputtingMaterialized(output) => output,
+                AggregateHashTableState::Done => return Ok(None),
+                AggregateHashTableState::Building(_) => {
+                    return internal_err!(
                         "next_output_batch must be called in the outputting state"
                     );
-              }
-          };
+                }
+            };
 
         let batch = output.next_batch().transpose();
         if output.is_exhausted() {
@@ -361,29 +374,31 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         let output = group_by_metrics.time_emitting(|| {
             let mut blocked_output = state.group_values.emit(BlockedEmitTo::All)?;
 
-
             for (idx, acc) in state.accumulators.iter_mut().enumerate() {
-                let blocked_state = accumulator_metrics.time(
-                    idx,
-                    AccumulatorPhase::State,
-                    || acc.state(BlockedEmitTo::All),
-                )?;
+                let blocked_state =
+                    accumulator_metrics.time(idx, AccumulatorPhase::State, || {
+                        acc.state(BlockedEmitTo::All)
+                    })?;
 
-                blocked_output.iter_mut().zip(blocked_state).for_each(|(output, states)| {
-                    output.extend_from_slice(states.as_ref());
-                });
+                blocked_output.iter_mut().zip(blocked_state).for_each(
+                    |(output, states)| {
+                        output.extend_from_slice(states.as_ref());
+                    },
+                );
             }
 
             Ok::<_, datafusion_common::DataFusionError>(blocked_output)
         })?;
 
-        let batches = output.into_iter().map(|cols| {
-            let batch = RecordBatch::try_new(Arc::clone(&state_schema), cols)?;
-            debug_assert!(batch.num_rows() > 0);
+        let batches = output
+            .into_iter()
+            .map(|cols| {
+                let batch = RecordBatch::try_new(Arc::clone(&state_schema), cols)?;
+                debug_assert!(batch.num_rows() > 0);
 
-            Ok(batch)
-        }).collect::<Result<Vec<_>>>()?;
-
+                Ok(batch)
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         // `emit(EmitTo::All)` resets accumulator state. Explicitly shrink the
         // key/index buffers too so the memory reservation can be released
@@ -650,7 +665,7 @@ impl MaterializedAggregateOutput {
                 self.total_memory -= batch.get_array_memory_size();
                 Some(Ok(batch))
             }
-            res => res
+            res => res,
         }
     }
 
@@ -718,7 +733,8 @@ impl HashAggregateAccumulator {
     /// state buffers (empty [`BlockedGroupsAccumulator`]).
     pub(super) fn empty_like(&self) -> Result<Self> {
         let batch_size = self.accumulator.batch_size();
-        let accumulator = create_blocked_group_accumulator(&self.aggregate_expr, batch_size)?;
+        let accumulator =
+            create_blocked_group_accumulator(&self.aggregate_expr, batch_size)?;
         Ok(Self::new(
             Arc::clone(&self.aggregate_expr),
             self.arguments.clone(),
@@ -924,7 +940,9 @@ mod tests {
 
     #[test]
     fn compact_group_indices_uses_filter_bitmap() {
-        let group_indices = (0..10).map(BlocksIndex::new_in_first_block).collect::<Vec<_>>();
+        let group_indices = (0..10)
+            .map(BlocksIndex::new_in_first_block)
+            .collect::<Vec<_>>();
         let all_true = BooleanArray::from(vec![true; 10]);
         assert_eq!(compact_group_indices(&group_indices, &all_true), None);
 
@@ -932,7 +950,11 @@ mod tests {
             BooleanArray::from((0..10).map(|index| index != 4).collect::<Vec<_>>());
         assert_eq!(
             compact_group_indices(&group_indices, &high_selectivity),
-            Some([0, 1, 2, 3, 5, 6, 7, 8, 9].map(BlocksIndex::new_in_first_block).to_vec())
+            Some(
+                [0, 1, 2, 3, 5, 6, 7, 8, 9]
+                    .map(BlocksIndex::new_in_first_block)
+                    .to_vec()
+            )
         );
 
         let with_nulls =
@@ -1029,13 +1051,12 @@ mod tests {
                 .alias("SUM(value)")
                 .build()?,
         );
-        let accumulator = create_group_accumulator(&aggregate_expr)?;
+        let accumulator = create_blocked_group_accumulator(&aggregate_expr)?;
         Ok(HashAggregateAccumulator::new(
             aggregate_expr,
             vec![argument],
             Some(Arc::new(Column::new(filter_name, filter_index))),
             accumulator,
-            8192
         ))
     }
 

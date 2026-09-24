@@ -17,14 +17,13 @@
 
 use crate::aggregates::group_values::GroupValues;
 
+use crate::aggregates::group_values::blocked::BlockedGroupValues;
 use arrow::array::{
     ArrayRef, AsArray as _, BooleanArray, BooleanBufferBuilder, NullBufferBuilder,
 };
 use datafusion_common::Result;
-use datafusion_expr::EmitTo;
-use std::{mem::size_of, sync::Arc};
 use datafusion_expr_common::blocked_groups_accumulator::BlocksIndex;
-use crate::aggregates::group_values::blocked::BlockedGroupValues;
+use std::{mem::size_of, sync::Arc};
 
 #[derive(Debug)]
 pub struct BlockedGroupValuesBoolean {
@@ -86,7 +85,10 @@ impl BlockedGroupValues for BlockedGroupValuesBoolean {
                 }
             };
 
-            groups.push(BlocksIndex::from_index_in_fixed_block_size(index, self.block_size));
+            groups.push(BlocksIndex::from_index_in_fixed_block_size(
+                index,
+                self.block_size,
+            ));
         }
 
         Ok(())
@@ -102,8 +104,8 @@ impl BlockedGroupValues for BlockedGroupValuesBoolean {
 
     fn len(&self) -> usize {
         self.false_group.is_some() as usize
-          + self.true_group.is_some() as usize
-          + self.null_group.is_some() as usize
+            + self.true_group.is_some() as usize
+            + self.null_group.is_some() as usize
     }
 
     fn emit_all(&mut self) -> Result<Vec<Vec<ArrayRef>>> {
@@ -166,7 +168,11 @@ impl BlockedGroupValues for BlockedGroupValuesBoolean {
     }
 
     fn emit_first_n(&mut self, n: usize) -> Result<Vec<ArrayRef>> {
-        assert!(n < self.block_size, "{n} must be less than block_size {}", self.block_size);
+        assert!(
+            n < self.block_size,
+            "{n} must be less than block_size {}",
+            self.block_size
+        );
 
         {
             let len = self.len();
@@ -224,10 +230,13 @@ impl BlockedGroupValues for BlockedGroupValuesBoolean {
 
 #[cfg(test)]
 mod tests {
-    use datafusion_expr_common::blocked_groups_accumulator::BlocksIndex;
     use super::*;
+    use datafusion_expr_common::blocked_groups_accumulator::BlocksIndex;
 
-    fn intern(group_values: &mut BlockedGroupValuesBoolean, values: &[Option<bool>]) -> Vec<BlocksIndex> {
+    fn intern(
+        group_values: &mut BlockedGroupValuesBoolean,
+        values: &[Option<bool>],
+    ) -> Vec<BlocksIndex> {
         let mut groups = vec![];
         let array: ArrayRef = Arc::new(BooleanArray::from(values.to_vec()));
         group_values.intern(&[array], &mut groups).unwrap();
@@ -236,15 +245,18 @@ mod tests {
 
     fn emitted(blocks: Vec<Vec<ArrayRef>>) -> Vec<Vec<Option<bool>>> {
         blocks
-          .into_iter()
-          .map(|block| block[0].as_boolean().iter().collect())
-          .collect()
+            .into_iter()
+            .map(|block| block[0].as_boolean().iter().collect())
+            .collect()
     }
 
     #[test]
     fn emit_all_only_emits_existing_groups() {
         let mut group_values = BlockedGroupValuesBoolean::new(531);
-        let groups = intern(&mut group_values, &[Some(true), None, Some(true), Some(false)]);
+        let groups = intern(
+            &mut group_values,
+            &[Some(true), None, Some(true), Some(false)],
+        );
         assert_eq!(
             groups,
             [0, 1, 0, 2].map(BlocksIndex::new_in_first_block).to_vec()

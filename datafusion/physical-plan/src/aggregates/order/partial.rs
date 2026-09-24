@@ -246,7 +246,8 @@ impl GroupOrderingPartial {
         let ranges = partition(&sort_keys)?.ranges();
         let last_range = ranges.last().unwrap();
 
-        let range_current_sort = group_indices[last_range.start].into_index_in_fixed_block_size(self.block_size);
+        let range_current_sort = group_indices[last_range.start]
+            .into_index_in_fixed_block_size(self.block_size);
         let range_sort_key = get_row_at_idx(&sort_keys, last_range.start)?;
 
         let (current_sort, sort_key) = if last_range.start == 0 {
@@ -288,7 +289,8 @@ mod tests {
         // Ordered on column a
         let order_indices = vec![0];
         let block_size = 8192;
-        let mut group_ordering = GroupOrderingPartial::try_new(order_indices, block_size)?;
+        let mut group_ordering =
+            GroupOrderingPartial::try_new(order_indices, block_size)?;
 
         let batch_group_values: Vec<ArrayRef> = vec![
             Arc::new(Int32Array::from(vec![1, 2, 3])),

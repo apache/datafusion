@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::mem::size_of;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray, PrimitiveArray};
@@ -24,11 +23,10 @@ use arrow::compute;
 use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
-use datafusion_expr_common::blocked_groups_accumulator::{BlockedEmitTo, BlockedGroupSelection, BlockedGroupsAccumulator, BlocksIndex};
-use datafusion_expr_common::blocked_helpers::BlockedVec;
-use datafusion_expr_common::groups_accumulator::{
-    EmitTo, GroupSelection, GroupsAccumulator,
+use datafusion_expr_common::blocked_groups_accumulator::{
+    BlockedEmitTo, BlockedGroupSelection, BlockedGroupsAccumulator, BlocksIndex,
 };
+use datafusion_expr_common::blocked_helpers::BlockedVec;
 
 use super::accumulate::BlockedNullState;
 
@@ -105,7 +103,8 @@ where
         let values = values[0].as_primitive::<T>();
 
         // update values
-        self.values.push_value_n_to_len(self.starting_value, total_num_groups);
+        self.values
+            .push_value_n_to_len(self.starting_value, total_num_groups);
 
         // NullState dispatches / handles tracking nulls and groups that saw no values
         self.null_state.accumulate(
@@ -127,16 +126,23 @@ where
         let values = self.values.emit(emit_to);
         let nulls = self.null_state.build(emit_to);
 
-        let blocks = values.into_iter().zip(nulls).map(|(values, nulls)| {
-            let values = PrimitiveArray::<T>::new(values.into(), nulls) // no copy
-              .with_data_type(self.data_type.clone());
-            Arc::new(values) as ArrayRef
-        }).collect::<Vec<_>>();
+        let blocks = values
+            .into_iter()
+            .zip(nulls)
+            .map(|(values, nulls)| {
+                let values = PrimitiveArray::<T>::new(values.into(), nulls) // no copy
+                    .with_data_type(self.data_type.clone());
+                Arc::new(values) as ArrayRef
+            })
+            .collect::<Vec<_>>();
 
         Ok(blocks)
     }
 
-    fn evaluate_preserving(&mut self, selection: BlockedGroupSelection<'_>) -> Result<ArrayRef> {
+    fn evaluate_preserving(
+        &mut self,
+        selection: BlockedGroupSelection<'_>,
+    ) -> Result<ArrayRef> {
         selection.validate_num_groups(self.values.len())?;
         let values: Vec<T::Native> =
             selection.iter().map(|index| self.values[index]).collect();
@@ -153,10 +159,11 @@ where
     fn state(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<Vec<ArrayRef>>> {
         let blocks = self.evaluate(emit_to)?;
 
-        Ok(blocks.into_iter()
-          // Convert each block into a Vec<ArrayRef> to match the return type
-          .map(|arr| vec![arr])
-          .collect::<Vec<_>>())
+        Ok(blocks
+            .into_iter()
+            // Convert each block into a Vec<ArrayRef> to match the return type
+            .map(|arr| vec![arr])
+            .collect::<Vec<_>>())
     }
 
     fn state_preserving(

@@ -26,7 +26,7 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
-    DataFusionError, Result, assert_ne_or_internal_err, internal_datafusion_err,
+    DataFusionError, Result, assert_ne_or_internal_err,
     internal_err,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -292,18 +292,21 @@ impl FinalSpillContext {
         &mut self,
         hash_table: &mut AggregateHashTable<FinalMarker>,
     ) -> Result<()> {
-        for batch in  hash_table.take_all_state_batch()? {
+        for batch in hash_table.take_all_state_batch()? {
             // TODO - avoid this - it will create MANY small spill files as oppose to before,
             //        CHANGE TO sort iterator that will sort multiple batches instead of one batches without concat
             //        and will output multiple batches
-            let sorted_iter =
-              IncrementalSortIterator::new(batch, self.spill_expr.clone(), self.batch_size);
+            let sorted_iter = IncrementalSortIterator::new(
+                batch,
+                self.spill_expr.clone(),
+                self.batch_size,
+            );
             let spill_file = self
-              .spill_manager
-              .spill_record_batch_iter_and_return_max_batch_memory(
-                  sorted_iter,
-                  "FinalHashAggregateSpill",
-              )?;
+                .spill_manager
+                .spill_record_batch_iter_and_return_max_batch_memory(
+                    sorted_iter,
+                    "FinalHashAggregateSpill",
+                )?;
 
             let Some((file, max_record_batch_memory)) = spill_file else {
                 return internal_err!("Final hash aggregation produced an empty spill");
@@ -314,7 +317,6 @@ impl FinalSpillContext {
                 max_record_batch_memory,
             });
         }
-
 
         Ok(())
     }
@@ -478,7 +480,8 @@ impl PartialHashAggregateStream {
                         break;
                     }
                     HandleInputResult::OOM => {
-                        let materialized_group_states = hash_table.take_all_state_batch()?;
+                        let materialized_group_states =
+                            hash_table.take_all_state_batch()?;
 
                         if materialized_group_states.is_empty() {
                             return internal_err!(
@@ -598,11 +601,14 @@ impl PartialHashAggregateStream {
         &mut self,
         // After each incremental emitting step, the `remaining_groups` will be updated
         // with batch slicing.
-        mut remaining_groups: Vec<RecordBatch>,
+        remaining_groups: Vec<RecordBatch>,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
         hash_table_mem_size: usize,
     ) -> Result<()> {
-        let sizes = remaining_groups.iter().map(|b| b.get_array_memory_size()).collect::<Vec<_>>();
+        let sizes = remaining_groups
+            .iter()
+            .map(|b| b.get_array_memory_size())
+            .collect::<Vec<_>>();
         // Skip first since we are emitting it right away
         let total_size: usize = sizes.iter().skip(1).sum();
 
@@ -628,15 +634,14 @@ impl PartialHashAggregateStream {
 
             // Do not shrink the first batch since we did not count it
             if i > 0 {
-
                 // We are no longer holding on the batch while slicing, so release the memory.
                 // The memory will now equal to the hash table size
                 self.reservation.try_shrink(size)?;
             }
 
             emitter
-              .emit(output.record_output(&self.baseline_metrics))
-              .await;
+                .emit(output.record_output(&self.baseline_metrics))
+                .await;
         }
 
         Ok(())

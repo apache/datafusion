@@ -17,13 +17,12 @@
 
 //! Vectorized [`GroupsAccumulator`]
 
+use crate::groups_accumulator::EmitTo;
 use arrow::array::{ArrayRef, BooleanArray};
 use datafusion_common::{
     Result, assert_ne_or_internal_err, assert_or_internal_err, exec_err, not_impl_err,
-    utils::split_vec_min_alloc,
 };
 use std::cmp::Ordering;
-use crate::groups_accumulator::EmitTo;
 
 /// Selects groups for a non-destructive grouped aggregation read.
 ///
@@ -151,15 +150,18 @@ impl BlocksIndex {
     };
 
     pub fn new(block_index: usize, index_in_block: usize) -> Self {
-      Self {
-        block_index: Self::narrow(block_index),
-        index_in_block: Self::narrow(index_in_block),
-      }
+        Self {
+            block_index: Self::narrow(block_index),
+            index_in_block: Self::narrow(index_in_block),
+        }
     }
 
     #[inline(always)]
     fn narrow(value: usize) -> u32 {
-        debug_assert!(value <= u32::MAX as usize, "block index part {value} does not fit in u32");
+        debug_assert!(
+            u32::try_from(value).is_ok(),
+            "block index part {value} does not fit in u32"
+        );
         value as u32
     }
 
@@ -196,11 +198,16 @@ impl BlocksIndex {
 
     pub fn sub_flat_checked(self, rhs_flat: usize, block_size: usize) -> Option<Self> {
         let self_flat = self.into_index_in_fixed_block_size(block_size);
-        self_flat.checked_sub(rhs_flat).map(|v| Self::from_index_in_fixed_block_size(v, block_size))
+        self_flat
+            .checked_sub(rhs_flat)
+            .map(|v| Self::from_index_in_fixed_block_size(v, block_size))
     }
 
     pub fn sub_flat(self, rhs_flat: usize, block_size: usize) -> Self {
-        Self::from_index_in_fixed_block_size(self.into_index_in_fixed_block_size(block_size) - rhs_flat, block_size)
+        Self::from_index_in_fixed_block_size(
+            self.into_index_in_fixed_block_size(block_size) - rhs_flat,
+            block_size,
+        )
     }
 
     pub fn gte_flat(self, rhs_flat: usize, block_size: usize) -> bool {
@@ -249,7 +256,9 @@ impl PartialOrd for BlocksIndex {
 
 impl Ord for BlocksIndex {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.block_index.cmp(&other.block_index).then(self.index_in_block.cmp(&other.index_in_block))
+        self.block_index
+            .cmp(&other.block_index)
+            .then(self.index_in_block.cmp(&other.index_in_block))
     }
 }
 

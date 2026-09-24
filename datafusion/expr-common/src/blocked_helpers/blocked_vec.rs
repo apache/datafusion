@@ -1,11 +1,8 @@
-use datafusion_common::utils::proxy::{VecAllocExt};
+use crate::blocked_groups_accumulator::{BlockedEmitTo, BlocksIndex};
+use datafusion_common::utils::proxy::VecAllocExt;
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::ops::{Index, IndexMut};
-use arrow::buffer::ScalarBuffer;
-use arrow::datatypes::ArrowNativeType;
-use crate::blocked_groups_accumulator::{BlockedEmitTo, BlocksIndex};
-
 
 /// Blocked Vec
 ///
@@ -35,8 +32,7 @@ pub struct BlockedVec<T: Copy> {
     finished_blocks_allocated_memory: usize,
 }
 
-impl<T: Copy> BlockedVec<T>
-{
+impl<T: Copy> BlockedVec<T> {
     // TODO - some want to preallocate the blocks and some don't,
     //        there should be a way while avoiding having a lot of memory used if all are prealocatting
     pub fn new(block_size: usize) -> Self {
@@ -61,16 +57,13 @@ impl<T: Copy> BlockedVec<T>
         self.len
     }
 
-    pub fn num_blocks(&self) -> usize {
+    fn num_blocks(&self) -> usize {
         self.current_block_index + (self.should_count_current_block() as usize)
     }
 
     fn should_count_current_block(&self) -> bool {
-        self.should_count_current_block || !self.blocks[self.current_block_index].is_empty()
-    }
-
-    pub fn block(&self, block_index: usize) -> &Vec<T> {
-        &self.blocks[block_index]
+        self.should_count_current_block
+            || !self.blocks[self.current_block_index].is_empty()
     }
 
     pub fn block_size(&self) -> usize {
@@ -83,33 +76,11 @@ impl<T: Copy> BlockedVec<T>
             + self.blocks.back().map_or(0, |b| b.allocated_size())
     }
 
-    /// Get the number of elements in the current block
-    pub fn current_block_len(&self) -> usize {
-        self.blocks[self.current_block_index].len()
-    }
-
-    pub fn start_new_block(&mut self) {
-        // a block that was only pre-opened becomes the started block instead of an empty
-        // block of its own
-        if self.should_count_current_block() {
-            self.end_current_block();
-        }
-        self.should_count_current_block = true;
-    }
-
-    pub(crate) fn mark_current_block_counted(&mut self) {
-        self.should_count_current_block = true;
-    }
-
-    pub fn end_current_block(&mut self) {
-        self.end_current_block_inner();
-    }
-
-    fn end_current_block_inner(&mut self) {
+    fn end_current_block(&mut self) {
         // Don't add to number of blocks since we might not insert into it
         self.current_block_index += 1;
         self.finished_blocks_allocated_memory +=
-          self.blocks.back().map_or(0, |b| b.allocated_size());
+            self.blocks.back().map_or(0, |b| b.allocated_size());
         let new_block = vec![];
 
         // Don't count current block since we might not insert into it
@@ -117,7 +88,7 @@ impl<T: Copy> BlockedVec<T>
         self.blocks.push_back(new_block);
     }
 
-    pub(crate) fn reserve_blocks(&mut self, n: usize) {
+    fn reserve_blocks(&mut self, n: usize) {
         self.blocks.reserve(n);
     }
 
@@ -131,114 +102,18 @@ impl<T: Copy> BlockedVec<T>
         let finished_block = block.len() == self.block_size;
 
         if finished_block {
-            self.end_current_block_inner();
+            self.end_current_block();
             true
         } else {
             false
         }
     }
 
-    /// Extends iterator of lengths within current block
-    /// Returns if the current block has finished
-    ///
-    /// # Panics
-    /// Panics if the iterator length exceeds the remaining size of the current block
-    pub(super) fn extend_in_block(
-        &mut self,
-        iter: impl Iterator<Item = T>,
-    ) -> bool {
-        let block = &mut self.blocks[self.current_block_index];
-
-        let prev_block_len = block.len();
-        block.extend(iter);
-
-        assert!(
-            block.len() <= self.block_size,
-            "overflow from block new block length: {}, block size: {}",
-            block.len(),
-            self.block_size
-        );
-
-        let added_items = block.len() - prev_block_len;
-        self.len += added_items;
-
-        let finished_block = block.len() == self.block_size;
-
-        if finished_block {
-            self.end_current_block_inner();
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Extends from slice within current block
-    /// Returns if the current block has finished
-    ///
-    /// # Panics
-    /// Panics if the iterator length exceeds the remaining size of the current block
-    pub(super) fn extend_from_slice_in_block(
-        &mut self,
-        slice: &[T],
-    ) -> bool
-    {
-        let block = &mut self.blocks[self.current_block_index];
-
-        let prev_block_len = block.len();
-        block.copy_from_slice(slice);
-
-        assert!(
-            block.len() <= self.block_size,
-            "overflow from block new block length: {}, block size: {}",
-            block.len(),
-            self.block_size
-        );
-
-        let added_items = block.len() - prev_block_len;
-        self.len += added_items;
-
-        let finished_block = block.len() == self.block_size;
-
-        if finished_block {
-            self.end_current_block_inner();
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Extend the length from the current offsets
-    pub fn extend_from_slice(
-        &mut self,
-        mut buffer: &[T],
-    ) {
-        let number_of_blocks_to_reserve = buffer
-            .len()
-            .saturating_sub(self.current_block_remaining_len())
-            .div_ceil(self.block_size);
-        self.reserve_blocks(number_of_blocks_to_reserve);
-
-        while !buffer.is_empty() {
-            let remaining_in_current_block = self.current_block_remaining_len();
-            let to_add = remaining_in_current_block.min(buffer.len());
-
-            let (to_copy, rest) = buffer.split_at(to_add);
-            buffer = rest;
-
-            self.extend_from_slice_in_block(to_copy);
-        }
-    }
-
-    pub fn current_block_remaining_len(&self) -> usize {
+    fn current_block_remaining_len(&self) -> usize {
         self.block_size - self.blocks[self.current_block_index].len()
     }
 
-    pub fn push_value_n_within_block(
-        &mut self,
-        value: T,
-        n: usize,
-    ) -> bool
-    {
+    fn push_value_n_within_block(&mut self, value: T, n: usize) -> bool {
         self.len += n;
         let block = &mut self.blocks[self.current_block_index];
 
@@ -253,26 +128,14 @@ impl<T: Copy> BlockedVec<T>
         let finished_block = block.len() == self.block_size;
 
         if finished_block {
-            self.end_current_block_inner();
+            self.end_current_block();
             true
         } else {
             false
         }
     }
 
-    /// Push default
-    pub fn push_default_n(&mut self, n: usize)
-    where
-        T: Default,
-    {
-        self.push_value_n(T::default(), n);
-    }
-
-    pub fn push_value_n(
-        &mut self,
-        value: T,
-        mut n: usize,
-    ) {
+    pub fn push_value_n(&mut self, value: T, mut n: usize) {
         let number_of_blocks_to_reserve = n
             .saturating_sub(self.current_block_remaining_len())
             .div_ceil(self.block_size);
@@ -289,7 +152,10 @@ impl<T: Copy> BlockedVec<T>
     }
 
     pub fn push_value_n_to_len(&mut self, value: T, new_len: usize) {
-        assert!(new_len >= self.len, "new_len must be greater than or equal to current len");
+        assert!(
+            new_len >= self.len,
+            "new_len must be greater than or equal to current len"
+        );
         let n = new_len - self.len;
         self.push_value_n(value, n);
     }
@@ -299,7 +165,7 @@ impl<T: Copy> BlockedVec<T>
     /// # Safety
     /// `block_index < self.num_blocks()`
     #[inline]
-    pub unsafe fn block_unchecked(&self, block_index: usize) -> &Vec<T> {
+    unsafe fn block_unchecked(&self, block_index: usize) -> &Vec<T> {
         debug_assert!(block_index < self.blocks.len());
         unsafe { self.blocks.get(block_index).unwrap_unchecked() }
     }
@@ -309,46 +175,32 @@ impl<T: Copy> BlockedVec<T>
     /// # Safety
     /// `block_index < self.num_blocks()`
     #[inline]
-    pub unsafe fn block_unchecked_mut(
-        &mut self,
-        block_index: usize,
-    ) -> &mut Vec<T> {
+    unsafe fn block_unchecked_mut(&mut self, block_index: usize) -> &mut Vec<T> {
         debug_assert!(block_index < self.blocks.len());
         unsafe { self.blocks.get_mut(block_index).unwrap_unchecked() }
     }
 
-    pub fn blocks_mut(&mut self) -> impl Iterator<Item = &mut Vec<T>> {
-        let num_blocks = self.num_blocks();
-        self.blocks.iter_mut().take(num_blocks)
-    }
-
-    pub fn current_block_mut(&mut self) -> &mut Vec<T> {
-        &mut self.blocks[self.current_block_index]
-    }
-
-    pub fn current_or_block_mut(&mut self, block_index: usize) -> &mut Vec<T> {
-        &mut self.blocks[block_index]
-    }
-
-    pub fn get_unchecked(&self, index: BlocksIndex) -> &T {
+    /// Get reference to the item at `index` without bounds checking
+    ///
+    /// # Safety
+    /// index must be in bound
+    pub unsafe fn get_unchecked(&self, index: BlocksIndex) -> &T {
         let block = unsafe { self.block_unchecked(index.block_index()) };
-        let item = unsafe { block.get_unchecked(index.index_in_block()) };
-        item
+        unsafe { block.get_unchecked(index.index_in_block()) }
     }
 
-    pub fn get_unchecked_mut(&mut self, index: BlocksIndex) -> &mut T {
+    /// Get mutable reference to the item at `index` without bounds checking
+    ///
+    /// # Safety
+    /// index must be in bound
+    pub unsafe fn get_unchecked_mut(&mut self, index: BlocksIndex) -> &mut T {
         let block = unsafe { self.block_unchecked_mut(index.block_index()) };
-        let item = unsafe { block.get_unchecked_mut(index.index_in_block()) };
-        item
+        unsafe { block.get_unchecked_mut(index.index_in_block()) }
     }
 
     pub fn emit(&mut self, emit_to: BlockedEmitTo) -> Vec<Vec<T>> {
         match emit_to {
-            BlockedEmitTo::All => {
-                let counts = self.take_all();
-
-                counts
-            }
+            BlockedEmitTo::All => self.take_all(),
             BlockedEmitTo::NextBlock => {
                 self.take_block().map_or(vec![], |next| vec![next])
             }
@@ -373,12 +225,6 @@ impl<T: Copy> BlockedVec<T>
         if self.num_blocks() == 0 {
             return None;
         }
-        Some(self.take_first_block())
-    }
-
-    /// Take the first block even when it is empty, for callers that know from
-    /// elsewhere that the block holds items
-    pub fn take_first_block(&mut self) -> Vec<T> {
         let block = self.blocks.pop_front().expect("always at least one block");
 
         if self.blocks.is_empty() {
@@ -394,26 +240,17 @@ impl<T: Copy> BlockedVec<T>
 
         self.len -= block.len();
 
-        block
+        Some(block)
     }
 
-    pub fn take_block_finished(&mut self) -> Option<ScalarBuffer<T>>
-    where T: ArrowNativeType
-    {
-        let block = self.take_block()?;
-
-        let finished = ScalarBuffer::from(block);
-
-        Some(finished)
-    }
-
-    pub fn take_n(
-        &mut self,
-        n: usize,
-    ) -> Vec<T> {
+    pub fn take_n(&mut self, n: usize) -> Vec<T> {
         assert_ne!(n, 0, "n must be greater than 0");
         assert!(n <= self.len, "n ({n}) must be <= len ({})", self.len);
-        assert!(n < self.block_size, "n ({n}) must be lower than the block size ({}), instead use `take_block` and take_n with the remainder", self.block_size);
+        assert!(
+            n < self.block_size,
+            "n ({n}) must be lower than the block size ({}), instead use `take_block` and take_n with the remainder",
+            self.block_size
+        );
 
         if n == self.len {
             let blocks = self.take_all();
@@ -421,14 +258,17 @@ impl<T: Copy> BlockedVec<T>
         }
 
         if n == self.blocks[0].len() {
-            return self.take_block().expect("must have at least one block since n < len and n != 0");
+            return self
+                .take_block()
+                .expect("must have at least one block since n < len and n != 0");
         }
 
         let prev_len = self.len;
 
-
         debug_assert!(
-            self.blocks.back().is_some_and(|block| block.len() < self.block_size),
+            self.blocks
+                .back()
+                .is_some_and(|block| block.len() < self.block_size),
             "the last block must not be full (since it should be the writable tail)"
         );
 
@@ -462,7 +302,8 @@ impl<T: Copy> BlockedVec<T>
         // If the block before it is full it is the writable tail as is and keeps its allocation,
         // otherwise the block before it is the writable tail and the empty one is not part of the layout
         let tail_is_empty = self.blocks.back().is_some_and(Vec::is_empty);
-        let prev_is_full = self.blocks.len() >= 2 && self.blocks[self.blocks.len() - 2].len() == self.block_size;
+        let prev_is_full = self.blocks.len() >= 2
+            && self.blocks[self.blocks.len() - 2].len() == self.block_size;
 
         if tail_is_empty && !prev_is_full {
             self.blocks.pop_back();
@@ -490,76 +331,22 @@ impl<T: Copy> BlockedVec<T>
     }
 }
 
-impl<T: Copy>
-    Extend<T>
-    for BlockedVec<T>
-{
-    fn extend<U: IntoIterator<Item = T>>(
-        &mut self,
-        iter: U,
-    ) {
-        let mut iter = iter.into_iter();
-
-        loop {
-            let remaining_in_current_block = self.current_block_remaining_len();
-            let block_finished =
-                self.extend_in_block(iter.by_ref().take(remaining_in_current_block));
-
-            if !block_finished {
-                break;
-            }
-        }
-    }
-}
-
-impl<T> Index<usize>
-    for BlockedVec<T>
-where
-    T: Copy,
-{
-    type Output = T;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        self.index(BlocksIndex::from_index_in_fixed_block_size(
-            index,
-            self.block_size,
-        ))
-    }
-}
-
-impl<T> IndexMut<usize>
-    for BlockedVec<T>
-where
-    T: Copy,
-{
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        self.index_mut(BlocksIndex::from_index_in_fixed_block_size(
-            index,
-            self.block_size,
-        ))
-    }
-}
-
-impl<T> Index<BlocksIndex>
-    for BlockedVec<T>
+impl<T> Index<BlocksIndex> for BlockedVec<T>
 where
     T: Copy,
 {
     type Output = T;
 
     fn index(&self, index: BlocksIndex) -> &Self::Output {
-        &self.blocks[index.block_index()]
-            [index.index_in_block()]
+        &self.blocks[index.block_index()][index.index_in_block()]
     }
 }
 
-impl<T> IndexMut<BlocksIndex>
-    for BlockedVec<T>
+impl<T> IndexMut<BlocksIndex> for BlockedVec<T>
 where
     T: Copy,
 {
     fn index_mut(&mut self, index: BlocksIndex) -> &mut Self::Output {
-        &mut self.blocks[index.block_index()]
-            [index.index_in_block()]
+        &mut self.blocks[index.block_index()][index.index_in_block()]
     }
 }

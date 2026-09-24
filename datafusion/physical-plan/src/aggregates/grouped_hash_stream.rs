@@ -73,11 +73,13 @@ use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 
 use crate::sorts::IncrementalSortIterator;
 use datafusion_common::utils::memory::get_record_batch_memory_size;
+use datafusion_expr_common::blocked_groups_accumulator::{
+    BlockedGroupsAccumulator, BlocksIndex,
+};
+use datafusion_functions_aggregate_common::aggregate::blocked_groups_accumulator::BlockedGroupsAccumulatorAdapter;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
-use datafusion_expr_common::blocked_groups_accumulator::{BlockedGroupsAccumulator, BlocksIndex};
-use datafusion_functions_aggregate_common::aggregate::blocked_groups_accumulator::BlockedGroupsAccumulatorAdapter;
 
 #[derive(Debug, Clone)]
 /// This object tracks the aggregation phase (input/output)
@@ -673,11 +675,15 @@ pub(crate) fn create_group_accumulator(
 /// [`BlockedGroupsAccumulatorAdapter`] if not.
 pub(crate) fn create_blocked_group_accumulator(
     agg_expr: &Arc<AggregateFunctionExpr>,
-    block_size: usize
+    block_size: usize,
 ) -> Result<Box<dyn BlockedGroupsAccumulator>> {
     // TODO - WHAT ABOUT DYNAMIC BLOCK SIZE?
     if let Some(agg_batch_size) = agg_expr.batch_size() {
-        assert_eq_or_internal_err!(agg_batch_size, block_size, "Block size mismatch for blocked groups accumulator");
+        assert_eq_or_internal_err!(
+            agg_batch_size,
+            block_size,
+            "Block size mismatch for blocked groups accumulator"
+        );
     }
     if agg_expr.blocked_groups_accumulator_supported() {
         agg_expr.create_blocked_groups_accumulator()
@@ -688,7 +694,9 @@ pub(crate) fn create_blocked_group_accumulator(
             agg_expr.name()
         );
         let group_acc = create_group_accumulator(agg_expr)?;
-        Ok(Box::new(BlockedGroupsAccumulatorAdapter::new(group_acc, block_size)))
+        Ok(Box::new(BlockedGroupsAccumulatorAdapter::new(
+            group_acc, block_size,
+        )))
     }
 }
 
@@ -946,7 +954,11 @@ impl GroupedHashAggregateStream {
                     let starting_num_groups = self.group_values.len();
                     self.group_values
                         .intern(group_values, &mut self.current_group_indices)?;
-                    let group_indices_as_blocks = self.current_group_indices.iter().map(|&idx| BlocksIndex::new_in_first_block(idx)).collect::<Vec<_>>();
+                    let group_indices_as_blocks = self
+                        .current_group_indices
+                        .iter()
+                        .map(|&idx| BlocksIndex::new_in_first_block(idx))
+                        .collect::<Vec<_>>();
                     let total_num_groups = self.group_values.len();
                     if total_num_groups > starting_num_groups {
                         self.group_ordering.new_groups(

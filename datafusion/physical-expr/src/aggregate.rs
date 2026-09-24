@@ -52,12 +52,16 @@ use datafusion_expr::expr::{
     AggregateFunction, AggregateFunctionParams, NullTreatment, physical_name,
 };
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
-use datafusion_expr::{AggregateUDF, AggregateUDFImpl, Expr, ReversedUDAF, SetMonotonicity};
+use datafusion_expr::{
+    AggregateUDF, Expr, ReversedUDAF, SetMonotonicity,
+};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::blocked_groups_accumulator::BlockedGroupsAccumulator;
-use datafusion_expr_common::groups_accumulator::{GroupsAccumulator};
+use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use datafusion_expr_common::type_coercion::aggregates::check_arg_count;
-use datafusion_functions_aggregate_common::accumulator::{AccumulatorArgs, BlockedAccumulatorArgs, StateFieldsArgs};
+use datafusion_functions_aggregate_common::accumulator::{
+    AccumulatorArgs, BlockedAccumulatorArgs, StateFieldsArgs,
+};
 use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
@@ -318,7 +322,7 @@ impl AggregateExprBuilder {
             input_fields: input_exprs_fields,
             is_reversed,
             is_nullable,
-            batch_size
+            batch_size,
         })
     }
 
@@ -562,7 +566,12 @@ impl<'a> LoweredAggregateBuilder<'a> {
             .output_metadata(output_metadata)
             .with_ignore_nulls(ignore_nulls)
             .with_distinct(*distinct)
-            .with_batch_size(execution_props.config_options.as_ref().map(|x| x.execution.batch_size.get()));
+            .with_batch_size(
+                execution_props
+                    .config_options
+                    .as_ref()
+                    .map(|x| x.execution.batch_size.get()),
+            );
 
         if let Some(human_display) = human_display {
             builder = builder.human_display(human_display.expression);
@@ -948,7 +957,7 @@ impl AggregateFunctionExpr {
     /// `[Self::create_groups_accumulator`] will be called.
     pub fn blocked_groups_accumulator_supported(&self) -> bool {
         let Some(batch_size) = self.batch_size else {
-            return false
+            return false;
         };
         let args = AccumulatorArgs {
             return_field: Arc::clone(&self.return_field),
@@ -970,9 +979,13 @@ impl AggregateFunctionExpr {
     ///
     /// For maximum performance, a [`GroupsAccumulator`] should be
     /// implemented in addition to [`Accumulator`].
-    pub fn create_blocked_groups_accumulator(&self) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+    pub fn create_blocked_groups_accumulator(
+        &self,
+    ) -> Result<Box<dyn BlockedGroupsAccumulator>> {
         let Some(batch_size) = self.batch_size else {
-            return internal_err!("batch size must be set if blocked group accumulator is supported");
+            return internal_err!(
+                "batch size must be set if blocked group accumulator is supported"
+            );
         };
         let args = AccumulatorArgs {
             return_field: Arc::clone(&self.return_field),
