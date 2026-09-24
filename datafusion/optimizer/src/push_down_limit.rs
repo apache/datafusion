@@ -171,8 +171,16 @@ fn rewrite_limit(mut limit: Limit) -> Result<Transformed<LogicalPlan>> {
                 }
             } else {
                 sort.fetch = new_fetch;
-                limit.input = Arc::new(LogicalPlan::Sort(sort));
-                Ok(Transformed::yes(LogicalPlan::Limit(limit)))
+                if skip > 0 {
+                    limit.input = Arc::new(LogicalPlan::Sort(sort));
+                    Ok(Transformed::yes(LogicalPlan::Limit(limit)))
+                } else {
+                    // With `skip = 0` the Sort's fetch already caps the output,
+                    // so drop the Limit now instead of on the next pass. The
+                    // Sort then replaces the Limit as the visited node and its
+                    // own visit is skipped, so apply the TopK pushdown here.
+                    Ok(Transformed::yes(push_topk_through_join(sort)?.data))
+                }
             }
         }
         LogicalPlan::Projection(mut proj) => {
@@ -660,15 +668,34 @@ mod test {
             .limit(0, Some(10))?
             .build()?;
 
-        // Should push down limit to sort
+        // Should push down limit to sort, and drop the now redundant limit
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Limit: skip=0, fetch=10
-          Sort: test.a ASC NULLS LAST, fetch=10
-            TableScan: test
+        Sort: test.a ASC NULLS LAST, fetch=10
+          TableScan: test
         "
         )
+    }
+
+    /// `Limit(skip=0) -> Sort` settles in the first pass: the second pass
+    /// leaves the plan unchanged, so the optimizer stops after 2 passes.
+    #[test]
+    fn limit_push_down_sort_settles_in_first_pass() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .sort_by(vec![col("a")])?
+            .limit(0, Some(10))?
+            .build()?;
+
+        let optimizer_ctx = OptimizerContext::new().with_max_passes(3);
+        let optimizer =
+            crate::Optimizer::with_rules(vec![Arc::new(PushDownLimit::new())]);
+        let mut passes = 0;
+        optimizer.optimize(plan, &optimizer_ctx, |_, _| passes += 1)?;
+        assert_eq!(passes, 2);
+        Ok(())
     }
 
     #[test]
