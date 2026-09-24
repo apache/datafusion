@@ -1662,6 +1662,40 @@ mod tests {
         Ok(())
     }
 
+    /// Two partition columns present in the file, one of them mid-schema. The
+    /// remaining file fields keep their order and the partition columns follow
+    /// in their configured order, not their order in the file.
+    #[test]
+    fn test_overlapping_partition_columns_order() -> Result<()> {
+        let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
+            .with_file_extension_opt(Some(""))
+            .with_table_partition_cols(vec![
+                ("month".to_string(), DataType::Utf8),
+                ("year".to_string(), DataType::Utf8),
+            ]);
+        let file_schema = Schema::new(vec![
+            Field::new("a", DataType::Boolean, false),
+            Field::new("year", DataType::Utf8, true),
+            Field::new("b", DataType::Int32, false),
+            Field::new("month", DataType::Utf8, true),
+            Field::new("c", DataType::Float64, true),
+        ]);
+        let config =
+            ListingTableConfig::new(ListingTableUrl::parse("test:///bucket/test/")?)
+                .with_listing_options(opt)
+                .with_schema(Arc::new(file_schema));
+
+        let schema = ListingTable::try_new(config)?.schema();
+        let names = schema
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["a", "b", "c", "month", "year"]);
+
+        Ok(())
+    }
+
     #[cfg(feature = "parquet")]
     #[tokio::test]
     async fn test_table_stats_behaviors() -> Result<()> {
