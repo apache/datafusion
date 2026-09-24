@@ -44,15 +44,21 @@ use datafusion_common::{
     _internal_datafusion_err, Column, DFSchema, assert_eq_or_internal_err,
 };
 use datafusion_common::{
-    ScalarValue, internal_datafusion_err, plan_datafusion_err, plan_err,
+    ScalarValue, internal_datafusion_err, internal_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
 };
 use datafusion_expr_common::casts::try_cast_literal_to_type;
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee};
-use datafusion_physical_expr::{PhysicalExprRef, expressions as phys_expr};
+use datafusion_physical_expr::{
+    PhysicalExprRef, conjunction, expressions as phys_expr, split_conjunction,
+};
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr_opt;
 use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
+
+mod conjunct_stats;
+pub use conjunct_stats::ConjunctPruningStats;
+use conjunct_stats::PruningConjuncts;
 
 /// Used to prove that arbitrary predicates (boolean expression) can not
 /// possibly evaluate to `true` given information about a column provided by
@@ -386,6 +392,9 @@ pub struct PruningPredicate {
     max_in_list_size: usize,
     /// Whether its logical inverse can safely prove every row matches.
     can_be_inverted_for_full_match: bool,
+    /// Per-conjunct pruning data. Only present when built with
+    /// [`PruningPredicateBuilder::with_conjunct_stats`].
+    conjuncts: Option<PruningConjuncts>,
 }
 
 #[derive(Default)]
@@ -429,6 +438,7 @@ pub struct PruningPredicateBuilder<'a> {
     file_schema: Option<SchemaRef>,
     error_counter: Option<&'a Count>,
     max_in_list_size: usize,
+    conjunct_stats: bool,
 }
 
 impl<'a> PruningPredicateBuilder<'a> {
@@ -438,6 +448,7 @@ impl<'a> PruningPredicateBuilder<'a> {
             file_schema: None,
             error_counter: None,
             max_in_list_size: MAX_IN_LIST_SIZE,
+            conjunct_stats: false,
         }
     }
 
@@ -487,6 +498,24 @@ impl<'a> PruningPredicateBuilder<'a> {
         self
     }
 
+    /// Also prepare per-conjunct pruning statistics, which
+    /// [`PruningPredicate::prune_with_conjunct_stats`] returns.
+    ///
+    /// The conjuncts are the terms that [`split_conjunction`] returns for the
+    /// predicate passed to [`Self::build`] or [`Self::try_build`]. Thus an `OR`,
+    /// a `NOT` or a dynamic filter is one conjunct, even if it contains an
+    /// `AND`. Dynamic filters are snapshotted once, and all conjuncts and the
+    /// whole predicate use that snapshot.
+    ///
+    /// This is disabled by default, because it rewrites each conjunct a second
+    /// time.
+    ///
+    /// [`split_conjunction`]: datafusion_physical_expr::split_conjunction
+    pub fn with_conjunct_stats(mut self, conjunct_stats: bool) -> Self {
+        self.conjunct_stats = conjunct_stats;
+        self
+    }
+
     /// Build a [`PruningPredicate`] wrapped in `Some(Arc<..>)` when it can
     /// prune, `None` when it is trivially true or when construction fails.
     /// If [`Self::with_error_counter`] was set, construction failures are
@@ -522,7 +551,17 @@ impl<'a> PruningPredicateBuilder<'a> {
             )
         })?;
 
-        let predicate = snapshot_and_simplify(predicate, &file_schema)?;
+        // Snapshot each conjunct separately, so that a dynamic filter stays one
+        // conjunct. The whole predicate uses the same snapshots.
+        let (predicate, conjuncts) = if self.conjunct_stats {
+            let conjuncts = split_conjunction(&predicate)
+                .into_iter()
+                .map(|conjunct| snapshot_and_simplify(Arc::clone(conjunct), &file_schema))
+                .collect::<Result<Vec<_>>>()?;
+            (conjunction(conjuncts.iter().cloned()), Some(conjuncts))
+        } else {
+            (snapshot_and_simplify(predicate, &file_schema)?, None)
+        };
         let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
 
         // build predicate expression once
@@ -541,6 +580,17 @@ impl<'a> PruningPredicateBuilder<'a> {
         let predicate_expr =
             PhysicalExprSimplifier::new(&predicate_schema).simplify(predicate_expr)?;
         let literal_guarantees = LiteralGuarantee::analyze(&predicate);
+        let conjuncts = conjuncts
+            .map(|conjuncts| {
+                PruningConjuncts::try_new(
+                    &conjuncts,
+                    &file_schema,
+                    &required_columns,
+                    &unhandled_hook,
+                    self.max_in_list_size,
+                )
+            })
+            .transpose()?;
 
         Ok(PruningPredicate {
             schema: file_schema,
@@ -550,6 +600,7 @@ impl<'a> PruningPredicateBuilder<'a> {
             literal_guarantees,
             max_in_list_size: self.max_in_list_size,
             can_be_inverted_for_full_match: !properties.has_filter_semantics_only,
+            conjuncts,
         })
     }
 }
@@ -686,6 +737,36 @@ impl PruningPredicate {
         builder.combine_value(self.predicate_expr.evaluate(&statistics_batch)?);
 
         Ok(builder.build())
+    }
+
+    /// Same as [`Self::prune`], and also returns how many containers each
+    /// conjunct prunes when it is evaluated alone.
+    ///
+    /// The first returned value is the same as the result of [`Self::prune`].
+    /// The second returned value has one entry for each conjunct, in the
+    /// order of [`PruningPredicateBuilder::with_conjunct_stats`].
+    ///
+    /// Each conjunct is evaluated on all containers, also when other conjuncts
+    /// already prune them. Thus the statistics of a conjunct do not depend on
+    /// the other conjuncts or on their order. A conjunct that can not be
+    /// rewritten in terms of statistics keeps all containers.
+    ///
+    /// This builds the statistics batch one time for all conjuncts, but it
+    /// evaluates the literal guarantees and the predicate of each conjunct in
+    /// addition to those of the whole predicate.
+    ///
+    /// Returns an error if the predicate was not built with
+    /// [`PruningPredicateBuilder::with_conjunct_stats`].
+    pub fn prune_with_conjunct_stats<S: PruningStatistics + ?Sized>(
+        &self,
+        statistics: &S,
+    ) -> Result<(Vec<bool>, Vec<ConjunctPruningStats>)> {
+        let Some(conjuncts) = &self.conjuncts else {
+            return internal_err!(
+                "PruningPredicate was not built with conjunct stats (call `PruningPredicateBuilder::with_conjunct_stats`)"
+            );
+        };
+        conjuncts.prune(self, statistics)
     }
 
     /// Return a reference to the input schema
