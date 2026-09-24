@@ -229,3 +229,28 @@ JOIN (SELECT arrow_cast(-0.0, 'Float32') AS b) t2 ON t1.a = t2.b;
 
 statement ok
 reset datafusion.optimizer.prefer_hash_join;
+
+#####
+## Nested values holding +0.0 / -0.0
+#####
+
+query BBB
+SELECT [0.0] = [-0.0] AS eq,
+       [0.0] IS DISTINCT FROM [-0.0] AS is_distinct,
+       {a: 0.0} = {a: -0.0} AS struct_eq;
+----
+true false true
+
+statement ok
+CREATE TABLE nested_zeros(id INT, a DOUBLE[]) AS VALUES (1, [0.0]), (2, [-0.0]);
+
+query II
+SELECT l.id, r.id FROM nested_zeros l JOIN nested_zeros r ON l.a = r.a ORDER BY l.id, r.id;
+----
+1 1
+1 2
+2 1
+2 2
+
+statement ok
+DROP TABLE nested_zeros;
