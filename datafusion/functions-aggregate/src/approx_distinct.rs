@@ -38,6 +38,7 @@ use datafusion_common::{
     DataFusionError, Result, downcast_value, internal_datafusion_err, internal_err,
     not_impl_err,
 };
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -359,9 +360,8 @@ impl GroupHll {
                 );
             }
             let mut delta = 0;
-            for chunk in bytes.chunks_exact(size_of::<u64>()) {
-                let h = u64::from_le_bytes(chunk.try_into().unwrap());
-                delta += self.add_hash(h);
+            for chunk in bytes.as_chunks::<{ size_of::<u64>() }>().0 {
+                delta += self.add_hash(u64::from_le_bytes(*chunk));
             }
             Ok(delta)
         }
@@ -870,6 +870,11 @@ impl AggregateUDFImpl for ApproxDistinct {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // Updating an HLL register with a value already seen is a no-op.
+        DistinctHandling::Insensitive
     }
 }
 

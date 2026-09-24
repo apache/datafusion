@@ -80,7 +80,13 @@ pub(crate) fn has_untrusted_min_max_order(
     parquet_column_index: usize,
 ) -> bool {
     let column = parquet_schema.column(parquet_column_index);
-    if column.sort_order() == SortOrder::UNDEFINED {
+    // As of arrow 60, INT96 columns report `SortOrder::INT96_TIMESTAMP`
+    // rather than `UNDEFINED`; keep treating their min/max as untrusted.
+    // until <https://github.com/apache/datafusion/issues/25484>
+    if matches!(
+        column.sort_order(),
+        SortOrder::UNDEFINED | SortOrder::INT96_TIMESTAMP
+    ) {
         return true;
     }
     requires_unsigned_byte_array_order(&column)
@@ -313,12 +319,13 @@ impl<'a> DFParquetMetadata<'a> {
     }
 
     /// Check whether `metadata` already has both the column index and the
-    /// offset index populated (see [`ParquetMetaData::column_index`] and
-    /// [`ParquetMetaData::offset_index`]).
+    /// offset index populated (see [`ParquetMetaData::page_index`]).
     ///
     /// Used to decide whether page index I/O can be skipped.
     fn metadata_has_page_index(metadata: &ParquetMetaData) -> bool {
-        metadata.column_index().is_some() && metadata.offset_index().is_some()
+        metadata
+            .page_index()
+            .is_some_and(|page_index| page_index.is_complete())
     }
 
     /// Store `metadata` in the configured [`FileMetadataCache`], keyed by
@@ -405,7 +412,10 @@ impl<'a> DFParquetMetadata<'a> {
         object_meta: &ObjectMeta,
         metadata: Arc<ParquetMetaData>,
     ) -> Result<Arc<ParquetMetaData>> {
-        if metadata.column_index().is_some() && metadata.offset_index().is_some() {
+        if metadata
+            .page_index()
+            .is_some_and(|page_index| page_index.is_complete())
+        {
             return Ok(metadata);
         }
         let metadata =
@@ -551,6 +561,10 @@ impl<'a> DFParquetMetadata<'a> {
                         file_metadata.schema_descr(),
                     ) {
                         Ok(stats_converter) => {
+                            // An omitted count must not become an exact zero in
+                            // file statistics used for pruning and aggregates.
+                            let stats_converter =
+                                stats_converter.with_missing_null_counts_as_zero(false);
                             let parquet_index = stats_converter.parquet_column_index();
                             if parquet_index.is_some_and(|index| {
                                 has_untrusted_min_max_order(
@@ -1045,8 +1059,10 @@ impl FileMetadata for CachedParquetMetaData {
     }
 
     fn extra_info(&self) -> HashMap<String, String> {
-        let page_index =
-            self.0.column_index().is_some() && self.0.offset_index().is_some();
+        let page_index = self
+            .0
+            .page_index()
+            .is_some_and(|page_index| page_index.is_complete());
         HashMap::from([("page_index".to_owned(), page_index.to_string())])
     }
 }
@@ -1392,6 +1408,43 @@ mod tests {
             );
 
             ParquetMetaData::new(file_meta, row_groups)
+        }
+
+        #[test]
+        fn test_statistics_preserve_missing_null_counts() {
+            let schema_descr = create_schema_descr(1);
+            let arrow_schema = create_arrow_schema(1);
+            for (null_counts, expected) in [
+                (vec![None], Precision::Absent),
+                (vec![Some(0), None], Precision::Inexact(0)),
+                (vec![Some(2), None], Precision::Inexact(2)),
+                (vec![Some(0), Some(0)], Precision::Exact(0)),
+            ] {
+                let row_groups = null_counts
+                    .into_iter()
+                    .map(|null_count| {
+                        create_row_group_with_stats(
+                            &schema_descr,
+                            vec![Some(ParquetStatistics::int32(
+                                Some(1),
+                                Some(10),
+                                None,
+                                null_count,
+                                false,
+                            ))],
+                            10,
+                        )
+                    })
+                    .collect();
+                let metadata =
+                    create_parquet_metadata(Arc::clone(&schema_descr), row_groups);
+                let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
+                    &metadata,
+                    &arrow_schema,
+                )
+                .unwrap();
+                assert_eq!(statistics.column_statistics[0].null_count, expected);
+            }
         }
 
         #[test]

@@ -543,11 +543,16 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     ///
     /// See [`Expr::schema_name`] for details
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
-        Ok(format!(
-            "{}({})",
-            self.name(),
-            schema_name_from_exprs_comma_separated_without_space(args)?
-        ))
+        /// Use an inner function to avoid code duplication over all
+        /// generic callsites as the body is the same.
+        fn inner(name: &str, args: &[Expr]) -> Result<String> {
+            Ok(format!(
+                "{}({})",
+                name,
+                schema_name_from_exprs_comma_separated_without_space(args)?
+            ))
+        }
+        inner(self.name(), args)
     }
 
     /// Returns a [`Signature`] describing the argument types for which this
@@ -660,12 +665,12 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// logical input even if the input is simplified (e.g. it must return the same
     /// value for `('foo' | 'bar')` as it does for ('foobar').
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
-        let data_types = args
-            .arg_fields
-            .iter()
-            .map(|f| f.data_type())
-            .cloned()
-            .collect::<Vec<_>>();
+        /// Use an inner function to avoid code duplication over all
+        /// generic callsites as the body is the same.
+        fn arg_fields_to_data_types(arg_fields: &[FieldRef]) -> Vec<DataType> {
+            arg_fields.iter().map(|f| f.data_type().clone()).collect()
+        }
+        let data_types = arg_fields_to_data_types(args.arg_fields);
         let return_type = self.return_type(&data_types)?;
         Ok(Arc::new(Field::new(self.name(), return_type, true)))
     }
@@ -899,6 +904,19 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     ///
     /// If the function is `ABS(a)`, and the input interval is `a: [-3, 2]`,
     /// then the output interval would be `[0, 3]`.
+    ///
+    /// # Output type
+    ///
+    /// The default implementation returns an unbounded [`DataType::Null`]
+    /// interval because the output type cannot be inferred generically.
+    /// Implementations should override this method when they can determine the
+    /// output type, even if they cannot compute precise bounds. Returning an
+    /// unbounded interval with the correct type preserves information used by
+    /// downstream physical property analysis.
+    ///
+    /// If the output type depends on argument values, only report it when those
+    /// values are known, such as from singleton input intervals. Otherwise,
+    /// keep the output type unknown.
     fn evaluate_bounds(&self, _input: &[&Interval]) -> Result<Interval> {
         // We cannot assume the input datatype is the same of output type.
         Interval::make_unbounded(&DataType::Null)
@@ -942,19 +960,24 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
             return Ok(SortProperties::Unordered);
         }
 
-        let Some(first_order) = inputs.first().map(|p| &p.sort_properties) else {
-            return Ok(SortProperties::Singleton);
-        };
+        /// Use an inner function to avoid code duplication over all
+        /// generic callsites as the body is the same.
+        fn inner(inputs: &[ExprProperties]) -> SortProperties {
+            let Some(first_order) = inputs.first().map(|p| &p.sort_properties) else {
+                return SortProperties::Singleton;
+            };
 
-        if inputs
-            .iter()
-            .skip(1)
-            .all(|input| &input.sort_properties == first_order)
-        {
-            Ok(*first_order)
-        } else {
-            Ok(SortProperties::Unordered)
+            if inputs
+                .iter()
+                .skip(1)
+                .all(|input| &input.sort_properties == first_order)
+            {
+                *first_order
+            } else {
+                SortProperties::Unordered
+            }
         }
+        Ok(inner(inputs))
     }
 
     /// Returns true if the function preserves lexicographical ordering based on
@@ -995,7 +1018,12 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// A Vec the same length as `arg_types`. DataFusion will `CAST` the function call
     /// arguments to these specific types.
     fn coerce_types(&self, _arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        not_impl_err!("Function {} does not implement coerce_types", self.name())
+        /// Use an inner function to avoid code duplication over all
+        /// generic callsites as the body is the same.
+        fn inner(name: &str) -> Result<Vec<DataType>> {
+            not_impl_err!("Function {name} does not implement coerce_types")
+        }
+        inner(self.name())
     }
 
     /// For struct-producing functions, return how output fields map to input

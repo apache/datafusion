@@ -719,6 +719,64 @@ fn plan_insert_no_target_columns() {
     );
 }
 
+#[test]
+fn plan_insert_preserves_target_extension_metadata() {
+    let sql = "INSERT INTO person_with_uuid_extension \
+               SELECT id, first_name, last_name FROM person_with_binary_id";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Dml: op=[Insert Into] table=[person_with_uuid_extension]
+      Projection: CAST(person_with_binary_id.id AS FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>) AS id, person_with_binary_id.first_name AS first_name, person_with_binary_id.last_name AS last_name
+        Projection: person_with_binary_id.id, person_with_binary_id.first_name, person_with_binary_id.last_name
+          TableScan: person_with_binary_id
+    "#
+    );
+}
+
+#[test]
+fn plan_insert_skips_cast_for_matching_extension_metadata() {
+    let sql = "INSERT INTO person_with_uuid_extension \
+               SELECT id, first_name, last_name FROM person_with_uuid_extension";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Dml: op=[Insert Into] table=[person_with_uuid_extension]
+      Projection: person_with_uuid_extension.id AS id, person_with_uuid_extension.first_name AS first_name, person_with_uuid_extension.last_name AS last_name
+        Projection: person_with_uuid_extension.id, person_with_uuid_extension.first_name, person_with_uuid_extension.last_name
+          TableScan: person_with_uuid_extension
+    "#
+    );
+}
+
+#[test]
+fn plan_insert_preserves_target_extension_metadata_on_type_cast() {
+    let sql = "INSERT INTO string_with_extension SELECT id FROM test_decimal";
+    let plan = logical_plan(sql).unwrap();
+    assert_snapshot!(
+        plan,
+        @r#"
+    Dml: op=[Insert Into] table=[string_with_extension]
+      Projection: CAST(test_decimal.id AS Utf8<{"ARROW:extension:name": "example.string"}>) AS value
+        Projection: test_decimal.id
+          TableScan: test_decimal
+    "#
+    );
+}
+
+#[test]
+fn plan_insert_does_not_promise_ordinary_target_field_metadata() {
+    let sql = "INSERT INTO array_with_field_metadata SELECT left FROM array";
+    let plan = logical_plan(sql).unwrap();
+    let LogicalPlan::Dml(dml) = &plan else {
+        panic!("expected DML plan");
+    };
+
+    assert!(dml.input.schema().field(0).metadata().is_empty());
+}
+
 #[rstest]
 #[case::duplicate_columns(
     "INSERT INTO test_decimal (id, price, price) VALUES (1, 2, 3), (4, 5, 6)",
@@ -3897,7 +3955,7 @@ fn select_groupby_orderby_aggregate_on_non_selected_column_original_issue() {
 }
 
 #[test]
-fn plan_merge_into_canonicalizes_qualifiers_and_preserves_quoted_columns() {
+fn plan_merge_into_preserves_target_qualifier_and_quoted_columns() {
     let plan = logical_plan(
         "MERGE INTO person_quoted_cols AS t USING j2 AS s ON t.id = s.j2_id \
          WHEN MATCHED THEN UPDATE SET \"First Name\" = s.j2_string \
@@ -3911,7 +3969,11 @@ fn plan_merge_into_canonicalizes_qualifiers_and_preserves_quoted_columns() {
         panic!("expected MergeInto, got {:?}", dml.op);
     };
 
-    assert_eq!(merge_op.on.to_string(), "person_quoted_cols.id = s.j2_id");
+    assert_eq!(
+        merge_op.target_qualifier(),
+        &datafusion_common::TableReference::bare("t")
+    );
+    assert_eq!(merge_op.on.to_string(), "t.id = s.j2_id");
 
     let datafusion_expr::dml::MergeIntoAction::Update(assignments) =
         &merge_op.clauses[0].action

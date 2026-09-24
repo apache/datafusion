@@ -730,6 +730,8 @@ logical_plan
 06)--EmptyRelation: rows=1
 
 #simple_uncorrelated_scalar_subquery2
+# Pinned to today's behaviour, which is incorrect. See
+# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query TT
 explain select (select count(*) from t1) as b, (select count(1) from t2)
 ----
@@ -1191,13 +1193,26 @@ query TT
 explain SELECT t1_id, (SELECT max(t2.t2_id) is null FROM t2 WHERE t2.t2_int = t1.t1_int) x from t1
 ----
 logical_plan
-01)Projection: t1.t1_id, __scalar_sq_1.__always_true IS NULL OR __scalar_sq_1.__always_true IS NOT NULL AND __scalar_sq_1.max(t2.t2_id) IS NULL AS x
+01)Projection: t1.t1_id, CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Boolean(true) ELSE __scalar_sq_1.max(t2.t2_id) IS NULL END AS x
 02)--Left Join: t1.t1_int = __scalar_sq_1.t2_int
 03)----TableScan: t1 projection=[t1_id, t1_int]
 04)----SubqueryAlias: __scalar_sq_1
 05)------Projection: max(t2.t2_id) IS NULL, t2.t2_int, Boolean(true) AS __always_true
 06)--------Aggregate: groupBy=[[t2.t2_int]], aggr=[[max(t2.t2_id)]]
 07)----------TableScan: t2 projection=[t2_id, t2_int]
+
+# A correlated aggregate must distinguish a non-NULL maximum from both an
+# all-NULL group and an empty group (including a NULL correlation key).
+query IB rowsort
+WITH outer_rows(k) AS (VALUES (1), (2), (3), (NULL)),
+     inner_rows(k, v) AS (VALUES (1, 10), (1, NULL), (2, NULL), (NULL, 20))
+SELECT k, (SELECT max(v) IS NULL FROM inner_rows WHERE inner_rows.k = outer_rows.k)
+FROM outer_rows
+----
+1 false
+2 true
+3 true
+NULL true
 
 query TT
 explain SELECT t1_id, (SELECT max(t2.t2_id) FROM t2 WHERE t2.t2_int = t1.t1_int) x from t1
@@ -1239,6 +1254,8 @@ where t1.t1_id > 40 or t1.t1_id in (select t2.t2_id from t2 where t1.t1_int > 0)
 44 d 4
 
 # not_in_subquery_to_join_with_correlated_outer_filter_disjunction
+# Pinned to today's behaviour, which is incorrect. See
+# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query TT
 explain select t1.t1_id,
        t1.t1_name,
@@ -1781,27 +1798,21 @@ explain select v from (values (1), (6), (10)) set_cmp_t(v) where v > any(select 
 ----
 logical_plan
 01)Projection: set_cmp_t.v
-02)--LeftMark Join:  Filter: set_cmp_t.v > __correlated_sq_3.v IS TRUE
+02)--LeftMark Join:  Filter: set_cmp_t.v > __correlated_sq_2.v IS NULL
 03)----Projection: set_cmp_t.v
-04)------LeftMark Join:  Filter: set_cmp_t.v > __correlated_sq_2.v IS NULL
-05)--------Projection: set_cmp_t.v
-06)----------Filter: __correlated_sq_1.mark
-07)------------LeftMark Join:  Filter: set_cmp_t.v > __correlated_sq_1.v IS TRUE
-08)--------------SubqueryAlias: set_cmp_t
-09)----------------Projection: column1 AS v
-10)------------------Values: (Int64(1)), (Int64(6)), (Int64(10))
-11)--------------SubqueryAlias: __correlated_sq_1
-12)----------------SubqueryAlias: set_cmp_s
-13)------------------Projection: column1 AS v
-14)--------------------Values: (Int64(5)), (Int64(NULL))
-15)--------SubqueryAlias: __correlated_sq_2
-16)----------SubqueryAlias: set_cmp_s
-17)------------Projection: column1 AS v
-18)--------------Values: (Int64(5)), (Int64(NULL))
-19)----SubqueryAlias: __correlated_sq_3
-20)------SubqueryAlias: set_cmp_s
-21)--------Projection: column1 AS v
-22)----------Values: (Int64(5)), (Int64(NULL))
+04)------Filter: __correlated_sq_1.mark IS NOT DISTINCT FROM Boolean(true)
+05)--------LeftMark Join:  Filter: set_cmp_t.v > __correlated_sq_1.v IS TRUE
+06)----------SubqueryAlias: set_cmp_t
+07)------------Projection: column1 AS v
+08)--------------Values: (Int64(1)), (Int64(6)), (Int64(10))
+09)----------SubqueryAlias: __correlated_sq_1
+10)------------SubqueryAlias: set_cmp_s
+11)--------------Projection: column1 AS v
+12)----------------Values: (Int64(5)), (Int64(NULL))
+13)----SubqueryAlias: __correlated_sq_2
+14)------SubqueryAlias: set_cmp_s
+15)--------Projection: column1 AS v
+16)----------Values: (Int64(5)), (Int64(NULL))
 
 # same-table `= ANY` / `<> ALL` must plan without
 # "duplicate unqualified field name mark".

@@ -276,7 +276,7 @@ physical_plan
 03)----SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[true]
 04)------AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[max(d.a)]
 05)--------RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4
-06)----------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[max(d.a)], ordering_mode=Sorted
+06)----------AggregateExec: mode=Partial, gby=[b@1 as b], aggr=[max(d.a)]
 07)------------UnionExec
 08)--------------ProjectionExec: expr=[1 as a, aa as b]
 09)----------------PlaceholderRowExec
@@ -7018,8 +7018,8 @@ query error DataFusion error: type_coercion\ncaused by\nError during planning: R
 SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND INTERVAL '1' HOUR FOLLOWING)
 FROM (VALUES (arrow_cast('01:00:00', 'Time64(Microsecond)'))) t(x)
 
-# Unsupported RANGE ORDER BY types still propagate the type-coercion error.
-query error DataFusion error: type_coercion\ncaused by\nInternal error: Cannot run range queries on datatype: Struct\("c0": Int64\)
+# Unsupported RANGE ORDER BY types are rejected during planning.
+query error Error during planning: RANGE window frames are not supported for ORDER BY type Struct
 SELECT COUNT(*) OVER (ORDER BY x)
 FROM (VALUES (struct(1))) t(x)
 
@@ -7093,6 +7093,90 @@ SELECT last_value() OVER () FROM (VALUES (1), (2), (3)) t(x)
 
 statement error DataFusion error: Error during planning: 'nth_value' does not support zero arguments
 SELECT nth_value() OVER () FROM (VALUES (1), (2), (3)) t(x)
+
+# The default frame of `OVER (ORDER BY ...)` is a free RANGE frame, which
+# needs no offset arithmetic on the ORDER BY type. Durations and intervals
+# used to fail with "Internal error: Cannot run range queries on datatype".
+query ?I
+select x, row_number() over (order by x) from (values (arrow_cast(2, 'Duration(Second)')), (arrow_cast(1, 'Duration(Second)'))) t(x) order by 2
+----
+0 days 0 hours 0 mins 1 secs 1
+0 days 0 hours 0 mins 2 secs 2
+
+query ?I
+select x, rank() over (order by x) from (values (interval '2 months'), (interval '1 month')) t(x) order by 2
+----
+1 mons 1
+2 mons 2
+
+query ?I
+select x, row_number() over (order by x range between unbounded preceding and current row) from (values (arrow_cast(2, 'Duration(Millisecond)')), (arrow_cast(1, 'Duration(Millisecond)'))) t(x) order by 2
+----
+0 days 0 hours 0 mins 0.001 secs 1
+0 days 0 hours 0 mins 0.002 secs 2
+
+# offset frames still need an arithmetic ORDER BY type; the map and struct
+# types are not accepted in free frames either, see `supports_free_range_frame`
+statement error Error during planning: RANGE window frames are not supported for ORDER BY type Struct
+select count(*) over (order by x range between 1 preceding and current row) from (values (struct(1))) t(x)
+
+statement error Error during planning: RANGE window frames are not supported for ORDER BY type Map
+select count(*) over (order by x) from (values (map(['a'], [1])), (map(['a'], [2]))) t(x)
+
+# every ORDER BY expression takes part in the peer comparison, so a map after
+# a duration is rejected as well, while two durations are fine; the error names
+# the offending type, not the first ORDER BY type
+statement error Error during planning: RANGE window frames are not supported for ORDER BY type Map
+select count(*) over (order by d, m) from (values (arrow_cast(1, 'Duration(Second)'), map(['a'], [1])), (arrow_cast(1, 'Duration(Second)'), map(['a'], [2]))) t(d, m)
+
+# the trailing key check also runs when the first ORDER BY type supports offset
+# arithmetic; otherwise these maps are treated as peers because their keys are
+# equal even though their values differ
+statement error Error during planning: RANGE window frames are not supported for ORDER BY type Map
+select count(*) over (order by i, m) from (values (1, map(['a'], [1])), (1, map(['a'], [2]))) t(i, m)
+
+query ??I
+select d, e, count(*) over (order by d, e) from (values (arrow_cast(1, 'Duration(Second)'), arrow_cast(2, 'Duration(Millisecond)')), (arrow_cast(1, 'Duration(Second)'), arrow_cast(1, 'Duration(Millisecond)'))) t(d, e) order by 3
+----
+0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 0.001 secs 1
+0 days 0 hours 0 mins 1 secs 0 days 0 hours 0 mins 0.002 secs 2
+
+# List ORDER BY keys were already accepted in RANGE frames before the free-range
+# fallback existed (`extract_window_frame_target_type` returns the list type
+# itself), and this PR does not change that. A list of primitives works:
+query I
+select count(*) over (order by l) from (values ([1]), ([2])) t(l)
+----
+1
+2
+
+# but a list whose elements are nested (struct, list) plans and then fails at
+# execution: the peer comparison in the RANGE frame goes through
+# `ScalarValue::partial_cmp`, which cannot compare nested list elements, while
+# the sort that produced the input uses `make_comparator` and can. Documented
+# here so the fix to the scalar comparison can flip these expectations.
+query error DataFusion error: Internal error: Uncomparable values: List\(\[\{c0: 1\}\]\), List\(\[\{c0: 1\}\]\)
+select count(*) over (order by l) from (values ([struct(1)]), ([struct(2)])) t(l)
+
+query error DataFusion error: Internal error: Uncomparable values: List\(\[\[1\]\]\), List\(\[\[1\]\]\)
+select count(*) over (order by l) from (values ([[1]]), ([[2]])) t(l)
+
+# after a duration key the free-range check looks at every ORDER BY type, and
+# a list is rejected at planning even though it sorts fine: the RANGE peer
+# check (`compare_rows`, then `ScalarValue::partial_cmp`) always orders a NULL
+# list element after a non-NULL one, while the sort applies NULLS FIRST to the
+# elements as well, so with tied durations `[NULL]` and `[1]` would be sorted
+# one way and compared the other
+query error Error during planning: RANGE window frames are not supported for ORDER BY type List
+select count(*) over (order by d, l nulls first) from (values (arrow_cast(1, 'Duration(Second)'), [NULL]), (arrow_cast(1, 'Duration(Second)'), [1])) t(d, l)
+
+# the check is on the type, not the values: a list without NULLs and a
+# dictionary-encoded list are rejected the same way
+query error Error during planning: RANGE window frames are not supported for ORDER BY type List
+select count(*) over (order by d, l) from (values (arrow_cast(1, 'Duration(Second)'), [1]), (arrow_cast(1, 'Duration(Second)'), [2])) t(d, l)
+
+query error Error during planning: RANGE window frames are not supported for ORDER BY type Dictionary\(Int32, List
+select count(*) over (order by d, l) from (values (arrow_cast(1, 'Duration(Second)'), arrow_cast([1], 'Dictionary(Int32, List(Int64))')), (arrow_cast(1, 'Duration(Second)'), arrow_cast([2], 'Dictionary(Int32, List(Int64))'))) t(d, l)
 
 # Window functions are not allowed in WHERE or HAVING: both are evaluated before
 # window functions are computed, so they are rejected during planning
