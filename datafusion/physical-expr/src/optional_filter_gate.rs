@@ -1,0 +1,1005 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! A runtime gate that pauses optional filters that cost more than they
+//! save.
+//!
+//! An *optional filter* is a filter that is not needed for correctness, for
+//! example a dynamic filter that a hash join or a TopK pushes down into a
+//! scan. An operator can skip such a filter and still produce correct
+//! results. When the filter removes few rows, or when it is expensive (for
+//! example a hash table lookup with many columns), the cost to evaluate it
+//! can be larger than the benefit.
+//!
+//! [`OptionalFilterGate`] decides, batch by batch, if a stream evaluates the
+//! filter or skips it. Each stream has its own gate, and gates do not share
+//! state.
+//!
+//! # State machine
+//!
+//! ```text
+//!                 keep (see "Decision")
+//!              (reset backoff, new window)
+//!                     +-------+
+//!                     |       |
+//!                     v       |
+//!               +-------------+-+           pause                 +---------------------+
+//!  start ------>|   Evaluate    |-------------------------------->|       Paused        |
+//!               | (window of    |   (pause for `backoff` batches, | (skip `remaining`   |
+//!               | sample_batches|    then double `backoff`)       |  batches)           |
+//!               | batches)      |<--------------------------------|                     |
+//!               +---------------+   pause ends: probe with a      +---------------------+
+//!                                   fresh window
+//! ```
+//!
+//! * In `Evaluate`, the gate collects the rows in, the rows out and the
+//!   evaluation time of `sample_batches` batches (a *window*). Then it
+//!   decides (see below). To pause, it goes to `Paused` for `backoff` batches
+//!   and doubles `backoff` (up to `max_pause_batches`). To keep the filter,
+//!   it stays in `Evaluate`, sets `backoff` to `initial_pause_batches` and
+//!   starts a new window.
+//! * In `Paused`, the gate skips batches. It does not change counters or
+//!   `backoff` for skipped batches. When the pause ends, the gate evaluates
+//!   a new window (a *probe*).
+//! * Before each batch the gate checks if the filter changed (for example a
+//!   dynamic filter got new bounds). If so, the gate goes to `Evaluate` with
+//!   an empty window and sets `backoff` to `initial_pause_batches`.
+//!
+//! # Decision
+//!
+//! At the end of each window, the gate pauses the filter if one of these
+//! rules is true:
+//!
+//! 1. The filter removed no rows in the window.
+//! 2. The evaluation time of the window (`cost_ns`) is larger than the work
+//!    that the removed rows save (`saving_ns`):
+//!
+//!    ```text
+//!    saving_ns = (rows_in - rows_out) * saving_ns_per_row
+//!    saving_ns_per_row = min_saving_ns_per_row + measured saving
+//!    ```
+//!
+//!    `min_saving_ns_per_row` comes from the configuration. It is the work
+//!    that a removed row saves after the filter, for example a hash table
+//!    probe in a join. The *measured saving* is optional: a consumer that
+//!    can measure more work that a removed row saves (the Parquet scan
+//!    measures the decode time of the columns that the filter does not read)
+//!    gives it in a shared [`MeasuredRowSaving`] and updates it at any time.
+//!
+//!    To prevent a filter from switching on and off when the cost and the
+//!    saving are almost equal, this rule has a margin: a running filter is
+//!    paused only if `cost_ns > saving_ns * 1.1`, and a probe after a pause
+//!    turns the filter on again only if `cost_ns < saving_ns * 0.9`.
+//!
+//! Thus a filter that removes most rows but is expensive is paused, and a
+//! cheap filter stays on also when it removes only some of the rows.
+//!
+//! The gate measures time with a [`Clock`]. Tests use a [`ManualClock`], so
+//! that the decisions are deterministic.
+//!
+//! [`ManualClock`]: crate::filter_stats::ManualClock
+//!
+//! # Change detection
+//!
+//! The gate walks the filter one time, when it is created, with
+//! [`DynamicFilterTracking::classify`]. The walk subscribes to each
+//! [`DynamicFilterPhysicalExpr`] in the filter that is not complete. Before
+//! each batch, the gate polls these subscriptions with
+//! [`DynamicFilterTracker::changed`]. When nothing changed, this is one
+//! atomic load for each subscription. The tracker drops a subscription when
+//! its filter is complete. A filter without dynamic filters, or with only
+//! complete dynamic filters, is never polled and never resets the gate.
+//!
+//! [`DynamicFilterPhysicalExpr`]: crate::expressions::DynamicFilterPhysicalExpr
+//! [`DynamicFilterTracker::changed`]: crate::expressions::DynamicFilterTracker::changed
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+
+use datafusion_common::config::ExecutionOptions;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+
+use crate::expressions::DynamicFilterTracking;
+use crate::filter_stats::{Clock, FilterCost, SystemClock, duration_nanos};
+
+/// A running filter is paused by the cost rule only if its cost is larger
+/// than this multiple of its saving. See the [module documentation](self).
+const PAUSE_COST_MARGIN: f64 = 1.1;
+
+/// A probe turns a paused filter on again (by the cost rule) only if its
+/// cost is smaller than this multiple of its saving.
+const RESUME_COST_MARGIN: f64 = 0.9;
+
+/// Configuration of an [`OptionalFilterGate`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OptionalFilterGateConfig {
+    /// Number of evaluated batches in one window. The gate makes a decision
+    /// at the end of each window. Values smaller than 1 are used as 1.
+    pub sample_batches: usize,
+    /// Number of batches to skip at the first pause, and after the filter
+    /// was selective again. Values smaller than 1 are used as 1.
+    pub initial_pause_batches: usize,
+    /// Maximum number of batches to skip in one pause. Values smaller than
+    /// `initial_pause_batches` are used as `initial_pause_batches`.
+    pub max_pause_batches: usize,
+    /// Work, in nanoseconds, that each row removed by the filter saves after
+    /// the filter, at the least. The gate adds the saving that the consumer
+    /// measures (see [`MeasuredRowSaving`]). The gate pauses a filter whose
+    /// evaluation time is larger than the saving of the rows that it
+    /// removes. Negative values are used as 0.
+    pub min_saving_ns_per_row: f64,
+}
+
+impl Default for OptionalFilterGateConfig {
+    fn default() -> Self {
+        Self {
+            sample_batches: 2,
+            initial_pause_batches: 4,
+            max_pause_batches: 32,
+            min_saving_ns_per_row: 20.0,
+        }
+    }
+}
+
+impl From<&ExecutionOptions> for OptionalFilterGateConfig {
+    /// Uses `optional_filter_min_saving_ns_per_row` from `options`, and the
+    /// default values for the other fields.
+    fn from(options: &ExecutionOptions) -> Self {
+        Self {
+            min_saving_ns_per_row: options.optional_filter_min_saving_ns_per_row,
+            ..Default::default()
+        }
+    }
+}
+
+impl OptionalFilterGateConfig {
+    /// Returns a copy with the documented minimum values applied.
+    fn normalized(self) -> Self {
+        let sample_batches = self.sample_batches.max(1);
+        let initial_pause_batches = self.initial_pause_batches.max(1);
+        let max_pause_batches = self.max_pause_batches.max(initial_pause_batches);
+        Self {
+            sample_batches,
+            initial_pause_batches,
+            max_pause_batches,
+            min_saving_ns_per_row: self.min_saving_ns_per_row.max(0.0),
+        }
+    }
+}
+
+/// The decision of an [`OptionalFilterGate`] for one batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GateDecision {
+    /// Evaluate the filter on this batch, then call
+    /// [`OptionalFilterGate::record`] with the row counts and the time.
+    Evaluate,
+    /// Do not evaluate the filter on this batch. Let all rows pass.
+    Skip,
+}
+
+/// Work, in nanoseconds, that each row removed by an optional filter saves,
+/// as measured by the consumer of the filter. The gate adds it to
+/// [`OptionalFilterGateConfig::min_saving_ns_per_row`].
+///
+/// The consumer creates one value, gives a clone of the [`Arc`] to the gate
+/// with [`OptionalFilterGate::with_measured_saving`], and updates it at any
+/// time with [`Self::set_ns_per_row`]. The gate reads it at each decision.
+/// For example, the Parquet scan sets it to the time to decode the columns
+/// that the filter does not read, for each row.
+///
+/// The value is an `f64` in an [`AtomicU64`], thus reads and updates are
+/// cheap and lock-free.
+#[derive(Debug, Default)]
+pub struct MeasuredRowSaving {
+    /// The bits of the `f64` value.
+    ns_per_row_bits: AtomicU64,
+}
+
+impl MeasuredRowSaving {
+    /// Creates a value of 0 ns.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the measured saving for each removed row, in nanoseconds.
+    /// Values that are negative or not finite are used as 0.
+    pub fn set_ns_per_row(&self, ns_per_row: f64) {
+        let ns_per_row = if ns_per_row.is_finite() {
+            ns_per_row.max(0.0)
+        } else {
+            0.0
+        };
+        self.ns_per_row_bits
+            .store(ns_per_row.to_bits(), Ordering::Relaxed);
+    }
+
+    /// The measured saving for each removed row, in nanoseconds.
+    pub fn ns_per_row(&self) -> f64 {
+        f64::from_bits(self.ns_per_row_bits.load(Ordering::Relaxed))
+    }
+}
+
+/// The state of an [`OptionalFilterGate`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GateState {
+    /// Evaluate the filter and collect counts and time for the current
+    /// window.
+    Evaluate {
+        window: FilterCost,
+        batches_in_window: usize,
+    },
+    /// Skip the filter for `remaining_batches` more batches.
+    Paused { remaining_batches: usize },
+}
+
+impl GateState {
+    const fn new_window() -> Self {
+        Self::Evaluate {
+            window: FilterCost {
+                rows_in: 0,
+                rows_out: 0,
+                nanos: 0,
+            },
+            batches_in_window: 0,
+        }
+    }
+}
+
+/// Decides, batch by batch, if one stream evaluates an optional filter.
+///
+/// See the [module documentation](self) for the state machine. A gate is
+/// for one stream only. Do not share it between streams.
+///
+/// Call [`Self::begin_batch`] before each batch. If it returns
+/// [`GateDecision::Evaluate`], evaluate [`Self::filter`] on the batch and
+/// then call [`Self::record`] with the row counts and the evaluation time.
+/// Measure the time with [`Self::clock`], so that tests can replace it.
+#[derive(Debug)]
+pub struct OptionalFilterGate {
+    filter: Arc<dyn PhysicalExpr>,
+    /// The dynamic filters in `filter` that can still change.
+    tracking: DynamicFilterTracking,
+    config: OptionalFilterGateConfig,
+    /// The clock that consumers use to measure the evaluation time.
+    clock: Arc<dyn Clock>,
+    /// The saving that the consumer measures, added to
+    /// `config.min_saving_ns_per_row`.
+    measured_saving: Option<Arc<MeasuredRowSaving>>,
+    state: GateState,
+    /// True while the current window is a probe after a pause. The cost
+    /// rule then uses [`RESUME_COST_MARGIN`].
+    probing: bool,
+    /// Length of the next pause, in batches.
+    backoff: usize,
+    /// True after `begin_batch` returned `Evaluate` and before `record`.
+    awaiting_record: bool,
+    pauses: usize,
+}
+
+impl OptionalFilterGate {
+    /// Creates a gate for `filter`, a boolean expression. The gate starts to
+    /// evaluate the filter.
+    ///
+    /// The gate uses a [`SystemClock`] and no measured saving. See
+    /// [`Self::with_clock`] and [`Self::with_measured_saving`].
+    ///
+    /// This walks `filter` one time to find its dynamic filters.
+    pub fn new(filter: Arc<dyn PhysicalExpr>, config: OptionalFilterGateConfig) -> Self {
+        let config = config.normalized();
+        let tracking = DynamicFilterTracking::classify(&filter);
+        Self {
+            filter,
+            tracking,
+            config,
+            clock: SystemClock::shared(),
+            measured_saving: None,
+            state: GateState::new_window(),
+            probing: false,
+            backoff: config.initial_pause_batches,
+            awaiting_record: false,
+            pauses: 0,
+        }
+    }
+
+    /// Uses `clock` as the clock of this gate, see [`Self::clock`].
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// Adds `saving` to [`OptionalFilterGateConfig::min_saving_ns_per_row`]
+    /// at each decision. See [`MeasuredRowSaving`].
+    pub fn with_measured_saving(mut self, saving: Arc<MeasuredRowSaving>) -> Self {
+        self.measured_saving = Some(saving);
+        self
+    }
+
+    /// The filter of this gate.
+    pub fn filter(&self) -> &Arc<dyn PhysicalExpr> {
+        &self.filter
+    }
+
+    /// The clock to measure the evaluation time that is given to
+    /// [`Self::record`].
+    pub fn clock(&self) -> &Arc<dyn Clock> {
+        &self.clock
+    }
+
+    /// The work, in nanoseconds, that the gate assumes each removed row
+    /// saves now: the configured minimum plus the measured saving.
+    pub fn saving_ns_per_row(&self) -> f64 {
+        let measured = self
+            .measured_saving
+            .as_ref()
+            .map_or(0.0, |saving| saving.ns_per_row());
+        self.config.min_saving_ns_per_row + measured
+    }
+
+    /// Call before each batch. Returns if the caller must evaluate the
+    /// filter on the batch or skip it.
+    ///
+    /// If the result is [`GateDecision::Evaluate`], call [`Self::record`]
+    /// after the evaluation.
+    pub fn begin_batch(&mut self) -> GateDecision {
+        // Only a filter with dynamic filters that are not complete can
+        // change. When nothing changed, this is one atomic load for each
+        // such dynamic filter.
+        if let Some(tracker) = self.tracking.watcher()
+            && tracker.changed()
+        {
+            self.state = GateState::new_window();
+            self.probing = false;
+            self.backoff = self.config.initial_pause_batches;
+        }
+
+        match &mut self.state {
+            GateState::Paused { remaining_batches } => {
+                // Only count down. Counters and backoff change only at
+                // decision points.
+                *remaining_batches = remaining_batches.saturating_sub(1);
+                if *remaining_batches == 0 {
+                    // The next batch is a probe.
+                    self.state = GateState::new_window();
+                    self.probing = true;
+                }
+                self.awaiting_record = false;
+                GateDecision::Skip
+            }
+            GateState::Evaluate { .. } => {
+                self.awaiting_record = true;
+                GateDecision::Evaluate
+            }
+        }
+    }
+
+    /// Records the result of an evaluation that [`Self::begin_batch`]
+    /// requested. `rows_in` is the number of rows evaluated, `rows_out`
+    /// the number of rows that passed (a null result does not pass) and
+    /// `elapsed` the evaluation time.
+    ///
+    /// Calls without a matching `begin_batch` that returned
+    /// [`GateDecision::Evaluate`] are ignored.
+    pub fn record(&mut self, rows_in: usize, rows_out: usize, elapsed: Duration) {
+        if !std::mem::take(&mut self.awaiting_record) {
+            return;
+        }
+        let GateState::Evaluate {
+            window,
+            batches_in_window,
+        } = &mut self.state
+        else {
+            return;
+        };
+        window.add(rows_in as u64, rows_out as u64, duration_nanos(elapsed));
+        *batches_in_window += 1;
+        if *batches_in_window >= self.config.sample_batches {
+            let window = *window;
+            self.decide(window);
+        }
+    }
+
+    /// Number of times the gate paused the filter.
+    pub fn pauses(&self) -> usize {
+        self.pauses
+    }
+
+    /// True if the gate skips the next batch, unless the filter changes
+    /// before it.
+    pub fn is_paused(&self) -> bool {
+        matches!(self.state, GateState::Paused { .. })
+    }
+
+    /// Makes a decision at the end of a window.
+    fn decide(&mut self, window: FilterCost) {
+        if window.rows_in == 0 {
+            // No rows, thus no information. Start a new window.
+            self.state = GateState::new_window();
+            return;
+        }
+        if self.should_pause(&window) {
+            self.start_pause(self.backoff);
+        } else {
+            self.state = GateState::new_window();
+            self.probing = false;
+            self.backoff = self.config.initial_pause_batches;
+        }
+    }
+
+    /// The decision rules, see the [module documentation](self).
+    fn should_pause(&self, window: &FilterCost) -> bool {
+        let rows_removed = window.rows_removed();
+        if rows_removed == 0 {
+            return true;
+        }
+        // The filter costs more than it saves.
+        let cost_ns = window.nanos as f64;
+        let saving_ns = rows_removed as f64 * self.saving_ns_per_row();
+        if self.probing {
+            // Turn the filter on again only if it is clearly worth its cost.
+            cost_ns >= saving_ns * RESUME_COST_MARGIN
+        } else {
+            cost_ns > saving_ns * PAUSE_COST_MARGIN
+        }
+    }
+
+    /// Goes to `Paused` for `pause_batches` batches and doubles the backoff.
+    fn start_pause(&mut self, pause_batches: usize) {
+        let pause_batches = pause_batches.max(1);
+        self.probing = false;
+        self.state = GateState::Paused {
+            remaining_batches: pause_batches,
+        };
+        self.backoff = pause_batches
+            .saturating_mul(2)
+            .min(self.config.max_pause_batches);
+        self.pauses += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expressions::{BinaryExpr, Column, DynamicFilterPhysicalExpr, col, lit};
+    use crate::filter_stats::ManualClock;
+    use arrow::array::{Array, BooleanArray, Int32Array, RecordBatch};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::cast::as_boolean_array;
+    use datafusion_expr::Operator;
+
+    const ROWS: usize = 1000;
+
+    fn static_filter() -> Arc<dyn PhysicalExpr> {
+        lit(true)
+    }
+
+    /// A gate with the default configuration and a clock that does not
+    /// move: the evaluation time is 0, thus only a window that removes no
+    /// rows pauses the filter.
+    fn gate_with(filter: Arc<dyn PhysicalExpr>) -> OptionalFilterGate {
+        OptionalFilterGate::new(filter, OptionalFilterGateConfig::default())
+            .with_clock(Arc::new(ManualClock::new()))
+    }
+
+    fn new_gate() -> OptionalFilterGate {
+        gate_with(static_filter())
+    }
+
+    /// Feeds one batch with the given pass ratio and an evaluation time of
+    /// 0. Returns the decision.
+    fn feed(gate: &mut OptionalFilterGate, pass_ratio: f64) -> GateDecision {
+        feed_timed(gate, pass_ratio, 0.0)
+    }
+
+    /// Feeds one batch with the given pass ratio and an evaluation time of
+    /// `ns_per_row` for each row. Returns the decision.
+    fn feed_timed(
+        gate: &mut OptionalFilterGate,
+        pass_ratio: f64,
+        ns_per_row: f64,
+    ) -> GateDecision {
+        let decision = gate.begin_batch();
+        if decision == GateDecision::Evaluate {
+            let elapsed = Duration::from_nanos((ROWS as f64 * ns_per_row) as u64);
+            gate.record(ROWS, (ROWS as f64 * pass_ratio) as usize, elapsed);
+        }
+        decision
+    }
+
+    /// Feeds `n` batches and returns how many the gate evaluated.
+    fn feed_n(gate: &mut OptionalFilterGate, n: usize, pass_ratio: f64) -> usize {
+        (0..n)
+            .filter(|_| feed(gate, pass_ratio) == GateDecision::Evaluate)
+            .count()
+    }
+
+    /// Feeds batches until the gate evaluates one. Returns the number of
+    /// skipped batches.
+    fn skip_until_probe(gate: &mut OptionalFilterGate, pass_ratio: f64) -> usize {
+        let mut skipped = 0;
+        while feed(gate, pass_ratio) == GateDecision::Skip {
+            skipped += 1;
+            assert!(skipped < 10_000, "gate never probes");
+        }
+        skipped
+    }
+
+    /// Evaluates the filter of `gate` on `batch` like a consumer does, or
+    /// skips it. Returns `None` if the gate skipped the filter.
+    fn evaluate(
+        gate: &mut OptionalFilterGate,
+        batch: &RecordBatch,
+    ) -> Option<BooleanArray> {
+        if gate.begin_batch() == GateDecision::Skip {
+            return None;
+        }
+        let num_rows = batch.num_rows();
+        let start = gate.clock().now_nanos();
+        let result = gate
+            .filter()
+            .evaluate(batch)
+            .unwrap()
+            .into_array(num_rows)
+            .unwrap();
+        let result = as_boolean_array(&result).unwrap().clone();
+        let elapsed = gate.clock().now_nanos().saturating_sub(start);
+        // `true_count` does not count nulls.
+        gate.record(num_rows, result.true_count(), Duration::from_nanos(elapsed));
+        Some(result)
+    }
+
+    #[test]
+    fn pauses_filter_that_removes_no_rows() {
+        let mut gate = new_gate();
+        assert_eq!(feed(&mut gate, 1.0), GateDecision::Evaluate);
+        assert!(!gate.is_paused());
+        assert_eq!(feed(&mut gate, 1.0), GateDecision::Evaluate);
+        assert!(gate.is_paused());
+        assert_eq!(gate.pauses(), 1);
+
+        // Pauses for `initial_pause_batches` batches.
+        for _ in 0..4 {
+            assert_eq!(feed(&mut gate, 1.0), GateDecision::Skip);
+        }
+        // Then it probes.
+        assert_eq!(feed(&mut gate, 1.0), GateDecision::Evaluate);
+    }
+
+    #[test]
+    fn keeps_free_filter_that_removes_rows() {
+        let mut gate = new_gate();
+        assert_eq!(feed_n(&mut gate, 100, 0.5), 100);
+        assert_eq!(gate.pauses(), 0);
+        // A free filter that removes only 1% of the rows also stays on.
+        assert_eq!(feed_n(&mut gate, 10, 0.99), 10);
+        assert_eq!(gate.pauses(), 0);
+    }
+
+    #[test]
+    fn backoff_doubles_up_to_cap_and_resets() {
+        let mut gate = new_gate();
+        let mut observed = vec![];
+        assert_eq!(feed_n(&mut gate, 2, 1.0), 2);
+        for _ in 0..6 {
+            observed.push(skip_until_probe(&mut gate, 1.0));
+            // `skip_until_probe` evaluated the first batch of the probe
+            // window. One more batch closes the window.
+            assert_eq!(feed(&mut gate, 1.0), GateDecision::Evaluate);
+        }
+        assert_eq!(observed, vec![4, 8, 16, 32, 32, 32]);
+        assert_eq!(gate.pauses(), 7);
+
+        // A selective probe resets the backoff.
+        assert!(gate.is_paused());
+        let skipped = skip_until_probe(&mut gate, 0.1);
+        assert_eq!(skipped, 32);
+        assert_eq!(feed(&mut gate, 0.1), GateDecision::Evaluate);
+        assert!(!gate.is_paused());
+        assert_eq!(gate.backoff, 4);
+
+        // The next pause is short again.
+        assert_eq!(feed_n(&mut gate, 2, 1.0), 2);
+        assert_eq!(skip_until_probe(&mut gate, 1.0), 4);
+    }
+
+    fn dynamic_filter() -> (Arc<DynamicFilterPhysicalExpr>, Arc<dyn PhysicalExpr>) {
+        let column: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let dynamic = Arc::new(DynamicFilterPhysicalExpr::new(vec![column], lit(true)));
+        let filter = Arc::clone(&dynamic) as Arc<dyn PhysicalExpr>;
+        (dynamic, filter)
+    }
+
+    fn a_gt(value: i32) -> Arc<dyn PhysicalExpr> {
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            lit(value),
+        ))
+    }
+
+    #[test]
+    fn generation_change_restarts_evaluation() {
+        let (dynamic, filter) = dynamic_filter();
+        let mut gate = gate_with(filter);
+
+        // Pause two times: the backoff grows to 16.
+        assert_eq!(feed_n(&mut gate, 2, 1.0), 2);
+        skip_until_probe(&mut gate, 1.0);
+        feed(&mut gate, 1.0);
+        assert!(gate.is_paused());
+        assert_eq!(gate.backoff, 16);
+
+        // A new generation of the filter ends the pause at once.
+        dynamic.update(a_gt(10)).unwrap();
+        assert_eq!(feed(&mut gate, 1.0), GateDecision::Evaluate);
+        assert!(!gate.is_paused());
+        assert_eq!(gate.backoff, 4);
+
+        // The new window has an empty history: one more batch decides.
+        assert_eq!(feed(&mut gate, 1.0), GateDecision::Evaluate);
+        assert!(gate.is_paused());
+        assert_eq!(skip_until_probe(&mut gate, 1.0), 4);
+    }
+
+    #[test]
+    fn static_filter_is_never_watched() {
+        // A filter without dynamic filters, and a filter whose dynamic
+        // filters are all complete, can not change: the gate never polls
+        // them and never resets.
+        let (dynamic, complete) = dynamic_filter();
+        dynamic.mark_complete();
+        for (filter, expected_complete) in [(static_filter(), false), (complete, true)] {
+            let mut gate = gate_with(filter);
+            match (&gate.tracking, expected_complete) {
+                (DynamicFilterTracking::Static, false)
+                | (DynamicFilterTracking::AllComplete, true) => {}
+                (other, _) => panic!("unexpected tracking {other:?}"),
+            }
+            assert!(gate.tracking.watcher().is_none());
+
+            assert_eq!(feed_n(&mut gate, 2, 1.0), 2);
+            assert!(gate.is_paused());
+            assert_eq!(skip_until_probe(&mut gate, 1.0), 4);
+            assert_eq!(feed(&mut gate, 1.0), GateDecision::Evaluate);
+            assert_eq!(skip_until_probe(&mut gate, 1.0), 8);
+            assert_eq!(gate.pauses(), 2);
+        }
+    }
+
+    #[test]
+    fn completed_filter_stops_being_watched() {
+        let (dynamic, filter) = dynamic_filter();
+        let mut gate = gate_with(filter);
+        assert!(gate.tracking.watcher().is_some());
+        assert_eq!(feed_n(&mut gate, 2, 1.0), 2);
+        assert!(gate.is_paused());
+
+        // The final update restarts the evaluation one time.
+        dynamic.update(a_gt(10)).unwrap();
+        dynamic.mark_complete();
+        assert_eq!(feed(&mut gate, 1.0), GateDecision::Evaluate);
+        assert!(!gate.is_paused());
+        // The tracker dropped the subscription of the complete filter.
+        assert!(gate.tracking.watcher().unwrap().is_exhausted());
+
+        // No more resets: the gate pauses and backs off as usual.
+        assert_eq!(feed(&mut gate, 1.0), GateDecision::Evaluate);
+        assert!(gate.is_paused());
+        assert_eq!(skip_until_probe(&mut gate, 1.0), 4);
+        assert_eq!(feed(&mut gate, 1.0), GateDecision::Evaluate);
+        assert_eq!(skip_until_probe(&mut gate, 1.0), 8);
+    }
+
+    #[test]
+    fn topk_like_filter_stays_on() {
+        // The filter gets tighter over time and changes often, like a TopK
+        // dynamic filter. At the start it removes almost no rows.
+        let (dynamic, filter) = dynamic_filter();
+        let mut gate = gate_with(filter);
+        for i in 0..100 {
+            if i % 2 == 0 {
+                dynamic.update(a_gt(i)).unwrap();
+            }
+            let pass_ratio = 1.0 - (i as f64 / 100.0);
+            assert_eq!(
+                feed(&mut gate, pass_ratio),
+                GateDecision::Evaluate,
+                "batch {i}"
+            );
+        }
+        assert_eq!(gate.pauses(), 0);
+    }
+
+    #[test]
+    fn skewed_input_probe_re_enables_filter() {
+        let mut gate = new_gate();
+        // Data that the filter does not remove first: the gate pauses with
+        // growing backoff.
+        assert_eq!(feed_n(&mut gate, 2, 1.0), 2);
+        for _ in 0..3 {
+            skip_until_probe(&mut gate, 1.0);
+            feed(&mut gate, 1.0);
+        }
+        assert!(gate.is_paused());
+
+        // Then the data becomes selective. A probe finds it.
+        let skipped = skip_until_probe(&mut gate, 0.05);
+        assert!(skipped <= 32);
+        assert_eq!(feed(&mut gate, 0.05), GateDecision::Evaluate);
+        assert!(!gate.is_paused());
+        // The filter stays on for the rest of the input.
+        assert_eq!(feed_n(&mut gate, 50, 0.05), 50);
+    }
+
+    /// Regression test: a paused gate must not change its backoff or its
+    /// counters for each skipped batch. Only decisions change them.
+    #[test]
+    fn paused_gate_does_not_grow_backoff_while_skipping() {
+        let mut gate = new_gate();
+        assert_eq!(feed_n(&mut gate, 2, 1.0), 2);
+        assert!(gate.is_paused());
+        let backoff = gate.backoff;
+        let pauses = gate.pauses();
+
+        for _ in 0..3 {
+            assert_eq!(gate.begin_batch(), GateDecision::Skip);
+            // A stray `record` during a pause is ignored.
+            gate.record(ROWS, 0, Duration::from_secs(1));
+            assert_eq!(gate.backoff, backoff);
+            assert_eq!(gate.pauses(), pauses);
+        }
+        assert_eq!(gate.begin_batch(), GateDecision::Skip);
+        assert_eq!(gate.backoff, backoff);
+        // The pause is over: the next batch is evaluated.
+        assert_eq!(gate.begin_batch(), GateDecision::Evaluate);
+    }
+
+    #[test]
+    fn empty_window_makes_no_decision() {
+        let mut gate = new_gate();
+        for _ in 0..10 {
+            assert_eq!(gate.begin_batch(), GateDecision::Evaluate);
+            gate.record(0, 0, Duration::from_micros(1));
+        }
+        assert_eq!(gate.pauses(), 0);
+    }
+
+    fn batch(values: Vec<Option<i32>>) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(values))]).unwrap()
+    }
+
+    fn col_gt(value: i32) -> Arc<dyn PhysicalExpr> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        Arc::new(BinaryExpr::new(
+            col("a", &schema).unwrap(),
+            Operator::Gt,
+            lit(value),
+        ))
+    }
+
+    #[test]
+    fn evaluate_selective_filter() {
+        let mut gate = gate_with(col_gt(8));
+        let input = batch((0..10).map(Some).collect());
+        for _ in 0..10 {
+            let result = evaluate(&mut gate, &input).expect("evaluated");
+            assert_eq!(result.true_count(), 1);
+        }
+        assert_eq!(gate.pauses(), 0);
+    }
+
+    #[test]
+    fn evaluate_filter_that_removes_no_rows_skips() {
+        let mut gate = gate_with(col_gt(0));
+        let input = batch((1..=10).map(Some).collect());
+        assert!(evaluate(&mut gate, &input).is_some());
+        assert!(evaluate(&mut gate, &input).is_some());
+        for _ in 0..4 {
+            assert!(evaluate(&mut gate, &input).is_none());
+        }
+        assert!(evaluate(&mut gate, &input).is_some());
+    }
+
+    #[test]
+    fn evaluate_counts_null_as_not_passing() {
+        let mut gate = gate_with(col_gt(0));
+        // 9 of 10 rows are null: the filter removes them.
+        let mut values = vec![None; 9];
+        values.push(Some(5));
+        let input = batch(values);
+        for _ in 0..10 {
+            let result = evaluate(&mut gate, &input).expect("evaluated");
+            assert_eq!(result.null_count(), 9);
+        }
+        assert_eq!(gate.pauses(), 0);
+    }
+
+    #[test]
+    fn config_from_execution_options() {
+        let mut options = ExecutionOptions::default();
+        assert_eq!(
+            OptionalFilterGateConfig::from(&options),
+            OptionalFilterGateConfig::default()
+        );
+        options.optional_filter_min_saving_ns_per_row = 7.5;
+        let config = OptionalFilterGateConfig::from(&options);
+        assert_eq!(config.min_saving_ns_per_row, 7.5);
+        assert_eq!(config.sample_batches, 2);
+    }
+
+    // The tests below use the default `min_saving_ns_per_row` of 20 ns. For
+    // a window of 1000-row batches with pass ratio `p` and cost `c` ns for
+    // each row, the gate compares `c` with `(1 - p) * 20` ns for each row.
+
+    /// Like the dynamic filter of a hash join with a multi-column key: it
+    /// removes 93% of the rows, but costs 70 ns for each row. Each removed
+    /// row saves only 20 ns, thus 18.6 ns for each evaluated row.
+    #[test]
+    fn selective_but_expensive_filter_pauses() {
+        let mut gate = new_gate();
+        assert_eq!(feed_timed(&mut gate, 0.07, 70.0), GateDecision::Evaluate);
+        assert_eq!(feed_timed(&mut gate, 0.07, 70.0), GateDecision::Evaluate);
+        assert!(gate.is_paused());
+        assert_eq!(gate.pauses(), 1);
+
+        // The probes find the same cost: the pauses get longer.
+        assert_eq!(skip_until_probe(&mut gate, 0.07), 4);
+        assert_eq!(feed_timed(&mut gate, 0.07, 70.0), GateDecision::Evaluate);
+        // `skip_until_probe` evaluated the first batch with no time. The
+        // window costs 70 µs and saves 1860 * 20 ns = 37.2 µs: still too
+        // much.
+        assert!(gate.is_paused());
+        assert_eq!(skip_until_probe(&mut gate, 0.07), 8);
+    }
+
+    /// A bound check that costs 2 ns for each row and removes 30% of the
+    /// rows: it saves 6 ns for each row, thus it stays on.
+    #[test]
+    fn cheap_weakly_selective_filter_stays_on() {
+        let mut gate = new_gate();
+        for _ in 0..100 {
+            assert_eq!(feed_timed(&mut gate, 0.7, 2.0), GateDecision::Evaluate);
+        }
+        assert_eq!(gate.pauses(), 0);
+    }
+
+    /// Cheap bounds that cost 1 ns for each row and remove 12% of the rows:
+    /// they save 2.4 ns for each row, thus they stay on. There is no
+    /// separate rule for the fraction of rows that pass.
+    #[test]
+    fn cheap_bounds_that_remove_few_rows_stay_on() {
+        let mut gate = new_gate();
+        for _ in 0..100 {
+            assert_eq!(feed_timed(&mut gate, 0.88, 1.0), GateDecision::Evaluate);
+        }
+        assert_eq!(gate.pauses(), 0);
+    }
+
+    /// Like the dynamic filter of a TopK: a cheap comparison that removes
+    /// almost all rows. It stays on.
+    #[test]
+    fn cheap_very_selective_filter_stays_on() {
+        let mut gate = new_gate();
+        for _ in 0..100 {
+            assert_eq!(feed_timed(&mut gate, 0.001, 3.0), GateDecision::Evaluate);
+        }
+        assert_eq!(gate.pauses(), 0);
+    }
+
+    /// The consumer measures a larger saving (for example the Parquet scan
+    /// measures the decode time of the columns that the filter does not
+    /// read). The next probe turns the expensive filter on again.
+    #[test]
+    fn measured_saving_re_enables_filter_at_next_probe() {
+        let saving = Arc::new(MeasuredRowSaving::new());
+        let mut gate = new_gate().with_measured_saving(Arc::clone(&saving));
+        assert_eq!(gate.saving_ns_per_row(), 20.0);
+        assert_eq!(feed_timed(&mut gate, 0.07, 70.0), GateDecision::Evaluate);
+        assert_eq!(feed_timed(&mut gate, 0.07, 70.0), GateDecision::Evaluate);
+        assert!(gate.is_paused());
+
+        // Each removed row now saves 20 + 80 = 100 ns: 93 ns for each
+        // evaluated row, more than the cost of 70 ns with the margin.
+        saving.set_ns_per_row(80.0);
+        assert_eq!(gate.saving_ns_per_row(), 100.0);
+        // The pause does not end early.
+        for _ in 0..4 {
+            assert_eq!(feed_timed(&mut gate, 0.07, 70.0), GateDecision::Skip);
+        }
+        assert_eq!(feed_timed(&mut gate, 0.07, 70.0), GateDecision::Evaluate);
+        assert_eq!(feed_timed(&mut gate, 0.07, 70.0), GateDecision::Evaluate);
+        assert!(!gate.is_paused());
+        assert_eq!(gate.backoff, 4);
+        for _ in 0..20 {
+            assert_eq!(feed_timed(&mut gate, 0.07, 70.0), GateDecision::Evaluate);
+        }
+
+        // Invalid measured values are used as 0.
+        saving.set_ns_per_row(f64::NAN);
+        assert_eq!(gate.saving_ns_per_row(), 20.0);
+        saving.set_ns_per_row(-5.0);
+        assert_eq!(gate.saving_ns_per_row(), 20.0);
+    }
+
+    /// When the cost is near the saving, the gate keeps its state: a running
+    /// filter stays on and a paused filter stays paused.
+    #[test]
+    fn cost_check_has_hysteresis() {
+        // The filter removes 50% of the rows: the saving is 10 ns for each
+        // evaluated row. A cost of 10.5 ns is between 0.9 and 1.1 times the
+        // saving.
+        let mut gate = new_gate();
+        for _ in 0..20 {
+            assert_eq!(feed_timed(&mut gate, 0.5, 10.5), GateDecision::Evaluate);
+        }
+        assert!(!gate.is_paused());
+
+        // Pause it with a larger cost.
+        assert_eq!(feed_timed(&mut gate, 0.5, 30.0), GateDecision::Evaluate);
+        assert_eq!(feed_timed(&mut gate, 0.5, 30.0), GateDecision::Evaluate);
+        assert!(gate.is_paused());
+        // A probe with the cost near the saving does not turn it on.
+        for _ in 0..4 {
+            assert_eq!(feed_timed(&mut gate, 0.5, 10.5), GateDecision::Skip);
+        }
+        assert_eq!(feed_timed(&mut gate, 0.5, 10.5), GateDecision::Evaluate);
+        assert_eq!(feed_timed(&mut gate, 0.5, 10.5), GateDecision::Evaluate);
+        assert!(gate.is_paused());
+        assert_eq!(gate.pauses(), 2);
+        // A probe with a clearly lower cost turns it on.
+        for _ in 0..8 {
+            assert_eq!(feed_timed(&mut gate, 0.5, 8.5), GateDecision::Skip);
+        }
+        assert_eq!(feed_timed(&mut gate, 0.5, 8.5), GateDecision::Evaluate);
+        assert_eq!(feed_timed(&mut gate, 0.5, 8.5), GateDecision::Evaluate);
+        assert!(!gate.is_paused());
+    }
+
+    /// A clock that moves by a fixed step each time it is read.
+    #[derive(Debug)]
+    struct SteppingClock {
+        now: AtomicU64,
+        step: u64,
+    }
+
+    impl Clock for SteppingClock {
+        fn now_nanos(&self) -> u64 {
+            self.now.fetch_add(self.step, Ordering::Relaxed)
+        }
+    }
+
+    /// A consumer measures the time with the clock of the gate.
+    #[test]
+    fn consumer_measures_time_with_gate_clock() {
+        // Each evaluation takes 10 µs for 10 rows: 1000 ns for each row.
+        let clock = Arc::new(SteppingClock {
+            now: AtomicU64::new(0),
+            step: 10_000,
+        });
+        let mut gate =
+            OptionalFilterGate::new(col_gt(8), OptionalFilterGateConfig::default())
+                .with_clock(clock);
+        let input = batch((0..10).map(Some).collect());
+        // The filter removes 90% of the rows, but it costs 1000 ns for each
+        // row, and each removed row saves 20 ns.
+        assert!(evaluate(&mut gate, &input).is_some());
+        assert!(evaluate(&mut gate, &input).is_some());
+        assert!(gate.is_paused());
+        assert!(evaluate(&mut gate, &input).is_none());
+    }
+}
