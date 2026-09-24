@@ -277,24 +277,21 @@ fn copy_byte_spans<S: OffsetSizeTrait, T: ByteArrayType<Offset = S>>(
     let source_offsets = values.value_offsets();
     let mut offsets = Vec::with_capacity(kept_count + 1);
     offsets.push(S::zero());
-    // Count retained bytes first to avoid reserving space for hidden NULL payloads.
-    let mut byte_len = S::zero();
+    let mut bytes = Vec::with_capacity(offset_span_len(values.offsets()));
     for (start, end) in keep_mask.set_slices() {
-        let adjustment = byte_len - source_offsets[start];
+        let adjustment = S::usize_as(bytes.len()) - source_offsets[start];
         offsets.extend(
             source_offsets[start + 1..=end]
                 .iter()
                 .map(|offset| *offset + adjustment),
         );
-        byte_len = source_offsets[end] + adjustment;
-    }
-    let mut bytes = Vec::with_capacity(byte_len.as_usize());
-    for (start, end) in keep_mask.set_slices() {
         bytes.extend_from_slice(
             &values.value_data()
                 [source_offsets[start].as_usize()..source_offsets[end].as_usize()],
         );
     }
+    // Release capacity reserved for bytes hidden by NULL elements or list rows.
+    bytes.shrink_to_fit();
     // SAFETY: the keep bitmap selects only non-null elements, copied unchanged
     // from the input. This preserves UTF-8 validity for string arrays. Rebasing
     // offsets preserves their order, and the last offset equals bytes.len().
