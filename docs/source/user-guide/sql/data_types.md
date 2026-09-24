@@ -105,20 +105,25 @@ The maximum supported precision for `DECIMAL` types is 76.
 
 ## Date/Time Types
 
-| SQL DataType                                               | Arrow DataType                                             |
-| ---------------------------------------------------------- | :--------------------------------------------------------- |
-| `DATE`                                                     | `Date32`                                                   |
-| `TIME`                                                     | `Time64(Nanosecond)`                                       |
-| `TIMESTAMP`, `TIMESTAMP(p)`, `TIMESTAMP WITHOUT TIME ZONE` | `Timestamp(unit, None)`                                    |
-| `TIMESTAMPTZ(p)`, `TIMESTAMP(p) WITH TIME ZONE`            | `Timestamp(unit, None)` by default — see the warning below |
-| `INTERVAL`                                                 | `Interval(IntervalMonthDayNano)`                           |
+| SQL DataType                                                  | Arrow DataType                                             |
+| ------------------------------------------------------------- | :--------------------------------------------------------- |
+| `DATE`                                                        | `Date32`                                                   |
+| `TIME`                                                        | `Time64(Nanosecond)`                                       |
+| `TIMESTAMP`, `TIMESTAMP(p)`, `TIMESTAMP(p) WITHOUT TIME ZONE` | `Timestamp(unit, None)`                                    |
+| `TIMESTAMPTZ(p)`, `TIMESTAMP(p) WITH TIME ZONE`               | `Timestamp(unit, None)` by default — see the warning below |
+| `INTERVAL`                                                    | `Interval(MonthDayNano)`                                   |
 
 :::{warning}
 `TIMESTAMPTZ` and `TIMESTAMP WITH TIME ZONE` do **not** give a timezone-aware
 type by default. The zone comes from the
 [`datafusion.execution.time_zone`] setting, and that setting is unset unless you
 set it. So `'2024-01-01T12:00:00Z'::timestamptz` gives `Timestamp(unit, None)`
-by default, and DataFusion discards the `Z`.
+by default: the result type does not keep timezone metadata.
+
+An explicit offset in the input is still applied. DataFusion normalizes the
+value to UTC. For example, with the default setting,
+`'2024-01-01T12:00:00+07:00'::timestamptz` gives `2024-01-01T05:00:00`. It is
+not read as the local time `12:00:00`.
 
 This is a known bug. See [issue #25166]. PostgreSQL and DuckDB always give an
 aware type here, because their session time zone always has a value.
