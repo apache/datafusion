@@ -286,12 +286,15 @@ fn to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
 
     let result = builder.finish();
+    // Only collapse to a scalar when the whole output is a single row. When the
+    // format column has more than one row, a scalar `args[0]` was expanded to a
+    // full array, so returning row 0 would repeat it for every row.
     match args[0] {
-        ColumnarValue::Scalar(_) => {
+        ColumnarValue::Scalar(_) if result.len() == 1 => {
             let val = result.is_valid(0).then(|| result.value(0).to_string());
             Ok(ColumnarValue::Scalar(ScalarValue::Utf8(val)))
         }
-        ColumnarValue::Array(_) => Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef)),
+        _ => Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef)),
     }
 }
 
@@ -357,6 +360,38 @@ mod tests {
             } else {
                 panic!("Expected an array value")
             }
+        }
+    }
+
+    #[test]
+    fn test_scalar_datetime_with_format_column_returns_array() {
+        // A scalar datetime with a multi-row format column must format each
+        // row; previously it collapsed to row 0 and repeated one value.
+        let value = ScalarValue::Date32(Some(18506)); // 2020-09-01
+        let format = StringArray::from(vec!["%Y-%m-%d", "%d/%m/%Y"]);
+        let arg_fields = vec![
+            Field::new("a", value.data_type(), false).into(),
+            Field::new("a", format.data_type().to_owned(), false).into(),
+        ];
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(value),
+                ColumnarValue::Array(Arc::new(format) as ArrayRef),
+            ],
+            arg_fields,
+            number_rows: 2,
+            return_field: Field::new("f", DataType::Utf8, true).into(),
+            config_options: Arc::new(ConfigOptions::default()),
+        };
+        let result = ToCharFunc::new()
+            .invoke_with_args(args)
+            .expect("to_char should format each row");
+
+        let expected = StringArray::from(vec!["2020-09-01", "01/09/2020"]);
+        if let ColumnarValue::Array(result) = result {
+            assert_eq!(&expected as &dyn Array, result.as_ref());
+        } else {
+            panic!("Expected an array value, got a scalar (row 0 repeated)")
         }
     }
 
