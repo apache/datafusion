@@ -369,9 +369,8 @@ statement ok
 DROP TABLE r_empty;
 
 # A correlated `NOT IN` filter builds a `LeftAnti` join with two keys: the
-# value and the correlation. A null-aware `LeftAnti` hash join supports one key
-# only, so a function key over non-nullable columns must not make this join
-# null-aware.
+# value and the correlation. A function key over non-nullable columns that
+# cannot be NULL must not make this join null-aware.
 statement ok
 CREATE TABLE t1(k INT NOT NULL, s VARCHAR NOT NULL) AS VALUES (1, 'a'), (2, 'b');
 
@@ -385,9 +384,9 @@ SELECT * FROM t1 WHERE upper(t1.s) NOT IN (SELECT t2.s FROM t2 WHERE t2.k = t1.k
 
 # `NULLIF(k, 1)` is NULL for `k = 1`, and that group of `t2` is not empty, so
 # the correct result has no row for `k = 1`. The join has two keys, the value
-# and the correlation, and the null-aware `LeftAnti` executor takes one key
-# only. The `NOT IN` becomes a null-aware mark join, which takes any number of
-# keys, and a filter on the mark. `main` keeps the `k = 1` row, which is
+# first and the correlation second, and is null-aware because the value
+# expression can be NULL. `main` tests the columns of the key instead, which
+# are not nullable, and keeps the `k = 1` row. That is
 # https://github.com/apache/datafusion/issues/25347.
 query I rowsort
 SELECT k FROM t1 WHERE NULLIF(t1.k, 1) NOT IN (SELECT t2.k + 10 FROM t2 WHERE t2.k = t1.k);
@@ -398,21 +397,17 @@ query TT
 EXPLAIN SELECT k FROM t1 WHERE NULLIF(t1.k, 1) NOT IN (SELECT t2.k + 10 FROM t2 WHERE t2.k = t1.k);
 ----
 logical_plan
-01)Projection: t1.k
-02)--Filter: NOT __correlated_sq_1.mark
-03)----LeftMark Join: nullif(CAST(t1.k AS Int64), Int64(1)) = __correlated_sq_1.t2.k + Int64(10), t1.k = __correlated_sq_1.k null_aware
-04)------TableScan: t1 projection=[k]
-05)------SubqueryAlias: __correlated_sq_1
-06)--------Projection: CAST(t2.k AS Int64) + Int64(10), t2.k
-07)----------TableScan: t2 projection=[k]
+01)LeftAnti Join: nullif(CAST(t1.k AS Int64), Int64(1)) = __correlated_sq_1.t2.k + Int64(10), t1.k = __correlated_sq_1.k null_aware
+02)--TableScan: t1 projection=[k]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Projection: CAST(t2.k AS Int64) + Int64(10), t2.k
+05)------TableScan: t2 projection=[k]
 physical_plan
-01)FilterExec: NOT mark@1, projection=[k@0]
-02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(nullif(t1.k,Int64(1))@1, t2.k + Int64(10)@0), (k@0, k@1)], projection=[k@0, mark@2], null_aware
-04)------ProjectionExec: expr=[k@0 as k, nullif(CAST(k@0 AS Int64), 1) as nullif(t1.k,Int64(1))]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
-06)------ProjectionExec: expr=[CAST(k@0 AS Int64) + 10 as t2.k + Int64(10), k@0 as k]
-07)--------DataSourceExec: partitions=1, partition_sizes=[1]
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(nullif(t1.k,Int64(1))@1, t2.k + Int64(10)@0), (k@0, k@1)], projection=[k@0], null_aware
+02)--ProjectionExec: expr=[k@0 as k, nullif(CAST(k@0 AS Int64), 1) as nullif(t1.k,Int64(1))]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--ProjectionExec: expr=[CAST(k@0 AS Int64) + 10 as t2.k + Int64(10), k@0 as k]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 DROP TABLE t1;
@@ -420,14 +415,11 @@ DROP TABLE t1;
 statement ok
 DROP TABLE t2;
 
-# A non-equality correlation leaves one key and a residual join filter. No hash
-# join can mark the UNKNOWN rows of a residual filter
-# (https://github.com/apache/datafusion/issues/25336), so a `NOT IN` whose
-# value can be NULL does not become an anti join. It becomes the mark joins
-# that materialize its three-valued result, the same plan as for a projected
-# `IN`, and a filter on that result. For `k = 1` the key is NULL and the
-# correlated subquery result is empty, and `NULL NOT IN (<empty set>)` is TRUE.
-# Both rows are correct.
+# A non-equality correlation leaves one key and a residual join filter. The
+# null-aware `LeftAnti` hash join applies the residual filter when it looks
+# for UNKNOWN rows. For `k = 1` the key is NULL and the correlated subquery
+# result is empty, and `NULL NOT IN (<empty set>)` is TRUE. Both rows are
+# correct.
 statement ok
 CREATE TABLE ra(k INT NOT NULL, z INT NOT NULL) AS VALUES (1, 10), (2, 20);
 
@@ -453,30 +445,17 @@ EXPLAIN SELECT k FROM ra WHERE NULLIF(ra.k, 1) NOT IN (SELECT rb.k FROM rb WHERE
 ----
 logical_plan
 01)Projection: ra.k
-02)--Filter: NOT CASE WHEN __correlated_sq_2.mark THEN Boolean(true) WHEN __correlated_sq_3.mark OR nullif(CAST(ra.k AS Int64), Int64(1)) IS NULL AND __correlated_sq_4.mark THEN Boolean(NULL) ELSE Boolean(false) END
-03)----Projection: ra.k, __correlated_sq_2.mark, __correlated_sq_3.mark, __correlated_sq_4.mark
-04)------LeftMark Join:  Filter: __correlated_sq_4.z > ra.z
-05)--------LeftMark Join:  Filter: __correlated_sq_3.z > ra.z
-06)----------LeftMark Join: nullif(CAST(ra.k AS Int64), Int64(1)) = __correlated_sq_2.rb.k Filter: __correlated_sq_2.z > ra.z
-07)------------TableScan: ra projection=[k, z]
-08)------------SubqueryAlias: __correlated_sq_2
-09)--------------Projection: CAST(rb.k AS Int64), rb.z
-10)----------------TableScan: rb projection=[k, z]
-11)----------EmptyRelation: rows=0
-12)--------SubqueryAlias: __correlated_sq_4
-13)----------TableScan: rb projection=[z]
+02)--LeftAnti Join: nullif(CAST(ra.k AS Int64), Int64(1)) = __correlated_sq_1.rb.k Filter: __correlated_sq_1.z > ra.z null_aware
+03)----TableScan: ra projection=[k, z]
+04)----SubqueryAlias: __correlated_sq_1
+05)------Projection: CAST(rb.k AS Int64), rb.z
+06)--------TableScan: rb projection=[k, z]
 physical_plan
-01)FilterExec: NOT CASE WHEN mark@1 THEN true WHEN mark@2 OR nullif(CAST(k@0 AS Int64), 1) IS NULL AND mark@3 THEN NULL ELSE false END, projection=[k@0]
-02)--NestedLoopJoinExec: join_type=RightMark, filter=z@1 > z@0, projection=[k@0, mark@2, mark@3, mark@4]
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(nullif(ra.k,Int64(1))@2, rb.k@0)], filter=z@1 > z@0, projection=[k@0], null_aware
+02)--ProjectionExec: expr=[k@0 as k, z@1 as z, nullif(CAST(k@0 AS Int64), 1) as nullif(ra.k,Int64(1))]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----NestedLoopJoinExec: join_type=RightMark, filter=z@1 > z@0
-05)------EmptyExec
-06)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)--------HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(rb.k@0, nullif(ra.k,Int64(1))@2)], filter=z@1 > z@0, projection=[k@0, z@1, mark@3]
-08)----------ProjectionExec: expr=[CAST(k@0 AS Int64) as rb.k, z@1 as z]
-09)------------DataSourceExec: partitions=1, partition_sizes=[1]
-10)----------ProjectionExec: expr=[k@0 as k, z@1 as z, nullif(CAST(k@0 AS Int64), 1) as nullif(ra.k,Int64(1))]
-11)------------DataSourceExec: partitions=1, partition_sizes=[1]
+04)--ProjectionExec: expr=[CAST(k@0 AS Int64) as rb.k, z@1 as z]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 DROP TABLE ra;

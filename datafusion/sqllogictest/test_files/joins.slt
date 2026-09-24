@@ -1988,22 +1988,11 @@ where join_t1.t1_id + 12 not in
     (select join_t2.t2_id + 1 from join_t2 where join_t1.t1_int > 0)
 ----
 logical_plan
-01)Projection: join_t1.t1_id, join_t1.t1_name, join_t1.t1_int
-02)--Filter: NOT CASE WHEN __correlated_sq_2.mark THEN Boolean(true) WHEN __correlated_sq_3.mark OR CAST(join_t1.t1_id AS Int64) + Int64(12) IS NULL AND __correlated_sq_4.mark THEN Boolean(NULL) ELSE Boolean(false) END
-03)----LeftMark Join:  Filter: join_t1.t1_int > UInt32(0)
-04)------LeftMark Join:  Filter: join_t1.t1_int > UInt32(0)
-05)--------LeftMark Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_2.join_t2.t2_id + Int64(1) Filter: join_t1.t1_int > UInt32(0)
-06)----------TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
-07)----------SubqueryAlias: __correlated_sq_2
-08)------------Projection: CAST(join_t2.t2_id AS Int64) + Int64(1)
-09)--------------TableScan: join_t2 projection=[t2_id]
-10)--------SubqueryAlias: __correlated_sq_3
-11)----------Projection: CAST(join_t2.t2_id AS Int64) + Int64(1)
-12)------------Filter: CAST(join_t2.t2_id AS Int64) + Int64(1) IS NULL
-13)--------------TableScan: join_t2 projection=[t2_id]
-14)------SubqueryAlias: __correlated_sq_4
-15)--------Projection: CAST(join_t2.t2_id AS Int64) + Int64(1)
-16)----------TableScan: join_t2 projection=[t2_id]
+01)LeftAnti Join: CAST(join_t1.t1_id AS Int64) + Int64(12) = __correlated_sq_1.join_t2.t2_id + Int64(1) Filter: join_t1.t1_int > UInt32(0) null_aware
+02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Projection: CAST(join_t2.t2_id AS Int64) + Int64(1)
+05)------TableScan: join_t2 projection=[t2_id]
 
 # In subquery to join with outer filter
 

@@ -488,12 +488,12 @@ struct MarkJoin {
 
 /// The join keys of the join that replaces an `IN` or `NOT IN` predicate.
 struct JoinKeys {
-    /// The equalities that the hash join can use as keys. The `IN` predicate
-    /// is the first one when its value holds a column; the others are the
-    /// correlation.
-    equijoin_keys: Vec<(Expr, Expr)>,
     /// The part of the join filter that the split could not turn into keys.
     residual_filter: Option<Expr>,
+    /// True if the `IN` equality is the first equality that the hash join can
+    /// use as a key, which is where a null-aware hash join reads the `IN`
+    /// value. The other keys are the correlation.
+    value_is_first_key: bool,
     /// True if the `IN` value or the subquery column it is compared with can
     /// be NULL inside the scope of an outer row, see
     /// [`key_may_be_null_in_scope`]. Only then can `IN` be UNKNOWN, so only
@@ -519,9 +519,12 @@ impl JoinKeys {
             left_schema,
             right_schema,
         )?;
+        let value_is_first_key = equijoin_keys.first().is_some_and(|(value, column)| {
+            value == &in_value.value && column == &in_value.subquery_column
+        });
         Ok(Self {
-            equijoin_keys,
             residual_filter,
+            value_is_first_key,
             value_may_be_null: in_value.may_be_null_in_scope(
                 left_schema,
                 right_schema,
@@ -764,8 +767,6 @@ fn build_join(
         }
         other => other,
     };
-    // The columns of the outer plan, which an anti join keeps as they are.
-    let outer_columns = left.schema().columns();
     let left = projected_left.as_ref().unwrap_or(left);
 
     let join_filter = match (&in_value, join_filter_opt) {
@@ -799,32 +800,19 @@ fn build_join(
     };
 
     // A `NOT IN` in a filter builds a `LeftAnti` join, and needs null-aware
-    // semantics when the value can be NULL in scope. The null-aware `LeftAnti`
-    // executor takes one key only (see `NullAwareMode::try_new`), and no hash
-    // join can mark the UNKNOWN rows of a residual filter
-    // (https://github.com/apache/datafusion/issues/25336). So:
-    //
-    // * A residual filter: give up here. The caller then materializes the
-    //   UNKNOWN rows with more joins, see `in_subquery_value_mark_join`.
-    // * More than one key: the null-aware `LeftMark` executor takes any number
-    //   of keys, the others being the scope of the outer row. Build that join
-    //   instead and keep the rows whose mark is FALSE, which is `NOT IN` under
-    //   three-valued logic.
-    // * One key: the null-aware `LeftAnti` join below.
-    let anti_join_as_mark = match &join_keys {
-        Some(keys) if join_type == JoinType::LeftAnti && keys.value_may_be_null => {
-            if keys.residual_filter.is_some() {
-                return Ok(None);
-            }
-            keys.equijoin_keys.len() > 1
-        }
-        _ => false,
-    };
-    let join_type = if anti_join_as_mark {
-        JoinType::LeftMark
-    } else {
-        join_type
-    };
+    // semantics when the value can be NULL in scope. The null-aware hash join
+    // reads its first key as the `NOT IN` value and the other keys as the
+    // scope of the outer row (see `HashJoinExec::null_aware`). If the `IN`
+    // equality did not become that first key, give up here. The caller then
+    // materializes the UNKNOWN rows with more joins, see
+    // `in_subquery_value_mark_join`.
+    if let Some(keys) = &join_keys
+        && join_type == JoinType::LeftAnti
+        && keys.value_may_be_null
+        && !keys.value_is_first_key
+    {
+        return Ok(None);
+    }
 
     if matches!(join_type, JoinType::LeftMark | JoinType::RightMark) {
         let right_schema = sub_query_alias.schema();
@@ -884,18 +872,6 @@ fn build_join(
             )?
             .build()?;
 
-        // `NOT IN` keeps the rows whose mark is FALSE. `NOT mark` is TRUE for
-        // those rows only, and the projection removes the mark column again.
-        let new_plan = if anti_join_as_mark {
-            let mark = Expr::Column(Column::new(Some(alias.to_string()), "mark"));
-            LogicalPlanBuilder::from(new_plan)
-                .filter(not(mark))?
-                .project(outer_columns.into_iter().map(Expr::from))?
-                .build()?
-        } else {
-            new_plan
-        };
-
         debug!(
             "predicate subquery optimized:\n{}",
             new_plan.display_indent()
@@ -909,8 +885,7 @@ fn build_join(
 
     // Null-aware semantics are only needed for a `NOT IN` anti join, which
     // follows three-valued logic. `NOT EXISTS` and `IN` are two-valued, and
-    // `join_keys` is `None` for them. The join here has one key and no
-    // residual filter: the other shapes were handled above.
+    // `join_keys` is `None` for them.
     let null_aware = join_keys
         .as_ref()
         .is_some_and(|keys| keys.value_may_be_null);
@@ -1895,11 +1870,11 @@ mod tests {
         )
     }
 
-    /// The same rewrite must not fire for a correlated subquery: the
-    /// correlation predicate is a second equi-join key, and null-aware hash
-    /// joins accept only one.
+    /// The same rewrite fires for a correlated subquery. The projected value
+    /// is the first equi-join key, which is where the null-aware hash join
+    /// reads the `NOT IN` value, and the correlation is the second.
     #[test]
-    fn constant_not_in_correlated_subquery_becomes_a_mark_join() -> Result<()> {
+    fn constant_not_in_correlated_subquery() -> Result<()> {
         let outer_scan = nullable_scalar_mark_scan("outer_t")?;
         let inner_scan = nullable_scalar_mark_scan("inner_t")?;
 
@@ -1920,14 +1895,12 @@ mod tests {
             plan,
             @"
         Projection: outer_t.id, outer_t.grp [id:Int32;N, grp:Int32;N]
-          Filter: NOT __correlated_sq_1.mark [id:Int32;N, grp:Int32;N, __correlated_sq_1_value:Int32, mark:Boolean;N]
-            LeftMark Join:  Filter: __correlated_sq_1_value = __correlated_sq_1.id AND outer_t.grp = __correlated_sq_1.grp null_aware [id:Int32;N, grp:Int32;N, __correlated_sq_1_value:Int32, mark:Boolean;N]
-              Projection: outer_t.id, outer_t.grp, Int32(3) AS __correlated_sq_1_value [id:Int32;N, grp:Int32;N, __correlated_sq_1_value:Int32]
-                TableScan: outer_t [id:Int32;N, grp:Int32;N]
-              Projection: __correlated_sq_1.id, __correlated_sq_1.grp [id:Int32;N, grp:Int32;N]
-                SubqueryAlias: __correlated_sq_1 [id:Int32;N, grp:Int32;N]
-                  Projection: inner_t.id, inner_t.grp [id:Int32;N, grp:Int32;N]
-                    TableScan: inner_t [id:Int32;N, grp:Int32;N]
+          LeftAnti Join:  Filter: __correlated_sq_1_value = __correlated_sq_1.id AND outer_t.grp = __correlated_sq_1.grp null_aware [id:Int32;N, grp:Int32;N, __correlated_sq_1_value:Int32]
+            Projection: outer_t.id, outer_t.grp, Int32(3) AS __correlated_sq_1_value [id:Int32;N, grp:Int32;N, __correlated_sq_1_value:Int32]
+              TableScan: outer_t [id:Int32;N, grp:Int32;N]
+            SubqueryAlias: __correlated_sq_1 [id:Int32;N, grp:Int32;N]
+              Projection: inner_t.id, inner_t.grp [id:Int32;N, grp:Int32;N]
+                TableScan: inner_t [id:Int32;N, grp:Int32;N]
         "
         )
     }
