@@ -4858,7 +4858,7 @@ _Alias of [inner_product](#inner_product)._
 
 ### `empty`
 
-Returns 1 for an empty array or 0 for a non-empty array.
+Returns true for an empty array or false for a non-empty array.
 
 ```sql
 empty(array)
@@ -4875,7 +4875,7 @@ empty(array)
 +------------------+
 | empty(List([1])) |
 +------------------+
-| 0                |
+| false            |
 +------------------+
 ```
 
