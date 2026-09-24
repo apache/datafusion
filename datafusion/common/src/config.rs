@@ -1265,6 +1265,16 @@ config_namespace! {
         /// The default is about the cost of a hash table probe for one row. The
         /// best value depends on the hardware.
         pub optional_filter_min_saving_ns_per_row: f64, default = 20.0
+
+        /// When true and `datafusion.execution.parquet.pushdown_filters` is
+        /// true, the Parquet scan decides for each filter conjunct if it is a
+        /// row filter (late materialization) or a filter on the decoded
+        /// batches. The scan measures the rows that each conjunct removes, the
+        /// decode time and the fetch latency, and it changes the placement at
+        /// row group boundaries. When `datafusion.execution.optional_filter_mode`
+        /// is `adaptive`, an optional filter that is paused is also removed
+        /// from the row filter, thus its columns are not decoded.
+        pub adaptive_filter_placement: bool, default = false
     }
 }
 

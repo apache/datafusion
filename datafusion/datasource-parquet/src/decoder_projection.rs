@@ -48,9 +48,10 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::{Count, Time};
 
 use parquet::arrow::ProjectionMask;
-use parquet::schema::types::SchemaDescriptor;
+use parquet::schema::types::{SchemaDescPtr, SchemaDescriptor};
 
 use crate::ParquetFileMetrics;
+use crate::filter_placement::ConjunctStats;
 use crate::opener::{VirtualColumnsState, append_fields};
 use crate::projection_read_plan::build_projection_read_plan;
 
@@ -132,8 +133,10 @@ pub(crate) enum PostScanSelection {
 /// into [`ParquetFileMetrics`] for `EXPLAIN ANALYZE`.
 pub(crate) struct PostScanFilter {
     /// The `AND` conjuncts of the predicate, rebased onto the decoder's stream
-    /// schema, in the order they are evaluated. Never empty.
-    conjuncts: Vec<Arc<dyn PhysicalExpr>>,
+    /// schema, in the order they are evaluated, each with the measurements
+    /// of the adaptive filter placement (if the placement manages it). Never
+    /// empty.
+    conjuncts: Vec<PostScanConjunct>,
     rows_pruned: Count,
     rows_matched: Count,
     eval_time: Time,
@@ -165,7 +168,14 @@ impl PostScanFilter {
         let mut acc: Option<BooleanArray> = None;
 
         let last = self.conjuncts.len() - 1;
-        for (position, conjunct) in self.conjuncts.iter().enumerate() {
+        for (
+            position,
+            PostScanConjunct {
+                expr: conjunct,
+                stats,
+            },
+        ) in self.conjuncts.iter().enumerate()
+        {
             let rows_in = working.num_rows();
             let array = conjunct.evaluate(&working)?.into_array(rows_in)?;
             let Ok(mask) = as_boolean_array(array.as_ref()) else {
@@ -179,6 +189,9 @@ impl PostScanFilter {
                 Some(_) => prep_null_mask_filter(mask),
                 None => mask.clone(),
             };
+            if let Some(stats) = stats {
+                stats.record_evaluation(&mask);
+            }
             // An all-true conjunct leaves the accumulated selection untouched.
             if mask.true_count() == rows_in {
                 continue;
@@ -225,6 +238,62 @@ impl PostScanFilter {
     fn record(&self, input_rows: usize, survivors: usize) {
         self.rows_matched.add(survivors);
         self.rows_pruned.add(input_rows - survivors);
+    }
+}
+
+/// A conjunct for the post-scan filter, see [`DecoderProjection::try_new`].
+#[derive(Debug, Clone)]
+pub(crate) struct PostScanConjunct {
+    /// The conjunct, in terms of the physical file schema.
+    pub(crate) expr: Arc<dyn PhysicalExpr>,
+    /// The measurements of the adaptive filter placement, if it manages the
+    /// conjunct. The post-scan filter records each evaluation.
+    pub(crate) stats: Option<Arc<ConjunctStats>>,
+}
+
+impl From<Arc<dyn PhysicalExpr>> for PostScanConjunct {
+    fn from(expr: Arc<dyn PhysicalExpr>) -> Self {
+        Self { expr, stats: None }
+    }
+}
+
+/// The inputs of [`DecoderProjection::try_new`] that do not change for a
+/// file. The opener builds the first projection of a file with it, and the
+/// stream builds a new projection with it when the adaptive filter
+/// placement changes the post-scan conjuncts at a row group boundary.
+#[derive(Clone)]
+pub(crate) struct DecoderProjectionBuilder {
+    pub(crate) projection: ProjectionExprs,
+    /// Conjuncts that are always in the post-scan filter of the file: the
+    /// required conjuncts that the `RowFilter` rejects, or all required
+    /// conjuncts when `pushdown_filters` is false.
+    pub(crate) fixed_post_scan: Vec<PostScanConjunct>,
+    pub(crate) physical_file_schema: SchemaRef,
+    pub(crate) parquet_schema: SchemaDescPtr,
+    pub(crate) output_schema: SchemaRef,
+    pub(crate) virtual_state: Option<Arc<VirtualColumnsState>>,
+    pub(crate) file_metrics: ParquetFileMetrics,
+}
+
+impl DecoderProjectionBuilder {
+    /// The decoder projection with `placed` (the conjuncts that the adaptive
+    /// filter placement puts in the post-scan filter) and
+    /// [`Self::fixed_post_scan`] in the post-scan filter.
+    pub(crate) fn build(&self, placed: &[PostScanConjunct]) -> Result<DecoderProjection> {
+        let post_scan_conjuncts: Vec<PostScanConjunct> = placed
+            .iter()
+            .chain(&self.fixed_post_scan)
+            .cloned()
+            .collect();
+        DecoderProjection::try_new(
+            &self.projection,
+            &post_scan_conjuncts,
+            &self.physical_file_schema,
+            &self.parquet_schema,
+            &self.output_schema,
+            self.virtual_state.as_deref(),
+            &self.file_metrics,
+        )
     }
 }
 
@@ -289,7 +358,7 @@ impl DecoderProjection {
     /// behaviour.
     pub(crate) fn try_new(
         projection: &ProjectionExprs,
-        post_scan_conjuncts: &[Arc<dyn PhysicalExpr>],
+        post_scan_conjuncts: &[PostScanConjunct],
         physical_file_schema: &SchemaRef,
         parquet_schema: &SchemaDescriptor,
         output_schema: &SchemaRef,
@@ -320,12 +389,15 @@ impl DecoderProjection {
         // the post-scan predicate, which is rebased onto the stream schema
         // where the reader has appended the virtual columns.
         let post_scan_for_read_plan: Vec<Arc<dyn PhysicalExpr>> = match virtual_state {
-            None => post_scan_conjuncts.to_vec(),
+            None => post_scan_conjuncts
+                .iter()
+                .map(|conjunct| Arc::clone(&conjunct.expr))
+                .collect(),
             Some(state) => post_scan_conjuncts
                 .iter()
-                .map(|expr| {
+                .map(|conjunct| {
                     replace_columns_with_literals(
-                        Arc::clone(expr),
+                        Arc::clone(&conjunct.expr),
                         state.null_replacements(),
                     )
                 })
@@ -392,13 +464,24 @@ impl DecoderProjection {
             // already conjunct-wise, but a single entry may still be a nested
             // `AND` (e.g. a `RowFilter`-rejected conjunct). The compact-once
             // loop can only compact between the pieces it can see.
-            let rebased = post_scan_conjuncts
-                .iter()
-                .map(|expr| reassign_expr_columns(Arc::clone(expr), &stream_schema))
-                .collect::<Result<Vec<_>>>()?
-                .iter()
-                .flat_map(|expr| split_conjunction(expr).into_iter().map(Arc::clone))
-                .collect::<Vec<_>>();
+            let mut rebased = vec![];
+            for conjunct in post_scan_conjuncts {
+                let expr =
+                    reassign_expr_columns(Arc::clone(&conjunct.expr), &stream_schema)?;
+                let pieces = split_conjunction(&expr);
+                // The measurements belong to the whole conjunct. The adaptive
+                // filter placement only manages conjuncts of the root `AND`
+                // chain, which are never split again.
+                let stats = if pieces.len() == 1 {
+                    conjunct.stats.clone()
+                } else {
+                    None
+                };
+                rebased.extend(pieces.into_iter().map(|piece| PostScanConjunct {
+                    expr: Arc::clone(piece),
+                    stats: stats.clone(),
+                }));
+            }
             Some(PostScanFilter {
                 conjuncts: rebased,
                 rows_pruned: file_metrics.post_scan_rows_pruned.clone(),
@@ -514,7 +597,7 @@ mod tests {
 
     fn filter(conjuncts: Vec<Arc<dyn PhysicalExpr>>) -> PostScanFilter {
         PostScanFilter {
-            conjuncts,
+            conjuncts: conjuncts.into_iter().map(PostScanConjunct::from).collect(),
             rows_pruned: Count::new(),
             rows_matched: Count::new(),
             eval_time: Time::new(),
