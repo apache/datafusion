@@ -412,9 +412,9 @@ impl ParquetSource {
     /// example a dynamic filter from a hash join. The scan can skip it and
     /// the query result stays the same.
     ///
-    /// * [`OptionalFilterMode::Always`] (the default): the row filter
-    ///   evaluates optional filters like all other filters.
-    /// * [`OptionalFilterMode::Adaptive`]: each optional filter is a
+    /// * [`OptionalFilterMode::Always`]: the row filter evaluates optional
+    ///   filters like all other filters.
+    /// * [`OptionalFilterMode::Adaptive`] (the default): each optional filter is a
     ///   separate row filter predicate, after the required predicates. An
     ///   [`OptionalFilterGate`] skips it while it removes too few rows (see
     ///   [`Self::with_optional_filter_gate_config`]).
@@ -2288,7 +2288,7 @@ mod tests {
             false,
         )]));
         let source = ParquetSource::new(Arc::clone(&schema));
-        assert_eq!(source.optional_filter_mode(), OptionalFilterMode::Always);
+        assert_eq!(source.optional_filter_mode(), OptionalFilterMode::Adaptive);
 
         let filter = logical2physical(&col("value").eq(logical_lit(1i64)), &schema);
         let optional: Arc<dyn PhysicalExpr> =
@@ -2296,7 +2296,7 @@ mod tests {
 
         let mut config = ConfigOptions::default();
         config.execution.parquet.pushdown_filters = true;
-        config.execution.optional_filter_mode = OptionalFilterMode::Adaptive;
+        config.execution.optional_filter_mode = OptionalFilterMode::Always;
         config.execution.optional_filter_max_pass_ratio = 0.5;
         let prop = source
             .try_pushdown_filters(vec![optional], &config)
@@ -2307,7 +2307,7 @@ mod tests {
         let updated = (updated.as_ref() as &dyn std::any::Any)
             .downcast_ref::<ParquetSource>()
             .expect("ParquetSource");
-        assert_eq!(updated.optional_filter_mode(), OptionalFilterMode::Adaptive);
+        assert_eq!(updated.optional_filter_mode(), OptionalFilterMode::Always);
         assert_eq!(updated.optional_filter_gate_config.max_pass_ratio, 0.5);
         assert_eq!(
             updated.predicate.as_ref().unwrap().to_string(),

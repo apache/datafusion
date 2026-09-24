@@ -889,10 +889,11 @@ impl Display for MapKeyDedupPolicy {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum OptionalFilterMode {
     /// Evaluate optional filters like any other pushed-down filter.
-    #[default]
     Always,
-    /// Pause optional filters that remove too few rows. Try them again at
-    /// intervals to find out if they became selective.
+    /// Pause optional filters that remove too few rows or that cost more
+    /// than they save. Try them again at intervals to find out if they
+    /// became useful. This is the default.
+    #[default]
     Adaptive,
     /// Use optional filters only for statistics pruning (for example of
     /// files, row groups and pages). Never evaluate them row by row.
@@ -1246,14 +1247,14 @@ config_namespace! {
         /// `datafusion.execution.optional_filter_max_pass_ratio`) or when they
         /// cost more than they save (see
         /// `datafusion.execution.optional_filter_min_saving_ns_per_row`), and
-        /// tries them again at intervals. `pruning_only` uses these filters only to
-        /// prune files, row groups and pages with statistics, and never
-        /// evaluates them row by row.
+        /// tries them again at intervals (the default). `pruning_only` uses
+        /// these filters only to prune files, row groups and pages with
+        /// statistics, and never evaluates them row by row.
         ///
         /// This option is most important when
         /// `datafusion.execution.parquet.pushdown_filters` is true, because then
         /// the Parquet reader evaluates pushed-down filters row by row.
-        pub optional_filter_mode: OptionalFilterMode, default = OptionalFilterMode::Always
+        pub optional_filter_mode: OptionalFilterMode, default = OptionalFilterMode::Adaptive
 
         /// When `datafusion.execution.optional_filter_mode` is `adaptive`, pause
         /// an optional filter when more than this fraction of the rows pass it.
