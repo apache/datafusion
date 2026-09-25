@@ -31,12 +31,13 @@ use futures::stream::{Stream, StreamExt};
 use super::aggregate_hash_table::{
     AggregateHashTable, OrderedAggregateTableMetrics, SingleMarker,
 };
+use super::order::GroupCompletionMode;
 use super::spill::AggregateSpill;
 use super::{AggregateExec, create_schema};
 use crate::aggregates::AggregateMode;
 use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
 use crate::stream::EmptyRecordBatchStream;
-use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
+use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 /// Hash aggregation can run the full logical aggregation in one operator. This
 /// stream implements the single stage for grouped hash aggregation.
@@ -175,7 +176,7 @@ impl SingleHashAggregateStream {
             agg.mode,
             AggregateMode::Single | AggregateMode::SinglePartitioned
         ));
-        debug_assert_eq!(agg.input_order_mode, InputOrderMode::Linear);
+        debug_assert_eq!(agg.group_completion_mode, GroupCompletionMode::None);
 
         let schema = Arc::clone(&agg.schema);
         let input = agg.input.execute(partition, Arc::clone(context))?;
@@ -206,7 +207,7 @@ impl SingleHashAggregateStream {
                 context,
                 partition,
                 batch_size,
-                &InputOrderMode::Linear,
+                &GroupCompletionMode::None,
                 &state_schema,
                 spill_metrics,
             )?))
