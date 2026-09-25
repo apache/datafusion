@@ -69,12 +69,12 @@ use crate::ParquetFileMetrics;
 use crate::decoder_projection::{
     DecoderProjection, DecoderProjectionBuilder, PostScanSelection,
 };
-use crate::filter_placement::FilePlacement;
+use crate::filter_placement::{FilePlacement, PlacementChange};
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
 use crate::optional_filter::OptionalFilterSavings;
 use crate::row_filter::{
     OptionalFilterRowFilterContext, PrebuiltRowFilterCandidate,
-    prebuild_row_filter_candidates, row_filter_from_prebuilt,
+    prebuild_row_filter_candidates, row_filter_from_prebuilt, row_filter_in_order,
 };
 use crate::row_group_filter::RowGroupPruningStatistics;
 
@@ -554,20 +554,24 @@ impl RowFilterContext {
     /// Infallible by construction: [`Self::try_new`] only produces a context
     /// when the prebuilt candidate list is non-empty.
     ///
-    /// With adaptive filter placement, only the candidates that are placed
-    /// in the `RowFilter` are used.
+    /// With adaptive filter placement, the `RowFilter` has the candidates
+    /// that the placement does not manage, then the candidates that it
+    /// places in the `RowFilter`, in its evaluation order.
     pub(crate) fn build_row_filter(&self) -> RowFilter {
-        let placement = self.placement.as_ref();
-        row_filter_from_prebuilt(
-            self.prebuilt
-                .as_slice()
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| placement.is_none_or(|p| p.in_row_filter(*index)))
-                .map(|(_, candidate)| candidate),
-            self.reorder_predicates,
-            &self.file_metrics,
-        )
+        let candidates = self.prebuilt.as_slice();
+        let Some(placement) = &self.placement else {
+            return row_filter_from_prebuilt(
+                candidates,
+                self.reorder_predicates,
+                &self.file_metrics,
+            );
+        };
+        let ordered = (0..candidates.len())
+            .filter(|index| !placement.manages(*index))
+            .chain(placement.row_filter_candidates())
+            .map(|index| &candidates[index])
+            .collect();
+        row_filter_in_order(ordered, &self.file_metrics)
     }
 }
 
@@ -937,9 +941,16 @@ impl PushDecoderStreamState {
         pruned_count: usize,
     ) -> Result<bool, DataFusionError> {
         // The adaptive filter placement for the next RG. `Some` when it
-        // changed: then the decoder needs the new projection and a new
-        // `RowFilter`.
-        let new_projection = self.update_placement()?;
+        // changed: then the stream needs the new projection (its post-scan
+        // filter), and the decoder needs a rebuild only if its projection
+        // mask or its `RowFilter` changed.
+        let (new_projection, row_filter_changed) = match self.update_placement()? {
+            Some((projection, change)) => (Some(projection), change.row_filter),
+            None => (None, false),
+        };
+        let mask_changed = new_projection.as_ref().is_some_and(|projection| {
+            projection.projection_mask() != self.decoder_projection.projection_mask()
+        });
 
         // `desired_filter` is `Some(true)` when the next RG needs a real
         // filter, `Some(false)` when it is fully-matched (filter is a no-op, so
@@ -950,10 +961,15 @@ impl PushDecoderStreamState {
             .as_ref()
             .and_then(|_| self.rg_plan.front().map(|e| !e.fully_matched));
         let filter_needs_toggle = desired_filter.is_some_and(|want| {
-            want != self.filter_installed || (want && new_projection.is_some())
+            want != self.filter_installed || (want && row_filter_changed)
         });
 
-        if pruned_count == 0 && !filter_needs_toggle && new_projection.is_none() {
+        if pruned_count == 0 && !filter_needs_toggle && !mask_changed {
+            // Only the post-scan filter changed (or nothing): the decoder
+            // stays.
+            if let Some(projection) = new_projection {
+                self.decoder_projection = projection;
+            }
             return Ok(false);
         }
         if self.rg_plan.is_empty() {
@@ -1012,7 +1028,9 @@ impl PushDecoderStreamState {
     /// projection. If the new post-scan conjuncts change that schema (this
     /// can happen with nested columns), the file keeps its current placement
     /// until its end.
-    fn update_placement(&mut self) -> Result<Option<DecoderProjection>> {
+    fn update_placement(
+        &mut self,
+    ) -> Result<Option<(DecoderProjection, PlacementChange)>> {
         let (Some(builder), Some(front)) =
             (self.projection_builder.as_ref(), self.rg_plan.front())
         else {
@@ -1025,18 +1043,18 @@ impl PushDecoderStreamState {
         else {
             return Ok(None);
         };
-        let previous = placement.placements();
+        let previous = placement.snapshot();
         let rows = placement.row_group_rows(front.rg_index);
-        if !placement.decide(rows) {
+        let Some(change) = placement.decide(rows) else {
             return Ok(None);
-        }
+        };
         let projection = builder.build(&placement.post_scan_conjuncts())?;
         if projection.filtered_schema() != self.decoder_projection.filtered_schema() {
             placement.restore_and_freeze(&previous);
             return Ok(None);
         }
         placement.set_decoder_mask(projection.projection_mask());
-        Ok(Some(projection))
+        Ok(Some((projection, change)))
     }
 
     /// Copies metrics from ArrowReaderMetrics (the metrics collected by the
