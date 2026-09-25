@@ -429,6 +429,8 @@ impl ParquetAccessPlan {
                 // Parquet preserves bitmap backing only when both operands
                 // are masks. Promote selector-backed page pruning to retain
                 // an external index's bitmap and use a bitwise intersection.
+                // Revisit this conversion once Parquet optimizes mixed-backed
+                // intersections: https://github.com/apache/arrow-rs/issues/10423
                 let selection = if existing_selection.as_mask().is_some()
                     && selection.as_mask().is_none()
                 {
