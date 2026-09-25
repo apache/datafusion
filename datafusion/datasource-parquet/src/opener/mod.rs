@@ -2008,6 +2008,17 @@ impl RowGroupsPrunedParquetOpen {
         let files_ranges_pruned_statistics =
             prepared.file_metrics.files_ranges_pruned_statistics.clone();
 
+        // True if the predicate has a dynamic filter that can still change.
+        // Such a filter gets tighter only when its producer (for example a
+        // TopK) sees the rows of the scan.
+        let watches_dynamic_filter =
+            prepared.predicate.as_ref().is_some_and(|predicate| {
+                matches!(
+                    DynamicFilterTracking::classify(predicate),
+                    DynamicFilterTracking::Watching(_)
+                )
+            });
+
         // Build a dynamic row-group pruner only when all three conditions hold:
         //   1) the scan has a predicate (so there is something to evaluate),
         //   2) the predicate has at least one not-yet-complete dynamic filter
@@ -2024,12 +2035,7 @@ impl RowGroupsPrunedParquetOpen {
         // and is tracked in https://github.com/apache/datafusion/issues/24358.
         let row_group_pruner =
             match (&prepared.predicate, rg_plan.len() > 1, has_row_selection) {
-                (Some(predicate), true, false)
-                    if matches!(
-                        DynamicFilterTracking::classify(predicate),
-                        DynamicFilterTracking::Watching(_)
-                    ) =>
-                {
+                (Some(predicate), true, false) if watches_dynamic_filter => {
                     Some(RowGroupPruner::new(
                         Arc::clone(predicate),
                         Arc::clone(&prepared.physical_file_schema),
@@ -2077,6 +2083,10 @@ impl RowGroupsPrunedParquetOpen {
                     .with_biggest_coalesce_batch_size(biggest)
             }),
             flushed: false,
+            // Hand the buffered rows downstream at each row group boundary
+            // when a dynamic filter can still change, so that its producer
+            // can tighten it before the scan prunes the next row groups.
+            flush_at_row_group_boundary: watches_dynamic_filter,
             projection_builder,
         }
         .into_stream();
