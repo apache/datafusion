@@ -751,6 +751,48 @@ Invalid or Unsupported Configuration: Invalid parquet statistics setting: invali
 statement ok
 RESET datafusion.execution.parquet.statistics_enabled
 
+# parquet.compression is validated when it is set, including the level
+statement ok
+SET datafusion.execution.parquet.compression = 'GZIP(6)'
+
+query TT
+SHOW datafusion.execution.parquet.compression
+----
+datafusion.execution.parquet.compression gzip(6)
+
+statement error
+SET datafusion.execution.parquet.compression = 'zstdd(3)'
+----
+DataFusion error: Error setting config datafusion.execution.parquet.compression
+caused by
+Invalid or Unsupported Configuration: Unknown or unsupported parquet compression: zstdd(3). Valid values are: uncompressed, snappy, gzip(level), brotli(level), lz4, zstd(level), and lz4_raw.
+
+
+statement error
+SET datafusion.execution.parquet.compression = 'zstd'
+----
+DataFusion error: Error setting config datafusion.execution.parquet.compression
+caused by
+Invalid or Unsupported Configuration: zstd compression requires specifying a level such as zstd(4)
+
+
+statement error
+SET datafusion.execution.parquet.compression = 'zstd(23)'
+----
+DataFusion error: Error setting config datafusion.execution.parquet.compression
+caused by
+Invalid or Unsupported Configuration: Invalid compression level 23 for zstd. Expected a level between 0 and 22
+
+
+# The rejected values did not change the setting
+query TT
+SHOW datafusion.execution.parquet.compression
+----
+datafusion.execution.parquet.compression gzip(6)
+
+statement ok
+RESET datafusion.execution.parquet.compression
+
 statement error DataFusion error: Error setting config datafusion\.execution\.batch_size\ncaused by\nInvalid or Unsupported Configuration: value must be greater than 0
 SET datafusion.execution.batch_size = 0
 
