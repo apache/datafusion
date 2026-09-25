@@ -44,10 +44,6 @@ pub(crate) struct Observation {
     /// Rows in windows where no row passed the conjunct, see
     /// [`skippable_rows`](crate::row_filter_cost::skippable_rows) and [`StageSelection`].
     pub(crate) skippable_rows: u64,
-    /// Row groups that the conjunct alone pruned with statistics.
-    pub(crate) row_groups_pruned: u64,
-    /// Row groups that the conjunct alone did not prune with statistics.
-    pub(crate) row_groups_kept: u64,
     /// Evaluation time of the conjunct, in nanoseconds.
     pub(crate) nanos: u64,
 }
@@ -73,13 +69,6 @@ impl Observation {
     pub(crate) fn pass_ratio(&self) -> Option<f64> {
         (self.rows_in > 0).then(|| self.rows_out as f64 / self.rows_in as f64)
     }
-
-    /// Fraction of the row groups that the conjunct pruned with statistics,
-    /// or `None` if there is no statistics pruning result.
-    pub(crate) fn pruned_fraction(&self) -> Option<f64> {
-        let total = self.row_groups_pruned + self.row_groups_kept;
-        (total > 0).then(|| self.row_groups_pruned as f64 / total as f64)
-    }
 }
 
 /// The pooled [`Observation`] of one conjunct. Lock-free.
@@ -88,8 +77,6 @@ pub(crate) struct ConjunctStats {
     rows_in: AtomicU64,
     rows_out: AtomicU64,
     skippable_rows: AtomicU64,
-    row_groups_pruned: AtomicU64,
-    row_groups_kept: AtomicU64,
     nanos: AtomicU64,
     /// The generation of the conjunct that the evaluation measurements are
     /// for, see [`Self::observe_generation`].
@@ -175,8 +162,6 @@ impl ConjunctStats {
             rows_in: self.rows_in.load(Ordering::Relaxed),
             rows_out: self.rows_out.load(Ordering::Relaxed),
             skippable_rows: self.skippable_rows.load(Ordering::Relaxed),
-            row_groups_pruned: self.row_groups_pruned.load(Ordering::Relaxed),
-            row_groups_kept: self.row_groups_kept.load(Ordering::Relaxed),
             nanos: self.nanos.load(Ordering::Relaxed),
         }
     }
@@ -450,8 +435,7 @@ mod tests {
         assert_eq!(stats.observation().rows_in, 64);
         // A new generation clears them.
         stats.observe_generation(4);
-        let observation = stats.observation();
-        assert_eq!((observation.rows_in, observation.nanos), (0, 0));
+        assert_eq!(stats.observation(), Observation::default());
     }
 
     #[test]
@@ -469,14 +453,11 @@ mod tests {
                 rows_in: 256,
                 rows_out: 65,
                 skippable_rows: 128,
-                row_groups_pruned: 0,
-                row_groups_kept: 0,
                 nanos: 30,
             }
         );
         assert_eq!(observation.skippable_fraction(), Some(0.5));
         assert_eq!(Observation::default().skippable_fraction(), None);
-        assert_eq!(Observation::default().pruned_fraction(), None);
     }
 
     /// A conjunct after a compaction is measured in the positions of the
