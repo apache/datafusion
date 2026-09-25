@@ -36,7 +36,6 @@ use datafusion_physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
     ReplaceChildrenOptions,
 };
-use itertools::Itertools;
 
 use crate::file::FileSource;
 use crate::file_scan_config::FileScanConfig;
@@ -44,6 +43,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Constraints, Result, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_expr::filter::{FilterConjunct, PhysicalFilter};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::SortOrderPushdownResult;
@@ -201,6 +201,28 @@ pub trait DataSource: Any + Send + Sync + Debug {
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
             vec![PushedDown::No; filters.len()],
         ))
+    }
+
+    /// Try to push down a [`PhysicalFilter`] into this DataSource.
+    ///
+    /// The same as [`Self::try_pushdown_filters`], but each conjunct carries
+    /// its properties (for example [`FilterConjunct::is_optional`]). The
+    /// result has one [`PushedDown`] for each conjunct, in order.
+    ///
+    /// The default implementation calls [`Self::try_pushdown_filters`] with
+    /// the expressions. Thus a source that does not override this method
+    /// applies optional conjuncts as required conjuncts, which is correct.
+    fn try_pushdown_filter(
+        &self,
+        filter: PhysicalFilter,
+        config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
+        let filters = filter
+            .into_conjuncts()
+            .into_iter()
+            .map(FilterConjunct::into_expr)
+            .collect();
+        self.try_pushdown_filters(filters, config)
     }
 
     /// Try to create a new DataSource that produces data in the specified sort order.
@@ -543,15 +565,16 @@ impl ExecutionPlan for DataSourceExec {
         child_pushdown_result: ChildPushdownResult,
         config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        // Push any remaining filters into our data source
-        let parent_filters = child_pushdown_result
+        // Push any remaining filters into our data source. Each filter keeps
+        // its properties (for example, the optional flag).
+        let parent_filter: PhysicalFilter = child_pushdown_result
             .parent_filters
-            .into_iter()
-            .map(|f| f.filter)
-            .collect_vec();
+            .iter()
+            .map(|f| f.conjunct())
+            .collect();
         let res = self
             .data_source
-            .try_pushdown_filters(parent_filters, config)?;
+            .try_pushdown_filter(parent_filter, config)?;
         match res.updated_node {
             Some(data_source) => {
                 let mut new_node = self.clone();
