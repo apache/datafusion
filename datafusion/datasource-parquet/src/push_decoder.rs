@@ -73,9 +73,10 @@ use crate::filter_placement::{FilePlacement, PlacementChange};
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
 use crate::optional_filter::OptionalFilterSavings;
 use crate::row_filter::{
-    OptionalFilterRowFilterContext, PrebuiltRowFilterCandidate,
-    prebuild_row_filter_candidates, row_filter_from_prebuilt, row_filter_in_order,
+    OptionalFilterRowFilterContext, PrebuiltRowFilterCandidate, candidate_order,
+    prebuild_row_filter_candidates, row_filter_in_order,
 };
+use crate::row_filter_cost::ChangeHysteresis;
 use crate::row_group_filter::RowGroupPruningStatistics;
 
 /// Shared options applied to the [`ParquetPushDecoderBuilder`] for a file
@@ -407,6 +408,11 @@ pub(crate) struct RowFilterContext {
     pub(crate) placement: Option<FilePlacement>,
     /// See [`Self::start_reader`].
     decode_measurement: DecodeMeasurement,
+    /// Without adaptive filter placement: the evaluation order of the
+    /// candidates in the installed `RowFilter` (see [`Self::refresh_order`]).
+    order: Vec<usize>,
+    /// Hysteresis on the changes of `order`.
+    order_changes: ChangeHysteresis,
 }
 
 /// Which output batches measure the decode speed, see
@@ -463,6 +469,7 @@ impl RowFilterContext {
                         unfiltered: true,
                     };
                     Self {
+                        order: candidate_order(&prebuilt, reorder_predicates),
                         prebuilt: PrebuiltRowFilterCandidateList::new(prebuilt),
                         reorder_predicates,
                         file_metrics,
@@ -470,6 +477,7 @@ impl RowFilterContext {
                         optional_savings,
                         placement: None,
                         decode_measurement,
+                        order_changes: ChangeHysteresis::default(),
                     }
                 });
                 (context, rejected)
@@ -556,22 +564,37 @@ impl RowFilterContext {
     ///
     /// With adaptive filter placement, the `RowFilter` has the candidates
     /// that the placement does not manage, then the candidates that it
-    /// places in the `RowFilter`, in its evaluation order.
+    /// places in the `RowFilter`, in its evaluation order. Without it, all
+    /// candidates in [`Self::refresh_order`] order.
     pub(crate) fn build_row_filter(&self) -> RowFilter {
         let candidates = self.prebuilt.as_slice();
-        let Some(placement) = &self.placement else {
-            return row_filter_from_prebuilt(
-                candidates,
-                self.reorder_predicates,
-                &self.file_metrics,
-            );
+        let order: Vec<usize> = match &self.placement {
+            None => self.order.clone(),
+            Some(placement) => (0..candidates.len())
+                .filter(|index| !placement.manages(*index))
+                .chain(placement.row_filter_candidates())
+                .collect(),
         };
-        let ordered = (0..candidates.len())
-            .filter(|index| !placement.manages(*index))
-            .chain(placement.row_filter_candidates())
-            .map(|index| &candidates[index])
-            .collect();
+        let ordered = order.into_iter().map(|index| &candidates[index]).collect();
         row_filter_in_order(ordered, &self.file_metrics)
+    }
+
+    /// Without adaptive filter placement: at a row group boundary, updates
+    /// the evaluation order of the candidates from their measurements (see
+    /// [`candidate_order`]). Returns true if it changed: then rebuild the
+    /// `RowFilter`. With adaptive filter placement, the placement decides
+    /// the order.
+    pub(crate) fn refresh_order(&mut self) -> bool {
+        if self.placement.is_some() || !self.order_changes.boundary() {
+            return false;
+        }
+        let order = candidate_order(self.prebuilt.as_slice(), self.reorder_predicates);
+        if order == self.order {
+            return false;
+        }
+        self.order = order;
+        self.order_changes.changed();
+        true
     }
 }
 
@@ -946,7 +969,12 @@ impl PushDecoderStreamState {
         // mask or its `RowFilter` changed.
         let (new_projection, row_filter_changed) = match self.update_placement()? {
             Some((projection, change)) => (Some(projection), change.row_filter),
-            None => (None, false),
+            None => (
+                None,
+                self.row_filter_context
+                    .as_mut()
+                    .is_some_and(RowFilterContext::refresh_order),
+            ),
         };
         let mask_changed = new_projection.as_ref().is_some_and(|projection| {
             projection.projection_mask() != self.decoder_projection.projection_mask()
@@ -1199,6 +1227,53 @@ mod tests {
             Operator::Gt,
             lit(ScalarValue::Int64(Some(threshold))),
         ))
+    }
+
+    /// Without adaptive filter placement, the `RowFilter` order follows
+    /// the measurements, with hysteresis on the changes.
+    #[test]
+    fn row_filter_order_follows_measurements() {
+        let (meta, schema) = build_three_rg_file();
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            gt_predicate(0),
+            Operator::And,
+            gt_predicate(2000),
+        ));
+        let metrics = ExecutionPlanMetricsSet::new();
+        let (context, rejected) = RowFilterContext::try_new(
+            &predicate,
+            &schema,
+            &meta,
+            false,
+            ParquetFileMetrics::new(0, "file", &metrics),
+            None,
+            None,
+        );
+        assert!(rejected.is_empty());
+        let mut context = context.unwrap();
+        // Before any measurement: the written order.
+        assert_eq!(context.order, vec![0, 1]);
+        assert!(!context.refresh_order());
+
+        // `v > 2000` removes more rows for each nanosecond: it goes first.
+        let rows = 10 * 8192;
+        let candidates = context.prebuilt.as_slice();
+        candidates[0].cost().record(rows, rows, rows as u64);
+        candidates[1].cost().record(rows, rows / 3, rows as u64);
+        assert!(context.refresh_order());
+        assert_eq!(context.order, vec![1, 0]);
+
+        // A flip back waits for the hysteresis: after the first change the
+        // hold is 0 boundaries, after the second 1 boundary.
+        let candidates = context.prebuilt.as_slice();
+        candidates[0].cost().record(10 * rows, 0, rows as u64);
+        assert!(context.refresh_order());
+        assert_eq!(context.order, vec![0, 1]);
+        let candidates = context.prebuilt.as_slice();
+        candidates[1].cost().record(100 * rows, 0, rows as u64);
+        assert!(!context.refresh_order());
+        assert!(context.refresh_order());
+        assert_eq!(context.order, vec![1, 0]);
     }
 
     #[test]
