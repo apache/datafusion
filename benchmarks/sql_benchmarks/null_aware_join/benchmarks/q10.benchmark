@@ -1,0 +1,33 @@
+name Q10
+group null_aware_join
+
+load sql_benchmarks/null_aware_join/init/load.sql
+
+# Correctness canary: the NOT IN result must match a reference count that does
+# not use NOT IN. It holds for every NAJ_ROWS. No key holds a NULL, so a row is
+# kept exactly when no subquery row equals its whole tuple.
+assert I
+SELECT count(*) = (
+  SELECT count(*)
+  FROM small_outer o
+  WHERE NOT EXISTS (
+    SELECT 1 FROM small_inner i WHERE i.id_n0 = o.id_n0 AND i.z = o.z
+  )
+)
+FROM small_outer o
+WHERE (o.id_n0, o.z) NOT IN (SELECT i.id_n0, i.z FROM small_inner i);
+----
+true
+
+expect_plan HashJoinExec
+
+run
+-- Q10: uncorrelated multi-column NOT IN over nullable keys that hold no NULL.
+-- A tuple NOT IN always decides UNKNOWN per build row (the outer side), but
+-- without NULLs there is no candidate pair to check, so this is the floor for
+-- the multi-column shape.
+SELECT count(*)
+FROM small_outer o
+WHERE (o.id_n0, o.z) NOT IN (SELECT i.id_n0, i.z FROM small_inner i);
+
+cleanup sql_benchmarks/null_aware_join/init/cleanup.sql

@@ -17,6 +17,7 @@
 
 //! Logical Expressions: [`Expr`]
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter, Write};
@@ -1399,34 +1400,54 @@ impl InSubquery {
             negated,
         }
     }
-
-    /// The tuple elements of a multi-column `(a, b, ...) IN (SELECT x, y, ...)`,
-    /// or `None` for a single-column `IN`. See [`in_subquery_tuple_values`].
-    pub fn tuple_values(&self) -> Option<&[Expr]> {
-        in_subquery_tuple_values(&self.expr, &self.subquery.subquery)
-    }
 }
 
 /// The tuple elements of a multi-column `(a, b, ...) IN (SELECT x, y, ...)`,
 /// given the compared expression `expr` and the `subquery` plan, or `None`
 /// for a single-column `IN`.
 ///
-/// The tuple is planned as a `struct` call. It is a multi-column `IN` only when
-/// the subquery returns more than one column; against a single column the
-/// `struct` is one value compared with a struct-typed column. The number of
-/// elements is not checked against the number of subquery columns here.
+/// The tuple is planned as a `struct` call, which `simplify_expressions` folds
+/// into a struct literal when every element is a literal. It is a
+/// multi-column `IN` only when the subquery returns more than one column;
+/// against a single column the struct is one value compared with a
+/// struct-typed column.
+///
+/// Errors when the number of tuple elements does not match the number of
+/// subquery columns.
 pub fn in_subquery_tuple_values<'a>(
     expr: &'a Expr,
     subquery: &crate::LogicalPlan,
-) -> Option<&'a [Expr]> {
-    match expr {
-        Expr::ScalarFunction(func)
-            if func.func.name() == "struct" && subquery.schema().fields().len() > 1 =>
-        {
-            Some(&func.args)
-        }
-        _ => None,
+) -> Result<Option<Cow<'a, [Expr]>>> {
+    let num_columns = subquery.schema().fields().len();
+    if num_columns <= 1 {
+        return Ok(None);
     }
+    let values = match expr {
+        Expr::ScalarFunction(func) if func.func.name() == "struct" => {
+            Cow::Borrowed(func.args.as_slice())
+        }
+        Expr::Literal(ScalarValue::Struct(array), _)
+            if arrow::array::Array::is_valid(array.as_ref(), 0) =>
+        {
+            Cow::Owned(
+                array
+                    .columns()
+                    .iter()
+                    .map(|column| {
+                        Ok(Expr::Literal(ScalarValue::try_from_array(column, 0)?, None))
+                    })
+                    .collect::<Result<_>>()?,
+            )
+        }
+        _ => return Ok(None),
+    };
+    if values.len() != num_columns {
+        return plan_err!(
+            "The number of columns in the tuple ({}) must match the number of columns in the subquery ({num_columns})",
+            values.len()
+        );
+    }
+    Ok(Some(values))
 }
 
 /// Placeholder, representing bind parameter values such as `$1` or `$name`.
@@ -2245,10 +2266,8 @@ impl Expr {
                     // position.
                     let subquery_schema = subquery.subquery.schema();
                     let is_tuple =
-                        in_subquery_tuple_values(expr.as_ref(), &subquery.subquery)
-                            .is_some_and(|values| {
-                                values.len() == subquery_schema.fields().len()
-                            });
+                        in_subquery_tuple_values(expr.as_ref(), &subquery.subquery)?
+                            .is_some();
                     match expr.as_mut() {
                         Expr::ScalarFunction(func) if is_tuple => {
                             for (arg, field) in
@@ -2260,6 +2279,8 @@ impl Expr {
                                 rewrite_placeholder(arg, &column, subquery_schema)?;
                             }
                         }
+                        // A struct literal holds no placeholder.
+                        _ if is_tuple => {}
                         expr => rewrite_placeholder_from_subquery(
                             "InSubquery",
                             expr,

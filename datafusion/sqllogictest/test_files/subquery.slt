@@ -3004,12 +3004,11 @@ WHERE (a, b) IN (SELECT x, y FROM multi_in_right_empty);
 ## Test 8: Multi-column IN with WHERE clause in subquery
 #############
 
-# Should return only rows matching filtered subquery
+# The filter drops (1, 2) from the subquery, so only (5, 6) matches
 query IIT rowsort
 SELECT * FROM multi_in_left
-WHERE (a, b) IN (SELECT x, y FROM multi_in_right WHERE x > 0 AND y < 10);
+WHERE (a, b) IN (SELECT x, y FROM multi_in_right WHERE x > 1);
 ----
-1 2 match
 5 6 match
 
 #############

@@ -22,7 +22,7 @@ use datafusion_common::{
 
 use crate::{
     Aggregate, DmlStatement, Expr, Filter, Join, JoinType, LogicalPlan, Window, WriteOp,
-    expr::{Exists, InSubquery, SetComparison},
+    expr::{Exists, InSubquery, SetComparison, in_subquery_tuple_values},
     expr_rewriter::strip_outer_reference,
     utils::{collect_subquery_cols, split_conjunction},
 };
@@ -228,14 +228,7 @@ pub fn check_subquery_expr(
             // multi-column `(a, b) IN (SELECT x, y ...)` with one tuple element
             // per subquery column.
             let num_subquery_cols = subquery.subquery.subquery.schema().fields().len();
-            match subquery.tuple_values() {
-                Some(values) if values.len() != num_subquery_cols => {
-                    return plan_err!(
-                        "The number of columns in the tuple ({}) must match the number of columns in the subquery ({})",
-                        values.len(),
-                        num_subquery_cols
-                    );
-                }
+            match in_subquery_tuple_values(&subquery.expr, &subquery.subquery.subquery)? {
                 Some(_) => {}
                 None if num_subquery_cols > 1 => {
                     return plan_err!(

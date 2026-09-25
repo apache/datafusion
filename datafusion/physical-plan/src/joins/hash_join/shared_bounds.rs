@@ -26,7 +26,7 @@ use crate::ExecutionPlanProperties;
 use crate::Partitioning;
 use crate::joins::Map;
 use crate::joins::PartitionMode;
-use crate::joins::hash_join::exec::HASH_JOIN_SEED;
+use crate::joins::hash_join::exec::{HASH_JOIN_SEED, NullAwareMode};
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::partitioned_hash_eval::{
     HashExpr, HashTableLookupExpr, SeededRandomState,
@@ -269,9 +269,7 @@ pub(crate) struct SharedBuildAccumulator {
     null_equality: NullEquality,
     /// Null-aware anti join (`NOT IN`). A probe-side NULL must reach the join so its
     /// three-valued logic can collapse the result, so the pushed filter keeps NULL rows.
-    null_aware: bool,
-    /// Number of `NOT IN` value keys (`on_right[..n]`) of a null-aware join.
-    null_aware_value_keys: usize,
+    null_aware: Option<NullAwareMode>,
 }
 
 /// Strategy for filter pushdown (decided at collection time)
@@ -382,8 +380,7 @@ impl SharedBuildAccumulator {
         on_right: Vec<PhysicalExprRef>,
         repartition_random_state: SeededRandomState,
         null_equality: NullEquality,
-        null_aware: bool,
-        null_aware_value_keys: usize,
+        null_aware: Option<NullAwareMode>,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -441,7 +438,6 @@ impl SharedBuildAccumulator {
             probe_range_partitioning,
             null_equality,
             null_aware,
-            null_aware_value_keys,
         }
     }
 
@@ -821,22 +817,23 @@ impl SharedBuildAccumulator {
         // probe NULL makes `NOT IN` unknown for every build row. A null-equal join needs probe
         // NULLs only to match an actual build-side NULL, so a NULL-free build keeps the filter
         // at full selectivity.
-        let needs_probe_nulls = self.null_aware
+        let needs_probe_nulls = self.null_aware.is_some()
             || (self.null_equality == NullEquality::NullEqualsNull
                 && build_keys_have_null);
         if !needs_probe_nulls {
             return Ok(filter_expr);
         }
-        let keys = if self.null_aware {
-            assert_or_internal_err!(
-                (1..=self.on_right.len()).contains(&self.null_aware_value_keys),
-                "null-aware join must have between 1 and {} value keys, got {}",
-                self.on_right.len(),
-                self.null_aware_value_keys
-            );
-            &self.on_right[..self.null_aware_value_keys]
-        } else {
-            self.on_right.as_slice()
+        let keys = match self.null_aware {
+            Some(mode) => {
+                let value_keys = mode.value_keys();
+                assert_or_internal_err!(
+                    (1..=self.on_right.len()).contains(&value_keys),
+                    "null-aware join must have between 1 and {} value keys, got {value_keys}",
+                    self.on_right.len()
+                );
+                &self.on_right[..value_keys]
+            }
+            None => self.on_right.as_slice(),
         };
 
         // Only a key that can actually be NULL needs the disjunct; a NOT NULL key
@@ -896,8 +893,7 @@ pub(super) fn make_partitioned_accumulator_for_test(
         probe_schema,
         probe_range_partitioning: None,
         null_equality: NullEquality::NullEqualsNothing,
-        null_aware: false,
-        null_aware_value_keys: 1,
+        null_aware: None,
     }
 }
 
@@ -962,8 +958,7 @@ mod tests {
             probe_schema: test_probe_schema(),
             probe_range_partitioning: None,
             null_equality: NullEquality::NullEqualsNothing,
-            null_aware: false,
-            null_aware_value_keys: 1,
+            null_aware: None,
         }
     }
 
@@ -1451,8 +1446,10 @@ mod tests {
             probe_schema,
             probe_range_partitioning: None,
             null_equality,
-            null_aware,
-            null_aware_value_keys: 1,
+            null_aware: null_aware.then_some(NullAwareMode::LeftAnti {
+                correlated: false,
+                value_keys: 1,
+            }),
         }
     }
 
@@ -1629,130 +1626,90 @@ mod tests {
         assert_eq!(format!("{widened}").matches("IS NULL").count(), 1);
     }
 
-    // Correlated null-aware LeftMark joins have multiple probe keys
-    // (`on_right[0]` = scalar NOT IN value key, `on_right[1..]` = correlation
-    // scope keys). The NULL escape must accept that shape and wrap only the
-    // value key.
+    // A null-aware join with several probe keys has its `NOT IN` value keys
+    // first (`on_right[..V]`: one for a scalar `NOT IN`, one per tuple element
+    // for a multi-column one) and correlation scope keys after them. A NULL in
+    // any value key can make `NOT IN` UNKNOWN, so the NULL escape must wrap
+    // every value key and no scope key.
     #[test]
-    fn null_aware_multi_key_filter_escapes_value_key_only() {
-        let on_right: Vec<PhysicalExprRef> = vec![
-            Arc::new(Column::new("value_key", 0)),
-            Arc::new(Column::new("scope_key", 1)),
-        ];
-        let dynamic_filter = test_dynamic_filter(&on_right);
-        let acc = SharedBuildAccumulator {
-            inner: Mutex::new(AccumulatorState {
-                data: AccumulatedBuildData::CollectLeft {
-                    data: PartitionStatus::Pending,
-                    reported_count: 0,
-                    expected_reports: 1,
-                },
-                completion: CompletionState::Pending,
-            }),
-            completion_notify: Notify::new(),
-            dynamic_filter,
-            on_right,
-            repartition_random_state: SeededRandomState::with_seed(1),
-            probe_schema: Arc::new(Schema::new(vec![
-                Field::new("value_key", DataType::Int32, true),
-                // Keep the scope key nullable so this test proves it is not widened.
-                Field::new("scope_key", DataType::Int32, true),
-            ])),
-            probe_range_partitioning: None,
-            null_equality: NullEquality::NullEqualsNothing,
-            null_aware: true,
-            null_aware_value_keys: 1,
-        };
+    fn null_aware_multi_key_filter_escapes_value_keys_only() {
+        for value_keys in [1, 2] {
+            let mut on_right: Vec<PhysicalExprRef> = (0..value_keys)
+                .map(|i| Arc::new(Column::new(&format!("value_key_{i}"), i)) as _)
+                .collect();
+            on_right.push(Arc::new(Column::new("scope_key", value_keys)));
+            let mut fields: Vec<Field> = (0..value_keys)
+                .map(|i| Field::new(format!("value_key_{i}"), DataType::Int32, true))
+                .collect();
+            // Keep the scope key nullable so this test proves it is not widened.
+            fields.push(Field::new("scope_key", DataType::Int32, true));
 
-        let two_key_bounds = PartitionBounds::new(vec![
-            ColumnBounds::new(ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(5))),
-            ColumnBounds::new(ScalarValue::Int32(Some(10)), ScalarValue::Int32(Some(20))),
-        ]);
-        acc.build_filter(FinalizeInput::CollectLeft(reported(
-            PushdownStrategy::Empty,
-            two_key_bounds,
-        )))
-        .unwrap();
+            let dynamic_filter = test_dynamic_filter(&on_right);
+            let acc = SharedBuildAccumulator {
+                inner: Mutex::new(AccumulatorState {
+                    data: AccumulatedBuildData::CollectLeft {
+                        data: PartitionStatus::Pending,
+                        reported_count: 0,
+                        expected_reports: 1,
+                    },
+                    completion: CompletionState::Pending,
+                }),
+                completion_notify: Notify::new(),
+                dynamic_filter,
+                on_right,
+                repartition_random_state: SeededRandomState::with_seed(1),
+                probe_schema: Arc::new(Schema::new(fields)),
+                probe_range_partitioning: None,
+                null_equality: NullEquality::NullEqualsNothing,
+                null_aware: Some(NullAwareMode::LeftMark {
+                    correlated: true,
+                    value_keys,
+                }),
+            };
 
-        let expr = current_expr(&acc);
-        let or = binary_expr(&expr);
-        assert_eq!(or.op(), &Operator::Or);
-        let is_null = or
-            .left()
-            .downcast_ref::<IsNullExpr>()
-            .expect("expected IS NULL escape as the left disjunct");
-        let column = is_null
-            .arg()
-            .downcast_ref::<Column>()
-            .expect("expected column under IS NULL");
-        assert_eq!(column.index(), 0, "escape must target the NOT IN value key");
+            let bounds = PartitionBounds::new(
+                (0..=value_keys as i32)
+                    .map(|i| {
+                        ColumnBounds::new(
+                            ScalarValue::Int32(Some(10 * i)),
+                            ScalarValue::Int32(Some(10 * i + 5)),
+                        )
+                    })
+                    .collect(),
+            );
+            acc.build_filter(FinalizeInput::CollectLeft(reported(
+                PushdownStrategy::Empty,
+                bounds,
+            )))
+            .unwrap();
+
+            let expr = current_expr(&acc);
+            let or = binary_expr(&expr);
+            assert_eq!(or.op(), &Operator::Or);
+            let mut escaped = vec![];
+            collect_is_null_columns(or.left(), &mut escaped);
+            assert_eq!(
+                escaped,
+                (0..value_keys).collect::<Vec<_>>(),
+                "escape must target every NOT IN value key and nothing else"
+            );
+        }
     }
 
-    // A multi-column `(a, b) NOT IN` has one value key per tuple element
-    // (`on_right[..2]`) before the correlation scope keys. A NULL in any value
-    // key can make the tuple comparison UNKNOWN, so the NULL escape must wrap
-    // every value key, and still no scope key.
-    #[test]
-    fn null_aware_multi_column_filter_escapes_every_value_key() {
-        let on_right: Vec<PhysicalExprRef> = vec![
-            Arc::new(Column::new("value_key_0", 0)),
-            Arc::new(Column::new("value_key_1", 1)),
-            Arc::new(Column::new("scope_key", 2)),
-        ];
-        let dynamic_filter = test_dynamic_filter(&on_right);
-        let acc = SharedBuildAccumulator {
-            inner: Mutex::new(AccumulatorState {
-                data: AccumulatedBuildData::CollectLeft {
-                    data: PartitionStatus::Pending,
-                    reported_count: 0,
-                    expected_reports: 1,
-                },
-                completion: CompletionState::Pending,
-            }),
-            completion_notify: Notify::new(),
-            dynamic_filter,
-            on_right,
-            repartition_random_state: SeededRandomState::with_seed(1),
-            probe_schema: Arc::new(Schema::new(vec![
-                Field::new("value_key_0", DataType::Int32, true),
-                Field::new("value_key_1", DataType::Int32, true),
-                // Keep the scope key nullable so this test proves it is not widened.
-                Field::new("scope_key", DataType::Int32, true),
-            ])),
-            probe_range_partitioning: None,
-            null_equality: NullEquality::NullEqualsNothing,
-            null_aware: true,
-            null_aware_value_keys: 2,
-        };
-
-        let two_key_bounds = PartitionBounds::new(vec![
-            ColumnBounds::new(ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(5))),
-            ColumnBounds::new(ScalarValue::Int32(Some(6)), ScalarValue::Int32(Some(9))),
-            ColumnBounds::new(ScalarValue::Int32(Some(10)), ScalarValue::Int32(Some(20))),
-        ]);
-        acc.build_filter(FinalizeInput::CollectLeft(reported(
-            PushdownStrategy::Empty,
-            two_key_bounds,
-        )))
-        .unwrap();
-
-        let expr = current_expr(&acc);
-        let or = binary_expr(&expr);
-        assert_eq!(or.op(), &Operator::Or);
-        let any_value_key_is_null = or
-            .left()
-            .downcast_ref::<BinaryExpr>()
-            .expect("expected an OR of IS NULL escapes as the left disjunct");
-        assert_eq!(any_value_key_is_null.op(), &Operator::Or);
-        let escaped =
-            [any_value_key_is_null.left(), any_value_key_is_null.right()].map(|expr| {
-                expr.downcast_ref::<IsNullExpr>()
-                    .expect("expected IS NULL escape")
-                    .arg()
-                    .downcast_ref::<Column>()
-                    .expect("expected column under IS NULL")
-                    .index()
-            });
-        assert_eq!(escaped, [0, 1], "escape must target every NOT IN value key");
+    /// Column indices under the `IS NULL` disjuncts of an `OR` chain.
+    fn collect_is_null_columns(expr: &Arc<dyn PhysicalExpr>, out: &mut Vec<usize>) {
+        if let Some(or) = expr.downcast_ref::<BinaryExpr>() {
+            assert_eq!(or.op(), &Operator::Or);
+            collect_is_null_columns(or.left(), out);
+            collect_is_null_columns(or.right(), out);
+        } else {
+            let column = expr
+                .downcast_ref::<IsNullExpr>()
+                .expect("expected IS NULL escape")
+                .arg()
+                .downcast_ref::<Column>()
+                .expect("expected column under IS NULL");
+            out.push(column.index());
+        }
     }
 }

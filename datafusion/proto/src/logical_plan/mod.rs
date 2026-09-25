@@ -1064,7 +1064,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                     // Plans encoded before the field existed decode it as 0; they
                     // could only hold scalar `NOT IN` joins.
                     .with_null_aware_value_keys(
-                        (join.null_aware_value_keys as usize).max(1),
+                        usize_from_wire(
+                            join.null_aware_value_keys,
+                            "JoinNode",
+                            "null_aware_value_keys",
+                        )?
+                        .max(1),
                     ),
                 ))
             }
@@ -1785,7 +1790,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                             null_equality: null_equality.into(),
                             filter,
                             null_aware: *null_aware,
-                            null_aware_value_keys: *null_aware_value_keys as u32,
+                            null_aware_value_keys: u32::try_from(
+                                *null_aware_value_keys,
+                            )
+                            .map_err(|_| {
+                                internal_datafusion_err!(
+                                    "JoinNode: null_aware_value_keys {null_aware_value_keys} does not fit in u32"
+                                )
+                            })?,
                         },
                     ))),
                 })

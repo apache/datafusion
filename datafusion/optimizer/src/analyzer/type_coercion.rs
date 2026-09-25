@@ -40,7 +40,7 @@ use datafusion_expr::expr::{
     WindowFunction, in_subquery_tuple_values,
 };
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
-use datafusion_expr::expr_schema::cast_subquery;
+use datafusion_expr::expr_schema::{cast_subquery, cast_subquery_columns};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::type_coercion::binary::{
     comparison_coercion, like_coercion, regex_coercion, type_union_coercion,
@@ -620,7 +620,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     spans: subquery.spans,
                 };
                 let is_tuple =
-                    in_subquery_tuple_values(&expr, &new_subquery.subquery).is_some();
+                    in_subquery_tuple_values(&expr, &new_subquery.subquery)?.is_some();
                 match *expr {
                     // Multi-column `(a, b) IN (SELECT x, y ...)`: the tuple is
                     // planned as a `struct` call whose arguments are compared
@@ -1645,16 +1645,9 @@ fn coerce_multi_column_in_subquery(
     schema: &DFSchema,
 ) -> Result<(Expr, Subquery)> {
     let subquery_schema = Arc::clone(subquery.subquery.schema());
-    if func.args.len() != subquery_schema.fields().len() {
-        return plan_err!(
-            "The number of columns in the tuple ({}) must match the number of columns in the subquery ({})",
-            func.args.len(),
-            subquery_schema.fields().len()
-        );
-    }
-
     let mut common_types = Vec::with_capacity(func.args.len());
-    for (arg, field) in func.args.iter().zip(subquery_schema.fields()) {
+    let mut args = Vec::with_capacity(func.args.len());
+    for (arg, field) in func.args.into_iter().zip(subquery_schema.fields()) {
         let expr_type = arg.get_type(schema)?;
         let subquery_type = field.data_type();
         let common_type = comparison_coercion(&expr_type, subquery_type).ok_or(
@@ -1662,58 +1655,12 @@ fn coerce_multi_column_in_subquery(
                 "expr type {expr_type} can't cast to {subquery_type} in InSubquery"
             ),
         )?;
+        args.push(arg.cast_to(&common_type, schema)?);
         common_types.push(common_type);
     }
-
-    let args = func
-        .args
-        .into_iter()
-        .zip(&common_types)
-        .map(|(arg, common_type)| arg.cast_to(common_type, schema))
-        .collect::<Result<Vec<_>>>()?;
-    let expr = Expr::ScalarFunction(ScalarFunction::new_udf(func.func, args));
-
-    let needs_cast = subquery_schema
-        .fields()
-        .iter()
-        .zip(&common_types)
-        .any(|(field, common_type)| field.data_type() != common_type);
-    if !needs_cast {
-        return Ok((expr, subquery));
-    }
-
-    let plan = Arc::unwrap_or_clone(subquery.subquery);
-    let new_plan = match plan {
-        LogicalPlan::Projection(projection) => {
-            let input_schema = projection.input.schema();
-            let exprs = projection
-                .expr
-                .into_iter()
-                .zip(&common_types)
-                .map(|(expr, common_type)| expr.cast_to(common_type, input_schema))
-                .collect::<Result<Vec<_>>>()?;
-            LogicalPlan::Projection(Projection::try_new(exprs, projection.input)?)
-        }
-        plan => {
-            let exprs = plan
-                .schema()
-                .columns()
-                .into_iter()
-                .zip(&common_types)
-                .map(|(column, common_type)| {
-                    Expr::Column(column).cast_to(common_type, plan.schema())
-                })
-                .collect::<Result<Vec<_>>>()?;
-            LogicalPlan::Projection(Projection::try_new(exprs, Arc::new(plan))?)
-        }
-    };
     Ok((
-        expr,
-        Subquery {
-            subquery: Arc::new(new_plan),
-            outer_ref_columns: subquery.outer_ref_columns,
-            spans: subquery.spans,
-        },
+        Expr::ScalarFunction(ScalarFunction::new_udf(func.func, args)),
+        cast_subquery_columns(subquery, &common_types)?,
     ))
 }
 

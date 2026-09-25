@@ -45,14 +45,17 @@ use crate::{
     },
 };
 
-use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array, make_comparator};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, UInt32Array, UInt64Array};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
+use arrow::compute::{filter, take};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, internal_datafusion_err, internal_err,
 };
+use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr_common::datum::apply_cmp;
 
 use datafusion_common::hash_utils::RandomState;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
@@ -852,6 +855,7 @@ impl HashJoinStream {
                 mark_null_candidates_for_probe_batch(
                     build_side,
                     state,
+                    mode.value_keys(),
                     self.filter.as_ref(),
                     self.join_type,
                     &self.random_state,
@@ -1120,7 +1124,7 @@ impl HashJoinStream {
         // Null-aware joins post-process the build rows under SQL three-valued
         // logic; see the helpers for the rules.
         let (left_side, right_side, mark_column) = match self.null_aware {
-            Some(NullAwareMode::LeftAnti { correlated }) => {
+            Some(NullAwareMode::LeftAnti { correlated, .. }) => {
                 let (left_side, right_side) = null_aware_left_anti_final_indices(
                     &build_side.left_data,
                     correlated,
@@ -1130,7 +1134,7 @@ impl HashJoinStream {
                 );
                 (left_side, right_side, None)
             }
-            Some(NullAwareMode::LeftMark { correlated }) => {
+            Some(NullAwareMode::LeftMark { correlated, .. }) => {
                 let mark_column = null_aware_left_mark_column(
                     &build_side.left_data,
                     correlated,
@@ -1244,10 +1248,18 @@ fn null_aware_skip_probe_batch(
         NullAwareMode::RightAnti => left_data.build_side_has_null,
         // Correlated joins decide UNKNOWN per build row instead, in
         // `mark_null_candidates_for_probe_batch`.
-        NullAwareMode::LeftAnti { correlated: true }
-        | NullAwareMode::LeftMark { correlated: true } => false,
-        NullAwareMode::LeftAnti { correlated: false }
-        | NullAwareMode::LeftMark { correlated: false } => {
+        NullAwareMode::LeftAnti {
+            correlated: true, ..
+        }
+        | NullAwareMode::LeftMark {
+            correlated: true, ..
+        } => false,
+        NullAwareMode::LeftAnti {
+            correlated: false, ..
+        }
+        | NullAwareMode::LeftMark {
+            correlated: false, ..
+        } => {
             // `on[0]` is the `NOT IN` value key for both modes.
             let probe_key_column = &state.values[0];
             let is_anti = matches!(mode, NullAwareMode::LeftAnti { .. });
@@ -1390,6 +1402,7 @@ fn null_aware_left_mark_column(
 fn mark_null_candidates_for_probe_batch(
     build_side: &BuildSideReadyState,
     state: &ProcessProbeBatchState,
+    num_value_keys: usize,
     filter: Option<&JoinFilter>,
     join_type: JoinType,
     random_state: &RandomState,
@@ -1399,7 +1412,6 @@ fn mark_null_candidates_for_probe_batch(
     build_indices_buffer: &mut Vec<u64>,
 ) -> Result<()> {
     let left_data = &build_side.left_data;
-    let num_value_keys = left_data.null_aware_value_keys();
     let null_value_build_rows = left_data.null_value_build_rows();
     let probe_null_value_mask = null_value_key_mask(&state.values[..num_value_keys]);
     if null_value_build_rows.is_none() && probe_null_value_mask.is_none() {
@@ -1563,6 +1575,9 @@ fn mark_null_candidates_for_probe_batch(
 /// NULL, are found by the hash lookup instead), whereas a pair with a definite
 /// mismatch compares FALSE whatever its NULLs are: `(NULL, 1) = (2, 3)` is
 /// `UNKNOWN AND FALSE`, which is FALSE.
+///
+/// Elements are compared with SQL `=` (see [`apply_cmp`]), which, like the
+/// join's own key equality, treats `-0.0` and `+0.0` as equal.
 fn retain_value_mismatch_free(
     build_value_keys: &[ArrayRef],
     probe_value_keys: &[ArrayRef],
@@ -1572,40 +1587,37 @@ fn retain_value_mismatch_free(
     if build_indices.is_empty() {
         return Ok((build_indices, probe_indices));
     }
-    let comparators = build_value_keys
-        .iter()
-        .zip(probe_value_keys)
-        .map(|(build, probe)| {
+    let mut keep: Option<BooleanBuffer> = None;
+    for (build, probe) in build_value_keys.iter().zip(probe_value_keys) {
+        let build = take(build.as_ref(), &build_indices, None)?;
+        let probe = take(probe.as_ref(), &probe_indices, None)?;
+        let eq = apply_cmp(
+            Operator::Eq,
+            &ColumnarValue::Array(build),
+            &ColumnarValue::Array(probe),
+        )?
+        .into_array(build_indices.len())?;
+        let eq = eq.as_boolean();
+        // A NULL comparison (an element involving NULL) is not a mismatch.
+        let not_mismatch = match eq.nulls() {
+            Some(nulls) => eq.values() | &!nulls.inner(),
+            None => eq.values().clone(),
+        };
+        keep = Some(match keep {
+            Some(keep) => &keep & &not_mismatch,
+            None => not_mismatch,
+        });
+    }
+    match keep {
+        Some(keep) if keep.count_set_bits() < keep.len() => {
+            let keep = BooleanArray::new(keep, None);
             Ok((
-                build.logical_nulls(),
-                probe.logical_nulls(),
-                // Same total order the hash join's own key comparison uses.
-                make_comparator(
-                    build.as_ref(),
-                    probe.as_ref(),
-                    arrow::compute::SortOptions::default(),
-                )?,
+                filter(&build_indices, &keep)?.as_primitive().clone(),
+                filter(&probe_indices, &keep)?.as_primitive().clone(),
             ))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let is_null = |nulls: &Option<NullBuffer>, idx: usize| {
-        nulls.as_ref().is_some_and(|nulls| nulls.is_null(idx))
-    };
-    let (build, probe): (Vec<u64>, Vec<u32>) = build_indices
-        .values()
-        .iter()
-        .zip(probe_indices.values().iter())
-        .filter(|(build_idx, probe_idx)| {
-            let (build_idx, probe_idx) = (**build_idx as usize, **probe_idx as usize);
-            comparators.iter().all(|(build_nulls, probe_nulls, cmp)| {
-                is_null(build_nulls, build_idx)
-                    || is_null(probe_nulls, probe_idx)
-                    || cmp(build_idx, probe_idx).is_eq()
-            })
-        })
-        .map(|(build_idx, probe_idx)| (*build_idx, *probe_idx))
-        .unzip();
-    Ok((build.into(), probe.into()))
+        }
+        _ => Ok((build_indices, probe_indices)),
+    }
 }
 
 /// Calls `f` with all correlation-scope matches between `build_scope_values`

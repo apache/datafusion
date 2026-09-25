@@ -3810,80 +3810,63 @@ async fn roundtrip_empty_table_scan_with_projection() -> Result<()> {
 }
 
 // Regression test for https://github.com/apache/datafusion/issues/22065:
-// the decoder must preserve `null_aware = true` (NOT IN semantics)
-// across a to_proto -> from_proto round trip. `null_equality` is at
-// its default (`NullEqualsNothing`).
+// the decoder must preserve `null_aware = true` (NOT IN semantics), and the
+// `NOT IN` value key count of a multi-column `(a, b) NOT IN` (which also holds
+// a correlation key), across a to_proto -> from_proto round trip.
+// `null_equality` is at its default (`NullEqualsNothing`).
 #[tokio::test]
 async fn roundtrip_join_null_aware() -> Result<()> {
     use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
     use datafusion_expr::JoinType;
 
     let ctx = SessionContext::new();
-    let sql = "
-        SELECT id
-        FROM (VALUES (1), (2), (3)) AS t1(id)
-        WHERE id NOT IN (
-            SELECT bad_id
-            FROM (VALUES (CAST(1 AS INT)), (CAST(NULL AS INT))) AS excludes(bad_id)
-        )
-    ";
+    let cases = [
+        (
+            "
+            SELECT id
+            FROM (VALUES (1), (2), (3)) AS t1(id)
+            WHERE id NOT IN (
+                SELECT bad_id
+                FROM (VALUES (CAST(1 AS INT)), (CAST(NULL AS INT))) AS excludes(bad_id)
+            )
+            ",
+            (1, 1),
+        ),
+        (
+            "
+            SELECT k
+            FROM (VALUES (1, 1, 2), (2, 3, 4)) AS t1(k, a, b)
+            WHERE (a, b) NOT IN (
+                SELECT x, y
+                FROM (VALUES (1, CAST(NULL AS INT), 2)) AS t2(k, x, y)
+                WHERE t2.k = t1.k
+            )
+            ",
+            (3, 2),
+        ),
+    ];
 
-    let df = ctx.sql(sql).await?;
-    let plan = ctx.state().optimize(df.logical_plan())?;
+    for (sql, expected_keys) in cases {
+        let df = ctx.sql(sql).await?;
+        let plan = ctx.state().optimize(df.logical_plan())?;
 
-    let mut found_null_aware = false;
-    plan.apply(|n| {
-        if let LogicalPlan::Join(j) = n
-            && j.join_type == JoinType::LeftAnti
-            && j.null_aware
-        {
-            found_null_aware = true;
-        }
-        Ok(TreeNodeRecursion::Continue)
-    })?;
-    assert!(found_null_aware);
+        // (number of equi-join keys, number of `NOT IN` value keys)
+        let mut null_aware_keys = None;
+        plan.apply(|n| {
+            if let LogicalPlan::Join(j) = n
+                && j.join_type == JoinType::LeftAnti
+                && j.null_aware
+            {
+                null_aware_keys = Some((j.on.len(), j.null_aware_value_keys));
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        assert_eq!(null_aware_keys, Some(expected_keys));
 
-    let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
-    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
-
-    Ok(())
-}
-
-// The decoder must preserve the `NOT IN` value key count of a multi-column
-// `(a, b) NOT IN (SELECT x, y ...)`, which also holds a correlation key.
-#[tokio::test]
-async fn roundtrip_join_null_aware_value_keys() -> Result<()> {
-    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-
-    let ctx = SessionContext::new();
-    let sql = "
-        SELECT k
-        FROM (VALUES (1, 1, 2), (2, 3, 4)) AS t1(k, a, b)
-        WHERE (a, b) NOT IN (
-            SELECT x, y
-            FROM (VALUES (1, CAST(NULL AS INT), 2)) AS t2(k, x, y)
-            WHERE t2.k = t1.k
-        )
-    ";
-
-    let df = ctx.sql(sql).await?;
-    let plan = ctx.state().optimize(df.logical_plan())?;
-
-    let mut value_keys = None;
-    plan.apply(|n| {
-        if let LogicalPlan::Join(j) = n
-            && j.null_aware
-        {
-            value_keys = Some((j.on.len(), j.null_aware_value_keys));
-        }
-        Ok(TreeNodeRecursion::Continue)
-    })?;
-    assert_eq!(value_keys, Some((3, 2)));
-
-    let bytes = logical_plan_to_bytes(&plan)?;
-    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
-    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+        let bytes = logical_plan_to_bytes(&plan)?;
+        let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+        assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    }
 
     Ok(())
 }
