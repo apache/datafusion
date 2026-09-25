@@ -1890,6 +1890,21 @@ impl ExecutionPlan for HashJoinExec {
 
         let batch_size = context.session_config().batch_size();
 
+        // The join measures the work that its dynamic filters save for each
+        // row that they remove (see `RemovedRowWork`).
+        let removed_row_work = self
+            .dynamic_filter
+            .as_ref()
+            .filter(|_| enable_dynamic_filter_pushdown)
+            .map(|df| {
+                df.membership
+                    .iter()
+                    .chain(df.bounds.iter())
+                    .map(|filter| Arc::clone(filter.removed_row_work()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         // we have the batches and the hash map with their keys. We can how create a stream
         // over the right that uses this information to issue new batches.
         let right_stream = self.right.execute(partition, context)?;
@@ -1909,27 +1924,30 @@ impl ExecutionPlan for HashJoinExec {
             .map(|(_, right_expr)| Arc::clone(right_expr))
             .collect::<Vec<_>>();
 
-        Ok(Box::pin(HashJoinStream::new(
-            partition,
-            self.schema(),
-            on_right,
-            self.filter.clone(),
-            self.join_type,
-            right_stream,
-            self.random_state.random_state().clone(),
-            join_metrics,
-            column_indices_after_projection,
-            self.null_equality,
-            HashJoinStreamState::WaitBuildSide,
-            BuildSide::Initial(BuildSideInitialState { left_fut }),
-            batch_size,
-            vec![],
-            self.right.output_ordering().is_some(),
-            build_accumulator,
-            self.mode,
-            null_aware,
-            self.fetch,
-        )))
+        Ok(Box::pin(
+            HashJoinStream::new(
+                partition,
+                self.schema(),
+                on_right,
+                self.filter.clone(),
+                self.join_type,
+                right_stream,
+                self.random_state.random_state().clone(),
+                join_metrics,
+                column_indices_after_projection,
+                self.null_equality,
+                HashJoinStreamState::WaitBuildSide,
+                BuildSide::Initial(BuildSideInitialState { left_fut }),
+                batch_size,
+                vec![],
+                self.right.output_ordering().is_some(),
+                build_accumulator,
+                self.mode,
+                null_aware,
+                self.fetch,
+            )
+            .with_removed_row_work(removed_row_work),
+        ))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -9313,6 +9331,87 @@ mod tests {
             +----+-----+----+----+
             ");
         }
+        Ok(())
+    }
+
+    /// The join measures the work that its dynamic filter saves for each
+    /// row that the filter removes: its work for each probe row.
+    #[tokio::test]
+    async fn test_dynamic_filter_measures_removed_row_work() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 6]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        // `MIN_OBSERVED_ROWS` probe rows.
+        let rows = datafusion_physical_expr::filter_stats::MIN_OBSERVED_ROWS as i32;
+        let values: Vec<i32> = (0..rows).collect();
+        let right = build_table(("a2", &values), ("b2", &values), ("c2", &values));
+        let on = vec![(
+            Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("a2", &right.schema())?) as _,
+        )];
+        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
+        let consumer: Arc<dyn PhysicalExpr> = Arc::clone(&dynamic_filter) as _;
+        // The consumer does not apply the filter here: the join sees all
+        // probe rows.
+        let right = Arc::new(FilterExecBuilder::new(consumer, right).build()?);
+        let mut join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+        join.dynamic_filter = Some(HashJoinExecDynamicFilter::new(
+            Some(Arc::clone(&dynamic_filter)),
+            None,
+        ));
+        let work = Arc::clone(dynamic_filter.removed_row_work());
+        assert_eq!(work.ns_per_row(), None);
+        let batches = common::collect(join.execute(0, task_ctx)?).await?;
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
+        // The filter removed all but 3 probe rows, thus the join saw fewer
+        // than `MIN_OBSERVED_ROWS` rows: no measurement yet.
+        assert_eq!(work.ns_per_row(), None);
+
+        // Without a consumer that filters, the join sees all probe rows.
+        let task_ctx = Arc::new(TaskContext::default());
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 6]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(("a2", &values), ("b2", &values), ("c2", &values));
+        let on = vec![(
+            Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("a2", &right.schema())?) as _,
+        )];
+        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
+        let mut join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+        join.dynamic_filter = Some(HashJoinExecDynamicFilter::new(
+            Some(Arc::clone(&dynamic_filter)),
+            None,
+        ));
+        let batches = common::collect(join.execute(0, task_ctx)?).await?;
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
+        let measured = dynamic_filter.removed_row_work().ns_per_row();
+        assert!(measured.is_some_and(|ns| ns > 0.0), "{measured:?}");
         Ok(())
     }
 
