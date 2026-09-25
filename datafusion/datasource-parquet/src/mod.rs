@@ -40,6 +40,7 @@ mod pruning;
 mod push_decoder;
 mod reader;
 mod row_filter;
+mod row_filter_cost;
 mod row_group_filter;
 mod schema_coercion;
 mod sink;
