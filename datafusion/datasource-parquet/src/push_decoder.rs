@@ -481,6 +481,16 @@ impl PushDecoderStreamState {
         // every return.
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let mut timer = elapsed_compute.timer();
+        // Once `finish` has flushed the coalescer, the stream only drains it.
+        // The decoder can still point at row groups that the plan dropped
+        // (for example, when a dynamic filter pruned every remaining row
+        // group at a boundary), so it must not be driven again.
+        if self.flushed {
+            if self.remaining_limit == Some(0) {
+                return None;
+            }
+            return self.emit_completed();
+        }
         loop {
             // Hand out anything the coalescer has already assembled into a
             // full-size batch before doing more decoding work.
