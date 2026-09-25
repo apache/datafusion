@@ -67,14 +67,19 @@ pub(crate) struct ConjunctInputs {
 }
 
 impl ConjunctInputs {
-    /// Decode time, in nanoseconds for each evaluated row, that a row
-    /// filter saves. `None` without enough measurements.
+    /// Time, in nanoseconds for each evaluated row, that a row filter
+    /// saves: the decode of the unread output columns for the skippable
+    /// rows, and the measured copies of the post-scan filter after the
+    /// conjunct. `None` without enough measurements.
     pub(crate) fn benefit_ns_per_row(&self) -> Option<f64> {
         if self.observation.rows_in < MIN_OBSERVED_ROWS {
             return None;
         }
         let skippable = self.observation.skippable_fraction()?;
-        Some(skippable * self.unread_output_bytes_per_row * self.decode_ns_per_byte)
+        Some(
+            skippable * self.unread_output_bytes_per_row * self.decode_ns_per_byte
+                + self.observation.copy_ns_per_row(),
+        )
     }
 
     /// The extra time, in nanoseconds for each evaluated row, of a row
@@ -99,6 +104,7 @@ impl ConjunctInputs {
 ///
 /// ```text
 /// benefit = skippable rows / rows in * unread output bytes * decode ns for each byte
+///         + measured post-scan copy ns for each row
 /// cost    = fixed stage cost
 ///         + fetch latency / rows of the next row group
 ///         + rows out / rows in * read output bytes * decode ns for each byte
@@ -192,7 +198,7 @@ mod tests {
                 rows_in,
                 rows_out: rows_in - skippable_rows,
                 skippable_rows,
-                nanos: 0,
+                ..Default::default()
             },
             unread_output_bytes_per_row,
             read_output_bytes_per_row: 0.0,
@@ -248,6 +254,21 @@ mod tests {
             place_required(&remote, Some(Placement::RowFilter)),
             Placement::PostScan
         );
+    }
+
+    /// The copies of the post-scan filter after the conjunct are part of
+    /// the benefit of a row filter.
+    #[test]
+    fn measured_post_scan_copy() {
+        let rows = 100_000;
+        // benefit = 0.1 * 10 * 4 = 4 ns, cost = 8 ns: post-scan.
+        let mut copying = inputs(rows, rows / 10, 10.0, 0.0);
+        assert_eq!(place_required(&copying, None), Placement::PostScan);
+        // The copies after the conjunct took 6 ns for each row: benefit =
+        // 10 ns, more than 8 ns / 0.9.
+        copying.observation.post_scan_rows = rows;
+        copying.observation.copy_nanos = 6 * rows;
+        assert_eq!(place_required(&copying, None), Placement::RowFilter);
     }
 
     #[test]

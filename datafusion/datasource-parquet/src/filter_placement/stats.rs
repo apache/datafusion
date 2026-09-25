@@ -33,8 +33,8 @@ use parking_lot::Mutex;
 use crate::optional_filter::DEFAULT_DECODE_NS_PER_BYTE;
 use crate::row_filter_cost::{SKIP_WINDOW_ROWS, skippable_in, skippable_rows};
 
-/// What the scan measured for one conjunct: in the row filter or in the
-/// post-scan filter, and in the row group statistics pruning.
+/// What the scan measured for one conjunct, in the row filter or in the
+/// post-scan filter.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct Observation {
     /// Rows that the conjunct was evaluated on.
@@ -46,9 +46,26 @@ pub(crate) struct Observation {
     pub(crate) skippable_rows: u64,
     /// Evaluation time of the conjunct, in nanoseconds.
     pub(crate) nanos: u64,
+    /// Rows of the input batches of the post-scan filter where the
+    /// conjunct was evaluated.
+    pub(crate) post_scan_rows: u64,
+    /// Time of the copies (compactions of the working batch) of the
+    /// post-scan filter after the conjunct, in nanoseconds.
+    pub(crate) copy_nanos: u64,
 }
 
 impl Observation {
+    /// The time of the copies that the post-scan filter makes after the
+    /// conjunct, in nanoseconds for each row of its input batches. 0 before
+    /// a post-scan evaluation. A row filter does not copy: the decoder
+    /// produces only the rows that pass.
+    pub(crate) fn copy_ns_per_row(&self) -> f64 {
+        if self.post_scan_rows == 0 {
+            return 0.0;
+        }
+        self.copy_nanos as f64 / self.post_scan_rows as f64
+    }
+
     /// The rows in, rows out and evaluation time.
     pub(crate) fn cost(&self) -> FilterCost {
         FilterCost {
@@ -78,6 +95,8 @@ pub(crate) struct ConjunctStats {
     rows_out: AtomicU64,
     skippable_rows: AtomicU64,
     nanos: AtomicU64,
+    post_scan_rows: AtomicU64,
+    copy_nanos: AtomicU64,
     /// The generation of the conjunct that the evaluation measurements are
     /// for, see [`Self::observe_generation`].
     generation: AtomicU64,
@@ -134,9 +153,14 @@ impl ConjunctStats {
             .fetch_add(skippable as u64, Ordering::Relaxed);
     }
 
-    /// Clears the evaluation measurements (not the statistics pruning
-    /// result) when `generation` is newer than the generation that they are
-    /// for. `generation` is the sum of the generations of the dynamic
+    /// Records a copy (a compaction of the working batch) of the post-scan
+    /// filter after the conjunct, which took `nanos` nanoseconds.
+    pub(crate) fn record_copy(&self, nanos: u64) {
+        self.copy_nanos.fetch_add(nanos, Ordering::Relaxed);
+    }
+
+    /// Clears the measurements when `generation` is newer than the
+    /// generation that they are for. `generation` is the sum of the generations of the dynamic
     /// filters in the conjunct ([`snapshot_generation`]): a new generation
     /// is a new filter, and the measurements of the old filter do not
     /// describe it. Generations only increase, thus a caller with an older
@@ -150,6 +174,8 @@ impl ConjunctStats {
                 &self.rows_out,
                 &self.skippable_rows,
                 &self.nanos,
+                &self.post_scan_rows,
+                &self.copy_nanos,
             ] {
                 counter.store(0, Ordering::Relaxed);
             }
@@ -163,6 +189,8 @@ impl ConjunctStats {
             rows_out: self.rows_out.load(Ordering::Relaxed),
             skippable_rows: self.skippable_rows.load(Ordering::Relaxed),
             nanos: self.nanos.load(Ordering::Relaxed),
+            post_scan_rows: self.post_scan_rows.load(Ordering::Relaxed),
+            copy_nanos: self.copy_nanos.load(Ordering::Relaxed),
         }
     }
 }
@@ -218,6 +246,9 @@ impl StageSelection {
         nanos: u64,
     ) {
         let values = passed.values();
+        stats
+            .post_scan_rows
+            .fetch_add(self.input_rows as u64, Ordering::Relaxed);
         match &self.complete_windows {
             None => stats.record(
                 self.input_rows,
@@ -454,6 +485,7 @@ mod tests {
                 rows_out: 65,
                 skippable_rows: 128,
                 nanos: 30,
+                ..Default::default()
             }
         );
         assert_eq!(observation.skippable_fraction(), Some(0.5));
@@ -476,6 +508,7 @@ mod tests {
                 rows_in: 256,
                 rows_out: 64,
                 skippable_rows: 0,
+                post_scan_rows: 256,
                 ..Default::default()
             }
         );
@@ -493,6 +526,7 @@ mod tests {
                 rows_in: 256,
                 rows_out: 256 - 32,
                 skippable_rows: 0,
+                post_scan_rows: 256,
                 ..Default::default()
             }
         );
@@ -513,6 +547,7 @@ mod tests {
                 rows_in: 256,
                 rows_out: 128,
                 skippable_rows: 128,
+                post_scan_rows: 256,
                 ..Default::default()
             }
         );
@@ -542,6 +577,7 @@ mod tests {
                 rows_in: 256,
                 rows_out: 256 - 65,
                 skippable_rows: 64,
+                post_scan_rows: 256,
                 ..Default::default()
             }
         );
@@ -575,6 +611,7 @@ mod tests {
                 rows_in: 256,
                 rows_out: 192,
                 skippable_rows: 0,
+                post_scan_rows: 256,
                 ..Default::default()
             }
         );
