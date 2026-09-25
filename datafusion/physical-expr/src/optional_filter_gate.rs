@@ -73,12 +73,20 @@
 //!    ```text
 //!    cost_ns   = evaluation time + rows_in * measured overhead
 //!    saving_ns = (rows_in - rows_out) * saving_ns_per_row
-//!    saving_ns_per_row = min_saving_ns_per_row + measured saving
+//!    saving_ns_per_row = producer work + measured saving
 //!    ```
 //!
-//!    `min_saving_ns_per_row` comes from the configuration. It is the work
-//!    that a removed row saves after the filter, for example a hash table
-//!    probe in a join. The *measured saving* and the *measured overhead* are
+//!    The *producer work* is the work that a removed row saves after the
+//!    filter, in the operator that produced the filter, for example the
+//!    hash and the hash table lookup of a probe row in a hash join. The
+//!    producer measures it ([`RemovedRowWork`], see
+//!    [`DynamicFilterPhysicalExpr::removed_row_work`]): a hash join with a
+//!    small build side does 2 to 8 ns of work for each probe row (TPC-DS
+//!    SF1 star joins), a join with a large build side much more. Until the
+//!    producer has measured [`MIN_OBSERVED_ROWS`] rows, the gate uses
+//!    `min_saving_ns_per_row` from the configuration (a prior). With more
+//!    than one dynamic filter in the filter, the smallest measured work is
+//!    used. The *measured saving* and the *measured overhead* are
 //!    optional: a consumer that can measure more work that a removed row
 //!    saves (the Parquet scan measures the decode time of the columns that
 //!    the filter does not read), or a fixed cost for each evaluated row in
@@ -146,9 +154,11 @@ use std::time::Duration;
 use datafusion_common::config::ExecutionOptions;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
-use crate::expressions::DynamicFilterTracking;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+
+use crate::expressions::{DynamicFilterPhysicalExpr, DynamicFilterTracking};
 use crate::filter_stats::{
-    Clock, FilterCost, MIN_OBSERVED_ROWS, SystemClock, duration_nanos,
+    Clock, FilterCost, MIN_OBSERVED_ROWS, RemovedRowWork, SystemClock, duration_nanos,
 };
 
 /// A running filter is paused by the cost rule only if its cost is larger
@@ -172,7 +182,8 @@ pub struct OptionalFilterGateConfig {
     /// `initial_pause_batches` are used as `initial_pause_batches`.
     pub max_pause_batches: usize,
     /// Work, in nanoseconds, that each row removed by the filter saves after
-    /// the filter, at the least. The gate adds the saving that the consumer
+    /// the filter, until the producer of the filter has measured it (see
+    /// [`RemovedRowWork`]). The gate adds the saving that the consumer
     /// measures (see [`MeasuredRowSaving`]). The gate pauses a filter whose
     /// evaluation time is larger than the saving of the rows that it
     /// removes. Negative values are used as 0.
@@ -421,9 +432,11 @@ pub struct OptionalFilterGate {
     config: OptionalFilterGateConfig,
     /// The clock that consumers use to measure the evaluation time.
     clock: Arc<dyn Clock>,
-    /// The saving that the consumer measures, added to
-    /// `config.min_saving_ns_per_row`.
+    /// The saving that the consumer measures, added to the producer work.
     measured_saving: Option<Arc<MeasuredRowSaving>>,
+    /// The work that the producers of the dynamic filters in `filter` do
+    /// for each removed row, see [`RemovedRowWork`].
+    producer_work: Vec<Arc<RemovedRowWork>>,
     state: GateState,
     /// True while the current window is a probe after a pause. The cost
     /// rule then uses [`RESUME_COST_MARGIN`].
@@ -457,12 +470,22 @@ impl OptionalFilterGate {
     pub fn new(filter: Arc<dyn PhysicalExpr>, config: OptionalFilterGateConfig) -> Self {
         let config = config.normalized();
         let tracking = DynamicFilterTracking::classify(&filter);
+        let mut producer_work = vec![];
+        filter
+            .apply(|expr| {
+                if let Some(dynamic) = expr.downcast_ref::<DynamicFilterPhysicalExpr>() {
+                    producer_work.push(Arc::clone(dynamic.removed_row_work()));
+                }
+                Ok(TreeNodeRecursion::Continue)
+            })
+            .expect("the closure is infallible");
         Self {
             filter,
             tracking,
             config,
             clock: SystemClock::shared(),
             measured_saving: None,
+            producer_work,
             state: GateState::new_window(),
             probing: false,
             backoff: config.initial_pause_batches,
@@ -513,13 +536,26 @@ impl OptionalFilterGate {
     }
 
     /// The work, in nanoseconds, that the gate assumes each removed row
-    /// saves now: the configured minimum plus the measured saving.
+    /// saves now: the work of the producer (measured, or the configured
+    /// `min_saving_ns_per_row` before the measurement) plus the measured
+    /// saving of the consumer.
     pub fn saving_ns_per_row(&self) -> f64 {
         let measured = self
             .measured_saving
             .as_ref()
             .map_or(0.0, |saving| saving.ns_per_row());
-        self.config.min_saving_ns_per_row + measured
+        self.producer_work_ns_per_row() + measured
+    }
+
+    /// The work of the producer for each removed row: the smallest measured
+    /// [`RemovedRowWork`] of the dynamic filters in the filter, or
+    /// `min_saving_ns_per_row` if none is measured yet.
+    fn producer_work_ns_per_row(&self) -> f64 {
+        self.producer_work
+            .iter()
+            .filter_map(|work| work.ns_per_row())
+            .reduce(f64::min)
+            .unwrap_or(self.config.min_saving_ns_per_row)
     }
 
     /// The work, in nanoseconds for each evaluated row, that the gate adds
@@ -1372,6 +1408,32 @@ mod tests {
         assert_eq!(feed(&mut gate, 0.5), GateDecision::Evaluate);
         assert!(!shared.is_paused());
         assert!(!shared_gate(filter, &shared).is_paused());
+    }
+
+    /// The producer of a dynamic filter measures its work for each row that
+    /// the filter removes: once measured, it replaces the configured
+    /// `min_saving_ns_per_row`.
+    #[test]
+    fn producer_work_replaces_configured_saving() {
+        let (dynamic, filter) = dynamic_filter();
+        let mut gate = gate_with(filter);
+        assert_eq!(gate.saving_ns_per_row(), 20.0);
+        // Removes 80% at 5 ns for each row: 5 < 0.8 * 20 * 1.1, it stays on.
+        for _ in 0..4 {
+            assert_eq!(feed_timed(&mut gate, 0.2, 5.0), GateDecision::Evaluate);
+        }
+        assert!(!gate.is_paused());
+
+        // The producer measures 4 ns for each removed row: 0.8 * 4 < 5.
+        let work = dynamic.removed_row_work();
+        work.record(MIN_OBSERVED_ROWS, 4 * MIN_OBSERVED_ROWS);
+        assert_eq!(gate.saving_ns_per_row(), 4.0);
+        assert_eq!(feed_timed(&mut gate, 0.2, 5.0), GateDecision::Evaluate);
+        assert_eq!(feed_timed(&mut gate, 0.2, 5.0), GateDecision::Evaluate);
+        assert!(gate.is_paused());
+
+        // A filter without dynamic filters uses the configuration.
+        assert_eq!(new_gate().saving_ns_per_row(), 20.0);
     }
 
     /// A clock that moves by a fixed step each time it is read.
