@@ -27,7 +27,7 @@ run
 -- Q11: uncorrelated multi-column NOT IN with 1% NULL in one subquery element.
 -- Each NULL-valued subquery row is paired with every outer row and the pair is
 -- kept as UNKNOWN only when the other element matches, so the cost grows with
--- (outer rows) x (NULL-valued subquery rows). Compare with Q10.
+-- (outer rows) x (NULL-valued subquery rows). Compare with Q10 and Q12.
 SELECT count(*)
 FROM small_outer o
 WHERE (o.id_n0, o.z) NOT IN (SELECT i.id_n1, i.z FROM small_inner i);

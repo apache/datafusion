@@ -14,7 +14,7 @@
 -- `id` is only ~half covered by the subquery side, so the anti join returns rows
 -- rather than degenerating to an empty or full result.
 
--- Small tables: used by the correlated and multi-column queries (Q04-Q11), whose cost grows with
+-- Small tables: used by the correlated and multi-column queries (Q04-Q12), whose cost grows with
 -- the product of the two table sizes.
 CREATE TABLE small_outer AS
 SELECT

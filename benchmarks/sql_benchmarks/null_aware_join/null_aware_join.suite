@@ -8,7 +8,7 @@ short = "r"
 env = "NAJ_ROWS"
 default = "10000"
 values = ["10000", "..."]
-help = "Rows per table for the correlated and multi-column queries (Q04-Q11). These evaluate the join filter over candidate build x probe pairs, so their cost grows with the square of this value."
+help = "Rows per table for the correlated and multi-column queries (Q04-Q12). These evaluate the join filter over candidate build x probe pairs, so their cost grows with the square of this value."
 
 [[options]]
 name = "large-rows"
