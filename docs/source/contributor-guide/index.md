@@ -124,8 +124,8 @@ before merge.
 
 Please ensure your PR follows the [testing guide](testing.md). In particular:
 
-- Prefer `sqllogictest` (`.slt`) tests and other end-to-end tests of public
-  APIs, such as the DataFrame API, over Rust unit tests where possible. See
+- Prefer end-to-end Public API tests such as `sqllogictest` (`.slt`) and DataFrame API, 
+  over Rust unit tests where possible. See
   [Choosing What Kind of Test to Write](testing.md#choosing-what-kind-of-test-to-write).
 - Run any relevant commands from the [testing quick start](testing.md#testing-quick-start).
 
