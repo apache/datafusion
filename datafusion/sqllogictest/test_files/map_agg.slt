@@ -1,0 +1,89 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+#######
+# Tests for the map_agg aggregate function.
+#######
+
+# A map is built from all input rows.
+query ?
+SELECT map_agg(v, m) FROM (VALUES (1, 10), (2, 20), (3, 30), (4, 40)) t(v, m)
+----
+{1: 10, 2: 20, 3: 30, 4: 40}
+
+# NULL values are kept in the map.
+query ?
+SELECT map_agg(v, m) FROM (VALUES (1, 10), (2, NULL), (3, 30)) t(v, m)
+----
+{1: 10, 2: NULL, 3: 30}
+
+# Null keys cannot be represented in an Arrow map.
+statement error DataFusion error: Execution error: map key cannot be null
+SELECT map_agg(v, m) FROM (VALUES (1, 10), (NULL, 20)) t(v, m)
+
+# Empty input produces a NULL map, like array_agg.
+query ?
+SELECT map_agg(v, m) FROM (VALUES (1, 10)) t(v, m) WHERE false
+----
+NULL
+
+# Each group collects its own key/value pairs into one map.
+query T?
+SELECT k, map_agg(v, m)
+FROM (VALUES
+    ('a', 1, 10),
+    ('a', 2, 20),
+    ('b', 3, 30)
+) t(k, v, m)
+GROUP BY k
+ORDER BY k
+----
+a {1: 10, 2: 20}
+b {3: 30}
+
+# Multiple batches: with batch_size = 1 every row arrives in its own batch.
+# A single partition keeps the input order, so the entries stay in row order.
+statement ok
+set datafusion.execution.batch_size = 1
+
+statement ok
+set datafusion.execution.target_partitions = 1
+
+query ?
+SELECT map_agg(v, m) FROM (VALUES (1, 10), (2, NULL), (3, 30)) t(v, m)
+----
+{1: 10, 2: NULL, 3: 30}
+
+# The SLT runner sets target_partitions to 4 instead of using the default, so
+# set it back explicitly rather than resetting.
+statement ok
+set datafusion.execution.target_partitions = 4
+
+# With the default parallelism the entry order depends on which partial state
+# finishes first, so assert the entry count and the sorted keys instead.
+query I
+SELECT cardinality(map_agg(v, m)) FROM (VALUES (1, 10), (2, 20), (3, 30), (4, 40)) t(v, m)
+----
+4
+
+query T
+SELECT array_to_string(array_sort(map_keys(map_agg(v, m))), ',') FROM (VALUES (1, 10), (2, 20), (3, 30), (4, 40)) t(v, m)
+----
+1,2,3,4
+
+statement ok
+reset datafusion.execution.batch_size
