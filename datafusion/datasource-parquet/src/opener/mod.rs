@@ -6185,7 +6185,7 @@ mod test {
             let options = || OptionalFilterOptions {
                 mode: OptionalFilterMode::Adaptive,
                 gate_config: OptionalFilterGateConfig::default(),
-                decode_cost: Arc::default(),
+                ..Default::default()
             };
 
             let adaptive =
