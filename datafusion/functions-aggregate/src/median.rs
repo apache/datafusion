@@ -28,6 +28,7 @@ use datafusion_common::Result;
 use datafusion_common::types::logical_float64;
 use datafusion_expr::GroupsAccumulator;
 use datafusion_expr::function::StateFieldsArgs;
+use datafusion_expr::utils::AggregateOrderSensitivity;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, Documentation, Signature, TypeSignature,
     TypeSignatureClass, Volatility, function::AccumulatorArgs,
@@ -141,6 +142,10 @@ impl AggregateUDFImpl for Median {
             0.5,
             args.expr_fields[0].data_type(),
         )
+    }
+
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::Insensitive
     }
 
     fn documentation(&self) -> Option<&Documentation> {
