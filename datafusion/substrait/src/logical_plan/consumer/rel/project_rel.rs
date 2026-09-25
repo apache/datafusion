@@ -16,13 +16,12 @@
 // under the License.
 
 use crate::logical_plan::consumer::SubstraitConsumer;
-use crate::logical_plan::consumer::utils::NameTracker;
 use async_recursion::async_recursion;
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::common::{Column, not_impl_err};
 use datafusion::logical_expr::builder::project;
 use datafusion::logical_expr::expr_rewriter::NamePreserver;
-use datafusion::logical_expr::utils::find_window_exprs;
+use datafusion::logical_expr::utils::{NameTracker, find_window_exprs};
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use std::collections::HashSet;
 use std::sync::Arc;

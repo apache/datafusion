@@ -351,11 +351,32 @@ physical_plan
 03)----AggregateExec: mode=Single, gby=[], aggr=[sum(tbl.val), count(tbl.val)]
 04)------DataSourceExec: partitions=1, partition_sizes=[2]
 
+# Extracted aggregate names must not conflict with group output names.
+statement ok
+CREATE TABLE linear_name_collision_t(
+    a INT NOT NULL,
+    "sum(linear_name_collision_t.a)" INT NOT NULL
+) AS VALUES (1, 10), (2, 20);
+
+query III rowsort
+SELECT
+    "sum(linear_name_collision_t.a)",
+    SUM(a + 1),
+    SUM(a + 2)
+FROM linear_name_collision_t
+GROUP BY "sum(linear_name_collision_t.a)";
+----
+10 2 3
+20 3 4
+
 statement ok
 DROP TABLE IF EXISTS tbl;
 
 statement ok
 DROP TABLE sum_simplify_t;
+
+statement ok
+DROP TABLE linear_name_collision_t;
 
 #######
 # EliminateAggregateDistinct: DISTINCT is dropped from duplicate-insensitive

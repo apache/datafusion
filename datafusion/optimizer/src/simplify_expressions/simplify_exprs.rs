@@ -19,17 +19,19 @@
 
 use std::sync::Arc;
 
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::Expr;
 use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
-    columnize_expr, find_aggregate_exprs, grouping_set_to_exprlist, merge_schema,
+    NameTracker, columnize_expr, find_aggregate_exprs, grouping_set_to_exprlist,
+    merge_schema,
 };
 
 use super::ExprSimplifier;
 use crate::optimizer::ApplyOrder;
+use crate::simplify_expressions::aggregate_decomposition::rewrite_shared_aggregate_components;
 use crate::simplify_expressions::linear_aggregates::rewrite_multiple_linear_aggregates;
 use crate::utils::{NamePreserver, merge_into_schema};
 use crate::{OptimizerConfig, OptimizerRule};
@@ -109,7 +111,7 @@ impl SimplifyExpressions {
         // Inputs have already been rewritten (due to bottom-up traversal handled by Optimizer)
         // Just need to rewrite our own expressions
 
-        let simplifier = ExprSimplifier::new(info);
+        let simplifier = ExprSimplifier::new(info.clone());
 
         // The left and right expressions in a Join on clause are not
         // commutative, for reasons that are not entirely clear. Thus, do not
@@ -143,7 +145,7 @@ impl SimplifyExpressions {
                 rewrite_expr(expr)
             }
         })?
-        .transform_data(rewrite_aggregate_non_aggregate_aggr_expr)
+        .transform_data(|plan| rewrite_aggregate_non_aggregate_aggr_expr(plan, &info))
     }
 }
 
@@ -157,7 +159,8 @@ impl SimplifyExpressions {
 /// Ensures that `LogicalPlan::Aggregate` is well formed after rewrites
 /// by potentially introducing an extra `Projection`.
 ///
-/// Also applies the [`rewrite_multiple_linear_aggregates`] special case
+/// Also applies shared aggregate decompositions and the
+/// [`rewrite_multiple_linear_aggregates`] special case.
 ///
 /// # Rationale:
 ///
@@ -175,6 +178,7 @@ impl SimplifyExpressions {
 /// * `  Aggregate(group_expr, aggr_expr=[agg(exp2) AS _X])`
 fn rewrite_aggregate_non_aggregate_aggr_expr(
     plan: LogicalPlan,
+    info: &SimplifyContext,
 ) -> Result<Transformed<LogicalPlan>> {
     let LogicalPlan::Aggregate(Aggregate {
         input,
@@ -187,7 +191,10 @@ fn rewrite_aggregate_non_aggregate_aggr_expr(
         return Ok(Transformed::no(plan));
     };
 
-    let rewrote_aggs = rewrite_multiple_linear_aggregates(&mut aggr_expr)?;
+    let rewrote_linear = rewrite_multiple_linear_aggregates(&mut aggr_expr)?;
+    let rewrote_decompositions =
+        rewrite_shared_aggregate_components(&mut aggr_expr, info)?;
+    let rewrote_aggs = rewrote_decompositions || rewrote_linear;
 
     // Ensure that all Aggregate arguments are AggregateExpr
     if aggr_expr.iter().all(is_top_level_aggregate_expr) {
@@ -204,7 +211,25 @@ fn rewrite_aggregate_non_aggregate_aggr_expr(
     // Otherwise we need to add a Projection above Aggregate to calculate
     // the final output expressions.
 
-    let inner_aggr_expr = find_aggregate_exprs(aggr_expr.iter());
+    // Decomposing `SELECT SUM(x), AVG(x), COUNT(*)` for an integer column `x`
+    // produces separate Int64 and Float64 sums, both named "sum(x)".
+    // A GROUP BY column named "sum(x)" can also conflict, so reserve group names.
+    let mut projection_exprs = aggregate_output_exprs(&group_expr)?;
+    let mut name_tracker = NameTracker::new();
+    name_tracker.reserve(&projection_exprs);
+
+    let mut renames = Vec::new();
+    let inner_aggr_expr = find_aggregate_exprs(aggr_expr.iter())
+        .into_iter()
+        .map(|agg| {
+            let named_agg = name_tracker.get_uniquely_named_expr(agg.clone())?;
+            if named_agg != agg {
+                let (relation, name) = named_agg.qualified_name();
+                renames.push((agg, Column::new(relation, name)));
+            }
+            Ok(named_agg)
+        })
+        .collect::<Result<Vec<_>>>()?;
     let inner_aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
         Arc::clone(&input),
         group_expr.clone(),
@@ -212,16 +237,45 @@ fn rewrite_aggregate_non_aggregate_aggr_expr(
     )?);
     let inner_aggregate = Arc::new(inner_aggregate);
 
-    let mut projection_exprs = aggregate_output_exprs(&group_expr)?;
     projection_exprs.extend(aggr_expr);
     let projection_exprs = projection_exprs
         .into_iter()
-        .map(|expr| columnize_expr(expr, inner_aggregate.as_ref()))
+        .map(|expr| {
+            let original_name = expr.schema_name().to_string();
+            let replaced = replace_renamed_aggregates(expr, &renames)?;
+            let expr = columnize_expr(replaced.data, inner_aggregate.as_ref())?;
+            // Replacing an aggregate with its disambiguation alias changes the
+            // schema name; restore it so references above keep resolving.
+            if replaced.transformed && expr.schema_name().to_string() != original_name {
+                Ok(expr.alias(original_name))
+            } else {
+                Ok(expr)
+            }
+        })
         .collect::<Result<Vec<_>>>()?;
 
     Ok(Transformed::yes(LogicalPlan::Projection(
         Projection::try_new(projection_exprs, inner_aggregate)?,
     )))
+}
+
+/// Replaces aggregates that were aliased for disambiguation with a reference
+/// to the aliased column, as `columnize_expr` only matches unaliased exprs.
+fn replace_renamed_aggregates(
+    expr: Expr,
+    renames: &[(Expr, Column)],
+) -> Result<Transformed<Expr>> {
+    if renames.is_empty() {
+        return Ok(Transformed::no(expr));
+    }
+    expr.transform_down(|e| match renames.iter().find(|(agg, _)| agg == &e) {
+        Some((_, column)) => Ok(Transformed::new(
+            Expr::Column(column.clone()),
+            true,
+            TreeNodeRecursion::Jump,
+        )),
+        None => Ok(Transformed::no(e)),
+    })
 }
 
 fn is_top_level_aggregate_expr(expr: &Expr) -> bool {

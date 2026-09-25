@@ -38,10 +38,10 @@ pub use set_rel::*;
 pub use sort_rel::*;
 
 use crate::logical_plan::consumer::SubstraitConsumer;
-use crate::logical_plan::consumer::utils::NameTracker;
 use async_recursion::async_recursion;
 use datafusion::common::{Column, not_impl_err, substrait_datafusion_err, substrait_err};
 use datafusion::logical_expr::builder::project;
+use datafusion::logical_expr::utils::NameTracker;
 use datafusion::logical_expr::{Expr, LogicalPlan, Projection};
 use std::sync::Arc;
 use substrait::proto::rel::RelType;

@@ -1,0 +1,250 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for decomposing Float64 AVG(x) into SUM(x) / COUNT(x) when at least one
+# component can be shared with another aggregate.
+
+statement ok
+CREATE TABLE t(a INT NOT NULL, b INT, c DOUBLE) AS VALUES
+    (1, 10, 1.5), (2, NULL, 2.5), (3, 30, NULL), (4, 40, 4.5);
+
+# AVG over a non-nullable column decomposes into sum / count(*), and the count
+# is shared with an explicit count(*).
+query TT
+EXPLAIN SELECT count(*), avg(a) FROM t;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*), sum(t.a) / CAST(count(Int64(1)) AS Float64) AS avg(t.a)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), sum(CAST(t.a AS Float64))]]
+03)----TableScan: t projection=[a]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*), sum(t.a)@1 / CAST(count(Int64(1))@0 AS Float64) as avg(t.a)]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), sum(t.a)]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# AVG without a shared SUM or COUNT keeps its combined accumulator.
+query TT
+EXPLAIN SELECT avg(b) FROM t;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[avg(CAST(t.b AS Float64))]]
+02)--TableScan: t projection=[b]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[avg(t.b)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Decomposition does not normalize COUNT(CAST(expr)) to COUNT(expr); that
+# equivalence belongs in a separate optimizer rewrite.
+query TT
+EXPLAIN SELECT count(b), avg(b) FROM t;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[count(t.b), avg(CAST(t.b AS Float64))]]
+02)--TableScan: t projection=[b]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[count(t.b), avg(t.b)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Sharing only between decomposition candidates would still increase the
+# number of distinct aggregates (two AVGs to two SUMs plus one COUNT), so both
+# AVGs keep their combined accumulators.
+query TT
+EXPLAIN SELECT avg(a), avg(a + 1) FROM t;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[avg(CAST(t.a AS Float64)), avg(CAST(CAST(t.a AS Int64) + Int64(1) AS Float64))]]
+02)--TableScan: t projection=[a]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[avg(t.a), avg(t.a + Int64(1))]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A nullable AVG decomposes when its count can be shared.
+query TT
+EXPLAIN SELECT count(c), avg(c) FROM t;
+----
+logical_plan
+01)Projection: count(t.c), sum(t.c) / CAST(count(t.c) AS Float64) AS avg(t.c)
+02)--Aggregate: groupBy=[[]], aggr=[[count(t.c), sum(t.c)]]
+03)----TableScan: t projection=[c]
+physical_plan
+01)ProjectionExec: expr=[count(t.c)@0 as count(t.c), sum(t.c)@1 / CAST(count(t.c)@0 AS Float64) as avg(t.c)]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(t.c), sum(t.c)]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# AVG decomposes when its SUM can be shared.
+query TT
+EXPLAIN SELECT sum(c), avg(c) FROM t;
+----
+logical_plan
+01)Projection: sum(t.c), sum(t.c) / CAST(count(t.c) AS Float64) AS avg(t.c)
+02)--Aggregate: groupBy=[[]], aggr=[[sum(t.c), count(t.c)]]
+03)----TableScan: t projection=[c]
+physical_plan
+01)ProjectionExec: expr=[sum(t.c)@0 as sum(t.c), sum(t.c)@0 / CAST(count(t.c)@1 AS Float64) as avg(t.c)]
+02)--AggregateExec: mode=Single, gby=[], aggr=[sum(t.c), count(t.c)]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# AVG uses the same SUM and COUNT when both are already requested.
+query TT
+EXPLAIN SELECT sum(c), count(c), avg(c) FROM t;
+----
+logical_plan
+01)Projection: sum(t.c), count(t.c), sum(t.c) / CAST(count(t.c) AS Float64) AS avg(t.c)
+02)--Aggregate: groupBy=[[]], aggr=[[sum(t.c), count(t.c)]]
+03)----TableScan: t projection=[c]
+physical_plan
+01)ProjectionExec: expr=[sum(t.c)@0 as sum(t.c), count(t.c)@1 as count(t.c), sum(t.c)@0 / CAST(count(t.c)@1 AS Float64) as avg(t.c)]
+02)--AggregateExec: mode=Single, gby=[], aggr=[sum(t.c), count(t.c)]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The decomposed sum(CAST(a AS Float64)) collides with the user-written
+# sum(a) on schema name; the inner aggregate is disambiguated with an alias.
+query TT
+EXPLAIN SELECT count(*), avg(a), sum(a) FROM t;
+----
+logical_plan
+01)Projection: count(Int64(1)) AS count(*), sum(t.a) / CAST(count(Int64(1)) AS Float64) AS avg(t.a), sum(t.a)__temp__0 AS sum(t.a)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), sum(CAST(t.a AS Float64)), sum(CAST(t.a AS Int64)) AS sum(t.a)__temp__0]]
+03)----TableScan: t projection=[a]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(*), sum(t.a)@1 / CAST(count(Int64(1))@0 AS Float64) as avg(t.a), sum(t.a)__temp__0@2 as sum(t.a)]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), sum(t.a), sum(t.a) as sum(t.a)__temp__0]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query IRI
+SELECT count(*), avg(a), sum(a) FROM t;
+----
+4 2.5 10
+
+# Results with NULLs in both nullable columns.
+query RRR
+SELECT avg(a), avg(b), avg(c) FROM t;
+----
+2.5 26.666666666667 2.833333333333
+
+# Decomposition preserves AVG semantics for empty input...
+query RI
+SELECT avg(a), count(*) FROM t WHERE a > 100;
+----
+NULL 0
+
+# ...and for all-NULL input.
+query RI
+SELECT avg(x), count(x)
+FROM (VALUES (CAST(NULL AS DOUBLE)), (NULL)) v(x);
+----
+NULL 0
+
+# Grouped decomposition.
+query IRI rowsort
+SELECT b % 20, avg(a), count(*) FROM t GROUP BY b % 20;
+----
+0 4 1
+10 2 2
+NULL 2 1
+
+# Grouping sets decomposition preserves expanded grouping columns and the
+# internal grouping id needed by GROUPING().
+query IIRI
+SELECT b, grouping(b), avg(a), count(*)
+FROM t
+GROUP BY GROUPING SETS ((b), ())
+ORDER BY grouping(b), b NULLS FIRST;
+----
+NULL 0 2 1
+10 0 1 1
+30 0 3 1
+40 0 4 1
+NULL 1 2.5 4
+
+# DISTINCT / FILTER AVGs are not decomposed.
+query TT
+EXPLAIN SELECT avg(DISTINCT a), avg(a) FILTER (WHERE a > 1) FROM t;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[avg(DISTINCT __common_expr_1 AS t.a), avg(__common_expr_1) FILTER (WHERE t.a > Int32(1)) AS avg(t.a) FILTER (WHERE t.a > Int64(1))]]
+02)--Projection: CAST(t.a AS Float64) AS __common_expr_1, t.a
+03)----TableScan: t projection=[a]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[avg(DISTINCT t.a), avg(__common_expr_1) FILTER (WHERE t.a > Int32(1)) as avg(t.a) FILTER (WHERE t.a > Int64(1))]
+02)--ProjectionExec: expr=[CAST(a@0 AS Float64) as __common_expr_1, a@0 as a]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Ordered and volatile AVG arguments are not decomposed.
+query TT
+EXPLAIN SELECT sum(c), avg(c ORDER BY a), sum(random()), avg(random()) FROM t;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[sum(t.c), avg(t.c) ORDER BY [t.a ASC NULLS LAST], sum(random()), avg(random())]]
+02)--TableScan: t projection=[a, c]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[sum(t.c), avg(t.c) ORDER BY [t.a ASC NULLS LAST], sum(random()), avg(random())]
+02)--SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Decimal AVG is not decomposed: its widened sum type and division semantics
+# differ from SUM / COUNT.
+statement ok
+CREATE TABLE td(d DECIMAL(10,2) NOT NULL) AS VALUES (1.10), (2.20);
+
+query TT
+EXPLAIN SELECT sum(d), avg(d) FROM td;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[sum(td.d), avg(td.d)]]
+02)--TableScan: td projection=[d]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[sum(td.d), avg(td.d)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query RR
+SELECT sum(d), avg(d) FROM td;
+----
+3.30 1.650000
+
+# Internal aggregate aliases must not conflict with group output names,
+# including names that look like generated aliases.
+statement ok
+CREATE TABLE name_collision_t(
+    a INT NOT NULL,
+    "sum(name_collision_t.a):1" INT NOT NULL,
+    "sum(name_collision_t.a)__temp__0" INT NOT NULL
+) AS VALUES (1, 10, 100), (2, 20, 200);
+
+query IIRII rowsort
+SELECT
+    "sum(name_collision_t.a):1",
+    "sum(name_collision_t.a)__temp__0",
+    avg(a),
+    sum(a),
+    count(*)
+FROM name_collision_t
+GROUP BY
+    "sum(name_collision_t.a):1",
+    "sum(name_collision_t.a)__temp__0";
+----
+10 100 1 1 1
+20 200 2 2 1
+
+statement ok
+DROP TABLE t;
+
+statement ok
+DROP TABLE td;
+
+statement ok
+DROP TABLE name_collision_t;
