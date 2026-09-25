@@ -859,7 +859,6 @@ impl FileSource for ParquetSource {
                         self.table_schema.table_schema(),
                         &predicate_creation_errors,
                         self.max_in_list_size(),
-                        false,
                     ) {
                         let mut guarantees = pruning_predicate
                             .literal_guarantees()
