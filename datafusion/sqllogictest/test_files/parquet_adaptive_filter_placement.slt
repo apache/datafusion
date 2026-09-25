@@ -16,9 +16,10 @@
 # under the License.
 
 # Tests for `datafusion.execution.adaptive_filter_placement`: the Parquet scan
-# places each filter conjunct in the row filter or in the post-scan filter,
-# and changes the placement at row group boundaries. The results must be the
-# same as without adaptive placement.
+# starts each filter conjunct in the post-scan filter, and moves it to the row
+# filter at a row group boundary when the measurements show that the row
+# filter saves more than it costs. The results must be the same as without
+# adaptive placement.
 
 statement ok
 set datafusion.execution.parquet.max_row_group_size = 1024;
@@ -72,12 +73,17 @@ SELECT v, s FROM t WHERE a = 1 AND b = 42 ORDER BY v LIMIT 3;
 4203 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx4203
 4205 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx4205
 
-# A limit without an order: the placement can move `a = 0` to the post-scan
-# filter in the middle of the file.
+# A limit without an order: the placement can move the clustered filter on
+# `b` to the row filter in the middle of the file.
 query I
 SELECT count(*) FROM (SELECT v FROM t WHERE a = 0 LIMIT 3000);
 ----
 3000
+
+query I
+SELECT count(*) FROM (SELECT v FROM t WHERE b < 5 OR b BETWEEN 50 AND 54 LIMIT 700);
+----
+700
 
 # The same queries without adaptive placement give the same results.
 statement ok

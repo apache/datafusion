@@ -28,9 +28,12 @@
 //! | [`Placement::Skip`] | Not evaluated, and its columns are not decoded | Optional conjuncts in the `adaptive` optional filter mode, while the gate is paused |
 //!
 //! A row filter is not always better. It saves decode time only when it
-//! removes long runs of rows, and the decoder fetches the columns of each
-//! row filter predicate before the other columns (one more round trip for
-//! each row group). See [`model`] for the decision.
+//! removes long runs of rows, each row filter stage has a fixed cost for
+//! each row, and the decoder fetches the columns of each row filter
+//! predicate before the other columns (one more round trip for each row
+//! group). Thus a required conjunct starts in the post-scan filter and
+//! becomes a row filter only on measured evidence. See [`model`] for the
+//! decision.
 //!
 //! [`FilePlacement`] decides at file open and again at each row group
 //! boundary. The stream then rebuilds the decoder
@@ -140,6 +143,9 @@ enum ConjunctKind {
         /// Compressed bytes for each row of the output columns that the
         /// conjunct does not read.
         unread_output_bytes_per_row: f64,
+        /// Compressed bytes for each row of the output columns that the
+        /// conjunct reads.
+        read_output_bytes_per_row: f64,
     },
     /// An optional conjunct with a gate (the `adaptive` optional filter
     /// mode).
@@ -210,10 +216,16 @@ impl FilePlacement {
                         output_projection.leaf_included(leaf)
                             && !candidate.reads_leaf(leaf)
                     });
+                let read_output_bytes_per_row =
+                    compressed_bytes_per_row(metadata, |leaf| {
+                        output_projection.leaf_included(leaf)
+                            && candidate.reads_leaf(leaf)
+                    });
                 ConjunctKind::Required {
                     expr: Arc::clone(candidate.source_expr()),
                     stats,
                     unread_output_bytes_per_row,
+                    read_output_bytes_per_row,
                 }
             };
             conjuncts.push(ManagedConjunct {
@@ -278,11 +290,13 @@ impl FilePlacement {
                 ConjunctKind::Required {
                     stats,
                     unread_output_bytes_per_row,
+                    read_output_bytes_per_row,
                     ..
                 } => place_required(
                     &RequiredConjunctInputs {
                         observation: stats.observation(),
                         unread_output_bytes_per_row: *unread_output_bytes_per_row,
+                        read_output_bytes_per_row: *read_output_bytes_per_row,
                         decode_ns_per_byte,
                         fetch_ns_per_row,
                     },
