@@ -891,10 +891,11 @@ impl Display for MapKeyDedupPolicy {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum OptionalFilterMode {
     /// Evaluate optional filters like any other pushed-down filter.
-    #[default]
     Always,
     /// Pause optional filters that cost more than they save. Try them again
-    /// at intervals to find out if they became worth their cost.
+    /// at intervals to find out if they became worth their cost. This is the
+    /// default.
+    #[default]
     Adaptive,
     /// Use optional filters only for statistics pruning (for example of
     /// files, row groups and pages). Never evaluate them row by row.
@@ -1257,14 +1258,14 @@ config_namespace! {
         /// other pushed-down filter. `adaptive` pauses these filters when they
         /// cost more than they save (see
         /// `datafusion.execution.optional_filter_min_saving_ns_per_row`) or when
-        /// they remove no rows, and tries them again at intervals. `pruning_only`
-        /// uses these filters only to prune files, row groups and pages with
-        /// statistics, and never evaluates them row by row.
+        /// they remove no rows, and tries them again at intervals (the default).
+        /// `pruning_only` uses these filters only to prune files, row groups
+        /// and pages with statistics, and never evaluates them row by row.
         ///
         /// This option is most important when
         /// `datafusion.execution.parquet.pushdown_filters` is true, because then
         /// the Parquet reader evaluates pushed-down filters row by row.
-        pub optional_filter_mode: OptionalFilterMode, default = OptionalFilterMode::Always
+        pub optional_filter_mode: OptionalFilterMode, default = OptionalFilterMode::Adaptive
 
         /// The assumed work, in nanoseconds, that each row removed by an
         /// optional filter saves downstream. Optional filters are filters that
@@ -1277,8 +1278,9 @@ config_namespace! {
         /// best value depends on the hardware.
         pub optional_filter_min_saving_ns_per_row: f64, default = 20.0
 
-        /// When true and `datafusion.execution.parquet.pushdown_filters` is
-        /// true, the Parquet scan decides for each filter conjunct if it is a
+        /// When true (the default) and
+        /// `datafusion.execution.parquet.pushdown_filters` is true, the
+        /// Parquet scan decides for each filter conjunct if it is a
         /// row filter (late materialization) or a filter on the decoded
         /// batches. Each conjunct starts as a filter on the decoded batches.
         /// The scan measures the rows that each conjunct removes, the decode
@@ -1287,7 +1289,7 @@ config_namespace! {
         /// saves is more than its cost. When `datafusion.execution.optional_filter_mode`
         /// is `adaptive`, an optional filter that is paused is also removed
         /// from the row filter, thus its columns are not decoded.
-        pub adaptive_filter_placement: bool, default = false
+        pub adaptive_filter_placement: bool, default = true
     }
 }
 

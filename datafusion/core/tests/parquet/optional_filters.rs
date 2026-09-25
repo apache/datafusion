@@ -181,6 +181,10 @@ fn scan_with_pushdown(
     let mut options = ConfigOptions::default();
     options.execution.parquet.pushdown_filters = pushdown;
     options.execution.optional_filter_mode = mode;
+    // These tests check the optional filters in the row filter. The
+    // adaptive filter placement (the default) starts each conjunct after the
+    // decode.
+    options.execution.adaptive_filter_placement = false;
     options.execution.optional_filter_min_saving_ns_per_row = min_saving_ns_per_row;
     let source = ParquetSource::new(Arc::clone(schema))
         .try_pushdown_filters(vec![predicate], &options)
@@ -517,6 +521,7 @@ fn struct_scan(
     options.execution.parquet.pushdown_filters = true;
     options.execution.optional_filter_mode = mode;
     options.execution.optional_filter_min_saving_ns_per_row = 1e9;
+    options.execution.adaptive_filter_placement = false;
     let source = ParquetSource::new(Arc::clone(schema))
         .with_predicate(table_predicate)
         .try_pushdown_filters(vec![a_op(schema, Operator::Lt, 50)], &options)

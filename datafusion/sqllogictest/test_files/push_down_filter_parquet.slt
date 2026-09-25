@@ -201,6 +201,11 @@ LOCATION 'test_files/scratch/push_down_filter_parquet/topk_pushdown.parquet';
 statement ok
 set datafusion.explain.analyze_categories = 'rows';
 
+# Evaluate the TopK dynamic filter on each row. The default (`adaptive`) can
+# pause it, because its cost depends on timing, and then the metrics change.
+statement ok
+set datafusion.execution.optional_filter_mode = 'always';
+
 query TT
 EXPLAIN ANALYZE SELECT t FROM topk_pushdown ORDER BY t * t LIMIT 10;
 ----
@@ -210,6 +215,9 @@ Plan with Metrics
 
 statement ok
 reset datafusion.explain.analyze_categories;
+
+statement ok
+reset datafusion.execution.optional_filter_mode;
 
 statement ok
 reset datafusion.execution.parquet.max_row_group_size;

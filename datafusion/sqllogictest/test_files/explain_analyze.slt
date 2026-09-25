@@ -189,6 +189,15 @@ reset datafusion.explain.analyze_level;
 statement ok
 set datafusion.execution.parquet.pushdown_filters = true;
 
+# The expected metrics below are for the row filter without adaptive
+# decisions. The default (`adaptive`) can pause the TopK dynamic filter,
+# because its cost depends on timing, and then the metrics change.
+statement ok
+set datafusion.execution.optional_filter_mode = 'always';
+
+statement ok
+set datafusion.execution.adaptive_filter_placement = false;
+
 statement ok
 CREATE TABLE _cat_data AS VALUES
   ('Anow Vole', 7),
@@ -713,3 +722,9 @@ drop table cat_tracking;
 
 statement ok
 reset datafusion.execution.parquet.pushdown_filters;
+
+statement ok
+reset datafusion.execution.optional_filter_mode;
+
+statement ok
+reset datafusion.execution.adaptive_filter_placement;

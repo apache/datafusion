@@ -37,6 +37,7 @@ use datafusion::{
     physical_plan::metrics::MetricsSet,
     prelude::{ParquetReadOptions, SessionConfig, SessionContext},
 };
+use datafusion_common::config::OptionalFilterMode;
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_physical_plan::metrics::MetricValue;
 use parquet::arrow::ArrowWriter;
@@ -321,6 +322,13 @@ impl ContextWithParquet {
     ) -> Self {
         // Use a single partition for deterministic results no matter how many CPUs the host has
         config = config.with_target_partitions(1);
+        // The tests check the exact metrics of a plain row filter. The
+        // adaptive modes (the defaults) make decisions from time
+        // measurements, and the adaptive filter placement coalesces small
+        // batches, which delays the TopK dynamic filters. Thus use the modes
+        // without adaptive decisions.
+        config.options_mut().execution.optional_filter_mode = OptionalFilterMode::Always;
+        config.options_mut().execution.adaptive_filter_placement = false;
         let file = match unit {
             Unit::RowGroup(row_per_group) => {
                 config = config.with_parquet_bloom_filter_pruning(true);

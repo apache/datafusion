@@ -31,6 +31,19 @@
 statement ok
 set datafusion.execution.parquet.pushdown_filters = true;
 
+# These tests check the runtime row group pruning, thus the TopK must see
+# the rows of each row group before the next row group boundary. The
+# adaptive filter placement (the default) starts each conjunct after the
+# decode, and the scan then coalesces the small batches of these 3-row row
+# groups up to the batch size. The TopK sees no row until the end of the
+# file, thus the scan prunes no row group. Use a row filter without adaptive
+# decisions instead.
+statement ok
+set datafusion.execution.optional_filter_mode = 'always';
+
+statement ok
+set datafusion.execution.adaptive_filter_placement = false;
+
 statement ok
 set datafusion.explain.analyze_level = summary;
 
@@ -466,3 +479,9 @@ set datafusion.execution.target_partitions = 4;
 
 statement ok
 RESET datafusion.execution.parquet.pushdown_filters;
+
+statement ok
+RESET datafusion.execution.optional_filter_mode;
+
+statement ok
+RESET datafusion.execution.adaptive_filter_placement;

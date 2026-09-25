@@ -638,6 +638,9 @@ async fn predicate_cache_default() -> datafusion_common::Result<()> {
 async fn predicate_cache_pushdown_default() -> datafusion_common::Result<()> {
     let mut config = SessionConfig::new();
     config.options_mut().execution.parquet.pushdown_filters = true;
+    // The cache is used by the row filter. The adaptive filter placement
+    // (the default) starts each conjunct after the decode.
+    config.options_mut().execution.adaptive_filter_placement = false;
     let ctx = SessionContext::new_with_config(config);
     // The cache is on by default, and used when filter pushdown is enabled
     PredicateCacheTest {
@@ -652,6 +655,9 @@ async fn predicate_cache_pushdown_default() -> datafusion_common::Result<()> {
 async fn predicate_cache_stats_issue_19561() -> datafusion_common::Result<()> {
     let mut config = SessionConfig::new();
     config.options_mut().execution.parquet.pushdown_filters = true;
+    // The cache is used by the row filter. The adaptive filter placement
+    // (the default) starts each conjunct after the decode.
+    config.options_mut().execution.adaptive_filter_placement = false;
     // force to get multiple batches to trigger repeated metric compound bug
     config.options_mut().execution.batch_size =
         datafusion_common::config::ConfigNonZeroUsize::try_new(1)?;
@@ -670,6 +676,9 @@ async fn predicate_cache_pushdown_default_selections_only()
 -> datafusion_common::Result<()> {
     let mut config = SessionConfig::new();
     config.options_mut().execution.parquet.pushdown_filters = true;
+    // The cache is used by the row filter. The adaptive filter placement
+    // (the default) starts each conjunct after the decode.
+    config.options_mut().execution.adaptive_filter_placement = false;
     // forcing filter selections minimizes the number of rows read from the cache
     config
         .options_mut()

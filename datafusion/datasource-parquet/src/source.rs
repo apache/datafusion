@@ -2263,7 +2263,7 @@ mod tests {
             false,
         )]));
         let source = ParquetSource::new(Arc::clone(&schema));
-        assert_eq!(source.optional_filter_mode, OptionalFilterMode::Always);
+        assert_eq!(source.optional_filter_mode, OptionalFilterMode::Adaptive);
 
         let filter = logical2physical(&col("value").eq(logical_lit(1i64)), &schema);
         let optional: Arc<dyn PhysicalExpr> =
@@ -2271,7 +2271,7 @@ mod tests {
 
         let mut config = ConfigOptions::default();
         config.execution.parquet.pushdown_filters = true;
-        config.execution.optional_filter_mode = OptionalFilterMode::Adaptive;
+        config.execution.optional_filter_mode = OptionalFilterMode::Always;
         config.execution.optional_filter_min_saving_ns_per_row = 7.5;
         let prop = source
             .try_pushdown_filters(vec![optional], &config)
@@ -2282,7 +2282,7 @@ mod tests {
         let updated = (updated.as_ref() as &dyn std::any::Any)
             .downcast_ref::<ParquetSource>()
             .expect("ParquetSource");
-        assert_eq!(updated.optional_filter_mode, OptionalFilterMode::Adaptive);
+        assert_eq!(updated.optional_filter_mode, OptionalFilterMode::Always);
         assert_eq!(
             updated.optional_filter_gate_config.min_saving_ns_per_row,
             7.5
