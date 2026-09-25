@@ -983,6 +983,15 @@ mod tests {
                 assert!(buf.is_empty());
                 Ok(Arc::new(WindowUDF::from(TestUdwf::new())))
             }
+
+            fn try_decode_higher_order_function(
+                &self,
+                _name: &str,
+                buf: &[u8],
+            ) -> Result<Arc<HigherOrderUDF>> {
+                assert!(buf.is_empty());
+                Ok(Arc::new(HigherOrderUDF::new_from_impl(TestHigherOrderUdf)))
+            }
         }
 
         fn encode_ctx_over<'a>(
@@ -1359,6 +1368,143 @@ mod tests {
             assert!(buf.is_empty(), "a rejected encode must leave buf untouched");
 
             Ok(())
+        }
+
+        /// Empty registry, so every by-name decode falls back to the codec.
+        fn with_composed_ctx(
+            codecs: Vec<Arc<dyn PhysicalExtensionCodec>>,
+            f: impl FnOnce(
+                &ExecutionPlanEncodeCtx<'_>,
+                &ExecutionPlanDecodeCtx<'_>,
+            ) -> Result<()>,
+        ) -> Result<()> {
+            let composed = ComposedPhysicalExtensionCodec::new(codecs);
+            let converter = DefaultPhysicalProtoConverter {};
+            let encoder = encode_ctx_over(&composed, &converter);
+            let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+
+            let task_ctx = TaskContext::default();
+            let decode_context = PhysicalPlanDecodeContext::new(&task_ctx, &composed);
+            let decoder = ConverterPlanDecoder {
+                ctx: &decode_context,
+                proto_converter: &converter,
+            };
+            let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+
+            f(&encode_ctx, &decode_ctx)
+        }
+
+        #[test]
+        fn composed_by_name_fallback_reaches_codec_at_position_0() -> Result<()> {
+            with_composed_ctx(vec![Arc::new(EmptyPayloadOnlyCodec)], |enc, dec| {
+                let payload = enc.encode_udf(&ScalarUDF::from(TestUdf::new()))?;
+                assert!(payload.is_none());
+                assert_eq!(
+                    dec.decode_udf("test_udf", payload.as_deref())?.name(),
+                    "test_udf"
+                );
+
+                let payload = enc.encode_udaf(&AggregateUDF::from(TestUdaf::new()))?;
+                assert!(payload.is_none());
+                assert_eq!(
+                    dec.decode_udaf("test_udaf", payload.as_deref())?.name(),
+                    "test_udaf"
+                );
+                Ok(())
+            })
+        }
+
+        #[test]
+        fn composed_by_name_udf_fallback_reaches_later_codec() -> Result<()> {
+            with_composed_ctx(
+                vec![
+                    Arc::new(DefaultPhysicalExtensionCodec {}),
+                    Arc::new(EmptyPayloadOnlyCodec),
+                ],
+                |enc, dec| {
+                    let payload = enc.encode_udf(&ScalarUDF::from(TestUdf::new()))?;
+                    assert!(payload.is_none(), "expected by-name encoding");
+                    assert_eq!(
+                        dec.decode_udf("test_udf", payload.as_deref())?.name(),
+                        "test_udf"
+                    );
+                    Ok(())
+                },
+            )
+        }
+
+        #[test]
+        fn composed_by_name_udaf_fallback_reaches_later_codec() -> Result<()> {
+            with_composed_ctx(
+                vec![
+                    Arc::new(DefaultPhysicalExtensionCodec {}),
+                    Arc::new(EmptyPayloadOnlyCodec),
+                ],
+                |enc, dec| {
+                    let payload =
+                        enc.encode_udaf(&AggregateUDF::from(TestUdaf::new()))?;
+                    assert!(payload.is_none(), "expected by-name encoding");
+                    assert_eq!(
+                        dec.decode_udaf("test_udaf", payload.as_deref())?.name(),
+                        "test_udaf"
+                    );
+                    Ok(())
+                },
+            )
+        }
+
+        #[test]
+        fn composed_by_name_udwf_fallback_reaches_later_codec() -> Result<()> {
+            with_composed_ctx(
+                vec![
+                    Arc::new(DefaultPhysicalExtensionCodec {}),
+                    Arc::new(EmptyPayloadOnlyCodec),
+                ],
+                |enc, dec| {
+                    let payload = enc.encode_udwf(&WindowUDF::from(TestUdwf::new()))?;
+                    assert!(payload.is_none(), "expected by-name encoding");
+                    assert_eq!(
+                        dec.decode_udwf("test_udwf", payload.as_deref())?.name(),
+                        "test_udwf"
+                    );
+                    Ok(())
+                },
+            )
+        }
+
+        #[test]
+        fn composed_by_name_higher_order_fallback_reaches_later_codec() -> Result<()> {
+            let composed = ComposedPhysicalExtensionCodec::new(vec![
+                Arc::new(DefaultPhysicalExtensionCodec {}),
+                Arc::new(EmptyPayloadOnlyCodec),
+            ]);
+
+            let mut buf = vec![];
+            composed.try_encode_higher_order_function(
+                &HigherOrderUDF::new_from_impl(TestHigherOrderUdf),
+                &mut buf,
+            )?;
+            assert!(buf.is_empty(), "expected by-name encoding");
+            let decoded = composed
+                .try_decode_higher_order_function("test_higher_order_udf", &buf)?;
+            assert_eq!(decoded.name(), "test_higher_order_udf");
+            Ok(())
+        }
+
+        #[test]
+        fn composed_by_name_decode_errors_when_no_codec_resolves_the_name() {
+            let composed = ComposedPhysicalExtensionCodec::new(vec![
+                Arc::new(DefaultPhysicalExtensionCodec {}),
+                Arc::new(RejectsUdwfCodec),
+            ]);
+
+            let err = composed
+                .try_decode_udwf("test_udwf", &[])
+                .expect_err("no codec can resolve the name");
+            assert!(
+                err.to_string().contains("test_udwf"),
+                "expected the function name in the error, got: {err}"
+            );
         }
     }
 }
@@ -2368,14 +2514,7 @@ pub struct ComposedPhysicalExtensionCodec {
 impl ComposedPhysicalExtensionCodec {
     /// Position in this codecs list is important as it will be used for decoding.
     /// If new codec is added it should go to last position.
-    ///
-    /// Position is claimed differently by the two hook families. For plans and
-    /// expressions the first codec returning `Ok` claims its position. For the
-    /// function hooks (udf, udaf, udwf, higher-order) a codec that accepts
-    /// without writing a payload does *not* claim its position, because an empty
-    /// payload is the encode-by-name signal; a later codec in the list may claim
-    /// it instead. Ordering therefore matters for both, but a payload-free codec
-    /// early in the list will not shadow a later one that actually encodes.
+    /// A function codec that writes no payload does not claim a position.
     pub fn new(codecs: Vec<Arc<dyn PhysicalExtensionCodec>>) -> Self {
         Self { codecs }
     }
@@ -2395,16 +2534,38 @@ impl ComposedPhysicalExtensionCodec {
         decode(codec.as_ref(), &proto.blob)
     }
 
-    /// Finds the codec that owns `encode`'s node and frames its payload.
-    ///
-    /// `encode_by_name_on_empty` selects between the two contracts the
-    /// [`PhysicalExtensionCodec`] hooks use. Plan and expression hooks default to
-    /// an error, so any `Ok` claims the node and an empty payload is still framed.
-    /// The function hooks default to `Ok(())` writing nothing, which is the
-    /// encode-by-name signal: framing that empty blob would make a registry
-    /// function look codec-encoded and strand it at decode time, so a codec that
-    /// writes nothing must not claim the position and `buf` must be left
-    /// untouched.
+    /// An empty `buf` means encoded by name, so there is no position: try every codec.
+    fn decode_function<R>(
+        &self,
+        name: &str,
+        buf: &[u8],
+        decode: impl Fn(&dyn PhysicalExtensionCodec, &[u8]) -> Result<R>,
+    ) -> Result<R> {
+        if !buf.is_empty() {
+            return self.decode_protobuf(buf, decode);
+        }
+
+        let mut last_err = None;
+        for codec in &self.codecs {
+            match decode(codec.as_ref(), buf) {
+                Ok(decoded) => return Ok(decoded),
+                Err(err) => last_err = Some(err),
+            }
+        }
+
+        Err(match last_err {
+            Some(err) => err.context(format!(
+                "None of the {} composed codecs could decode '{name}' by name",
+                self.codecs.len()
+            )),
+            None => DataFusionError::NotImplemented(
+                "Empty list of composed codecs".to_owned(),
+            ),
+        })
+    }
+
+    /// Frames the first accepting codec's payload with its position. With
+    /// `encode_by_name_on_empty`, a codec that writes nothing leaves `buf` untouched.
     fn encode_with(
         &self,
         buf: &mut Vec<u8>,
@@ -2417,8 +2578,7 @@ impl ComposedPhysicalExtensionCodec {
         let mut any_accepted = false;
 
         for (position, codec) in self.codecs.iter().enumerate() {
-            // A codec may write before it rejects the node; those bytes must not
-            // reach whichever codec succeeds next.
+            // Drop bytes a rejected attempt wrote before the next codec runs.
             data.clear();
             match encode(codec.as_ref(), &mut data) {
                 Ok(()) => {
@@ -2434,7 +2594,6 @@ impl ComposedPhysicalExtensionCodec {
 
         let Some(encoder_position) = encoder_position else {
             return match last_err {
-                // Every codec rejected the node outright.
                 Some(err) if !any_accepted => Err(err),
                 // A codec accepted it without a payload: leave it encoded by name.
                 _ if encode_by_name_on_empty && any_accepted => Ok(()),
@@ -2480,7 +2639,7 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
     }
 
     fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
-        self.decode_protobuf(buf, |codec, data| codec.try_decode_udf(name, data))
+        self.decode_function(name, buf, |codec, data| codec.try_decode_udf(name, data))
     }
 
     fn try_encode_udf(&self, node: &ScalarUDF, buf: &mut Vec<u8>) -> Result<()> {
@@ -2492,7 +2651,7 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
         name: &str,
         buf: &[u8],
     ) -> Result<Arc<HigherOrderUDF>> {
-        self.decode_protobuf(buf, |codec, data| {
+        self.decode_function(name, buf, |codec, data| {
             codec.try_decode_higher_order_function(name, data)
         })
     }
@@ -2528,7 +2687,7 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
     }
 
     fn try_decode_udaf(&self, name: &str, buf: &[u8]) -> Result<Arc<AggregateUDF>> {
-        self.decode_protobuf(buf, |codec, data| codec.try_decode_udaf(name, data))
+        self.decode_function(name, buf, |codec, data| codec.try_decode_udaf(name, data))
     }
 
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
@@ -2536,7 +2695,7 @@ impl PhysicalExtensionCodec for ComposedPhysicalExtensionCodec {
     }
 
     fn try_decode_udwf(&self, name: &str, buf: &[u8]) -> Result<Arc<WindowUDF>> {
-        self.decode_protobuf(buf, |codec, data| codec.try_decode_udwf(name, data))
+        self.decode_function(name, buf, |codec, data| codec.try_decode_udwf(name, data))
     }
 
     fn try_encode_udwf(&self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
