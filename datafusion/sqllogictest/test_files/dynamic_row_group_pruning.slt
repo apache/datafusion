@@ -113,6 +113,25 @@ Plan with Metrics
 01)SortExec: TopK(fetch=3), expr=[v@0 DESC], preserve_partitioning=[false], filter=[v@0 IS NULL OR v@0 > 12], metrics=[output_rows=3, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>]
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_row_group_pruning/data.parquet]]}, projection=[v], file_type=parquet, predicate=Optional(DynamicFilter [ v@0 IS NULL OR v@0 > 12 ]), sort_order_for_reorder=[v@0 DESC], reverse_row_groups=true, dynamic_rg_pruning=eligible, pruning_predicate=v_null_count@0 > 0 OR v_null_count@0 != row_count@2 AND v_max@1 > 12, required_guarantees=[], metrics=[output_rows=3, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=5 total → 5 matched, row_groups_pruned_bloom_filter=5 total → 5 matched, page_index_pages_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, bytes_processed=<slt:ignore>, bytes_scanned=<slt:ignore>, row_groups_pruned_dynamic_filter=4, metadata_load_time=<slt:ignore>, scan_efficiency_ratio=<slt:ignore>]
 
+# The same query with adaptive filter placement and with the TopK dynamic
+# filter evaluated after the decode: the scan coalesces the small batches of
+# these 3-row row groups, but it must hand the buffered rows to the TopK at
+# each row group boundary. Otherwise the TopK sees no row until the end of
+# the file and the scan prunes no row group. The scan must prune the same
+# four row groups as above.
+statement ok
+set datafusion.execution.adaptive_filter_placement = true;
+
+query TT
+explain analyze select v from t order by v desc limit 3;
+----
+Plan with Metrics
+01)SortExec: TopK(fetch=3), expr=[v@0 DESC], preserve_partitioning=[false], filter=[v@0 IS NULL OR v@0 > 12], metrics=[output_rows=3, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/dynamic_row_group_pruning/data.parquet]]}, projection=[v], file_type=parquet, predicate=DynamicFilter [ v@0 IS NULL OR v@0 > 12 ], sort_order_for_reorder=[v@0 DESC], reverse_row_groups=true, dynamic_rg_pruning=eligible, pruning_predicate=v_null_count@0 > 0 OR v_null_count@0 != row_count@2 AND v_max@1 > 12, required_guarantees=[], metrics=[output_rows=3, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, files_ranges_pruned_statistics=1 total → 1 matched, row_groups_pruned_statistics=5 total → 5 matched, row_groups_pruned_bloom_filter=5 total → 5 matched, page_index_pages_pruned=0 total → 0 matched, limit_pruned_row_groups=0 total → 0 matched, bytes_processed=<slt:ignore>, bytes_scanned=<slt:ignore>, filter_placement_changes=0, row_groups_pruned_dynamic_filter=4, metadata_load_time=<slt:ignore>, scan_efficiency_ratio=<slt:ignore>]
+
+statement ok
+RESET datafusion.execution.adaptive_filter_placement;
+
 # `EXPLAIN ANALYZE` with a *static* predicate must surface the
 # `row_filter_skipped_fully_matched` metric with a non-zero value — this
 # is the only way to see the fully-matched RowFilter-skip optimization

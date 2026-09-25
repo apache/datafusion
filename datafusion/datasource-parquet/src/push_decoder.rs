@@ -349,6 +349,16 @@ pub(crate) struct PushDecoderStreamState {
     /// end-of-input flushing happens exactly once no matter which terminal
     /// path reached it.
     pub(crate) flushed: bool,
+    /// True if the partial batch in [`Self::batch_coalescer`] is handed
+    /// downstream at each row group boundary, before the runtime row group
+    /// pruning for the next row groups.
+    ///
+    /// Set when the predicate has a dynamic filter that can still change.
+    /// Its producer (for example a TopK) can tighten the filter only after it
+    /// sees rows. If the coalescer held the rows of small row groups until it
+    /// has `batch_size` rows, the producer would see no rows until the end of
+    /// the file, and the scan could not prune any row group with the filter.
+    pub(crate) flush_at_row_group_boundary: bool,
     /// Builds a new [`DecoderProjection`] when the adaptive filter placement
     /// changes the post-scan conjuncts at a row group boundary. `Some`
     /// exactly when [`RowFilterContext::placement`] is `Some`.
@@ -709,6 +719,19 @@ impl PushDecoderStreamState {
                 && let Err(e) = self.sync_rg_plan_to_decoder_frontier()
             {
                 return Some((Err(e), self));
+            }
+            // Before the pruning below, hand the rows of the previous row
+            // groups downstream, so that a dynamic filter can use them. The
+            // next call comes back to this boundary with an empty coalescer.
+            if at_boundary
+                && self.flush_at_row_group_boundary
+                && let Some(coalescer) = self.batch_coalescer.as_mut()
+                && coalescer.get_buffered_rows() > 0
+            {
+                if let Err(e) = coalescer.finish_buffered_batch() {
+                    return Some((Err(DataFusionError::from(e)), self));
+                }
+                return self.emit_completed();
             }
             if at_boundary && !self.rg_plan.is_empty() {
                 let pruned_count = self.prune_boundary_row_groups();
