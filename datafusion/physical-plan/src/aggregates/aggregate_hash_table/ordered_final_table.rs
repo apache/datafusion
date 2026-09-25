@@ -80,13 +80,24 @@ impl OrderedAggregateTable<FinalMarker> {
         )
     }
 
-    /// See comments in `ordered_partial_stream::next_output_batch`
-    pub(in crate::aggregates) fn next_output_batch(
+    /// Materializes final results for all groups proven complete by the input
+    /// ordering, leaving the active ordered-key range in the table.
+    ///
+    /// Returns None if there are no completed groups.
+    pub(in crate::aggregates) fn take_completed_result_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
-        self.next_output_batch_inner(
+        if self.is_empty() {
+            return Ok(None);
+        }
+        let Some(emit_to) = self.group_ordering().emit_to() else {
+            return Ok(None);
+        };
+        self.materialize_groups(
+            emit_to,
             HashAggregateAccumulator::evaluate_to_columns,
             AccumulatorPhase::Evaluate,
         )
+        .map(Some)
     }
 }
