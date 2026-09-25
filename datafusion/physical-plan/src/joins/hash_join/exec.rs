@@ -70,8 +70,8 @@ use crate::{
 };
 
 use arrow::array::{
-    Array, ArrayRef, BinaryViewArray, BooleanBufferBuilder, ByteView, GenericByteViewArray,
-    StringViewArray, UInt64Array,
+    Array, ArrayRef, BinaryViewArray, BooleanBufferBuilder, ByteView,
+    GenericByteViewArray, StringViewArray, UInt64Array,
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::compute::concat_batches;
@@ -2944,8 +2944,7 @@ fn deduplicate_view_array_buffers<T: ByteViewType>(
     // idiomatic way to use pointer values as HashMap keys on stable Rust.
     let mut unique_buffers: Vec<arrow::buffer::Buffer> =
         Vec::with_capacity(data_buffers.len());
-    let mut pointer_map: HashMap<usize, u32> =
-        HashMap::with_capacity(data_buffers.len());
+    let mut pointer_map: HashMap<usize, u32> = HashMap::with_capacity(data_buffers.len());
     let mut index_remap: Vec<u32> = Vec::with_capacity(data_buffers.len());
     let mut has_duplicates = false;
 
@@ -7616,15 +7615,24 @@ mod tests {
         builder.append_value("this is a long string that exceeds inline size 12");
         builder.append_value("another long string that exceeds inline size 12");
         let base_array: StringViewArray = builder.finish();
-        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8View, true)]));
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8View, true)]));
 
-        let batch1 = RecordBatch::try_new(schema.clone(), vec![Arc::new(base_array.clone())])?;
-        let batch2 = RecordBatch::try_new(schema.clone(), vec![Arc::new(base_array.clone())])?;
-        let batch3 = RecordBatch::try_new(schema.clone(), vec![Arc::new(base_array.clone())])?;
+        let batch1 =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(base_array.clone())])?;
+        let batch2 =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(base_array.clone())])?;
+        let batch3 =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(base_array.clone())])?;
 
         // Before deduplication, concat_batches puts 3 duplicate buffer references in data_buffers
-        let concatenated_raw = concat_batches(&schema, &[batch1.clone(), batch2.clone(), batch3.clone()])?;
-        let raw_view_arr = concatenated_raw.column(0).as_any().downcast_ref::<StringViewArray>().unwrap();
+        let concatenated_raw =
+            concat_batches(&schema, &[batch1.clone(), batch2.clone(), batch3.clone()])?;
+        let raw_view_arr = concatenated_raw
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap();
         assert_eq!(raw_view_arr.data_buffers().len(), 3);
 
         // After concat_build_batches, buffer references are deduplicated down to 1
@@ -7642,7 +7650,11 @@ mod tests {
             &metrics,
         )?;
 
-        let view_arr = batch.column(0).as_any().downcast_ref::<StringViewArray>().unwrap();
+        let view_arr = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap();
         assert_eq!(view_arr.data_buffers().len(), 1);
         assert_eq!(batch.num_rows(), 6);
         Ok(())
