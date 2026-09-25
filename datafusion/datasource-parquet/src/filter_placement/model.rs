@@ -49,9 +49,9 @@ const LEAVE_ROW_FILTER_MARGIN: f64 = 1.1;
 /// than this multiple of its benefit.
 const ENTER_ROW_FILTER_MARGIN: f64 = 0.9;
 
-/// What the decision for a required conjunct uses.
+/// The measured evidence for the placement of a conjunct.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct RequiredConjunctInputs {
+pub(crate) struct ConjunctInputs {
     /// The pooled measurements of the conjunct.
     pub(crate) observation: Observation,
     /// Compressed bytes for each row of the output columns that the
@@ -71,7 +71,7 @@ pub(crate) struct RequiredConjunctInputs {
     pub(crate) fetch_ns_per_row: f64,
 }
 
-impl RequiredConjunctInputs {
+impl ConjunctInputs {
     /// Decode time, in nanoseconds for each evaluated row, that a row
     /// filter saves. `None` without enough measurements.
     pub(crate) fn benefit_ns_per_row(&self) -> Option<f64> {
@@ -121,7 +121,7 @@ impl RequiredConjunctInputs {
 /// columns: the row groups that are left pass most rows, and the page
 /// index already skips the pages that the conjunct removes.
 pub(crate) fn place_required(
-    inputs: &RequiredConjunctInputs,
+    inputs: &ConjunctInputs,
     current: Option<Placement>,
 ) -> Placement {
     let Some(benefit) = inputs.benefit_ns_per_row() else {
@@ -146,15 +146,49 @@ pub(crate) fn place_required(
     }
 }
 
-/// The placement of an optional conjunct in the `adaptive` optional filter
-/// mode: [`Placement::Skip`] while its gate is paused, otherwise
-/// [`Placement::RowFilter`].
-pub(crate) fn place_optional(gate_paused: bool) -> Placement {
+/// The placement of an optional conjunct (in the `adaptive` optional
+/// filter mode): [`Placement::Skip`] while its gate is paused, else the same
+/// decision as for a required conjunct ([`place_required`]). A skipped
+/// conjunct is not a row filter: it needs the evidence again to become one.
+pub(crate) fn place_optional(
+    inputs: &ConjunctInputs,
+    gate_paused: bool,
+    current: Option<Placement>,
+) -> Placement {
     if gate_paused {
-        Placement::Skip
-    } else {
-        Placement::RowFilter
+        return Placement::Skip;
     }
+    let current = current.map(|current| match current {
+        Placement::Skip => Placement::PostScan,
+        other => other,
+    });
+    place_required(inputs, current)
+}
+
+/// The rank of a conjunct in the evaluation order of its stage: the rows
+/// that it removed for each nanosecond of evaluation time
+/// ([`FilterCost::rows_removed_per_nano`], the ranking key of the adaptive
+/// conjunct order of `FilterExec`). `None` before [`MIN_OBSERVED_ROWS`]
+/// evaluated rows.
+pub(crate) fn rank(observation: &Observation) -> Option<f64> {
+    if observation.rows_in < MIN_OBSERVED_ROWS {
+        return None;
+    }
+    observation.cost().rows_removed_per_nano()
+}
+
+/// The evaluation order of conjuncts, as indexes into `observations`. The
+/// same rule for required and optional conjuncts: a larger [`rank`] first.
+/// A conjunct without a rank comes first, in the written order, so that it
+/// is measured on all rows of its stage.
+pub(crate) fn evaluation_order(observations: &[Observation]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..observations.len()).collect();
+    // A stable sort keeps the written order for equal keys.
+    order.sort_by(|&a, &b| {
+        let key = |i: usize| rank(&observations[i]).unwrap_or(f64::INFINITY);
+        key(b).total_cmp(&key(a))
+    });
+    order
 }
 
 #[cfg(test)]
@@ -170,14 +204,15 @@ mod tests {
         kept: u64,
         unread_output_bytes_per_row: f64,
         fetch_ns_per_row: f64,
-    ) -> RequiredConjunctInputs {
-        RequiredConjunctInputs {
+    ) -> ConjunctInputs {
+        ConjunctInputs {
             observation: Observation {
                 rows_in,
                 rows_out: rows_in - skippable_rows,
                 skippable_rows,
                 row_groups_pruned: pruned,
                 row_groups_kept: kept,
+                nanos: 0,
             },
             unread_output_bytes_per_row,
             read_output_bytes_per_row: 0.0,
@@ -305,8 +340,62 @@ mod tests {
     }
 
     #[test]
-    fn optional_follows_the_gate() {
-        assert_eq!(place_optional(true), Placement::Skip);
-        assert_eq!(place_optional(false), Placement::RowFilter);
+    fn optional_is_skipped_while_paused_else_placed_like_required() {
+        let rows = 100_000;
+        let clustered = inputs(rows, rows / 2, 0, 0, 10.0, 1.0);
+        for current in [None, Some(Placement::RowFilter), Some(Placement::PostScan)] {
+            assert_eq!(place_optional(&clustered, true, current), Placement::Skip);
+        }
+        // Not paused: the evidence decides. A skipped conjunct is not a row
+        // filter, thus it moves to the row filter with the entry margin.
+        assert_eq!(
+            place_optional(&clustered, false, Some(Placement::Skip)),
+            Placement::RowFilter
+        );
+        let unmeasured = inputs(0, 0, 0, 0, 100.0, 0.0);
+        for current in [None, Some(Placement::Skip)] {
+            assert_eq!(
+                place_optional(&unmeasured, false, current),
+                Placement::PostScan
+            );
+        }
+        // No output column that the conjunct does not read: a row filter
+        // saves no decode time.
+        let reads_all_outputs = inputs(rows, rows / 2, 0, 0, 0.0, 0.0);
+        assert_eq!(
+            place_optional(&reads_all_outputs, false, Some(Placement::RowFilter)),
+            Placement::PostScan
+        );
+    }
+
+    fn measured(rows_in: u64, rows_out: u64, nanos: u64) -> Observation {
+        Observation {
+            rows_in,
+            rows_out,
+            nanos,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn order_by_rows_removed_per_nanosecond() {
+        let rows = MIN_OBSERVED_ROWS * 10;
+        // Removes 90% at 1 ns for each row: 0.9 rows for each ns.
+        let cheap_selective = measured(rows, rows / 10, rows);
+        // Removes 95% at 16 ns for each row: about 0.06 rows for each ns.
+        let expensive = measured(rows, rows / 20, 16 * rows);
+        // Removes nothing at 1 ns for each row.
+        let useless = measured(rows, rows, rows);
+        let unmeasured = measured(MIN_OBSERVED_ROWS - 1, 0, 1);
+        assert_eq!(rank(&unmeasured), None);
+        assert_eq!(
+            evaluation_order(&[expensive, useless, cheap_selective]),
+            vec![2, 0, 1]
+        );
+        // Unmeasured conjuncts first, in the written order.
+        assert_eq!(
+            evaluation_order(&[expensive, unmeasured, cheap_selective, unmeasured]),
+            vec![1, 3, 2, 0]
+        );
     }
 }

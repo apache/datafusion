@@ -73,7 +73,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use arrow::array::BooleanArray;
@@ -187,6 +187,10 @@ pub(crate) struct OptionalFilterSaving {
     /// The removed rows that the decoder can skip, see
     /// [`skippable_rows`](crate::row_filter_cost::skippable_rows).
     skippable_rows: AtomicU64,
+    /// True if the filter is a row filter predicate (the default). The
+    /// adaptive filter placement can put the filter in the post-scan filter:
+    /// then it saves no decode time and has no stage cost.
+    row_filter: AtomicBool,
 }
 
 impl OptionalFilterSaving {
@@ -200,11 +204,18 @@ impl OptionalFilterSaving {
             unread_bytes_per_row,
             removed_rows: AtomicU64::new(0),
             skippable_rows: AtomicU64::new(0),
+            row_filter: AtomicBool::new(true),
         };
+        saving.update();
         saving
-            .measured
-            .set_overhead_ns_per_row(ROW_FILTER_STAGE_NS_PER_ROW);
-        saving
+    }
+
+    /// Sets if the filter is a row filter predicate (`true`) or not (in the
+    /// post-scan filter, or not evaluated). Only a row filter predicate
+    /// saves decode time and has a stage cost.
+    pub(crate) fn set_row_filter(&self, row_filter: bool) {
+        self.row_filter.store(row_filter, Ordering::Relaxed);
+        self.update();
     }
 
     /// The values that the gate reads, see
@@ -244,14 +255,21 @@ impl OptionalFilterSaving {
         self.skippable_rows.load(Ordering::Relaxed) as f64 / removed as f64
     }
 
-    /// Updates the measured saving with the current decode speed and
-    /// skippable fraction.
+    /// Updates the measured saving and overhead with the placement, the
+    /// current decode speed and the skippable fraction.
     fn update(&self) {
+        if !self.row_filter.load(Ordering::Relaxed) {
+            self.measured.set_ns_per_row(0.0);
+            self.measured.set_overhead_ns_per_row(0.0);
+            return;
+        }
         self.measured.set_ns_per_row(
             self.skippable_fraction()
                 * self.unread_bytes_per_row
                 * self.decode_cost.ns_per_byte(),
         );
+        self.measured
+            .set_overhead_ns_per_row(ROW_FILTER_STAGE_NS_PER_ROW);
     }
 }
 
@@ -355,6 +373,29 @@ pub(crate) struct OptionalFilterOptions {
 mod tests {
     use super::*;
     use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
+
+    /// Only a row filter predicate saves decode time and has a stage cost.
+    #[test]
+    fn saving_depends_on_placement() {
+        let saving = OptionalFilterSaving::new(10.0, Arc::default());
+        // One window of 64 removed rows: all removed rows are skippable.
+        saving.record_evaluation(&BooleanArray::from(vec![false; 64]));
+        let row_filter = (
+            DEFAULT_DECODE_NS_PER_BYTE * 10.0,
+            ROW_FILTER_STAGE_NS_PER_ROW,
+        );
+        let measured = |s: &OptionalFilterSaving| {
+            (
+                s.measured().ns_per_row(),
+                s.measured().overhead_ns_per_row(),
+            )
+        };
+        assert_eq!(measured(&saving), row_filter);
+        saving.set_row_filter(false);
+        assert_eq!(measured(&saving), (0.0, 0.0));
+        saving.set_row_filter(true);
+        assert_eq!(measured(&saving), row_filter);
+    }
 
     #[test]
     fn sites_share_verdicts_by_expression_id() {

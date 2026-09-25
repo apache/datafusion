@@ -80,8 +80,10 @@ use parquet::file::metadata::ParquetMetaData;
 use datafusion_common::Result;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::config::OptionalFilterMode;
+use datafusion_common::instant::Instant;
 use datafusion_common::tree_node::TreeNode;
 use datafusion_physical_expr::expressions::OptionalFilterPhysicalExpr;
+use datafusion_physical_expr::filter_stats::duration_nanos;
 use datafusion_physical_expr::optional_filter_gate::{GateDecision, OptionalFilterGate};
 use datafusion_physical_expr::utils::{is_optional_filter, reassign_expr_columns};
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
@@ -160,7 +162,20 @@ pub(crate) struct OptionalFilterGateState {
 pub(crate) type SharedOptionalFilterGate = Arc<Mutex<OptionalFilterGateState>>;
 
 impl OptionalFilterGateState {
-    fn begin_batch(&mut self, num_rows: usize) -> GateDecision {
+    /// The shared state of `gate`, which reports to `metrics`.
+    pub(crate) fn shared(
+        gate: OptionalFilterGate,
+        metrics: OptionalFilterMetrics,
+    ) -> SharedOptionalFilterGate {
+        Arc::new(Mutex::new(Self {
+            gate,
+            metrics,
+            reported_pauses: 0,
+        }))
+    }
+
+    /// See [`OptionalFilterGate::begin_batch`]. Counts the skipped rows.
+    pub(crate) fn begin_batch(&mut self, num_rows: usize) -> GateDecision {
         let decision = self.gate.begin_batch();
         if decision == GateDecision::Skip {
             self.metrics.add_rows_skipped(num_rows);
@@ -169,10 +184,17 @@ impl OptionalFilterGateState {
         decision
     }
 
-    fn record(&mut self, rows_in: usize, rows_out: usize, elapsed: Duration) {
+    /// See [`OptionalFilterGate::record`]. Adds the evaluation time.
+    pub(crate) fn record(&mut self, rows_in: usize, rows_out: usize, elapsed: Duration) {
         self.gate.record(rows_in, rows_out, elapsed);
         self.metrics.add_eval_time(elapsed);
         self.report_pauses();
+    }
+
+    /// The clock to measure the evaluation time, see
+    /// [`OptionalFilterGate::clock`].
+    pub(crate) fn now_nanos(&self) -> u64 {
+        self.gate.clock().now_nanos()
     }
 
     /// True if the gate skips the next batch.
@@ -255,6 +277,7 @@ impl ArrowPredicate for DatafusionArrowPredicate {
         }
         // The gate measures the evaluation time with its clock.
         let start = gate.as_ref().map(|gate| gate.gate.clock().now_nanos());
+        let measure_start = self.placement_stats.as_ref().map(|_| Instant::now());
 
         self.physical_expr
             .evaluate(&batch)
@@ -265,8 +288,13 @@ impl ArrowPredicate for DatafusionArrowPredicate {
                 let num_pruned = bool_arr.len() - num_matched;
                 self.rows_pruned.add(num_pruned);
                 self.rows_matched.add(num_matched);
-                if let Some(stats) = &self.placement_stats {
-                    stats.record_evaluation(&bool_arr);
+                if let (Some(stats), Some(measure_start)) =
+                    (&self.placement_stats, measure_start)
+                {
+                    stats.record_evaluation(
+                        &bool_arr,
+                        duration_nanos(measure_start.elapsed()),
+                    );
                 }
                 if let Some(saving) = &self.saving {
                     saving.record_evaluation(&bool_arr);
@@ -814,15 +842,14 @@ pub(crate) fn prebuild_row_filter_candidates(
                 gate = gate.with_measured_saving(Arc::clone(saving.measured()));
                 candidate.saving = Some(saving);
             }
-            candidate.gate = Some(Arc::new(Mutex::new(OptionalFilterGateState {
+            candidate.gate = Some(OptionalFilterGateState::shared(
                 gate,
-                metrics: OptionalFilterMetrics::new(
+                OptionalFilterMetrics::new(
                     optional.metrics,
                     optional.partition,
                     optional.filename,
                 ),
-                reported_pauses: 0,
-            })));
+            ));
             prebuilt.push(candidate);
         }
     }
@@ -890,11 +917,18 @@ pub(crate) fn row_filter_from_prebuilt<'a>(
     reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
 ) -> RowFilter {
+    row_filter_in_order(order_candidates(prebuilt, reorder_predicates), file_metrics)
+}
+
+/// A [`RowFilter`] with the predicates of `ordered`, in this order.
+pub(crate) fn row_filter_in_order(
+    ordered: Vec<&PrebuiltRowFilterCandidate>,
+    file_metrics: &ParquetFileMetrics,
+) -> RowFilter {
     let rows_pruned = &file_metrics.pushdown_rows_pruned;
     let rows_matched = &file_metrics.pushdown_rows_matched;
     let time = &file_metrics.row_pushdown_eval_time;
 
-    let ordered = order_candidates(prebuilt, reorder_predicates);
     let total = ordered.len();
     let filters: Vec<Box<dyn ArrowPredicate>> = ordered
         .into_iter()
@@ -3192,21 +3226,20 @@ mod optional_filter_tests {
     }
 
     /// The adaptive filter placement of a file with a required conjunct and
-    /// a gated optional conjunct. The gate decisions use the durations
+    /// two gated optional conjuncts. The gate decisions use the durations
     /// passed to `record`, thus the test is deterministic.
     #[test]
     fn file_placement_follows_gate_and_measurements() {
-        use crate::filter_placement::{
-            FilePlacement, Placement, PlacementOptions, PlacementSites,
-        };
+        use crate::filter_placement::{FilePlacement, PlacementOptions, PlacementSites};
         use arrow::array::BooleanArray;
         use datafusion_physical_plan::metrics::Count;
 
         let (_file, metadata, file_schema) = test_file();
-        // a > 5 AND Optional(b >= 0). The optional conjunct removes no row.
+        // a > 5 AND Optional(b >= 0) AND Optional(a >= 0).
         let predicate = conjunction([
             col_op("a", Operator::Gt, 5, &file_schema),
             optional(col_op("b", Operator::GtEq, 0, &file_schema)),
+            optional(col_op("a", Operator::GtEq, 0, &file_schema)),
         ]);
         let options = options(OptionalFilterMode::Adaptive);
         let metrics = ExecutionPlanMetricsSet::new();
@@ -3215,8 +3248,7 @@ mod optional_filter_tests {
         // A slow decode: a row filter that skips rows saves a lot.
         let sites = Arc::new(PlacementSites::with_fixed_costs(1000.0, 0.0));
         let placement_options = PlacementOptions::new(true, sites, Some(&predicate));
-        // The output columns are `b`, `c` and `s`: the required conjunct
-        // reads no output column (no second decode in a row filter).
+        // The output columns are `b`, `c` and `s`.
         let output =
             ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [1, 2, 3]);
         let batch_size = 100;
@@ -3232,59 +3264,105 @@ mod optional_filter_tests {
             changes.clone(),
         )
         .unwrap();
-        let required = candidates.iter().position(|c| !c.is_optional()).unwrap();
-        let gated = candidates.iter().position(|c| c.is_optional()).unwrap();
-        // Without measurements, the required conjunct starts in the
-        // post-scan filter. The gate is not paused.
-        assert!(!placement.in_row_filter(required));
-        assert!(placement.in_row_filter(gated));
+        let index = |expr: &str| {
+            candidates
+                .iter()
+                .position(|c| c.source_expr().to_string() == expr)
+                .unwrap()
+        };
+        let required = index("a@0 > 5");
+        let on_b = index("b@1 >= 0");
+        let on_a = index("a@0 >= 0");
+        let post_scan = |placement: &FilePlacement| {
+            placement
+                .post_scan_conjuncts()
+                .iter()
+                .map(|c| (c.expr.to_string(), c.gate.is_some()))
+                .collect::<Vec<_>>()
+        };
+        let entry = |expr: &str, gated: bool| (expr.to_string(), gated);
+        // Without measurements, all conjuncts start in the post-scan filter,
+        // in the written order. The optional conjuncts have their gate.
+        assert!(placement.row_filter_candidates().is_empty());
+        assert_eq!(
+            post_scan(&placement),
+            vec![
+                entry("a@0 > 5", false),
+                entry("b@1 >= 0", true),
+                entry("a@0 >= 0", true)
+            ]
+        );
 
-        // The gate pauses the optional filter: it removed no row in its
-        // first window (`sample_batches` = 2).
-        let gate = Arc::clone(candidates[gated].gate().unwrap());
-        for _ in 0..2 {
-            let mut gate = gate.lock();
-            assert_eq!(gate.begin_batch(batch_size), GateDecision::Evaluate);
-            gate.record(batch_size, batch_size, Duration::from_micros(1));
-        }
-        assert!(gate.lock().is_paused());
-        assert!(placement.decide(1000));
-        assert!(!placement.in_row_filter(gated));
-        assert!(!placement.in_row_filter(required));
+        // The gates pause the optional filters: they removed no row in their
+        // first window (`sample_batches` = 2). They are skipped.
+        let pause = |candidate: usize| {
+            let gate = Arc::clone(candidates[candidate].gate().unwrap());
+            for _ in 0..2 {
+                let mut gate = gate.lock();
+                assert_eq!(gate.begin_batch(batch_size), GateDecision::Evaluate);
+                gate.record(batch_size, batch_size, Duration::from_micros(1));
+            }
+            assert!(gate.lock().is_paused());
+        };
+        pause(on_b);
+        pause(on_a);
+        let change = placement.decide(1000).unwrap();
+        assert!(!change.row_filter);
+        assert_eq!(post_scan(&placement), vec![entry("a@0 > 5", false)]);
         assert_eq!(changes.value(), 1);
 
-        // The pause (`initial_pause_batches` = 4) ends while the scan skips
-        // the next row group (10 batches): the filter is a row filter again.
-        assert!(placement.decide(1000));
-        assert!(placement.in_row_filter(gated));
-        assert!(!gate.lock().is_paused());
+        // The pauses (`initial_pause_batches` = 4) end while the scan skips
+        // the next row group (10 batches).
+        assert!(placement.decide(1000).is_some());
+        assert_eq!(post_scan(&placement).len(), 3);
 
-        // The post-scan filter measures the required conjunct.
-        let post_scan = placement.post_scan_conjuncts();
-        assert_eq!(post_scan.len(), 1);
-        assert_eq!(post_scan[0].expr.to_string(), "a@0 > 5");
-        let stats = post_scan[0].stats.clone().unwrap();
-
-        // It removes every second row: no run of removed rows that the
-        // decoder can skip, thus it stays in the post-scan filter.
+        // The measurements, pooled over all files. The required conjunct
+        // removes every second row at 10 ns for each row: no run of removed
+        // rows that the decoder can skip, thus it stays in the post-scan
+        // filter.
+        let all_stats = placement.post_scan_conjuncts();
+        let stats_of = |expr: &str| {
+            all_stats
+                .iter()
+                .find(|c| c.expr.to_string() == expr)
+                .and_then(|c| c.stats.clone())
+                .unwrap()
+        };
         let scattered: BooleanArray = (0..20_000).map(|i| Some(i % 2 == 0)).collect();
-        stats.record_evaluation(&scattered);
-        assert!(!placement.decide(1000));
-        assert!(!placement.in_row_filter(required));
-
-        // More rows where it removes a long run of rows: it moves to the
-        // row filter.
+        stats_of("a@0 > 5").record_evaluation(&scattered, 200_000);
+        // The optional conjunct on `a` removes a long run of rows at 1 ns
+        // for each row: it saves decode time in a row filter, and it ranks
+        // before the required conjunct.
         let clustered: BooleanArray = (0..40_000).map(|i| Some(i >= 30_000)).collect();
-        stats.record_evaluation(&clustered);
-        assert!(placement.decide(1000));
-        assert!(placement.in_row_filter(required));
-        assert!(placement.post_scan_conjuncts().is_empty());
+        stats_of("a@0 >= 0").record_evaluation(&clustered, 40_000);
+        let change = placement.decide(1000).unwrap();
+        assert!(change.row_filter);
+        assert_eq!(placement.row_filter_candidates(), vec![on_a]);
+        // The optional conjunct on `b` is not measured yet: it comes first.
+        assert_eq!(
+            post_scan(&placement),
+            vec![entry("b@1 >= 0", true), entry("a@0 > 5", false)]
+        );
+
+        // The optional conjunct on `b` removes nothing: it ranks last. Only
+        // the post-scan order changes.
+        stats_of("b@1 >= 0")
+            .record_evaluation(&BooleanArray::from(vec![true; 20_000]), 20_000);
+        let change = placement.decide(1000).unwrap();
+        assert!(!change.row_filter);
+        assert_eq!(
+            post_scan(&placement),
+            vec![entry("a@0 > 5", false), entry("b@1 >= 0", true)]
+        );
+        assert!(placement.decide(1000).is_none());
+        assert_eq!(changes.value(), 4);
+        let _ = required;
 
         // A frozen placement does not change.
-        let before = placement.placements();
-        placement.restore_and_freeze(&[Placement::PostScan, Placement::PostScan]);
-        assert!(!placement.decide(1000));
-        assert_ne!(placement.placements(), before);
-        assert_eq!(changes.value(), 3);
+        let frozen = placement.snapshot();
+        placement.restore_and_freeze(&frozen);
+        stats_of("b@1 >= 0").record_evaluation(&clustered, 1);
+        assert!(placement.decide(1000).is_none());
+        assert_eq!(placement.snapshot(), frozen);
     }
 }
