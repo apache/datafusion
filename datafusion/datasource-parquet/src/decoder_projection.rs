@@ -246,7 +246,13 @@ impl PostScanFilter {
                 if let Some(stages) = stages.as_mut() {
                     stages.compact(&folded);
                 }
+                // The placement model measures the copy: a row filter does
+                // not make it.
+                let copy_start = stats.as_ref().map(|_| Instant::now());
                 working = filter_record_batch(&working, &folded)?;
+                if let (Some(stats), Some(copy_start)) = (stats, copy_start) {
+                    stats.record_copy(duration_nanos(copy_start.elapsed()));
+                }
                 acc = None;
             } else {
                 acc = Some(folded);
@@ -722,6 +728,10 @@ mod tests {
             (first.rows_in, first.rows_out, first.skippable_rows),
             (256, 64, 0)
         );
+        // The first conjunct keeps 25% of the rows: the loop copies the
+        // working batch after it, and measures the copy for it.
+        assert_eq!(first.post_scan_rows, 256);
+        assert!(first.copy_nanos > 0);
         // The rows that the first conjunct removed pass: no empty window.
         let second = second.observation();
         assert_eq!(
