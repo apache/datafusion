@@ -79,13 +79,12 @@ cargo nextest run
 When adding tests, prefer tests that exercise **user-visible behavior** over
 tests of internal implementation details. In rough order of preference:
 
-1. [sqllogictest](#sqllogictests-tests) (`.slt`) tests for any behavior that can
-   be expressed in SQL, including query results, error messages, and the output
-   of `EXPLAIN` for plans.
+1. Use [sqllogictest](#sqllogictests-tests) (`.slt`) tests for any behavior that can
+   be expressed in SQL.
 2. End-to-end tests that use public APIs such as the DataFrame API, for behavior
    that cannot be expressed in SQL.
-3. Rust unit tests, only for logic that cannot practically be reached through
-   SQL or the public APIs.
+3. Rust unit tests for logic that cannot practically be reached through
+   SQL or DataFrame public APIs.
 
 Tests of user-visible behavior are less coupled to the implementation, so they
 keep working (and keep catching regressions) while the code is refactored.
