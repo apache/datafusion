@@ -262,6 +262,8 @@ datafusion.execution.parquet.maximum_parallel_row_group_writers 1
 datafusion.execution.parquet.metadata_size_hint 524288
 datafusion.execution.parquet.pruning true
 datafusion.execution.parquet.pushdown_filters false
+datafusion.execution.parquet.read_ahead_bytes NULL
+datafusion.execution.parquet.read_ahead_conditional false
 datafusion.execution.parquet.reorder_filters false
 datafusion.execution.parquet.schema_force_view_types true
 datafusion.execution.parquet.skip_arrow_metadata false
@@ -423,6 +425,8 @@ datafusion.execution.parquet.maximum_parallel_row_group_writers 1 (writing) By d
 datafusion.execution.parquet.metadata_size_hint 524288 (reading) If specified, the parquet reader will try and fetch the last `size_hint` bytes of the parquet file optimistically. If not specified, two reads are required: One read to fetch the 8-byte parquet footer and another to fetch the metadata length encoded in the footer Default setting to 512 KiB, which should be sufficient for most parquet files, it can reduce one I/O operation per parquet file. If the metadata is larger than the hint, two reads will still be performed.
 datafusion.execution.parquet.pruning true (reading) If true, the parquet reader attempts to skip entire row groups based on the predicate in the query and the metadata (min/max values) stored in the parquet file
 datafusion.execution.parquet.pushdown_filters false (reading) If true, filter expressions are be applied during the parquet decoding operation to reduce the number of rows decoded. This optimization is sometimes called "late materialization".
+datafusion.execution.parquet.read_ahead_bytes NULL (reading) If set, decode Parquet a batch at a time and read ahead up to this many bytes per partition stream, in the order the decoder reads them. If unset, the reader fetches one row group at a time.
+datafusion.execution.parquet.read_ahead_conditional false (reading) With `read_ahead_bytes` set, also read ahead byte ranges that a pushed-down filter can make unnecessary. This reduces waits on high-latency storage but can read bytes that the scan does not use.
 datafusion.execution.parquet.reorder_filters false (reading) If true, filter expressions evaluated during the parquet decoding operation will be reordered heuristically to minimize the cost of evaluation. If false, the filters are applied in the same order as written in the query
 datafusion.execution.parquet.schema_force_view_types true (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`, and `Binary/BinaryLarge` with `BinaryView`. The parquet reader is optimized for reading `Utf8View` and `BinaryView`, so such queries are significantly faster than reading `Utf8`/`Binary` and then casting to the view types.
 datafusion.execution.parquet.skip_arrow_metadata false (writing) Skip encoding the embedded arrow metadata in the KV_meta This is analogous to the `ArrowWriterOptions::with_skip_arrow_metadata`. Refer to <https://docs.rs/parquet/53.3.0/parquet/arrow/arrow_writer/struct.ArrowWriterOptions.html#method.with_skip_arrow_metadata>
