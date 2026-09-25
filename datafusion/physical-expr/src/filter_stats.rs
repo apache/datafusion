@@ -106,6 +106,15 @@ impl Clock for ManualClock {
     }
 }
 
+/// Minimum number of evaluated rows before an adaptive decision uses the
+/// measurements of a filter. It is one batch of the default
+/// `datafusion.execution.batch_size`. With fewer rows, the evaluation time
+/// is dominated by the fixed cost of each call (for example 2 to 7 rows of
+/// a batch after a selective row filter took 600 to 8000 ns for each row in
+/// ClickBench Q23, against 0.4 ns for each row on full batches), and the
+/// fraction of removed rows is not reliable.
+pub const MIN_OBSERVED_ROWS: u64 = 8192;
+
 /// Returns the nanoseconds in `elapsed`, saturated to `u64::MAX`.
 pub fn duration_nanos(elapsed: Duration) -> u64 {
     u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
