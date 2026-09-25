@@ -262,12 +262,11 @@ impl FilePlacement {
         // A skipped optional conjunct did not see the batches of the last
         // row group. Count them down on its gate, so that the pause can
         // end.
-        let batches = self.row_group_rows.div_ceil(self.batch_size);
         for conjunct in &self.conjuncts {
             if let (Placement::Skip, ConjunctKind::Optional { gate }) =
                 (conjunct.placement, &conjunct.kind)
             {
-                gate.lock().skip_batches(batches, self.batch_size);
+                gate.lock().skip_rows(self.row_group_rows, self.batch_size);
             }
         }
         self.row_group_rows = next_row_group_rows;
