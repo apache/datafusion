@@ -606,24 +606,29 @@ fn test_simplify_with_cycle_count(
 
 #[test]
 fn test_simplify_log() {
-    // Log(c3, 1) ===> 0
     {
-        let expr = log(col("c3_non_null"), lit(1));
-        test_simplify(expr, lit(0i64));
+        let expr = log(lit(2.0), lit(1.0));
+        test_simplify(expr, lit(0.0));
     }
-    // Log(c3, c3) ===> 1
     {
-        let expr = log(col("c3_non_null"), col("c3_non_null"));
-        let expected = lit(1i64);
+        let expr = log(lit(2.0), lit(2.0));
+        let expected = lit(1.0);
         test_simplify(expr, expected);
     }
-    // Log(c3, Power(c3, c4)) ===> c4
     {
-        let expr = log(
-            col("c3_non_null"),
-            power(col("c3_non_null"), col("c4_non_null")),
-        );
-        let expected = col("c4_non_null");
+        let expr = log(lit(2i64), power(lit(2i64), col("c4_non_null")));
+        test_simplify(expr.clone(), expr);
+    }
+    // Log(c3, 1) ===> Log(c3, 1), since c3 may be 1, 0 or negative
+    {
+        let expr = log(col("c3_non_null"), lit(1));
+        let expected = log(col("c3_non_null"), lit(1));
+        test_simplify(expr, expected);
+    }
+    // Log(c3, c3) ===> Log(c3, c3)
+    {
+        let expr = log(col("c3_non_null"), col("c3_non_null"));
+        let expected = log(col("c3_non_null"), col("c3_non_null"));
         test_simplify(expr, expected);
     }
     // Log(c3, c4) ===> Log(c3, c4)
@@ -649,20 +654,21 @@ fn test_simplify_power() {
             Expr::Cast(Cast::new(Box::new(col("c3_non_null")), DataType::Float64));
         test_simplify(expr, expected)
     }
-    // Power(c3, Log(c3, c4)) ===> cast(c4 AS Float64)
-    // The simplifier rewrites `power(b, log(b, x))` to `x`, but the
-    // rewritten expression must keep the same type as the original
-    // `power` call. `power` returns Float64, so the UInt32 c4 has to be cast
-    // to Float64 to preserve the output schema the optimizer already
-    // committed to.
+    // Power(c3, Log(c3, c4)) is left alone, since c3 may be 1, 0 or negative.
     {
         let expr = power(
             col("c3_non_null"),
             log(col("c3_non_null"), col("c4_non_null")),
         );
-        let expected =
-            Expr::Cast(Cast::new(Box::new(col("c4_non_null")), DataType::Float64));
+        let expected = power(
+            col("c3_non_null"),
+            log(col("c3_non_null"), col("c4_non_null")),
+        );
         test_simplify(expr, expected)
+    }
+    {
+        let expr = power(lit(2i64), log(lit(2i64), col("c4_non_null")));
+        test_simplify(expr.clone(), expr)
     }
     // Power(c3, c4) ===> Power(c3, c4)
     {
