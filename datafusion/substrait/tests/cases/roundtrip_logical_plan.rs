@@ -1647,19 +1647,18 @@ async fn self_referential_except() -> Result<()> {
 
 #[tokio::test]
 async fn self_referential_intersect_all() -> Result<()> {
-    // Test INTERSECT ALL with the same table on both sides
-    // INTERSECT ALL preserves duplicates and does not include DISTINCT
-    // Uses **LeftSemi** join (returns rows from left that exist in right)
-    // The requalification ensures no duplicate field name errors
     assert_expected_plan(
         "SELECT a FROM data WHERE a > 0 INTERSECT ALL SELECT a FROM data WHERE a < 5",
-        "LeftSemi Join: left.a = right.a\
-        \n  SubqueryAlias: left\
-        \n    Filter: data.a > Int64(0)\
-        \n      TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
-        \n  SubqueryAlias: right\
-        \n    Filter: data.a < Int64(5)\
-        \n      TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
+        "Projection: left.a\
+        \n  Inner Join: left.a = right.a, left.row_number() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING = right.row_number() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
+        \n    SubqueryAlias: left\
+        \n      WindowAggr: windowExpr=[[row_number() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
+        \n        Filter: data.a > Int64(0)\
+        \n          TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
+        \n    SubqueryAlias: right\
+        \n      WindowAggr: windowExpr=[[row_number() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
+        \n        Filter: data.a < Int64(5)\
+        \n          TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
         true,
     )
     .await
@@ -1667,19 +1666,18 @@ async fn self_referential_intersect_all() -> Result<()> {
 
 #[tokio::test]
 async fn self_referential_except_all() -> Result<()> {
-    // Test EXCEPT ALL with the same table on both sides
-    // EXCEPT ALL preserves duplicates and does not include DISTINCT
-    // Uses **LeftAnti** join (returns rows from left that don't exist in right)
-    // The requalification ensures no duplicate field name errors
     assert_expected_plan(
         "SELECT a FROM data WHERE a > 0 EXCEPT ALL SELECT a FROM data WHERE a < 5",
-        "LeftAnti Join: left.a = right.a\
-        \n  SubqueryAlias: left\
-        \n    Filter: data.a > Int64(0)\
-        \n      TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
-        \n  SubqueryAlias: right\
-        \n    Filter: data.a < Int64(5)\
-        \n      TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
+        "Projection: left.a\
+        \n  LeftAnti Join: left.a = right.a, left.row_number() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING = right.row_number() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
+        \n    SubqueryAlias: left\
+        \n      WindowAggr: windowExpr=[[row_number() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
+        \n        Filter: data.a > Int64(0)\
+        \n          TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
+        \n    SubqueryAlias: right\
+        \n      WindowAggr: windowExpr=[[row_number() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
+        \n        Filter: data.a < Int64(5)\
+        \n          TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
         true,
     )
     .await

@@ -45,8 +45,8 @@ use crate::utils::{
 };
 use crate::{
     BinaryExpr, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
-    RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource, WriteOp, and,
-    binary_expr, lit,
+    RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource, WindowUDF,
+    WriteOp, and, binary_expr, lit,
 };
 
 use super::dml::InsertOp;
@@ -1497,6 +1497,112 @@ impl LogicalPlanBuilder {
             JoinType::LeftAnti,
             is_all,
         )
+    }
+
+    /// Build an `INTERSECT ALL` plan, preserving the multiplicity of each row.
+    pub fn intersect_all(
+        left_plan: LogicalPlan,
+        right_plan: LogicalPlan,
+        row_number: &Arc<WindowUDF>,
+    ) -> Result<LogicalPlan> {
+        Self::multiset_set_operation(left_plan, right_plan, row_number, JoinType::Inner)
+    }
+
+    /// Build an `EXCEPT ALL` plan, subtracting matching row multiplicities.
+    pub fn except_all(
+        left_plan: LogicalPlan,
+        right_plan: LogicalPlan,
+        row_number: &Arc<WindowUDF>,
+    ) -> Result<LogicalPlan> {
+        Self::multiset_set_operation(
+            left_plan,
+            right_plan,
+            row_number,
+            JoinType::LeftAnti,
+        )
+    }
+
+    fn multiset_set_operation(
+        left_plan: LogicalPlan,
+        right_plan: LogicalPlan,
+        row_number: &Arc<WindowUDF>,
+        join_type: JoinType,
+    ) -> Result<LogicalPlan> {
+        let left_columns = left_plan.schema().columns();
+        let right_columns = right_plan.schema().columns();
+        if left_columns.len() != right_columns.len() {
+            return plan_err!(
+                "INTERSECT/EXCEPT query must have the same number of columns. Left is {} and right is {}.",
+                left_columns.len(),
+                right_columns.len()
+            );
+        }
+        let mut row_number_name = "__datafusion_set_operation_row_number".to_string();
+        while [left_plan.schema(), right_plan.schema()]
+            .iter()
+            .any(|schema| {
+                schema
+                    .fields()
+                    .iter()
+                    .any(|field| field.name() == &row_number_name)
+            })
+        {
+            row_number_name.push('_');
+        }
+        let with_row_number = |plan: LogicalPlan, columns: &[Column]| {
+            let mut window = crate::expr::WindowFunction::new(
+                crate::WindowFunctionDefinition::WindowUDF(Arc::clone(row_number)),
+                vec![],
+            );
+            window.params.partition_by =
+                columns.iter().cloned().map(Expr::Column).collect();
+            LogicalPlanBuilder::from(plan)
+                .window(vec![
+                    Expr::WindowFunction(Box::new(window)).alias(&row_number_name),
+                ])?
+                .build()
+        };
+        let left_plan = with_row_number(left_plan, &left_columns)?;
+        let right_plan = with_row_number(right_plan, &right_columns)?;
+        let (left_builder, right_builder, requalified) = requalify_sides_if_needed(
+            LogicalPlanBuilder::from(left_plan),
+            LogicalPlanBuilder::from(right_plan),
+        )?;
+        let left_plan = left_builder.build()?;
+        let right_plan = right_builder.build()?;
+        let join_keys = left_plan
+            .schema()
+            .fields()
+            .iter()
+            .zip(right_plan.schema().fields().iter())
+            .map(|(left_field, right_field)| {
+                (
+                    Column::from_name(left_field.name()),
+                    Column::from_name(right_field.name()),
+                )
+            })
+            .collect();
+        let joined = LogicalPlanBuilder::from(left_plan).join_detailed(
+            right_plan,
+            join_type,
+            join_keys,
+            None,
+            NullEquality::NullEqualsNull,
+        )?;
+        let projection = left_columns
+            .into_iter()
+            .map(|column| {
+                if requalified {
+                    Expr::Column(Column::new(
+                        Some(TableReference::bare("left")),
+                        column.name,
+                    ))
+                } else {
+                    Expr::Column(column)
+                }
+            })
+            .collect::<Vec<_>>();
+        joined.project(projection)?.build()
     }
 
     /// Process intersect or except

@@ -19,12 +19,9 @@ use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
-    Column, DataFusionError, Diagnostic, Result, Span, not_impl_err, plan_err,
+    DataFusionError, Diagnostic, Result, Span, not_impl_err, plan_err,
 };
-use datafusion_expr::{
-    Expr, LogicalPlan, LogicalPlanBuilder,
-    expr::{WindowFunction, WindowFunctionDefinition},
-};
+use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{SetExpr, SetOperator, SetQuantifier, Spanned};
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
@@ -165,14 +162,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .union_by_name_distinct(right_plan)?
                 .build(),
             (SetOperator::Intersect, SetQuantifier::All) => {
-                self.intersect_or_except_all(left_plan, right_plan, true)
+                LogicalPlanBuilder::intersect_all(
+                    left_plan,
+                    right_plan,
+                    &self.row_number_for_set_operation()?,
+                )
             }
             (SetOperator::Intersect, SetQuantifier::Distinct | SetQuantifier::None) => {
                 LogicalPlanBuilder::intersect(left_plan, right_plan, false)
             }
-            (SetOperator::Except, SetQuantifier::All) => {
-                self.intersect_or_except_all(left_plan, right_plan, false)
-            }
+            (SetOperator::Except, SetQuantifier::All) => LogicalPlanBuilder::except_all(
+                left_plan,
+                right_plan,
+                &self.row_number_for_set_operation()?,
+            ),
             (SetOperator::Except, SetQuantifier::Distinct | SetQuantifier::None) => {
                 LogicalPlanBuilder::except(left_plan, right_plan, false)
             }
@@ -182,83 +185,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
     }
 
-    fn intersect_or_except_all(
-        &self,
-        left_plan: LogicalPlan,
-        right_plan: LogicalPlan,
-        intersect: bool,
-    ) -> Result<LogicalPlan> {
+    fn row_number_for_set_operation(&self) -> Result<Arc<datafusion_expr::WindowUDF>> {
         let Some(row_number) = self.context_provider.get_window_meta("row_number") else {
             return plan_err!("row_number window function is not registered");
         };
-        let left_columns = left_plan.schema().columns();
-        let right_columns = right_plan.schema().columns();
-        let row_number_name = "__datafusion_set_operation_row_number";
-
-        let with_row_number = |plan: LogicalPlan, columns: &[Column]| {
-            let mut row_number_expr = WindowFunction::new(
-                WindowFunctionDefinition::WindowUDF(Arc::clone(&row_number)),
-                vec![],
-            );
-            row_number_expr.params.partition_by =
-                columns.iter().cloned().map(Expr::Column).collect();
-            LogicalPlanBuilder::from(plan)
-                .window(vec![
-                    Expr::WindowFunction(Box::new(row_number_expr))
-                        .alias(row_number_name),
-                ])?
-                .build()
-        };
-
-        let left_plan = with_row_number(left_plan, &left_columns)?;
-        let right_plan = with_row_number(right_plan, &right_columns)?;
-        let left_builder = LogicalPlanBuilder::from(left_plan);
-        let right_builder = LogicalPlanBuilder::from(right_plan);
-        let (left_builder, right_builder, requalified) =
-            datafusion_expr::logical_plan::builder::requalify_sides_if_needed(
-                left_builder,
-                right_builder,
-            )?;
-        let left_plan = left_builder.build()?;
-        let right_plan = right_builder.build()?;
-
-        let join_keys = left_plan
-            .schema()
-            .fields()
-            .iter()
-            .zip(right_plan.schema().fields().iter())
-            .map(|(left_field, right_field)| {
-                (
-                    Column::from_name(left_field.name()),
-                    Column::from_name(right_field.name()),
-                )
-            })
-            .collect();
-        let joined = LogicalPlanBuilder::from(left_plan.clone()).join_detailed(
-            right_plan,
-            if intersect {
-                datafusion_expr::JoinType::Inner
-            } else {
-                datafusion_expr::JoinType::LeftAnti
-            },
-            join_keys,
-            None,
-            datafusion_common::NullEquality::NullEqualsNull,
-        )?;
-
-        let projection = left_columns
-            .into_iter()
-            .map(|column| {
-                if requalified {
-                    Expr::Column(Column::new(
-                        Some(datafusion_common::TableReference::bare("left")),
-                        column.name,
-                    ))
-                } else {
-                    Expr::Column(column)
-                }
-            })
-            .collect::<Vec<_>>();
-        joined.project(projection)?.build()
+        Ok(row_number)
     }
 }

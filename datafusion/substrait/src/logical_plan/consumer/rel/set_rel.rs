@@ -17,6 +17,7 @@
 
 use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::common::{not_impl_err, substrait_err};
+use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use substrait::proto::set_rel::SetOp;
 use substrait::proto::{Rel, SetRel};
@@ -77,11 +78,16 @@ async fn intersect_rels(
     let mut rel = consumer.consume_rel(&rels[0]).await?;
 
     for input in &rels[1..] {
-        rel = LogicalPlanBuilder::intersect(
-            rel,
-            consumer.consume_rel(input).await?,
-            is_all,
-        )?;
+        let right = consumer.consume_rel(input).await?;
+        rel = if is_all {
+            LogicalPlanBuilder::intersect_all(
+                rel,
+                right,
+                &consumer.get_function_registry().udwf("row_number")?,
+            )?
+        } else {
+            LogicalPlanBuilder::intersect(rel, right, false)?
+        };
     }
 
     Ok(rel)
@@ -95,8 +101,16 @@ async fn except_rels(
     let mut rel = consumer.consume_rel(&rels[0]).await?;
 
     for input in &rels[1..] {
-        rel =
-            LogicalPlanBuilder::except(rel, consumer.consume_rel(input).await?, is_all)?;
+        let right = consumer.consume_rel(input).await?;
+        rel = if is_all {
+            LogicalPlanBuilder::except_all(
+                rel,
+                right,
+                &consumer.get_function_registry().udwf("row_number")?,
+            )?
+        } else {
+            LogicalPlanBuilder::except(rel, right, false)?
+        };
     }
 
     Ok(rel)

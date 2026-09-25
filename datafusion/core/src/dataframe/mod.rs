@@ -1962,7 +1962,11 @@ impl DataFrame {
     pub fn intersect(self, dataframe: DataFrame) -> Result<DataFrame> {
         let left_plan = self.plan;
         let right_plan = dataframe.plan;
-        let plan = LogicalPlanBuilder::intersect(left_plan, right_plan, true)?;
+        let Some(row_number) = self.session_state.window_functions().get("row_number")
+        else {
+            return plan_err!("row_number window function is not registered");
+        };
+        let plan = LogicalPlanBuilder::intersect_all(left_plan, right_plan, row_number)?;
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
@@ -2040,7 +2044,11 @@ impl DataFrame {
     pub fn except(self, dataframe: DataFrame) -> Result<DataFrame> {
         let left_plan = self.plan;
         let right_plan = dataframe.plan;
-        let plan = LogicalPlanBuilder::except(left_plan, right_plan, true)?;
+        let Some(row_number) = self.session_state.window_functions().get("row_number")
+        else {
+            return plan_err!("row_number window function is not registered");
+        };
+        let plan = LogicalPlanBuilder::except_all(left_plan, right_plan, row_number)?;
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
