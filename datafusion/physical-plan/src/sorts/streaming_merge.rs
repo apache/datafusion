@@ -98,7 +98,7 @@ pub struct StreamingMergeBuilder<'a> {
     merge_pool: Option<Arc<MergeMemoryPool>>,
     /// Leave memory for the aggregate consuming the merged spill rows.
     reserve_replay_headroom: bool,
-    size_intermediate_merges: bool,
+    min_spill_batch_rows: Option<usize>,
     enable_round_robin_tie_breaker: bool,
 }
 
@@ -173,8 +173,14 @@ impl<'a> StreamingMergeBuilder<'a> {
 
     /// Limit the last intermediate merge to the inputs needed to reach the
     /// final replay fan-in. The ordered replay path can use the larger final pass.
-    pub(crate) fn with_intermediate_merge_sizing(mut self) -> Self {
-        self.size_intermediate_merges = true;
+    /// `min_spill_batch_rows` is the minimum largest-batch row count across input
+    /// runs. A run without a full batch disables sizing for the whole replay,
+    /// since merging short batches can increase the intermediate run's budget.
+    pub(crate) fn with_intermediate_merge_sizing(
+        mut self,
+        min_spill_batch_rows: usize,
+    ) -> Self {
+        self.min_spill_batch_rows = Some(min_spill_batch_rows);
         self
     }
 
@@ -212,7 +218,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             reservation,
             merge_pool,
             reserve_replay_headroom,
-            size_intermediate_merges,
+            min_spill_batch_rows,
             fetch,
             expressions,
             enable_round_robin_tie_breaker,
@@ -255,7 +261,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             )
             .with_merge_pool(merge_pool)
             .with_replay_headroom(reserve_replay_headroom)
-            .with_intermediate_merge_sizing(size_intermediate_merges)
+            .with_intermediate_merge_sizing(min_spill_batch_rows)
             .create_spillable_merge_stream());
         }
 
