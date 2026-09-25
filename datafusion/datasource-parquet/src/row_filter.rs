@@ -694,9 +694,12 @@ pub(crate) struct OptionalFilterRowFilterContext<'a> {
 ///   predicate.
 /// * [`OptionalFilterMode::Adaptive`]: each optional conjunct is a separate
 ///   candidate with an [`OptionalFilterGate`], which skips the conjunct while
-///   it costs more than it saves. Each file has its own gates. Optional
-///   candidates come after all required
-///   candidates, see [`row_filter_from_prebuilt`].
+///   it costs more than it saves. Each file has its own gates, and the
+///   gates of one filter share their pauses in all files and partitions of
+///   the scan (see
+///   [`OptionalFilterSites`](crate::optional_filter::OptionalFilterSites)).
+///   Optional candidates come after all required candidates, see
+///   [`row_filter_from_prebuilt`].
 ///
 /// An optional conjunct that cannot be evaluated as an `ArrowPredicate` for
 /// this file (for example because of schema evolution) is not used, in all
@@ -790,6 +793,13 @@ pub(crate) fn prebuild_row_filter_candidates(
                 Arc::clone(&candidate.physical_expr),
                 optional.options.gate_config,
             );
+            // The gates of the filter in the other files and partitions of
+            // the scan share their pauses.
+            if let Some(verdict) =
+                optional.options.sites.verdict_for(&candidate.source_expr)
+            {
+                gate = gate.with_shared_verdict(verdict);
+            }
             // A removed row saves the decode of the output columns that the
             // filter does not read.
             if let Some(output) = optional.output_projection {
@@ -2676,7 +2686,7 @@ mod optional_filter_tests {
                 min_saving_ns_per_row,
                 ..Default::default()
             },
-            decode_cost: Arc::default(),
+            ..Default::default()
         }
     }
 
@@ -2925,8 +2935,8 @@ mod optional_filter_tests {
         assert_eq!(rows_adaptive, rows_always);
         assert_eq!(file_metrics.pushdown_rows_matched.value(), rows_adaptive);
 
-        // Gates do not share state: the gate for the next file starts to
-        // evaluate the filter.
+        // A filter without an expression id does not share its pauses: the
+        // gate for the next file starts to evaluate the filter.
         let candidates = prebuild(
             &predicate,
             &file_schema,
@@ -2936,6 +2946,30 @@ mod optional_filter_tests {
         );
         let gate = candidates[0].gate.as_ref().unwrap();
         assert!(!gate.lock().gate.is_paused());
+    }
+
+    /// The gates of a dynamic filter share their pauses: the gate for the
+    /// next file starts paused, without a window of its own.
+    #[test]
+    fn adaptive_gates_of_dynamic_filter_share_pauses() {
+        let (file, metadata, file_schema) = test_file();
+        let dynamic: Arc<dyn PhysicalExpr> = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![col("b", &file_schema).unwrap()],
+            col_op("b", Operator::GtEq, 0, &file_schema),
+        ));
+        let predicate = optional(dynamic);
+        let metrics = ExecutionPlanMetricsSet::new();
+        let file_metrics = ParquetFileMetrics::new(0, FILENAME, &metrics);
+        let options = options(OptionalFilterMode::Adaptive);
+        let candidates =
+            prebuild(&predicate, &file_schema, &metadata, &options, &metrics);
+        assert!(!candidates[0].gate.as_ref().unwrap().lock().gate.is_paused());
+        read_with_row_filter(&file, &candidates, &file_metrics);
+        assert!(metric(&metrics, "optional_filter_pauses") > 0);
+
+        let candidates =
+            prebuild(&predicate, &file_schema, &metadata, &options, &metrics);
+        assert!(candidates[0].gate.as_ref().unwrap().lock().gate.is_paused());
     }
 
     #[test]
