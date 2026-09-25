@@ -244,6 +244,15 @@ fn aggregations_with_limit_combined() -> datafusion_common::Result<()> {
     let partial_group_by = PhysicalGroupBy::new_single(groups);
     let partial_agg =
         partial_aggregate_exec(parquet_exec(schema), partial_group_by, aggr_expr.clone());
+    let partial_agg = Arc::new(
+        partial_agg
+            .downcast_ref::<AggregateExec>()
+            .unwrap()
+            .clone()
+            .try_optimize_distinct_soft_limit(5)
+            .unwrap()
+            .data,
+    );
 
     let groups: Vec<(Arc<dyn PhysicalExpr>, String)> =
         vec![(col("c", &partial_agg.schema())?, "c".to_string())];

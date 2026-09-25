@@ -848,8 +848,13 @@ impl LimitOptions {
 }
 
 /// Mutually exclusive aggregation implementations and their configuration.
+///
+/// # Public Only for Internal Use:
+/// `datafusion-physical-optimizer` inspects and combines aggregate kinds.
+/// This enum is not part of the supported public API.
+#[doc(hidden)]
 #[derive(Debug, Clone)]
-enum AggregateKind {
+pub enum AggregateKind {
     /// Ordinary aggregation, with no limit on the groups retained.
     General {
         group_by: Arc<PhysicalGroupBy>,
@@ -868,7 +873,6 @@ enum AggregateKind {
         aggr_expr: Arc<AggregateFunctionExpr>,
         limit: usize,
         descending: bool,
-        // Retained so rewrites can revalidate nullable MIN/MAX inputs.
         nulls_first: bool,
     },
     /// See [`AggregateExec::try_optimize_topk`] for details.
@@ -884,7 +888,14 @@ enum AggregateKind {
 pub struct AggregateExec {
     /// Aggregation mode (full, partial)
     mode: AggregateMode,
-    kind: AggregateKind,
+    /// Aggregation implementation and its configuration.
+    ///
+    /// # Public Only for Internal Use:
+    /// `datafusion-physical-optimizer` updates this when combining aggregates.
+    /// Changes must preserve the expressions, schema, and plan properties.
+    /// This field is not part of the supported public API.
+    #[doc(hidden)]
+    pub kind: AggregateKind,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub input: Arc<dyn ExecutionPlan>,
     /// Schema after the aggregate is applied. Contains the group by columns followed by the
@@ -1098,11 +1109,16 @@ impl AggregateExec {
         self.kind = kind;
         self.input_order_mode = InputOrderMode::Linear;
         self.required_input_ordering = None;
-        let mut equivalence = self.cache.eq_properties.clone();
-        equivalence.clear_orderings();
-        let cache = Arc::make_mut(&mut self.cache);
-        cache.set_eq_properties(equivalence);
-        cache.emission_type = EmissionType::Final;
+        // Keep unchanged properties so parent aggregates do not need rebuilding.
+        if !self.cache.eq_properties.oeq_class().is_empty()
+            || self.cache.emission_type != EmissionType::Final
+        {
+            let mut equivalence = self.cache.eq_properties.clone();
+            equivalence.clear_orderings();
+            let cache = Arc::make_mut(&mut self.cache);
+            cache.set_eq_properties(equivalence);
+            cache.emission_type = EmissionType::Final;
+        }
         self.metrics = ExecutionPlanMetricsSet::new();
         Some(Transformed::yes(self))
     }
@@ -1434,49 +1450,6 @@ impl AggregateExec {
             )
             .map(|result| result.data)
         }
-    }
-
-    /// Preserve a validated specialization when rebuilding an aggregate's input.
-    fn restore_optimization(self, source: &Self) -> Result<Self> {
-        let restored = match &source.kind {
-            AggregateKind::General { .. } => Some(self),
-            AggregateKind::DistinctLimit { limit, .. } => {
-                self.restore_limit_options(Some(LimitOptions::new(*limit)))
-            }
-            AggregateKind::TopKMinMax {
-                limit,
-                descending,
-                nulls_first,
-                aggr_expr,
-                ..
-            } => self
-                .try_optimize_topk(
-                    *limit,
-                    aggr_expr.name(),
-                    SortOptions {
-                        descending: *descending,
-                        nulls_first: *nulls_first,
-                    },
-                )
-                .map(|result| result.data),
-            AggregateKind::TopKDistinct {
-                group_by,
-                limit,
-                descending,
-            } => self
-                .try_optimize_topk(
-                    *limit,
-                    &group_by.expr[0].1,
-                    // DISTINCT retains the NULL key for either placement.
-                    SortOptions::new(*descending, false),
-                )
-                .map(|result| result.data),
-        };
-        restored.ok_or_else(|| {
-            datafusion_common::internal_datafusion_err!(
-                "Aggregate rewrite cannot preserve its DISTINCT or TopK optimization"
-            )
-        })
     }
 
     /// Get the limit options (if set)
@@ -2535,7 +2508,13 @@ impl ExecutionPlan for AggregateExec {
                     Arc::clone(&self.input_schema),
                     Arc::clone(&self.schema),
                 )?;
-                me = me.restore_optimization(&self)?;
+                // Reapply a DISTINCT limit only if the new input remains eligible.
+                if let AggregateKind::DistinctLimit { limit, .. } = &self.kind
+                    && let Some(optimized) =
+                        me.clone().try_optimize_distinct_soft_limit(*limit)
+                {
+                    me = optimized.data;
+                }
                 me.dynamic_filter.clone_from(&self.dynamic_filter);
                 Ok(Arc::new(me))
             }
