@@ -51,7 +51,7 @@ use parquet::arrow::ProjectionMask;
 use parquet::schema::types::{SchemaDescPtr, SchemaDescriptor};
 
 use crate::ParquetFileMetrics;
-use crate::filter_placement::ConjunctStats;
+use crate::filter_placement::{ConjunctStats, StageSelection};
 use crate::opener::{VirtualColumnsState, append_fields};
 use crate::projection_read_plan::build_projection_read_plan;
 
@@ -166,6 +166,13 @@ impl PostScanFilter {
         // compaction, `None` meaning "all of them are still live".
         let mut working = batch;
         let mut acc: Option<BooleanArray> = None;
+        // Maps the working rows to the rows of the input batch, for the
+        // conjuncts that the adaptive filter placement measures.
+        let mut stages = self
+            .conjuncts
+            .iter()
+            .any(|conjunct| conjunct.stats.is_some())
+            .then(|| StageSelection::new(input_rows));
 
         let last = self.conjuncts.len() - 1;
         for (
@@ -189,8 +196,8 @@ impl PostScanFilter {
                 Some(_) => prep_null_mask_filter(mask),
                 None => mask.clone(),
             };
-            if let Some(stats) = stats {
-                stats.record_evaluation(&mask);
+            if let (Some(stages), Some(stats)) = (stages.as_ref(), stats) {
+                stages.record(stats, &mask);
             }
             // An all-true conjunct leaves the accumulated selection untouched.
             if mask.true_count() == rows_in {
@@ -214,6 +221,9 @@ impl PostScanFilter {
             if position < last
                 && (alive as f64) <= COMPACTION_SELECTIVITY_THRESHOLD * rows_in as f64
             {
+                if let Some(stages) = stages.as_mut() {
+                    stages.compact(&folded);
+                }
                 working = filter_record_batch(&working, &folded)?;
                 acc = None;
             } else {
@@ -623,6 +633,59 @@ mod tests {
                     .collect()
             }
         }
+    }
+
+    /// A conjunct after a compaction is measured in the positions of the
+    /// input batch, not of the compacted batch. The rows that the compaction
+    /// removed count as passing.
+    #[test]
+    fn measures_skippable_rows_on_input_positions() {
+        // (a % 4) = 0: keeps every fourth row, no empty window. The loop then
+        // compacts the batch to 64 rows.
+        let every_fourth: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a", 0)),
+                Operator::Modulo,
+                Arc::new(Literal::new(ScalarValue::Int32(Some(4)))),
+            )),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
+        ));
+        // b > 127: removes the first 32 rows of the compacted batch, that is
+        // the live rows of the input rows 0..128. In the compacted batch this
+        // is half of one window of 64 rows.
+        let upper_half = gt("b", 1, 127);
+        let first = Arc::new(ConjunctStats::default());
+        let second = Arc::new(ConjunctStats::default());
+        let filter = PostScanFilter {
+            conjuncts: vec![
+                PostScanConjunct {
+                    expr: every_fourth,
+                    stats: Some(Arc::clone(&first)),
+                },
+                PostScanConjunct {
+                    expr: upper_half,
+                    stats: Some(Arc::clone(&second)),
+                },
+            ],
+            rows_pruned: Count::new(),
+            rows_matched: Count::new(),
+            eval_time: Time::new(),
+        };
+        let rows = survivors(&filter, batch((0..256).map(Some).collect()));
+        assert_eq!(rows, (128..256).step_by(4).map(Some).collect::<Vec<_>>());
+
+        let first = first.observation();
+        assert_eq!(
+            (first.rows_in, first.rows_out, first.skippable_rows),
+            (256, 64, 0)
+        );
+        // The rows that the first conjunct removed pass: no empty window.
+        let second = second.observation();
+        assert_eq!(
+            (second.rows_in, second.rows_out, second.skippable_rows),
+            (256, 256 - 32, 0)
+        );
     }
 
     #[test]
