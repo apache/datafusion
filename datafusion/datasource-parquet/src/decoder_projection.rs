@@ -42,7 +42,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::instant::Instant;
 use datafusion_common::{Result, internal_err};
-use datafusion_physical_expr::filter_stats::duration_nanos;
+use datafusion_physical_expr::filter_stats::{FilterCost, duration_nanos};
 use datafusion_physical_expr::optional_filter_gate::GateDecision;
 use datafusion_physical_expr::projection::{ProjectionExprs, Projector};
 use datafusion_physical_expr::split_conjunction;
@@ -59,6 +59,7 @@ use crate::filter_placement::{ConjunctStats, StageSelection};
 use crate::opener::{VirtualColumnsState, append_fields};
 use crate::projection_read_plan::build_projection_read_plan;
 use crate::row_filter::SharedOptionalFilterGate;
+use crate::row_filter_cost::evaluation_order;
 
 /// Stream-schema column indices referenced by `projection`, in ascending
 /// order, or `None` when the projection already reads every column of
@@ -138,9 +139,9 @@ pub(crate) enum PostScanSelection {
 /// into [`ParquetFileMetrics`] for `EXPLAIN ANALYZE`.
 pub(crate) struct PostScanFilter {
     /// The `AND` conjuncts of the predicate, rebased onto the decoder's stream
-    /// schema, in the order they are evaluated, each with the measurements
-    /// of the adaptive filter placement (if the placement manages it). Never
-    /// empty.
+    /// schema, each with the measurements of the adaptive filter placement
+    /// (if the placement manages it). Never empty. They are evaluated in the
+    /// order of [`Self::evaluation_order`].
     conjuncts: Vec<PostScanConjunct>,
     rows_pruned: Count,
     rows_matched: Count,
@@ -180,15 +181,12 @@ impl PostScanFilter {
             .then(|| StageSelection::new(input_rows));
 
         let last = self.conjuncts.len() - 1;
-        for (
-            position,
-            PostScanConjunct {
+        for (position, index) in self.evaluation_order().into_iter().enumerate() {
+            let PostScanConjunct {
                 expr: conjunct,
                 stats,
                 gate,
-            },
-        ) in self.conjuncts.iter().enumerate()
-        {
+            } = &self.conjuncts[index];
             let rows_in = working.num_rows();
             // An optional conjunct that its gate skips lets all rows pass.
             let mut gate = gate.as_ref().map(|gate| gate.lock());
@@ -268,6 +266,30 @@ impl PostScanFilter {
             batch: working,
             mask: acc,
         })
+    }
+
+    /// The order to evaluate the conjuncts for the next batch, as indexes
+    /// into `conjuncts`: by the pooled measurements of the conjuncts (rows
+    /// removed for each nanosecond, see
+    /// [`evaluation_order`](crate::row_filter_cost::evaluation_order)), the
+    /// conjuncts without enough measurements first in their order. The
+    /// post-scan filter can change its order at each batch for free, thus a
+    /// file with few row groups does not keep the written order until its
+    /// end (TPC-DS Q24: an expensive join filter ran before a cheap one that
+    /// removes all rows).
+    fn evaluation_order(&self) -> Vec<usize> {
+        let costs: Vec<FilterCost> = self
+            .conjuncts
+            .iter()
+            .map(|conjunct| {
+                conjunct
+                    .stats
+                    .as_ref()
+                    .map(|stats| stats.observation().cost())
+                    .unwrap_or_default()
+            })
+            .collect();
+        evaluation_order(&costs)
     }
 
     /// Record one batch's contribution to the rows-matched / rows-pruned
@@ -788,6 +810,44 @@ mod tests {
         assert!(gate.lock().is_paused());
         // The paused gate skips the optional conjunct: same result.
         assert_eq!(survivors(&filter, input()).len(), rows as usize / 2);
+    }
+
+    /// The conjuncts run in the order of their pooled measurements: the
+    /// conjunct that removes more rows for each nanosecond first. The
+    /// result does not change.
+    #[test]
+    fn conjuncts_run_in_measured_order() {
+        let rows = 16 * 8192;
+        let expensive = Arc::new(ConjunctStats::default());
+        let cheap = Arc::new(ConjunctStats::default());
+        let filter = PostScanFilter {
+            conjuncts: vec![
+                PostScanConjunct {
+                    expr: gt("a", 0, 49),
+                    stats: Some(Arc::clone(&expensive)),
+                    gate: None,
+                },
+                PostScanConjunct {
+                    expr: gt("b", 1, 149),
+                    stats: Some(Arc::clone(&cheap)),
+                    gate: None,
+                },
+            ],
+            rows_pruned: Count::new(),
+            rows_matched: Count::new(),
+            eval_time: Time::new(),
+        };
+        // Unmeasured: the written order.
+        assert_eq!(filter.evaluation_order(), vec![0, 1]);
+        // The second conjunct removes more rows for each nanosecond.
+        expensive.record(rows, rows / 2, 0, 20 * rows as u64);
+        cheap.record(rows, rows / 4, 0, rows as u64);
+        assert_eq!(filter.evaluation_order(), vec![1, 0]);
+        let input = batch((0..200).map(Some).collect());
+        assert_eq!(
+            survivors(&filter, input),
+            (150..200).map(Some).collect::<Vec<_>>()
+        );
     }
 
     #[test]
