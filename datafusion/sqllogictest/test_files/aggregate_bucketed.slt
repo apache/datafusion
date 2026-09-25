@@ -15,11 +15,13 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Final hash aggregation splits its groups into hash buckets once the table
-# reaches `hash_aggregate_bucket_threshold` groups. Every query runs with the
-# option off and with a tiny threshold; the results must be identical.
-
-# The test context runs with 4 target partitions, so the aggregation is two-stage.
+# A hash aggregation table that reaches `hash_aggregate_bucket_threshold` groups
+# stops growing: a partial aggregation flushes it, a final aggregation and a
+# single stage aggregation that runs on every partition move its groups into
+# hash buckets. Every query runs with 4 partitions (the test context's default)
+# and with 1 partition, where the lone single stage aggregation keeps its
+# table, each with the option off and with a tiny threshold; the results must
+# be identical.
 
 statement ok
 set datafusion.execution.batch_size = 1024;
@@ -27,7 +29,10 @@ set datafusion.execution.batch_size = 1024;
 statement ok
 create table t as select value as v from generate_series(1, 200000);
 
-# --- hash_aggregate_bucket_threshold = 0
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+# --- target_partitions = 4, hash_aggregate_bucket_threshold = 0
 
 statement ok
 set datafusion.execution.hash_aggregate_bucket_threshold = 0;
@@ -74,7 +79,19 @@ select count(*) from (select distinct v % 20011 as k, v % 3 as j from t);
 ----
 60033
 
-# accumulators with list state
+# aggregate with a filter
+query III
+select count(*), sum(c), sum(s) from (select v % 10007 as k, count(*) filter (where v % 3 = 0) c, sum(v) filter (where v % 5 = 0) s from t group by k);
+----
+10007 66666 4000100000
+
+# grouping sets
+query III
+select count(*), sum(c), sum(s) from (select v % 1009 as k1, v % 13 as k2, count(*) c, sum(v) s from t group by rollup(k1, k2));
+----
+14127 600000 60000300000
+
+# accumulators with list state keep their single table
 query II
 select count(*), sum(d) from (select v % 5003 as k, count(distinct v % 17) d from t group by k);
 ----
@@ -86,11 +103,11 @@ select count(*), sum(m) from (select v % 5003 as k, median(v) m from t group by 
 ----
 5003 500302501.5
 
-# array_agg
+# ordered array_agg
 query II
-select count(*), sum(array_length(a)) from (select v % 5003 as k, array_agg(v) a from t group by k);
+select count(*), sum(a[1]) from (select v % 5003 as k, array_agg(v order by v desc) a from t group by k);
 ----
-5003 200000
+5003 988087497
 
 # every row its own group, largest groups first
 query III
@@ -100,7 +117,13 @@ select k, c, s from (select v as k, count(*) c, sum(v) s from t group by v) orde
 199999 1 199999
 199998 1 199998
 
-# --- hash_aggregate_bucket_threshold = 100
+# nested aggregation: the outer one runs single stage on every partition
+query III
+select count(*), sum(c), sum(mn) from (select k, mn, count(*) c from (select v % 10007 as k, min(v) mn from t group by k) group by k, mn);
+----
+10007 10007 50075028
+
+# --- target_partitions = 4, hash_aggregate_bucket_threshold = 100
 
 statement ok
 set datafusion.execution.hash_aggregate_bucket_threshold = 100;
@@ -114,6 +137,14 @@ explain analyze select count(*) from (select v % 10007 as k, count(*) c from t g
 06)----------AggregateExec: mode=FinalPartitioned, gby=[t.v % Int64(10007)@0 as t.v % Int64(10007)], aggr=[], metrics=[<slt:ignore>bucket_splits=4,<slt:ignore>]
 <slt:ignore>
 08)--------------AggregateExec: mode=Partial, gby=[v@0 % 10007 as t.v % Int64(10007)], aggr=[], metrics=[<slt:ignore>table_flush_count=<slt:ignore>]
+<slt:ignore>
+
+# The outer aggregation of a nested one is single stage and bucketed too
+query TT
+explain analyze select count(*), sum(c), sum(mn) from (select k, mn, count(*) c from (select v % 10007 as k, min(v) mn from t group by k) group by k, mn);
+----
+<slt:ignore>
+06)----------AggregateExec: mode=SinglePartitioned, gby=[k@0 as k, mn@1 as mn], aggr=[count(Int64(1))], metrics=[<slt:ignore>bucket_splits=4,<slt:ignore>]
 <slt:ignore>
 
 # integer key, several accumulators
@@ -158,7 +189,19 @@ select count(*) from (select distinct v % 20011 as k, v % 3 as j from t);
 ----
 60033
 
-# accumulators with list state
+# aggregate with a filter
+query III
+select count(*), sum(c), sum(s) from (select v % 10007 as k, count(*) filter (where v % 3 = 0) c, sum(v) filter (where v % 5 = 0) s from t group by k);
+----
+10007 66666 4000100000
+
+# grouping sets
+query III
+select count(*), sum(c), sum(s) from (select v % 1009 as k1, v % 13 as k2, count(*) c, sum(v) s from t group by rollup(k1, k2));
+----
+14127 600000 60000300000
+
+# accumulators with list state keep their single table
 query II
 select count(*), sum(d) from (select v % 5003 as k, count(distinct v % 17) d from t group by k);
 ----
@@ -170,11 +213,11 @@ select count(*), sum(m) from (select v % 5003 as k, median(v) m from t group by 
 ----
 5003 500302501.5
 
-# array_agg
+# ordered array_agg
 query II
-select count(*), sum(array_length(a)) from (select v % 5003 as k, array_agg(v) a from t group by k);
+select count(*), sum(a[1]) from (select v % 5003 as k, array_agg(v order by v desc) a from t group by k);
 ----
-5003 200000
+5003 988087497
 
 # every row its own group, largest groups first
 query III
@@ -184,11 +227,206 @@ select k, c, s from (select v as k, count(*) c, sum(v) s from t group by v) orde
 199999 1 199999
 199998 1 199998
 
+# nested aggregation: the outer one runs single stage on every partition
+query III
+select count(*), sum(c), sum(mn) from (select k, mn, count(*) c from (select v % 10007 as k, min(v) mn from t group by k) group by k, mn);
+----
+10007 10007 50075028
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+# --- target_partitions = 1, hash_aggregate_bucket_threshold = 0
+
+statement ok
+set datafusion.execution.hash_aggregate_bucket_threshold = 0;
+
+# integer key, several accumulators
+query IIIII
+select count(*), sum(c), sum(s), min(mn), max(mx) from (select v % 10007 as k, count(*) c, sum(v) s, min(v) mn, max(v) mx from t group by k);
+----
+10007 200000 20000100000 1 200000
+
+# avg keeps sum and count as state
+query IR
+select count(*), round(sum(a), 3) from (select v % 10007 as k, avg(v) a from t group by k);
+----
+10007 1000705003.5
+
+# string key
+query II
+select count(*), sum(c) from (select concat('key-', cast(v % 9973 as varchar)) as k, count(*) c from t group by k);
+----
+9973 200000
+
+# string view key
+query II
+select count(*), sum(c) from (select arrow_cast(concat('a-long-enough-string-view-key-', cast(v % 9973 as varchar)), 'Utf8View') as k, count(*) c from t group by k);
+----
+9973 200000
+
+# several key columns of mixed types
+query III
+select count(*), sum(c), sum(s) from (select v % 101 as k1, concat('k', cast(v % 103 as varchar)) as k2, v % 7 = 0 as k3, count(*) c, sum(v) s from t group by k1, k2, k3);
+----
+20806 200000 20000100000
+
+# nullable key
+query II
+select count(*), sum(c) from (select case when v % 11 = 0 then null else v % 5003 end as k, count(*) c from t group by k);
+----
+5004 200000
+
+# distinct has no accumulators
+query I
+select count(*) from (select distinct v % 20011 as k, v % 3 as j from t);
+----
+60033
+
+# aggregate with a filter
+query III
+select count(*), sum(c), sum(s) from (select v % 10007 as k, count(*) filter (where v % 3 = 0) c, sum(v) filter (where v % 5 = 0) s from t group by k);
+----
+10007 66666 4000100000
+
+# grouping sets
+query III
+select count(*), sum(c), sum(s) from (select v % 1009 as k1, v % 13 as k2, count(*) c, sum(v) s from t group by rollup(k1, k2));
+----
+14127 600000 60000300000
+
+# accumulators with list state keep their single table
+query II
+select count(*), sum(d) from (select v % 5003 as k, count(distinct v % 17) d from t group by k);
+----
+5003 85051
+
+# median
+query IR
+select count(*), sum(m) from (select v % 5003 as k, median(v) m from t group by k);
+----
+5003 500302501.5
+
+# ordered array_agg
+query II
+select count(*), sum(a[1]) from (select v % 5003 as k, array_agg(v order by v desc) a from t group by k);
+----
+5003 988087497
+
+# every row its own group, largest groups first
+query III
+select k, c, s from (select v as k, count(*) c, sum(v) s from t group by v) order by k desc limit 3;
+----
+200000 1 200000
+199999 1 199999
+199998 1 199998
+
+# nested aggregation: the outer one runs single stage on every partition
+query III
+select count(*), sum(c), sum(mn) from (select k, mn, count(*) c from (select v % 10007 as k, min(v) mn from t group by k) group by k, mn);
+----
+10007 10007 50075028
+
+# --- target_partitions = 1, hash_aggregate_bucket_threshold = 100
+
+statement ok
+set datafusion.execution.hash_aggregate_bucket_threshold = 100;
+
+# integer key, several accumulators
+query IIIII
+select count(*), sum(c), sum(s), min(mn), max(mx) from (select v % 10007 as k, count(*) c, sum(v) s, min(v) mn, max(v) mx from t group by k);
+----
+10007 200000 20000100000 1 200000
+
+# avg keeps sum and count as state
+query IR
+select count(*), round(sum(a), 3) from (select v % 10007 as k, avg(v) a from t group by k);
+----
+10007 1000705003.5
+
+# string key
+query II
+select count(*), sum(c) from (select concat('key-', cast(v % 9973 as varchar)) as k, count(*) c from t group by k);
+----
+9973 200000
+
+# string view key
+query II
+select count(*), sum(c) from (select arrow_cast(concat('a-long-enough-string-view-key-', cast(v % 9973 as varchar)), 'Utf8View') as k, count(*) c from t group by k);
+----
+9973 200000
+
+# several key columns of mixed types
+query III
+select count(*), sum(c), sum(s) from (select v % 101 as k1, concat('k', cast(v % 103 as varchar)) as k2, v % 7 = 0 as k3, count(*) c, sum(v) s from t group by k1, k2, k3);
+----
+20806 200000 20000100000
+
+# nullable key
+query II
+select count(*), sum(c) from (select case when v % 11 = 0 then null else v % 5003 end as k, count(*) c from t group by k);
+----
+5004 200000
+
+# distinct has no accumulators
+query I
+select count(*) from (select distinct v % 20011 as k, v % 3 as j from t);
+----
+60033
+
+# aggregate with a filter
+query III
+select count(*), sum(c), sum(s) from (select v % 10007 as k, count(*) filter (where v % 3 = 0) c, sum(v) filter (where v % 5 = 0) s from t group by k);
+----
+10007 66666 4000100000
+
+# grouping sets
+query III
+select count(*), sum(c), sum(s) from (select v % 1009 as k1, v % 13 as k2, count(*) c, sum(v) s from t group by rollup(k1, k2));
+----
+14127 600000 60000300000
+
+# accumulators with list state keep their single table
+query II
+select count(*), sum(d) from (select v % 5003 as k, count(distinct v % 17) d from t group by k);
+----
+5003 85051
+
+# median
+query IR
+select count(*), sum(m) from (select v % 5003 as k, median(v) m from t group by k);
+----
+5003 500302501.5
+
+# ordered array_agg
+query II
+select count(*), sum(a[1]) from (select v % 5003 as k, array_agg(v order by v desc) a from t group by k);
+----
+5003 988087497
+
+# every row its own group, largest groups first
+query III
+select k, c, s from (select v as k, count(*) c, sum(v) s from t group by v) order by k desc limit 3;
+----
+200000 1 200000
+199999 1 199999
+199998 1 199998
+
+# nested aggregation: the outer one runs single stage on every partition
+query III
+select count(*), sum(c), sum(mn) from (select k, mn, count(*) c from (select v % 10007 as k, min(v) mn from t group by k) group by k, mn);
+----
+10007 10007 50075028
+
 statement ok
 reset datafusion.execution.hash_aggregate_bucket_threshold;
 
 statement ok
 reset datafusion.execution.batch_size;
+
+# back to the test context's default
+statement ok
+set datafusion.execution.target_partitions = 4;
 
 statement ok
 drop table t;

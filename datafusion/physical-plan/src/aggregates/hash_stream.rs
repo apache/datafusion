@@ -1731,6 +1731,152 @@ mod tests {
         Ok(())
     }
 
+    /// Runs `SELECT group_col, COUNT(value_col) .. GROUP BY group_col` as a
+    /// single stage hash aggregation over `keys`. The input is not charged to
+    /// the memory pool. Returns the `(group, count)` rows sorted by group and
+    /// the `bucket_splits` and `spill_count` metrics.
+    async fn run_single_hash_aggregate(
+        mode: AggregateMode,
+        keys: Vec<i32>,
+        bucket_threshold: usize,
+        memory_limit: Option<usize>,
+    ) -> Result<(Vec<(i32, i64)>, usize, usize)> {
+        use datafusion_common::ScalarValue;
+
+        let batch_size = 1024;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("group_col", DataType::Int32, false),
+            Field::new("value_col", DataType::Int64, false),
+        ]));
+        let batches = keys
+            .chunks(batch_size)
+            .map(|keys| {
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Int32Array::from(keys.to_vec())),
+                        Arc::new(Int64Array::from(vec![1i64; keys.len()])),
+                    ],
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut runtime = RuntimeEnvBuilder::default();
+        if let Some(memory_limit) = memory_limit {
+            runtime = runtime.with_memory_limit(memory_limit, 1.0);
+        }
+        let task_ctx = TaskContext::default().with_runtime(runtime.build_arc()?);
+        let session_config = task_ctx
+            .session_config()
+            .clone()
+            .set(
+                "datafusion.execution.batch_size",
+                &ScalarValue::UInt64(Some(batch_size as u64)),
+            )
+            .set(
+                "datafusion.execution.hash_aggregate_bucket_threshold",
+                &ScalarValue::UInt64(Some(bucket_threshold as u64)),
+            );
+        let task_ctx = Arc::new(task_ctx.with_session_config(session_config));
+
+        let aggr_expr = vec![Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col("value_col", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("count_value")
+                .build()?,
+        )];
+        let input = TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let single = Arc::new(AggregateExec::try_new(
+            mode,
+            PhysicalGroupBy::new_single(vec![(
+                col("group_col", &schema)?,
+                "group_col".to_string(),
+            )]),
+            aggr_expr,
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?);
+
+        let output =
+            crate::collect(Arc::clone(&single) as Arc<dyn ExecutionPlan>, task_ctx)
+                .await?;
+        let mut rows = vec![];
+        for batch in &output {
+            let groups = batch.column(0).as_primitive::<Int32Type>();
+            let counts = batch
+                .column(1)
+                .as_primitive::<arrow::datatypes::Int64Type>();
+            rows.extend(
+                groups
+                    .values()
+                    .iter()
+                    .copied()
+                    .zip(counts.values().iter().copied()),
+            );
+        }
+        rows.sort_unstable();
+        let metrics = single.metrics().expect("single aggregate has metrics");
+        let bucket_splits = metrics
+            .sum_by_name("bucket_splits")
+            .map(|value| value.as_usize())
+            .unwrap_or(0);
+        Ok((rows, bucket_splits, metrics.spill_count().unwrap_or(0)))
+    }
+
+    #[tokio::test]
+    async fn single_hash_aggregate_buckets_match_single_table() -> Result<()> {
+        let mode = AggregateMode::SinglePartitioned;
+        // Every group has 4 rows, spread over the whole input
+        let keys: Vec<i32> = (0..200_000).map(|row| row % 50_000).collect();
+        let (expected, splits, _) =
+            run_single_hash_aggregate(mode, keys.clone(), 0, None).await?;
+        assert_eq!(splits, 0);
+        assert_eq!(expected.len(), 50_000);
+        assert!(expected.iter().all(|&(_, count)| count == 4));
+
+        // The table is moved into the buckets each time it holds 10000 groups
+        let (rows, splits, spills) =
+            run_single_hash_aggregate(mode, keys.clone(), 10_000, None).await?;
+        assert_eq!(rows, expected);
+        assert_eq!(splits, 1);
+        assert_eq!(spills, 0);
+
+        // Buckets that are still too large are split again
+        let (rows, splits, _) =
+            run_single_hash_aggregate(mode, keys.clone(), 100, None).await?;
+        assert_eq!(rows, expected);
+        assert!(splits > 1, "buckets were split again, got {splits} splits");
+
+        // A table that never reaches the threshold is left alone
+        let (rows, splits, _) =
+            run_single_hash_aggregate(mode, keys.clone(), 50_001, None).await?;
+        assert_eq!(rows, expected);
+        assert_eq!(splits, 0);
+
+        // A lone single stage aggregation keeps its table
+        let (rows, splits, _) =
+            run_single_hash_aggregate(AggregateMode::Single, keys, 100, None).await?;
+        assert_eq!(rows, expected);
+        assert_eq!(splits, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn single_hash_aggregate_spills_buckets_under_memory_limit() -> Result<()> {
+        let mode = AggregateMode::SinglePartitioned;
+        let keys: Vec<i32> = (0..600_000).map(|row| row % 200_000).collect();
+        let (expected, _, _) =
+            run_single_hash_aggregate(mode, keys.clone(), 0, None).await?;
+
+        let (rows, splits, spills) =
+            run_single_hash_aggregate(mode, keys, 10_000, Some(3 * 1024 * 1024)).await?;
+        assert_eq!(rows, expected);
+        assert!(splits >= 1);
+        assert!(spills > 0, "buckets were spilled");
+        Ok(())
+    }
+
     thread_local! {
         /// `bucket_compactions` metric of the last [`run_final_hash_aggregate`]
         static BUCKET_COMPACTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
