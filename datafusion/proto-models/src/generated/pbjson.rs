@@ -8386,7 +8386,7 @@ impl<'de> serde::Deserialize<'de> for FilterExecNode {
                             if startup_rows__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("startupRows"));
                             }
-                            startup_rows__ =
+                            startup_rows__ = 
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
