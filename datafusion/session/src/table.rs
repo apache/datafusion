@@ -376,11 +376,11 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// column called "count" such as the following
     ///
     /// ```text
-    /// +-------+,
-    /// | count |,
-    /// +-------+,
-    /// | 6     |,
-    /// +-------+,
+    /// +-------+
+    /// | count |
+    /// +-------+
+    /// | 6     |
+    /// +-------+
     /// ```
     ///
     /// # See Also

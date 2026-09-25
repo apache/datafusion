@@ -103,11 +103,11 @@ mod tests {
     use crate::arrow::datatypes::{DataType, Field, Schema};
     use crate::arrow::record_batch::RecordBatch;
     use crate::dataframe::DataFrameWriteOptions;
-    use crate::parquet::basic::Compression;
     use crate::test_util::parquet_test_data;
 
     use arrow::util::pretty::pretty_format_batches;
     use datafusion_common::config::TableParquetOptions;
+    use datafusion_common::parquet_config::DFParquetCompression;
     use datafusion_common::{assert_batches_sorted_eq, assert_contains};
     use datafusion_execution::config::SessionConfig;
 
@@ -271,7 +271,7 @@ mod tests {
         std::fs::create_dir(dir).expect("create dir failed");
 
         let mut options = TableParquetOptions::default();
-        options.global.compression = Some(Compression::SNAPPY.to_string());
+        options.global.compression = Some(DFParquetCompression::Snappy);
 
         // Write the dataframe to a parquet file named 'output1.parquet'
         write_df
