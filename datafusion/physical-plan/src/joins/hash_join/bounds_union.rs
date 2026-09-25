@@ -331,7 +331,7 @@ mod tests {
     }
 
     #[test]
-    fn predicate_ors_disjoint_ranges_and_ands_columns() {
+    fn predicate_ors_disjoint_ranges_and_conjoins_columns() {
         let merged = merge(
             2,
             &[
