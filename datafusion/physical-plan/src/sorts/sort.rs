@@ -31,7 +31,7 @@ use crate::execution_plan::{
     replace_children_if_necessary,
 };
 use crate::expressions::PhysicalSortExpr;
-use crate::filter::FilterExec;
+use crate::filter::FilterExecBuilder;
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation, PushedDown,
@@ -74,6 +74,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::filter::PhysicalFilter;
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
@@ -1660,24 +1661,28 @@ impl ExecutionPlan for SortExec {
         }
 
         // Collect parent filters that were NOT successfully pushed to our child.
-        let unsupported_filters: Vec<Arc<dyn PhysicalExpr>> = child_pushdown_result
+        // Each one keeps its properties (for example, the optional flag).
+        let unsupported_filter: PhysicalFilter = child_pushdown_result
             .parent_filters
             .iter()
             .filter(|&f| matches!(f.all(), PushedDown::No))
-            .map(|f| Arc::clone(&f.filter))
+            .map(|f| f.conjunct())
             .collect();
 
-        if unsupported_filters.is_empty() {
+        if unsupported_filter.is_empty() {
             // All filters were pushed — nothing extra to do.
             return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
         }
 
-        // Build a single conjunctive predicate from the unsupported filters
-        // and insert a FilterExec between this SortExec and its child.
-        let predicate = datafusion_physical_expr::conjunction(unsupported_filters);
-        let new_child =
-            Arc::new(FilterExec::try_new(predicate, Arc::clone(self.input()))?)
-                as Arc<dyn ExecutionPlan>;
+        // Insert a FilterExec with the unsupported filters between this
+        // SortExec and its child.
+        let new_child = Arc::new(
+            FilterExecBuilder::new_with_filter(
+                unsupported_filter,
+                Arc::clone(self.input()),
+            )
+            .build()?,
+        ) as Arc<dyn ExecutionPlan>;
         let new_sort = Arc::new(
             SortExec::new(self.expr.clone(), new_child)
                 .with_fetch(self.fetch())
