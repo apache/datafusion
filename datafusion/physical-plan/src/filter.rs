@@ -959,8 +959,9 @@ impl ExecutionPlan for FilterExec {
         // `FilterExec` is a compile error here until it is either serialized or
         // explicitly documented as not needing to be.
         let Self {
-            // Encoded as `predicate` (the AND of all conjuncts).
-            filter: _,
+            // Encoded as `predicate` (the AND of all conjuncts) and one
+            // optional flag for each term.
+            filter,
             predicate,
             input,
             // Runtime metrics, not part of the plan shape.
@@ -974,6 +975,13 @@ impl ExecutionPlan for FilterExec {
         } = self;
         let input_node = ctx.encode_child(input)?;
         let expr = ctx.encode_expr(predicate)?;
+        // Write the flags only if a conjunct is optional, so that a filter
+        // with only required conjuncts has the same encoding as before.
+        let optional_conjuncts = if filter.optional().next().is_some() {
+            filter.split_optional_flags()
+        } else {
+            vec![]
+        };
         if *batch_size == 0 {
             return plan_err!("FilterExec: batch_size must be greater than 0");
         }
@@ -1001,6 +1009,7 @@ impl ExecutionPlan for FilterExec {
                         projection,
                         batch_size,
                         fetch,
+                        optional_conjuncts,
                     },
                 )),
             ),
@@ -1037,6 +1046,7 @@ impl FilterExec {
             projection,
             batch_size,
             fetch,
+            optional_conjuncts,
         } = &**filter_node;
         let input = ctx.decode_required_child(input.as_deref(), "FilterExec", "input")?;
         let predicate = ctx.decode_required_expr(
@@ -1071,7 +1081,8 @@ impl FilterExec {
         let fetch = fetch
             .map(|f| usize_from_wire(f, "FilterExec", "fetch"))
             .transpose()?;
-        let filter = FilterExecBuilder::new(predicate, input)
+        let filter = PhysicalFilter::from_split_flags(predicate, optional_conjuncts);
+        let filter = FilterExecBuilder::new_with_filter(filter, input)
             .apply_projection(projection)?
             .with_batch_size(batch_size)
             .with_fetch(fetch)

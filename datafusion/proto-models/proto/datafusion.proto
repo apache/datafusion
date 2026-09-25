@@ -1262,6 +1262,11 @@ message FilterExecNode {
   repeated uint32 projection = 9;
   uint32 batch_size = 10;
   optional uint32 fetch = 11;
+  // One flag for each term of the root AND chain of `expr`: true if the term
+  // is optional (a consumer can skip it without an effect on the result).
+  // Empty means that all terms are required. A reader that does not know this
+  // field applies all terms, which is correct.
+  repeated bool optional_conjuncts = 12;
 }
 
 message FileGroup {
@@ -1331,6 +1336,11 @@ message ParquetScanExecNode {
 
   // Source-specific footer prefetch size. Absent means no hint.
   optional uint64 metadata_size_hint = 7;
+
+  // One flag for each term of the root AND chain of `predicate`: true if the
+  // term is optional. Empty means that all terms are required. A reader that
+  // does not know this field applies all terms, which is correct.
+  repeated bool optional_predicate_conjuncts = 8;
 }
 
 message CsvScanExecNode {

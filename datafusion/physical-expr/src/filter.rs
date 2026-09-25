@@ -197,6 +197,44 @@ impl PhysicalFilter {
         conjunction(self.conjuncts.iter().map(|c| Arc::clone(&c.expr)))
     }
 
+    /// One optional flag for each term of the root `AND` chain of
+    /// [`Self::to_expr`] (the terms of [`split_conjunction`]), in order.
+    ///
+    /// The optional flag of a conjunct applies to each of its terms: if a
+    /// consumer can skip `a AND b`, it can also skip `a` or `b`. Use
+    /// [`Self::from_split_flags`] to rebuild the filter, for example after
+    /// serialization.
+    pub fn split_optional_flags(&self) -> Vec<bool> {
+        self.conjuncts
+            .iter()
+            .flat_map(|c| {
+                std::iter::repeat_n(c.is_optional(), split_conjunction(&c.expr).len())
+            })
+            .collect()
+    }
+
+    /// The inverse of [`Self::split_optional_flags`]: one conjunct for each
+    /// term of the root `AND` chain of `expr`, with the flag at the same
+    /// position.
+    ///
+    /// If `flags` is empty, or its length is not the number of terms, the
+    /// result is [`Self::from_expr`]: all terms are required. Thus a missing
+    /// or damaged flag list makes the filter stricter, never less strict.
+    pub fn from_split_flags(expr: Arc<dyn PhysicalExpr>, flags: &[bool]) -> Self {
+        let terms = split_conjunction(&expr);
+        if flags.is_empty() || flags.len() != terms.len() {
+            return Self::from_expr(expr);
+        }
+        Self::new(terms.into_iter().zip(flags).map(|(term, optional)| {
+            let term = Arc::clone(term);
+            if *optional {
+                FilterConjunct::optional(term)
+            } else {
+                FilterConjunct::required(term)
+            }
+        }))
+    }
+
     /// The `AND` of the required conjuncts, or `true` if there are none.
     ///
     /// Use this expression for guarantees that must hold for every output
@@ -273,6 +311,48 @@ mod tests {
         // Remapping keeps the optional flag.
         let remapped = filter.try_map_exprs(Ok)?;
         assert_eq!(remapped.optional().count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn split_flags_round_trip() -> Result<()> {
+        let schema = schema();
+        let [a, b, c] = ["a", "b", "c"].map(|n| col(n, &schema).unwrap());
+        let b_and_c: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::clone(&b),
+            Operator::And,
+            Arc::clone(&c),
+        ));
+        let filter = PhysicalFilter::new([
+            FilterConjunct::required(Arc::clone(&a)),
+            FilterConjunct::optional(b_and_c),
+        ]);
+        // The flag of the optional conjunct `b AND c` applies to each term.
+        let flags = filter.split_optional_flags();
+        assert_eq!(flags, vec![false, true, true]);
+
+        let decoded = PhysicalFilter::from_split_flags(filter.to_expr(), &flags);
+        let conjuncts: Vec<_> = decoded
+            .conjuncts()
+            .iter()
+            .map(|c| (c.to_string(), c.is_optional()))
+            .collect();
+        assert_eq!(
+            conjuncts,
+            vec![
+                ("a@0".to_string(), false),
+                ("b@1".to_string(), true),
+                ("c@2".to_string(), true),
+            ]
+        );
+        assert_eq!(decoded.required_expr().to_string(), "a@0");
+
+        // No flags or a wrong number of flags: all terms are required.
+        for flags in [vec![], vec![true, true]] {
+            let decoded = PhysicalFilter::from_split_flags(filter.to_expr(), &flags);
+            assert_eq!(decoded.optional().count(), 0);
+            assert_eq!(decoded.to_string(), "a@0 AND b@1 AND c@2");
+        }
         Ok(())
     }
 }
