@@ -416,3 +416,53 @@ RESET datafusion.explain.analyze_level;
 
 statement ok
 RESET datafusion.execution.parquet.pushdown_filters;
+
+# Regression test: the TopK dynamic filter prunes every remaining row group at a
+# row group boundary while the in-scan post-scan filter (`pushdown_filters =
+# false`, the default) holds rows in its batch coalescer. The stream flushes the
+# coalescer and must then only drain it. Before the fix the next poll went back
+# to the decoder, which still pointed at a row group that the plan had dropped,
+# and failed with "decoder and plan have diverged".
+# Layout: 10 row groups of 1000 rows, row group k holds `ts` k*1000..k*1000+999
+# in a scrambled order, so the first row group fills the TopK heap and its
+# threshold prunes all other row groups.
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+COPY (
+  SELECT (value / 1000) * 1000 + ((value * 7919) % 1000) AS ts, 'x' AS s
+  FROM generate_series(0, 9999)
+)
+TO 'test_files/scratch/dynamic_row_group_pruning/flush.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '1000');
+
+statement ok
+CREATE EXTERNAL TABLE flush_t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/dynamic_row_group_pruning/flush.parquet';
+
+query IIII
+SELECT count(*), count(DISTINCT ts), min(ts), max(ts)
+FROM (SELECT * FROM flush_t WHERE s <> '' ORDER BY ts LIMIT 500);
+----
+500 500 0 499
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+query IIII
+SELECT count(*), count(DISTINCT ts), min(ts), max(ts)
+FROM (SELECT * FROM flush_t WHERE s <> '' ORDER BY ts LIMIT 500);
+----
+500 500 0 499
+
+statement ok
+drop table flush_t;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;
