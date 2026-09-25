@@ -79,3 +79,27 @@ async fn except_all_preserves_duplicate_counts_and_nulls() -> Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn set_operation_all_preserves_synthetic_column_name() -> Result<()> {
+    let ctx = SessionContext::new();
+    for operation in ["INTERSECT ALL", "EXCEPT ALL"] {
+        let sql = format!(
+            "SELECT column1 AS __datafusion_set_operation_row_number FROM VALUES (1), (1)
+             {operation}
+             SELECT column1 AS __datafusion_set_operation_row_number FROM VALUES (1)"
+        );
+        let result = ctx.sql(&sql).await?.collect().await?;
+        assert_batches_sorted_eq!(
+            [
+                "+---------------------------------------+",
+                "| __datafusion_set_operation_row_number |",
+                "+---------------------------------------+",
+                "| 1                                     |",
+                "+---------------------------------------+",
+            ],
+            &result
+        );
+    }
+    Ok(())
+}
