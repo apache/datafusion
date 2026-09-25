@@ -440,7 +440,7 @@ impl SingleHashAggregateStream {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
         let mut result = hash_table
-            .take_state_batch()
+            .take_all_state_batch()
             .and_then(|batch| spill_context.sort_and_spill(batch));
 
         // Spilling shrinks the aggregate table and releases its accumulated
@@ -488,7 +488,7 @@ impl SingleHashAggregateStream {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
         let replay = match hash_table
-            .take_state_batch()
+            .take_all_state_batch()
             .and_then(|batch| spill_context.sort_and_spill(batch))
         {
             Ok(()) => {

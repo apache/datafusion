@@ -41,7 +41,7 @@ use crate::{InputOrderMode, SendableRecordBatchStream};
 ///
 /// Every aggregation stream that spills does so the same way. Each spill event
 /// drains all currently buffered groups as intermediate state (see
-/// `take_state_batch` on the aggregate tables), sorts them by the full group
+/// `take_all_state_batch` on the aggregate tables), sorts them by the full group
 /// key, and writes them to one spill file. After the original input ends, all
 /// files are merged and replayed through an [`OrderedFinalAggregateStream`],
 /// which merges the states and evaluates the final aggregate values.
@@ -208,37 +208,37 @@ impl AggregateSpill {
         !self.spills.is_empty()
     }
 
-    /// Sorts `state_batch`, the intermediate state of all currently buffered
-    /// groups (`None` if there are no groups), and writes it as one spill file.
-    /// Memory reservation should be updated by the caller.
+    /// Sorts each of `state_batches`, the intermediate state of all currently
+    /// buffered groups (empty if there are no groups), and writes each as one
+    /// spill file. Memory reservation should be updated by the caller.
     pub(super) fn sort_and_spill(
         &mut self,
-        state_batch: Option<RecordBatch>,
+        state_batches: Vec<RecordBatch>,
     ) -> Result<()> {
-        let Some(state_batch) = state_batch else {
-            return Ok(());
-        };
+        // TODO - this creates one (small) spill file per block; sort the
+        //        blocks together instead of one by one.
+        for state_batch in state_batches {
+            let sorted_iter = IncrementalSortIterator::new(
+                state_batch,
+                self.spill_expr.clone(),
+                self.batch_size,
+            );
+            let spill_file = self
+                .spill_manager
+                .spill_record_batch_iter_and_return_max_batch_memory(
+                    sorted_iter,
+                    self.label,
+                )?;
 
-        let sorted_iter = IncrementalSortIterator::new(
-            state_batch,
-            self.spill_expr.clone(),
-            self.batch_size,
-        );
-        let spill_file = self
-            .spill_manager
-            .spill_record_batch_iter_and_return_max_batch_memory(
-                sorted_iter,
-                self.label,
-            )?;
+            let Some((file, max_record_batch_memory)) = spill_file else {
+                return internal_err!("{}: produced an empty spill", self.label);
+            };
 
-        let Some((file, max_record_batch_memory)) = spill_file else {
-            return internal_err!("{}: produced an empty spill", self.label);
-        };
-
-        self.spills.push(SortedSpillFile {
-            file,
-            max_record_batch_memory,
-        });
+            self.spills.push(SortedSpillFile {
+                file,
+                max_record_batch_memory,
+            });
+        }
 
         Ok(())
     }

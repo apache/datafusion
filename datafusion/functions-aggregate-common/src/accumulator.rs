@@ -20,6 +20,7 @@ use datafusion_common::Result;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 /// [`AccumulatorArgs`] contains information about how an aggregate
@@ -77,6 +78,41 @@ impl AccumulatorArgs<'_> {
     /// Returns the return type of the aggregate function.
     pub fn return_type(&self) -> &DataType {
         self.return_field.data_type()
+    }
+}
+
+/// [`AccumulatorArgs`] contains information about how an aggregate
+/// function was called, including the types of its arguments and any optional
+/// ordering expressions.
+#[derive(Debug, Clone)]
+pub struct BlockedAccumulatorArgs<'a> {
+    pub accumulator_args: AccumulatorArgs<'a>,
+
+    pub batch_size: usize,
+}
+impl<'a> Deref for BlockedAccumulatorArgs<'a> {
+    type Target = AccumulatorArgs<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.accumulator_args
+    }
+}
+impl DerefMut for BlockedAccumulatorArgs<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.accumulator_args
+    }
+}
+
+impl<'a> BlockedAccumulatorArgs<'a> {
+    /// Returns the return type of the aggregate function.
+    pub fn from_accumulator_args(
+        accumulator_args: AccumulatorArgs<'a>,
+        batch_size: usize,
+    ) -> Self {
+        Self {
+            accumulator_args,
+            batch_size,
+        }
     }
 }
 

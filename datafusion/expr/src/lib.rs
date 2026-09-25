@@ -104,10 +104,15 @@ pub use datafusion_doc::{
 pub use datafusion_expr_common::accumulator::{
     Accumulator, AggregateMetric, AggregateMetricRecorder, AggregateMetrics,
 };
+pub use datafusion_expr_common::blocked_groups_accumulator::{
+    BlockedEmitTo, BlockedGroupSelection, BlockedGroupsAccumulator, BlocksIndex,
+};
+pub use datafusion_expr_common::blocked_helpers;
 pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::groups_accumulator::{
     EmitTo, GroupSelection, GroupsAccumulator,
 };
+
 pub use datafusion_expr_common::operator::Operator;
 pub use datafusion_expr_common::placement::ExpressionPlacement;
 pub use datafusion_expr_common::signature::{

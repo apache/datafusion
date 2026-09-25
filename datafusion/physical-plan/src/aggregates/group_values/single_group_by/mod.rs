@@ -17,6 +17,7 @@
 
 //! `GroupValues` implementations for single group by cases
 
+pub(crate) mod blocked_primitive;
 pub(crate) mod boolean;
 pub(crate) mod bytes;
 pub(crate) mod bytes_view;

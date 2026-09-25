@@ -418,14 +418,14 @@ impl NullState {
 /// value_fn(0, 200)
 /// value_fn(0, 300)
 /// ```
-pub fn accumulate<T, F>(
-    group_indices: &[usize],
+pub fn accumulate<T, F, I: Copy>(
+    group_indices: &[I],
     values: &PrimitiveArray<T>,
     opt_filter: Option<&BooleanArray>,
     mut value_fn: F,
 ) where
     T: ArrowPrimitiveType + Send,
-    F: FnMut(usize, T::Native) + Send,
+    F: FnMut(I, T::Native) + Send,
 {
     let data: &[T::Native] = values.values();
     assert_eq!(data.len(), group_indices.len());
@@ -588,13 +588,13 @@ pub fn accumulate_multiple<T, F>(
 ///
 /// See [`NullState::accumulate`], for more details on other
 /// arguments.
-pub fn accumulate_indices<F>(
-    group_indices: &[usize],
+pub fn accumulate_indices<F, I: Copy>(
+    group_indices: &[I],
     nulls: Option<&NullBuffer>,
     opt_filter: Option<&BooleanArray>,
     mut index_fn: F,
 ) where
-    F: FnMut(usize) + Send,
+    F: FnMut(I) + Send,
 {
     match (nulls, opt_filter) {
         (None, None) => {

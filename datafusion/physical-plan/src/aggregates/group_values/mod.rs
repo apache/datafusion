@@ -46,8 +46,11 @@ use crate::aggregates::{
     order::GroupOrdering,
 };
 
+mod blocked;
 mod metrics;
 mod null_builder;
+
+pub use blocked::{BlockedGroupValues, new_blocked_group_values};
 
 pub(crate) use metrics::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,

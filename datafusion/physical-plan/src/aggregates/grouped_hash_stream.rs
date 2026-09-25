@@ -72,6 +72,7 @@ use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 
 use crate::sorts::IncrementalSortIterator;
 use datafusion_common::utils::memory::get_record_batch_memory_size;
+use datafusion_expr_common::blocked_groups_accumulator::BlocksIndex;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
@@ -528,7 +529,7 @@ impl GroupedHashAggregateStream {
             .collect::<Vec<_>>()
             .join(", ");
         let name = format!("GroupedHashAggregateStream[{partition}] ({agg_fn_names})");
-        let group_ordering = GroupOrdering::try_new(&agg.input_order_mode)?;
+        let group_ordering = GroupOrdering::try_new(&agg.input_order_mode, batch_size)?;
         let oom_mode = match (agg.mode, &group_ordering) {
             // In partial aggregation mode, always prefer to emit incomplete results early.
             (AggregateMode::Partial, _) => OutOfMemoryMode::EmitEarly,
@@ -905,12 +906,16 @@ impl GroupedHashAggregateStream {
                     let starting_num_groups = self.group_values.len();
                     self.group_values
                         .intern(group_values, &mut self.current_group_indices)?;
-                    let group_indices = &self.current_group_indices;
+                    let group_indices_as_blocks = self
+                        .current_group_indices
+                        .iter()
+                        .map(|&idx| BlocksIndex::new_in_first_block(idx))
+                        .collect::<Vec<_>>();
                     let total_num_groups = self.group_values.len();
                     if total_num_groups > starting_num_groups {
                         self.group_ordering.new_groups(
                             group_values,
-                            group_indices,
+                            &group_indices_as_blocks,
                             total_num_groups,
                         )?;
                     }
@@ -1140,9 +1145,14 @@ impl GroupedHashAggregateStream {
                     .intern(&cols, &mut self.current_group_indices)?;
                 let total_groups = self.group_values.len();
                 if total_groups > starting_groups {
+                    let current_group_indices_as_blocks = self
+                        .current_group_indices
+                        .iter()
+                        .map(|&idx| BlocksIndex::new_in_first_block(idx))
+                        .collect::<Vec<_>>();
                     self.group_ordering.new_groups(
                         &cols,
-                        &self.current_group_indices,
+                        &current_group_indices_as_blocks,
                         total_groups,
                     )?;
                 }

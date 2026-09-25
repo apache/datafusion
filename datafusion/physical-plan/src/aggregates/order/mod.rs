@@ -20,6 +20,7 @@ use std::mem::size_of;
 use arrow::array::ArrayRef;
 use datafusion_common::Result;
 use datafusion_expr::EmitTo;
+use datafusion_expr_common::blocked_groups_accumulator::BlocksIndex;
 
 mod full;
 mod partial;
@@ -41,11 +42,11 @@ pub enum GroupOrdering {
 
 impl GroupOrdering {
     /// Create a `GroupOrdering` for the specified ordering
-    pub fn try_new(mode: &InputOrderMode) -> Result<Self> {
+    pub fn try_new(mode: &InputOrderMode, block_size: usize) -> Result<Self> {
         match mode {
             InputOrderMode::Linear => Ok(GroupOrdering::None),
             InputOrderMode::PartiallySorted(order_indices) => {
-                GroupOrderingPartial::try_new(order_indices.clone())
+                GroupOrderingPartial::try_new(order_indices.clone(), block_size)
                     .map(GroupOrdering::Partial)
             }
             InputOrderMode::Sorted => Ok(GroupOrdering::Full(GroupOrderingFull::new())),
@@ -128,7 +129,7 @@ impl GroupOrdering {
     pub fn new_groups(
         &mut self,
         batch_group_values: &[ArrayRef],
-        group_indices: &[usize],
+        group_indices: &[BlocksIndex],
         total_num_groups: usize,
     ) -> Result<()> {
         match self {
@@ -180,14 +181,15 @@ mod tests {
     /// distinct values such as `[1, 2, 3]` create boundaries, while repeated
     /// values such as `[1, 1, 1]` do not.
     fn partial_ordering(sort_key_values: Vec<i32>) -> Result<GroupOrdering> {
+        let block_size = 8192;
         let mut group_ordering =
-            GroupOrdering::Partial(GroupOrderingPartial::try_new(vec![0])?);
+            GroupOrdering::Partial(GroupOrderingPartial::try_new(vec![0], block_size)?);
 
         let batch_group_values: Vec<ArrayRef> = vec![
             Arc::new(Int32Array::from(sort_key_values)),
             Arc::new(Int32Array::from(vec![10, 20, 30])),
         ];
-        let group_indices = vec![0, 1, 2];
+        let group_indices = [0, 1, 2].map(BlocksIndex::new_in_first_block).to_vec();
 
         group_ordering.new_groups(&batch_group_values, &group_indices, 3)?;
 

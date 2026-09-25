@@ -26,6 +26,7 @@ use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
+use datafusion_expr_common::blocked_groups_accumulator::BlocksIndex;
 
 /// Tracks grouping state when the data is ordered by some subset of
 /// the group keys.
@@ -66,6 +67,8 @@ use datafusion_expr::EmitTo;
 pub struct GroupOrderingPartial {
     /// State machine
     state: State,
+
+    block_size: usize,
 
     /// The indexes of the group by columns that form the sort key.
     /// For example if grouping by `id, state` and ordered by `state`
@@ -117,11 +120,12 @@ impl State {
 
 impl GroupOrderingPartial {
     /// TODO: Remove unnecessary `input_schema` parameter.
-    pub fn try_new(order_indices: Vec<usize>) -> Result<Self> {
+    pub fn try_new(order_indices: Vec<usize>, block_size: usize) -> Result<Self> {
         debug_assert!(!order_indices.is_empty());
         Ok(Self {
             state: State::Start,
             order_indices,
+            block_size,
         })
     }
 
@@ -214,7 +218,7 @@ impl GroupOrderingPartial {
     pub fn new_groups(
         &mut self,
         batch_group_values: &[ArrayRef],
-        group_indices: &[usize],
+        group_indices: &[BlocksIndex],
         total_num_groups: usize,
     ) -> Result<()> {
         assert!(total_num_groups > 0);
@@ -242,7 +246,8 @@ impl GroupOrderingPartial {
         let ranges = partition(&sort_keys)?.ranges();
         let last_range = ranges.last().unwrap();
 
-        let range_current_sort = group_indices[last_range.start];
+        let range_current_sort = group_indices[last_range.start]
+            .into_index_in_fixed_block_size(self.block_size);
         let range_sort_key = get_row_at_idx(&sort_keys, last_range.start)?;
 
         let (current_sort, sort_key) = if last_range.start == 0 {
@@ -283,14 +288,16 @@ mod tests {
     fn test_group_ordering_partial() -> Result<()> {
         // Ordered on column a
         let order_indices = vec![0];
-        let mut group_ordering = GroupOrderingPartial::try_new(order_indices)?;
+        let block_size = 8192;
+        let mut group_ordering =
+            GroupOrderingPartial::try_new(order_indices, block_size)?;
 
         let batch_group_values: Vec<ArrayRef> = vec![
             Arc::new(Int32Array::from(vec![1, 2, 3])),
             Arc::new(Int32Array::from(vec![2, 1, 3])),
         ];
 
-        let group_indices = vec![0, 1, 2];
+        let group_indices = [0, 1, 2].map(BlocksIndex::new_in_first_block).to_vec();
         let total_num_groups = 3;
 
         group_ordering.new_groups(
@@ -313,7 +320,7 @@ mod tests {
             Arc::new(Int32Array::from(vec![3, 3, 3])),
             Arc::new(Int32Array::from(vec![2, 1, 7])),
         ];
-        let group_indices = vec![3, 4, 5];
+        let group_indices = [3, 4, 5].map(BlocksIndex::new_in_first_block).to_vec();
         let total_num_groups = 6;
 
         group_ordering.new_groups(
@@ -336,7 +343,7 @@ mod tests {
             Arc::new(Int32Array::from(vec![4, 4, 4])),
             Arc::new(Int32Array::from(vec![1, 1, 1])),
         ];
-        let group_indices = vec![6, 7, 8];
+        let group_indices = [6, 7, 8].map(BlocksIndex::new_in_first_block).to_vec();
         let total_num_groups = 9;
 
         group_ordering.new_groups(

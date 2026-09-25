@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 
+use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
@@ -318,10 +319,12 @@ impl Aggregating {
                     if matches!(self.table.group_ordering(), GroupOrdering::Full(_)) {
                         return Err(oom);
                     }
-                    let Some(batch) = self.table.take_state_batch()? else {
+                    let batches = self.table.take_all_state_batch()?;
+                    if batches.is_empty() {
                         return Err(oom);
-                    };
-                    Some(batch)
+                    }
+                    // ponytail: concat so the output stage can slice one batch
+                    Some(concat_batches(&batches[0].schema(), &batches)?)
                 }
                 Err(e) => return Err(e),
             };

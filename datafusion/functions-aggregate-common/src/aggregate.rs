@@ -16,6 +16,7 @@
 // under the License.
 
 pub mod avg_distinct;
+pub mod blocked_groups_accumulator;
 pub mod count_distinct;
 pub mod groups_accumulator;
 pub mod sum_distinct;

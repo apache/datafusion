@@ -26,7 +26,7 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
-    DataFusionError, Result, assert_ne_or_internal_err, internal_datafusion_err,
+    DataFusionError, Result, assert_ne_or_internal_err, internal_err,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
@@ -143,9 +143,6 @@ pub(crate) struct PartialHashAggregateStream {
 
     /// Input batches containing raw rows, not partial aggregate state.
     input: SendableRecordBatchStream,
-
-    /// Target output batch size from configuration.
-    batch_size: usize,
 
     /// Memory reservation for group keys and accumulators.
     reservation: MemoryReservation,
@@ -271,7 +268,6 @@ impl PartialHashAggregateStream {
         Ok(Self {
             schema,
             input,
-            batch_size,
             baseline_metrics,
             reservation,
             reduction_factor,
@@ -313,11 +309,14 @@ impl PartialHashAggregateStream {
                         break;
                     }
                     HandleInputResult::OOM => {
-                        let materialized_group_states = hash_table.take_state_batch()?.ok_or_else(|| {
-                            internal_datafusion_err!(
+                        let materialized_group_states =
+                            hash_table.take_all_state_batch()?;
+
+                        if materialized_group_states.is_empty() {
+                            return internal_err!(
                                 "Partial hash aggregate ran out of memory with no aggregated groups"
-                            )
-                        })?;
+                            );
+                        }
 
                         self.early_emit_count.add(1);
                         timer.done();
@@ -431,11 +430,16 @@ impl PartialHashAggregateStream {
         &mut self,
         // After each incremental emitting step, the `remaining_groups` will be updated
         // with batch slicing.
-        mut remaining_groups: RecordBatch,
+        remaining_groups: Vec<RecordBatch>,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
         hash_table_mem_size: usize,
     ) -> Result<()> {
-        let remaining_groups_memory = remaining_groups.get_array_memory_size();
+        let sizes = remaining_groups
+            .iter()
+            .map(|b| b.get_array_memory_size())
+            .collect::<Vec<_>>();
+        // Skip first since we are emitting it right away
+        let total_size: usize = sizes.iter().skip(1).sum();
 
         // Emitting clears the aggregate table and releases its
         // accumulated memory. Update the reservation accordingly.
@@ -443,54 +447,31 @@ impl PartialHashAggregateStream {
         // if there is not enough memory, fallback to emit large batch
         match self
             .reservation
-            .try_resize(hash_table_mem_size + remaining_groups_memory)
+            // TODO - also reserve for the vec we are holding between emit
+            .try_resize(hash_table_mem_size + total_size)
         {
             Ok(_) => {
                 // Continue with slicing
             }
-            Err(DataFusionError::ResourcesExhausted(_)) => {
-                // Fail to reserve memory for the hash table + state batch while slicing so emit a huge batch
-
-                // Try resize without holding the state batch, if it fails there is nothing we can do
-                self.reservation.try_resize(hash_table_mem_size)?;
-
-                self.reduction_factor.add_part(remaining_groups.num_rows());
-                emitter
-                    .emit(remaining_groups.record_output(&self.baseline_metrics))
-                    .await;
-
-                return Ok(());
-            }
+            // TODO - even in out-of-memory we shouldn't concat and emit large batch since it will have huge tmp memory and may lead to machine OOM
             Err(e) => return Err(e),
         }
 
-        while remaining_groups.num_rows() > self.batch_size {
-            // More batch to output, continue in the current state.
-            let output = remaining_groups.slice(0, self.batch_size);
-
-            remaining_groups = remaining_groups.slice(
-                self.batch_size,
-                remaining_groups.num_rows() - self.batch_size,
-            );
-
+        for (i, (output, size)) in remaining_groups.into_iter().zip(sizes).enumerate() {
             self.reduction_factor.add_part(output.num_rows());
             debug_assert!(output.num_rows() > 0);
+
+            // Do not shrink the first batch since we did not count it
+            if i > 0 {
+                // We are no longer holding on the batch while slicing, so release the memory.
+                // The memory will now equal to the hash table size
+                self.reservation.try_shrink(size)?;
+            }
 
             emitter
                 .emit(output.record_output(&self.baseline_metrics))
                 .await;
         }
-
-        self.reduction_factor.add_part(remaining_groups.num_rows());
-        debug_assert!(remaining_groups.num_rows() > 0);
-
-        // We are no longer holding on the batch while slicing, so release the memory.
-        // The memory will now equal to the hash table size
-        self.reservation.try_shrink(remaining_groups_memory)?;
-
-        emitter
-            .emit(remaining_groups.record_output(&self.baseline_metrics))
-            .await;
 
         Ok(())
     }
@@ -751,7 +732,7 @@ impl FinalHashAggregateStream {
                     // Go to the next state to perform spilling the aggregated
                     // groups so far.
                     let result = hash_table
-                        .take_state_batch()
+                        .take_all_state_batch()
                         .and_then(|batch| spill_context.sort_and_spill(batch));
 
                     // Spilling shrinks the aggregate table and releases its accumulated
@@ -790,7 +771,7 @@ impl FinalHashAggregateStream {
 
         // Input was exhausted after spilling. Spill the last in-memory run
         hash_table
-            .take_state_batch()
+            .take_all_state_batch()
             .and_then(|batch| spill_context.sort_and_spill(batch))?;
 
         // Construct the ordered input used to merge all spill files.
