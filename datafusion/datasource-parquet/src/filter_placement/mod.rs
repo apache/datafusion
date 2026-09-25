@@ -51,9 +51,14 @@
 //! only the post-scan filter. The measurements are pooled over all files
 //! and partitions of the scan ([`PlacementSites`]).
 //!
-//! The placement of a file stops changing only when a change would change
-//! the schema of the decoded batches (possible with nested columns): the
-//! batch coalescer holds batches with the current schema.
+//! The measurements are noisy near a decision boundary, thus the changes of
+//! one file have hysteresis: after the `n`-th change, the next change waits
+//! for `2^(n-1) - 1` row group boundaries. A file whose decision flips again
+//! and again changes its placement at most `log2(row groups) + 1` times.
+//!
+//! The placement of a file stops changing when a change would change the
+//! schema of the decoded batches (possible with nested columns): the batch
+//! coalescer holds batches with the current schema.
 //!
 //! Conjuncts that `build_row_filter` rejects for a file always run in the
 //! post-scan filter (required) or are not used (optional). Optional
@@ -193,6 +198,10 @@ pub(crate) struct FilePlacement {
     decoded_bytes_per_row: f64,
     /// When true, the placement does not change any more.
     frozen: bool,
+    /// Number of changes of the placement of this file.
+    changes_made: u32,
+    /// Row group boundaries since the last change.
+    boundaries_since_change: usize,
     /// Number of row group boundaries where the placement changed.
     changes: Count,
 }
@@ -267,6 +276,8 @@ impl FilePlacement {
             row_group_rows: first_row_group_rows,
             decoded_bytes_per_row: 0.0,
             frozen: false,
+            changes_made: 0,
+            boundaries_since_change: 0,
             changes,
         };
         placement.place_all(first_row_group_rows, true);
@@ -277,7 +288,8 @@ impl FilePlacement {
     /// `next_row_group_rows` rows. Call at each row group boundary. Returns
     /// `Some` if the placement or the evaluation order changed: then rebuild
     /// the post-scan filter, and the decoder if its projection mask or its
-    /// `RowFilter` changed.
+    /// `RowFilter` changed. Too soon after a change, nothing changes (see
+    /// the [module documentation](self)).
     pub(crate) fn decide(
         &mut self,
         next_row_group_rows: usize,
@@ -299,6 +311,10 @@ impl FilePlacement {
             }
         }
         self.row_group_rows = next_row_group_rows;
+        self.boundaries_since_change += 1;
+        if self.boundaries_since_change <= self.change_hold() {
+            return None;
+        }
         let row_filter = self.row_filter_candidates();
         let before = self.snapshot();
         self.place_all(next_row_group_rows, false);
@@ -306,9 +322,20 @@ impl FilePlacement {
             return None;
         }
         self.changes.add(1);
+        self.changes_made += 1;
+        self.boundaries_since_change = 0;
         Some(PlacementChange {
             row_filter: self.row_filter_candidates() != row_filter,
         })
+    }
+
+    /// Row group boundaries to wait after the last change before the next
+    /// change: `2^(n-1) - 1` after the `n`-th change.
+    fn change_hold(&self) -> usize {
+        1usize
+            .checked_shl(self.changes_made)
+            .map_or(usize::MAX, |doubled| doubled / 2)
+            .saturating_sub(1)
     }
 
     /// Decides the placement of each conjunct and the evaluation order.
