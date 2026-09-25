@@ -3192,7 +3192,7 @@ mod optional_filter_tests {
                     break;
                 }
                 assert_eq!(state.gate.begin_batch(), GateDecision::Evaluate);
-                state.gate.record(100, 100, Duration::ZERO);
+                state.gate.record(8192, 8192, Duration::ZERO);
             }
             assert!(state.gate.is_paused());
         }
