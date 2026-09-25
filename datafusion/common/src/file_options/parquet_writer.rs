@@ -22,13 +22,13 @@ use std::sync::Arc;
 use crate::{
     _internal_datafusion_err, DataFusionError, Result,
     config::{ParquetCdcOptions, ParquetOptions, TableParquetOptions},
+    parquet_config::DFParquetCompression,
 };
 
 use arrow::datatypes::Schema;
 use parquet::arrow::encode_arrow_schema;
 use parquet::{
     arrow::ARROW_SCHEMA_META_KEY,
-    basic::{BrotliLevel, GzipLevel, ZstdLevel},
     file::{
         metadata::KeyValue,
         properties::{
@@ -282,7 +282,7 @@ impl ParquetOptions {
         // We do not have access to default ColumnProperties set in Arrow.
         // Therefore, only overwrite if these settings exist.
         if let Some(compression) = compression {
-            builder = builder.set_compression(parse_compression_string(compression)?);
+            builder = builder.set_compression((*compression).into());
         }
         if let Some(encoding) = encoding {
             builder = builder.set_encoding(parse_encoding_string(encoding)?);
@@ -320,94 +320,11 @@ pub(crate) fn parse_encoding_string(
     }
 }
 
-/// Splits compression string into compression codec and optional compression_level
-/// I.e. gzip(2) -> gzip, 2
-fn split_compression_string(str_setting: &str) -> Result<(String, Option<u32>)> {
-    // ignore string literal chars passed from sqlparser i.e. remove single quotes
-    let str_setting = str_setting.replace('\'', "");
-    let split_setting = str_setting.split_once('(');
-
-    match split_setting {
-        Some((codec, rh)) => {
-            let level = &rh[..rh.len() - 1].parse::<u32>().map_err(|_| {
-                DataFusionError::Configuration(format!(
-                    "Could not parse compression string. \
-                    Got codec: {codec} and unknown level from {str_setting}"
-                ))
-            })?;
-            Ok((codec.to_owned(), Some(*level)))
-        }
-        None => Ok((str_setting.to_owned(), None)),
-    }
-}
-
-/// Helper to ensure compression codecs which don't support levels
-/// don't have one set. E.g. snappy(2) is invalid.
-fn check_level_is_none(codec: &str, level: Option<&u32>) -> Result<()> {
-    if level.is_some() {
-        return Err(DataFusionError::Configuration(format!(
-            "Compression {codec} does not support specifying a level"
-        )));
-    }
-    Ok(())
-}
-
-/// Helper to ensure compression codecs which require a level
-/// do have one set. E.g. zstd is invalid, zstd(3) is valid
-fn require_level(codec: &str, level: Option<u32>) -> Result<u32> {
-    level.ok_or(DataFusionError::Configuration(format!(
-        "{codec} compression requires specifying a level such as {codec}(4)"
-    )))
-}
-
 /// Parses datafusion.execution.parquet.compression String to a parquet::basic::Compression
 pub fn parse_compression_string(
     str_setting: &str,
 ) -> Result<parquet::basic::Compression> {
-    let str_setting_lower: &str = &str_setting.to_lowercase();
-    let (codec, level) = split_compression_string(str_setting_lower)?;
-    let codec = codec.as_str();
-    match codec {
-        "uncompressed" => {
-            check_level_is_none(codec, level.as_ref())?;
-            Ok(parquet::basic::Compression::UNCOMPRESSED)
-        }
-        "snappy" => {
-            check_level_is_none(codec, level.as_ref())?;
-            Ok(parquet::basic::Compression::SNAPPY)
-        }
-        "gzip" => {
-            let level = require_level(codec, level)?;
-            Ok(parquet::basic::Compression::GZIP(GzipLevel::try_new(
-                level,
-            )?))
-        }
-        "brotli" => {
-            let level = require_level(codec, level)?;
-            Ok(parquet::basic::Compression::BROTLI(BrotliLevel::try_new(
-                level,
-            )?))
-        }
-        "lz4" => {
-            check_level_is_none(codec, level.as_ref())?;
-            Ok(parquet::basic::Compression::LZ4)
-        }
-        "zstd" => {
-            let level = require_level(codec, level)?;
-            Ok(parquet::basic::Compression::ZSTD(ZstdLevel::try_new(
-                level as i32,
-            )?))
-        }
-        "lz4_raw" => {
-            check_level_is_none(codec, level.as_ref())?;
-            Ok(parquet::basic::Compression::LZ4_RAW)
-        }
-        _ => Err(DataFusionError::Configuration(format!(
-            "Unknown or unsupported parquet compression: \
-        {str_setting}. Valid values are: uncompressed, snappy, gzip(level), \
-        brotli(level), lz4, zstd(level), and lz4_raw."
-        ))),
-    }
+    Ok(str_setting.parse::<DFParquetCompression>()?.into())
 }
 
 pub(crate) fn parse_statistics_string(str_setting: &str) -> Result<EnabledStatistics> {
@@ -433,7 +350,9 @@ mod tests {
         MaxRowGroupBytes, ParquetCdcOptions, ParquetColumnOptions,
         ParquetEncryptionOptions, ParquetOptions,
     };
-    use crate::parquet_config::{DFParquetStatistics, DFParquetWriterVersion};
+    use crate::parquet_config::{
+        DFParquetCompression, DFParquetStatistics, DFParquetWriterVersion,
+    };
     use parquet::basic::Compression;
     use parquet::file::properties::{
         BloomFilterProperties, DEFAULT_BLOOM_FILTER_FPP, DEFAULT_BLOOM_FILTER_NDV,
@@ -471,7 +390,7 @@ mod tests {
             data_pagesize_limit: 42,
             write_batch_size: 42,
             writer_version,
-            compression: Some("zstd(22)".into()),
+            compression: Some(DFParquetCompression::Zstd(22)),
             dictionary_enabled: Some(!defaults.dictionary_enabled.unwrap_or(false)),
             dictionary_page_size_limit: 43,
             statistics_enabled: Some(DFParquetStatistics::Chunk),
@@ -597,7 +516,12 @@ mod tests {
 
                 // global options which set the default column props
                 encoding: default_col_props.encoding,
-                compression: default_col_props.compression,
+                compression: match props.compression(&default_col) {
+                    Compression::ZSTD(level) => {
+                        Some(DFParquetCompression::Zstd(level.compression_level() as u32))
+                    }
+                    _ => None,
+                },
                 dictionary_enabled: default_col_props.dictionary_enabled,
                 statistics_enabled: Some(props.statistics_enabled(&default_col).into()),
                 bloom_filter_on_write: default_col_props
@@ -770,7 +694,7 @@ mod tests {
         let mut from_extern_parquet =
             session_config_from_writer_props(&default_writer_props);
         from_extern_parquet.global.created_by = same_created_by;
-        from_extern_parquet.global.compression = Some("zstd(3)".into());
+        from_extern_parquet.global.compression = Some(DFParquetCompression::Zstd(3));
         from_extern_parquet.global.skip_arrow_metadata = true;
 
         assert_eq!(
