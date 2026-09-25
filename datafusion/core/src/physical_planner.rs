@@ -45,6 +45,9 @@ use crate::physical_plan::joins::{
     PartitionMode, SortMergeJoinExec,
 };
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use crate::physical_plan::materialized_cte::{
+    MaterializedCteBuffer, MaterializedCteExec, MaterializedCteScanExec,
+};
 use crate::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
@@ -213,12 +216,141 @@ impl DefaultPhysicalPlanner {
         {
             return Ok(plan);
         }
+        let renumbered = renumber_duplicate_materialized_ctes(logical_plan)?;
+        let logical_plan = renumbered.as_ref().unwrap_or(logical_plan);
         let plan = self
             .create_initial_plan(logical_plan, session_state)
             .await?;
+        let plan = bind_materialized_cte_scans(plan)?;
 
         self.optimize_physical_plan(plan, session_state, |_, _| {})
     }
+}
+
+/// Give each occurrence of a [`MaterializedCte`] in `plan` its own id.
+///
+/// The id is copied when a logical plan is cloned, so one CTE can occur more
+/// than once in a plan, for example when a view that declares it is referenced
+/// two times, or when a DataFrame is joined to itself. Each occurrence is a
+/// separate CTE, as in PostgreSQL. Thus every occurrence after the first gets a
+/// new id, and so do the scans in its continuation, including the scans in
+/// subqueries.
+///
+/// Returns `None` when all ids are already unique.
+///
+/// [`MaterializedCte`]: datafusion_expr::MaterializedCte
+fn renumber_duplicate_materialized_ctes(
+    plan: &LogicalPlan,
+) -> Result<Option<LogicalPlan>> {
+    fn as_cte(plan: &LogicalPlan) -> Option<&datafusion_expr::MaterializedCte> {
+        match plan {
+            LogicalPlan::Extension(Extension { node }) => node.as_any().downcast_ref(),
+            _ => None,
+        }
+    }
+
+    let mut ids = HashSet::new();
+    let mut has_duplicate = false;
+    plan.apply_with_subqueries(|node| {
+        if let Some(cte) = as_cte(node) {
+            has_duplicate |= !ids.insert(cte.id);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    if !has_duplicate {
+        return Ok(None);
+    }
+
+    let mut ids = HashSet::new();
+    plan.clone()
+        .transform_down_with_subqueries(|node| {
+            let Some(cte) = as_cte(&node) else {
+                return Ok(Transformed::no(node));
+            };
+            if ids.insert(cte.id) {
+                return Ok(Transformed::no(node));
+            }
+            let old_id = cte.id;
+            let new_id = datafusion_expr::MaterializedCteId::next();
+            ids.insert(new_id);
+            let continuation = cte
+                .continuation
+                .clone()
+                .transform_down_with_subqueries(|node| {
+                    let LogicalPlan::Extension(Extension { node: scan }) = &node else {
+                        return Ok(Transformed::no(node));
+                    };
+                    match scan
+                        .as_any()
+                        .downcast_ref::<datafusion_expr::MaterializedCteScan>()
+                    {
+                        Some(scan) if scan.id == old_id => {
+                            let scan = datafusion_expr::MaterializedCteScan {
+                                id: new_id,
+                                ..scan.clone()
+                            };
+                            Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                                node: Arc::new(scan),
+                            })))
+                        }
+                        _ => Ok(Transformed::no(node)),
+                    }
+                })?
+                .data;
+            let cte = datafusion_expr::MaterializedCte {
+                id: new_id,
+                name: cte.name.clone(),
+                cte: cte.cte.clone(),
+                continuation,
+            };
+            Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                node: Arc::new(cte),
+            })))
+        })
+        .map(|t| Some(t.data))
+}
+
+/// Point every [`MaterializedCteScanExec`] at the buffer of the
+/// [`MaterializedCteExec`] with the same id.
+///
+/// [`renumber_duplicate_materialized_ctes`] makes the ids unique before the
+/// physical plan is created.
+///
+/// Scans are planned before the node that owns their CTE, and a scan inside a
+/// scalar subquery is planned in a separate subtree, so the binding is done
+/// once on the whole initial plan.
+fn bind_materialized_cte_scans(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let mut buffers = HashMap::new();
+    plan.apply(|node| {
+        if let Some(cte) = node.downcast_ref::<MaterializedCteExec>()
+            && buffers
+                .insert(cte.buffer().id(), Arc::clone(cte.buffer()))
+                .is_some()
+        {
+            return internal_err!(
+                "Two MaterializedCteExec nodes have the id {}",
+                cte.buffer().id()
+            );
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    if buffers.is_empty() {
+        return Ok(plan);
+    }
+    plan.transform_up(|node| {
+        let Some(scan) = node.downcast_ref::<MaterializedCteScanExec>() else {
+            return Ok(Transformed::no(node));
+        };
+        let Some(buffer) = buffers.get(&scan.id()) else {
+            return internal_err!("MaterializedCteScanExec {} has no CTE", scan.id());
+        };
+        Ok(Transformed::yes(
+            Arc::new(scan.bind(Arc::clone(buffer))) as Arc<dyn ExecutionPlan>
+        ))
+    })
+    .map(|t| t.data)
 }
 
 #[derive(Debug)]
@@ -1881,6 +2013,41 @@ impl DefaultPhysicalPlanner {
 
             // N Children
             LogicalPlan::Union(_) => UnionExec::try_new(children.vec())?,
+            LogicalPlan::Extension(Extension { node })
+                if node.as_any().is::<datafusion_expr::MaterializedCte>() =>
+            {
+                let cte = node
+                    .as_any()
+                    .downcast_ref::<datafusion_expr::MaterializedCte>()
+                    .unwrap();
+                let [body, continuation] = children.two()?;
+                // The body is fully buffered before a scan yields a row, so an
+                // unbounded body would never produce output.
+                if body.boundedness().is_unbounded() {
+                    return plan_err!(
+                        "MATERIALIZED CTE {} reads an unbounded source, which cannot be materialized",
+                        cte.name
+                    );
+                }
+                let buffer =
+                    Arc::new(MaterializedCteBuffer::new(cte.id.as_u64(), &cte.name));
+                Arc::new(MaterializedCteExec::new(body, continuation, buffer))
+            }
+            LogicalPlan::Extension(Extension { node })
+                if node.as_any().is::<datafusion_expr::MaterializedCteScan>() =>
+            {
+                let scan = node
+                    .as_any()
+                    .downcast_ref::<datafusion_expr::MaterializedCteScan>()
+                    .unwrap();
+                // Unbound until `bind_materialized_cte_scans` runs on the whole plan.
+                Arc::new(MaterializedCteScanExec::new(
+                    scan.id.as_u64(),
+                    &scan.name,
+                    Arc::clone(scan.schema.inner()),
+                    session_state.config().target_partitions(),
+                ))
+            }
             LogicalPlan::Extension(Extension { node }) => {
                 let mut maybe_plan = None;
                 let children = children.vec();

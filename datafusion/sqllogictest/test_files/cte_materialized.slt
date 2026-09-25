@@ -1,0 +1,437 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for `WITH x AS MATERIALIZED (...)`: the CTE body runs once and every
+# reference reads its buffered output.
+
+# sqlparser only parses `[NOT] MATERIALIZED` for the PostgreSQL dialect.
+statement ok
+set datafusion.sql_parser.dialect = 'PostgreSQL';
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+statement ok
+CREATE TABLE t(k INT, v INT) AS VALUES (1, 10), (2, 20), (3, 30), (4, 40);
+
+# A volatile body is evaluated once, so both references see the same value.
+query I
+WITH r AS MATERIALIZED (SELECT random() AS x)
+SELECT count(DISTINCT x) FROM (SELECT x FROM r UNION ALL SELECT x FROM r)
+----
+1
+
+# Without MATERIALIZED the body is inlined and evaluated once per reference.
+query I
+WITH r AS NOT MATERIALIZED (SELECT random() AS x)
+SELECT count(DISTINCT x) FROM (SELECT x FROM r UNION ALL SELECT x FROM r)
+----
+2
+
+query I
+WITH r AS (SELECT random() AS x)
+SELECT count(DISTINCT x) FROM (SELECT x FROM r UNION ALL SELECT x FROM r)
+----
+2
+
+# The table is scanned once, below MaterializedCteExec, and each reference is
+# a MaterializedCteScanExec. The filter of each reference stays above its scan.
+query TT
+EXPLAIN WITH c AS MATERIALIZED (SELECT k, v * 2 AS v2 FROM t)
+SELECT k FROM c WHERE v2 > 30
+UNION ALL
+SELECT k FROM c WHERE v2 < 30
+----
+logical_plan
+01)MaterializedCte: name=c
+02)--SubqueryAlias: c
+03)----Projection: t.k, CAST(t.v AS Int64) * Int64(2) AS v2
+04)------TableScan: t projection=[k, v]
+05)--Union
+06)----Projection: c.k
+07)------Filter: c.v2 > Int64(30)
+08)--------MaterializedCteScan: name=c
+09)----Projection: c.k
+10)------Filter: c.v2 < Int64(30)
+11)--------MaterializedCteScan: name=c
+physical_plan
+01)MaterializedCteExec: name=c
+02)--ProjectionExec: expr=[k@0 as k, CAST(v@1 AS Int64) * 2 as v2]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--UnionExec
+05)----FilterExec: v2@1 > 30, projection=[k@0]
+06)------MaterializedCteScanExec: name=c
+07)----FilterExec: v2@1 < 30, projection=[k@0]
+08)------MaterializedCteScanExec: name=c
+
+query I rowsort
+WITH c AS MATERIALIZED (SELECT k, v * 2 AS v2 FROM t)
+SELECT k FROM c WHERE v2 > 30
+UNION ALL
+SELECT k FROM c WHERE v2 < 30
+----
+1
+2
+3
+4
+
+# EXPLAIN ANALYZE: the source is read once (4 rows) although the CTE is
+# referenced three times, and each scan replays all 4 rows.
+query TT
+EXPLAIN ANALYZE WITH c AS MATERIALIZED (SELECT k, v FROM t)
+SELECT count(*) FROM (
+  SELECT k FROM c UNION ALL SELECT k FROM c UNION ALL SELECT k FROM c
+)
+----
+Plan with Metrics
+01)MaterializedCteExec: name=c, metrics=[spill_count=0, <slt:ignore>buffered_rows=4]
+02)--DataSourceExec: partitions=1, partition_sizes=[1], metrics=[<slt:ignore>]
+03)--ProjectionExec: expr=[count(Int64(1))@0 as count(*)], metrics=[<slt:ignore>]
+04)----AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))], metrics=[<slt:ignore>]
+05)------CoalescePartitionsExec, metrics=[<slt:ignore>]
+06)--------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], metrics=[<slt:ignore>]
+07)----------UnionExec, metrics=[<slt:ignore>]
+08)------------ProjectionExec: expr=[], metrics=[<slt:ignore>]
+09)--------------MaterializedCteScanExec: name=c, metrics=[output_rows=4, <slt:ignore>]
+10)------------ProjectionExec: expr=[], metrics=[<slt:ignore>]
+11)--------------MaterializedCteScanExec: name=c, metrics=[output_rows=4, <slt:ignore>]
+12)------------ProjectionExec: expr=[], metrics=[<slt:ignore>]
+13)--------------MaterializedCteScanExec: name=c, metrics=[output_rows=4, <slt:ignore>]
+
+# For comparison, the inlined CTE scans the source once per reference.
+query TT
+EXPLAIN WITH c AS (SELECT k, v FROM t)
+SELECT sum(k) FROM (
+  SELECT k FROM c UNION ALL SELECT k FROM c UNION ALL SELECT k FROM c
+)
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[sum(CAST(k AS Int64))]]
+02)--Union
+03)----SubqueryAlias: c
+04)------TableScan: t projection=[k]
+05)----SubqueryAlias: c
+06)------TableScan: t projection=[k]
+07)----SubqueryAlias: c
+08)------TableScan: t projection=[k]
+physical_plan
+01)AggregateExec: mode=Final, gby=[], aggr=[sum(k)]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[], aggr=[sum(k)]
+04)------UnionExec
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)--------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Both sides of one hash join read the same CTE. The build side must be read
+# completely before the probe side starts, which full materialization allows.
+query III rowsort
+WITH c AS MATERIALIZED (SELECT k, v FROM t)
+SELECT a.k, a.v, b.v FROM c a JOIN c b ON a.k = b.k
+----
+1 10 10
+2 20 20
+3 30 30
+4 40 40
+
+# A reference inside a scalar subquery. The scalar subquery runs before the
+# main plan, so the scan must be able to start the body itself.
+query II
+WITH c AS MATERIALIZED (SELECT k, v FROM t)
+SELECT k, v FROM c WHERE v = (SELECT max(v) FROM c)
+----
+4 40
+
+# A later CTE reads an earlier one.
+query II rowsort
+WITH a AS MATERIALIZED (SELECT k, v FROM t WHERE k > 1),
+     b AS MATERIALIZED (SELECT k, v + 1 AS v FROM a)
+SELECT a.k, b.v FROM a JOIN b ON a.k = b.k
+----
+2 21
+3 31
+4 41
+
+# Sibling subqueries declare CTEs with the same name.
+query II
+SELECT x.cnt, y.cnt FROM
+  (WITH s AS MATERIALIZED (SELECT k FROM t WHERE k <= 2)
+   SELECT count(*) AS cnt FROM s p JOIN s q ON p.k = q.k) x,
+  (WITH s AS MATERIALIZED (SELECT k FROM t WHERE k >= 2)
+   SELECT count(*) AS cnt FROM s p JOIN s q ON p.k = q.k) y
+----
+2 3
+
+# A column alias list on a materialized CTE.
+query I rowsort
+WITH c(a, b) AS MATERIALIZED (SELECT k, v FROM t)
+SELECT a FROM c WHERE b > 20
+----
+3
+4
+
+# IN and NOT IN subqueries that declare a materialized CTE.
+query I rowsort
+SELECT k FROM t WHERE k IN (
+  WITH r AS MATERIALIZED (SELECT k FROM t WHERE k > 2) SELECT k FROM r)
+----
+3
+4
+
+query I rowsort
+SELECT k FROM t WHERE k NOT IN (
+  WITH r AS MATERIALIZED (SELECT k FROM t WHERE k > 2) SELECT k FROM r)
+----
+1
+2
+
+# Correlated subqueries whose continuation refers to the outer query.
+query I rowsort
+SELECT k FROM t WHERE EXISTS (
+  WITH r AS MATERIALIZED (SELECT k AS rk FROM t)
+  SELECT 1 FROM r WHERE r.rk = t.k + 1)
+----
+1
+2
+3
+
+query I
+SELECT k FROM t WHERE NOT EXISTS (
+  WITH r AS MATERIALIZED (SELECT k AS rk FROM t)
+  SELECT 1 FROM r WHERE r.rk = t.k + 1)
+----
+4
+
+query I rowsort
+SELECT k FROM t WHERE v IN (
+  WITH r AS MATERIALIZED (SELECT k AS rk, v AS rv FROM t)
+  SELECT rv FROM r WHERE r.rk = t.k AND r.rk > 2)
+----
+3
+4
+
+# In a WITH RECURSIVE block, MATERIALIZED applies to a CTE that does not refer
+# to itself.
+query I
+WITH RECURSIVE r AS MATERIALIZED (SELECT random() AS x)
+SELECT count(DISTINCT x) FROM (SELECT x FROM r UNION ALL SELECT x FROM r)
+----
+1
+
+# A recursive CTE is also materialized: RecursiveQueryExec runs once, and its
+# reference to itself is still a work table.
+query TT
+EXPLAIN WITH RECURSIVE r AS MATERIALIZED (
+  SELECT 1 AS n UNION ALL SELECT n + 1 FROM r WHERE n < 3
+)
+SELECT count(*) FROM r a, r b
+----
+logical_plan
+01)MaterializedCte: name=r
+02)--SubqueryAlias: r
+03)----RecursiveQuery: is_distinct=false
+04)------Projection: Int64(1) AS n
+05)--------EmptyRelation: rows=1
+06)------Projection: r.n + Int64(1)
+07)--------Filter: r.n < Int64(3)
+08)----------TableScan: r projection=[n]
+09)--Projection: count(Int64(1)) AS count(*)
+10)----Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+11)------Cross Join:
+12)--------SubqueryAlias: a
+13)----------Projection:
+14)------------MaterializedCteScan: name=r
+15)--------SubqueryAlias: b
+16)----------Projection:
+17)------------MaterializedCteScan: name=r
+physical_plan
+01)MaterializedCteExec: name=r
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----RecursiveQueryExec: name=r, is_distinct=false
+04)------ProjectionExec: expr=[CAST(1 AS Int64) as n]
+05)--------PlaceholderRowExec
+06)------CoalescePartitionsExec
+07)--------ProjectionExec: expr=[n@0 + 1 as n]
+08)----------FilterExec: n@0 < 3
+09)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)--------------WorkTableExec: name=r
+11)--ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
+12)----AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+13)------CoalescePartitionsExec
+14)--------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+15)----------CrossJoinExec
+16)------------CoalescePartitionsExec
+17)--------------ProjectionExec: expr=[]
+18)----------------MaterializedCteScanExec: name=r
+19)------------ProjectionExec: expr=[]
+20)--------------MaterializedCteScanExec: name=r
+
+query I
+WITH RECURSIVE r AS MATERIALIZED (
+  SELECT 1 AS n UNION ALL SELECT n + 1 FROM r WHERE n < 3
+)
+SELECT count(*) FROM r a, r b
+----
+9
+
+# A recursive CTE reads a materialized CTE of the same block.
+query I rowsort
+WITH RECURSIVE m AS MATERIALIZED (SELECT 3 AS lim),
+  r AS (SELECT 1 AS n UNION ALL SELECT n + 1 FROM r, m WHERE n < m.lim)
+SELECT n FROM r
+----
+1
+2
+3
+
+# Each reference to a view is a separate query, so each has its own
+# materialized CTE, as in PostgreSQL.
+statement ok
+CREATE VIEW vv AS WITH r AS MATERIALIZED (SELECT random() AS x) SELECT x FROM r;
+
+query B
+SELECT a.x = b.x FROM vv a, vv b
+----
+false
+
+query I
+SELECT count(DISTINCT x) FROM (
+  SELECT x FROM vv UNION ALL SELECT x FROM vv UNION ALL SELECT (SELECT max(x) FROM vv)
+)
+----
+3
+
+# Inside one reference to a view, the CTE is still shared.
+statement ok
+CREATE VIEW vv2 AS WITH r AS MATERIALIZED (SELECT random() AS x)
+SELECT a.x = b.x AS same FROM r a, r b;
+
+query B
+SELECT * FROM vv2 UNION ALL SELECT * FROM vv2
+----
+true
+true
+
+statement ok
+DROP VIEW vv;
+
+statement ok
+DROP VIEW vv2;
+
+# A filter above the query that declares the CTE goes into the continuation,
+# not into the shared body.
+query TT
+EXPLAIN SELECT * FROM (
+  WITH r AS MATERIALIZED (SELECT k FROM t)
+  SELECT t.k, t.v FROM t JOIN r ON t.k = r.k
+) s WHERE s.v = 10
+----
+logical_plan
+01)SubqueryAlias: s
+02)--MaterializedCte: name=r
+03)----SubqueryAlias: r
+04)------TableScan: t projection=[k]
+05)----Projection: t.k, t.v
+06)------Inner Join: t.k = r.k
+07)--------Filter: t.v = Int32(10)
+08)----------TableScan: t projection=[k, v]
+09)--------MaterializedCteScan: name=r
+physical_plan
+01)MaterializedCteExec: name=r
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(k@0, k@0)], projection=[k@0, v@1]
+04)----FilterExec: v@1 = 10
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+06)----MaterializedCteScanExec: name=r
+
+query II
+SELECT * FROM (
+  WITH r AS MATERIALIZED (SELECT k FROM t)
+  SELECT t.k, t.v FROM t JOIN r ON t.k = r.k
+) s WHERE s.v = 10
+----
+1 10
+
+# Spill: the body does not fit in the memory limit, so it is written to disk
+# and replayed from there by every reference. Part of the in-memory prefix is
+# also moved to disk, so that the two references have memory to decode the
+# spill files (spill_count=2).
+statement ok
+SET datafusion.execution.target_partitions = 1
+
+statement ok
+SET datafusion.runtime.memory_limit = '300K'
+
+query II
+WITH g AS MATERIALIZED (SELECT value AS x FROM generate_series(1, 200000))
+SELECT (SELECT count(*) FROM g), (SELECT sum(x) FROM g)
+----
+200000 20000100000
+
+query TT
+EXPLAIN ANALYZE WITH g AS MATERIALIZED (SELECT value AS x FROM generate_series(1, 200000))
+SELECT count(*) FROM (SELECT x FROM g UNION ALL SELECT x FROM g)
+----
+Plan with Metrics
+01)MaterializedCteExec: name=g, metrics=[spill_count=2, <slt:ignore>buffered_rows=200.0 K]
+02)--ProjectionExec: expr=[value@0 as x], metrics=[output_rows=200.0 K, <slt:ignore>]
+03)----LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=200000, batch_size=8192], metrics=[output_rows=200.0 K, <slt:ignore>]
+04)--ProjectionExec: expr=[count(Int64(1))@0 as count(*)], metrics=[<slt:ignore>]
+05)----AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))], metrics=[<slt:ignore>]
+06)------CoalescePartitionsExec, metrics=[<slt:ignore>]
+07)--------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))], metrics=[<slt:ignore>]
+08)----------UnionExec, metrics=[<slt:ignore>]
+09)------------ProjectionExec: expr=[], metrics=[<slt:ignore>]
+10)--------------MaterializedCteScanExec: name=g, metrics=[output_rows=200.0 K, <slt:ignore>]
+11)------------ProjectionExec: expr=[], metrics=[<slt:ignore>]
+12)--------------MaterializedCteScanExec: name=g, metrics=[output_rows=200.0 K, <slt:ignore>]
+
+statement ok
+RESET datafusion.runtime.memory_limit
+
+# Setting a runtime option also sets this option to false.
+statement ok
+RESET datafusion.catalog.create_default_catalog_and_schema
+
+# Restore the slt runner default.
+statement ok
+SET datafusion.execution.target_partitions = 4
+
+# An unbounded body is rejected: it is fully buffered before any row is
+# returned, so the query would never produce output.
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE unbounded_t(c1 integer NOT NULL)
+STORED AS CSV
+LOCATION '../core/tests/data/empty.csv'
+OPTIONS ('format.has_header' 'true');
+
+query error DataFusion error: Error during planning: MATERIALIZED CTE u reads an unbounded source, which cannot be materialized
+WITH u AS MATERIALIZED (SELECT c1 FROM unbounded_t)
+SELECT count(*) FROM u
+
+# Without MATERIALIZED the CTE is inlined as before.
+statement ok
+EXPLAIN WITH u AS (SELECT c1 FROM unbounded_t) SELECT c1 FROM u
+
+statement ok
+DROP TABLE unbounded_t;
+
+statement ok
+DROP TABLE t;
+
+statement ok
+set datafusion.sql_parser.dialect = generic;
