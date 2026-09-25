@@ -72,6 +72,15 @@ const BATCH_SIZE: usize = 100;
 /// group has all values `0..100`, thus statistics cannot prune it), `rg` is
 /// the row group index and `v` is the row number.
 fn write_file() -> (NamedTempFile, SchemaRef) {
+    write_file_with(ROW_GROUPS, ROWS_PER_ROW_GROUP)
+}
+
+/// Like [`write_file`], with `row_groups` row groups of
+/// `rows_per_row_group` rows.
+fn write_file_with(
+    row_groups: usize,
+    rows_per_row_group: usize,
+) -> (NamedTempFile, SchemaRef) {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int32, false),
         Field::new("rg", DataType::Int32, false),
@@ -79,16 +88,16 @@ fn write_file() -> (NamedTempFile, SchemaRef) {
     ]));
     let file = NamedTempFile::new().unwrap();
     let props = WriterProperties::builder()
-        .set_max_row_group_row_count(Some(ROWS_PER_ROW_GROUP))
+        .set_max_row_group_row_count(Some(rows_per_row_group))
         .build();
     let mut writer =
         ArrowWriter::try_new(file.reopen().unwrap(), Arc::clone(&schema), Some(props))
             .unwrap();
-    for rg in 0..ROW_GROUPS {
-        let start = rg * ROWS_PER_ROW_GROUP;
-        let rows = start..start + ROWS_PER_ROW_GROUP;
+    for rg in 0..row_groups {
+        let start = rg * rows_per_row_group;
+        let rows = start..start + rows_per_row_group;
         let a: Int32Array = rows.clone().map(|i| (i % 100) as i32).collect();
-        let rg_col = Int32Array::from(vec![rg as i32; ROWS_PER_ROW_GROUP]);
+        let rg_col = Int32Array::from(vec![rg as i32; rows_per_row_group]);
         let v: Int64Array = rows.map(|i| i as i64).collect();
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -98,7 +107,7 @@ fn write_file() -> (NamedTempFile, SchemaRef) {
         writer.write(&batch).unwrap();
     }
     let metadata = writer.close().unwrap();
-    assert_eq!(metadata.num_row_groups(), ROW_GROUPS);
+    assert_eq!(metadata.num_row_groups(), row_groups);
     (file, schema)
 }
 
@@ -479,6 +488,56 @@ async fn optional_filter_is_not_evaluated_post_scan() {
     assert_eq!(values(&batches).len(), total_rows);
     assert_eq!(metric(scan.as_ref(), "post_scan_rows_matched"), 0);
     assert_eq!(metric(scan.as_ref(), "post_scan_rows_pruned"), 0);
+}
+
+/// With adaptive filter placement, the scan removes a paused optional
+/// filter from the row filter for complete row groups, and counts the rows of
+/// these row groups as skipped. It must count the rows that the row groups
+/// have, not the batch size: here each row group has 15 rows and the batch
+/// size is 8192.
+#[tokio::test]
+async fn skipped_rows_of_placement_are_the_rows_of_the_row_groups() {
+    let row_groups = 20;
+    let rows_per_row_group = 15;
+    let total_rows = row_groups * rows_per_row_group;
+    let (file, schema) = write_file_with(row_groups, rows_per_row_group);
+    let filter = removes_no_rows(&schema);
+
+    let mut options = ConfigOptions::default();
+    options.execution.parquet.pushdown_filters = true;
+    options.execution.optional_filter_mode = OptionalFilterMode::Adaptive;
+    options.execution.optional_filter_min_saving_ns_per_row = 1e9;
+    options.execution.adaptive_filter_placement = true;
+    let source = ParquetSource::new(Arc::clone(&schema))
+        .try_pushdown_filters(vec![optional(Arc::clone(&filter))], &options)
+        .unwrap()
+        .updated_node
+        .expect("the scan accepts the predicate");
+    let path = file.path().to_str().unwrap().to_string();
+    let size = std::fs::metadata(&path).unwrap().len();
+    let config = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+        .with_file(PartitionedFile::new(path, size))
+        .build();
+    let scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
+    let plan: Arc<dyn ExecutionPlan> =
+        Arc::new(FilterExec::try_new(filter, Arc::clone(&scan)).unwrap());
+    let ctx = SessionContext::new_with_config(SessionConfig::new().with_batch_size(8192));
+    let batches = collect(plan, ctx.task_ctx()).await.unwrap();
+    assert_eq!(values(&batches).len(), total_rows);
+
+    // The gate evaluates the filter on the first row groups, then pauses
+    // it. The placement then removes it from the row filter.
+    assert!(metric(scan.as_ref(), "optional_filter_pauses") > 0);
+    let skipped = metric(scan.as_ref(), "optional_filter_rows_skipped");
+    assert!(skipped > 0, "expected skipped rows");
+    assert_eq!(skipped % rows_per_row_group, 0, "skipped {skipped} rows");
+    // Each row is skipped or evaluated at most once.
+    let evaluated = metric(scan.as_ref(), "pushdown_rows_matched")
+        + metric(scan.as_ref(), "pushdown_rows_pruned");
+    assert!(
+        skipped + evaluated <= total_rows,
+        "skipped {skipped} and evaluated {evaluated} of {total_rows} rows"
+    );
 }
 
 /// A file with the columns `a` (`i % 100`) and `s` (a struct that is null
