@@ -52,6 +52,7 @@ use datafusion_functions_aggregate::{
 use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr,
     expressions::{DynamicFilterPhysicalExpr, IsNullExpr, cast, col},
+    filter::FilterConjunct,
     utils::conjunction,
 };
 use datafusion_physical_expr::{
@@ -1839,10 +1840,10 @@ fn test_filter_with_projection_rejects_out_of_range_parent_filter() {
     let result = filter.handle_child_pushdown_result(
         FilterPushdownPhase::Pre,
         ChildPushdownResult {
-            parent_filters: vec![ChildFilterPushdownResult {
-                filter: id_eq_x(1),
-                child_results: vec![PushedDown::No],
-            }],
+            parent_filters: vec![ChildFilterPushdownResult::new(
+                FilterConjunct::required(id_eq_x(1)),
+                vec![PushedDown::No],
+            )],
             self_filters: vec![vec![]],
         },
         &ConfigOptions::default(),
