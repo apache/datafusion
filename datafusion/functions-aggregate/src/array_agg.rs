@@ -410,7 +410,8 @@ impl Accumulator for ArrayAggAccumulator {
             .enumerate()
             .map(|(i, a)| {
                 if i == 0 && self.front_offset > 0 {
-                    a.slice(self.front_offset, a.len() - self.front_offset)
+                    let offset = self.front_offset.min(a.len());
+                    a.slice(offset, a.len() - offset)
                 } else {
                     Arc::clone(a)
                 }
