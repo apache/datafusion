@@ -224,13 +224,27 @@ pub fn check_subquery_expr(
         }
     } else {
         if let Expr::InSubquery(subquery) = expr {
-            // InSubquery should only return one column
-            if subquery.subquery.subquery.schema().fields().len() > 1 {
-                return plan_err!(
-                    "InSubquery should only return one column, but found {}: {}",
-                    subquery.subquery.subquery.schema().fields().len(),
-                    subquery.subquery.subquery.schema().field_names().join(", ")
-                );
+            // InSubquery should only return one column, unless it is a
+            // multi-column `(a, b) IN (SELECT x, y ...)` with one tuple element
+            // per subquery column.
+            let num_subquery_cols = subquery.subquery.subquery.schema().fields().len();
+            match subquery.tuple_values() {
+                Some(values) if values.len() != num_subquery_cols => {
+                    return plan_err!(
+                        "The number of columns in the tuple ({}) must match the number of columns in the subquery ({})",
+                        values.len(),
+                        num_subquery_cols
+                    );
+                }
+                Some(_) => {}
+                None if num_subquery_cols > 1 => {
+                    return plan_err!(
+                        "InSubquery should only return one column, but found {}: {}",
+                        num_subquery_cols,
+                        subquery.subquery.subquery.schema().field_names().join(", ")
+                    );
+                }
+                None => {}
             }
         }
         if let Expr::SetComparison(set_comparison) = expr

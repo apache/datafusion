@@ -406,7 +406,380 @@ SELECT * FROM test_table t1 WHERE c1 NOT IN (SELECT c2 FROM test_table t2 WHERE 
 NULL 0
 
 #############
+## Test 19: Multi-column NOT IN with NULL in subquery
+#############
+
+statement ok
+CREATE TABLE multi_col_outer(a INT, b INT, value TEXT) AS VALUES
+(1, 2, 'x'),
+(3, 4, 'y'),
+(5, 6, 'z'),
+(NULL, 8, 'w');
+
+statement ok
+CREATE TABLE multi_col_inner_with_null(x INT, y INT) AS VALUES
+(1, 2),
+(NULL, 4);
+
+# With multi-column NOT IN, a NULL in one column doesn't make the whole comparison UNKNOWN
+# if another column definitively doesn't match.
+# (1,2): matches (1,2) → excluded
+# (3,4): vs (NULL,4) → 3=NULL UNKNOWN AND 4=4 TRUE → UNKNOWN → excluded
+# (5,6): vs (1,2) → FALSE; vs (NULL,4) → 5=NULL UNKNOWN AND 6=4 FALSE → FALSE → included
+# (NULL,8): vs (1,2) → FALSE; vs (NULL,4) → NULL=NULL UNKNOWN AND 8=4 FALSE → FALSE → included
+query IIT rowsort
+SELECT * FROM multi_col_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM multi_col_inner_with_null);
+----
+5 6 z
+NULL 8 w
+
+#############
+## Test 20: Multi-column NOT IN without NULL
+#############
+
+statement ok
+CREATE TABLE multi_col_inner_no_null(x INT, y INT) AS VALUES
+(1, 2);
+
+# (NULL, 8) vs (1, 2): NULL=1 UNKNOWN AND 8=2 FALSE → FALSE → NOT IN = TRUE
+# So (NULL, 8, 'w') IS returned because 8≠2 definitively excludes the match
+query IIT rowsort
+SELECT * FROM multi_col_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM multi_col_inner_no_null);
+----
+3 4 y
+5 6 z
+NULL 8 w
+
+#############
+## Test 21: Multi-column with NULL in both left and build side columns
+#############
+
+statement ok
+CREATE TABLE multi_left_null(a INT, b INT) AS VALUES
+(1, 2),
+(3, NULL),
+(NULL, 4),
+(5, 6);
+
+statement ok
+CREATE TABLE multi_right_no_null(x INT, y INT) AS VALUES
+(1, 2);
+
+# (3, NULL) vs (1, 2): 3=1 FALSE → comparison is FALSE → NOT IN = TRUE → included
+# (NULL, 4) vs (1, 2): NULL=1 UNKNOWN AND 4=2 FALSE → FALSE → NOT IN = TRUE → included
+# Both are included because the non-NULL column definitively doesn't match
+query II rowsort
+SELECT * FROM multi_left_null
+WHERE (a, b) NOT IN (SELECT x, y FROM multi_right_no_null);
+----
+3 NULL
+5 6
+NULL 4
+
+#############
+## Test 22: Three-column NOT IN
+#############
+
+statement ok
+CREATE TABLE three_col_outer(a INT, b INT, c INT) AS VALUES
+(1, 2, 3),
+(4, 5, 6),
+(7, 8, 9);
+
+statement ok
+CREATE TABLE three_col_inner(x INT, y INT, z INT) AS VALUES
+(1, 2, 3);
+
+# Should return (4, 5, 6) and (7, 8, 9)
+query III rowsort
+SELECT * FROM three_col_outer
+WHERE (a, b, c) NOT IN (SELECT x, y, z FROM three_col_inner);
+----
+4 5 6
+7 8 9
+
+#############
+## Test 23: Three-column NOT IN with NULL
+#############
+
+statement ok
+CREATE TABLE three_col_inner_null(x INT, y INT, z INT) AS VALUES
+(1, 2, 3),
+(4, NULL, 6);
+
+# (4,5,6) vs (4,NULL,6): 4=4 TRUE, 5=NULL UNKNOWN, 6=6 TRUE → UNKNOWN → excluded
+# (7,8,9) vs (4,NULL,6): 7=4 FALSE → FALSE → NOT IN = TRUE → included
+# (7,8,9) vs (1,2,3): FALSE → included
+query III rowsort
+SELECT * FROM three_col_outer
+WHERE (a, b, c) NOT IN (SELECT x, y, z FROM three_col_inner_null);
+----
+7 8 9
+
+#############
+## Test 24: Correlated multi-column NOT IN (from issue #10583)
+#############
+
+statement ok
+CREATE TABLE test_multi(c1 INT, c2 INT, c3 INT) AS VALUES
+(1, 1, 1),
+(2, 2, 2),
+(3, 3, 3),
+(4, 4, NULL);
+
+# Correlated NOT IN with multi-column
+# Should return rows where (c2, c3) doesn't match in same c1 group
+# Row (4, 4, NULL) should not appear because it has NULL in c3
+query III rowsort
+SELECT * FROM test_multi t1
+WHERE (c2, c3) NOT IN (
+    SELECT c2, c3 FROM test_multi t2 WHERE t1.c1 = t2.c1
+);
+----
+
+# Verify the EXPLAIN plan shows LeftAnti join with multi-column join conditions
+query TT
+EXPLAIN SELECT * FROM test_multi t1
+WHERE (c2, c3) NOT IN (
+    SELECT c2, c3 FROM test_multi t2 WHERE t1.c1 = t2.c1
+);
+----
+logical_plan
+01)LeftAnti Join: t1.c2 = __correlated_sq_1.c2, t1.c3 = __correlated_sq_1.c3, t1.c1 = __correlated_sq_1.c1 null_aware(value_keys=2)
+02)--SubqueryAlias: t1
+03)----TableScan: test_multi projection=[c1, c2, c3]
+04)--SubqueryAlias: __correlated_sq_1
+05)----Projection: t2.c2, t2.c3, t2.c1
+06)------SubqueryAlias: t2
+07)--------TableScan: test_multi projection=[c1, c2, c3]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(c2@1, c2@0), (c3@2, c3@1), (c1@0, c1@2)], null_aware(value_keys=2)
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+#############
+## Test 25: Multi-column NOT IN with empty subquery
+#############
+
+statement ok
+CREATE TABLE multi_empty(x INT, y INT);
+
+# Empty subquery should return all rows
+query IIT rowsort
+SELECT * FROM multi_col_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM multi_empty);
+----
+1 2 x
+3 4 y
+5 6 z
+NULL 8 w
+
+#############
+## Test 26: Multi-column NOT IN with a constant tuple element
+#############
+
+# The constant is projected as a column of the outer side so that it becomes an
+# equi-join key in its tuple position.
+# (1, 2) matches (1, 2); (NULL, 2) vs (1, 2) is `UNKNOWN AND TRUE`;
+# (3, 2) and (5, 2) mismatch both inner rows.
+query IIT rowsort
+SELECT * FROM multi_col_outer
+WHERE (a, 2) NOT IN (SELECT x, y FROM multi_col_inner_with_null);
+----
+3 4 y
+5 6 z
+
+query TT
+EXPLAIN SELECT * FROM multi_col_outer
+WHERE (a, 2) NOT IN (SELECT x, y FROM multi_col_inner_with_null);
+----
+logical_plan
+01)Projection: multi_col_outer.a, multi_col_outer.b, multi_col_outer.value
+02)--LeftAnti Join: multi_col_outer.a = __correlated_sq_1.x, __correlated_sq_1_value_1 = __correlated_sq_1.multi_col_inner_with_null.y null_aware(value_keys=2)
+03)----Projection: multi_col_outer.a, multi_col_outer.b, multi_col_outer.value, Int64(2) AS __correlated_sq_1_value_1
+04)------TableScan: multi_col_outer projection=[a, b, value]
+05)----SubqueryAlias: __correlated_sq_1
+06)------Projection: multi_col_inner_with_null.x, CAST(multi_col_inner_with_null.y AS Int64)
+07)--------TableScan: multi_col_inner_with_null projection=[x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(a@0, x@0), (__correlated_sq_1_value_1@3, multi_col_inner_with_null.y@1)], projection=[a@0, b@1, value@2], null_aware(value_keys=2)
+02)--ProjectionExec: expr=[a@0 as a, b@1 as b, value@2 as value, 2 as __correlated_sq_1_value_1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--ProjectionExec: expr=[x@0 as x, CAST(y@1 AS Int64) as multi_col_inner_with_null.y]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+#############
+## Test 27: Correlated multi-column NOT IN with a non-equality correlation
+#############
+
+statement ok
+CREATE TABLE corr_tuple_outer(k INT, a INT, b INT) AS VALUES
+(1, 1, 2),
+(2, 1, 2),
+(3, NULL, 5),
+(4, 7, 7),
+(5, 4, 2);
+
+statement ok
+CREATE TABLE corr_tuple_inner(k INT, x INT, y INT) AS VALUES
+(1, 1, 2),
+(3, NULL, 2),
+(3, 9, 5);
+
+# k=1 has an empty scope; k=2 matches (1, 2); (NULL, 5) and (7, 7) mismatch
+# every row in scope; (4, 2) vs (NULL, 2) at k=3 is `UNKNOWN AND TRUE`.
+query III rowsort
+SELECT * FROM corr_tuple_outer o
+WHERE (a, b) NOT IN (SELECT x, y FROM corr_tuple_inner i WHERE i.k < o.k);
+----
+1 1 2
+3 NULL 5
+4 7 7
+
+#############
+## Test 28: Multi-column NOT IN as a nullable value
+#############
+
+# (1, 2) matches: false. (3, 4) vs (NULL, 4) is UNKNOWN: NULL.
+# (5, 6) and (NULL, 8) mismatch both inner rows: true.
+query IIB rowsort
+SELECT a, b, (a, b) NOT IN (SELECT x, y FROM multi_col_inner_with_null) AS r
+FROM multi_col_outer;
+----
+1 2 false
+3 4 NULL
+5 6 true
+NULL 8 true
+
+query TT
+EXPLAIN SELECT a, b, (a, b) NOT IN (SELECT x, y FROM multi_col_inner_with_null) AS r
+FROM multi_col_outer;
+----
+logical_plan
+01)Projection: multi_col_outer.a, multi_col_outer.b, NOT __correlated_sq_1.mark AS r
+02)--LeftMark Join: multi_col_outer.a = __correlated_sq_1.x, multi_col_outer.b = __correlated_sq_1.y null_aware(value_keys=2)
+03)----TableScan: multi_col_outer projection=[a, b]
+04)----SubqueryAlias: __correlated_sq_1
+05)------TableScan: multi_col_inner_with_null projection=[x, y]
+physical_plan
+01)ProjectionExec: expr=[a@0 as a, b@1 as b, NOT mark@2 as r]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(a@0, x@0), (b@1, y@1)], null_aware(value_keys=2)
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Under OR only a TRUE `NOT IN` keeps a row on its own.
+query IIT rowsort
+SELECT * FROM multi_col_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM multi_col_inner_with_null) OR value = 'y';
+----
+3 4 y
+5 6 z
+NULL 8 w
+
+#############
+## Test 29: Multi-column NOT IN coerces each tuple element to its column
+#############
+
+statement ok
+CREATE TABLE wide_tuple_inner(x BIGINT, y DOUBLE) AS VALUES
+(1, 2.0),
+(3, NULL);
+
+# (1, 2) matches (1, 2.0); (3, 4) vs (3, NULL) and (NULL, 8) vs (3, NULL) are
+# UNKNOWN.
+query IIT rowsort
+SELECT * FROM multi_col_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM wide_tuple_inner);
+----
+5 6 z
+
+#############
+## Test 30: Tuple and subquery column counts
+#############
+
+statement error DataFusion error: Error during planning: The number of columns in the tuple \(2\) must match the number of columns in the subquery \(3\)
+SELECT * FROM multi_col_outer WHERE (a, b) NOT IN (SELECT x, y, x AS z FROM multi_col_inner_no_null);
+
+statement error DataFusion error: Error during planning: The number of columns in the tuple \(3\) must match the number of columns in the subquery \(2\)
+SELECT * FROM multi_col_outer WHERE (a, b, a) NOT IN (SELECT x, y FROM multi_col_inner_no_null);
+
+statement error Too many columns! The subquery should only return one column
+SELECT * FROM multi_col_outer WHERE a NOT IN (SELECT x, y FROM multi_col_inner_no_null);
+
+# Against a single struct column the tuple is one struct value, not a
+# multi-column `IN`.
+query IIT rowsort
+SELECT * FROM multi_col_outer
+WHERE (a, b) IN (SELECT struct(x, y) FROM multi_col_inner_no_null);
+----
+1 2 x
+
+#############
+## Test 31: Placeholders in a multi-column NOT IN take their tuple column's type
+#############
+
+statement ok
+PREPARE tuple_not_in AS SELECT value FROM multi_col_outer
+WHERE ($1, b) NOT IN (SELECT x, y FROM multi_col_inner_no_null);
+
+query T rowsort
+EXECUTE tuple_not_in(1);
+----
+w
+y
+z
+
+statement ok
+DEALLOCATE tuple_not_in;
+
+statement ok
+DROP TABLE corr_tuple_outer;
+
+statement ok
+DROP TABLE corr_tuple_inner;
+
+statement ok
+DROP TABLE wide_tuple_inner;
+
+#############
 ## Cleanup
+#############
+
+statement ok
+DROP TABLE multi_col_outer;
+
+statement ok
+DROP TABLE multi_col_inner_with_null;
+
+statement ok
+DROP TABLE multi_col_inner_no_null;
+
+statement ok
+DROP TABLE multi_left_null;
+
+statement ok
+DROP TABLE multi_right_no_null;
+
+statement ok
+DROP TABLE three_col_outer;
+
+statement ok
+DROP TABLE three_col_inner;
+
+statement ok
+DROP TABLE three_col_inner_null;
+
+statement ok
+DROP TABLE test_multi;
+
+statement ok
+DROP TABLE multi_empty;
+
+#############
+## Cleanup (original tables)
 #############
 
 statement ok

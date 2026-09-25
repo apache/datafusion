@@ -1050,16 +1050,23 @@ impl AsLogicalPlan for LogicalPlanNode {
                 // them silently loses both fields. Both sides of the round
                 // trip should already have validated keys, so we don't need
                 // the builder's normalization / equijoin-pair checks.
-                Ok(LogicalPlan::Join(Join::try_new(
-                    Arc::new(left),
-                    Arc::new(right),
-                    on,
-                    filter,
-                    datafusion_expr::JoinType::from(join_type),
-                    JoinConstraint::from(join_constraint),
-                    NullEquality::from(null_equality),
-                    join.null_aware,
-                )?))
+                Ok(LogicalPlan::Join(
+                    Join::try_new(
+                        Arc::new(left),
+                        Arc::new(right),
+                        on,
+                        filter,
+                        datafusion_expr::JoinType::from(join_type),
+                        JoinConstraint::from(join_constraint),
+                        NullEquality::from(null_equality),
+                        join.null_aware,
+                    )?
+                    // Plans encoded before the field existed decode it as 0; they
+                    // could only hold scalar `NOT IN` joins.
+                    .with_null_aware_value_keys(
+                        (join.null_aware_value_keys as usize).max(1),
+                    ),
+                ))
             }
             LogicalPlanType::AsOfJoin(join) => {
                 let left_keys =
@@ -1734,6 +1741,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 join_constraint,
                 null_equality,
                 null_aware,
+                null_aware_value_keys,
                 // Not encoded; recomputed by `Join::try_new` on decode.
                 schema: _,
             }) => {
@@ -1777,6 +1785,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             null_equality: null_equality.into(),
                             filter,
                             null_aware: *null_aware,
+                            null_aware_value_keys: *null_aware_value_keys as u32,
                         },
                     ))),
                 })

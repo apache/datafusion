@@ -510,16 +510,19 @@ fn rewrite_join(
     if changed {
         // The join type or an input changed, so the output schema may have
         // narrowed; recompute it via `try_new`.
-        Ok(Transformed::yes(LogicalPlan::Join(Join::try_new(
-            left,
-            right,
-            join.on,
-            join.filter,
-            rewritten_join_type,
-            join.join_constraint,
-            join.null_equality,
-            join.null_aware,
-        )?)))
+        Ok(Transformed::yes(LogicalPlan::Join(
+            Join::try_new(
+                left,
+                right,
+                join.on,
+                join.filter,
+                rewritten_join_type,
+                join.join_constraint,
+                join.null_equality,
+                join.null_aware,
+            )?
+            .with_null_aware_value_keys(join.null_aware_value_keys),
+        )))
     } else {
         // Nothing changed; reassemble the join reusing its existing schema rather
         // than recomputing it.
@@ -533,6 +536,7 @@ fn rewrite_join(
             schema: join.schema,
             null_equality: join.null_equality,
             null_aware: join.null_aware,
+            null_aware_value_keys: join.null_aware_value_keys,
         })))
     }
 }

@@ -41,7 +41,7 @@ use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::filter::FilterExecBuilder;
 use crate::physical_plan::joins::utils as join_utils;
 use crate::physical_plan::joins::{
-    AsOfJoinExec, AsOfMatchExpr, CrossJoinExec, HashJoinExec, NestedLoopJoinExec,
+    AsOfJoinExec, AsOfMatchExpr, CrossJoinExec, HashJoinExecBuilder, NestedLoopJoinExec,
     PartitionMode, SortMergeJoinExec,
 };
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
@@ -1358,6 +1358,7 @@ impl DefaultPhysicalPlanner {
                 join_type,
                 null_equality,
                 null_aware,
+                null_aware_value_keys,
                 schema: join_schema,
                 ..
             }) => {
@@ -1790,17 +1791,20 @@ impl DefaultPhysicalPlanner {
                         PartitionMode::CollectLeft
                     };
 
-                    Arc::new(HashJoinExec::try_new(
-                        physical_left,
-                        physical_right,
-                        join_on,
-                        join_filter,
-                        join_type,
-                        None,
-                        partition_mode,
-                        *null_equality,
-                        *null_aware,
-                    )?)
+                    Arc::new(
+                        HashJoinExecBuilder::new(
+                            physical_left,
+                            physical_right,
+                            join_on,
+                            *join_type,
+                        )
+                        .with_filter(join_filter)
+                        .with_partition_mode(partition_mode)
+                        .with_null_equality(*null_equality)
+                        .with_null_aware(*null_aware)
+                        .with_null_aware_value_keys(*null_aware_value_keys)
+                        .build()?,
+                    )
                 };
 
                 // If plan was mutated previously then need to create the ExecutionPlan

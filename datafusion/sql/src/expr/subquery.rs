@@ -70,12 +70,30 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
         planner_context.pop_outer_query_schema();
 
-        self.validate_single_column(
-            &sub_plan,
-            &spans,
-            "Too many columns! The subquery should only return one column",
-            "Select only one column in the subquery",
-        )?;
+        // A tuple `(a, b) IN (SELECT x, y ...)` compares one subquery column per
+        // tuple element; anything else compares a single value, so the
+        // subquery must return exactly one column.
+        let tuple_len = match &expr {
+            SQLExpr::Tuple(values) => Some(values.len()),
+            _ => None,
+        };
+        let subquery_len = sub_plan.schema().fields().len();
+        match tuple_len {
+            Some(tuple_len) if subquery_len > 1 && tuple_len != subquery_len => {
+                return plan_err!(
+                    "The number of columns in the tuple ({}) must match the number of columns in the subquery ({})",
+                    tuple_len,
+                    subquery_len
+                );
+            }
+            Some(_) => {}
+            None => self.validate_single_column(
+                &sub_plan,
+                &spans,
+                "Too many columns! The subquery should only return one column",
+                "Select only one column in the subquery",
+            )?,
+        }
 
         let expr_obj = self.sql_to_expr(expr, input_schema, planner_context)?;
 

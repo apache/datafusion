@@ -3850,6 +3850,44 @@ async fn roundtrip_join_null_aware() -> Result<()> {
     Ok(())
 }
 
+// The decoder must preserve the `NOT IN` value key count of a multi-column
+// `(a, b) NOT IN (SELECT x, y ...)`, which also holds a correlation key.
+#[tokio::test]
+async fn roundtrip_join_null_aware_value_keys() -> Result<()> {
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+
+    let ctx = SessionContext::new();
+    let sql = "
+        SELECT k
+        FROM (VALUES (1, 1, 2), (2, 3, 4)) AS t1(k, a, b)
+        WHERE (a, b) NOT IN (
+            SELECT x, y
+            FROM (VALUES (1, CAST(NULL AS INT), 2)) AS t2(k, x, y)
+            WHERE t2.k = t1.k
+        )
+    ";
+
+    let df = ctx.sql(sql).await?;
+    let plan = ctx.state().optimize(df.logical_plan())?;
+
+    let mut value_keys = None;
+    plan.apply(|n| {
+        if let LogicalPlan::Join(j) = n
+            && j.null_aware
+        {
+            value_keys = Some((j.on.len(), j.null_aware_value_keys));
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    assert_eq!(value_keys, Some((3, 2)));
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+
+    Ok(())
+}
+
 // Regression test for `null_equality` round-trip (related to #22065):
 // the decoder must preserve a non-default `null_equality`
 // (`NullEqualsNull`) across a to_proto -> from_proto round trip.

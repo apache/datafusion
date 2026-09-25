@@ -1399,6 +1399,34 @@ impl InSubquery {
             negated,
         }
     }
+
+    /// The tuple elements of a multi-column `(a, b, ...) IN (SELECT x, y, ...)`,
+    /// or `None` for a single-column `IN`. See [`in_subquery_tuple_values`].
+    pub fn tuple_values(&self) -> Option<&[Expr]> {
+        in_subquery_tuple_values(&self.expr, &self.subquery.subquery)
+    }
+}
+
+/// The tuple elements of a multi-column `(a, b, ...) IN (SELECT x, y, ...)`,
+/// given the compared expression `expr` and the `subquery` plan, or `None`
+/// for a single-column `IN`.
+///
+/// The tuple is planned as a `struct` call. It is a multi-column `IN` only when
+/// the subquery returns more than one column; against a single column the
+/// `struct` is one value compared with a struct-typed column. The number of
+/// elements is not checked against the number of subquery columns here.
+pub fn in_subquery_tuple_values<'a>(
+    expr: &'a Expr,
+    subquery: &crate::LogicalPlan,
+) -> Option<&'a [Expr]> {
+    match expr {
+        Expr::ScalarFunction(func)
+            if func.func.name() == "struct" && subquery.schema().fields().len() > 1 =>
+        {
+            Some(&func.args)
+        }
+        _ => None,
+    }
 }
 
 /// Placeholder, representing bind parameter values such as `$1` or `$name`.
@@ -2212,11 +2240,32 @@ impl Expr {
                     subquery,
                     negated: _,
                 }) => {
-                    rewrite_placeholder_from_subquery(
-                        "InSubquery",
-                        expr.as_mut(),
-                        subquery,
-                    )?;
+                    // Multi-column `(a, b) IN (SELECT x, y ...)`: infer each
+                    // tuple element from the subquery column at the same
+                    // position.
+                    let subquery_schema = subquery.subquery.schema();
+                    let is_tuple =
+                        in_subquery_tuple_values(expr.as_ref(), &subquery.subquery)
+                            .is_some_and(|values| {
+                                values.len() == subquery_schema.fields().len()
+                            });
+                    match expr.as_mut() {
+                        Expr::ScalarFunction(func) if is_tuple => {
+                            for (arg, field) in
+                                func.args.iter_mut().zip(subquery_schema.fields())
+                            {
+                                let column = Expr::Column(Column::new_unqualified(
+                                    field.name().clone(),
+                                ));
+                                rewrite_placeholder(arg, &column, subquery_schema)?;
+                            }
+                        }
+                        expr => rewrite_placeholder_from_subquery(
+                            "InSubquery",
+                            expr,
+                            subquery,
+                        )?,
+                    }
                 }
                 Expr::SetComparison(SetComparison {
                     expr,
