@@ -35,8 +35,14 @@
 //! [`FilePlacement`] decides at file open and again at each row group
 //! boundary. The stream then rebuilds the decoder
 //! (`ParquetPushDecoder::into_builder`) with the new `RowFilter` and
-//! projection mask, and rebuilds the post-scan filter. The measurements are
-//! pooled over all files and partitions of the scan ([`PlacementSites`]).
+//! projection mask, and rebuilds the post-scan filter. The rebuilt decoder
+//! keeps the row selections of the remaining row groups (for example from
+//! the page index). The measurements are pooled over all files and
+//! partitions of the scan ([`PlacementSites`]).
+//!
+//! The placement of a file stops changing only when a change would change
+//! the schema of the decoded batches (possible with nested columns): the
+//! batch coalescer holds batches with the current schema.
 //!
 //! Conjuncts that `build_row_filter` rejects for a file always run in the
 //! post-scan filter (required) or are not used (optional). Optional
@@ -309,11 +315,6 @@ impl FilePlacement {
         for (conjunct, placement) in self.conjuncts.iter_mut().zip(placements) {
             conjunct.placement = *placement;
         }
-        self.frozen = true;
-    }
-
-    /// Stops all later changes.
-    pub(crate) fn freeze(&mut self) {
         self.frozen = true;
     }
 
