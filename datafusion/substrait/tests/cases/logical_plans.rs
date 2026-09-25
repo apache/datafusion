@@ -340,4 +340,97 @@ mod tests {
         DataFrame::new(ctx.state(), plan).show().await?;
         Ok(())
     }
+
+    // The read schema declares the list element as dictionary encoded while the lambda
+    // carries its own plain parameter type, as a producer that cannot express dictionary
+    // encoding in Substrait emits. Physical planning reconciles the two with a cast.
+    #[tokio::test]
+    async fn higher_order_function_with_dictionary_encoded_lambda_parameter() -> Result<()>
+    {
+        let proto_plan = read_json(
+            "tests/testdata/test_plans/any_match_dictionary_list_element.substrait.json",
+        );
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        assert_snapshot!(
+        plan,
+        @r#"
+        Projection: array_any_match(t.tags, (p0) -> p0 = Utf8("c")) AS matched
+          TableScan: t
+        "#
+        );
+
+        let df = DataFrame::new(ctx.state(), plan);
+
+        // Without resolution this fails in physical planning, where the field recorded
+        // on the parameter does not match the one the schema carries.
+        df.clone().show().await?;
+
+        // The lambda parameter is resolved to the encoding the list actually carries, so
+        // the comparison coerces the literal rather than decoding every element.
+        assert_snapshot!(
+        df.into_optimized_plan()?,
+        @r#"
+        Projection: array_any_match(t.tags, (p0) -> p0 = Dictionary(UInt32, Utf8("c"))) AS matched
+          TableScan: t projection=[tags]
+        "#
+        );
+        Ok(())
+    }
+
+    // Substrait has no string view type, so a producer records a plain parameter for a
+    // lambda over a column the plan itself declares as a view.
+    #[tokio::test]
+    async fn higher_order_function_with_string_view_lambda_parameter() -> Result<()> {
+        let proto_plan = read_json(
+            "tests/testdata/test_plans/any_match_string_view_list_element.substrait.json",
+        );
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        let df = DataFrame::new(ctx.state(), plan);
+
+        // Without resolution this fails in physical planning, where the field recorded
+        // on the parameter does not match the one the schema carries.
+        df.clone().show().await?;
+
+        // The lambda parameter is resolved to the view the list actually carries, so the
+        // comparison coerces the literal rather than materializing every element.
+        assert_snapshot!(
+        df.into_optimized_plan()?,
+        @r#"
+        Projection: array_any_match(t.tags, (p0) -> p0 = Utf8View("c")) AS matched
+          TableScan: t projection=[tags]
+        "#
+        );
+        Ok(())
+    }
+
+    // A higher order function can be the value argument of another one, where its own
+    // lambda parameter has to be resolved too.
+    #[tokio::test]
+    async fn nested_higher_order_function_with_dictionary_encoded_lambda_parameter()
+    -> Result<()> {
+        let proto_plan = read_json(
+            "tests/testdata/test_plans/nested_any_match_dictionary_list_element.substrait.json",
+        );
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        let df = DataFrame::new(ctx.state(), plan);
+
+        // Without resolution of the inner function this fails in physical planning.
+        df.clone().show().await?;
+
+        // Both parameters are resolved to the encoding the list actually carries.
+        assert_snapshot!(
+        df.into_optimized_plan()?,
+        @r#"
+        Projection: array_any_match(array_transform(t.tags, (p0) -> p0), (p1) -> p1 = Dictionary(UInt32, Utf8("c"))) AS matched
+          TableScan: t projection=[tags]
+        "#
+        );
+        Ok(())
+    }
 }
