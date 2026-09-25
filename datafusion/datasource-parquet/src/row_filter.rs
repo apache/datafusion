@@ -176,18 +176,20 @@ impl OptionalFilterGateState {
         self.gate.is_paused()
     }
 
-    /// Counts down up to `batches` batches of `rows_per_batch` rows that the
-    /// scan did not evaluate the filter on, while the gate is paused. The
-    /// adaptive filter placement calls this when it removed the paused
-    /// filter from the `RowFilter` (see [`crate::filter_placement`]). Stops
-    /// when the gate stops the pause, for example because the filter
-    /// changed.
-    pub(crate) fn skip_batches(&mut self, batches: usize, rows_per_batch: usize) {
-        for _ in 0..batches {
-            if !self.gate.is_paused() {
-                break;
-            }
-            self.begin_batch(rows_per_batch);
+    /// Counts down the batches of `rows` rows that the scan did not evaluate
+    /// the filter on, while the gate is paused. The scan reads the rows in
+    /// batches of `batch_size` rows at most: the last batch has the
+    /// remaining rows. The adaptive filter placement calls this when it
+    /// removed the paused filter from the `RowFilter` (see
+    /// [`crate::filter_placement`]). Stops when the gate stops the pause,
+    /// for example because the filter changed.
+    pub(crate) fn skip_rows(&mut self, rows: usize, batch_size: usize) {
+        let batch_size = batch_size.max(1);
+        let mut remaining = rows;
+        while remaining > 0 && self.gate.is_paused() {
+            let batch_rows = remaining.min(batch_size);
+            self.begin_batch(batch_rows);
+            remaining -= batch_rows;
         }
     }
 
