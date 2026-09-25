@@ -192,9 +192,15 @@ pub struct RowValues {
     /// Cached byte length for the current row.
     current_len: usize,
 
-    /// The offset the cache was last refreshed for. Debug builds only: used
-    /// by [`CursorValues::compare`] to assert callers only compare at the
+    /// The offset the cache was last refreshed for. Used by
+    /// [`CursorValues::compare`] to assert callers only compare at the
     /// current offset (the narrowed contract this impl relies on).
+    ///
+    /// Gated on `debug_assertions` deliberately, not for tidiness: a plain
+    /// `debug_assert_eq!` would compile away on its own, but the field
+    /// itself would still widen `Cursor<RowValues>` — the struct the loser
+    /// tree shuffles on every comparison — by eight bytes in release. The
+    /// cfg keeps the release layout byte-identical.
     #[cfg(debug_assertions)]
     current_offset: usize,
 
@@ -222,6 +228,10 @@ impl RowValues {
         );
         let len = rows.num_rows();
         assert!(len > 0);
+        // Seed the cache for row 0. `current_ptr`, `current_len`, and (in
+        // debug builds) `current_offset` must always describe the same row;
+        // `Cursor::new` starts at offset 0 without calling `set_offset`, so
+        // it depends on this constructor having seeded exactly row 0.
         // Extract raw ptr + length while the temporary `Row` is still alive.
         // The pointer is into `rows`'s Arc buffer heap and stays valid.
         let (current_ptr, current_len) = {
@@ -284,6 +294,12 @@ impl CursorValues for RowValues {
         // the current offsets, so the cached slices are the requested rows.
         // Debug builds verify the indices match the offsets the cache was
         // refreshed for; zero cost in release.
+        //
+        // A finished cursor (`offset == len`) has `current_offset == len - 1`
+        // because `advance` skips the out-of-bounds `set_offset`; the assert
+        // would fire on it, intentionally — a finished cursor's stale cache
+        // must never be read, and `Cursor::advance` upholds that one layer up
+        // (the previous bounds-only assert rejected the same state).
         #[cfg(debug_assertions)]
         {
             debug_assert_eq!(
