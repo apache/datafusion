@@ -3299,8 +3299,9 @@ mod optional_filter_tests {
             let gate = Arc::clone(candidates[candidate].gate().unwrap());
             for _ in 0..2 {
                 let mut gate = gate.lock();
-                assert_eq!(gate.begin_batch(batch_size), GateDecision::Evaluate);
-                gate.record(batch_size, batch_size, Duration::from_micros(1));
+                // A window needs `MIN_OBSERVED_ROWS` rows.
+                assert_eq!(gate.begin_batch(8192), GateDecision::Evaluate);
+                gate.record(8192, 8192, Duration::from_micros(1));
             }
             assert!(gate.lock().is_paused());
         };
