@@ -1138,25 +1138,6 @@ mod test {
     }
 
     #[test]
-    fn test_new_from_overall_mask_invalid_row_count() {
-        for selection_rows in [99, 101] {
-            let err = ParquetAccessPlan::try_new_from_overall_row_selection(
-                RowSelection::from(BooleanBuffer::new_set(selection_rows)),
-                &ROW_GROUP_METADATA,
-            )
-            .unwrap_err()
-            .to_string();
-            assert_contains!(
-                err,
-                format!(
-                    "Invalid Parquet RowSelection. File has 100 rows, \
-                     but selection specifies {selection_rows} rows"
-                )
-            );
-        }
-    }
-
-    #[test]
     fn test_new_from_overall_row_selection() {
         let row_selection = RowSelection::from(vec![
             RowSelector::select(10),
@@ -1192,19 +1173,26 @@ mod test {
 
     #[test]
     fn test_new_from_overall_row_selection_invalid_row_count() {
-        let row_selection = RowSelection::from(vec![RowSelector::select(99)]);
-
-        let err = ParquetAccessPlan::try_new_from_overall_row_selection(
-            row_selection,
-            &ROW_GROUP_METADATA,
-        )
-        .unwrap_err()
-        .to_string();
-
-        assert_contains!(
-            err,
-            "Invalid Parquet RowSelection. File has 100 rows, but selection specifies 99 rows"
-        );
+        for selection_rows in [99, 101] {
+            for selection in [
+                RowSelection::from(vec![RowSelector::select(selection_rows)]),
+                RowSelection::from(BooleanBuffer::new_set(selection_rows)),
+            ] {
+                let err = ParquetAccessPlan::try_new_from_overall_row_selection(
+                    selection,
+                    &ROW_GROUP_METADATA,
+                )
+                .unwrap_err()
+                .to_string();
+                assert_contains!(
+                    err,
+                    format!(
+                        "Invalid Parquet RowSelection. File has 100 rows, \
+                         but selection specifies {selection_rows} rows"
+                    )
+                );
+            }
+        }
     }
 
     #[test]

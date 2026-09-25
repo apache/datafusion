@@ -190,63 +190,39 @@ async fn row_selection_extension() {
 
 #[tokio::test]
 async fn row_selection_extension_spanning_row_groups() {
-    // A selection whose selectors straddle the row group boundary (row 4 is the
-    // last row of group 0, rows 5-6 are the first rows of group 1).
-    let parquet_metrics = TestFull {
-        access_plan: None,
-        row_selection: Some(ParquetRowSelection::new(RowSelection::from(vec![
+    // Row 4 is the last row of group 0; rows 5-6 begin group 1.
+    for selection in [
+        RowSelection::from(vec![
             RowSelector::skip(4),
             RowSelector::select(3),
             RowSelector::skip(3),
-        ]))),
-        expected_rows: 3,
-        expected_output: Some(&[
-            "+------+------------+",
-            "| utf8 | large_utf8 |",
-            "+------+------------+",
-            "|      |            |",
-            "| e    | e          |",
-            "| f    | f          |",
-            "+------+------------+",
         ]),
-        predicate: None,
-    }
-    .run()
-    .await
-    .unwrap();
-
-    let bytes_scanned = metric_value(&parquet_metrics, "bytes_scanned").unwrap();
-    assert_ne!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}");
-}
-
-#[tokio::test]
-async fn bitmap_row_selection_extension_spanning_row_groups() {
-    // Repeat the cross-row-group case with a bitmap-backed selection.
-    let parquet_metrics = TestFull {
-        access_plan: None,
-        row_selection: Some(ParquetRowSelection::new(RowSelection::from_boolean_buffer(
-            BooleanBuffer::from(vec![
-                false, false, false, false, true, true, true, false, false, false,
+        RowSelection::from_boolean_buffer(BooleanBuffer::from(vec![
+            false, false, false, false, true, true, true, false, false, false,
+        ])),
+    ] {
+        let parquet_metrics = TestFull {
+            access_plan: None,
+            row_selection: Some(ParquetRowSelection::new(selection)),
+            expected_rows: 3,
+            expected_output: Some(&[
+                "+------+------------+",
+                "| utf8 | large_utf8 |",
+                "+------+------------+",
+                "|      |            |",
+                "| e    | e          |",
+                "| f    | f          |",
+                "+------+------------+",
             ]),
-        ))),
-        expected_rows: 3,
-        expected_output: Some(&[
-            "+------+------------+",
-            "| utf8 | large_utf8 |",
-            "+------+------------+",
-            "|      |            |",
-            "| e    | e          |",
-            "| f    | f          |",
-            "+------+------------+",
-        ]),
-        predicate: None,
-    }
-    .run()
-    .await
-    .unwrap();
+            predicate: None,
+        }
+        .run()
+        .await
+        .unwrap();
 
-    let bytes_scanned = metric_value(&parquet_metrics, "bytes_scanned").unwrap();
-    assert_ne!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}");
+        let bytes_scanned = metric_value(&parquet_metrics, "bytes_scanned").unwrap();
+        assert_ne!(bytes_scanned, 0, "metrics : {parquet_metrics:#?}");
+    }
 }
 
 #[tokio::test]

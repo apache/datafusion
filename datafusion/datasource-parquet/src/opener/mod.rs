@@ -4375,11 +4375,9 @@ mod test {
             // pruning is best-effort, so RG1 may still be read when the
             // selection disables it. RG2's unselected rows also satisfy
             // this predicate and must never reach the consumer.
-            let batches: Vec<RecordBatch> = stream.try_collect().await.unwrap();
-            let remaining: Vec<i32> = batches
-                .iter()
-                .flat_map(|batch| batch.column(0).as_primitive::<Int32Type>().values())
-                .copied()
+            let remaining: Vec<i32> = collect_int32_values(stream)
+                .await
+                .into_iter()
                 .filter(|&value| value < 50)
                 .collect();
             if has_selection {
@@ -5204,6 +5202,72 @@ mod test {
             u64::try_from(data_len).unwrap(),
         );
         (schema, file)
+    }
+
+    #[tokio::test]
+    async fn test_filter_toggles_preserve_external_row_selection() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        // For a > 5, the groups are fully matched, partially matched, then
+        // fully matched. Both boundaries must rebuild the decoder to toggle
+        // its row filter while preserving the remaining external selections.
+        let batch = record_batch!((
+            "a",
+            Int32,
+            vec![10, 11, 12, 13, 0, 20, 21, 22, 30, 31, 32, 33]
+        ))
+        .unwrap();
+        let schema = batch.schema();
+        let data_len = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            vec![batch],
+            Some(
+                WriterProperties::builder()
+                    .set_max_row_group_row_count(Some(4))
+                    .build(),
+            ),
+        )
+        .await;
+        let file = PartitionedFile::new("test.parquet".to_string(), data_len as u64);
+
+        for selection in [
+            RowSelection::from(vec![
+                RowSelector::select(1),
+                RowSelector::skip(1),
+                RowSelector::select(1),
+                RowSelector::skip(1),
+            ]),
+            RowSelection::from(BooleanBuffer::from(vec![true, false, true, false])),
+        ] {
+            let file = file.clone().with_extension(ParquetAccessPlan::new(vec![
+                RowGroupAccess::Selection(selection.clone()),
+                RowGroupAccess::Selection(selection.clone()),
+                RowGroupAccess::Selection(selection),
+            ]));
+            let metrics = ExecutionPlanMetricsSet::new();
+            let opener = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[0])
+                .with_predicate(logical2physical(&col("a").gt(lit(5i32)), &schema))
+                .with_pushdown_filters(true)
+                .with_row_group_stats_pruning(true)
+                .with_preserve_order(true)
+                .with_metrics(metrics.clone())
+                .build();
+
+            let values =
+                collect_int32_values(open_file(&opener, file).await.unwrap()).await;
+            // 0 tests that the filter was enabled; unselected values that
+            // also pass a > 5 detect lost selections at either boundary.
+            assert_eq!(values, vec![10, 12, 21, 30, 32]);
+            // One skip at initialization and one after re-enabling the filter
+            // for RG1 prove that the fully-matched optimization was exercised.
+            assert_eq!(
+                counter_metric_value(&metrics, "row_filter_skipped_fully_matched"),
+                2
+            );
+        }
     }
 
     #[tokio::test]
