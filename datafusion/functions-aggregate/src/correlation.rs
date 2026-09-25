@@ -196,7 +196,6 @@ impl Accumulator for CorrelationAccumulator {
         self.stddev2.update_batch(&values[1..2])?;
         Ok(())
     }
-
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let covar = self.covar.evaluate()?;
         let stddev1 = self.stddev1.evaluate()?;
@@ -207,12 +206,12 @@ impl Accumulator for CorrelationAccumulator {
         let mean1 = self.covar.get_mean1();
         let mean2 = self.covar.get_mean2();
 
-        // If both means are NaN, then both input columns contain only NaN values
-        if mean1.is_nan() && mean2.is_nan() {
+        // If either mean is NaN, correlation is undefined and propagates NaN rather than NULL
+        if mean1.is_nan() || mean2.is_nan() {
             return Ok(ScalarValue::Float64(Some(f64::NAN)));
         }
         let n = self.covar.get_count();
-        if mean1.is_nan() || mean2.is_nan() || n < 2 {
+        if n < 2 {
             return Ok(ScalarValue::Float64(None));
         }
 
@@ -336,13 +335,12 @@ impl CorrelationGroupsAccumulator {
             let mean_x = mean_xs[i];
             let mean_y = mean_ys[i];
 
-            // If both inputs are NaN, return NaN. If only one input is NaN,
-            // or there are too few values, return NULL.
-            if mean_x.is_nan() && mean_y.is_nan() {
+            // If either input is NaN, return NaN. If there are too few values, return NULL.
+            if mean_x.is_nan() || mean_y.is_nan() {
                 values.push(f64::NAN);
                 nulls.append_non_null();
                 continue;
-            } else if count < 2 || mean_x.is_nan() || mean_y.is_nan() {
+            } else if count < 2 {
                 values.push(0.0);
                 nulls.append_null();
                 continue;
@@ -992,6 +990,65 @@ mod tests {
         let result = result.as_any().downcast_ref::<Float64Array>().unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result.null_count(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn correlation_nan_propagation_scalar_and_grouped() -> Result<()> {
+        // 1. Scalar Accumulator: NaN in x only
+        let mut scalar_x_nan = CorrelationAccumulator::try_new()?;
+        let x1: ArrayRef = Arc::new(Float64Array::from(vec![f64::NAN, 2.0]));
+        let y1: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 4.0]));
+        scalar_x_nan.update_batch(&[x1, y1])?;
+        let res = scalar_x_nan.evaluate()?;
+        match res {
+            ScalarValue::Float64(Some(v)) => assert!(v.is_nan(), "Expected NaN, got {v}"),
+            other => panic!("Expected Some(NaN), got {other:?}"),
+        }
+
+        // 2. Scalar Accumulator: NaN in y only
+        let mut scalar_y_nan = CorrelationAccumulator::try_new()?;
+        let x2: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0]));
+        let y2: ArrayRef = Arc::new(Float64Array::from(vec![f64::NAN, 4.0]));
+        scalar_y_nan.update_batch(&[x2, y2])?;
+        let res = scalar_y_nan.evaluate()?;
+        match res {
+            ScalarValue::Float64(Some(v)) => assert!(v.is_nan(), "Expected NaN, got {v}"),
+            other => panic!("Expected Some(NaN), got {other:?}"),
+        }
+
+        // 3. Scalar Accumulator: count = 1 with NaN
+        let mut scalar_single_nan = CorrelationAccumulator::try_new()?;
+        let x3: ArrayRef = Arc::new(Float64Array::from(vec![f64::NAN]));
+        let y3: ArrayRef = Arc::new(Float64Array::from(vec![1.0]));
+        scalar_single_nan.update_batch(&[x3, y3])?;
+        let res = scalar_single_nan.evaluate()?;
+        match res {
+            ScalarValue::Float64(Some(v)) => assert!(v.is_nan(), "Expected NaN, got {v}"),
+            other => panic!("Expected Some(NaN), got {other:?}"),
+        }
+
+        // 4. Scalar Accumulator: count = 1 without NaN should return None (NULL)
+        let mut scalar_single_valid = CorrelationAccumulator::try_new()?;
+        let x4: ArrayRef = Arc::new(Float64Array::from(vec![10.0]));
+        let y4: ArrayRef = Arc::new(Float64Array::from(vec![20.0]));
+        scalar_single_valid.update_batch(&[x4, y4])?;
+        let res = scalar_single_valid.evaluate()?;
+        assert_eq!(res, ScalarValue::Float64(None));
+
+        // 5. Grouped Accumulator: group 0 has NaN in x, group 1 has count < 2
+        let mut grouped = CorrelationGroupsAccumulator::new();
+        let gx: ArrayRef = Arc::new(Float64Array::from(vec![f64::NAN, 5.0, 10.0]));
+        let gy: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 20.0]));
+        let groups = vec![0, 0, 1]; // group 0 has 2 rows (one NaN), group 1 has 1 row
+        grouped.update_batch(&[gx, gy], &groups, None, 2)?;
+        let gres = grouped.evaluate(EmitTo::All)?;
+        let gres_arr = gres.as_primitive::<Float64Type>();
+        assert_eq!(gres_arr.len(), 2);
+        assert!(!gres_arr.is_null(0));
+        assert!(gres_arr.value(0).is_nan(), "Group 0 expected NaN");
+        assert!(gres_arr.is_null(1), "Group 1 expected NULL");
+
         Ok(())
     }
 }
