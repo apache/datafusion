@@ -3335,6 +3335,9 @@ mod optional_filter_tests {
         // before the required conjunct.
         let clustered: BooleanArray = (0..40_000).map(|i| Some(i >= 30_000)).collect();
         stats_of("a@0 >= 0").record_evaluation(&clustered, 40_000);
+        // After the second change, the next change waits for one row group
+        // boundary (hysteresis).
+        assert!(placement.decide(1000).is_none());
         let change = placement.decide(1000).unwrap();
         assert!(change.row_filter);
         assert_eq!(placement.row_filter_candidates(), vec![on_a]);
@@ -3345,9 +3348,13 @@ mod optional_filter_tests {
         );
 
         // The optional conjunct on `b` removes nothing: it ranks last. Only
-        // the post-scan order changes.
+        // the post-scan order changes. After the third change, the next
+        // change waits for 3 row group boundaries (hysteresis).
         stats_of("b@1 >= 0")
             .record_evaluation(&BooleanArray::from(vec![true; 20_000]), 20_000);
+        for _ in 0..3 {
+            assert!(placement.decide(1000).is_none());
+        }
         let change = placement.decide(1000).unwrap();
         assert!(!change.row_filter);
         assert_eq!(
