@@ -38,7 +38,7 @@ use crate::logical_plan::{
 };
 use crate::select_expr::SelectExpr;
 use crate::utils::{
-    can_hash, check_all_columns_from_schema, columnize_expr, compare_sort_expr,
+    Columnizer, can_hash, check_all_columns_from_schema, compare_sort_expr,
     expand_qualified_wildcard, expand_wildcard, expr_to_columns,
     find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
     split_conjunction_owned,
@@ -2085,6 +2085,7 @@ fn project_with_validation(
     let mut projected_expr = vec![];
     let mut has_wildcard = false;
     let mut normalizer = ColumnNormalizer::new(&plan);
+    let columnizer = Columnizer::new(&plan);
     for (e, validate) in expr {
         let e = e.into();
         match e {
@@ -2103,7 +2104,7 @@ fn project_with_validation(
                 for e in expanded {
                     if validate {
                         projected_expr
-                            .push(columnize_expr(normalizer.normalize(e)?, &plan)?)
+                            .push(columnizer.columnize(normalizer.normalize(e)?)?)
                     } else {
                         projected_expr.push(e)
                     }
@@ -2125,7 +2126,7 @@ fn project_with_validation(
                 for e in expanded {
                     if validate {
                         projected_expr
-                            .push(columnize_expr(normalizer.normalize(e)?, &plan)?)
+                            .push(columnizer.columnize(normalizer.normalize(e)?)?)
                     } else {
                         projected_expr.push(e)
                     }
@@ -2133,7 +2134,7 @@ fn project_with_validation(
             }
             SelectExpr::Expression(e) => {
                 if validate {
-                    projected_expr.push(columnize_expr(normalizer.normalize(e)?, &plan)?)
+                    projected_expr.push(columnizer.columnize(normalizer.normalize(e)?)?)
                 } else {
                     projected_expr.push(e)
                 }
@@ -2160,6 +2161,8 @@ fn project_with_validation(
 
     validate_unique_names("Projections", projected_expr.iter())?;
 
+    // `columnizer` borrows `plan`, which moves into the projection below.
+    drop(columnizer);
     Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
 }
 
