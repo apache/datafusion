@@ -226,7 +226,8 @@ fn general_cosine_distance<O: OffsetSizeTrait>(arrays: &[ArrayRef]) -> Result<Ar
         if sq1 == 0.0 || sq2 == 0.0 {
             builder.append_null();
         } else {
-            builder.append_value(1.0 - dot / (sq1.sqrt() * sq2.sqrt()));
+            let sim = (dot / (sq1.sqrt() * sq2.sqrt())).clamp(-1.0, 1.0);
+            builder.append_value((1.0 - sim).clamp(0.0, 2.0));
         }
     }
 
@@ -254,3 +255,4 @@ fn dot_and_squares(
     }
     (dot, sq1, sq2)
 }
+
