@@ -1,0 +1,11 @@
+description = "Nested-loop join SQL benchmarks"
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- nlj"
+description = "Run all nested-loop join queries."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- nlj --query 7"
+description = "Run nested-loop join query 7."

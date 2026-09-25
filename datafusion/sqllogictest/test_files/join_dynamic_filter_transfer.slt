@@ -1,0 +1,135 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# A hash join's dynamic filter is transferred across the equi-join keys of the
+# joins below it: a filter over one side's join key also holds for the other
+# side's key, so it reaches the scans on both sides of that join.
+#
+# Here `dim` is the build side of the upper join and its keys filter `mid`
+# directly. `fact` is only joined with `mid`, but through `mid.m_key = fact.f_key`
+# the `dim` filter is rewritten over `f_key` and reaches the `fact` scan too.
+
+statement ok
+CREATE TABLE dim_src(d_key INT, d_val VARCHAR) AS VALUES
+(1, 'one'),
+(3, 'three');
+
+statement ok
+CREATE TABLE mid_src(m_key INT, m_c INT) AS VALUES
+(1, 10),
+(2, 20),
+(3, 30),
+(4, 40),
+(5, 50);
+
+statement ok
+CREATE TABLE fact_src(f_key INT, f_e INT) AS VALUES
+(1, 100),
+(2, 200),
+(3, 300),
+(4, 400),
+(5, 500),
+(6, 600),
+(7, 700),
+(8, 800);
+
+query I
+COPY dim_src TO 'test_files/scratch/join_dynamic_filter_transfer/dim.parquet' STORED AS PARQUET;
+----
+2
+
+query I
+COPY mid_src TO 'test_files/scratch/join_dynamic_filter_transfer/mid.parquet' STORED AS PARQUET;
+----
+5
+
+query I
+COPY fact_src TO 'test_files/scratch/join_dynamic_filter_transfer/fact.parquet' STORED AS PARQUET;
+----
+8
+
+statement ok
+CREATE EXTERNAL TABLE dim(d_key INT, d_val VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/join_dynamic_filter_transfer/dim.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE mid(m_key INT, m_c INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/join_dynamic_filter_transfer/mid.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE fact(f_key INT, f_e INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/join_dynamic_filter_transfer/fact.parquet';
+
+# The `fact` scan carries two dynamic filters: the lower join's own filter,
+# built from `mid`, and the upper join's filter from `dim` transferred over
+# `f_key`. The transferred one arrives with `dim`'s bounds and IN list even
+# when `mid` is large enough that its own filter is a hash-table lookup, which
+# cannot prune row groups.
+query TT
+EXPLAIN SELECT d.d_val, m.m_c, f.f_e
+FROM mid m
+JOIN fact f ON m.m_key = f.f_key
+JOIN dim d ON d.d_key = m.m_key;
+----
+logical_plan
+01)Projection: d.d_val, m.m_c, f.f_e
+02)--Inner Join: m.m_key = d.d_key
+03)----Projection: m.m_key, m.m_c, f.f_e
+04)------Inner Join: m.m_key = f.f_key
+05)--------SubqueryAlias: m
+06)----------TableScan: mid projection=[m_key, m_c]
+07)--------SubqueryAlias: f
+08)----------TableScan: fact projection=[f_key, f_e]
+09)----SubqueryAlias: d
+10)------TableScan: dim projection=[d_key, d_val]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(d_key@0, m_key@0)], projection=[d_val@1, m_c@3, f_e@4]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/join_dynamic_filter_transfer/dim.parquet]]}, projection=[d_key, d_val], file_type=parquet
+03)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(m_key@0, f_key@0)], projection=[m_key@0, m_c@1, f_e@3]
+05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/join_dynamic_filter_transfer/mid.parquet]]}, projection=[m_key, m_c], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+06)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/join_dynamic_filter_transfer/fact.parquet]]}, projection=[f_key, f_e], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+query TII rowsort
+SELECT d.d_val, m.m_c, f.f_e
+FROM mid m
+JOIN fact f ON m.m_key = f.f_key
+JOIN dim d ON d.d_key = m.m_key;
+----
+one 10 100
+three 30 300
+
+statement ok
+DROP TABLE dim;
+
+statement ok
+DROP TABLE mid;
+
+statement ok
+DROP TABLE fact;
+
+statement ok
+DROP TABLE dim_src;
+
+statement ok
+DROP TABLE mid_src;
+
+statement ok
+DROP TABLE fact_src;

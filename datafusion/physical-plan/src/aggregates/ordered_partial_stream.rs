@@ -17,23 +17,22 @@
 
 //! Partial aggregate stream for ordered group input.
 
-use std::ops::ControlFlow;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
-use datafusion_execution::TaskContext;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use futures::stream::{Stream, StreamExt};
+use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
+use futures::stream::StreamExt;
 
 use super::AggregateExec;
 use super::aggregate_hash_table::{OrderedAggregateTable, PartialMarker};
 use crate::aggregates::AggregateMode;
-use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput, SpillMetrics};
-use crate::stream::EmptyRecordBatchStream;
-use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metrics};
+use crate::aggregates::order::GroupOrdering;
+use crate::metrics::{BaselineMetrics, MetricBuilder, SpillMetrics};
+use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
+use crate::{InputOrderMode, SendableRecordBatchStream, metrics};
 
 /// Partial aggregate stream for `InputOrderMode::Sorted` and
 /// `InputOrderMode::PartiallySorted`.
@@ -67,41 +66,76 @@ use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream, metric
 /// After each input batch, check whether any groups can be emitted eagerly to
 /// improve memory efficiency. For example, if the last group key seen is
 /// `k = 100`, it is safe to emit all groups with keys less than 100 because the
-/// input is ordered.
+/// input is ordered. Materialize that entire completed prefix once, then emit
+/// slices of it before reading more input. This avoids repeatedly removing small
+/// batches of groups and shifting the remaining hash table and accumulator state.
 ///
-/// ## Implementation Note
+/// # Memory Pressure and Spilling
 ///
-/// This is intentionally kept simple and closely maps to
-/// `GroupedHashAggregateStream` to finish the refactor sooner.
+/// ## Fully ordered case
 ///
-/// See issue for details: <https://github.com/apache/datafusion/issues/22710>
+/// If the input is ordered by every group key, for example:
 ///
-/// More applicable optimizations are left to future work.
+/// - Input order: `a, b`
+/// - `GROUP BY`: `a, b`
+///
+/// Completed groups can be emitted as soon as the next group is observed. Thus,
+/// only the current group remains active after completed groups are emitted, and
+/// memory usage does not grow with the total number of groups.
+///
+/// If a memory reservation nevertheless fails, the stream returns the error
+/// directly, indicating an unexpected behavior.
+///
+/// ## Partially ordered case
+///
+/// If the input is ordered by only a subset of the group keys, for example:
+///
+/// - Input order: `a`
+/// - `GROUP BY`: `a, b`
+///
+/// If one `a` value contains many distinct `b` values, the table may accumulate
+/// enough groups to exceed the memory limit.
+///
+/// - `OrderedPartialAggregateStream`: On reservation failure, it emits all current
+///   intermediate states downstream and resets the table. The final stage can
+///   merge repeated `(a, b)` state rows, so no disk spill is required.
+/// - `OrderedFinalAggregateStream`: It cannot emit incomplete final results. On
+///   reservation failure, it sorts the current intermediate states by the complete
+///   group key and spills them as one run. After the input ends, it spills any
+///   remaining states, performs a sort-preserving merge of all runs, and feeds the
+///   merged input into a fully ordered final aggregate stream.
 pub(crate) struct OrderedPartialAggregateStream {
-    schema: SchemaRef,
-    input: SendableRecordBatchStream,
     reservation: MemoryReservation,
+    context: OrderedPartialAggregateContext,
+    stage: ExecutionStage,
+}
+
+/// Execution stages described in [`OrderedPartialAggregateStream::into_stream`].
+enum ExecutionStage {
+    Aggregating(Aggregating),
+    Outputting(Outputting),
+}
+
+struct Aggregating {
+    input: SendableRecordBatchStream,
+    table: OrderedAggregateTable<PartialMarker>,
+}
+
+struct Outputting {
+    /// Materialized aggregate states. Each iteration emits the first `batch_size`
+    /// rows and replaces this batch with the remaining slice.
+    batch: RecordBatch,
+    /// Aggregation stage to resume after output; `None` after EOF.
+    resume: Option<Aggregating>,
+}
+
+/// Immutable execution context shared by aggregation and output emission.
+struct OrderedPartialAggregateContext {
+    schema: SchemaRef,
+    batch_size: usize,
     baseline_metrics: BaselineMetrics,
     reduction_factor: metrics::RatioMetrics,
-    state: Option<OrderedPartialAggregateState>,
 }
-
-/// See comments at `poll_next()` for details.
-enum OrderedPartialAggregateState {
-    ReadingInput {
-        table: OrderedAggregateTable<PartialMarker>,
-    },
-    DrainingFinal {
-        table: OrderedAggregateTable<PartialMarker>,
-    },
-    Done,
-}
-
-type OrderedPartialAggregatePoll = Poll<Option<Result<RecordBatch>>>;
-type OrderedPartialAggregateStateTransition = ControlFlow<
-    (OrderedPartialAggregatePoll, OrderedPartialAggregateState),
-    OrderedPartialAggregateState,
->;
 
 impl OrderedPartialAggregateStream {
     pub fn new(
@@ -131,252 +165,252 @@ impl OrderedPartialAggregateStream {
         )?;
         let reservation =
             MemoryConsumer::new(format!("OrderedPartialAggregateStream[{partition}]"))
+                .with_can_spill(matches!(
+                    table.group_ordering(),
+                    GroupOrdering::Partial(_)
+                ))
                 .register(context.memory_pool());
 
         Ok(Self {
-            schema,
-            input,
             reservation,
-            baseline_metrics,
-            reduction_factor,
-            state: Some(OrderedPartialAggregateState::ReadingInput { table }),
+            context: OrderedPartialAggregateContext {
+                schema,
+                batch_size,
+                baseline_metrics,
+                reduction_factor,
+            },
+            stage: ExecutionStage::Aggregating(Aggregating { input, table }),
         })
     }
 
-    fn close_input(&mut self) {
-        let input_schema = self.input.schema();
-        self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
-    }
-
-    /// Consumes one ordered input batch, then immediately emits completed groups
-    /// if the ordering proves any group is ready.
+    /// Entry point for the ordered partial aggregate execution stages.
     ///
-    /// See comments at `poll_next()` for details.
+    /// See [`OrderedPartialAggregateStream`] for high-level ideas.
     ///
-    /// Returns the next operator state with control flow decision.
-    fn handle_reading_input(
-        &mut self,
-        cx: &mut Context<'_>,
-        original_state: OrderedPartialAggregateState,
-    ) -> OrderedPartialAggregateStateTransition {
-        let OrderedPartialAggregateState::ReadingInput { mut table } = original_state
-        else {
-            unreachable!("expected reading input state")
-        };
-
-        match self.input.poll_next_unpin(cx) {
-            Poll::Pending => ControlFlow::Break((
-                Poll::Pending,
-                OrderedPartialAggregateState::ReadingInput { table },
-            )),
-            Poll::Ready(Some(Ok(batch))) => {
-                let input_rows = batch.num_rows();
-                self.reduction_factor.add_total(input_rows);
-
-                let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-                let timer = elapsed_compute.timer();
-                let result = table.aggregate_batch(&batch);
-                timer.done();
-
-                if let Err(e) = result {
-                    return ControlFlow::Break((
-                        Poll::Ready(Some(Err(e))),
-                        OrderedPartialAggregateState::ReadingInput { table },
-                    ));
-                }
-
-                let timer = elapsed_compute.timer();
-                let result = table.next_output_batch();
-                timer.done();
-
-                match result {
-                    // There is some previous group results can be emitted: emit
-                    // them, and next continuing aggreagting input (loop in the
-                    // current state)
-                    Ok(Some(batch)) => {
-                        self.reduction_factor.add_part(batch.num_rows());
-                        let next_state =
-                            OrderedPartialAggregateState::ReadingInput { table };
-                        self.resize_reservation_for_state(&next_state);
-
-                        ControlFlow::Break((
-                            Poll::Ready(Some(Ok(
-                                batch.record_output(&self.baseline_metrics)
-                            ))),
-                            next_state,
-                        ))
-                    }
-                    Ok(None) => {
-                        // Ordered variant don't support memory-limited execution,
-                        // it have to error when OOM
-                        if let Err(e) = self.reservation.try_resize(table.memory_size()) {
-                            return ControlFlow::Break((
-                                Poll::Ready(Some(Err(e))),
-                                OrderedPartialAggregateState::ReadingInput { table },
-                            ));
-                        }
-
-                        // Can't do early emit, continue aggregating.
-                        ControlFlow::Continue(
-                            OrderedPartialAggregateState::ReadingInput { table },
-                        )
-                    }
-                    Err(e) => ControlFlow::Break((
-                        Poll::Ready(Some(Err(e))),
-                        OrderedPartialAggregateState::ReadingInput { table },
-                    )),
-                }
-            }
-            Poll::Ready(Some(Err(e))) => ControlFlow::Break((
-                Poll::Ready(Some(Err(e))),
-                OrderedPartialAggregateState::ReadingInput { table },
-            )),
-            // Input has exhausted, move to the final draining stage.
-            Poll::Ready(None) => {
-                self.close_input();
-                table.input_done();
-                ControlFlow::Continue(OrderedPartialAggregateState::DrainingFinal {
-                    table,
-                })
-            }
-        }
-    }
-
-    /// Emits one batch after input is exhausted.
-    ///
-    /// `table.input_done()` has already made every remaining group safe to emit,
-    /// so this state keeps draining until the table is empty.
-    ///
-    /// See comments at `poll_next()` for details.
-    ///
-    /// Returns the next operator state with control flow decision.
-    fn handle_draining_final(
-        &mut self,
-        original_state: OrderedPartialAggregateState,
-    ) -> OrderedPartialAggregateStateTransition {
-        let OrderedPartialAggregateState::DrainingFinal { table } = original_state else {
-            unreachable!("expected draining final state")
-        };
-
-        let mut table = table;
-        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-        let timer = elapsed_compute.timer();
-        let result = table.next_output_batch();
-        timer.done();
-
-        match result {
-            Ok(Some(batch)) => {
-                self.reduction_factor.add_part(batch.num_rows());
-                let next_state = if table.is_empty() {
-                    OrderedPartialAggregateState::Done
-                } else {
-                    OrderedPartialAggregateState::DrainingFinal { table }
-                };
-                self.resize_reservation_for_state(&next_state);
-
-                ControlFlow::Break((
-                    Poll::Ready(Some(Ok(batch.record_output(&self.baseline_metrics)))),
-                    next_state,
-                ))
-            }
-            Err(e) => ControlFlow::Break((
-                Poll::Ready(Some(Err(e))),
-                OrderedPartialAggregateState::DrainingFinal { table },
-            )),
-            Ok(None) => {
-                let next_state = OrderedPartialAggregateState::Done;
-                self.resize_reservation_for_state(&next_state);
-                ControlFlow::Continue(next_state)
-            }
-        }
-    }
-
-    fn resize_reservation_for_state(&mut self, state: &OrderedPartialAggregateState) {
-        let new_size = match state {
-            OrderedPartialAggregateState::ReadingInput { table }
-            | OrderedPartialAggregateState::DrainingFinal { table } => {
-                table.memory_size()
-            }
-            OrderedPartialAggregateState::Done => 0,
-        };
-        let _ = self.reservation.try_resize(new_size);
-    }
-}
-
-impl Stream for OrderedPartialAggregateStream {
-    type Item = Result<RecordBatch>;
-
-    /// Entry point for the ordered partial aggregate state machine.
-    ///
-    /// See comments in [`OrderedPartialAggregateStream`] for high-level ideas.
-    ///
-    /// State transition graph:
+    /// # Stage transition graph:
     ///
     /// ```text
-    /// (start)
-    ///   -> ReadingInput
-    ///      The stream starts by polling ordered input and aggregating batches
-    ///      into the ordered partial aggregate table.
-    ///
-    /// ReadingInput
-    ///   -> ReadingInput
-    ///      Aggregate one input batch. If the ordering proves some groups are
-    ///      complete, yield one partial-state batch immediately, then continue
-    ///      reading input. Otherwise continue directly with the next input batch.
-    ///   -> DrainingFinal
-    ///      Input was exhausted. Mark the table input as done so every remaining
-    ///      group is safe to emit.
-    ///
-    /// DrainingFinal
-    ///   -> DrainingFinal
-    ///      One remaining partial-state batch was yielded; repeat to continue
-    ///      draining the table.
-    ///   -> Done
-    ///      All remaining groups were emitted.
-    ///
-    /// Done
-    ///   -> (end)
+    ///                  +----[2]----+                     +----[5]----+
+    ///                  |           |                     |           |
+    ///                  v           |                     v           |
+    ///              +-------------------+             +-------------------+
+    ///              |                   |             |                   |
+    /// (start)-[1]->|    Aggregating    |-----[3]---->|     Outputting    |
+    ///              |                   |<----[6]-----|                   |
+    ///              +-------------------+             +-------------------+
+    ///                        | [4]                             | [7]
+    ///                        |                                 |
+    ///                        +----------------+----------------+
+    ///                                         |
+    ///                                         v
+    ///                                    +---------+
+    ///                                    |   Done  |--[8]--> (end)
+    ///                                    +---------+
     /// ```
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        loop {
-            let cur_state = self
-                .state
-                .take()
-                .expect("OrderedPartialAggregateStream state should not be None");
-
-            let next_state = match cur_state {
-                state @ OrderedPartialAggregateState::ReadingInput { .. } => {
-                    self.handle_reading_input(cx, state)
-                }
-                state @ OrderedPartialAggregateState::DrainingFinal { .. } => {
-                    self.handle_draining_final(state)
-                }
-                state @ OrderedPartialAggregateState::Done => {
-                    let _ = self.reservation.try_resize(0);
-                    self.state = Some(state);
-                    return Poll::Ready(None);
-                }
-            };
-
-            match next_state {
-                ControlFlow::Continue(next_state) => {
-                    self.state = Some(next_state);
-                    continue;
-                }
-                ControlFlow::Break((poll, next_state)) => {
-                    self.state = Some(next_state);
-                    return poll;
-                }
+    ///
+    /// ## Stages
+    ///
+    /// - [`Aggregating`]: Aggregates raw input and materializes one batch of partial
+    ///   states.
+    /// - [`Outputting`]: Emits slices of one materialized batch. If the materialized
+    ///   buffers cannot be reserved while slicing, hand off the whole batch, then
+    ///   resume aggregation or finish as described below.
+    ///
+    /// ### Incremental output
+    ///
+    /// Consider this query with input ordered only by `k1`:
+    ///
+    /// ```sql
+    /// SELECT k1, k2, AVG(v)
+    /// FROM table_with_order_k1
+    /// GROUP BY k1, k2
+    /// ```
+    ///
+    /// Suppose one `k1` value spans 1M rows with distinct, unordered `k2`
+    /// values. Ordering only proves these 1M `(k1, k2)` groups complete when
+    /// `k1` changes, so a single early emission can produce far more than
+    /// `batch_size` rows.
+    ///
+    /// Emitting those groups in small batches through [EmitTo::First] would
+    /// repeatedly remove a prefix from [`GroupValues`]. Because the group
+    /// values are stored contiguously, each removal copies the remaining values
+    /// and updates their group indexes.
+    ///
+    /// To avoid repeating that work, this stream:
+    ///
+    /// 1. Materializes all completed groups into one large batch.
+    /// 2. Emits `batch_size` slices that share the batch's buffers.
+    ///
+    /// Blocked aggregate state management may simplify this approach:
+    /// <https://github.com/apache/datafusion/issues/24704>
+    ///
+    /// [`GroupValues`]: crate::aggregates::group_values::GroupValues
+    /// [EmitTo::First]: datafusion_expr::EmitTo::First
+    ///
+    ///
+    /// ## Transition Edges
+    ///
+    /// 1. Start.
+    /// 2. Aggregate one input batch. If memory fits and no groups are complete,
+    ///    continue reading input.
+    /// 3. Prepare output:
+    ///    - Ordering proves a prefix complete: materialize the entire prefix once,
+    ///      retaining the input and active groups to resume aggregation.
+    ///    - On memory pressure with partial ordering, materialize all current
+    ///      states instead, including incomplete groups, and reset the table.
+    ///    - At EOF, materialize all remaining states and prepare to output.
+    /// 4. Input was exhausted with no remaining groups, directly end.
+    /// 5. Yield one slice without materializing the table again. Keep the shared
+    ///    buffers reserved until handing off the last slice.
+    /// 6. The batch was fully emitted and retained aggregation can resume.
+    /// 7. The output batch was fully emitted.
+    /// 8. End.
+    pub(crate) fn into_stream(self) -> SendableRecordBatchStream {
+        let Self {
+            reservation,
+            context,
+            stage,
+        } = self;
+        let schema = Arc::clone(&context.schema);
+        let metrics = context.baseline_metrics.clone();
+        let stream = async_try_stream(|mut emitter| async move {
+            let mut stage = Some(stage);
+            while let Some(current_stage) = stage {
+                stage = match current_stage {
+                    ExecutionStage::Aggregating(aggregating) => {
+                        aggregating.handle_stage(&context, &reservation).await?
+                    }
+                    ExecutionStage::Outputting(outputting) => {
+                        outputting
+                            .handle_stage(&context, &reservation, &mut emitter)
+                            .await?
+                    }
+                };
             }
-        }
+            Ok(())
+        });
+        let stream = Box::pin(RecordBatchStreamAdapter::new(schema, stream));
+        Box::pin(ObservedStream::new(stream, metrics, None))
     }
 }
 
-impl RecordBatchStream for OrderedPartialAggregateStream {
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
+impl Aggregating {
+    /// Aggregates raw input and materializes one batch of partial states.
+    ///
+    /// See [`OrderedPartialAggregateStream::into_stream`] for stage transitions.
+    async fn handle_stage(
+        mut self,
+        context: &OrderedPartialAggregateContext,
+        reservation: &MemoryReservation,
+    ) -> Result<Option<ExecutionStage>> {
+        let elapsed_compute = context.baseline_metrics.elapsed_compute();
+
+        while let Some(batch) = self.input.next().await.transpose()? {
+            context.reduction_factor.add_total(batch.num_rows());
+            let timer = elapsed_compute.timer();
+            self.table.aggregate_batch(&batch)?;
+
+            let output = match reservation.try_resize(self.table.memory_size()) {
+                Ok(()) => self.table.take_completed_state_batch()?,
+                Err(oom @ DataFusionError::ResourcesExhausted(_)) => {
+                    // Partial ordering may have an unbounded active key range.
+                    // The final stage can merge incomplete states emitted here.
+                    if matches!(self.table.group_ordering(), GroupOrdering::Full(_)) {
+                        return Err(oom);
+                    }
+                    let Some(batch) = self.table.take_state_batch()? else {
+                        return Err(oom);
+                    };
+                    Some(batch)
+                }
+                Err(e) => return Err(e),
+            };
+            let Some(batch) = output else {
+                continue;
+            };
+
+            timer.done();
+
+            // OOM, do early emit next, and go back to the current state to continue
+            // aggregating
+            return Ok(Some(ExecutionStage::Outputting(Outputting {
+                batch,
+                resume: Some(self),
+            })));
+        }
+
+        // Release upstream resources before draining the remaining states.
+        drop(self.input);
+        self.table.input_done();
+        let timer = elapsed_compute.timer();
+        let output = self.table.take_completed_state_batch()?;
+        drop(self.table);
+        timer.done();
+
+        let Some(batch) = output else {
+            reservation.try_resize(0)?;
+            return Ok(None);
+        };
+        Ok(Some(ExecutionStage::Outputting(Outputting {
+            batch,
+            resume: None,
+        })))
+    }
+}
+
+impl Outputting {
+    /// Emits slices of one materialized batch without touching the hash table.
+    ///
+    /// See [`OrderedPartialAggregateStream::into_stream`] for stage transitions
+    /// and output memory accounting.
+    async fn handle_stage(
+        self,
+        context: &OrderedPartialAggregateContext,
+        reservation: &MemoryReservation,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<Option<ExecutionStage>> {
+        let Self { mut batch, resume } = self;
+        let elapsed_compute = context.baseline_metrics.elapsed_compute();
+        let mut timer = elapsed_compute.timer();
+        let (table_memory, next_stage) = match resume {
+            Some(aggregating) => (
+                aggregating.table.memory_size(),
+                Some(ExecutionStage::Aggregating(aggregating)),
+            ),
+            None => (0, None),
+        };
+        let batch_memory = batch.get_array_memory_size();
+        match reservation.try_resize(table_memory + batch_memory) {
+            Ok(()) => {}
+            Err(DataFusionError::ResourcesExhausted(_)) => {
+                // If we cannot hold the batch while slicing, hand it off whole.
+                // Only the retained table needs to remain reserved.
+                reservation.try_resize(table_memory)?;
+                context.reduction_factor.add_part(batch.num_rows());
+                timer.done();
+                emitter.emit(batch).await;
+                return Ok(next_stage);
+            }
+            Err(e) => return Err(e),
+        }
+
+        while batch.num_rows() > context.batch_size {
+            // 1. Emit first `batch_size` rows from `batch`
+            // 2. Update `batch`` with the remaining tail
+            let output = batch.slice(0, context.batch_size);
+            batch =
+                batch.slice(context.batch_size, batch.num_rows() - context.batch_size);
+            context.reduction_factor.add_part(output.num_rows());
+            timer.done();
+            emitter.emit(output).await;
+            timer = elapsed_compute.timer();
+        }
+
+        // The final slice transfers ownership of the buffers to the consumer.
+        reservation.try_shrink(batch_memory)?;
+        context.reduction_factor.add_part(batch.num_rows());
+        timer.done();
+        emitter.emit(batch).await;
+        Ok(next_stage)
     }
 }

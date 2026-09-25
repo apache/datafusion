@@ -17,24 +17,16 @@
 
 use datafusion_expr::JoinType;
 
-// Returns boolean for whether the join is a right existence join
+// Returns boolean for whether the join is a right existence join served by
+// `RightExistencePWMJStream`, which reads nothing but a single min/max off the buffered side.
+//
+// `RightMark` belongs here too: deciding its mark column is the same one-key comparison as
+// `RightSemi`/`RightAnti`, just kept instead of used to filter, so it needs no more of the
+// buffered side than they do.
 pub(super) fn is_right_existence_join(join_type: JoinType) -> bool {
     matches!(
         join_type,
-        JoinType::RightAnti | JoinType::RightSemi | JoinType::RightMark
-    )
-}
-
-// Returns boolean for whether the join is an existence join
-pub(super) fn is_existence_join(join_type: JoinType) -> bool {
-    matches!(
-        join_type,
-        JoinType::LeftAnti
-            | JoinType::RightAnti
-            | JoinType::LeftSemi
-            | JoinType::RightSemi
-            | JoinType::LeftMark
-            | JoinType::RightMark
+        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark
     )
 }
 
@@ -42,20 +34,4 @@ pub(super) fn is_existence_join(join_type: JoinType) -> bool {
 // buffered side matches for classic joins
 pub(super) fn need_produce_result_in_final(join_type: JoinType) -> bool {
     matches!(join_type, JoinType::Full | JoinType::Left)
-}
-
-// Returns boolean for whether or not we need to build the buffered side
-// bitmap for marking matched rows on the buffered side.
-pub(super) fn build_visited_indices_map(join_type: JoinType) -> bool {
-    matches!(
-        join_type,
-        JoinType::Full
-            | JoinType::Left
-            | JoinType::LeftAnti
-            | JoinType::RightAnti
-            | JoinType::LeftSemi
-            | JoinType::RightSemi
-            | JoinType::LeftMark
-            | JoinType::RightMark
-    )
 }

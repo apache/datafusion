@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -48,7 +48,8 @@ SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM inner_table_no_null);
 1 a
 3 c
 
-# Verify the plan uses LeftAnti join
+# The logical plan remains LeftAnti, while JoinSelection swaps the physical
+# join to RightAnti so the smaller subquery is the build side.
 query TT
 EXPLAIN SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM inner_table_no_null);
 ----
@@ -58,7 +59,7 @@ logical_plan
 03)--SubqueryAlias: __correlated_sq_1
 04)----TableScan: inner_table_no_null projection=[id]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)], null_aware
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(id@0, id@0)], null_aware
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -69,6 +70,20 @@ physical_plan
 query IT rowsort
 SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM inner_table_with_null);
 ----
+
+# Regression test
+
+statement ok
+set datafusion.optimizer.filter_null_join_keys = true;
+
+# The subquery NULL must reach the join: every row's NOT IN is UNKNOWN or
+# FALSE, so the result stays empty.
+query IT rowsort
+SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM inner_table_with_null);
+----
+
+statement ok
+reset datafusion.optimizer.filter_null_join_keys;
 
 # Verify the result is empty even though there are rows in outer_table
 # that don't match the non-NULL value (2) in the subquery.
@@ -147,16 +162,6 @@ WHERE id NOT IN (SELECT id FROM inner_table_no_null)
 ## Test 9: Multiple NOT IN conditions (OR)
 #############
 
-# KNOWN LIMITATION: Mark joins used for OR conditions don't support null-aware semantics.
-# The NULL row is incorrectly returned here. According to SQL semantics:
-# - NULL NOT IN (2, 4) = UNKNOWN
-# - NULL NOT IN (1, 3) = UNKNOWN
-# - UNKNOWN OR UNKNOWN = UNKNOWN (should be filtered out)
-# But mark joins treat NULL keys as non-matching (FALSE), so:
-# - NULL mark column = FALSE
-# - NOT FALSE OR NOT FALSE = TRUE OR TRUE = TRUE (incorrectly included)
-# TODO: Implement null-aware support for mark joins to fix this
-
 query IT rowsort
 SELECT * FROM outer_table
 WHERE id NOT IN (SELECT id FROM inner_table_no_null)
@@ -166,7 +171,6 @@ WHERE id NOT IN (SELECT id FROM inner_table_no_null)
 2 b
 3 c
 4 d
-NULL e
 
 #############
 ## Test 10: NOT IN with WHERE clause in subquery
@@ -184,11 +188,10 @@ WHERE id NOT IN (SELECT id FROM inner_table_with_null WHERE value = 'x');
 # so this behaves like regular anti join (not null-aware)
 
 #############
-## Test 11: Verify NULL-aware flag is set for LeftAnti joins
+## Test 11: Verify the null-aware LeftAnti logical join is physically swapped
 #############
 
-# Check that the physical plan shows null-aware anti join
-# Note: The exact format may vary, but we should see LeftAnti join type
+# Check that JoinSelection builds on the smaller subquery using RightAnti.
 query TT
 EXPLAIN SELECT * FROM outer_table WHERE id NOT IN (SELECT id FROM inner_table_with_null);
 ----
@@ -198,7 +201,7 @@ logical_plan
 03)--SubqueryAlias: __correlated_sq_1
 04)----TableScan: inner_table_with_null projection=[id]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)], null_aware
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(id@0, id@0)], null_aware
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -394,11 +397,13 @@ query II rowsort
 SELECT * FROM test_table WHERE (c1 NOT IN (SELECT c2 FROM test_table)) = true;
 ----
 
-# NOTE: The correlated subquery version from issue #10583:
-# SELECT * FROM test_table t1 WHERE c1 NOT IN (SELECT c2 FROM test_table t2 WHERE t1.c1 = t2.c1)
-# is not yet supported because it creates a multi-column join (correlation + NOT IN condition).
-# This is a known limitation - currently only supports single column null-aware anti joins.
-# This will be addressed in next Phase (multi-column support).
+# The correlated subquery version from issue #10583 creates a multi-column join
+# (correlation + NOT IN condition). It is supported now; see the correlated
+# sections below.
+query II rowsort
+SELECT * FROM test_table t1 WHERE c1 NOT IN (SELECT c2 FROM test_table t2 WHERE t1.c1 = t2.c1);
+----
+NULL 0
 
 #############
 ## Cleanup
@@ -516,3 +521,424 @@ RESET datafusion.execution.parquet.pushdown_filters;
 
 statement ok
 RESET datafusion.optimizer.enable_join_dynamic_filter_pushdown;
+
+#############
+## Regression: null-aware NOT IN with an outer predicate on the join key
+##
+## `push_down_filter` used to infer the outer predicate `id > 5` onto the
+## subquery side (as `eid > 5`), dropping the subquery's NULL row and wrongly
+## returning outer rows. The subquery NULL must reach the join so that
+## `NOT IN` stays UNKNOWN for every row.
+#############
+
+statement ok
+CREATE TABLE nai_outer(id INT) AS VALUES (3), (7);
+
+statement ok
+CREATE TABLE nai_inner(id INT) AS VALUES (NULL);
+
+# Expected: zero rows (subquery contains NULL => NOT IN is UNKNOWN for all).
+query I
+SELECT id FROM nai_outer WHERE id > 5 AND id NOT IN (SELECT id FROM nai_inner) ORDER BY id;
+----
+
+# Same query under SortMergeJoin + multiple partitions: null-aware joins must
+# be planned as a CollectLeft HashJoin, not a plain anti SortMergeJoin.
+statement ok
+SET datafusion.optimizer.prefer_hash_join = false;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+query I
+SELECT id FROM nai_outer WHERE id NOT IN (SELECT id FROM nai_inner) ORDER BY id;
+----
+
+statement ok
+SET datafusion.optimizer.prefer_hash_join = true;
+
+# The SLT runner sets target_partitions to 4, so restore that value explicitly.
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+DROP TABLE nai_outer;
+
+statement ok
+DROP TABLE nai_inner;
+
+#############
+## Regression: constant (non-column) value expression in `NOT IN (subquery)`
+##
+## `3 NOT IN (1, NULL)` is UNKNOWN, so a `WHERE` clause must remove every row.
+## The value expression `3` contains no column, so on its own it cannot be an
+## equi-join key; decorrelation projects it as a column of the outer side so
+## the null-aware hash join gets a real key. Otherwise the predicate stays in
+## the join filter, where it is pushed into the subquery (dropping the NULL
+## rows before the join can observe them) and leaves a keyless join that no
+## null-aware operator can execute.
+#############
+
+statement ok
+CREATE TABLE naconst_t1(id INT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE naconst_t2(id INT) AS VALUES (1), (NULL);
+
+# Q1: expected no rows (subquery yields {1, NULL} => `3 NOT IN {1, NULL}` is UNKNOWN)
+query I
+SELECT id FROM naconst_t1 WHERE 3 NOT IN (SELECT id FROM naconst_t2) ORDER BY id;
+----
+
+# Q2: `NOT (x IN (...))` is the same predicate spelled differently
+query I
+SELECT id FROM naconst_t1 WHERE NOT (3 IN (SELECT id FROM naconst_t2)) ORDER BY id;
+----
+
+# C1: the constant is present in the subquery => FALSE, no rows (already correct)
+query I
+SELECT id FROM naconst_t1 WHERE 1 NOT IN (SELECT id FROM naconst_t2) ORDER BY id;
+----
+
+# C2: no NULL in the subquery => plain TRUE, all rows survive
+query I
+SELECT id FROM naconst_t1 WHERE 3 NOT IN (SELECT id FROM naconst_t2 WHERE id IS NOT NULL) ORDER BY id;
+----
+1
+2
+
+# C3: column value expression (an equi-join key exists) => already correct
+query I
+SELECT id FROM naconst_t1 WHERE id + 2 NOT IN (SELECT id FROM naconst_t2) ORDER BY id;
+----
+
+# A constant that is absent from a NULL-free subquery still yields TRUE even
+# when other outer predicates are present.
+query I
+SELECT id FROM naconst_t1
+WHERE id > 1 AND 3 NOT IN (SELECT id FROM naconst_t2 WHERE id IS NOT NULL)
+ORDER BY id;
+----
+2
+
+# The projected value column is named after the subquery alias. A user column
+# that happens to share that name must not make the reference ambiguous.
+statement ok
+CREATE TABLE naconst_clash("__correlated_sq_1_value" INT) AS VALUES (1), (2);
+
+query I
+SELECT "__correlated_sq_1_value" FROM naconst_clash
+WHERE 3 NOT IN (SELECT id FROM naconst_t2)
+ORDER BY 1;
+----
+
+query I
+SELECT "__correlated_sq_1_value" FROM naconst_clash
+WHERE 3 NOT IN (SELECT id FROM naconst_t2 WHERE id IS NOT NULL)
+ORDER BY 1;
+----
+1
+2
+
+statement ok
+DROP TABLE naconst_clash;
+
+# The rewrite also fires for a correlated subquery. The projected value column
+# is the first equi-join key, which is the position the null-aware hash join
+# reads as the `NOT IN` value key; the correlation follows it.
+statement ok
+CREATE TABLE naconst_corr_t1(id INT, g INT) AS VALUES (1, 1), (2, 2);
+
+statement ok
+CREATE TABLE naconst_corr_t2(id INT, g INT) AS VALUES (1, 1), (NULL, 2);
+
+# A non-equality correlation stays in the join filter. Row (1, 1) sees the NULL
+# of (NULL, 2), so its `NOT IN` is UNKNOWN; row (2, 2) sees an empty subquery,
+# so its `NOT IN` is TRUE. Expected results verified with DuckDB.
+query I
+SELECT id FROM naconst_corr_t1 WHERE 3 NOT IN (SELECT id FROM naconst_corr_t2 WHERE naconst_corr_t2.g > naconst_corr_t1.g) ORDER BY id;
+----
+2
+
+query I
+SELECT id FROM naconst_corr_t1 WHERE NOT (3 IN (SELECT id FROM naconst_corr_t2 WHERE naconst_corr_t2.g > naconst_corr_t1.g)) ORDER BY id;
+----
+2
+
+statement ok
+DROP TABLE naconst_corr_t1;
+
+statement ok
+DROP TABLE naconst_corr_t2;
+
+# https://github.com/apache/datafusion/pull/25339#issuecomment-5738402844
+# An equality correlation becomes a second equi-join key. Without the rewrite the
+# correlation would take the first key position and the join would apply the
+# value-key NULL rules to it. The outer row with a NULL correlation value matches
+# no subquery row at all, so its `NOT IN` is TRUE. The three queries cover TRUE,
+# FALSE and UNKNOWN. Expected results verified with DuckDB.
+statement ok
+CREATE TABLE naconst_corr_t3(z INT) AS VALUES (10), (NULL), (7);
+
+statement ok
+CREATE TABLE naconst_corr_t4(id INT, z INT) AS VALUES (NULL, 10), (1, 99), (2, 7);
+
+query I
+SELECT z FROM naconst_corr_t3 WHERE 1 NOT IN (SELECT naconst_corr_t4.id FROM naconst_corr_t4 WHERE naconst_corr_t4.z = naconst_corr_t3.z) ORDER BY z;
+----
+7
+NULL
+
+query I
+SELECT z FROM naconst_corr_t3 WHERE 2 NOT IN (SELECT naconst_corr_t4.id FROM naconst_corr_t4 WHERE naconst_corr_t4.z = naconst_corr_t3.z) ORDER BY z;
+----
+NULL
+
+query I
+SELECT z FROM naconst_corr_t3 WHERE 1 NOT IN (SELECT naconst_corr_t4.id FROM naconst_corr_t4 WHERE naconst_corr_t4.z > naconst_corr_t3.z) ORDER BY z;
+----
+NULL
+
+# The projected value column must be the FIRST equi-join key: a null-aware hash
+# join reads `on[0]` as the `NOT IN` value key and `on[1..]` as correlation
+# scope keys, positionally. Giving the correlation that slot returns wrong rows.
+query TT
+EXPLAIN SELECT z FROM naconst_corr_t3 WHERE 1 NOT IN (SELECT naconst_corr_t4.id FROM naconst_corr_t4 WHERE naconst_corr_t4.z = naconst_corr_t3.z);
+----
+logical_plan
+01)Projection: naconst_corr_t3.z
+02)--LeftAnti Join: __correlated_sq_1_value = __correlated_sq_1.naconst_corr_t4.id, naconst_corr_t3.z = __correlated_sq_1.z null_aware
+03)----Projection: naconst_corr_t3.z, Int64(1) AS __correlated_sq_1_value
+04)------TableScan: naconst_corr_t3 projection=[z]
+05)----SubqueryAlias: __correlated_sq_1
+06)------Projection: CAST(naconst_corr_t4.id AS Int64), naconst_corr_t4.z
+07)--------TableScan: naconst_corr_t4 projection=[id, z]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(__correlated_sq_1_value@1, naconst_corr_t4.id@0), (z@0, z@1)], projection=[z@0], null_aware
+02)--ProjectionExec: expr=[z@0 as z, 1 as __correlated_sq_1_value]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--ProjectionExec: expr=[CAST(id@0 AS Int64) as naconst_corr_t4.id, z@1 as z]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE naconst_corr_t3;
+
+statement ok
+DROP TABLE naconst_corr_t4;
+
+statement ok
+DROP TABLE naconst_t1;
+
+statement ok
+DROP TABLE naconst_t2;
+
+## Correlated NOT IN with a non-equality correlation
+## https://github.com/apache/datafusion/issues/25336
+#############
+
+# The non-equality correlation stays behind as a residual join filter. A NULL
+# subquery value only makes NOT IN UNKNOWN for the outer rows where the
+# residual keeps that NULL row. Expected results are verified with DuckDB and
+# PostgreSQL.
+
+statement ok
+CREATE TABLE nai_res_t1(id INT, z INT) AS VALUES (1,10), (2,20), (NULL,30), (4,40);
+
+statement ok
+CREATE TABLE nai_res_t2(id INT, z INT) AS VALUES (1,5), (NULL,50);
+
+# The NULL row (z = 50) never passes `t2.z < t1.z`, so it does not affect the result.
+query I
+SELECT id FROM nai_res_t1 WHERE id NOT IN (SELECT nai_res_t2.id FROM nai_res_t2 WHERE nai_res_t2.z < nai_res_t1.z) ORDER BY id;
+----
+2
+4
+
+query I
+SELECT id FROM nai_res_t1 WHERE NOT (id IN (SELECT nai_res_t2.id FROM nai_res_t2 WHERE nai_res_t2.z < nai_res_t1.z)) ORDER BY id;
+----
+2
+4
+
+query I
+SELECT id FROM nai_res_t1 WHERE id IN (SELECT nai_res_t2.id FROM nai_res_t2 WHERE nai_res_t2.z < nai_res_t1.z) ORDER BY id;
+----
+1
+
+# Uncorrelated residuals are pushed into the subquery.
+query I
+SELECT id FROM nai_res_t1 WHERE id NOT IN (SELECT nai_res_t2.id FROM nai_res_t2 WHERE nai_res_t2.z < 40) ORDER BY id;
+----
+2
+4
+
+query I
+SELECT id FROM nai_res_t1 WHERE id NOT IN (SELECT nai_res_t2.id FROM nai_res_t2 WHERE nai_res_t2.z < 100) ORDER BY id;
+----
+
+# The NULL row passes `t2.z > t1.z` for every outer row, so every row is UNKNOWN.
+query I
+SELECT id FROM nai_res_t1 WHERE id NOT IN (SELECT nai_res_t2.id FROM nai_res_t2 WHERE nai_res_t2.z > nai_res_t1.z) ORDER BY id;
+----
+
+statement ok
+CREATE TABLE nai_res_outer(id INT, z INT, g INT) AS VALUES
+(1, 10, 1),
+(2, 20, 1),
+(NULL, 30, 1),
+(4, 40, 2),
+(NULL, 1, 2),
+(5, 1, 3);
+
+statement ok
+CREATE TABLE nai_res_inner(id INT, z INT, g INT) AS VALUES
+(1, 5, 1),
+(NULL, 50, 1),
+(4, 35, 2),
+(NULL, 2, 2);
+
+# Per outer row, the residual decides which inner rows (NULL or not) are in
+# the subquery. A NULL outer value is TRUE only when that set is empty.
+query II rowsort
+SELECT id, z FROM nai_res_outer
+WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.z < nai_res_outer.z);
+----
+5 1
+NULL 1
+
+query II rowsort
+SELECT id, z FROM nai_res_outer
+WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.z > nai_res_outer.z);
+----
+
+query II rowsort
+SELECT id, z FROM nai_res_outer
+WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.z < nai_res_outer.z AND i.z > 3);
+----
+2 20
+5 1
+NULL 1
+
+query II rowsort
+SELECT id, z FROM nai_res_outer
+WHERE id + 0 NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.z < nai_res_outer.z);
+----
+5 1
+NULL 1
+
+# The residual references the subquery value itself.
+query II rowsort
+SELECT id, z FROM nai_res_outer
+WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.id + i.z > nai_res_outer.z);
+----
+1 10
+2 20
+4 40
+5 1
+
+# Equality and non-equality correlation together.
+query II rowsort
+SELECT id, z FROM nai_res_outer
+WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.g = nai_res_outer.g AND i.z < nai_res_outer.z);
+----
+2 20
+5 1
+NULL 1
+
+# Equality correlation only.
+query II rowsort
+SELECT id, z FROM nai_res_outer
+WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.g = nai_res_outer.g);
+----
+5 1
+
+# NOT EXISTS uses two-valued logic and must not change.
+query II rowsort
+SELECT id, z FROM nai_res_outer
+WHERE NOT EXISTS (SELECT 1 FROM nai_res_inner i WHERE i.id = nai_res_outer.id AND i.z < nai_res_outer.z);
+----
+2 20
+5 1
+NULL 1
+NULL 30
+
+# Output batches of one row split the unmatched build rows and the candidate
+# pairs checked against the residual filter into many chunks.
+statement ok
+SET datafusion.execution.batch_size = 1;
+
+query II rowsort
+SELECT id, z FROM nai_res_outer
+WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.z < nai_res_outer.z);
+----
+5 1
+NULL 1
+
+query II rowsort
+SELECT id, z FROM nai_res_outer
+WHERE id NOT IN (SELECT i.id FROM nai_res_inner i WHERE i.g = nai_res_outer.g AND i.z < nai_res_outer.z);
+----
+2 20
+5 1
+NULL 1
+
+statement ok
+RESET datafusion.execution.batch_size;
+
+# A correlation that names only outer columns. It cannot become an equi-join
+# key, so it stays a residual join filter on a join whose only key is the
+# `NOT IN` value. Every other correlated case here names a subquery column on
+# one side, so this is the only test of the outer-only shape.
+#
+# `nai_res_og.g > 0` holds for id 1, 2 and the NULL-id row with g = 5, so only
+# those three see the subquery {1, NULL}: id 1 matches and is FALSE, the other
+# two are UNKNOWN. Every other row sees an empty subquery, and `NOT IN` over an
+# empty set is TRUE even when the outer value is NULL. Expected results
+# verified with DuckDB and PostgreSQL.
+statement ok
+CREATE TABLE nai_res_og(id INT, g INT) AS VALUES (1,5), (2,5), (3,0), (4,NULL), (NULL,5), (NULL,0);
+
+statement ok
+CREATE TABLE nai_res_ig(id INT) AS VALUES (1), (NULL);
+
+query II
+SELECT id, g FROM nai_res_og WHERE nai_res_og.id NOT IN (SELECT i.id FROM nai_res_ig i WHERE nai_res_og.g > 0) ORDER BY id;
+----
+3 0
+4 NULL
+NULL 0
+
+# The shape must stay a single anti join that carries the correlation as a
+# filter. The alternative lowering materializes the mark of three joins, which
+# is correct but far slower.
+query TT
+EXPLAIN SELECT id, g FROM nai_res_og WHERE nai_res_og.id NOT IN (SELECT i.id FROM nai_res_ig i WHERE nai_res_og.g > 0);
+----
+logical_plan
+01)LeftAnti Join: nai_res_og.id = __correlated_sq_1.id Filter: nai_res_og.g > Int32(0) null_aware
+02)--TableScan: nai_res_og projection=[id, g]
+03)--SubqueryAlias: __correlated_sq_1
+04)----SubqueryAlias: i
+05)------TableScan: nai_res_ig projection=[id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)], filter=g@0 > 0, null_aware
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE nai_res_og;
+
+statement ok
+DROP TABLE nai_res_ig;
+
+statement ok
+DROP TABLE nai_res_t1;
+
+statement ok
+DROP TABLE nai_res_t2;
+
+statement ok
+DROP TABLE nai_res_outer;
+
+statement ok
+DROP TABLE nai_res_inner;

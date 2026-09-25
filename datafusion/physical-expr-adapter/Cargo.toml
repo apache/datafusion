@@ -28,3 +28,8 @@ itertools = { workspace = true }
 workspace = true
 
 [dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "schema_rewrite"
+harness = false

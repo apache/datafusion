@@ -19,12 +19,15 @@
 
 pub(crate) mod aggregate;
 pub mod expr;
+pub mod hex;
 pub mod memory;
 pub mod proxy;
 pub mod string_utils;
 
 use crate::assert_or_internal_err;
-use crate::error::{_exec_datafusion_err, _exec_err, _internal_datafusion_err};
+use crate::error::{
+    _exec_datafusion_err, _exec_err, _internal_datafusion_err, _plan_datafusion_err,
+};
 use crate::{Result, ScalarValue};
 use arrow::array::{
     Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
@@ -32,13 +35,13 @@ use arrow::array::{
 };
 use arrow::array::{
     ArrowPrimitiveType, BooleanArray, Datum, GenericListArray, Int32Array, Int64Array,
-    MutableArrayData, PrimitiveArray, make_array,
+    MutableArrayData, PrimitiveArray, layout, make_array,
 };
 use arrow::array::{LargeListViewArray, ListViewArray};
-use arrow::buffer::{OffsetBuffer, ScalarBuffer};
+use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::length::length;
-use arrow::compute::{SortColumn, SortOptions, partition};
+use arrow::compute::{SortColumn, SortOptions, nullif, partition};
 use arrow::datatypes::{
     ArrowNativeType, DataType, Field, Int32Type, Int64Type, SchemaRef,
 };
@@ -79,9 +82,9 @@ use std::thread::available_parallelism;
 ///
 /// assert_eq!(projected_schema, expected_schema);
 /// ```
-pub fn project_schema(
+pub fn project_schema<T: AsRef<[usize]> + ?Sized>(
     schema: &SchemaRef,
-    projection: Option<&impl AsRef<[usize]>>,
+    projection: Option<&T>,
 ) -> Result<SchemaRef> {
     let schema = match projection {
         Some(columns) => Arc::new(schema.project(columns.as_ref())?),
@@ -949,7 +952,7 @@ pub mod datafusion_strsim {
             let mut distance_b = i;
 
             for (j, b_elem) in b.into_iter().enumerate() {
-                let cost = if a_elem == b_elem { 0usize } else { 1usize };
+                let cost = usize::from(a_elem != b_elem);
                 let distance_a = distance_b + cost;
                 distance_b = cache[j];
                 result = min(result + 1, min(distance_a, distance_b + 1));
@@ -1031,7 +1034,7 @@ pub fn merge_and_order_indices<T: Borrow<usize>, S: Borrow<usize>>(
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-    result.sort();
+    result.sort_unstable();
     result
 }
 
@@ -1141,6 +1144,32 @@ pub fn combine_limit(
     (combined_skip, combined_fetch)
 }
 
+/// Converts a wire integer to `usize`, rejecting out-of-range values.
+/// `context` and `field` identify the value in the error message.
+pub fn usize_from_wire<T>(value: T, context: &str, field: &str) -> Result<usize>
+where
+    T: TryInto<usize> + std::fmt::Display + Copy,
+{
+    value.try_into().map_err(|_| {
+        _plan_datafusion_err!(
+            "{context}: {field} wire value {value} is out of range for usize"
+        )
+    })
+}
+
+/// Converts a `usize` to a wire integer, rejecting out-of-range values.
+pub fn usize_to_wire<T: TryFrom<usize>>(
+    value: usize,
+    context: &str,
+    field: &str,
+) -> Result<T> {
+    T::try_from(value).map_err(|_| {
+        _plan_datafusion_err!(
+            "{context}: {field} value {value} is out of range for the plan wire format"
+        )
+    })
+}
+
 /// Returns the estimated number of threads available for parallel execution.
 ///
 /// This is a wrapper around `std::thread::available_parallelism`, providing a default value
@@ -1198,6 +1227,36 @@ pub fn take_function_args<const N: usize, T>(
     })
 }
 
+/// Returns the number of values covered by an offset buffer.
+///
+/// Slicing a variable-length array narrows its offsets but retains its entire
+/// values buffer. Use this span to size output buffers: it counts child elements
+/// for lists and bytes for strings/binary arrays, including values in null rows.
+/// An empty array still has one offset and therefore a span of zero.
+#[inline]
+pub fn offset_span_len<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> usize {
+    offset_span(offsets).1
+}
+
+/// Returns the start and length of the values covered by an offset buffer.
+///
+/// The returned pair can be passed to [`Array::slice`] to select the visible
+/// child values of a sliced list or map. For strings/binary arrays, the start
+/// and length are measured in bytes. Values in null rows are included.
+/// An empty array has a length of zero but may have a nonzero start.
+///
+/// ```
+/// # use arrow::buffer::OffsetBuffer;
+/// # use datafusion_common::utils::offset_span;
+/// let offsets = OffsetBuffer::new(vec![100_i32, 103, 108].into());
+/// assert_eq!(offset_span(&offsets), (100, 8));
+/// ```
+#[inline]
+pub fn offset_span<O: ArrowNativeType>(offsets: &OffsetBuffer<O>) -> (usize, usize) {
+    let start = offsets.first().as_usize();
+    (start, offsets.last().as_usize() - start)
+}
+
 /// Returns the inner values of a list, or an error otherwise
 /// For [`ListArray`] and [`LargeListArray`], if it's sliced, it returns a
 /// sliced array too. Therefore, too reconstruct a list using it,
@@ -1215,15 +1274,10 @@ pub fn list_values(array: &dyn Array) -> Result<ArrayRef> {
 
 fn sliced_list_values<O: OffsetSizeTrait>(list: &GenericListArray<O>) -> ArrayRef {
     let values = list.values();
-    let offsets = list.offsets();
+    let (start, len) = offset_span(list.offsets());
 
-    if let (Some(first), Some(last)) = (offsets.first(), offsets.last()) {
-        let first = first.as_usize();
-        let last = last.as_usize();
-
-        if first != 0 || last != values.len() {
-            return values.slice(first, last - first);
-        }
+    if start != 0 || len != values.len() {
+        return values.slice(start, len);
     }
 
     Arc::clone(values)
@@ -1273,9 +1327,9 @@ fn truncate_list_nulls<O: OffsetSizeTrait>(
         if valid_or_empty.has_false() {
             let array_data = list.values().to_data();
             let offsets = list.offsets();
-            let capacity = offsets[offsets.len() - 1] - offsets[0];
+            let capacity = offset_span_len(offsets);
             let mut mutable_array_data =
-                MutableArrayData::new(vec![&array_data], false, capacity.as_usize());
+                MutableArrayData::new(vec![&array_data], false, capacity);
 
             let (valid_or_empty, _nulls) = valid_or_empty.into_parts();
 
@@ -1393,7 +1447,7 @@ fn fsl_values_row_number(list_size: i32, array_len: usize) -> Result<Int32Array>
 /// OR-reduction) decides whether to fall through to the rewriting path.
 /// Only arrays that actually contain `-0.0` pay for a new buffer.
 pub fn normalize_float_zero(array: &ArrayRef) -> ArrayRef {
-    use arrow::array::{Float16Array, Float32Array, Float64Array};
+    use arrow::array::{Float16Array, Float32Array, Float64Array, make_array};
     use arrow::datatypes::{Float16Type, Float32Type, Float64Type};
     // -0.0 has only the sign bit set; no other finite or NaN value shares
     // this bit pattern, so a strict-equality scan reliably gates the rewrite.
@@ -1445,7 +1499,47 @@ pub fn normalize_float_zero(array: &ArrayRef) -> ArrayRef {
             });
             Arc::new(normalized)
         }
+        dt if has_float_leaf(dt) => {
+            let data = array.to_data();
+            let children = data
+                .child_data()
+                .iter()
+                .map(|child| normalize_float_zero(&make_array(child.clone())).to_data())
+                .collect::<Vec<_>>();
+            if children
+                .iter()
+                .zip(data.child_data())
+                .all(|(new, old)| new.ptr_eq(old))
+            {
+                return Arc::clone(array);
+            }
+            make_array(
+                data.into_builder()
+                    .child_data(children)
+                    .build()
+                    .expect("rewriting float leaves preserves the array layout"),
+            )
+        }
         _ => Arc::clone(array),
+    }
+}
+
+pub fn has_float_leaf(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Float16 | DataType::Float32 | DataType::Float64 => true,
+        DataType::List(f)
+        | DataType::LargeList(f)
+        | DataType::ListView(f)
+        | DataType::LargeListView(f)
+        | DataType::FixedSizeList(f, _)
+        | DataType::Map(f, _)
+        | DataType::RunEndEncoded(_, f) => has_float_leaf(f.data_type()),
+        DataType::Struct(fields) => fields.iter().any(|f| has_float_leaf(f.data_type())),
+        DataType::Union(fields, _) => {
+            fields.iter().any(|(_, f)| has_float_leaf(f.data_type()))
+        }
+        DataType::Dictionary(_, values) => has_float_leaf(values),
+        _ => false,
     }
 }
 
@@ -1467,6 +1561,49 @@ pub fn normalize_float_zero_scalar(scalar: ScalarValue) -> ScalarValue {
     }
 }
 
+/// Apply a struct's nulls to one of its fields.
+///
+/// Arrays with validity bitmaps share their value buffers; unions and
+/// run-end encoded arrays are rebuilt.
+pub fn apply_parent_nulls(
+    col: &ArrayRef,
+    parent_nulls: Option<&NullBuffer>,
+) -> Result<ArrayRef> {
+    let Some(parent_nulls) = parent_nulls else {
+        // If there are no parent nulls to apply, we can just return
+        return Ok(Arc::clone(col));
+    };
+
+    // NullArray is already entirely null and cannot have a validity bitmap.
+    // If we have 0 parent nulls, we can also avoid extra work.
+    if col.data_type().is_null() || parent_nulls.null_count() == 0 {
+        return Ok(Arc::clone(col));
+    }
+
+    if layout(col.data_type()).can_contain_null_mask {
+        // `nullif` marks a row null where the mask is true and keeps the
+        // field's own nulls. Only the validity bitmap is rebuilt; the value
+        // buffers and child arrays are shared with `col`.
+        let null_parents = BooleanArray::new(!parent_nulls.inner(), None);
+        return Ok(nullif(col.as_ref(), &null_parents)?);
+    }
+
+    // Unions and run-end encoded arrays have no validity bitmap of their own
+    // and represent nulls in their children. Rebuild the array so null parents
+    // become null values in those children.
+    let data = col.to_data();
+    let mut mutable = MutableArrayData::new(vec![&data], true, data.len());
+    let mut end = 0;
+    for (start, valid_end) in parent_nulls.valid_slices() {
+        mutable.try_extend_nulls(start - end)?;
+        mutable.try_extend(0, start, valid_end)?;
+        end = valid_end;
+    }
+    mutable.try_extend_nulls(data.len() - end)?;
+
+    Ok(make_array(mutable.freeze()))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1474,12 +1611,86 @@ mod tests {
     use super::*;
     use crate::ScalarValue::Null;
     use arrow::{
-        array::{Float64Array, Int32Array},
-        buffer::NullBuffer,
+        array::{Float64Array, Int32Array, NullArray},
         datatypes::Int32Type,
     };
     #[cfg(feature = "sql")]
     use sqlparser::ast::Ident;
+
+    #[test]
+    fn test_apply_parent_nulls_sliced() -> Result<()> {
+        let child = Arc::new(
+            Int32Array::from(vec![Some(1), None, Some(3), Some(4), Some(5)]).slice(1, 3),
+        ) as ArrayRef;
+        let parent_nulls =
+            NullBuffer::from(vec![true, true, true, false, true]).slice(1, 3);
+        let result = apply_parent_nulls(&child, Some(&parent_nulls))?;
+        assert_eq!(
+            result.as_ref(),
+            &Int32Array::from(vec![None, Some(3), None])
+        );
+        assert!(result.to_data().buffers()[0].ptr_eq(&child.to_data().buffers()[0]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_apply_parent_nulls_noop() -> Result<()> {
+        let child = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])) as ArrayRef;
+        for parent_nulls in [None, Some(NullBuffer::new_valid(3))] {
+            assert!(Arc::ptr_eq(
+                &apply_parent_nulls(&child, parent_nulls.as_ref())?,
+                &child,
+            ));
+        }
+        let child = Arc::new(NullArray::new(3)) as ArrayRef;
+        assert!(Arc::ptr_eq(
+            &apply_parent_nulls(&child, Some(&NullBuffer::new_null(3)))?,
+            &child,
+        ));
+        let empty = child.slice(0, 0);
+        assert!(Arc::ptr_eq(
+            &apply_parent_nulls(&empty, Some(&NullBuffer::new_valid(0)))?,
+            &empty,
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_offset_span() {
+        let offsets = OffsetBuffer::new(vec![0_i32, 5, 8, 8, 12].into());
+        assert_eq!(offset_span(&offsets), (0, 12));
+        assert_eq!(offset_span(&offsets.slice(1, 2)), (5, 3));
+        assert_eq!(offset_span_len(&offsets.slice(1, 2)), 3);
+        assert_eq!(offset_span(&offsets.slice(2, 1)), (8, 0));
+        assert_eq!(offset_span(&offsets.slice(4, 0)), (12, 0));
+        assert_eq!(offset_span(&OffsetBuffer::<i64>::new_empty()), (0, 0));
+        let large = OffsetBuffer::new(vec![i64::MAX - 10, i64::MAX].into());
+        assert_eq!(offset_span(&large), ((i64::MAX - 10) as usize, 10));
+    }
+
+    #[test]
+    fn test_usize_wire_conversions() {
+        assert_eq!(usize_from_wire(42_u64, "SomeExec", "fetch").unwrap(), 42);
+        let err = usize_from_wire(-1_i64, "SomeExec", "skip").unwrap_err();
+        assert_eq!(
+            err.strip_backtrace(),
+            "Error during planning: SomeExec: skip wire value -1 is out of range for usize"
+        );
+
+        assert_eq!(usize_to_wire::<u32>(42, "SomeExec", "fetch").unwrap(), 42);
+        let err = usize_to_wire::<u8>(256, "SomeExec", "fetch").unwrap_err();
+        assert_eq!(
+            err.strip_backtrace(),
+            "Error during planning: SomeExec: fetch value 256 is out of range for the plan wire format"
+        );
+
+        let max = usize_from_wire(u64::MAX, "SomeExec", "fetch");
+        if usize::BITS >= u64::BITS {
+            assert_eq!(max.unwrap(), usize::MAX);
+        } else {
+            assert!(max.is_err());
+        }
+    }
 
     #[test]
     fn test_bisect_linear_left_and_right() -> Result<()> {

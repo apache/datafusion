@@ -189,7 +189,7 @@ mod tests {
             let ctx = &test_df.session_state;
             ctx.runtime_env().register_object_store(&local_url, local);
             let mut options = TableParquetOptions::default();
-            options.global.compression = Some(compression.to_string());
+            options.global.compression = Some(compression.parse()?);
             df.write_parquet(
                 output_path,
                 DataFrameWriteOptions::new().with_single_file_output(true),
@@ -221,8 +221,7 @@ mod tests {
         // relative to datafusion.execution.batch_size does not panic
         let ctx = SessionContext::new_with_config(SessionConfig::from_string_hash_map(
             &HashMap::from_iter(
-                [("datafusion.execution.batch_size", "10")]
-                    .iter()
+                std::iter::once(&("datafusion.execution.batch_size", "10"))
                     .map(|(s1, s2)| ((*s1).to_string(), (*s2).to_string())),
             ),
         )?);

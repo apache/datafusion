@@ -21,6 +21,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::buffer::BufferExec;
+use datafusion_physical_plan::execution_plan::replace_children_if_necessary;
 use datafusion_physical_plan::joins::HashJoinExec;
 use std::sync::Arc;
 
@@ -74,19 +75,25 @@ impl PhysicalOptimizerRule for HashJoinBuffering {
                     if node.left.is::<BufferExec>() {
                         return Ok(Transformed::no(plan));
                     }
-                    plan.with_new_children(vec![
-                        Arc::new(BufferExec::new(Arc::clone(&node.left), capacity)),
-                        Arc::clone(&node.right),
-                    ])?
+                    replace_children_if_necessary(
+                        plan,
+                        vec![
+                            Arc::new(BufferExec::new(Arc::clone(&node.left), capacity)),
+                            Arc::clone(&node.right),
+                        ],
+                    )?
                 } else {
                     // Do not stack BufferExec nodes together.
                     if node.right.is::<BufferExec>() {
                         return Ok(Transformed::no(plan));
                     }
-                    plan.with_new_children(vec![
-                        Arc::clone(&node.left),
-                        Arc::new(BufferExec::new(Arc::clone(&node.right), capacity)),
-                    ])?
+                    replace_children_if_necessary(
+                        plan,
+                        vec![
+                            Arc::clone(&node.left),
+                            Arc::new(BufferExec::new(Arc::clone(&node.right), capacity)),
+                        ],
+                    )?
                 },
             ))
         })

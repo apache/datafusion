@@ -21,6 +21,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+#[cfg(feature = "proto")]
+use super::proto::{decode_physical_window_expr, encode_physical_window_expr};
 use super::utils::create_schema;
 use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
@@ -31,10 +33,10 @@ use crate::windows::{
     window_equivalence_properties,
 };
 use crate::{
-    ColumnStatistics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    ExecutionPlanProperties, InputDistributionRequirements, PhysicalExpr, PlanProperties,
-    RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
-    check_if_same_properties,
+    ChildrenPropertiesMode, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
+    ExecutionPlan, ExecutionPlanProperties, InputDistributionRequirements, PhysicalExpr,
+    PlanProperties, RecordBatchStream, ReplaceChildrenOptions, SendableRecordBatchStream,
+    Statistics, WindowExpr, validate_child_count,
 };
 
 use arrow::array::ArrayRef;
@@ -43,6 +45,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::utils::{evaluate_partition_ranges, transpose};
 use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
@@ -212,6 +215,21 @@ impl ExecutionPlan for WindowAggExec {
         vec![&self.input]
     }
 
+    fn apply_expressions(
+        &self,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        let expressions = self.window_expr.iter().flat_map(|window_expr| {
+            let expressions = window_expr.all_expressions();
+            expressions
+                .args
+                .into_iter()
+                .chain(expressions.partition_by_exprs)
+                .chain(expressions.order_by_exprs)
+        });
+        crate::apply_expression_roots(expressions, f)
+    }
+
     fn maintains_input_order(&self) -> Vec<bool> {
         vec![true]
     }
@@ -244,27 +262,44 @@ impl ExecutionPlan for WindowAggExec {
         }
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        check_if_same_properties!(self, children);
-        Ok(Arc::new(WindowAggExec::try_new(
-            self.window_expr.clone(),
-            children.swap_remove(0),
-            true,
-        )?))
+        validate_child_count!(self, children);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => Ok(Arc::new(Self {
+                input: children.swap_remove(0),
+                metrics: ExecutionPlanMetricsSet::new(),
+                ..Self::clone(&*self)
+            })),
+            ChildrenPropertiesMode::Recompute => Ok(Arc::new(WindowAggExec::try_new(
+                self.window_expr.clone(),
+                children.swap_remove(0),
+                true,
+            )?)),
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn with_new_children_and_same_properties(
         self: Arc<Self>,
-        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self {
-            input: children.swap_remove(0),
-            metrics: ExecutionPlanMetricsSet::new(),
-            ..Self::clone(&*self)
-        }))
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )
     }
 
     fn execute(
@@ -316,6 +351,139 @@ impl ExecutionPlan for WindowAggExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+
+        // Exhaustive destructure: adding a field to `WindowAggExec` without
+        // deciding how it is serialized is a compile error, not a silent
+        // round-trip gap.
+        let Self {
+            input,
+            window_expr,
+            // Derived at construction by `create_schema` from the input schema
+            // and the window expressions.
+            schema: _,
+            // Runtime execution state, rebuilt empty on decode.
+            metrics: _,
+            // Derived at construction by `get_ordered_partition_by_indices`.
+            ordered_partition_by_indices: _,
+            // Derived at construction by `Self::compute_properties`.
+            cache: _,
+            // No wire field of its own; it is folded into `partition_keys`
+            // below, since `partition_keys()` returns an empty vec when this is
+            // false and the decoder recovers it as `!partition_keys.is_empty()`.
+            can_repartition: _,
+        } = self;
+
+        let input = ctx.encode_child(input)?;
+        let window_expr = window_expr
+            .iter()
+            .map(|expr| encode_physical_window_expr(expr, ctx))
+            .collect::<Result<Vec<_>>>()?;
+        let partition_keys = self
+            .partition_keys()
+            .iter()
+            .map(|expr| ctx.encode_expr(expr))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::Window(Box::new(
+                    protobuf::WindowAggExecNode {
+                        input: Some(Box::new(input)),
+                        window_expr,
+                        partition_keys,
+                        // `None` distinguishes a `WindowAggExec` from a
+                        // `BoundedWindowAggExec` on the shared `Window` variant.
+                        input_order_mode: None,
+                    },
+                )),
+            ),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl WindowAggExec {
+    /// Reconstruct a window plan from its protobuf representation.
+    ///
+    /// This returns a [`WindowAggExec`] when `input_order_mode` is absent and a
+    /// [`BoundedWindowAggExec`] when it is present.
+    ///
+    /// [`BoundedWindowAggExec`]: crate::windows::BoundedWindowAggExec
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use super::BoundedWindowAggExec;
+        use crate::InputOrderMode;
+        use datafusion_common::utils::usize_from_wire;
+        use datafusion_proto_models::protobuf;
+        use protobuf::window_agg_exec_node::InputOrderMode as ProtoInputOrderMode;
+
+        let window_agg = crate::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::Window,
+            "WindowAggExec",
+        );
+        // Exhaustive destructure: a new field on `WindowAggExecNode` is a
+        // compile error here rather than a silently ignored wire field.
+        let protobuf::WindowAggExecNode {
+            input,
+            window_expr,
+            partition_keys,
+            input_order_mode,
+        } = window_agg.as_ref();
+
+        let input =
+            ctx.decode_required_child(input.as_deref(), "WindowAggExec", "input")?;
+        let input_schema = input.schema();
+        let window_expr = window_expr
+            .iter()
+            .map(|expr| decode_physical_window_expr(expr, ctx, input_schema.as_ref()))
+            .collect::<Result<Vec<_>>>()?;
+        let partition_keys = partition_keys
+            .iter()
+            .map(|expr| ctx.decode_expr(expr, input_schema.as_ref()))
+            .collect::<Result<Vec<_>>>()?;
+
+        if let Some(input_order_mode) = input_order_mode.as_ref() {
+            let input_order_mode = match input_order_mode {
+                ProtoInputOrderMode::Linear(_) => InputOrderMode::Linear,
+                ProtoInputOrderMode::PartiallySorted(
+                    protobuf::PartiallySortedInputOrderMode { columns },
+                ) => InputOrderMode::PartiallySorted(
+                    columns
+                        .iter()
+                        .map(|column| {
+                            usize_from_wire(*column, "WindowAggExec", "columns")
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                ),
+                ProtoInputOrderMode::Sorted(_) => InputOrderMode::Sorted,
+            };
+            Ok(Arc::new(BoundedWindowAggExec::try_new(
+                window_expr,
+                input,
+                input_order_mode,
+                // `can_repartition` has no wire field: the encoder writes an
+                // empty `partition_keys` when it is false.
+                !partition_keys.is_empty(),
+            )?))
+        } else {
+            Ok(Arc::new(WindowAggExec::try_new(
+                window_expr,
+                input,
+                // See above: `can_repartition` is recovered from `partition_keys`.
+                !partition_keys.is_empty(),
+            )?))
+        }
     }
 }
 

@@ -17,7 +17,6 @@
 
 //! [`SessionContext`] API for registering data sources and executing queries
 
-use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, Weak};
@@ -29,7 +28,8 @@ use crate::execution::session_state::SessionStateBuilder;
 use crate::{
     catalog::listing_schema::ListingSchemaProvider,
     catalog::{
-        CatalogProvider, CatalogProviderList, TableProvider, TableProviderFactory,
+        CatalogProvider, CatalogProviderFactory, CatalogProviderList, TableProvider,
+        TableProviderFactory,
     },
     dataframe::DataFrame,
     datasource::listing::{
@@ -45,10 +45,10 @@ use crate::{
     logical_expr::AggregateUDF,
     logical_expr::ScalarUDF,
     logical_expr::{
-        CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
-        CreateMemoryTable, CreateView, DropCatalogSchema, DropFunction, DropTable,
-        DropView, Execute, LogicalPlan, LogicalPlanBuilder, Prepare, ResetVariable,
-        SetVariable, TableType, UNNAMED_TABLE,
+        CreateCatalog, CreateCatalogSchema, CreateExternalCatalog, CreateExternalTable,
+        CreateFunction, CreateMemoryTable, CreateView, DropCatalog, DropCatalogSchema,
+        DropFunction, DropTable, DropView, Execute, LogicalPlan, LogicalPlanBuilder,
+        Prepare, ResetVariable, SetVariable, TableType, UNNAMED_TABLE,
     },
     physical_expr::PhysicalExpr,
     physical_plan::ExecutionPlan,
@@ -562,6 +562,19 @@ impl SessionContext {
         self.state.read().table_factories().get(file_type).cloned()
     }
 
+    /// Return the [`CatalogProviderFactory`] that is registered for the
+    /// specified catalog type, if any.
+    pub fn catalog_factory(
+        &self,
+        catalog_type: &str,
+    ) -> Option<Arc<dyn CatalogProviderFactory>> {
+        self.state
+            .read()
+            .catalog_factories()
+            .get(catalog_type)
+            .cloned()
+    }
+
     /// Return the `enable_ident_normalization` of this Session
     pub fn enable_ident_normalization(&self) -> bool {
         self.state
@@ -687,8 +700,8 @@ impl SessionContext {
     pub async fn execute_logical_plan(&self, plan: LogicalPlan) -> Result<DataFrame> {
         match plan {
             LogicalPlan::Ddl(ddl) => {
-                // Box::pin avoids allocating the stack space within this function's frame
-                // for every one of these individual async functions, decreasing the risk of
+                // Box async DDL handlers to avoid reserving space for all of their
+                // futures in this function's state machine, decreasing the risk of
                 // stack overflows.
                 match ddl {
                     DdlStatement::CreateExternalTable(cmd) => {
@@ -703,32 +716,32 @@ impl SessionContext {
                         Box::pin(self.create_view(cmd)).await
                     }
                     DdlStatement::CreateCatalogSchema(cmd) => {
-                        Box::pin(self.create_catalog_schema(cmd)).await
+                        self.create_catalog_schema(cmd)
                     }
-                    DdlStatement::CreateCatalog(cmd) => {
-                        Box::pin(self.create_catalog(cmd)).await
+                    DdlStatement::CreateCatalog(cmd) => self.create_catalog(cmd),
+                    DdlStatement::CreateExternalCatalog(cmd) => {
+                        (Box::pin(async move { self.create_external_catalog(&cmd).await })
+                            as std::pin::Pin<Box<dyn Future<Output = _> + Send>>)
+                            .await
                     }
                     DdlStatement::DropTable(cmd) => Box::pin(self.drop_table(cmd)).await,
                     DdlStatement::DropView(cmd) => Box::pin(self.drop_view(cmd)).await,
-                    DdlStatement::DropCatalogSchema(cmd) => {
-                        Box::pin(self.drop_schema(cmd)).await
-                    }
+                    DdlStatement::DropCatalogSchema(cmd) => self.drop_schema(cmd),
+                    DdlStatement::DropCatalog(cmd) => self.drop_catalog(cmd),
                     DdlStatement::CreateFunction(cmd) => {
                         Box::pin(self.create_function(*cmd)).await
                     }
-                    DdlStatement::DropFunction(cmd) => {
-                        Box::pin(self.drop_function(cmd)).await
-                    }
+                    DdlStatement::DropFunction(cmd) => self.drop_function(&cmd),
                     ddl => Ok(DataFrame::new(self.state(), LogicalPlan::Ddl(ddl))),
                 }
             }
             // TODO what about the other statements (like TransactionStart and TransactionEnd)
             LogicalPlan::Statement(Statement::SetVariable(stmt)) => {
-                self.set_variable(stmt).await?;
+                self.set_variable(stmt)?;
                 self.return_empty_dataframe()
             }
             LogicalPlan::Statement(Statement::ResetVariable(stmt)) => {
-                self.reset_variable(stmt).await?;
+                self.reset_variable(stmt)?;
                 self.return_empty_dataframe()
             }
             LogicalPlan::Statement(Statement::Prepare(Prepare {
@@ -987,7 +1000,7 @@ impl SessionContext {
         Ok(())
     }
 
-    async fn create_catalog_schema(&self, cmd: CreateCatalogSchema) -> Result<DataFrame> {
+    fn create_catalog_schema(&self, cmd: CreateCatalogSchema) -> Result<DataFrame> {
         let CreateCatalogSchema {
             schema_name,
             if_not_exists,
@@ -1028,7 +1041,7 @@ impl SessionContext {
         }
     }
 
-    async fn create_catalog(&self, cmd: CreateCatalog) -> Result<DataFrame> {
+    fn create_catalog(&self, cmd: CreateCatalog) -> Result<DataFrame> {
         let CreateCatalog {
             catalog_name,
             if_not_exists,
@@ -1048,6 +1061,49 @@ impl SessionContext {
             }
             (false, Some(_)) => exec_err!("Catalog '{catalog_name}' already exists"),
         }
+    }
+
+    async fn create_external_catalog(
+        &self,
+        cmd: &CreateExternalCatalog,
+    ) -> Result<DataFrame> {
+        let exists = self.catalog(cmd.catalog_name.as_str()).is_some();
+
+        match (cmd.if_not_exists, cmd.or_replace, exists) {
+            (true, false, true) => self.return_empty_dataframe(),
+            (true, true, true) => {
+                exec_err!("'IF NOT EXISTS' cannot coexist with 'REPLACE'")
+            }
+            (false, false, true) => {
+                exec_err!("External catalog '{}' already exists", cmd.catalog_name)
+            }
+            (_, _, _) => {
+                let new_catalog = self.create_custom_catalog(cmd).await?;
+                self.state
+                    .write()
+                    .catalog_list()
+                    .register_catalog(cmd.catalog_name.clone(), new_catalog);
+                self.return_empty_dataframe()
+            }
+        }
+    }
+
+    async fn create_custom_catalog(
+        &self,
+        cmd: &CreateExternalCatalog,
+    ) -> Result<Arc<dyn CatalogProvider>> {
+        let state = self.state.read().clone();
+        let catalog_type = cmd.catalog_type.to_uppercase();
+        let factory = state
+            .catalog_factories()
+            .get(catalog_type.as_str())
+            .ok_or_else(|| {
+                exec_datafusion_err!(
+                    "Unable to find catalog factory for {}",
+                    cmd.catalog_type
+                )
+            })?;
+        factory.create(&state, cmd).await
     }
 
     async fn drop_table(&self, cmd: DropTable) -> Result<DataFrame> {
@@ -1078,7 +1134,7 @@ impl SessionContext {
         }
     }
 
-    async fn drop_schema(&self, cmd: DropCatalogSchema) -> Result<DataFrame> {
+    fn drop_schema(&self, cmd: DropCatalogSchema) -> Result<DataFrame> {
         let DropCatalogSchema {
             name,
             if_exists: allow_missing,
@@ -1113,10 +1169,27 @@ impl SessionContext {
         exec_err!("Schema '{schema_ref}' doesn't exist.")
     }
 
-    async fn set_variable(&self, stmt: SetVariable) -> Result<()> {
-        let SetVariable {
-            variable, value, ..
-        } = stmt;
+    fn drop_catalog(&self, cmd: DropCatalog) -> Result<DataFrame> {
+        let DropCatalog {
+            name,
+            if_exists,
+            cascade,
+            ..
+        } = cmd;
+        let dereg = self
+            .state
+            .write()
+            .catalog_list()
+            .deregister_catalog(&name, cascade)?;
+        match (dereg, if_exists) {
+            (Some(_), _) => self.return_empty_dataframe(),
+            (None, true) => self.return_empty_dataframe(),
+            (None, false) => exec_err!("Catalog '{name}' doesn't exist."),
+        }
+    }
+
+    fn set_variable(&self, stmt: SetVariable) -> Result<()> {
+        let SetVariable { variable, value } = stmt;
 
         // Check if this is a runtime configuration
         if variable.starts_with("datafusion.runtime.") {
@@ -1148,7 +1221,7 @@ impl SessionContext {
         Ok(())
     }
 
-    async fn reset_variable(&self, stmt: ResetVariable) -> Result<()> {
+    fn reset_variable(&self, stmt: ResetVariable) -> Result<()> {
         let variable = stmt.variable;
         if variable.starts_with("datafusion.runtime.") {
             return self.reset_runtime_variable(&variable);
@@ -1265,7 +1338,7 @@ impl SessionContext {
                     builder.with_max_spill_merge_fan_in(DEFAULT_MAX_SPILL_MERGE_FAN_IN);
             }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
-        };
+        }
         *state = SessionStateBuilder::from(state.clone())
             .with_runtime_env(Arc::new(builder.build()?))
             .build();
@@ -1526,12 +1599,12 @@ impl SessionContext {
                 self.state.write().register_higher_order_function(f)?;
             }
             RegisterFunction::Table(name, f) => self.register_udtf(&name, f),
-        };
+        }
 
         self.return_empty_dataframe()
     }
 
-    async fn drop_function(&self, stmt: DropFunction) -> Result<DataFrame> {
+    fn drop_function(&self, stmt: &DropFunction) -> Result<DataFrame> {
         // we don't know function type at this point
         // decision has been made to drop all functions
         let mut dropped = false;
@@ -1558,9 +1631,7 @@ impl SessionContext {
     }
 
     fn execute_prepared(&self, execute: Execute) -> Result<DataFrame> {
-        let Execute {
-            name, parameters, ..
-        } = execute;
+        let Execute { name, parameters } = execute;
         let prepared = self.state.read().get_prepared(&name).ok_or_else(|| {
             exec_datafusion_err!("Prepared statement '{}' does not exist", name)
         })?;
@@ -2187,16 +2258,9 @@ impl From<SessionContext> for SessionStateBuilder {
     }
 }
 
+// Re-export from this module for backwards compatibility.
 /// A planner used to add extensions to DataFusion logical and physical plans.
-#[async_trait]
-pub trait QueryPlanner: Any + Debug {
-    /// Given a [`LogicalPlan`], create an [`ExecutionPlan`] suitable for execution
-    async fn create_physical_plan(
-        &self,
-        logical_plan: &LogicalPlan,
-        session_state: &SessionState,
-    ) -> Result<Arc<dyn ExecutionPlan>>;
-}
+pub use datafusion_session::{QueryPlanner, UnsupportedQueryPlanner};
 
 /// Interface for handling `CREATE FUNCTION` statements and interacting with
 /// [SessionState] to create and register functions ([`ScalarUDF`],
@@ -2396,6 +2460,7 @@ mod tests {
     use crate::physical_planner::PhysicalPlanner;
     use async_trait::async_trait;
     use datafusion_expr::planner::TypePlanner;
+    use datafusion_session::Session;
     use sqlparser::ast;
     use tempfile::TempDir;
 
@@ -2785,7 +2850,7 @@ mod tests {
         );
 
         // Create catalog
-        ctx.sql("CREATE DATABASE test").await?.collect().await?;
+        ctx.sql("CREATE CATALOG test").await?.collect().await?;
 
         // Create schema
         ctx.sql("CREATE SCHEMA test.abc").await?.collect().await?;
@@ -2842,7 +2907,7 @@ mod tests {
         async fn create_physical_plan(
             &self,
             _logical_plan: &LogicalPlan,
-            _session_state: &SessionState,
+            _session_state: &dyn Session,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             not_impl_err!("query not supported")
         }
@@ -2851,7 +2916,7 @@ mod tests {
             &self,
             _expr: &Expr,
             _input_dfschema: &DFSchema,
-            _session_state: &SessionState,
+            _session_state: &dyn Session,
             _planning_ctx: &PhysicalPlanningContext,
         ) -> Result<Arc<dyn PhysicalExpr>> {
             unimplemented!()
@@ -2866,7 +2931,7 @@ mod tests {
         async fn create_physical_plan(
             &self,
             logical_plan: &LogicalPlan,
-            session_state: &SessionState,
+            session_state: &dyn Session,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             let physical_planner = MyPhysicalPlanner {};
             physical_planner
@@ -2972,8 +3037,8 @@ mod tests {
         // Valid durations
         for (duration, want) in [
             ("1s", Duration::from_secs(1)),
-            ("1m", Duration::from_secs(60)),
-            ("1m0s", Duration::from_secs(60)),
+            ("1m", Duration::from_mins(1)),
+            ("1m0s", Duration::from_mins(1)),
             ("1m1s", Duration::from_secs(61)),
         ] {
             let have =
@@ -2998,6 +3063,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::duration_suboptimal_units,
+        reason = "Each `Duration` deliberately uses the same unit as the suffix in the string it is parsed from"
+    )]
     fn test_parse_duration_with_overflow_check() {
         const LIST_FILES_CACHE_TTL: &str = "datafusion.runtime.list_files_cache_ttl";
 
@@ -3009,7 +3078,7 @@ mod tests {
             ),
             (
                 "307445734561825860m",
-                Duration::from_secs(307445734561825860 * 60),
+                Duration::from_mins(307445734561825860),
             ),
             (
                 "307445734561825860m10s",

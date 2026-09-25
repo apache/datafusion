@@ -103,11 +103,11 @@ mod tests {
     use crate::arrow::datatypes::{DataType, Field, Schema};
     use crate::arrow::record_batch::RecordBatch;
     use crate::dataframe::DataFrameWriteOptions;
-    use crate::parquet::basic::Compression;
     use crate::test_util::parquet_test_data;
 
     use arrow::util::pretty::pretty_format_batches;
     use datafusion_common::config::TableParquetOptions;
+    use datafusion_common::parquet_config::DFParquetCompression;
     use datafusion_common::{assert_batches_sorted_eq, assert_contains};
     use datafusion_execution::config::SessionConfig;
 
@@ -271,7 +271,7 @@ mod tests {
         std::fs::create_dir(dir).expect("create dir failed");
 
         let mut options = TableParquetOptions::default();
-        options.global.compression = Some(Compression::SNAPPY.to_string());
+        options.global.compression = Some(DFParquetCompression::Snappy);
 
         // Write the dataframe to a parquet file named 'output1.parquet'
         write_df
@@ -314,12 +314,7 @@ mod tests {
 
         // Read the dataframe from 'output1.parquet' with the default file extension.
         let read_df = ctx
-            .read_parquet(
-                &path1,
-                ParquetReadOptions {
-                    ..Default::default()
-                },
-            )
+            .read_parquet(&path1, ParquetReadOptions::default())
             .await?;
 
         let results = read_df.collect().await?;
@@ -342,12 +337,7 @@ mod tests {
 
         // Read the dataframe from 'output3.parquet.snappy.parquet' with the wrong file extension.
         let read_df = ctx
-            .read_parquet(
-                &path2,
-                ParquetReadOptions {
-                    ..Default::default()
-                },
-            )
+            .read_parquet(&path2, ParquetReadOptions::default())
             .await;
         let binding = DataFilePaths::to_urls(&path2).unwrap();
         let expected_path = binding[0].as_str();
@@ -360,12 +350,7 @@ mod tests {
 
         // Read the dataframe from 'output3.parquet.snappy.parquet' with the correct file extension.
         let read_df = ctx
-            .read_parquet(
-                &path3,
-                ParquetReadOptions {
-                    ..Default::default()
-                },
-            )
+            .read_parquet(&path3, ParquetReadOptions::default())
             .await?;
 
         let results = read_df.collect().await?;
@@ -376,12 +361,7 @@ mod tests {
         // errors on an empty location instead of producing a 0-column table.
         std::fs::create_dir(&path4)?;
         let err = ctx
-            .read_parquet(
-                &path4,
-                ParquetReadOptions {
-                    ..Default::default()
-                },
-            )
+            .read_parquet(&path4, ParquetReadOptions::default())
             .await
             .expect_err("read_parquet on an empty folder should error");
         assert!(
@@ -391,12 +371,7 @@ mod tests {
 
         // Read the dataframe from double dot folder;
         let read_df = ctx
-            .read_parquet(
-                &path5,
-                ParquetReadOptions {
-                    ..Default::default()
-                },
-            )
+            .read_parquet(&path5, ParquetReadOptions::default())
             .await?;
 
         let results = read_df.collect().await?;

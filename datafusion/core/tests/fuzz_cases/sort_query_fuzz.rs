@@ -18,6 +18,7 @@
 //! Fuzz Test for various corner cases sorting RecordBatches exceeds available memory and should spill
 
 use std::cmp::min;
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
@@ -430,7 +431,7 @@ impl SortFuzzerTestGenerator {
             let mut clause = col.name.clone();
             if rng.random_bool(0.5) {
                 let order = if rng.random_bool(0.5) { "ASC" } else { "DESC" };
-                clause.push_str(&format!(" {order}"));
+                write!(clause, " {order}").ok();
             }
             if rng.random_bool(0.5) {
                 let nulls = if rng.random_bool(0.5) {
@@ -438,7 +439,7 @@ impl SortFuzzerTestGenerator {
                 } else {
                     "NULLS LAST"
                 };
-                clause.push_str(&format!(" {nulls}"));
+                write!(clause, " {nulls}").ok();
             }
             order_by_clauses.push(clause);
         }

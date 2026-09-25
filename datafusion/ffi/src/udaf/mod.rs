@@ -145,6 +145,10 @@ pub struct FFI_AggregateUDF {
     /// the foreign interface. See [`crate::get_library_marker_id`] and
     /// the crate's `README.md` for more information.
     pub library_marker_id: extern "C" fn() -> usize,
+
+    /// FFI equivalent to [`AggregateUDF::supports_null_handling_clause`]
+    pub supports_null_handling_clause:
+        unsafe extern "C" fn(udaf: &FFI_AggregateUDF) -> bool,
 }
 
 unsafe impl Send for FFI_AggregateUDF {}
@@ -327,6 +331,12 @@ unsafe extern "C" fn order_sensitivity_fn_wrapper(
     unsafe { udaf.inner().order_sensitivity().into() }
 }
 
+unsafe extern "C" fn supports_null_handling_clause_fn_wrapper(
+    udaf: &FFI_AggregateUDF,
+) -> bool {
+    unsafe { udaf.inner().supports_null_handling_clause() }
+}
+
 unsafe extern "C" fn coerce_types_fn_wrapper(
     udaf: &FFI_AggregateUDF,
     arg_types: SVec<WrappedSchema>,
@@ -354,7 +364,7 @@ unsafe extern "C" fn release_fn_wrapper(udaf: &mut FFI_AggregateUDF) {
     unsafe {
         debug_assert!(!udaf.private_data.is_null());
         let private_data =
-            Box::from_raw(udaf.private_data as *mut AggregateUDFPrivateData);
+            Box::from_raw(udaf.private_data.cast::<AggregateUDFPrivateData>());
         drop(private_data);
         udaf.private_data = std::ptr::null_mut();
     }
@@ -399,8 +409,9 @@ impl From<Arc<AggregateUDF>> for FFI_AggregateUDF {
             coerce_types: coerce_types_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
+            supports_null_handling_clause: supports_null_handling_clause_fn_wrapper,
         }
     }
 }
@@ -595,6 +606,10 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
         unsafe { (self.udaf.order_sensitivity)(&self.udaf).into() }
     }
 
+    fn supports_null_handling_clause(&self) -> bool {
+        unsafe { (self.udaf.supports_null_handling_clause)(&self.udaf) }
+    }
+
     fn simplify(&self) -> Option<AggregateFunctionSimplification> {
         None
     }
@@ -642,9 +657,8 @@ impl From<AggregateOrderSensitivity> for FFI_AggregateOrderSensitivity {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
 
-    use arrow::datatypes::Schema;
+    use arrow::datatypes::{Metadata, Schema};
     use datafusion::common::create_array;
     use datafusion::functions_aggregate::sum::Sum;
     use datafusion::physical_expr::PhysicalSortExpr;
@@ -761,16 +775,26 @@ mod tests {
         let foreign_udaf: Arc<dyn AggregateUDFImpl> = (&local_udaf).into();
         let foreign_udaf = AggregateUDF::new_from_shared_impl(foreign_udaf);
 
-        let metadata: HashMap<String, String> =
-            [("a_key".to_string(), "a_value".to_string())]
-                .into_iter()
-                .collect();
+        let metadata = Metadata::new().with("a_key", "a_value");
         let input_field = Arc::new(
             Field::new("a", DataType::Float64, false).with_metadata(metadata.clone()),
         );
         let return_field = foreign_udaf.return_field(&[input_field])?;
 
         assert_eq!(&metadata, return_field.metadata());
+        Ok(())
+    }
+
+    #[test]
+    fn test_supports_null_handling_clause() -> Result<()> {
+        let first_value = create_test_foreign_udaf(
+            datafusion::functions_aggregate::first_last::FirstValue::new(),
+        )?;
+        assert!(first_value.supports_null_handling_clause());
+
+        let sum = create_test_foreign_udaf(Sum::new())?;
+        assert!(!sum.supports_null_handling_clause());
+
         Ok(())
     }
 
@@ -788,6 +812,9 @@ mod tests {
         );
 
         let a_field = Arc::new(Field::new("a", DataType::Float64, true));
+
+        let expected_ordering_field =
+            Arc::new(a_field.as_ref().clone().with_name("a[ordering_0]"));
         let state_fields = foreign_udaf.state_fields(StateFieldsArgs {
             name: "a",
             input_fields: &[Field::new("f", DataType::Float64, true).into()],
@@ -797,7 +824,7 @@ mod tests {
         })?;
 
         assert_eq!(state_fields.len(), 3);
-        assert_eq!(state_fields[1], a_field);
+        assert_eq!(state_fields[1], expected_ordering_field);
         Ok(())
     }
 

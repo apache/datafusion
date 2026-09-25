@@ -27,7 +27,7 @@ use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{Result, ScalarValue, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::utils::format_state_name;
+use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, EmitTo, GroupsAccumulator, ReversedUDAF,
     Signature, TypeSignatureClass, Volatility,
@@ -115,6 +115,10 @@ impl AggregateUDFImpl for SparkAvg {
 
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
+    }
+
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::Insensitive
     }
 
     fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
@@ -367,11 +371,6 @@ where
             Arc::new(counts) as ArrayRef,
         ])
     }
-
-    fn supports_convert_to_state(&self) -> bool {
-        true
-    }
-
     fn size(&self) -> usize {
         self.counts.capacity() * size_of::<i64>() + self.sums.capacity() * size_of::<T>()
     }
@@ -387,12 +386,6 @@ mod tests {
             Ok(sum / count as f64)
         })
     }
-
-    #[test]
-    fn supports_convert_to_state() {
-        assert!(make_acc().supports_convert_to_state());
-    }
-
     #[test]
     fn convert_to_state_basic() {
         let acc = make_acc();

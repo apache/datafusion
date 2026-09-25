@@ -259,12 +259,11 @@ async fn run_query(
     let result =
         run_query_with_config(&query, cfg_with_dynamic_filters, dataset.clone()).await;
     // Check that dynamic filters were actually pushed down
-    if !has_dynamic_filter_expr_pushdown(&result.explain_plan) {
-        panic!(
-            "Dynamic filter was not pushed down in query: {query}\n\n{}",
-            result.explain_plan
-        );
-    }
+    assert!(
+        has_dynamic_filter_expr_pushdown(&result.explain_plan),
+        "Dynamic filter was not pushed down in query: {query}\n\n{}",
+        result.explain_plan
+    );
 
     RunQueryResult {
         query: query.to_string(),

@@ -18,7 +18,8 @@
 //! DFSchema is an extended schema struct that DataFusion uses to provide support for
 //! fields with optional relation names.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashSet};
+use std::fmt::Write as _;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::sync::{Arc, LazyLock};
@@ -31,7 +32,7 @@ use crate::{
 
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, Schema, SchemaBuilder, SchemaRef,
+    DataType, Field, FieldRef, Fields, Metadata, Schema, SchemaBuilder, SchemaRef,
 };
 
 /// A reference-counted reference to a [DFSchema].
@@ -153,7 +154,7 @@ impl DFSchema {
     /// Create a `DFSchema` from an Arrow schema where all the fields have a given qualifier
     pub fn new_with_metadata(
         qualified_fields: Vec<(Option<TableReference>, Arc<Field>)>,
-        metadata: HashMap<String, String>,
+        metadata: impl Into<Metadata>,
     ) -> Result<Self> {
         let (qualifiers, fields): (Vec<Option<TableReference>>, Vec<Arc<Field>>) =
             qualified_fields.into_iter().unzip();
@@ -172,7 +173,7 @@ impl DFSchema {
     /// Create a new `DFSchema` from a list of Arrow [Field]s
     pub fn from_unqualified_fields(
         fields: Fields,
-        metadata: HashMap<String, String>,
+        metadata: impl Into<Metadata>,
     ) -> Result<Self> {
         let field_count = fields.len();
         let schema = Arc::new(Schema::new_with_metadata(fields, metadata));
@@ -671,6 +672,8 @@ impl DFSchema {
     /// logically equivalent. For example:
     /// - a Dictionary<K,V> type is logically equal to a plain V type
     /// - a Dictionary<K1, V1> is also logically equal to Dictionary<K2, V1>
+    /// - a RunEndEncoded<K,V> type is logically equal to a plain V type
+    /// - a RunEndEncoded<K1, V1> is also logically equal to RunEndEncoded<K2, V1>
     /// - Utf8 and Utf8View are logically equal
     pub fn datatype_is_logically_equal(dt1: &DataType, dt2: &DataType) -> bool {
         // check nested fields
@@ -682,8 +685,17 @@ impl DFSchema {
             | (othertype, DataType::Dictionary(_, v1)) => {
                 Self::datatype_is_logically_equal(v1.as_ref(), othertype)
             }
+            (DataType::RunEndEncoded(_, v1), DataType::RunEndEncoded(_, v2)) => {
+                Self::datatype_is_logically_equal(v1.data_type(), v2.data_type())
+            }
+            (DataType::RunEndEncoded(_, v1), othertype)
+            | (othertype, DataType::RunEndEncoded(_, v1)) => {
+                Self::datatype_is_logically_equal(v1.data_type(), othertype)
+            }
             (DataType::List(f1), DataType::List(f2))
             | (DataType::LargeList(f1), DataType::LargeList(f2))
+            | (DataType::ListView(f1), DataType::ListView(f2))
+            | (DataType::LargeListView(f1), DataType::LargeListView(f2))
             | (DataType::FixedSizeList(f1, _), DataType::FixedSizeList(f2, _)) => {
                 // Don't compare the names of the technical inner field
                 // Usually "item" but that's not mandated
@@ -742,8 +754,17 @@ impl DFSchema {
                 Self::datatype_is_semantically_equal(k1.as_ref(), k2.as_ref())
                     && Self::datatype_is_semantically_equal(v1.as_ref(), v2.as_ref())
             }
+            (DataType::RunEndEncoded(k1, v1), DataType::RunEndEncoded(k2, v2)) => {
+                Self::datatype_is_semantically_equal(k1.data_type(), k2.data_type())
+                    && Self::datatype_is_semantically_equal(
+                        v1.data_type(),
+                        v2.data_type(),
+                    )
+            }
             (DataType::List(f1), DataType::List(f2))
             | (DataType::LargeList(f1), DataType::LargeList(f2))
+            | (DataType::ListView(f1), DataType::ListView(f2))
+            | (DataType::LargeListView(f1), DataType::LargeListView(f2))
             | (DataType::FixedSizeList(f1, _), DataType::FixedSizeList(f2, _)) => {
                 // Don't compare the names of the technical inner field
                 // Usually "item" but that's not mandated
@@ -844,7 +865,7 @@ impl DFSchema {
     }
 
     /// Get metadata of this schema
-    pub fn metadata(&self) -> &HashMap<String, String> {
+    pub fn metadata(&self) -> &Metadata {
         &self.inner.metadata
     }
 
@@ -929,9 +950,11 @@ fn format_field_with_indent(
 
     match data_type {
         DataType::List(field) => {
-            result.push_str(&format!(
-                "{indent}|-- {field_name}: list (nullable = {nullable_str})\n"
-            ));
+            writeln!(
+                result,
+                "{indent}|-- {field_name}: list (nullable = {nullable_str})"
+            )
+            .ok();
             format_field_with_indent(
                 result,
                 field.name(),
@@ -941,9 +964,11 @@ fn format_field_with_indent(
             );
         }
         DataType::LargeList(field) => {
-            result.push_str(&format!(
-                "{indent}|-- {field_name}: large list (nullable = {nullable_str})\n"
-            ));
+            writeln!(
+                result,
+                "{indent}|-- {field_name}: large list (nullable = {nullable_str})"
+            )
+            .ok();
             format_field_with_indent(
                 result,
                 field.name(),
@@ -953,9 +978,11 @@ fn format_field_with_indent(
             );
         }
         DataType::FixedSizeList(field, _size) => {
-            result.push_str(&format!(
-                "{indent}|-- {field_name}: fixed size list (nullable = {nullable_str})\n"
-            ));
+            writeln!(
+                result,
+                "{indent}|-- {field_name}: fixed size list (nullable = {nullable_str})"
+            )
+            .ok();
             format_field_with_indent(
                 result,
                 field.name(),
@@ -965,9 +992,11 @@ fn format_field_with_indent(
             );
         }
         DataType::Map(field, _) => {
-            result.push_str(&format!(
-                "{indent}|-- {field_name}: map (nullable = {nullable_str})\n"
-            ));
+            writeln!(
+                result,
+                "{indent}|-- {field_name}: map (nullable = {nullable_str})"
+            )
+            .ok();
             if let DataType::Struct(inner_fields) = field.data_type()
                 && inner_fields.len() == 2
             {
@@ -995,16 +1024,18 @@ fn format_field_with_indent(
                         );
                     }
                     _ => {
-                        result.push_str(&format!("{child_indent}|-- value: {} (nullable = {value_contains_null})\n",
-                                format_simple_data_type(inner_fields[1].data_type())));
+                        writeln!(result, "{child_indent}|-- value: {} (nullable = {value_contains_null})",
+                                format_simple_data_type(inner_fields[1].data_type())).ok();
                     }
                 }
             }
         }
         DataType::Struct(fields) => {
-            result.push_str(&format!(
-                "{indent}|-- {field_name}: struct (nullable = {nullable_str})\n"
-            ));
+            writeln!(
+                result,
+                "{indent}|-- {field_name}: struct (nullable = {nullable_str})"
+            )
+            .ok();
             for struct_field in fields {
                 format_field_with_indent(
                     result,
@@ -1017,9 +1048,11 @@ fn format_field_with_indent(
         }
         _ => {
             let type_str = format_simple_data_type(data_type);
-            result.push_str(&format!(
-                "{indent}|-- {field_name}: {type_str} (nullable = {nullable_str})\n"
-            ));
+            writeln!(
+                result,
+                "{indent}|-- {field_name}: {type_str} (nullable = {nullable_str})"
+            )
+            .ok();
         }
     }
 }
@@ -1105,11 +1138,7 @@ impl TryFrom<SchemaRef> for DFSchema {
             field_qualifiers: vec![None; field_count],
             functional_dependencies: FunctionalDependencies::empty(),
         };
-        // Without checking names, because schema here may have duplicate field names.
-        // For example, Partial AggregateMode will generate duplicate field names from
-        // state_fields.
-        // See <https://github.com/apache/datafusion/issues/17715>
-        // dfschema.check_names()?;
+        dfschema.check_names()?;
         Ok(dfschema)
     }
 }
@@ -1159,7 +1188,7 @@ impl ToDFSchema for Vec<Field> {
         let field_count = self.len();
         let schema = Schema {
             fields: self.into(),
-            metadata: HashMap::new(),
+            metadata: Metadata::new(),
         };
         let dfschema = DFSchema {
             inner: schema.into(),
@@ -1201,7 +1230,7 @@ pub trait ExprSchema: std::fmt::Debug {
     }
 
     /// Returns the column's optional metadata.
-    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
+    fn metadata(&self, col: &Column) -> Result<&Metadata> {
         Ok(self.field_from_column(col)?.metadata())
     }
 
@@ -1225,7 +1254,7 @@ impl<P: AsRef<DFSchema> + std::fmt::Debug> ExprSchema for P {
         self.as_ref().data_type(col)
     }
 
-    fn metadata(&self, col: &Column) -> Result<&HashMap<String, String>> {
+    fn metadata(&self, col: &Column) -> Result<&Metadata> {
         ExprSchema::metadata(self.as_ref(), col)
     }
 
@@ -1320,9 +1349,8 @@ impl SchemaExt for Schema {
 /// `format!("{q}.{name}")` when `qualifier` is `Some`, or just `name` when
 /// `None`. We avoid going through the `fmt` machinery for performance reasons.
 pub fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String {
-    let qualifier = match qualifier {
-        None => return name.to_string(),
-        Some(q) => q,
+    let Some(qualifier) = qualifier else {
+        return name.to_string();
     };
     let (first, second, third) = match qualifier {
         TableReference::Bare { table } => (table.as_ref(), None, None),
@@ -1359,6 +1387,7 @@ pub fn qualified_name(qualifier: Option<&TableReference>, name: &str) -> String 
 #[cfg(test)]
 mod tests {
     use crate::assert_contains;
+    use std::collections::HashMap;
 
     use super::*;
 
@@ -1754,11 +1783,19 @@ mod tests {
             &DataType::List(Field::new_list_field(DataType::Int8, true).into()),
             &DataType::List(Field::new("element", DataType::Int8, false).into())
         ));
+        assert!(DFSchema::datatype_is_logically_equal(
+            &DataType::ListView(Field::new_list_field(DataType::Int8, true).into()),
+            &DataType::ListView(Field::new("element", DataType::Int8, false).into())
+        ));
 
         // Fails if element type is different
         assert!(!DFSchema::datatype_is_logically_equal(
             &DataType::List(Field::new_list_field(DataType::Int8, true).into()),
             &DataType::List(Field::new_list_field(DataType::Int16, true).into())
+        ));
+        assert!(!DFSchema::datatype_is_logically_equal(
+            &DataType::ListView(Field::new_list_field(DataType::Int8, true).into()),
+            &DataType::ListView(Field::new_list_field(DataType::Int16, true).into())
         ));
 
         // Test maps
@@ -1897,6 +1934,50 @@ mod tests {
     }
 
     #[test]
+    fn test_datatype_is_logically_equivalent_to_ree() {
+        // RunEndEncoded is logically equal to its value type
+        assert!(DFSchema::datatype_is_logically_equal(
+            &DataType::Utf8,
+            &DataType::RunEndEncoded(
+                Field::new("run", DataType::Int32, false).into(),
+                Field::new("val", DataType::Utf8, true).into(),
+            )
+        ));
+
+        // Dictionary is logically equal to the logically equivalent value type
+        assert!(DFSchema::datatype_is_logically_equal(
+            &DataType::Utf8View,
+            &DataType::RunEndEncoded(
+                Field::new("run", DataType::Int32, false).into(),
+                Field::new("val", DataType::Utf8, true).into(),
+            )
+        ));
+
+        assert!(DFSchema::datatype_is_logically_equal(
+            &DataType::RunEndEncoded(
+                Field::new("run", DataType::Int32, false).into(),
+                Field::new(
+                    "val",
+                    DataType::List(Field::new("element", DataType::Utf8, false).into()),
+                    true
+                )
+                .into(),
+            ),
+            &DataType::RunEndEncoded(
+                Field::new("run", DataType::Int64, false).into(),
+                Field::new(
+                    "val",
+                    DataType::List(
+                        Field::new("element", DataType::Utf8View, false).into()
+                    ),
+                    true
+                )
+                .into(),
+            ),
+        ));
+    }
+
+    #[test]
     fn test_datatype_is_semantically_equal() {
         assert!(DFSchema::datatype_is_semantically_equal(
             &DataType::Int8,
@@ -1945,11 +2026,19 @@ mod tests {
             &DataType::List(Field::new_list_field(DataType::Int8, true).into()),
             &DataType::List(Field::new("element", DataType::Int8, false).into())
         ));
+        assert!(DFSchema::datatype_is_semantically_equal(
+            &DataType::ListView(Field::new_list_field(DataType::Int8, true).into()),
+            &DataType::ListView(Field::new("element", DataType::Int8, false).into())
+        ));
 
         // Fails if element type is different
         assert!(!DFSchema::datatype_is_semantically_equal(
             &DataType::List(Field::new_list_field(DataType::Int8, true).into()),
             &DataType::List(Field::new_list_field(DataType::Int16, true).into())
+        ));
+        assert!(!DFSchema::datatype_is_semantically_equal(
+            &DataType::ListView(Field::new_list_field(DataType::Int8, true).into()),
+            &DataType::ListView(Field::new_list_field(DataType::Int16, true).into())
         ));
 
         // Test maps
@@ -2063,6 +2152,18 @@ mod tests {
         assert!(!DFSchema::datatype_is_semantically_equal(
             &DataType::Utf8,
             &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+        ));
+    }
+
+    #[test]
+    fn test_datatype_is_not_semantically_equivalent_to_ree() {
+        // RunEndEncoded is not semantically equal to its value type
+        assert!(!DFSchema::datatype_is_semantically_equal(
+            &DataType::Utf8,
+            &DataType::RunEndEncoded(
+                Field::new("run", DataType::Int32, false).into(),
+                Field::new("val", DataType::Utf8, true).into(),
+            )
         ));
     }
 

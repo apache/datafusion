@@ -203,6 +203,15 @@ impl Time {
         self.nanos.fetch_add(more_nanos.max(1), Ordering::Relaxed);
     }
 
+    /// Adds a duration without rounding it up to one nanosecond.
+    ///
+    /// Use only for metrics that record many independent operations, where a
+    /// minimum per recording would materially inflate the total.
+    pub fn add_duration_exact(&self, duration: Duration) {
+        self.nanos
+            .fetch_add(duration.as_nanos() as usize, Ordering::Relaxed);
+    }
+
     /// Add the number of nanoseconds of other `Time` to self
     pub fn add(&self, other: &Time) {
         self.add_duration(Duration::from_nanos(other.value() as u64))
@@ -1051,11 +1060,9 @@ impl MetricValue {
             Self::SpilledRows(_) => 13,
             Self::CurrentMemoryUsage(_) => 14,
             Self::Count { name, .. } => match name.as_ref() {
-                // This Parquet page-index metric is a plain Count because it
-                // records pages that skipped page-index evaluation, not a
-                // pruned/matched pair. Keep it grouped with the other
+                // Keep lazy Parquet pruning counters grouped with the other
                 // page-index pruning metrics in EXPLAIN output.
-                "page_index_pages_skipped_by_fully_matched" => 9,
+                "page_index_pages_skipped_by_fully_matched" | "limit_pruned_rows" => 9,
                 _ => 15,
             },
             Self::PeakMemoryUsage { .. } => 14,
@@ -1187,13 +1194,13 @@ mod tests {
         let other_custom_val = new_custom_counter("Hello", 1);
 
         // Not equal since the name differs.
-        assert!(other_custom_val != custom_val);
+        assert_ne!(other_custom_val, custom_val);
 
         // Should work even though the name differs
         custom_val.aggregate(&other_custom_val);
 
         let expected_val = new_custom_counter("Hi", 2);
-        assert!(expected_val == custom_val);
+        assert_eq!(expected_val, custom_val);
     }
 
     #[test]
@@ -1203,7 +1210,7 @@ mod tests {
 
         custom_val.aggregate(&other_custom_val);
 
-        assert!(custom_val != other_custom_val);
+        assert_ne!(custom_val, other_custom_val);
 
         if let MetricValue::Custom { value, .. } = custom_val {
             let counter = value
@@ -1277,6 +1284,14 @@ mod tests {
         for value in &values {
             assert_eq!("1.04µs", value.to_string(), "value {value:?}");
         }
+    }
+
+    #[test]
+    fn test_time_merge_marks_a_zero_duration_measurement_as_recorded() {
+        let merged = Time::new();
+        merged.add(&Time::new());
+
+        assert_eq!(merged.value(), 1);
     }
 
     #[test]

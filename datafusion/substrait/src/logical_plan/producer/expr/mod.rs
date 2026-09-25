@@ -149,10 +149,8 @@ pub fn to_substrait_rex(
         Expr::Wildcard { .. } => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::GroupingSet(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::Placeholder(expr) => producer.handle_placeholder(expr, schema),
-        Expr::OuterReferenceColumn(_, _) => {
-            // OuterReferenceColumn requires tracking outer query schema context for correlated
-            // subqueries. This is a complex feature that is not yet implemented.
-            not_impl_err!("Cannot convert {expr:?} to Substrait")
+        Expr::OuterReferenceColumn(field, col) => {
+            producer.handle_outer_reference_column(field, col, schema)
         }
         Expr::Unnest(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::HigherOrderFunction(expr) => {

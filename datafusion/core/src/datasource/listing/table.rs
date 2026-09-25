@@ -21,6 +21,7 @@ use datafusion_catalog_listing::{ListingOptions, ListingTableConfig};
 use datafusion_common::{config_datafusion_err, internal_datafusion_err};
 use datafusion_session::Session;
 use futures::StreamExt;
+use futures::future::BoxFuture;
 use std::collections::HashMap;
 
 /// Extension trait for [`ListingTableConfig`] that supports inferring schemas
@@ -47,17 +48,54 @@ pub trait ListingTableConfigExt {
 
 #[async_trait]
 impl ListingTableConfigExt for ListingTableConfig {
-    async fn infer_options(
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn infer_options<'life0, 'async_trait>(
         self,
-        state: &dyn Session,
-    ) -> datafusion_common::Result<ListingTableConfig> {
-        let store = if let Some(url) = self.table_paths.first() {
+        state: &'life0 dyn Session,
+    ) -> BoxFuture<'async_trait, datafusion_common::Result<ListingTableConfig>>
+    where
+        'life0: 'async_trait,
+        Self: 'async_trait,
+    {
+        infer_options_boxed(self, state)
+    }
+
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn infer<'life0, 'async_trait>(
+        self,
+        state: &'life0 dyn Session,
+    ) -> BoxFuture<'async_trait, datafusion_common::Result<Self>>
+    where
+        'life0: 'async_trait,
+        Self: 'async_trait,
+    {
+        infer_boxed(self, state)
+    }
+}
+
+/// Body of [`ListingTableConfigExt::infer`].
+fn infer_boxed(
+    config: ListingTableConfig,
+    state: &dyn Session,
+) -> BoxFuture<'_, datafusion_common::Result<ListingTableConfig>> {
+    Box::pin(async move { config.infer_options(state).await?.infer_schema(state).await })
+}
+
+/// Body of [`ListingTableConfigExt::infer_options`].
+fn infer_options_boxed(
+    config: ListingTableConfig,
+    state: &dyn Session,
+) -> BoxFuture<'_, datafusion_common::Result<ListingTableConfig>> {
+    Box::pin(async move {
+        let store = if let Some(url) = config.table_paths.first() {
             state.runtime_env().object_store(url)?
         } else {
-            return Ok(self);
+            return Ok(config);
         };
 
-        let file = self
+        let file = config
             .table_paths
             .first()
             .unwrap()
@@ -95,12 +133,8 @@ impl ListingTableConfigExt for ListingTableConfig {
         let listing_options =
             ListingOptions::new(file_format).with_file_extension(listing_file_extension);
 
-        Ok(self.with_listing_options(listing_options))
-    }
-
-    async fn infer(self, state: &dyn Session) -> datafusion_common::Result<Self> {
-        self.infer_options(state).await?.infer_schema(state).await
-    }
+        Ok(config.with_listing_options(listing_options))
+    })
 }
 
 #[cfg(test)]
@@ -774,9 +808,10 @@ mod tests {
         )
         .await
         .expect_err("Example should fail!");
+        // The value is rejected when the option is set, before any file is written
         assert_eq!(
             e.strip_backtrace(),
-            "Invalid or Unsupported Configuration: zstd compression requires specifying a level such as zstd(4)"
+            "Error setting config datafusion.execution.parquet.compression\ncaused by\nInvalid or Unsupported Configuration: zstd compression requires specifying a level such as zstd(4)"
         );
 
         Ok(())
@@ -1587,6 +1622,77 @@ mod tests {
                 "bucket/test/pid=2/file4",
             ]
         );
+
+        Ok(())
+    }
+
+    /// Files written with `keep_partition_by_columns = true` physically contain
+    /// the partition column, so the (inferred) file schema and the declared
+    /// partition columns overlap. The table schema must list the column once.
+    /// See <https://github.com/apache/datafusion/issues/17420>
+    #[test]
+    fn test_partition_column_present_in_file_schema_is_not_duplicated() -> Result<()> {
+        let partition_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8));
+        let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
+            .with_file_extension_opt(Some(""))
+            .with_table_partition_cols(vec![("pid".to_string(), partition_type.clone())]);
+
+        let table_path = ListingTableUrl::parse("test:///bucket/test/")?;
+        let file_schema = Schema::new(vec![
+            Field::new("a", DataType::Boolean, false),
+            Field::new("pid", DataType::Utf8, false),
+        ]);
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(opt)
+            .with_schema(Arc::new(file_schema));
+
+        let table = ListingTable::try_new(config)?;
+        let schema = table.schema();
+
+        let names = schema
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["a", "pid"]);
+        // The partition column keeps the declared partition type, as it does
+        // when the file schema is given explicitly in CREATE EXTERNAL TABLE.
+        assert_eq!(schema.field_with_name("pid")?.data_type(), &partition_type);
+
+        Ok(())
+    }
+
+    /// Two partition columns present in the file, one of them mid-schema. The
+    /// remaining file fields keep their order and the partition columns follow
+    /// in their configured order, not their order in the file.
+    #[test]
+    fn test_overlapping_partition_columns_order() -> Result<()> {
+        let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
+            .with_file_extension_opt(Some(""))
+            .with_table_partition_cols(vec![
+                ("month".to_string(), DataType::Utf8),
+                ("year".to_string(), DataType::Utf8),
+            ]);
+        let file_schema = Schema::new(vec![
+            Field::new("a", DataType::Boolean, false),
+            Field::new("year", DataType::Utf8, true),
+            Field::new("b", DataType::Int32, false),
+            Field::new("month", DataType::Utf8, true),
+            Field::new("c", DataType::Float64, true),
+        ]);
+        let config =
+            ListingTableConfig::new(ListingTableUrl::parse("test:///bucket/test/")?)
+                .with_listing_options(opt)
+                .with_schema(Arc::new(file_schema));
+
+        let schema = ListingTable::try_new(config)?.schema();
+        let names = schema
+            .fields()
+            .iter()
+            .map(|f| f.name().as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["a", "b", "c", "month", "year"]);
 
         Ok(())
     }

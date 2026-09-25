@@ -583,6 +583,8 @@ pub struct EmptyMessage {}
 pub struct JsonWriterOptions {
     #[prost(enumeration = "CompressionTypeVariant", tag = "1")]
     pub compression: i32,
+    #[prost(uint32, optional, tag = "2")]
+    pub compression_level: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CsvWriterOptions {
@@ -596,17 +598,17 @@ pub struct CsvWriterOptions {
     #[prost(bool, tag = "3")]
     pub has_header: bool,
     /// Optional date format for date arrays
-    #[prost(string, tag = "4")]
-    pub date_format: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "4")]
+    pub date_format: ::core::option::Option<::prost::alloc::string::String>,
     /// Optional datetime format for datetime arrays
-    #[prost(string, tag = "5")]
-    pub datetime_format: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "5")]
+    pub datetime_format: ::core::option::Option<::prost::alloc::string::String>,
     /// Optional timestamp format for timestamp arrays
-    #[prost(string, tag = "6")]
-    pub timestamp_format: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "6")]
+    pub timestamp_format: ::core::option::Option<::prost::alloc::string::String>,
     /// Optional time format for time arrays
-    #[prost(string, tag = "7")]
-    pub time_format: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "7")]
+    pub time_format: ::core::option::Option<::prost::alloc::string::String>,
     /// Optional value to represent null
     #[prost(string, tag = "8")]
     pub null_value: ::prost::alloc::string::String,
@@ -628,6 +630,15 @@ pub struct CsvWriterOptions {
     /// Whether to ignore trailing whitespace in string values
     #[prost(bool, tag = "14")]
     pub ignore_trailing_whitespace: bool,
+    /// Optional compression level
+    #[prost(uint32, optional, tag = "15")]
+    pub compression_level: ::core::option::Option<u32>,
+    /// Optional timestamp format for timestamp with timezone arrays
+    #[prost(string, optional, tag = "16")]
+    pub timestamp_tz_format: ::core::option::Option<::prost::alloc::string::String>,
+    /// Optional line terminator. Empty defaults to LF; valid values are one byte or CRLF
+    #[prost(bytes = "vec", tag = "17")]
+    pub terminator: ::prost::alloc::vec::Vec<u8>,
 }
 /// Options controlling CSV format
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -865,6 +876,8 @@ pub struct ParquetOptions {
     pub data_page_row_count_limit: u64,
     #[prost(uint64, tag = "15")]
     pub max_row_group_size: u64,
+    #[prost(uint64, tag = "38")]
+    pub max_in_list_size: u64,
     #[prost(string, tag = "16")]
     pub created_by: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "35")]

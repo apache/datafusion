@@ -40,10 +40,10 @@ pub struct DistinctSumAccumulator<T: ArrowPrimitiveType> {
 }
 
 impl<T: ArrowPrimitiveType> DistinctSumAccumulator<T> {
-    pub fn new(data_type: &DataType) -> Self {
+    pub fn new(data_type: DataType) -> Self {
         Self {
             values: GenericDistinctBuffer::new(data_type.clone()),
-            data_type: data_type.clone(),
+            data_type,
         }
     }
 
