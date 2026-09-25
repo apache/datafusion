@@ -9259,57 +9259,103 @@ mod tests {
 
     #[test]
     fn replacement_rebuilds_dynamic_filter() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+        ]));
         let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
-        let min = Arc::new(
+        let min_a = Arc::new(
             AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema)?])
                 .schema(Arc::clone(&schema))
-                .alias("value")
+                .alias("min_a")
+                .build()?,
+        );
+        let max_b = Arc::new(
+            AggregateExprBuilder::new(max_udaf(), vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("max_b")
                 .build()?,
         );
         let aggregate = AggregateExec::try_new(
             AggregateMode::Partial,
             PhysicalGroupBy::new_single(vec![]),
-            vec![min],
-            vec![None],
+            vec![min_a, max_b],
+            vec![None, None],
             input,
             Arc::clone(&schema),
         )?;
-        let old_filter = aggregate.dynamic_filter.as_ref().expect("MIN is supported");
+        let old_filter = aggregate
+            .dynamic_filter
+            .as_ref()
+            .expect("MIN/MAX are supported");
         *old_filter.accumulator_dyn_filter_info[0]
             .shared_bound
             .lock() = ScalarValue::Int64(Some(42));
         let old_id = old_filter.filter.expression_id();
 
-        let max = Arc::new(
-            AggregateExprBuilder::new(max_udaf(), vec![col("a", &schema)?])
+        let max_b = Arc::new(
+            AggregateExprBuilder::new(max_udaf(), vec![col("b", &schema)?])
                 .schema(Arc::clone(&schema))
-                .alias("value")
+                .alias("max_b")
                 .build()?,
         );
-        let replacement = aggregate.try_with_new_aggr_exprs(vec![max])?;
+        let min_a = Arc::new(
+            AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("min_a")
+                .build()?,
+        );
+        let replacement = aggregate.try_with_new_aggr_exprs(vec![max_b, min_a])?;
         let filter = replacement
             .dynamic_filter
             .as_ref()
-            .expect("MAX is supported");
+            .expect("MAX/MIN are supported");
         assert!(matches!(
             filter.accumulator_dyn_filter_info[0].aggr_type,
             DynamicFilterAggregateType::Max
         ));
-        assert_eq!(filter.accumulator_dyn_filter_info[0].aggr_index, 0);
+        assert!(matches!(
+            filter.accumulator_dyn_filter_info[1].aggr_type,
+            DynamicFilterAggregateType::Min
+        ));
         assert_eq!(
-            *filter.accumulator_dyn_filter_info[0].shared_bound.lock(),
-            ScalarValue::Null
+            filter
+                .accumulator_dyn_filter_info
+                .iter()
+                .map(|info| info.aggr_index)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+        assert_eq!(
+            filter
+                .filter
+                .children()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            vec!["b@1", "a@0"]
+        );
+        assert!(
+            filter
+                .accumulator_dyn_filter_info
+                .iter()
+                .all(|info| *info.shared_bound.lock() == ScalarValue::Null)
         );
         assert_ne!(filter.filter.expression_id(), old_id);
 
-        let sum = Arc::new(
+        let sum_a = Arc::new(
             AggregateExprBuilder::new(sum_udaf(), vec![col("a", &schema)?])
                 .schema(Arc::clone(&schema))
-                .alias("value")
+                .alias("sum_a")
                 .build()?,
         );
-        let unsupported = replacement.try_with_new_aggr_exprs(vec![sum])?;
+        let sum_b = Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("sum_b")
+                .build()?,
+        );
+        let unsupported = replacement.try_with_new_aggr_exprs(vec![sum_a, sum_b])?;
         assert!(unsupported.dynamic_expressions_produced().is_empty());
         Ok(())
     }
@@ -9342,6 +9388,7 @@ mod tests {
         let error = aggregate
             .try_with_new_aggr_exprs(vec![average])
             .expect_err("return type change must be rejected");
+        assert!(matches!(error, DataFusionError::Plan(_)));
         assert!(error.to_string().contains("incompatible"));
 
         let min = Arc::new(
@@ -9353,6 +9400,7 @@ mod tests {
         let error = aggregate
             .try_with_new_aggr_exprs(vec![min])
             .expect_err("nullability change must be rejected");
+        assert!(matches!(error, DataFusionError::Plan(_)));
         assert!(error.to_string().contains("incompatible"));
 
         let renamed_count = Arc::new(
