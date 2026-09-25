@@ -163,9 +163,62 @@ impl FilterCost {
     }
 }
 
+/// The work, in nanoseconds for each row, that an operator does on the rows
+/// that a filter removes before them, as measured by that operator.
+///
+/// For example, a hash join computes the hashes of the join keys of each
+/// probe row and looks them up in its hash table. A row that the dynamic
+/// filter of the join removes in the scan does not get this work, thus this
+/// is the saving of a removed row. The work that depends on a match (the
+/// output of a matched row) is not in it: the filter does not remove
+/// matched rows. The producer of a dynamic filter measures it and the
+/// consumers of the filter read it (see
+/// [`DynamicFilterPhysicalExpr::removed_row_work`]).
+///
+/// Lock-free.
+///
+/// [`DynamicFilterPhysicalExpr::removed_row_work`]: crate::expressions::DynamicFilterPhysicalExpr::removed_row_work
+#[derive(Debug, Default)]
+pub struct RemovedRowWork {
+    rows: AtomicU64,
+    nanos: AtomicU64,
+}
+
+impl RemovedRowWork {
+    /// Creates an empty measurement.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds `rows` rows and `nanos` nanoseconds of work. The two can be
+    /// recorded separately (for example the rows when a batch arrives and
+    /// the time of each step).
+    pub fn record(&self, rows: u64, nanos: u64) {
+        self.rows.fetch_add(rows, Ordering::Relaxed);
+        self.nanos.fetch_add(nanos, Ordering::Relaxed);
+    }
+
+    /// The work for each row, or `None` before [`MIN_OBSERVED_ROWS`] rows.
+    pub fn ns_per_row(&self) -> Option<f64> {
+        let rows = self.rows.load(Ordering::Relaxed);
+        (rows >= MIN_OBSERVED_ROWS)
+            .then(|| self.nanos.load(Ordering::Relaxed) as f64 / rows as f64)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removed_row_work_needs_min_observed_rows() {
+        let work = RemovedRowWork::new();
+        work.record(MIN_OBSERVED_ROWS - 1, 0);
+        work.record(0, 3 * (MIN_OBSERVED_ROWS - 1));
+        assert_eq!(work.ns_per_row(), None);
+        work.record(1, 3);
+        assert_eq!(work.ns_per_row(), Some(3.0));
+    }
 
     #[test]
     fn filter_cost_derived_values() {
