@@ -1141,6 +1141,21 @@ impl OptimizerRule for PushDownFilter {
                 result.map_data(|plan| Ok(with_filters(keep_predicates, plan)))
             }
             LogicalPlan::Join(join) => push_down_join(join, Some(filter.predicate)),
+            // Pushes deterministic left-only predicates below the ASOF join and
+            // mirrors eligible equality-key predicates to the right input.
+            // Example:
+            //   Before:
+            //     Filter: l.key = 42
+            //       AsOfJoin: on=[l.key = r.key]
+            //         Left
+            //         Right
+            //   ---
+            //   After:
+            //     AsOfJoin: on=[l.key = r.key]
+            //       Filter: l.key = 42
+            //         Left
+            //       Filter: r.key = 42
+            //         Right
             LogicalPlan::AsOfJoin(mut join) => {
                 // ASOF emits exactly one output row per left row without
                 // changing left values, so deterministic left-only predicates
