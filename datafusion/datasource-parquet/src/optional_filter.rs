@@ -26,51 +26,56 @@
 //! complete predicate, thus optional filters. Only the row-level
 //! `RowFilter` (used when `pushdown_filters` is true) changes with the mode.
 //!
-//! # The saving of a removed row
+//! # The cost and the saving of a row filter predicate
 //!
 //! In [`OptionalFilterMode::Adaptive`], the [`OptionalFilterGate`] of an
-//! optional filter pauses the filter when its evaluation costs more than the
-//! work that the rows it removes save. The gate adds the configured minimum
-//! saving (`datafusion.execution.optional_filter_min_saving_ns_per_row`, for
-//! the work after the scan) to the saving that the scan measures: the time
-//! to decode the output columns that the filter does not read, for each
-//! row. The scan does not decode these columns for a removed row.
-//!
-//! The scan estimates this decode time from the compressed size of the
-//! column chunks and a measured decode speed:
+//! optional filter pauses the filter when it costs more than the work that
+//! the rows it removes save. The gate adds the configured minimum saving
+//! (`datafusion.execution.optional_filter_min_saving_ns_per_row`, for the
+//! work after the scan) to the saving that the scan measures, and the cost
+//! of the row filter stage to the evaluation time:
 //!
 //! ```text
-//! measured saving = ns_per_byte * (compressed bytes for each row of the
-//!                                  output columns that the filter does not read)
-//! ns_per_byte     = time to decode output batches
-//!                   / (output rows * compressed bytes for each row of the
-//!                      output columns)
+//! measured saving   = skippable rows / removed rows * ns_per_byte
+//!                     * (compressed bytes for each row of the output
+//!                        columns that the filter does not read)
+//! measured overhead = ROW_FILTER_STAGE_NS_PER_ROW
 //! ```
 //!
+//! The decoder does not decode the other output columns of a removed row
+//! only when the removed rows make long runs: *skippable rows* are the
+//! removed rows in windows of 64 rows where no row passes (see
+//! [`skippable_rows`]). A filter that keeps 5% of the rows, spread over the
+//! file, removes 95% of the rows, but the decoder still decodes all pages.
+//! The gate of each filter counts its removed and skippable rows.
+//!
 //! The bytes for each row come from the metadata of the file (the average
-//! over its row groups). `ns_per_byte` is measured over all files and
-//! partitions of the scan ([`DecodeCost`]): the scan times each call that
-//! decodes an output batch. This time does not include the row filter,
-//! because the Parquet decoder evaluates the row filter of a row group
-//! before it decodes the output columns. Before the first measurement,
-//! `ns_per_byte` is [`DEFAULT_DECODE_NS_PER_BYTE`].
+//! over its row groups). `ns_per_byte` is the decode speed of the output
+//! columns. It is measured over all files and partitions of the scan
+//! ([`DecodeCost`]): the scan times each call that decodes an output batch
+//! of a row group where the row filter removed no rows. Before the first
+//! measurement, `ns_per_byte` is [`DEFAULT_DECODE_NS_PER_BYTE`].
 //!
-//! This is an estimate: the decode time of a row depends on the encoding and
-//! on the rows that are selected (a sparse selection costs more for each
-//! row), not only on the compressed size. But it is cheap (a clock read and
-//! a few atomic operations for each output batch), it adapts to the data and
-//! the hardware, and it separates the two important cases: a filter that
-//! reads all the output columns (for example a hash join filter on the join
-//! keys) saves only the work after the scan, and a filter on one column of
-//! a wide table (for example a TopK filter with `SELECT *`) saves the decode
-//! of all the other columns.
+//! This is an estimate: the decode time of a row depends on the encoding,
+//! not only on the compressed size. But it is cheap (a clock read and a few
+//! atomic operations for each output batch, and a count of the empty 64-row
+//! windows of each filter result), it adapts to the data and the hardware,
+//! and it separates the important cases: a filter that reads all the output
+//! columns (for example a hash join filter on the join keys) or removes
+//! rows that are spread over the file saves only the work after the scan,
+//! and a filter on one column of a wide table that removes long runs of
+//! rows (for example a TopK filter with `SELECT *` on sorted data) saves the
+//! decode of all the other columns.
 //!
+//! [`skippable_rows`]: crate::row_filter_cost::skippable_rows
 //! [`OptionalFilterPhysicalExpr`]: datafusion_physical_expr::expressions::OptionalFilterPhysicalExpr
 //! [`OptionalFilterGate`]: datafusion_physical_expr::optional_filter_gate::OptionalFilterGate
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+
+use arrow::array::BooleanArray;
 
 use datafusion_common::config::OptionalFilterMode;
 use datafusion_physical_expr::filter_stats::duration_nanos;
@@ -79,6 +84,8 @@ use datafusion_physical_expr::optional_filter_gate::{
 };
 use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::ParquetMetaData;
+
+use crate::row_filter_cost::{ROW_FILTER_STAGE_NS_PER_ROW, skippable_rows};
 
 /// The decode time for each compressed byte that the scan assumes before it
 /// measures it (see the [module documentation](self)). The TPC-DS SF1 scans
@@ -94,6 +101,13 @@ pub(crate) const DEFAULT_DECODE_NS_PER_BYTE: f64 = 4.0;
 /// The measured decode speed of the output columns of one scan, shared by
 /// all partitions and files of the scan. See the [module
 /// documentation](self).
+///
+/// Only the output batches of row groups where the row filter removed no
+/// rows are measured. A row filter that removes rows spread over the row
+/// group makes the decode of each output row much more expensive (the
+/// decoder decodes all pages and then drops most rows): TPC-H Q9 measured
+/// 21 to 28 ns for each byte with a filter that keeps 5% of the rows,
+/// against 1 to 4 ns without a row filter.
 #[derive(Debug, Default)]
 pub(crate) struct DecodeCost {
     /// Time to decode output batches, in nanoseconds.
@@ -109,6 +123,12 @@ impl DecodeCost {
     pub(crate) fn record(&self, nanos: u64, bytes: u64) {
         self.nanos.fetch_add(nanos, Ordering::Relaxed);
         self.bytes.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// The estimated compressed bytes of the measured output batches.
+    #[cfg(test)]
+    pub(crate) fn measured_bytes(&self) -> u64 {
+        self.bytes.load(Ordering::Relaxed)
     }
 
     /// The decode time for each compressed byte, or
@@ -148,33 +168,87 @@ pub(crate) fn compressed_bytes_per_row(
     }
 }
 
-/// The measured saving of one gated optional filter of one file, see the
-/// [module documentation](self).
-#[derive(Debug, Clone)]
+/// The measured saving and overhead of the gate of one optional filter of
+/// one file, see the [module documentation](self).
+#[derive(Debug)]
 pub(crate) struct OptionalFilterSaving {
-    /// The value that the gate of the filter reads.
-    pub(crate) saving: Arc<MeasuredRowSaving>,
+    /// The values that the gate of the filter reads.
+    measured: Arc<MeasuredRowSaving>,
+    /// The decode speed of the scan.
+    decode_cost: Arc<DecodeCost>,
     /// Compressed bytes for each row of the output columns that the filter
     /// does not read.
     pub(crate) unread_bytes_per_row: f64,
+    /// Rows that the filter removed as a row filter predicate.
+    removed_rows: AtomicU64,
+    /// The removed rows that the decoder can skip, see
+    /// [`skippable_rows`].
+    skippable_rows: AtomicU64,
 }
 
 impl OptionalFilterSaving {
     /// A saving for a filter that does not read `unread_bytes_per_row`
-    /// compressed bytes of the output columns, with the current decode
-    /// speed of `decode_cost`.
-    pub(crate) fn new(unread_bytes_per_row: f64, decode_cost: &DecodeCost) -> Self {
+    /// compressed bytes of the output columns. The decode speed comes from
+    /// `decode_cost`.
+    pub(crate) fn new(unread_bytes_per_row: f64, decode_cost: Arc<DecodeCost>) -> Self {
         let saving = Self {
-            saving: Arc::new(MeasuredRowSaving::new()),
+            measured: Arc::new(MeasuredRowSaving::new()),
+            decode_cost,
             unread_bytes_per_row,
+            removed_rows: AtomicU64::new(0),
+            skippable_rows: AtomicU64::new(0),
         };
-        saving.update(decode_cost.ns_per_byte());
+        saving
+            .measured
+            .set_overhead_ns_per_row(ROW_FILTER_STAGE_NS_PER_ROW);
         saving
     }
 
-    fn update(&self, ns_per_byte: f64) {
-        self.saving
-            .set_ns_per_row(ns_per_byte * self.unread_bytes_per_row);
+    /// The values that the gate reads, see
+    /// [`OptionalFilterGate::with_measured_saving`](datafusion_physical_expr::optional_filter_gate::OptionalFilterGate::with_measured_saving).
+    pub(crate) fn measured(&self) -> &Arc<MeasuredRowSaving> {
+        &self.measured
+    }
+
+    /// Records one evaluation of the filter as a row filter predicate, with
+    /// one value in `result` for each evaluated row.
+    pub(crate) fn record_evaluation(&self, result: &BooleanArray) {
+        let rows_in = result.len();
+        // `true_count` does not count nulls.
+        let rows_out = result.true_count();
+        if rows_out == rows_in {
+            return;
+        }
+        let skippable = if rows_out == 0 {
+            rows_in
+        } else {
+            skippable_rows(result)
+        };
+        self.removed_rows
+            .fetch_add((rows_in - rows_out) as u64, Ordering::Relaxed);
+        self.skippable_rows
+            .fetch_add(skippable as u64, Ordering::Relaxed);
+        self.update();
+    }
+
+    /// The fraction of the removed rows that the decoder can skip, 0 before
+    /// the filter removed a row.
+    fn skippable_fraction(&self) -> f64 {
+        let removed = self.removed_rows.load(Ordering::Relaxed);
+        if removed == 0 {
+            return 0.0;
+        }
+        self.skippable_rows.load(Ordering::Relaxed) as f64 / removed as f64
+    }
+
+    /// Updates the measured saving with the current decode speed and
+    /// skippable fraction.
+    fn update(&self) {
+        self.measured.set_ns_per_row(
+            self.skippable_fraction()
+                * self.unread_bytes_per_row
+                * self.decode_cost.ns_per_byte(),
+        );
     }
 }
 
@@ -188,7 +262,7 @@ pub(crate) struct OptionalFilterSavings {
     /// Compressed bytes for each row of the output columns of the file.
     output_bytes_per_row: f64,
     /// The saving of each gated optional filter of the file.
-    filters: Vec<OptionalFilterSaving>,
+    filters: Vec<Arc<OptionalFilterSaving>>,
 }
 
 impl OptionalFilterSavings {
@@ -198,7 +272,7 @@ impl OptionalFilterSavings {
         decode_cost: Arc<DecodeCost>,
         metadata: &ParquetMetaData,
         output_projection: &ProjectionMask,
-        filters: Vec<OptionalFilterSaving>,
+        filters: Vec<Arc<OptionalFilterSaving>>,
     ) -> Option<Self> {
         if filters.is_empty() {
             return None;
@@ -214,7 +288,8 @@ impl OptionalFilterSavings {
     }
 
     /// Records that the decoder produced an output batch of `rows` rows in
-    /// `elapsed`, and updates the savings.
+    /// `elapsed`, and updates the savings. Call only for the batches of row
+    /// groups where the row filter removed no rows, see [`DecodeCost`].
     pub(crate) fn record_output_batch(&self, rows: usize, elapsed: Duration) {
         let bytes = rows as f64 * self.output_bytes_per_row;
         if bytes < 1.0 {
@@ -222,9 +297,8 @@ impl OptionalFilterSavings {
         }
         self.decode_cost
             .record(duration_nanos(elapsed), bytes as u64);
-        let ns_per_byte = self.decode_cost.ns_per_byte();
         for filter in &self.filters {
-            filter.update(ns_per_byte);
+            filter.update();
         }
     }
 }
