@@ -2378,32 +2378,15 @@ impl PartitionedTopKDenseRank {
         // insertion order within an ob value — so the interleaved output
         // is already ordered and needs no post-sort.
         //
-        // `indices` carries the global `batch_id` rather than a position
-        // into a fixed `batch_refs` slice: for Dictionary columns,
-        // `interleave` does work proportional to the *number of input
-        // arrays*, not just the ones the indices reference, so passing
-        // every batch in the store on every chunk turns emit into
-        // O(chunks × total batches) instead of O(chunks × batches the
-        // chunk actually uses). Each chunk below rebuilds a batch slice
-        // scoped to just its own `batch_id`s.
-        let mut indices: Vec<(u32, usize)> = Vec::with_capacity(batch_size);
-        let mut flush = |indices: &mut Vec<(u32, usize)>| -> Result<()> {
-            let mut batch_refs = Vec::new();
-            let mut local_pos = HashMap::new();
-            let mut local_indices = Vec::with_capacity(indices.len());
-            for &(batch_id, row) in indices.iter() {
-                let pos = *local_pos.entry(batch_id).or_insert_with(|| {
-                    batch_refs.push(&store.batches[&batch_id].batch);
-                    batch_refs.len() - 1
-                });
-                local_indices.push((pos, row));
-            }
-            let b = interleave_record_batch(&batch_refs, &local_indices)?;
-            (&b).record_output(&metrics.baseline);
-            out.push(Ok(b));
-            indices.clear();
-            Ok(())
-        };
+        // `batch_refs` holds only the batches the current chunk references
+        // and is rebuilt per chunk: for Dictionary columns `interleave`
+        // does work for every input array it is handed, referenced or not,
+        // so passing the whole store to each chunk made emit
+        // O(chunks × store batches). A batch's slot is resolved once per
+        // entry, not per row.
+        let mut batch_refs: Vec<&RecordBatch> = Vec::new();
+        let mut batch_id_pos: HashMap<u32, usize> = HashMap::new();
+        let mut indices: Vec<(usize, usize)> = Vec::with_capacity(batch_size);
 
         // Chunk at `batch_size` so the operator emits the same batch sizes
         // as before and no single `interleave` output exceeds `batch_size`.
@@ -2420,17 +2403,38 @@ impl PartitionedTopKDenseRank {
             sorted_obs.sort_by(|a, b| a.0.cmp(&b.0));
             for (_ob, entries) in sorted_obs {
                 for entry in entries {
+                    let batch = &store
+                        .get(entry.batch_id)
+                        .expect("retained batch_id present in store")
+                        .batch;
+                    // Resolved lazily so a chunk boundary inside the entry
+                    // re-registers its batch in the next chunk's slice.
+                    let mut array_pos = None;
                     for row in entry.row_indices {
-                        indices.push((entry.batch_id, row as usize));
+                        let pos = *array_pos.get_or_insert_with(|| {
+                            *batch_id_pos.entry(entry.batch_id).or_insert_with(|| {
+                                batch_refs.push(batch);
+                                batch_refs.len() - 1
+                            })
+                        });
+                        indices.push((pos, row as usize));
                         if indices.len() == batch_size {
-                            flush(&mut indices)?;
+                            let b = interleave_record_batch(&batch_refs, &indices)?;
+                            (&b).record_output(&metrics.baseline);
+                            out.push(Ok(b));
+                            indices.clear();
+                            batch_refs.clear();
+                            batch_id_pos.clear();
+                            array_pos = None;
                         }
                     }
                 }
             }
         }
         if !indices.is_empty() {
-            flush(&mut indices)?;
+            let b = interleave_record_batch(&batch_refs, &indices)?;
+            (&b).record_output(&metrics.baseline);
+            out.push(Ok(b));
         }
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
@@ -4552,14 +4556,13 @@ mod tests {
         Ok(())
     }
 
-    /// Regression test for the `emit` rewrite: passing the *entire* store
-    /// to every `interleave_record_batch` call made Dictionary columns
-    /// O(chunks × total batches) instead of O(chunks × batches the chunk
-    /// actually uses), since `interleave_dictionaries` does per-input-array
-    /// work for every array it's handed. `batch_size` is 8, so 20 retained
-    /// rows spread across 2 source batches emit in 3 chunks — with several
-    /// chunks mixing rows from both source batches — the exact shape that
-    /// exercises the per-chunk batch-slice rebuild.
+    /// `emit` rebuilds the `interleave` batch slice per chunk, so a
+    /// Dictionary column must survive chunk boundaries that change which
+    /// source batches are in the slice — including a boundary that falls
+    /// *inside* one group entry (the four `v06` rows), whose batch must be
+    /// re-registered in the next chunk's slice. `batch_size` is 8, so the
+    /// 20 retained rows emit as 8 + 8 + 4, with the second chunk starting
+    /// mid-entry and mixing both source batches.
     #[tokio::test]
     async fn test_partitioned_topk_dense_rank_emit_dictionary_spans_chunks() -> Result<()>
     {
@@ -4611,23 +4614,36 @@ mod tests {
             )?)
         };
 
-        // Two source batches (two distinct `batch_id`s), 10 distinct values
-        // each, all under a single partition key so every output chunk
-        // draws from both.
+        // Two source batches (two distinct `batch_id`s), all under a single
+        // partition key; `v06` is one entry of four rows at batch 1.
         state.insert_batch(&dict_batch(&[
-            "v00", "v01", "v02", "v03", "v04", "v05", "v06", "v07", "v08", "v09",
+            "v00", "v01", "v02", "v03", "v04", "v05", "v06", "v06", "v06", "v06",
         ])?)?;
         state.insert_batch(&dict_batch(&[
             "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19",
         ])?)?;
 
         let results: Vec<_> = state.emit()?.try_collect().await?;
-        assert_eq!(results.iter().map(|b| b.num_rows()).sum::<usize>(), 20);
-        assert_eq!(results.len(), 3, "expected 3 chunks of batch_size=8");
-        let val_col = results[0].column(1).as_dictionary::<Int32Type>();
-        let dict_values = val_col.values().as_string::<i32>();
-        let first_val = dict_values.value(val_col.keys().value(0) as usize);
-        assert_eq!(first_val, "v00", "rows must still emit in ob-sorted order");
+        assert_eq!(
+            results.iter().map(|b| b.num_rows()).collect::<Vec<_>>(),
+            vec![8, 8, 4]
+        );
+        let mut emitted = Vec::new();
+        for b in &results {
+            let val_col = b.column(1).as_dictionary::<Int32Type>();
+            let dict_values = val_col.values().as_string::<i32>();
+            for key in val_col.keys().values() {
+                emitted.push(dict_values.value(*key as usize).to_string());
+            }
+        }
+        let expected: Vec<String> = [
+            "v00", "v01", "v02", "v03", "v04", "v05", "v06", "v06", "v06", "v06", "v10",
+            "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(emitted, expected, "rows must emit in ob-sorted order");
         Ok(())
     }
 
