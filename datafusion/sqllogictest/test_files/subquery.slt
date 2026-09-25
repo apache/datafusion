@@ -744,6 +744,23 @@ logical_plan
 10)----------TableScan: t2
 11)--TableScan: t1 projection=[t1_id, t1_name]
 
+#exists_subquery_with_non_literal_offset
+#not de-correlated, the offset could be positive and make the subquery empty
+query TT
+explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id offset (SELECT 1))
+----
+logical_plan
+01)Filter: EXISTS (<subquery>)
+02)--Subquery:
+03)----Limit: skip=(<subquery>), fetch=None
+04)------Subquery:
+05)--------Projection: Int64(1)
+06)----------EmptyRelation: rows=1
+07)------Projection: t2.t2_id, t2.t2_name, t2.t2_int
+08)--------Filter: t2.t2_id = outer_ref(t1.t1_id)
+09)----------TableScan: t2
+10)--TableScan: t1 projection=[t1_id, t1_name]
+
 #exists_subquery_with_limit_on_uncorrelated_branch
 #de-correlated, the limit is on an uncorrelated branch so it stays
 query TT
