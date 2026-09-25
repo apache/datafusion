@@ -413,6 +413,62 @@ physical_plan
 07)----FilterExec: grp@0 = A
 08)------DataSourceExec: partitions=1, partition_sizes=[1]
 
+# Any deterministic predicate that only references equality keys can be
+# mirrored, including compound IN, range, and OR expressions.
+query TT
+EXPLAIN SELECT l.id, r.val
+FROM asof_left l
+ASOF JOIN asof_right r
+MATCH_CONDITION (l.ts >= r.ts)
+ON l.grp = r.grp
+WHERE l.grp IN ('A', 'B') OR l.grp > 'C';
+----
+logical_plan
+01)Projection: l.id, r.val
+02)--AsOf Join: match=[l.ts >= r.ts], constraint=On, on=[l.grp = r.grp]
+03)----SubqueryAlias: l
+04)------Filter: asof_left.grp = Utf8View("A") OR asof_left.grp = Utf8View("B") OR asof_left.grp > Utf8View("C")
+05)--------TableScan: asof_left projection=[id, grp, ts]
+06)----SubqueryAlias: r
+07)------Filter: asof_right.grp = Utf8View("A") OR asof_right.grp = Utf8View("B") OR asof_right.grp > Utf8View("C")
+08)--------TableScan: asof_right projection=[grp, ts, val]
+physical_plan
+01)AsOfJoinExec: on=[(grp = grp)], match=[ts >= ts], projection=[id@0, val@5]
+02)--SortExec: expr=[grp@1 ASC, ts@2 ASC], preserve_partitioning=[true]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------FilterExec: grp@1 = A OR grp@1 = B OR grp@1 > C
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)--SortExec: expr=[grp@0 ASC, ts@1 ASC], preserve_partitioning=[false]
+07)----FilterExec: grp@0 = A OR grp@0 = B OR grp@0 > C
+08)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# If any referenced column is not an equality key, the entire predicate must
+# stay off the right input.
+query TT
+EXPLAIN SELECT l.id, r.val
+FROM asof_left l
+ASOF JOIN asof_right r
+MATCH_CONDITION (l.ts >= r.ts)
+ON l.grp = r.grp
+WHERE l.grp = 'A' OR l.id = 4;
+----
+logical_plan
+01)Projection: l.id, r.val
+02)--AsOf Join: match=[l.ts >= r.ts], constraint=On, on=[l.grp = r.grp]
+03)----SubqueryAlias: l
+04)------Filter: asof_left.grp = Utf8View("A") OR asof_left.id = Int32(4)
+05)--------TableScan: asof_left projection=[id, grp, ts]
+06)----SubqueryAlias: r
+07)------TableScan: asof_right projection=[grp, ts, val]
+physical_plan
+01)AsOfJoinExec: on=[(grp = grp)], match=[ts >= ts], projection=[id@0, val@5]
+02)--SortExec: expr=[grp@1 ASC, ts@2 ASC], preserve_partitioning=[true]
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------FilterExec: grp@1 = A OR id@0 = 4
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)--SortExec: expr=[grp@0 ASC, ts@1 ASC], preserve_partitioning=[false]
+07)----DataSourceExec: partitions=1, partition_sizes=[1]
+
 # An ASOF join emits each left row exactly once, so the primary key from
 # asof_left remains unique. Because the outer LEFT JOIN does not use columns
 # from the ASOF side, it can be removed entirely.

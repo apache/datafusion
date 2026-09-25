@@ -40,7 +40,7 @@ use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    BinaryExpr, Distinct, Expr, ExprSchemable, Filter, Operator, Projection,
+    BinaryExpr, Distinct, Expr, Filter, Operator, Projection,
     TableProviderFilterPushDown, and, or,
 };
 
@@ -1171,41 +1171,27 @@ impl OptimizerRule for PushDownFilter {
                                 })
                         });
 
-                // A literal comparison on an equal, same-typed key has the
-                // same value for every matching pair. Mirroring it to the
-                // right can prune groups without changing the ASOF candidate.
+                // Every matching pair has equal key values, so a deterministic
+                // predicate that refers only to left keys also holds for the
+                // corresponding right keys. Expression-based join keys are not
+                // mirrored because they cannot be replaced column-for-column.
+                let key_replacements = join
+                    .on
+                    .iter()
+                    .filter_map(|(left, right)| {
+                        Some((left.try_as_col()?, right.try_as_col()?))
+                    })
+                    .collect::<HashMap<_, _>>();
                 let mut right_predicates = Vec::new();
                 for predicate in &push_predicates {
-                    let Expr::BinaryExpr(BinaryExpr {
-                        left,
-                        op: Operator::Eq,
-                        right,
-                    }) = predicate
-                    else {
-                        continue;
-                    };
-                    let ((Expr::Column(left_column), Expr::Literal(_, _))
-                    | (Expr::Literal(_, _), Expr::Column(left_column))) =
-                        (left.as_ref(), right.as_ref())
-                    else {
-                        continue;
-                    };
-                    for (left_key, right_key) in &join.on {
-                        let (Some(left_key_column), Some(right_key_column)) =
-                            (left_key.try_as_col(), right_key.try_as_col())
-                        else {
-                            continue;
-                        };
-                        if left_column == left_key_column
-                            && left_key.get_type(join.left.schema())?
-                                == right_key.get_type(join.right.schema())?
-                        {
-                            let replacements =
-                                HashMap::from([(left_key_column, right_key_column)]);
-                            right_predicates
-                                .push(replace_col(predicate.clone(), &replacements)?);
-                            break;
-                        }
+                    let columns = predicate.column_refs();
+                    if !columns.is_empty()
+                        && columns
+                            .iter()
+                            .all(|column| key_replacements.contains_key(column))
+                    {
+                        right_predicates
+                            .push(replace_col(predicate.clone(), &key_replacements)?);
                     }
                 }
                 if let Some(predicate) = conjunction(right_predicates) {
