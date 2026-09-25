@@ -1751,6 +1751,8 @@ impl ExecutionPlan for HashJoinExec {
 
         let left_fut = match (&self.prepared_build, self.mode) {
             (Some(prepared), _) => {
+                // Public join fields can change after builder validation.
+                prepared.validate(self)?;
                 let prepared = Arc::clone(prepared);
                 self.left_fut.try_once(|| {
                     Ok(async move { Ok(prepared.probe_data(right_partitions)) })

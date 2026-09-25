@@ -553,6 +553,50 @@ async fn prepared_build_validates_descriptor_and_builder_changes() -> Result<()>
 }
 
 #[tokio::test]
+async fn prepared_build_revalidates_public_keys_at_execution() -> Result<()> {
+    let build = batch(vec![Some(1), Some(2)]);
+    let base = join(build.schema(), build.clone())?;
+    let keys: JoinOn = vec![(
+        Arc::new(Column::new("payload", 1)),
+        Arc::new(Column::new("payload", 1)),
+    )];
+    let ordinary = base
+        .builder()
+        .with_on(keys.clone())
+        .with_new_children(vec![
+            TestMemoryExec::try_new_exec(&[vec![build.clone()]], build.schema(), None)?,
+            Arc::clone(base.right()),
+        ])?
+        .build()?;
+    assert_batches_eq!(
+        [
+            "+-----+---------+-----+---------+",
+            "| key | payload | key | payload |",
+            "+-----+---------+-----+---------+",
+            "| 1   | 10      | 1   | 10      |",
+            "| 2   | 11      | 2   | 11      |",
+            "+-----+---------+-----+---------+",
+        ],
+        &run(&ordinary).await?
+    );
+
+    let prepared =
+        prepare(&base, vec![build], Arc::new(GreedyMemoryPool::new(1 << 20))).await?;
+    let mut attached = base.builder().with_prepared_build(prepared).build()?;
+    attached.on = keys;
+    let error = run(&attached)
+        .await
+        .expect_err("changed public keys must not probe the old prepared table");
+    assert!(matches!(error, DataFusionError::Plan(_)), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("does not match schema, keys or null equality")
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn prepared_build_rejects_view_payload_before_consumption() -> Result<()> {
     let build = RecordBatch::try_from_iter([
         ("key", Arc::new(Int64Array::from(vec![1])) as ArrayRef),
