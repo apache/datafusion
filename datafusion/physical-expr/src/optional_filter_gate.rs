@@ -65,20 +65,24 @@
 //! rules is true:
 //!
 //! 1. The filter removed no rows in the window.
-//! 2. The evaluation time of the window (`cost_ns`) is larger than the work
-//!    that the removed rows save (`saving_ns`):
+//! 2. The cost of the window (`cost_ns`) is larger than the work that the
+//!    removed rows save (`saving_ns`):
 //!
 //!    ```text
+//!    cost_ns   = evaluation time + rows_in * measured overhead
 //!    saving_ns = (rows_in - rows_out) * saving_ns_per_row
 //!    saving_ns_per_row = min_saving_ns_per_row + measured saving
 //!    ```
 //!
 //!    `min_saving_ns_per_row` comes from the configuration. It is the work
 //!    that a removed row saves after the filter, for example a hash table
-//!    probe in a join. The *measured saving* is optional: a consumer that
-//!    can measure more work that a removed row saves (the Parquet scan
-//!    measures the decode time of the columns that the filter does not read)
-//!    gives it in a shared [`MeasuredRowSaving`] and updates it at any time.
+//!    probe in a join. The *measured saving* and the *measured overhead* are
+//!    optional: a consumer that can measure more work that a removed row
+//!    saves (the Parquet scan measures the decode time of the columns that
+//!    the filter does not read), or a fixed cost for each evaluated row in
+//!    addition to the evaluation time (the Parquet scan has a cost for each
+//!    row filter stage), gives them in a shared [`MeasuredRowSaving`] and
+//!    updates them at any time.
 //!
 //!    To prevent a filter from switching on and off when the cost and the
 //!    saving are almost equal, this rule has a margin: a running filter is
@@ -192,22 +196,42 @@ pub enum GateDecision {
     Skip,
 }
 
-/// Work, in nanoseconds, that each row removed by an optional filter saves,
-/// as measured by the consumer of the filter. The gate adds it to
-/// [`OptionalFilterGateConfig::min_saving_ns_per_row`].
+/// The terms of the cost rule that the consumer of an optional filter
+/// measures:
+///
+/// * The *saving*: work, in nanoseconds, that each row removed by the filter
+///   saves. The gate adds it to
+///   [`OptionalFilterGateConfig::min_saving_ns_per_row`]. For example, the
+///   Parquet scan sets it to the time to decode the columns that the filter
+///   does not read, for each removed row that the decoder can skip.
+/// * The *overhead*: work, in nanoseconds, that the consumer does for each
+///   evaluated row because it evaluates the filter, in addition to the
+///   evaluation time. The gate adds it to the cost of each window. For
+///   example, the Parquet scan sets it to the fixed cost of a row filter
+///   stage when the filter is a row filter predicate.
 ///
 /// The consumer creates one value, gives a clone of the [`Arc`] to the gate
 /// with [`OptionalFilterGate::with_measured_saving`], and updates it at any
-/// time with [`Self::set_ns_per_row`]. The gate reads it at each decision.
-/// For example, the Parquet scan sets it to the time to decode the columns
-/// that the filter does not read, for each row.
+/// time with [`Self::set_ns_per_row`] and [`Self::set_overhead_ns_per_row`].
+/// The gate reads it at each decision.
 ///
-/// The value is an `f64` in an [`AtomicU64`], thus reads and updates are
+/// Each value is an `f64` in an [`AtomicU64`], thus reads and updates are
 /// cheap and lock-free.
 #[derive(Debug, Default)]
 pub struct MeasuredRowSaving {
-    /// The bits of the `f64` value.
+    /// The bits of the `f64` saving for each removed row.
     ns_per_row_bits: AtomicU64,
+    /// The bits of the `f64` overhead for each evaluated row.
+    overhead_ns_per_row_bits: AtomicU64,
+}
+
+/// `value` if it is finite and not negative, else 0.
+fn non_negative(value: f64) -> f64 {
+    if value.is_finite() {
+        value.max(0.0)
+    } else {
+        0.0
+    }
 }
 
 impl MeasuredRowSaving {
@@ -219,18 +243,25 @@ impl MeasuredRowSaving {
     /// Sets the measured saving for each removed row, in nanoseconds.
     /// Values that are negative or not finite are used as 0.
     pub fn set_ns_per_row(&self, ns_per_row: f64) {
-        let ns_per_row = if ns_per_row.is_finite() {
-            ns_per_row.max(0.0)
-        } else {
-            0.0
-        };
         self.ns_per_row_bits
-            .store(ns_per_row.to_bits(), Ordering::Relaxed);
+            .store(non_negative(ns_per_row).to_bits(), Ordering::Relaxed);
     }
 
     /// The measured saving for each removed row, in nanoseconds.
     pub fn ns_per_row(&self) -> f64 {
         f64::from_bits(self.ns_per_row_bits.load(Ordering::Relaxed))
+    }
+
+    /// Sets the measured overhead for each evaluated row, in nanoseconds.
+    /// Values that are negative or not finite are used as 0.
+    pub fn set_overhead_ns_per_row(&self, ns_per_row: f64) {
+        self.overhead_ns_per_row_bits
+            .store(non_negative(ns_per_row).to_bits(), Ordering::Relaxed);
+    }
+
+    /// The measured overhead for each evaluated row, in nanoseconds.
+    pub fn overhead_ns_per_row(&self) -> f64 {
+        f64::from_bits(self.overhead_ns_per_row_bits.load(Ordering::Relaxed))
     }
 }
 
@@ -322,8 +353,9 @@ impl OptionalFilterGate {
         self
     }
 
-    /// Adds `saving` to [`OptionalFilterGateConfig::min_saving_ns_per_row`]
-    /// at each decision. See [`MeasuredRowSaving`].
+    /// Adds the saving of `saving` to
+    /// [`OptionalFilterGateConfig::min_saving_ns_per_row`] and its overhead
+    /// to the cost at each decision. See [`MeasuredRowSaving`].
     pub fn with_measured_saving(mut self, saving: Arc<MeasuredRowSaving>) -> Self {
         self.measured_saving = Some(saving);
         self
@@ -348,6 +380,14 @@ impl OptionalFilterGate {
             .as_ref()
             .map_or(0.0, |saving| saving.ns_per_row());
         self.config.min_saving_ns_per_row + measured
+    }
+
+    /// The work, in nanoseconds for each evaluated row, that the gate adds
+    /// to the evaluation time now: the measured overhead.
+    pub fn overhead_ns_per_row(&self) -> f64 {
+        self.measured_saving
+            .as_ref()
+            .map_or(0.0, |saving| saving.overhead_ns_per_row())
     }
 
     /// Call before each batch. Returns if the caller must evaluate the
@@ -447,7 +487,8 @@ impl OptionalFilterGate {
             return true;
         }
         // The filter costs more than it saves.
-        let cost_ns = window.nanos as f64;
+        let cost_ns =
+            window.nanos as f64 + window.rows_in as f64 * self.overhead_ns_per_row();
         let saving_ns = rows_removed as f64 * self.saving_ns_per_row();
         if self.probing {
             // Turn the filter on again only if it is clearly worth its cost.
@@ -934,6 +975,34 @@ mod tests {
         assert_eq!(gate.saving_ns_per_row(), 20.0);
         saving.set_ns_per_row(-5.0);
         assert_eq!(gate.saving_ns_per_row(), 20.0);
+    }
+
+    /// The consumer measures an overhead for each evaluated row (for example
+    /// the fixed cost of a Parquet row filter stage). A filter that is worth
+    /// its evaluation time alone is paused when the overhead is added.
+    #[test]
+    fn measured_overhead_adds_to_cost() {
+        let saving = Arc::new(MeasuredRowSaving::new());
+        let mut gate = new_gate().with_measured_saving(Arc::clone(&saving));
+        // Removes 50% of the rows: saves 10 ns for each evaluated row. The
+        // evaluation costs 5 ns for each row.
+        for _ in 0..10 {
+            assert_eq!(feed_timed(&mut gate, 0.5, 5.0), GateDecision::Evaluate);
+        }
+        assert!(!gate.is_paused());
+
+        // With 8 ns of overhead, the cost is 13 ns for each row.
+        saving.set_overhead_ns_per_row(8.0);
+        assert_eq!(gate.overhead_ns_per_row(), 8.0);
+        assert_eq!(feed_timed(&mut gate, 0.5, 5.0), GateDecision::Evaluate);
+        assert_eq!(feed_timed(&mut gate, 0.5, 5.0), GateDecision::Evaluate);
+        assert!(gate.is_paused());
+
+        // Invalid measured values are used as 0.
+        saving.set_overhead_ns_per_row(f64::INFINITY);
+        assert_eq!(gate.overhead_ns_per_row(), 0.0);
+        saving.set_overhead_ns_per_row(-1.0);
+        assert_eq!(gate.overhead_ns_per_row(), 0.0);
     }
 
     /// When the cost is near the saving, the gate keeps its state: a running
