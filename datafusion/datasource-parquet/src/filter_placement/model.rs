@@ -19,6 +19,7 @@
 //! [module documentation](super) for the model.
 
 use super::stats::Observation;
+use crate::row_filter_cost::ROW_FILTER_STAGE_NS_PER_ROW;
 
 /// Where the scan evaluates one conjunct of its predicate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,16 +39,6 @@ pub(crate) const MIN_OBSERVED_ROWS: u64 = 8192;
 /// A conjunct that the statistics pruned in at least this fraction of the
 /// row groups stays in the post-scan filter. See [`place_required`].
 pub(crate) const CLUSTERED_PRUNED_FRACTION: f64 = 0.5;
-
-/// The fixed cost of a row filter stage for each row that it evaluates,
-/// in nanoseconds. It does not depend on the predicate: the decoder builds a
-/// `RowSelection` from the result, skips or reads the records of the other
-/// columns with it (`skip_records`), fills the predicate cache
-/// (`CachedArrayReader`) and fetches the columns of the stage before the
-/// other columns. Profiles of TPC-H SF1 Q6, Q12 and Q4 on an Apple M-series
-/// laptop showed 4 to 16 ns for each row and stage, about 20 times the time
-/// of the predicate. The post-scan filter has none of these costs.
-pub(crate) const ROW_FILTER_STAGE_NS_PER_ROW: f64 = 8.0;
 
 /// A row filter conjunct moves to the post-scan filter only if its cost is
 /// larger than this multiple of its benefit. The same margin as the
