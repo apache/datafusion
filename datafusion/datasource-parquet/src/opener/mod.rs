@@ -1679,18 +1679,17 @@ impl RowGroupsPrunedParquetOpen {
                     if !is_fully_dictionary_encoded(col_meta) {
                         continue;
                     }
-                    let dictionary = match builder
-                        .get_row_group_column_dictionary(idx, *column_idx)
-                        .await
-                    {
-                        Ok(Some(dictionary)) => dictionary,
-                        Ok(None) => continue,
-                        Err(e) => {
-                            debug!("Ignoring error reading dictionary page: {e}");
-                            prepared.file_metrics.predicate_evaluation_errors.add(1);
-                            continue;
-                        }
-                    };
+                    let dictionary =
+                        match builder.get_column_chunk_dictionary(idx, *column_idx).await
+                        {
+                            Ok(Some(dictionary)) => dictionary,
+                            Ok(None) => continue,
+                            Err(e) => {
+                                debug!("Ignoring error reading dictionary page: {e}");
+                                prepared.file_metrics.predicate_evaluation_errors.add(1);
+                                continue;
+                            }
+                        };
                     if let Err(e) = row_group_dictionary.insert(column_name, &dictionary)
                     {
                         debug!("Ignoring error decoding dictionary page: {e}");

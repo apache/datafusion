@@ -868,7 +868,7 @@ pub struct ParquetOptions {
     #[prost(bool, tag = "30")]
     pub skip_arrow_metadata: bool,
     /// default = false
-    #[prost(bool, tag = "38")]
+    #[prost(bool, tag = "39")]
     pub dictionary_filter_on_read: bool,
     #[prost(uint64, tag = "12")]
     pub dictionary_page_size_limit: u64,

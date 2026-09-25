@@ -87,7 +87,7 @@ use datafusion_datasource_parquet::{
 use datafusion_expr::{Expr, col, lit};
 use datafusion_physical_expr::planner::logical2physical;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-use datafusion_pruning::PruningPredicate;
+use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::{ArrowWriter, parquet_column};
 use parquet::file::metadata::ParquetMetaDataReader;
@@ -319,8 +319,10 @@ fn build_predicate(
 ) -> (PruningPredicate, usize) {
     let schema = schema();
     let physical_expr = logical2physical(expr, &schema);
-    let predicate =
-        PruningPredicate::try_new(physical_expr, schema).expect("valid predicate");
+    let predicate = PruningPredicateBuilder::new()
+        .with_file_schema(schema)
+        .try_build(physical_expr)
+        .expect("valid predicate");
     let (column_idx, _) = parquet_column(parquet_schema, predicate.schema(), column_name)
         .expect("column present");
     (predicate, column_idx)

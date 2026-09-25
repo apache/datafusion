@@ -30,7 +30,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use arrow::array::{ArrayRef, BinaryArray, BooleanArray, StringArray};
+use arrow::array::{ArrayRef, BinaryArray, BooleanArray};
 use arrow::datatypes::DataType;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::{Column, DataFusionError, Result, ScalarValue, internal_err};
@@ -48,9 +48,10 @@ use parquet::file::metadata::ColumnChunkMetaData;
 #[derive(Debug, Clone, Default)]
 pub struct DictionaryStatistics {
     /// Per-column exact value sets, keyed by predicate column name. Values
-    /// are stored as raw bytes so `Utf8`- and `Binary`-typed dictionaries
-    /// compare equally to whichever `ScalarValue` variant the predicate
-    /// literal happens to use (see [`normalize_literal`]).
+    /// are stored as raw bytes -- dictionaries always decode as `Binary`
+    /// regardless of the column's logical type -- so they compare equally to
+    /// whichever `ScalarValue` variant the predicate literal happens to use
+    /// (see [`normalize_literal`]).
     column_values: HashMap<String, HashSet<Vec<u8>>>,
 }
 
@@ -68,8 +69,8 @@ impl DictionaryStatistics {
     }
 
     /// Record the exact dictionary values for `column`, decoded as a
-    /// `Utf8` or `Binary` array (e.g. from
-    /// `ParquetRecordBatchStreamBuilder::get_row_group_column_dictionary`).
+    /// `Binary` array (e.g. from
+    /// `ParquetRecordBatchStreamBuilder::get_column_chunk_dictionary`).
     ///
     /// # Panics / Errors
     ///
@@ -84,16 +85,6 @@ impl DictionaryStatistics {
         dictionary: &ArrayRef,
     ) -> Result<()> {
         let values = match dictionary.data_type() {
-            DataType::Utf8 => dictionary
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .ok_or_else(|| {
-                    DataFusionError::Internal("Expected a StringArray".to_string())
-                })?
-                .iter()
-                .flatten()
-                .map(|v| v.as_bytes().to_vec())
-                .collect(),
             DataType::Binary => dictionary
                 .as_any()
                 .downcast_ref::<BinaryArray>()
@@ -106,7 +97,7 @@ impl DictionaryStatistics {
                 .collect(),
             other => {
                 return internal_err!(
-                    "DictionaryStatistics only supports Utf8/Binary dictionaries, got {other}"
+                    "DictionaryStatistics only supports Binary dictionaries, got {other}"
                 );
             }
         };
@@ -231,16 +222,16 @@ mod tests {
     use crate::test_util::ExpectedPruning;
     use crate::{ParquetAccessPlan, ParquetFileMetrics, RowGroupAccessPlanFilter};
 
+    use arrow::array::StringArray;
     use arrow::datatypes::{Field, Schema};
     use bytes::{BufMut, BytesMut};
     use datafusion_expr::{Expr, col, lit};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-    use datafusion_pruning::PruningPredicate;
+    use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
     use object_store::ObjectStoreExt;
     use parquet::arrow::ArrowWriter;
     use parquet::arrow::ParquetRecordBatchStreamBuilder;
-    use parquet::arrow::async_reader::ParquetObjectReader;
     use parquet::arrow::parquet_column;
     use parquet::basic::EncodingMask;
     use parquet::file::metadata::ColumnChunkMetaData;
@@ -357,11 +348,14 @@ mod tests {
             } = self;
 
             let expr = logical2physical(&expr, &Arc::new(schema));
-            let pruning_predicate = PruningPredicate::try_new(
-                expr,
-                Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)])),
-            )
-            .unwrap();
+            let pruning_predicate = PruningPredicateBuilder::new()
+                .with_file_schema(Arc::new(Schema::new(vec![Field::new(
+                    "s",
+                    DataType::Utf8,
+                    false,
+                )])))
+                .try_build(expr)
+                .unwrap();
 
             let pruned_row_groups =
                 test_row_group_dictionary_pruning_predicate(data, &pruning_predicate)
@@ -395,21 +389,16 @@ mod tests {
             .put(&object_meta.location, data.into())
             .await
             .expect("put parquet file into in memory object store");
+        let store: Arc<dyn object_store::ObjectStore> = Arc::new(in_memory);
 
         let metrics = ExecutionPlanMetricsSet::new();
         let file_metrics =
             ParquetFileMetrics::new(0, object_meta.location.as_ref(), &metrics);
-        let inner =
-            ParquetObjectReader::new(Arc::new(in_memory), object_meta.location.clone())
-                .with_file_size(object_meta.size);
 
         let partitioned_file = PartitionedFile::new_from_meta(object_meta);
 
-        let reader = ParquetFileReader {
-            inner,
-            file_metrics: file_metrics.clone(),
-            partitioned_file,
-        };
+        let reader =
+            ParquetFileReader::new(file_metrics.clone(), store, partitioned_file);
         let mut builder = ParquetRecordBatchStreamBuilder::new(reader).await.unwrap();
 
         let access_plan = ParquetAccessPlan::new_all(builder.metadata().num_row_groups());
@@ -439,18 +428,16 @@ mod tests {
                 if !is_fully_dictionary_encoded(col_meta) {
                     continue;
                 }
-                let dict = match builder
-                    .get_row_group_column_dictionary(idx, *column_idx)
-                    .await
-                {
-                    Ok(Some(dict)) => dict,
-                    Ok(None) => continue,
-                    Err(e) => {
-                        log::debug!("Ignoring error reading dictionary: {e}");
-                        file_metrics.predicate_evaluation_errors.add(1);
-                        continue;
-                    }
-                };
+                let dict =
+                    match builder.get_column_chunk_dictionary(idx, *column_idx).await {
+                        Ok(Some(dict)) => dict,
+                        Ok(None) => continue,
+                        Err(e) => {
+                            log::debug!("Ignoring error reading dictionary: {e}");
+                            file_metrics.predicate_evaluation_errors.add(1);
+                            continue;
+                        }
+                    };
                 dict_stats.insert(column_name, &dict).unwrap();
             }
             row_group_dictionaries[idx] = dict_stats;

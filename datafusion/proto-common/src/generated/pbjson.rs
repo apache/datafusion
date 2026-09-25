@@ -2600,7 +2600,7 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                             if compression_level__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("compressionLevel"));
                             }
-                            compression_level__ =
+                            compression_level__ = 
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
@@ -2614,7 +2614,7 @@ impl<'de> serde::Deserialize<'de> for CsvWriterOptions {
                             if terminator__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("terminator"));
                             }
-                            terminator__ =
+                            terminator__ = 
                                 Some(map_.next_value::<::pbjson::private::BytesDeserialize<_>>()?.0)
                             ;
                         }
@@ -4056,7 +4056,7 @@ impl serde::Serialize for ExplainAnalyzeCategoriesNode {
             struct_ser.serialize_field("all", &self.all)?;
         }
         if !self.only.is_empty() {
-            let v = self.only.iter().copied().map(|v| {
+            let v = self.only.iter().cloned().map(|v| {
                 MetricCategory::try_from(v)
                     .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", v)))
                 }).collect::<std::result::Result<Vec<_>, _>>()?;
