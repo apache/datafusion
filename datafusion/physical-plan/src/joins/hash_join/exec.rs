@@ -78,7 +78,9 @@ use arrow::util::bit_util;
 use arrow_schema::{DataType, Schema};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::utils::memory::{RecordBatchMemoryCounter, estimate_memory_size};
+use datafusion_common::utils::memory::{
+    RecordBatchMemoryCounter, estimate_memory_size, get_record_batch_memory_size,
+};
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
     plan_err, project_schema,
@@ -108,8 +110,14 @@ pub(crate) const HASH_JOIN_SEED: SeededRandomState =
 
 const ARRAY_MAP_CREATED_COUNT_METRIC_NAME: &str = "array_map_created_count";
 
+/// Decides whether the build side should be joined with an [`ArrayMap`]
+/// (perfect hash join), returning the `(min, max)` key range to build it over.
+///
+/// On `Some`, the memory of the [`ArrayMap`] has already been added to
+/// `reservation`; the caller concatenates the build batches and creates the map
+/// with [`ArrayMap::try_new`].
 #[expect(clippy::too_many_arguments)]
-fn try_create_array_map(
+fn array_map_key_range(
     bounds: Option<&PartitionBounds>,
     schema: &SchemaRef,
     batches: &[RecordBatch],
@@ -118,7 +126,7 @@ fn try_create_array_map(
     perfect_hash_join_small_build_threshold: usize,
     perfect_hash_join_min_key_density: f64,
     null_equality: NullEquality,
-) -> Result<Option<(ArrayMap, RecordBatch, Vec<ArrayRef>)>> {
+) -> Result<Option<(u64, u64)>> {
     // `bounds` are also collected for dynamic filters, on any key type, so the
     // key type cannot be inferred from their presence.
     if !is_perfect_hash_join_candidate(on_left, schema)? {
@@ -185,27 +193,23 @@ fn try_create_array_map(
     let mem_size = ArrayMap::estimate_memory_size(min_val, max_val, num_row);
     reservation.try_grow(mem_size)?;
 
-    let batch = concat_batches(schema, batches)?;
-    let left_values = evaluate_expressions_to_arrays(on_left, &batch)?;
-
-    let array_map = ArrayMap::try_new(&left_values[0], min_val, max_val)?;
-
-    Ok(Some((array_map, batch, left_values)))
+    Ok(Some((min_val, max_val)))
 }
 
-/// Correlation-scope hash map over only the build rows whose scalar `NOT IN`
-/// value key is NULL, used by correlated null-aware `LeftMark` joins.
+/// The build rows whose scalar `NOT IN` value key is NULL, used by correlated
+/// null-aware joins (see [`NullAwareMode`]).
 ///
-/// Such rows produce a NULL (UNKNOWN) mark whenever *any* probe row shares
-/// their correlation scope, so every probe row must be tested against them.
-/// Restricting this map to the NULL-valued build rows keeps that lookup
+/// Such rows are UNKNOWN whenever *any* probe row in their correlation scope
+/// passes the join filter, so every probe row must be tested against them.
+/// Restricting this lookup to the NULL-valued build rows keeps it
 /// proportional to the number of NULLs instead of enumerating every scope
 /// match of every probe row.
-pub(super) struct NullValueScopeMap {
+pub(super) struct NullValueBuildRows {
     /// Hash table keyed by the correlation scope values of the NULL-valued
     /// build rows. Stored positions index into `scope_values`/`build_indices`,
-    /// not the full build batch.
-    pub(super) map: Box<dyn JoinHashMapType>,
+    /// not the full build batch. `None` when the join has no correlation
+    /// scope keys, so every probe row is in scope.
+    pub(super) scope_map: Option<Box<dyn JoinHashMapType>>,
     /// Correlation scope key values of the NULL-valued build rows.
     pub(super) scope_values: Vec<ArrayRef>,
     /// Maps positions in `map`/`scope_values` back to row indices in the full
@@ -216,19 +220,23 @@ pub(super) struct NullValueScopeMap {
 /// Null-aware (`NOT IN`) semantics of a hash join, derived from
 /// [`HashJoinExec::null_aware`] and the join type.
 ///
-/// Only these three combinations are legal (see [`Self::try_new`]), so the
+/// Only these combinations are legal (see [`Self::try_new`]), so the
 /// stream matches on this instead of re-checking `null_aware && join_type == ..`.
+///
+/// A `correlated` join has correlation scope keys (`on[1..]`, see
+/// [`HashJoinExec::null_aware`]) or a join filter, or both. A NULL then makes
+/// `NOT IN` UNKNOWN only for the build rows whose scope and filter keep that
+/// NULL, so the join records the decision per build row in the null-indices
+/// bitmap instead of in shared probe-side flags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum NullAwareMode {
-    /// Uncorrelated `build.key NOT IN (probe.key)`: emits build rows, and
-    /// none of them once any probe key is NULL.
-    LeftAnti,
+    /// `build.key NOT IN (probe.key)`: emits build rows. When uncorrelated,
+    /// none of them are emitted once any probe key is NULL.
+    LeftAnti { correlated: bool },
     /// Uncorrelated `probe.key NOT IN (build.key)`: emits probe rows, and
     /// none of them once any build key is NULL.
     RightAnti,
-    /// `NOT IN` as a nullable mark column on the build rows. `correlated`
-    /// means `on[1..]` are correlation scope keys (see
-    /// [`HashJoinExec::null_aware`]).
+    /// `NOT IN` as a nullable mark column on the build rows.
     LeftMark { correlated: bool },
 }
 
@@ -240,13 +248,12 @@ impl NullAwareMode {
         num_keys: usize,
         has_filter: bool,
     ) -> Result<Self> {
+        let correlated = num_keys > 1 || has_filter;
         let mode = match (join_type, partition_mode) {
-            (JoinType::LeftAnti, _) => Self::LeftAnti,
+            (JoinType::LeftAnti, _) => Self::LeftAnti { correlated },
             // `PartitionMode::CollectLeft` is safe because `RightAnti` is probe-driven
             (JoinType::RightAnti, PartitionMode::CollectLeft) => Self::RightAnti,
-            (JoinType::LeftMark, _) => Self::LeftMark {
-                correlated: num_keys > 1,
-            },
+            (JoinType::LeftMark, _) => Self::LeftMark { correlated },
             _ => {
                 return plan_err!(
                     "null_aware can only be true for LeftAnti joins and RightAnti joins with `CollectLeft` `PartitionMode`, or LeftMark joins, got {join_type} with {partition_mode}"
@@ -254,10 +261,14 @@ impl NullAwareMode {
             }
         };
         match mode {
-            Self::LeftAnti | Self::RightAnti if num_keys != 1 => plan_err!(
+            Self::RightAnti if num_keys != 1 => plan_err!(
                 "null_aware {join_type} joins only support single column join key, got {num_keys} columns"
             ),
-            Self::LeftMark { .. } if partition_mode == PartitionMode::Partitioned => {
+            // Correlated joins share the per-build-row null bitmap across all
+            // probe partitions.
+            Self::LeftMark { .. } | Self::LeftAnti { correlated: true }
+                if partition_mode == PartitionMode::Partitioned =>
+            {
                 plan_err!(
                     "null_aware joins require PartitionMode::CollectLeft, got PartitionMode::Partitioned"
                 )
@@ -268,6 +279,14 @@ impl NullAwareMode {
             _ => Ok(mode),
         }
     }
+
+    /// Whether this join decides UNKNOWN per build row (see [`NullAwareMode`]).
+    pub(super) fn is_correlated(self) -> bool {
+        matches!(
+            self,
+            Self::LeftAnti { correlated: true } | Self::LeftMark { correlated: true }
+        )
+    }
 }
 
 /// HashTable and input data for the left (build side) of a join
@@ -277,17 +296,16 @@ pub(super) struct JoinLeftData {
     pub(super) map: Arc<Map>,
     /// Optional exact integer membership bitmap shared by probe streams.
     pub(super) integer_prefilter: Option<IntegerPrefilter>,
-    /// Hash table over correlated scope keys for scalar null-aware mark joins.
+    /// Hash table over correlated scope keys for correlated null-aware joins.
     ///
-    /// For null-aware `LeftMark`, key 0 is the scalar `NOT IN` value key and
-    /// keys 1..N are correlated equality scope keys. This map covers all build
-    /// rows and is probed only with NULL-valued probe rows; the complementary
-    /// direction uses `null_value_scope_map`.
-    null_aware_mark_scope_map: Option<Box<dyn JoinHashMapType>>,
-    /// Scope map restricted to the build rows whose value key is NULL (see
-    /// [`NullValueScopeMap`]). `None` when the build side has no NULL value
-    /// keys.
-    null_value_scope_map: Option<NullValueScopeMap>,
+    /// Key 0 is the scalar `NOT IN` value key and keys 1..N are correlated
+    /// equality scope keys. This map covers all build rows and is probed only
+    /// with NULL-valued probe rows; the complementary direction uses
+    /// `null_value_build_rows`. `None` when there are no scope keys.
+    null_aware_scope_map: Option<Box<dyn JoinHashMapType>>,
+    /// The build rows whose value key is NULL (see [`NullValueBuildRows`]).
+    /// `None` when the build side has no NULL value keys.
+    null_value_build_rows: Option<NullValueBuildRows>,
     /// The input rows for the build side
     batch: RecordBatch,
     /// The build side on expressions values
@@ -321,12 +339,12 @@ impl JoinLeftData {
         &self.map
     }
 
-    pub(super) fn null_aware_mark_scope_map(&self) -> Option<&dyn JoinHashMapType> {
-        self.null_aware_mark_scope_map.as_deref()
+    pub(super) fn null_aware_scope_map(&self) -> Option<&dyn JoinHashMapType> {
+        self.null_aware_scope_map.as_deref()
     }
 
-    pub(super) fn null_value_scope_map(&self) -> Option<&NullValueScopeMap> {
-        self.null_value_scope_map.as_ref()
+    pub(super) fn null_value_build_rows(&self) -> Option<&NullValueBuildRows> {
+        self.null_value_build_rows.as_ref()
     }
 
     /// returns a reference to the build side batch
@@ -681,7 +699,7 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
 /// 4. build_side.num_rows() < u32::MAX
 /// 5. NullEqualsNothing || (NullEqualsNull && build side doesn't contain null)
 ///
-/// See [`try_create_array_map`] for more details.
+/// See [`array_map_key_range`] for more details.
 ///
 /// Note that when using [`PartitionMode::Partitioned`], the build side is split into multiple
 /// partitions. This can cause a dense build side to become sparse within each partition,
@@ -881,13 +899,16 @@ pub struct HashJoinExec {
     /// Flag to indicate if this join uses null-aware equality semantics.
     ///
     /// Set for the physical lowering of scalar `NOT IN` subqueries (producing
-    /// `JoinType::LeftAnti` when uncorrelated or `JoinType::LeftMark` when
-    /// correlated). When `true`, NULLs in the join keys follow SQL `NOT IN`
-    /// three-valued logic rather than ordinary equi-join semantics.
+    /// `JoinType::LeftAnti` at the top level of a filter or `JoinType::LeftMark`
+    /// inside a larger expression). When `true`, NULLs in the join keys follow
+    /// SQL `NOT IN` three-valued logic rather than ordinary equi-join semantics.
+    /// A join filter holds the non-equality part of a correlated subquery, and
+    /// only the probe rows that pass it take part in the three-valued logic.
     ///
     /// Key-ordering convention (relied on positionally, not enforced): for a
-    /// null-aware `LeftMark` join with more than one key, `on[0]` is the scalar
-    /// `NOT IN` value key and `on[1..N]` are the correlated equality scope keys.
+    /// null-aware `LeftAnti` or `LeftMark` join with more than one key, `on[0]`
+    /// is the scalar `NOT IN` value key and `on[1..N]` are the correlated
+    /// equality scope keys.
     /// Reordering these keys would silently produce wrong results, which is why
     /// such joins are pinned to `PartitionMode::CollectLeft` (the only key
     /// reorderer acts solely on `PartitionMode::Partitioned`).
@@ -923,6 +944,7 @@ impl fmt::Debug for HashJoinExec {
             .field("left_fut", &self.left_fut)
             .field("random_state", &self.random_state)
             .field("mode", &self.mode)
+            .field("null_aware", &self.null_aware)
             .field("metrics", &self.metrics)
             .field("projection", &self.projection)
             .field("column_indices", &self.column_indices)
@@ -2801,7 +2823,7 @@ impl BuildSideState {
 /// (perfect hash join): a single join key of a supported integer type.
 ///
 /// Only a candidate: the final decision also depends on the observed key
-/// range and density, see [`try_create_array_map`].
+/// range and density, see [`array_map_key_range`].
 fn is_perfect_hash_join_candidate(
     on_left: &[PhysicalExprRef],
     schema: &SchemaRef,
@@ -2825,17 +2847,100 @@ fn new_join_hashmap(
 
     if num_rows > u32::MAX as usize {
         let estimated_hashtable_size =
-            estimate_memory_size::<(u64, u64)>(num_rows, fixed_size_u64)?;
+            estimate_memory_size::<(u64, u64)>(num_rows, fixed_size_u64)?
+                // Each build row also owns an index in the duplicate-key chain.
+                .checked_add(num_rows * size_of::<u64>())
+                .ok_or_else(|| {
+                    datafusion_common::exec_datafusion_err!(
+                        "Hash join table size overflow"
+                    )
+                })?;
         reservation.try_grow(estimated_hashtable_size)?;
         metrics.build_mem_used.add(estimated_hashtable_size);
         Ok(Box::new(JoinHashMapU64::with_capacity(num_rows)))
     } else {
         let estimated_hashtable_size =
-            estimate_memory_size::<(u32, u64)>(num_rows, fixed_size_u32)?;
+            estimate_memory_size::<(u32, u64)>(num_rows, fixed_size_u32)?
+                // Each build row also owns an index in the duplicate-key chain.
+                .checked_add(num_rows * size_of::<u32>())
+                .ok_or_else(|| {
+                    datafusion_common::exec_datafusion_err!(
+                        "Hash join table size overflow"
+                    )
+                })?;
         reservation.try_grow(estimated_hashtable_size)?;
         metrics.build_mem_used.add(estimated_hashtable_size);
         Ok(Box::new(JoinHashMapU32::with_capacity(num_rows)))
     }
+}
+
+/// Estimates the memory newly allocated for `array`'s share of a concatenated
+/// array.
+///
+/// Concatenating view arrays copies only the views and keeps sharing the data
+/// buffers of the inputs, which are already accounted for.
+fn estimate_concat_allocation(array: &dyn Array) -> Result<usize> {
+    match array.data_type() {
+        DataType::Utf8View | DataType::BinaryView => {
+            let nulls = array
+                .nulls()
+                .map(|_| bit_util::ceil(array.len(), 8))
+                .unwrap_or_default();
+            Ok(array.len() * size_of::<u128>() + nulls)
+        }
+        _ => Ok(array.to_data().get_slice_memory_size()?),
+    }
+}
+
+/// Concatenates the build side `batches` into a single batch, in reverse order
+/// if `reverse` is set, keeping `reservation` ahead of the actual memory usage.
+///
+/// `inputs_reserved` is the memory `reservation` already holds for `batches`.
+/// The copy is reserved before it is made, and once `batches` are dropped the
+/// reservation is trimmed to the memory retained by the returned batch.
+fn concat_build_batches(
+    schema: &SchemaRef,
+    batches: Vec<RecordBatch>,
+    reverse: bool,
+    inputs_reserved: usize,
+    reservation: &mut MemoryReservation,
+    metrics: &BuildProbeJoinMetrics,
+) -> Result<RecordBatch> {
+    // Concatenating a single batch is zero-copy
+    let copy_size = if batches.len() > 1 {
+        let mut copy_size = 0;
+        for batch in &batches {
+            for array in batch.columns() {
+                copy_size += estimate_concat_allocation(array.as_ref())?;
+            }
+        }
+        copy_size
+    } else {
+        0
+    };
+    reservation.try_grow(copy_size)?;
+    metrics.build_mem_used.add(copy_size);
+
+    let batch = if reverse {
+        concat_batches(schema, batches.iter().rev())?
+    } else {
+        concat_batches(schema, batches.iter())?
+    };
+    drop(batches);
+
+    // The inputs are gone: only hold on to what the concatenated batch retains,
+    // which includes any buffers it still shares with the inputs.
+    let held = inputs_reserved + copy_size;
+    let retained = get_record_batch_memory_size(&batch);
+    if retained > held {
+        reservation.try_grow(retained - held)?;
+        metrics.build_mem_used.add(retained - held);
+    } else {
+        reservation.shrink(held - retained);
+        metrics.build_mem_used.sub(held - retained);
+    }
+
+    Ok(batch)
 }
 
 /// Collects all batches from the left (build) side stream and creates a hash map for joining.
@@ -2857,6 +2962,13 @@ fn new_join_hashmap(
 /// * `should_compute_dynamic_filters` - Whether to compute min/max bounds for dynamic filtering
 /// * `with_null_aware_mark_state` - Whether to build the per-build-row null-indices bitmap
 ///   and correlation-scope maps used by correlated null-aware `LeftMark` joins
+///
+/// # Memory Accounting
+/// Build batches are added to `reservation` as they arrive. They are then copied
+/// into a single batch, see [`concat_build_batches`]: the copy is reserved
+/// before it is made, and the reservation is trimmed to what the single batch
+/// retains once the input batches are dropped. Join key arrays that do not
+/// share the buffers of that batch are reserved as well.
 ///
 /// # Dynamic Filter Coordination
 /// When `should_compute_dynamic_filters` is true, this function computes the min/max bounds
@@ -2887,11 +2999,8 @@ async fn collect_left_input(
     let schema = left_stream.schema();
 
     // The extra scope maps + null bitmap are only built for correlated
-    // null-aware LeftMark joins (`on_left[1..]` are correlation scope keys).
-    let with_null_aware_mark_state = matches!(
-        null_aware,
-        Some(NullAwareMode::LeftMark { correlated: true })
-    );
+    // null-aware joins (see `NullAwareMode`).
+    let with_null_aware_row_state = null_aware.is_some_and(NullAwareMode::is_correlated);
 
     let is_phj_candidate = is_perfect_hash_join_candidate(&on_left, &schema)?;
 
@@ -2935,8 +3044,9 @@ async fn collect_left_input(
         metrics,
         mut reservation,
         bounds_accumulators,
-        memory_counter: _,
+        memory_counter,
     } = state;
+    let inputs_reserved = memory_counter.memory_usage();
 
     // Compute bounds
     let mut bounds = match bounds_accumulators {
@@ -2950,8 +3060,8 @@ async fn collect_left_input(
         _ => None,
     };
 
-    let (join_hash_map, batch, left_values) =
-        if let Some((array_map, batch, left_value)) = try_create_array_map(
+    let (join_hash_map, batch, left_values) = if let Some((min_val, max_val)) =
+        array_map_key_range(
             bounds.as_ref(),
             &schema,
             &batches,
@@ -2961,48 +3071,75 @@ async fn collect_left_input(
             config.execution.perfect_hash_join_min_key_density,
             null_equality,
         )? {
-            array_map_created_count.add(1);
-            metrics.build_mem_used.add(array_map.size());
+        let batch = concat_build_batches(
+            &schema,
+            batches,
+            false,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )?;
+        let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
+        let array_map = ArrayMap::try_new(&left_values[0], min_val, max_val)?;
 
-            (Map::ArrayMap(array_map), batch, left_value)
-        } else {
-            // Estimation of memory size, required for hashtable, prior to allocation.
-            // Final result can be verified using `RawTable.allocation_info()`
-            // Use `u32` indices for the JoinHashMap when num_rows ≤ u32::MAX, otherwise use the
-            // `u64` indice variant
-            // Arc is used instead of Box to allow sharing with SharedBuildAccumulator for hash map pushdown
-            let mut hashmap = new_join_hashmap(num_rows, &mut reservation, &metrics)?;
+        array_map_created_count.add(1);
+        metrics.build_mem_used.add(array_map.size());
 
-            let mut hashes_buffer = Vec::new();
-            let mut offset = 0;
+        (Map::ArrayMap(array_map), batch, left_values)
+    } else {
+        // Estimation of memory size, required for hashtable, prior to allocation.
+        // Final result can be verified using `RawTable.allocation_info()`
+        // Use `u32` indices for the JoinHashMap when num_rows ≤ u32::MAX, otherwise use the
+        // `u64` indice variant
+        // Arc is used instead of Box to allow sharing with SharedBuildAccumulator for hash map pushdown
+        let mut hashmap = new_join_hashmap(num_rows, &mut reservation, &metrics)?;
 
-            let batches_iter = batches.iter().rev();
+        let mut hashes_buffer = Vec::new();
+        let mut offset = 0;
 
-            // Updating hashmap starting from the last batch
-            for batch in batches_iter.clone() {
-                hashes_buffer.clear();
-                hashes_buffer.resize(batch.num_rows(), 0);
-                update_hash(
-                    &on_left,
-                    batch,
-                    &mut *hashmap,
-                    offset,
-                    &random_state,
-                    &mut hashes_buffer,
-                    0,
-                    true,
-                    null_equality,
-                )?;
-                offset += batch.num_rows();
-            }
+        // Updating hashmap starting from the last batch
+        for batch in batches.iter().rev() {
+            hashes_buffer.clear();
+            hashes_buffer.resize(batch.num_rows(), 0);
+            update_hash(
+                &on_left,
+                batch,
+                &mut *hashmap,
+                offset,
+                &random_state,
+                &mut hashes_buffer,
+                0,
+                true,
+                null_equality,
+            )?;
+            offset += batch.num_rows();
+        }
 
-            // Merge all batches into a single batch, so we can directly index into the arrays
-            let batch = concat_batches(&schema, batches_iter.clone())?;
+        // Merge all batches into a single batch, so we can directly index into the arrays
+        let batch = concat_build_batches(
+            &schema,
+            batches,
+            true,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )?;
 
-            let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
+        let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
 
-            (Map::HashMap(hashmap), batch, left_values)
-        };
+        (Map::HashMap(hashmap), batch, left_values)
+    };
+
+    // Join keys that are plain columns share the buffers of `batch`, any other
+    // expression evaluates to new arrays that are kept for the whole join.
+    let mut key_counter = RecordBatchMemoryCounter::new();
+    key_counter.count_batch(&batch);
+    let keys_size = left_values
+        .iter()
+        .map(|values| key_counter.count_array(values.as_ref()))
+        .sum::<usize>();
+    reservation.try_grow(keys_size)?;
+    metrics.build_mem_used.add(keys_size);
 
     let allocate_bitmap = || -> Result<BooleanBufferBuilder> {
         let bitmap_size = bit_util::ceil(batch.num_rows(), 8);
@@ -3021,42 +3158,42 @@ async fn collect_left_input(
         BooleanBufferBuilder::new(0)
     };
 
-    let null_indices_bitmap = if with_null_aware_mark_state {
+    let null_indices_bitmap = if with_null_aware_row_state {
         allocate_bitmap()?
     } else {
         BooleanBufferBuilder::new(0)
     };
 
-    let (null_aware_mark_scope_map, null_value_scope_map) = if with_null_aware_mark_state
-    {
-        // Null-aware `LeftMark` convention: `on_left[0]` is the value key and
-        // `on_left[1..]` the scope keys, so the scope map needs more than one key.
-        debug_assert!(
-            on_left.len() > 1,
-            "null-aware LeftMark needs on_left[0]=value, on_left[1..]=scope, got {} key(s)",
-            on_left.len()
-        );
-        // Scope-only NULL marking uses a HashMap (the primary join map may use
-        // ArrayMap for full-key matches, but scope keys have arbitrary shape).
-        let mut scope_map = new_join_hashmap(num_rows, &mut reservation, &metrics)?;
+    let (null_aware_scope_map, null_value_build_rows) = if with_null_aware_row_state {
+        // Null-aware convention: `on_left[0]` is the value key and
+        // `on_left[1..]` the (possibly empty) correlation scope keys.
+        let scope_keys = &on_left[1..];
+        let scope_map = if scope_keys.is_empty() {
+            None
+        } else {
+            // Scope-only NULL marking uses a HashMap (the primary join map may
+            // use ArrayMap for full-key matches, but scope keys have arbitrary
+            // shape).
+            let mut scope_map = new_join_hashmap(num_rows, &mut reservation, &metrics)?;
 
-        let mut hashes_buffer = vec![0; batch.num_rows()];
-        update_hash(
-            &on_left[1..],
-            &batch,
-            &mut *scope_map,
-            0,
-            &random_state,
-            &mut hashes_buffer,
-            0,
-            true,
-            NullEquality::NullEqualsNothing,
-        )?;
+            let mut hashes_buffer = vec![0; batch.num_rows()];
+            update_hash(
+                scope_keys,
+                &batch,
+                &mut *scope_map,
+                0,
+                &random_state,
+                &mut hashes_buffer,
+                0,
+                true,
+                NullEquality::NullEqualsNothing,
+            )?;
+            Some(scope_map)
+        };
 
-        // Build the dedicated scope map over the NULL-valued build rows (see
-        // `NullValueScopeMap`).
+        // Collect the NULL-valued build rows (see `NullValueBuildRows`).
         let value_key = &left_values[0];
-        let null_value_scope_map = if value_key.null_count() > 0 {
+        let null_value_build_rows = if value_key.logical_null_count() > 0 {
             let null_mask = arrow::compute::is_null(value_key.as_ref())?;
             let build_indices = UInt64Array::from_iter_values(
                 null_mask.values().set_indices().map(|i| i as u64),
@@ -3077,14 +3214,19 @@ async fn collect_left_input(
             reservation.try_grow(retained_size)?;
             metrics.build_mem_used.add(retained_size);
 
-            let null_rows = build_indices.len();
-            let mut map = new_join_hashmap(null_rows, &mut reservation, &metrics)?;
-            let mut hashes_buffer = vec![0; null_rows];
-            create_hashes(&scope_values, &random_state, &mut hashes_buffer)?;
-            map.update_from_iter(Box::new(hashes_buffer.iter().enumerate().rev()), 0);
+            let scope_map = if scope_values.is_empty() {
+                None
+            } else {
+                let null_rows = build_indices.len();
+                let mut map = new_join_hashmap(null_rows, &mut reservation, &metrics)?;
+                let mut hashes_buffer = vec![0; null_rows];
+                create_hashes(&scope_values, &random_state, &mut hashes_buffer)?;
+                map.update_from_iter(Box::new(hashes_buffer.iter().enumerate().rev()), 0);
+                Some(map)
+            };
 
-            Some(NullValueScopeMap {
-                map,
+            Some(NullValueBuildRows {
+                scope_map,
                 scope_values,
                 build_indices,
             })
@@ -3092,7 +3234,7 @@ async fn collect_left_input(
             None
         };
 
-        (Some(scope_map), null_value_scope_map)
+        (scope_map, null_value_build_rows)
     } else {
         (None, None)
     };
@@ -3162,8 +3304,8 @@ async fn collect_left_input(
     let data = JoinLeftData {
         integer_prefilter,
         map,
-        null_aware_mark_scope_map,
-        null_value_scope_map,
+        null_aware_scope_map,
+        null_value_build_rows,
         batch,
         values: left_values,
         visited_indices_bitmap: Mutex::new(visited_indices_bitmap),
@@ -3239,8 +3381,8 @@ mod tests {
                 true,
             ),
             (
-                Arc::new(arrow::array::StringArray::from(vec!["a", "c"])),
-                Arc::new(arrow::array::StringArray::from(vec!["a", "b"])),
+                Arc::new(StringArray::from(vec!["a", "c"])),
+                Arc::new(StringArray::from(vec!["a", "b"])),
                 false,
             ),
             (
@@ -3473,8 +3615,9 @@ mod tests {
     };
 
     use arrow::array::{
-        Array, ArrayRef, AsArray, Date32Array, DictionaryArray, Int32Array, Int64Array,
-        StructArray, UInt32Array, UInt64Array,
+        Array, ArrayRef, AsArray, BinaryViewArray, Date32Array, DictionaryArray,
+        Int32Array, Int64Array, StringArray, StringViewArray, StructArray, UInt32Array,
+        UInt64Array,
     };
     use arrow::buffer::NullBuffer;
     use arrow::datatypes::{DataType, Field, Int32Type};
@@ -3485,6 +3628,9 @@ mod tests {
         exec_err, internal_err,
     };
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::memory_pool::{
+        GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
+    };
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal, col};
@@ -3497,6 +3643,38 @@ mod tests {
     use insta::{allow_duplicates, assert_snapshot};
     use rstest::*;
     use rstest_reuse::*;
+
+    #[test]
+    fn hash_map_admits_row_indices_before_allocation() -> Result<()> {
+        use datafusion_execution::memory_pool::{GreedyMemoryPool, MemoryPool};
+
+        let rows = 1024;
+        let buckets =
+            estimate_memory_size::<(u32, u64)>(rows, size_of::<JoinHashMapU32>())?;
+        let bytes = buckets + rows * size_of::<u32>();
+        for (limit, succeeds) in [(bytes - 1, false), (bytes, true)] {
+            let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(limit));
+            let mut reservation = MemoryConsumer::new("row indices").register(&pool);
+            let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+            let result = new_join_hashmap(rows, &mut reservation, &metrics);
+            if succeeds {
+                let map = result?;
+                assert_eq!(reservation.size(), bytes);
+                assert_eq!(metrics.build_mem_used.value(), bytes);
+                drop(map);
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(datafusion_common::DataFusionError::ResourcesExhausted(_))
+                ));
+                assert_eq!(reservation.size(), 0);
+                assert_eq!(metrics.build_mem_used.value(), 0);
+            }
+            drop(reservation);
+            assert_eq!(pool.reserved(), 0);
+        }
+        Ok(())
+    }
 
     #[derive(Debug)]
     struct PartitionedTestExec {
@@ -7419,6 +7597,344 @@ mod tests {
         Ok(())
     }
 
+    /// Build side batches of `num_batches` x `num_rows` rows with distinct
+    /// buffers: an Int32 key, a Utf8, a Utf8View and a BinaryView payload.
+    fn concat_test_batches(num_batches: usize, num_rows: usize) -> Vec<RecordBatch> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int32, false),
+            Field::new("s", DataType::Utf8, true),
+            Field::new("v", DataType::Utf8View, true),
+            Field::new("bv", DataType::BinaryView, true),
+        ]));
+        (0..num_batches)
+            .map(|b| {
+                let start = (b * num_rows) as i32;
+                let keys = Int32Array::from_iter_values(start..start + num_rows as i32);
+                let strings = (0..num_rows)
+                    .map(|i| (i % 7 != 0).then(|| format!("string-{b}-{i}")))
+                    .collect::<StringArray>();
+                let views = (0..num_rows)
+                    .map(|i| {
+                        (i % 5 != 0).then(|| format!("a long string view value {b}-{i}"))
+                    })
+                    .collect::<StringViewArray>();
+                let binary_views = (0..num_rows)
+                    .map(|i| {
+                        (i % 3 != 0).then(|| format!("a long binary view value {b}-{i}"))
+                    })
+                    .collect::<BinaryViewArray>();
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(keys),
+                        Arc::new(strings),
+                        Arc::new(views),
+                        Arc::new(binary_views),
+                    ],
+                )
+                .unwrap()
+            })
+            .collect()
+    }
+
+    /// Reserves `batches` the way `collect_left_input` does.
+    fn reserve_inputs(
+        batches: &[RecordBatch],
+        pool: &Arc<dyn MemoryPool>,
+    ) -> Result<(MemoryReservation, usize)> {
+        let reservation = MemoryConsumer::new("HashJoinInput").register(pool);
+        let mut counter = RecordBatchMemoryCounter::new();
+        for batch in batches {
+            reservation.try_grow(counter.count_batch(batch))?;
+        }
+        Ok((reservation, counter.memory_usage()))
+    }
+
+    #[test]
+    fn concat_build_batches_matches_concat_batches() -> Result<()> {
+        let batches = concat_test_batches(4, 100);
+        let schema = batches[0].schema();
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+
+        for reverse in [false, true] {
+            let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+            let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+            let expected = if reverse {
+                concat_batches(&schema, batches.iter().rev())?
+            } else {
+                concat_batches(&schema, batches.iter())?
+            };
+            let batch = concat_build_batches(
+                &schema,
+                batches.clone(),
+                reverse,
+                inputs_reserved,
+                &mut reservation,
+                &metrics,
+            )?;
+            assert_eq!(batch, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn concat_build_batches_reserves_copy() -> Result<()> {
+        let batches = concat_test_batches(4, 1000);
+        let schema = batches[0].schema();
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+        let inputs: usize = batches.iter().map(get_record_batch_memory_size).sum();
+
+        // The inputs fit, but not together with their concatenated copy
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(inputs * 5 / 4));
+        let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+        assert_eq!(inputs_reserved, inputs);
+        let err = concat_build_batches(
+            &schema,
+            batches.clone(),
+            false,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )
+        .unwrap_err();
+        assert_contains!(err.to_string(), "Resources exhausted");
+        drop(reservation);
+
+        // With room for the copy, the reservation ends up at what is retained
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(inputs * 2));
+        let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+        let batch = concat_build_batches(
+            &schema,
+            batches,
+            false,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )?;
+        assert_eq!(reservation.size(), get_record_batch_memory_size(&batch));
+        assert_eq!(pool.reserved(), reservation.size());
+        Ok(())
+    }
+
+    /// Concatenating a single batch is zero-copy, so nothing more is reserved.
+    #[test]
+    fn concat_build_batches_single_batch_not_reserved_twice() -> Result<()> {
+        let batches = concat_test_batches(1, 1000);
+        let schema = batches[0].schema();
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+        let inputs = get_record_batch_memory_size(&batches[0]);
+
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(inputs));
+        let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+        let batch = concat_build_batches(
+            &schema,
+            batches,
+            true,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )?;
+        assert_eq!(batch.num_rows(), 1000);
+        assert_eq!(reservation.size(), inputs);
+        Ok(())
+    }
+
+    /// Only the views of a view array are copied, its data buffers stay shared.
+    #[rstest]
+    fn concat_build_batches_view_data_not_reserved_twice(
+        #[values("v", "bv")] column: &str,
+    ) -> Result<()> {
+        let batches = concat_test_batches(4, 1000);
+        let column = batches[0].schema().index_of(column)?;
+        let batches = batches
+            .into_iter()
+            .map(|batch| batch.project(&[column]))
+            .collect::<Result<Vec<_>, _>>()?;
+        let schema = batches[0].schema();
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+        let inputs: usize = batches.iter().map(get_record_batch_memory_size).sum();
+        let views = 4 * 1000 * size_of::<u128>();
+        assert!(inputs > 2 * views);
+
+        let pool: Arc<dyn MemoryPool> =
+            Arc::new(GreedyMemoryPool::new(inputs + views * 5 / 4));
+        let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+        let batch = concat_build_batches(
+            &schema,
+            batches,
+            false,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )?;
+        assert_eq!(reservation.size(), get_record_batch_memory_size(&batch));
+        Ok(())
+    }
+
+    /// The build side is concatenated into a single batch, and that copy must
+    /// be visible to the memory pool while the input batches are still alive.
+    #[rstest]
+    #[tokio::test]
+    async fn join_build_concat_is_reserved(
+        #[values(PartitionMode::CollectLeft, PartitionMode::Partitioned)]
+        mode: PartitionMode,
+        #[values(false, true)] use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let num_rows = 4000;
+        let values = (0..num_rows).collect::<Vec<i32>>();
+        let batches = (0..4)
+            .map(|_| build_table_i32(("a1", &values), ("b1", &values), ("c1", &values)))
+            .collect::<Vec<_>>();
+        let inputs: usize = batches.iter().map(get_record_batch_memory_size).sum();
+        let left_schema = batches[0].schema();
+        let right = build_table(
+            ("a2", &vec![10, 11]),
+            ("b2", &vec![12, 13]),
+            ("c2", &vec![14, 15]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("a1", &left_schema)?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        )];
+
+        // Reserved on top of the inputs and their copy
+        let build_rows = batches.len() * num_rows as usize;
+        let map = if use_perfect_hash_join_as_possible {
+            ArrayMap::estimate_memory_size(0, num_rows as u64 - 1, build_rows)
+        } else {
+            estimate_memory_size::<(u32, u64)>(build_rows, size_of::<JoinHashMapU32>())?
+                + build_rows * size_of::<u32>()
+        };
+
+        for (limit, fits) in [(map + inputs * 3 / 2, false), (map + inputs * 3, true)] {
+            let left = TestMemoryExec::try_new_exec(
+                std::slice::from_ref(&batches),
+                Arc::clone(&left_schema),
+                None,
+            )?;
+            let join = HashJoinExec::try_new(
+                left,
+                Arc::clone(&right),
+                on.clone(),
+                None,
+                &JoinType::Inner,
+                None,
+                mode,
+                NullEquality::NullEqualsNothing,
+                false,
+            )?;
+
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(limit, 1.0)
+                .build_arc()?;
+            let task_ctx = prepare_task_ctx(8192, use_perfect_hash_join_as_possible);
+            let task_ctx = Arc::new(
+                TaskContext::default()
+                    .with_session_config(task_ctx.session_config().clone())
+                    .with_runtime(runtime),
+            );
+
+            let result = common::collect(join.execute(0, task_ctx)?).await;
+            if fits {
+                result?;
+            } else {
+                assert_contains!(
+                    result.unwrap_err().to_string(),
+                    "Resources exhausted: Additional allocation failed for HashJoinInput"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Join keys that are not plain columns evaluate to new arrays, which are
+    /// kept for the whole join and must be reserved.
+    #[rstest]
+    #[tokio::test]
+    async fn join_build_key_arrays_are_reserved(
+        #[values(false, true)] use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let num_rows = 16000;
+        let values = (0..num_rows).collect::<Vec<i32>>();
+        // A single build batch, so that there is no concatenated copy
+        let batch = build_table_i32(("a1", &values), ("b1", &values), ("c1", &values));
+        let inputs = get_record_batch_memory_size(&batch);
+        let keys = inputs / 3;
+        let left_schema = batch.schema();
+        let right = build_table(
+            ("a2", &vec![10, 11]),
+            ("b2", &vec![12, 13]),
+            ("c2", &vec![14, 15]),
+        );
+
+        let map = if use_perfect_hash_join_as_possible {
+            ArrayMap::estimate_memory_size(1, num_rows as u64, num_rows as usize)
+        } else {
+            estimate_memory_size::<(u32, u64)>(
+                num_rows as usize,
+                size_of::<JoinHashMapU32>(),
+            )? + num_rows as usize * size_of::<u32>()
+        };
+
+        for (computed_key, limit, fits) in [
+            (false, inputs + map + keys / 2, true),
+            (true, inputs + map + keys / 2, false),
+            (true, inputs + map + keys * 2, true),
+        ] {
+            let column = Arc::new(Column::new_with_schema("a1", &left_schema)?) as _;
+            let left_key: PhysicalExprRef = if computed_key {
+                Arc::new(BinaryExpr::new(
+                    column,
+                    Operator::Plus,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                ))
+            } else {
+                column
+            };
+            let on = vec![(
+                left_key,
+                Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+            )];
+            let left = TestMemoryExec::try_new_exec(
+                &[vec![batch.clone()]],
+                Arc::clone(&left_schema),
+                None,
+            )?;
+            let join = HashJoinExec::try_new(
+                left,
+                Arc::clone(&right),
+                on,
+                None,
+                &JoinType::Inner,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                false,
+            )?;
+
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(limit, 1.0)
+                .build_arc()?;
+            let task_ctx = prepare_task_ctx(8192, use_perfect_hash_join_as_possible);
+            let task_ctx = Arc::new(
+                TaskContext::default()
+                    .with_session_config(task_ctx.session_config().clone())
+                    .with_runtime(runtime),
+            );
+
+            let result = common::collect(join.execute(0, task_ctx)?).await;
+            if fits {
+                result?;
+            } else {
+                assert_contains!(
+                    result.unwrap_err().to_string(),
+                    "Resources exhausted: Additional allocation failed for HashJoinInput"
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn build_table_struct(
         struct_name: &str,
         field_name_and_values: (&str, &Vec<Option<i32>>),
@@ -9105,13 +9621,14 @@ mod tests {
             ),
         ];
 
-        // Try to create null-aware anti join with 2 columns (should fail)
+        // Try to create null-aware right anti join with 2 columns (should fail).
+        // A multi-column `LeftAnti` is a correlated `NOT IN` and is accepted.
         let result = HashJoinExec::try_new(
             left,
             right,
             on,
             None,
-            &JoinType::LeftAnti,
+            &JoinType::RightAnti,
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
@@ -9121,7 +9638,7 @@ mod tests {
         assert!(result.is_err());
         assert!(
             result.unwrap_err().to_string().contains(
-                "null_aware LeftAnti joins only support single column join key"
+                "null_aware RightAnti joins only support single column join key"
             )
         );
     }
@@ -9411,6 +9928,151 @@ mod tests {
             | 5  | 2   | false |
             | 7  | 3   | false |
             +----+-----+-------+
+            ");
+        }
+
+        Ok(())
+    }
+
+    /// `left.z > right.z` over the second column of two-column tables: the
+    /// non-equality correlation of
+    /// `id NOT IN (SELECT r.id FROM r WHERE r.z < l.z)`.
+    fn prepare_second_column_gt_filter() -> JoinFilter {
+        let column_indices = vec![
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Right,
+            },
+        ];
+        let intermediate_schema = Schema::new(vec![
+            Field::new("z", DataType::Int32, true),
+            Field::new("z", DataType::Int32, true),
+        ]);
+        let filter_expression = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("z", 0)),
+            Operator::Gt,
+            Arc::new(Column::new("z", 1)),
+        )) as Arc<dyn PhysicalExpr>;
+
+        JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        )
+    }
+
+    /// Build and probe sides of a null-aware join whose only correlation is
+    /// the non-equality filter from [`prepare_second_column_gt_filter`].
+    ///
+    /// For each build row, the probe rows with a smaller `z` form its
+    /// subquery result:
+    /// - `(1, 10)` and `(2, 20)`: `{1, NULL}`
+    /// - `(NULL, 30)`: `{1, NULL}`
+    /// - `(4, 40)`: `{1, 4, NULL}`
+    /// - `(NULL, 1)` and `(5, 1)`: empty
+    ///
+    /// The probe row `(NULL, 50)` never passes the filter.
+    fn build_null_aware_filter_only_inputs()
+    -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>, JoinOn) {
+        let left = build_table_two_cols(
+            ("id", &vec![Some(1), Some(2), None, Some(4), None, Some(5)]),
+            (
+                "z",
+                &vec![Some(10), Some(20), Some(30), Some(40), Some(1), Some(1)],
+            ),
+        );
+        let right = build_table_two_cols(
+            ("id", &vec![Some(1), None, Some(4), None]),
+            ("z", &vec![Some(5), Some(50), Some(35), Some(2)]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("id", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("id", &right.schema()).unwrap()) as _,
+        )];
+        (left, right, on)
+    }
+
+    /// Null-aware `LeftAnti` with a join filter and no correlation scope keys.
+    ///
+    /// A NULL on either side only makes `NOT IN` UNKNOWN for the build rows
+    /// where the filter keeps the NULL, so the NULLs must not remove every row.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_left_anti_filter_only(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+        let (left, right, on) = build_null_aware_filter_only_inputs();
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            Some(prepare_second_column_gt_filter()),
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // Only the rows with an empty subquery result are TRUE.
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+---+
+            | id | z |
+            +----+---+
+            |    | 1 |
+            | 5  | 1 |
+            +----+---+
+            ");
+        }
+
+        Ok(())
+    }
+
+    /// Null-aware `LeftMark` with a join filter and no correlation scope keys.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_left_mark_filter_only(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+        let (left, right, on) = build_null_aware_filter_only_inputs();
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            Some(prepare_second_column_gt_filter()),
+            &JoinType::LeftMark,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // `(1, 10)` and `(4, 40)` match (true); `(2, 20)` and `(NULL, 30)`
+        // keep the NULL probe row (UNKNOWN); `(NULL, 1)` and `(5, 1)` have an
+        // empty subquery result (false).
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+----+-------+
+            | id | z  | mark  |
+            +----+----+-------+
+            |    | 1  | false |
+            |    | 30 |       |
+            | 1  | 10 | true  |
+            | 2  | 20 |       |
+            | 4  | 40 | true  |
+            | 5  | 1  | false |
+            +----+----+-------+
             ");
         }
 

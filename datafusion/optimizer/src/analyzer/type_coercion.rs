@@ -23,7 +23,7 @@ use itertools::{Itertools as _, izip};
 use std::sync::{Arc, LazyLock};
 
 use crate::analyzer::AnalyzerRule;
-use crate::utils::NamePreserver;
+use crate::utils::{NamePreserver, merge_into_schema};
 
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use arrow::temporal_conversions::SECONDS_IN_DAY;
@@ -130,18 +130,10 @@ fn analyze_internal(
     }
 
     // MERGE expressions (ON / WHEN clauses) reference the target table, which
-    // is not one of `plan.inputs()`. Rebuild the target schema from the DML's
-    // `table_name` and `target` so those columns resolve during coercion.
-    if let LogicalPlan::Dml(DmlStatement {
-        op: WriteOp::MergeInto(_),
-        table_name,
-        target,
-        ..
-    }) = &plan
-    {
-        let target_schema =
-            DFSchema::try_from_qualified_schema(table_name.clone(), &target.schema())?;
-        schema.merge(&target_schema);
+    // is not one of `plan.inputs()`. Use the operation's visible qualifier
+    // when adding its target schema.
+    if let Some(merge_schema) = merge_into_schema(&plan)? {
+        schema = merge_schema;
     }
 
     // merge the outer schema for correlated subqueries
@@ -1099,7 +1091,11 @@ fn coerce_frame_bound(
     }
 }
 
-fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
+/// The type that RANGE frame offsets are coerced to for an ORDER BY column of
+/// `col_type`, or `None` if there is no offset type to coerce to (the column
+/// type has no arithmetic). `None` does not mean the type is unusable in a
+/// RANGE frame: a free frame has no offsets, see `supports_free_range_frame`.
+fn extract_window_frame_target_type(col_type: &DataType) -> Option<DataType> {
     if col_type.is_numeric()
         || col_type.is_string()
         || col_type.is_binary()
@@ -1114,16 +1110,78 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
                 | DataType::Time64(_)
         )
     {
-        Ok(col_type.clone())
+        Some(col_type.clone())
     } else if is_datetime(col_type) {
-        Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+        Some(DataType::Interval(IntervalUnit::MonthDayNano))
     } else if let DataType::Dictionary(_, value_type) = col_type {
         extract_window_frame_target_type(value_type)
     } else if let DataType::RunEndEncoded(_, value_type) = col_type {
         extract_window_frame_target_type(value_type.data_type())
     } else {
-        internal_err!("Cannot run range queries on datatype: {col_type}")
+        None
     }
+}
+
+/// Whether a free RANGE frame (all bounds `UNBOUNDED` or `CURRENT ROW`) can
+/// run over an ORDER BY column of `col_type` even though the type has no
+/// arithmetic for finite offsets.
+///
+/// Such a frame only compares rows to find peers, so the type must compare
+/// the same way in the RANGE peer check (`ScalarValue::partial_cmp`) as in
+/// the sort that produced the input order. That holds for durations and
+/// intervals; it does not for structs and maps, whose `ScalarValue`
+/// comparison differs from the sorter's, so they stay unsupported.
+fn supports_free_range_frame(col_type: &DataType) -> bool {
+    match col_type {
+        DataType::Duration(_) | DataType::Interval(_) => true,
+        DataType::Dictionary(_, value_type) => supports_free_range_frame(value_type),
+        DataType::RunEndEncoded(_, value_type) => {
+            supports_free_range_frame(value_type.data_type())
+        }
+        _ => false,
+    }
+}
+
+/// Whether `col_type` is a list, possibly behind dictionary or run-end
+/// encoding.
+///
+/// Lists are kept out of the free-range fallback because their peer
+/// comparison and the sort do not agree on element NULLs: `compare_rows`
+/// applies the NULLS FIRST / NULLS LAST option to the top-level value only and
+/// then calls `ScalarValue::partial_cmp`, whose `partial_cmp_list` always
+/// orders a NULL element after a non-NULL one (Postgres semantics), while the
+/// sorter's `make_comparator` applies the option to the elements as well. Under
+/// `ORDER BY d, l NULLS FIRST` with tied `d`, the sort puts `[NULL]` before
+/// `[1]` and the peer check orders them the other way round.
+fn is_list_type(col_type: &DataType) -> bool {
+    match col_type {
+        DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
+            true
+        }
+        DataType::Dictionary(_, value_type) => is_list_type(value_type),
+        DataType::RunEndEncoded(_, value_type) => is_list_type(value_type.data_type()),
+        _ => false,
+    }
+}
+
+/// Errors if any ORDER BY expression has a type not supported in a free RANGE
+/// frame: a type with neither an offset target nor a sound peer comparison, or
+/// a list (see `is_list_type`).
+fn check_free_range_order_by_types(
+    expressions: &[Sort],
+    schema: &DFSchema,
+) -> Result<()> {
+    for sort in expressions {
+        let t = sort.expr.get_type(schema)?;
+        let supported = supports_free_range_frame(&t)
+            || (extract_window_frame_target_type(&t).is_some() && !is_list_type(&t));
+        if !supported {
+            return plan_err!(
+                "RANGE window frames are not supported for ORDER BY type {t}"
+            );
+        }
+    }
+    Ok(())
 }
 
 // Coerces the given `window_frame` to use appropriate natural types.
@@ -1141,7 +1199,28 @@ fn coerce_window_frame(
                 .map(|s| s.expr.get_type(schema))
                 .transpose()?;
             if let Some(col_type) = current_types {
-                let target_type = extract_window_frame_target_type(&col_type)?;
+                let target_type = match extract_window_frame_target_type(&col_type) {
+                    Some(target_type) => {
+                        if window_frame.free_range() {
+                            // The first key established the target type above, but
+                            // every later key also participates in peer comparison.
+                            check_free_range_order_by_types(&expressions[1..], schema)?;
+                        }
+                        target_type
+                    }
+                    // A free range frame has no offsets to coerce, so ORDER BY
+                    // types without arithmetic are fine as long as their peer
+                    // comparison is sound (see `supports_free_range_frame`).
+                    None if window_frame.free_range() => {
+                        check_free_range_order_by_types(expressions, schema)?;
+                        return Ok(window_frame);
+                    }
+                    None => {
+                        return plan_err!(
+                            "RANGE window frames are not supported for ORDER BY type {col_type}"
+                        );
+                    }
+                };
                 // A finite offset bound (e.g. `5 PRECEDING`) is computed as
                 // `current_value ± offset`, so it is only meaningful for target
                 // types that support arithmetic. Other orderable target types can
@@ -1745,9 +1824,10 @@ mod test {
         // target schema to be visible to the analyzer, which only sees
         // `plan.inputs()` (the source plan) by default.
         let on = col("target.id").eq(col("source.id"));
-        let merge_op = MergeIntoOp {
+        let merge_op = MergeIntoOp::new(
+            "target",
             on,
-            clauses: vec![
+            vec![
                 MergeIntoClause {
                     kind: MergeIntoClauseKind::Matched,
                     predicate: None,
@@ -1765,7 +1845,7 @@ mod test {
                     },
                 },
             ],
-        };
+        );
         let plan = LogicalPlan::Dml(DmlStatement::new(
             target_table_name,
             target_source,

@@ -69,6 +69,17 @@ impl RowGroupAccessPlanFilter {
         Self { access_plan }
     }
 
+    /// Skip every remaining row group: used when the predicate has been
+    /// proven unsatisfiable for the whole file (for example, when
+    /// constant-column substitution from file statistics collapsed it to a
+    /// constant `false`/NULL), so no row group can contain a matching row.
+    pub fn skip_all(&mut self) {
+        let indexes: Vec<usize> = self.access_plan.row_group_indexes();
+        for idx in indexes {
+            self.access_plan.skip(idx);
+        }
+    }
+
     /// Return true if there are no row groups
     pub fn is_empty(&self) -> bool {
         self.access_plan.is_empty()
@@ -90,10 +101,6 @@ impl RowGroupAccessPlanFilter {
     }
 
     /// Returns a reference to the inner access plan.
-    ///
-    /// Test-only accessor used by the shared assertion helpers in
-    /// [`crate::test_util`].
-    #[cfg(test)]
     pub(crate) fn access_plan(&self) -> &ParquetAccessPlan {
         &self.access_plan
     }

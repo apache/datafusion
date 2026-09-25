@@ -512,9 +512,9 @@ query TT
 EXPLAIN SELECT a, count(b) FROM agg_filter_pushdown WHERE a = 'x' GROUP BY a;
 ----
 physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(agg_filter_pushdown.b)], ordering_mode=Sorted
+01)AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(agg_filter_pushdown.b)]
 02)--RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
-03)----AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(agg_filter_pushdown.b)], ordering_mode=Sorted
+03)----AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(agg_filter_pushdown.b)]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_regression/agg_filter_pushdown.parquet]]}, projection=[a, b], file_type=parquet, predicate=a@0 = x, pruning_predicate=a_null_count@2 != row_count@3 AND a_min@0 <= x AND x <= a_max@1, required_guarantees=[a in (x)]
 
@@ -640,3 +640,37 @@ drop table t1;
 
 statement ok
 drop table t2;
+
+# A filter on a volatile group key must stay above the aggregate. Below the
+# aggregate, the filter evaluates the key again and sees a different value.
+query TT
+EXPLAIN SELECT k, c FROM (SELECT random() < 0.5 AS k, count(*) AS c FROM generate_series(1, 10000) GROUP BY 1) WHERE k;
+----
+logical_plan
+01)Projection: random() < Float64(0.5) AS k, count(Int64(1)) AS c
+02)--Filter: random() < Float64(0.5)
+03)----Aggregate: groupBy=[[random() < Float64(0.5)]], aggr=[[count(Int64(1))]]
+04)------TableScan: generate_series() projection=[]
+physical_plan
+01)ProjectionExec: expr=[random() < Float64(0.5)@0 as k, count(Int64(1))@1 as c]
+02)--FilterExec: random() < Float64(0.5)@0
+03)----AggregateExec: mode=FinalPartitioned, gby=[random() < Float64(0.5)@0 as random() < Float64(0.5)], aggr=[count(Int64(1))]
+04)------RepartitionExec: partitioning=Hash([random() < Float64(0.5)@0], 4), input_partitions=4
+05)--------AggregateExec: mode=Partial, gby=[random() < 0.5 as random() < Float64(0.5)], aggr=[count(Int64(1))]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=10000, batch_size=8192]
+
+query B
+SELECT k FROM (SELECT random() < 0.5 AS k, count(*) AS c FROM generate_series(1, 10000) GROUP BY random() < 0.5) WHERE k;
+----
+true
+
+query B
+SELECT k FROM (SELECT random() < 0.5 AS k, count(*) AS c FROM generate_series(1, 10000) GROUP BY k) WHERE NOT k;
+----
+false
+
+query I
+SELECT sum(c) FROM (SELECT random() < 0.5 AS k, count(*) AS c FROM generate_series(1, 10000) GROUP BY random() < 0.5) WHERE k OR NOT k;
+----
+10000

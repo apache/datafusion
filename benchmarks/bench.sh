@@ -112,6 +112,17 @@ parquet_row_filter_skip: Per-RG fully-matched RowFilter skip on Parquet (apache/
                           range filter + pushdown, so most row groups are fully matched and the per-row RowFilter is skipped on them
                           (subgroups via BENCH_SUBGROUP: skip = clustered key so the skip fires, control = scrambled key so it never fires)
                           (data generated inline by the suite's load SQL; knobs: PRED_ROWS, RG_SIZE)
+spill_views:            Sort and GROUP BY queries that spill StringView/BinaryView columns read from Parquet
+                          (https://github.com/apache/datafusion/issues/23564); each query sets its own memory limit
+                          (subgroups via BENCH_SUBGROUP: repeated = low-cardinality payload, distinct = all-distinct strings)
+                          (data generated inline by the suite's load SQL)
+null_aware_join:        Null-aware (NOT IN) hash join micro-benchmarks: uncorrelated, non-equality-correlated and equality-correlated
+                          NOT IN across NULL fractions, to measure the per-pair join-filter work the correlated cases do
+                          (data generated inline by the suite's load SQL from range(); knobs: NAJ_ROWS, NAJ_LARGE_ROWS)
+projection_subquery:    IN / NOT IN / EXISTS subqueries in the SELECT list (see https://github.com/apache/datafusion/issues/25341); each query projects the
+                          boolean subquery result and aggregates it, so the cost is the decorrelation plan and not the output size
+                          (q07 correlates on '<' instead of '=', so it keeps the nested-loop plan and acts as the control)
+                          (data generated inline by the suite's load SQL; knob: PSQ_ROWS)
 
 # ClickBench Benchmarks
 clickbench_1:           ClickBench queries against a single parquet file
@@ -165,6 +176,7 @@ nlj:                    Benchmark for simple nested loop joins, testing various 
 hj:                     Benchmark for simple hash joins, testing various join scenarios
 smj:                    Benchmark for simple sort merge joins, testing various join scenarios
 dict:                   Benchmark for dictionary-encoded group-by scenarios
+array_agg_distinct:     1000K-group, two-row-per-group array_agg(DISTINCT) benchmark
 compile_profile:        Compile and execute TPC-H across selected Cargo profiles, reporting timing and binary size
 
 
@@ -270,6 +282,18 @@ main() {
                 parquet_row_filter_skip)
                     # Data is generated inline by the suite's load SQL (COPY).
                     echo "parquet_row_filter_skip: no external data to generate"
+                    ;;
+                spill_views)
+                    # Data is generated inline by the suite's load SQL (COPY).
+                    echo "spill_views: no external data to generate"
+                    ;;
+                null_aware_join)
+                    # Data is generated inline by the suite's load SQL from range().
+                    echo "null_aware_join: no external data to generate"
+                    ;;
+                projection_subquery)
+                    # Data is generated inline by the suite's load SQL.
+                    echo "projection_subquery: no external data to generate"
                     ;;
                 asof_join)
                     data_asof_join
@@ -490,6 +514,7 @@ main() {
                     run_tpcds
                     run_smj
                     run_dict 
+                    run_null_aware_join
                     ;;
                 tpch)
                     run_tpch "1" "parquet"
@@ -517,6 +542,15 @@ main() {
                     ;;
                 parquet_row_filter_skip)
                     run_parquet_row_filter_skip
+                    ;;
+                spill_views)
+                    run_spill_views
+                    ;;
+                null_aware_join)
+                    run_null_aware_join
+                    ;;
+                projection_subquery)
+                    run_projection_subquery
                     ;;
                 asof_join)
                     run_asof_join
@@ -660,6 +694,9 @@ main() {
                 dict)
                     run_dict
                     ;;
+                array_agg_distinct)
+                    run_array_agg_distinct
+                    ;;
                 compile_profile)
                     run_compile_profile "${PROFILE_ARGS[@]}"
                     ;;
@@ -783,6 +820,17 @@ data_tpcds() {
     echo "Done."
 }
 
+# Path of the results JSON the Criterion SQL harness ($SQL_CARGO_COMMAND)
+# writes, passed to it as BENCH_RESULTS_FILE. It has the same format as the
+# dfbench results files and holds each query's peak memory pool reservation
+# (recorded only under a memory limit). It has no timings: Criterion keeps
+# those under target/criterion. It goes in a subdirectory so that `compare`,
+# which reads ${RESULTS_DIR}/*.json as timing results, does not read it.
+sql_results_file() {
+    mkdir -p "${RESULTS_DIR}/criterion"
+    echo "${RESULTS_DIR}/criterion/$1.json"
+}
+
 # Runs the tpch benchmark
 run_tpch() {
     SCALE_FACTOR=$1
@@ -794,6 +842,7 @@ run_tpch() {
     echo "Running tpch benchmark..."
 
     debug_run env BENCH_NAME=tpch \
+      BENCH_RESULTS_FILE="$(sql_results_file tpch_sf${SCALE_FACTOR}_${FORMAT})" \
       BENCH_SIZE="${SCALE_FACTOR}" \
       DATA_DIR="${DATA_DIR}" \
       PREFER_HASH_JOIN="${PREFER_HASH_JOIN}" \
@@ -854,6 +903,7 @@ data_wide_schema() {
 run_wide_schema() {
     echo "Running wide_schema benchmark (wide subgroup)..."
     debug_run env BENCH_NAME=wide_schema BENCH_SUBGROUP=wide \
+      BENCH_RESULTS_FILE="$(sql_results_file wide_schema_wide)" \
       DATA_DIR="${DATA_DIR}" \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
@@ -861,6 +911,7 @@ run_wide_schema() {
 
     echo "Running wide_schema benchmark (narrow baseline subgroup)..."
     debug_run env BENCH_NAME=wide_schema BENCH_SUBGROUP=narrow \
+      BENCH_RESULTS_FILE="$(sql_results_file wide_schema_narrow)" \
       DATA_DIR="${DATA_DIR}" \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
@@ -874,6 +925,7 @@ run_push_down_topk() {
     echo "Running push_down_topk benchmark..."
 
     debug_run env BENCH_NAME=push_down_topk \
+      BENCH_RESULTS_FILE="$(sql_results_file push_down_topk)" \
       BENCH_SIZE="1" \
       DATA_DIR="${DATA_DIR}" \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
@@ -905,6 +957,7 @@ run_push_down_topk() {
 run_predicate_eval() {
     echo "Running predicate_eval benchmark (subgroup=${BENCH_SUBGROUP:-all}, rows=${PRED_ROWS:-1000000})..."
     debug_run env BENCH_NAME=predicate_eval \
+      BENCH_RESULTS_FILE="$(sql_results_file predicate_eval)" \
       ${BENCH_SUBGROUP:+BENCH_SUBGROUP="${BENCH_SUBGROUP}"} \
       PRED_ROWS="${PRED_ROWS:-1000000}" \
       ${PRED_FILL:+PRED_FILL="${PRED_FILL}"} \
@@ -926,9 +979,66 @@ run_predicate_eval() {
 run_parquet_row_filter_skip() {
     echo "Running parquet_row_filter_skip benchmark (subgroup=${BENCH_SUBGROUP:-all}, rows=${PRED_ROWS:-10000000}, rg_size=${RG_SIZE:-1000000})..."
     debug_run env BENCH_NAME=parquet_row_filter_skip \
+      BENCH_RESULTS_FILE="$(sql_results_file parquet_row_filter_skip)" \
       ${BENCH_SUBGROUP:+BENCH_SUBGROUP="${BENCH_SUBGROUP}"} \
       PRED_ROWS="${PRED_ROWS:-10000000}" \
       RG_SIZE="${RG_SIZE:-1000000}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Runs the null_aware_join suite: NOT IN (null-aware) hash joins. The load SQL
+# builds every table inline from range(), so there is no data step.
+#
+# Q01-Q03 are uncorrelated NOT IN and are linear in the table size; they are the
+# regression guard for the plain null-aware path. Q04-Q08 are correlated, where
+# the correlation predicate stays behind as a join filter that the join applies
+# per candidate (build row x probe row) pair while deciding which rows are
+# UNKNOWN; with no equality correlation there are no scope keys to narrow those
+# pairs, so Q05-Q07 scale with the NULL count times the opposite table's size.
+#
+#   NAJ_ROWS         rows per table for the correlated queries (default 10_000)
+#   NAJ_LARGE_ROWS   rows per table for the uncorrelated queries (default 1_000_000)
+run_null_aware_join() {
+    echo "Running null_aware_join benchmark (rows=${NAJ_ROWS:-10000}, large_rows=${NAJ_LARGE_ROWS:-1000000})..."
+    debug_run env BENCH_NAME=null_aware_join \
+      BENCH_RESULTS_FILE="$(sql_results_file null_aware_join)" \
+      NAJ_ROWS="${NAJ_ROWS:-10000}" \
+      NAJ_LARGE_ROWS="${NAJ_LARGE_ROWS:-1000000}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Runs the projection_subquery suite: IN / NOT IN / EXISTS subqueries that sit
+# in the SELECT list instead of a filter (see
+# https://github.com/apache/datafusion/issues/25341). The load SQL builds the
+# two tables inline, so there is no data step. Each query projects the boolean
+# subquery result and aggregates it, so the measured cost is the decorrelation
+# plan and not the size of the output. Query 07 correlates on '<' instead of
+# '=', so it keeps the nested-loop plan and acts as the control.
+# Knob (string-substituted into the load SQL, not engine config):
+#   PSQ_ROWS  rows in each of the two tables (default 30_000; the checked-in
+#             result files hold the counts for that value)
+run_projection_subquery() {
+    echo "Running projection_subquery benchmark (rows=${PSQ_ROWS:-30000})..."
+    debug_run env BENCH_NAME=projection_subquery \
+      BENCH_RESULTS_FILE="$(sql_results_file projection_subquery)" \
+      PSQ_ROWS="${PSQ_ROWS:-30000}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Runs the spill_views suite: sort and GROUP BY queries that spill StringView
+# and BinaryView columns read from Parquet
+# (https://github.com/apache/datafusion/issues/23564). The load SQL COPYs 1M-row
+# Parquet files inline, so there is no data step. Each query sets its own memory
+# limit and target_partitions, so it spills regardless of the environment.
+#   BENCH_SUBGROUP  run one subgroup (repeated, distinct)
+run_spill_views() {
+    echo "Running spill_views benchmark (subgroup=${BENCH_SUBGROUP:-all})..."
+    debug_run env BENCH_NAME=spill_views \
+      BENCH_RESULTS_FILE="$(sql_results_file spill_views)" \
+      ${BENCH_SUBGROUP:+BENCH_SUBGROUP="${BENCH_SUBGROUP}"} \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
       bash -c "$SQL_CARGO_COMMAND"
 }
@@ -943,6 +1053,7 @@ run_tpch_mem() {
     echo "Running tpch_mem benchmark..."
 
     debug_run env BENCH_NAME=tpch \
+      BENCH_RESULTS_FILE="$(sql_results_file tpch_mem_sf${SCALE_FACTOR})" \
       BENCH_SIZE="${SCALE_FACTOR}" \
       DATA_DIR="${DATA_DIR}" \
       TPCH_FILE_TYPE="mem" \
@@ -1348,6 +1459,7 @@ run_h2o_window_sorted() {
     FILE_TYPE=${2:-"csv"}
     echo "Running h2o window_sorted benchmark (size=${SIZE}, source format=${FILE_TYPE})..."
     debug_run env BENCH_NAME=h2o \
+      BENCH_RESULTS_FILE="$(sql_results_file h2o_window_sorted_${SIZE}_${FILE_TYPE})" \
       BENCH_SUBGROUP=window_sorted \
       H2O_BENCH_SIZE="${SIZE}" \
       H2O_FILE_TYPE="${FILE_TYPE}" \
@@ -1717,6 +1829,15 @@ run_dict() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running dict benchmark..."
     debug_run $CARGO_COMMAND --bin dfbench -- dict --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the data-free high-cardinality array_agg(DISTINCT) SQL benchmark.
+run_array_agg_distinct() {
+    echo "Running array_agg_distinct benchmark..."
+    debug_run env BENCH_NAME=array_agg_distinct \
+      BENCH_RESULTS_FILE="$(sql_results_file array_agg_distinct)" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 
