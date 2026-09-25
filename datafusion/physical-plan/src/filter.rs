@@ -4467,7 +4467,12 @@ mod tests {
         use datafusion_physical_expr::expressions::OptionalFilterPhysicalExpr;
 
         const BATCHES: usize = 20;
-        const ROWS_PER_BATCH: i32 = 100;
+        /// Each batch repeats `0..100` this many times, so that half a batch
+        /// has at least `MIN_OBSERVED_ROWS` rows (the smallest window of a
+        /// gate).
+        const REPEAT: i32 =
+            datafusion_physical_expr::filter_stats::MIN_OBSERVED_ROWS.div_ceil(50) as i32;
+        const ROWS_PER_BATCH: i32 = 100 * REPEAT;
 
         fn schema() -> SchemaRef {
             Arc::new(Schema::new(vec![
@@ -4476,15 +4481,19 @@ mod tests {
             ]))
         }
 
-        /// One partition of `BATCHES` batches. Column `a` is `0..100` in each
-        /// batch, column `b` is `a + 1`.
+        /// One partition of `BATCHES` batches. Column `a` is `0..100`,
+        /// repeated `REPEAT` times, in each batch; column `b` is `a + 1`.
         fn input() -> Result<Arc<dyn ExecutionPlan>> {
             let schema = schema();
             let batch = RecordBatch::try_new(
                 Arc::clone(&schema),
                 vec![
-                    Arc::new(Int32Array::from_iter_values(0..ROWS_PER_BATCH)),
-                    Arc::new(Int32Array::from_iter_values(1..=ROWS_PER_BATCH)),
+                    Arc::new(Int32Array::from_iter_values(
+                        (0..ROWS_PER_BATCH).map(|i| i % 100),
+                    )),
+                    Arc::new(Int32Array::from_iter_values(
+                        (0..ROWS_PER_BATCH).map(|i| i % 100 + 1),
+                    )),
                 ],
             )?;
             let batches = vec![batch; BATCHES];
@@ -4574,7 +4583,7 @@ mod tests {
         /// Values of `a` for which `keep` is true, in all batches.
         fn expected(keep: impl Fn(i32) -> bool) -> Vec<i32> {
             let mut values: Vec<i32> = (0..BATCHES)
-                .flat_map(|_| (0..ROWS_PER_BATCH).filter(|v| keep(*v)))
+                .flat_map(|_| (0..ROWS_PER_BATCH).map(|i| i % 100).filter(|v| keep(*v)))
                 .collect();
             values.sort_unstable();
             values
@@ -4603,12 +4612,12 @@ mod tests {
             // With the default gate configuration (windows of 2 batches, a
             // first pause of 4 batches that doubles), the gate evaluates
             // batches 1-2, 7-8 and 17-18, and skips the other 14 batches.
-            // In each batch, 50 rows reach the optional conjunct.
+            // In each batch, half of the rows reach the optional conjunct.
             let (_, metrics) = run_mode(&predicate, OptionalFilterMode::Adaptive).await?;
             assert_eq!(count(&metrics, "optional_filter_pauses"), Some(3));
             assert_eq!(
                 count(&metrics, "optional_filter_rows_skipped"),
-                Some(14 * 50)
+                Some(14 * 50 * REPEAT as usize)
             );
             Ok(())
         }
