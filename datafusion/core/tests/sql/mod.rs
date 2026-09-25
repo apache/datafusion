@@ -69,6 +69,7 @@ pub mod joins;
 mod path_partition;
 mod runtime_config;
 pub mod select;
+mod set_operations;
 mod sql_api;
 mod union_comparison;
 mod union_nullable;
