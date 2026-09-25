@@ -681,6 +681,15 @@ impl FileSource for ParquetSource {
                 .table_parquet_options
                 .global
                 .row_group_range_assignment,
+            read_ahead_bytes: self
+                .table_parquet_options
+                .global
+                .read_ahead_bytes
+                .map(|bytes| bytes as u64),
+            read_ahead_conditional: self
+                .table_parquet_options
+                .global
+                .read_ahead_conditional,
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             virtual_state,
