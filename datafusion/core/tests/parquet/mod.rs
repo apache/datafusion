@@ -322,13 +322,10 @@ impl ContextWithParquet {
     ) -> Self {
         // Use a single partition for deterministic results no matter how many CPUs the host has
         config = config.with_target_partitions(1);
-        // The tests check the exact metrics of a plain row filter. The
-        // adaptive modes (the defaults) make decisions from time
-        // measurements, and the adaptive filter placement coalesces small
-        // batches, which delays the TopK dynamic filters. Thus use the modes
-        // without adaptive decisions.
+        // The tests check exact metrics. The `adaptive` optional filter mode
+        // (the default) can pause a TopK dynamic filter from time
+        // measurements, thus evaluate the optional filters always.
         config.options_mut().execution.optional_filter_mode = OptionalFilterMode::Always;
-        config.options_mut().execution.adaptive_filter_placement = false;
         let file = match unit {
             Unit::RowGroup(row_per_group) => {
                 config = config.with_parquet_bloom_filter_pruning(true);
