@@ -32,6 +32,7 @@
 //! which calls [`map`](DecoderProjection::map) on every decoded batch.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use arrow::array::{Array, BooleanArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::kernels::boolean::and;
@@ -39,7 +40,10 @@ use arrow::compute::kernels::filter::{filter_record_batch, prep_null_mask_filter
 use arrow::datatypes::SchemaRef;
 
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::instant::Instant;
 use datafusion_common::{Result, internal_err};
+use datafusion_physical_expr::filter_stats::duration_nanos;
+use datafusion_physical_expr::optional_filter_gate::GateDecision;
 use datafusion_physical_expr::projection::{ProjectionExprs, Projector};
 use datafusion_physical_expr::split_conjunction;
 use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
@@ -54,6 +58,7 @@ use crate::ParquetFileMetrics;
 use crate::filter_placement::{ConjunctStats, StageSelection};
 use crate::opener::{VirtualColumnsState, append_fields};
 use crate::projection_read_plan::build_projection_read_plan;
+use crate::row_filter::SharedOptionalFilterGate;
 
 /// Stream-schema column indices referenced by `projection`, in ascending
 /// order, or `None` when the projection already reads every column of
@@ -180,10 +185,20 @@ impl PostScanFilter {
             PostScanConjunct {
                 expr: conjunct,
                 stats,
+                gate,
             },
         ) in self.conjuncts.iter().enumerate()
         {
             let rows_in = working.num_rows();
+            // An optional conjunct that its gate skips lets all rows pass.
+            let mut gate = gate.as_ref().map(|gate| gate.lock());
+            if let Some(gate) = gate.as_mut()
+                && gate.begin_batch(rows_in) == GateDecision::Skip
+            {
+                continue;
+            }
+            let start = gate.as_ref().map(|gate| gate.now_nanos());
+            let measure_start = stats.as_ref().map(|_| Instant::now());
             let array = conjunct.evaluate(&working)?.into_array(rows_in)?;
             let Ok(mask) = as_boolean_array(array.as_ref()) else {
                 return internal_err!(
@@ -196,9 +211,16 @@ impl PostScanFilter {
                 Some(_) => prep_null_mask_filter(mask),
                 None => mask.clone(),
             };
-            if let (Some(stages), Some(stats)) = (stages.as_ref(), stats) {
-                stages.record(stats, &mask);
+            if let (Some(stages), Some(stats), Some(measure_start)) =
+                (stages.as_ref(), stats, measure_start)
+            {
+                stages.record(stats, &mask, duration_nanos(measure_start.elapsed()));
             }
+            if let (Some(gate), Some(start)) = (gate.as_mut(), start) {
+                let elapsed = gate.now_nanos().saturating_sub(start);
+                gate.record(rows_in, mask.true_count(), Duration::from_nanos(elapsed));
+            }
+            drop(gate);
             // An all-true conjunct leaves the accumulated selection untouched.
             if mask.true_count() == rows_in {
                 continue;
@@ -259,11 +281,19 @@ pub(crate) struct PostScanConjunct {
     /// The measurements of the adaptive filter placement, if it manages the
     /// conjunct. The post-scan filter records each evaluation.
     pub(crate) stats: Option<Arc<ConjunctStats>>,
+    /// The gate of an optional conjunct: the post-scan filter evaluates the
+    /// conjunct only on the batches that the gate does not skip. `None` for
+    /// a required conjunct.
+    pub(crate) gate: Option<SharedOptionalFilterGate>,
 }
 
 impl From<Arc<dyn PhysicalExpr>> for PostScanConjunct {
     fn from(expr: Arc<dyn PhysicalExpr>) -> Self {
-        Self { expr, stats: None }
+        Self {
+            expr,
+            stats: None,
+            gate: None,
+        }
     }
 }
 
@@ -478,6 +508,15 @@ impl DecoderProjection {
             for conjunct in post_scan_conjuncts {
                 let expr =
                     reassign_expr_columns(Arc::clone(&conjunct.expr), &stream_schema)?;
+                // The gate of an optional conjunct decides for the whole
+                // conjunct, thus it is not split.
+                if conjunct.gate.is_some() {
+                    rebased.push(PostScanConjunct {
+                        expr,
+                        ..conjunct.clone()
+                    });
+                    continue;
+                }
                 let pieces = split_conjunction(&expr);
                 // The measurements belong to the whole conjunct. The adaptive
                 // filter placement only manages conjuncts of the root `AND`
@@ -490,6 +529,7 @@ impl DecoderProjection {
                 rebased.extend(pieces.into_iter().map(|piece| PostScanConjunct {
                     expr: Arc::clone(piece),
                     stats: stats.clone(),
+                    gate: None,
                 }));
             }
             Some(PostScanFilter {
@@ -662,10 +702,12 @@ mod tests {
                 PostScanConjunct {
                     expr: every_fourth,
                     stats: Some(Arc::clone(&first)),
+                    gate: None,
                 },
                 PostScanConjunct {
                     expr: upper_half,
                     stats: Some(Arc::clone(&second)),
+                    gate: None,
                 },
             ],
             rows_pruned: Count::new(),
@@ -686,6 +728,53 @@ mod tests {
             (second.rows_in, second.rows_out, second.skippable_rows),
             (256, 256 - 32, 0)
         );
+    }
+
+    /// A gated optional conjunct sees only the rows that the conjuncts
+    /// before it let pass, and a paused gate skips it.
+    #[test]
+    fn gated_conjunct_sees_rows_after_earlier_conjuncts() {
+        use crate::metrics::OptionalFilterMetrics;
+        use crate::row_filter::OptionalFilterGateState;
+        use datafusion_physical_expr::filter_stats::ManualClock;
+        use datafusion_physical_expr::optional_filter_gate::{
+            OptionalFilterGate, OptionalFilterGateConfig,
+        };
+        use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+
+        // The first conjunct keeps the rows with `a > 99`. The optional
+        // conjunct `b > 99` removes the same rows: after the first conjunct
+        // it removes nothing, thus its gate pauses it after its first window
+        // of 2 batches.
+        let optional = gt("b", 1, 99);
+        let gate = OptionalFilterGateState::shared(
+            OptionalFilterGate::new(
+                Arc::clone(&optional),
+                OptionalFilterGateConfig::default(),
+            )
+            .with_clock(Arc::new(ManualClock::new())),
+            OptionalFilterMetrics::new(&ExecutionPlanMetricsSet::new(), 0, "file"),
+        );
+        let filter = PostScanFilter {
+            conjuncts: vec![
+                PostScanConjunct::from(gt("a", 0, 99)),
+                PostScanConjunct {
+                    expr: optional,
+                    stats: None,
+                    gate: Some(Arc::clone(&gate)),
+                },
+            ],
+            rows_pruned: Count::new(),
+            rows_matched: Count::new(),
+            eval_time: Time::new(),
+        };
+        let input = || batch((0..200).map(Some).collect());
+        for _ in 0..2 {
+            assert_eq!(survivors(&filter, input()).len(), 100);
+        }
+        assert!(gate.lock().is_paused());
+        // The paused gate skips the optional conjunct: same result.
+        assert_eq!(survivors(&filter, input()).len(), 100);
     }
 
     #[test]
