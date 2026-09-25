@@ -4,6 +4,7 @@
 
 - [Quick Start Setup](docs/source/contributor-guide/development_environment.md#quick-start)
 - [Testing Quick Start](docs/source/contributor-guide/testing.md#testing-quick-start)
+- [Choosing What Kind of Test to Write](docs/source/contributor-guide/testing.md#choosing-what-kind-of-test-to-write)
 - [Before Submitting a PR](docs/source/contributor-guide/index.md#before-submitting-a-pr)
 - [Reviewing Pull Requests](docs/source/contributor-guide/pr_review.md)
 - [Contributor Guide](docs/source/contributor-guide/index.md)
@@ -38,7 +39,18 @@ When creating a PR, you MUST follow the [PR template](.github/pull_request_templ
 
 ## Testing
 
-If documentation files changed then run 
+When adding tests, you MUST follow
+[Choosing What Kind of Test to Write](docs/source/contributor-guide/testing.md#choosing-what-kind-of-test-to-write):
+
+- Prefer `sqllogictest` (`.slt`) tests in `datafusion/sqllogictest/test_files`
+  for any behavior that can be expressed in SQL, including `EXPLAIN` output.
+- Otherwise prefer end-to-end tests of public APIs such as the DataFrame API.
+- Write Rust unit tests only for logic that cannot practically be reached
+  through SQL or the public APIs.
+- Add new `.slt` tests to an existing file with related functionality rather
+  than creating a new file.
+
+If documentation files changed then run
 ```bash
 ./ci/scripts/doc_prettier_check.sh --write --allow-dirty
 ```

@@ -74,6 +74,40 @@ cargo nextest run
 [the book]: https://doc.rust-lang.org/book/
 [cargo-nextest]: https://nexte.st/
 
+## Choosing What Kind of Test to Write
+
+When adding tests, prefer tests that exercise **user-visible behavior** over
+tests of internal implementation details. In rough order of preference:
+
+1. [sqllogictest](#sqllogictests-tests) (`.slt`) tests for any behavior that can
+   be expressed in SQL, including query results, error messages, and the output
+   of `EXPLAIN` for plans.
+2. End-to-end tests that use public APIs such as the DataFrame API, for behavior
+   that cannot be expressed in SQL.
+3. Rust unit tests, only for logic that cannot practically be reached through
+   SQL or the public APIs.
+
+Tests of user-visible behavior are less coupled to the implementation, so they
+keep working (and keep catching regressions) while the code is refactored.
+
+`sqllogictest`s in particular are preferred because they:
+
+1. Do not require a slow recompile/link cycle to develop or run.
+2. Can be automatically updated using `--complete` when expected output changes.
+3. Are much more concise than the equivalent Rust code, which keeps the size of
+   the codebase, and thus the cost of maintaining it, down.
+
+`sqllogictests` may be less convenient for new contributors who are familiar
+with writing `.rs` tests as they require learning another tool. Like similar
+systems such as [DuckDB](https://duckdb.org/dev/testing), DataFusion has chosen
+to trade off a slightly higher barrier to contribution for longer term
+maintainability.
+
+Put new `.slt` tests in an existing file with related functionality rather than
+creating a new file, unless the new tests are large enough to justify their own
+file. See [Review the Test Coverage](pr_review.md#review-the-test-coverage) for
+what reviewers look for in tests.
+
 ## Unit tests
 
 Tests for code in an individual module are defined in the same source file with a `test` module, following Rust convention.
@@ -107,9 +141,11 @@ cargo test --profile=ci --test sqllogictests -- aggregate.slt --complete
 cargo test --profile=ci --test sqllogictests -- --complete
 ```
 
-`sqllogictests` may be less convenient for new contributors who are familiar with writing `.rs` tests as they require learning another tool. However, `sqllogictest` based tests are much easier to develop and maintain as they 1) do not require a slow recompile/link cycle and 2) can be automatically updated.
+`sqllogictest` based tests are the preferred way to test DataFusion. See
+[Choosing What Kind of Test to Write](#choosing-what-kind-of-test-to-write) for
+the rationale, and the [sqllogictest README] for a cookbook on adding tests.
 
-Like similar systems such as [DuckDB](https://duckdb.org/dev/testing), DataFusion has chosen to trade off a slightly higher barrier to contribution for longer term maintainability.
+[sqllogictest readme]: https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md#cookbook-adding-tests
 
 DataFusion runs [sqlite's test suite](https://sqlite.org/sqllogictest/doc/trunk/about.wiki) in the merge queue before merging PRs into `main`. For local instructions, see [Running Tests: sqlite](https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md#running-tests-sqlite).
 
