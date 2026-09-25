@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use crate::ensure_requirements::EnsureRequirements;
+use crate::ensure_requirements::EnforceDistribution;
 
 // Re-export from this module for convenience.
 pub use datafusion_session::PhysicalAnalyzerRule;
@@ -48,23 +48,18 @@ impl PhysicalAnalyzer {
     /// Create a new analyzer using the recommended list of rules
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn PhysicalAnalyzerRule + Send + Sync>> = vec![
-            // Ensures each input plan satisfies the distribution and ordering
-            // requirements declared by `ExecutionPlan::required_input_distribution`
-            // and `ExecutionPlan::required_input_ordering`.
+            // Enforces the distribution requirements declared by
+            // `ExecutionPlan::required_input_distribution` (inserting the
+            // repartition / coalesce operators needed for a valid, parallel
+            // plan). It runs first so the optimizer rules see a
+            // distribution-valid plan; the optimizer phase re-runs it after any
+            // rule that changes distribution (e.g. `JoinSelection`).
             //
-            // If the requirements are already satisfied, this rule leaves the plan
-            // unchanged. For example, it does not add sorting when the input is a
-            // file scan whose existing order already satisfies the required ordering.
-            // Otherwise, this rule inserts the necessary repartitioning and sorting
-            // operators.
-            //
-            // This used to be implemented as two separate rules: `EnforceDistribution`
-            // and `EnforceSorting`. It is now a single rule that decides distribution
-            // and sorting together in one bottom-up pass. See the module-level doc on
-            // [`EnsureRequirements`](crate::ensure_requirements) for the per-phase
-            // breakdown, and <https://github.com/apache/datafusion/issues/21973>
-            // for the original failure mode.
-            Arc::new(EnsureRequirements::new()),
+            // Ordering enforcement (`EnforceSorting`) and the sort optimizations
+            // (`OptimizeSorts`) run later in the optimizer phase, not here,
+            // because ordering enforcement is not idempotent and depends on
+            // rules like `JoinSelection` / `WindowTopN` having run first.
+            Arc::new(EnforceDistribution::new()),
         ];
 
         Self::with_rules(rules)
@@ -81,32 +76,54 @@ mod tests {
     use super::*;
     use crate::optimizer::PhysicalOptimizer;
 
-    /// The default analyzer enforces requirements via `EnsureRequirements`.
+    /// The default analyzer enforces distribution via `EnforceDistribution`.
     #[test]
-    fn default_analyzer_enforces_requirements() {
+    fn default_analyzer_enforces_distribution() {
         let analyzer = PhysicalAnalyzer::new();
         let names: Vec<&str> = analyzer.rules.iter().map(|r| r.name()).collect();
-        assert_eq!(names, vec!["EnsureRequirements"]);
+        assert_eq!(names, vec!["EnforceDistribution"]);
     }
 
-    /// `EnsureRequirements` moved to the analyzer phase, so it must no longer
-    /// appear in the default optimizer list (otherwise it would run twice).
+    /// The monolithic `EnsureRequirements` is no longer registered in either
+    /// default list; the default pipeline uses the decomposed rules.
     #[test]
-    fn default_optimizer_does_not_enforce_requirements() {
-        let has_ensure = PhysicalOptimizer::new()
+    fn default_lists_do_not_use_monolithic_ensure_requirements() {
+        let analyzer_has = PhysicalAnalyzer::new()
             .rules
             .iter()
             .any(|r| r.name() == "EnsureRequirements");
+        let optimizer_has = PhysicalOptimizer::new()
+            .rules
+            .iter()
+            .any(|r| r.name() == "EnsureRequirements");
+        assert!(!analyzer_has && !optimizer_has);
+    }
+
+    /// The default optimizer runs the decomposed enforcement/optimization rules
+    /// in the required relative order: `EnforceDistribution` → `EnforceSorting`
+    /// → `OptimizeSorts`.
+    #[test]
+    fn default_optimizer_has_decomposed_rules_in_order() {
+        let names: Vec<String> = PhysicalOptimizer::new()
+            .rules
+            .iter()
+            .map(|r| r.name().to_string())
+            .collect();
+        let pos = |name: &str| names.iter().position(|n| n == name);
+        let (d, s, o) = (
+            pos("EnforceDistribution").expect("EnforceDistribution present"),
+            pos("EnforceSorting").expect("EnforceSorting present"),
+            pos("OptimizeSorts").expect("OptimizeSorts present"),
+        );
         assert!(
-            !has_ensure,
-            "EnsureRequirements should be a PhysicalAnalyzerRule, not an optimizer rule"
+            d < s && s < o,
+            "expected EnforceDistribution < EnforceSorting < OptimizeSorts, got {names:?}"
         );
     }
 
-    /// A default analyzer with a schema-preserving enforcement rule keeps the
-    /// `schema_check` contract on.
+    /// The analyzer rule keeps its schema-check contract on.
     #[test]
-    fn ensure_requirements_schema_check_is_on() {
+    fn enforce_distribution_schema_check_is_on() {
         let analyzer = PhysicalAnalyzer::new();
         assert!(analyzer.rules[0].schema_check());
     }

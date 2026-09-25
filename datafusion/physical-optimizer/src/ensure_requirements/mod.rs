@@ -240,21 +240,31 @@ pub fn enforce_distribution_requirements(
     Ok(dist_ctx.plan)
 }
 
-/// Phases 0-2: make the plan *valid* by enforcing the distribution and ordering
-/// requirements every operator declares (distribution via
-/// [`enforce_distribution_requirements`], then sorting). Does not include the
-/// sort/distribution optimizations in [`optimize_sorts`].
+/// Phase 2b: enforce **ordering** requirements by inserting `SortExec`s on a
+/// distribution-fixed plan (bottom-up). This is the enforcement half that is
+/// *not* idempotent, so it runs exactly once in the default pipeline via the
+/// [`EnforceSorting`] rule. Exposed as a free function so the [`EnsureRequirements`]
+/// compatibility shim can reuse it.
+pub fn enforce_sorting_requirements(
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    use super::enforce_sorting::{PlanWithCorrespondingSort, ensure_sorting};
+    let sort_ctx = PlanWithCorrespondingSort::new_default(plan);
+    let sort_ctx = sort_ctx.transform_up(ensure_sorting)?.data;
+    Ok(sort_ctx.plan)
+}
+
+/// Phases 0-2: full requirement enforcement (distribution via
+/// [`enforce_distribution_requirements`], then sorting via
+/// [`enforce_sorting_requirements`]). The default pipeline uses the
+/// finer-grained [`EnforceDistribution`] / [`EnforceSorting`] rules instead;
+/// this stays for the [`EnsureRequirements`] compatibility shim.
 pub fn enforce_requirements(
     plan: Arc<dyn ExecutionPlan>,
     context: &dyn PhysicalOptimizerContext,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let plan = enforce_distribution_requirements(plan, context)?;
-
-    // Step 2b: Sorting enforcement (bottom-up) — runs on distribution-fixed plan
-    use super::enforce_sorting::{PlanWithCorrespondingSort, ensure_sorting};
-    let sort_ctx = PlanWithCorrespondingSort::new_default(plan);
-    let sort_ctx = sort_ctx.transform_up(ensure_sorting)?.data;
-    Ok(sort_ctx.plan)
+    enforce_sorting_requirements(plan)
 }
 
 /// Phase 3: sort and distribution *optimizations* that make an already-valid
@@ -303,13 +313,30 @@ pub fn optimize_sorts(
         .data()
 }
 
-impl PhysicalOptimizerRule for EnsureRequirements {
+/// Enforces **distribution** requirements (Phases 0-2a) via
+/// [`enforce_distribution_requirements`]. It is idempotent enough to run more
+/// than once, so it is used two ways in the default pipeline:
+/// - as the [`PhysicalAnalyzerRule`] that runs first (making the plan
+///   distribution-valid before the optimizers see it), and
+/// - as a [`PhysicalOptimizerRule`] placed after rules that change distribution
+///   (e.g. `JoinSelection`, `WindowTopN`) to re-enforce it.
+#[derive(Default, Debug)]
+pub struct EnforceDistribution {}
+
+impl EnforceDistribution {
+    #[expect(missing_docs)]
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl PhysicalOptimizerRule for EnforceDistribution {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.optimize_with_context(plan, &ConfigOnlyContext::new(config))
+        enforce_distribution_requirements(plan, &ConfigOnlyContext::new(config))
     }
 
     fn optimize_with_context(
@@ -317,15 +344,11 @@ impl PhysicalOptimizerRule for EnsureRequirements {
         plan: Arc<dyn ExecutionPlan>,
         context: &dyn PhysicalOptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // The optimizer path preserves the original combined behavior
-        // (enforcement + sort optimizations) for custom chains that still
-        // register `EnsureRequirements` as an optimizer rule.
-        let plan = enforce_requirements(plan, context)?;
-        optimize_sorts(plan, context.config_options())
+        enforce_distribution_requirements(plan, context)
     }
 
     fn name(&self) -> &str {
-        "EnsureRequirements"
+        "EnforceDistribution"
     }
 
     fn schema_check(&self) -> bool {
@@ -333,14 +356,7 @@ impl PhysicalOptimizerRule for EnsureRequirements {
     }
 }
 
-/// `EnsureRequirements` runs as a [`PhysicalAnalyzerRule`]: enforcing the
-/// distribution and ordering requirements every operator declares makes the
-/// plan *valid* rather than faster, so it belongs in the analyzer phase. Only
-/// the enforcement core (Phases 0-2) runs here; the sort/distribution
-/// optimizations (Phase 3) run separately as the [`OptimizeSorts`] optimizer
-/// rule. The `PhysicalOptimizerRule` impl above is retained (running both) so
-/// custom rule lists that still register it as an optimizer keep working.
-impl PhysicalAnalyzerRule for EnsureRequirements {
+impl PhysicalAnalyzerRule for EnforceDistribution {
     fn analyze(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -358,7 +374,7 @@ impl PhysicalAnalyzerRule for EnsureRequirements {
     }
 
     fn name(&self) -> &str {
-        "EnsureRequirements"
+        "EnforceDistribution"
     }
 
     fn schema_check(&self) -> bool {
@@ -366,10 +382,41 @@ impl PhysicalAnalyzerRule for EnsureRequirements {
     }
 }
 
-/// Phase 3 of the former combined `EnsureRequirements` rule, as a standalone
-/// [`PhysicalOptimizerRule`]: sort and distribution optimizations that make an
-/// already-valid plan faster. Runs in the optimizer phase so it can optimize
-/// operators produced by earlier optimizer rules.
+/// Enforces **ordering** requirements (Phase 2b) via
+/// [`enforce_sorting_requirements`]. Not idempotent, so it runs exactly once in
+/// the default pipeline, after the rules that determine ordering requirements
+/// (`JoinSelection` → `SortMergeJoin`, `WindowTopN`).
+#[derive(Default, Debug)]
+pub struct EnforceSorting {}
+
+impl EnforceSorting {
+    #[expect(missing_docs)]
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl PhysicalOptimizerRule for EnforceSorting {
+    fn optimize(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        _config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        enforce_sorting_requirements(plan)
+    }
+
+    fn name(&self) -> &str {
+        "EnforceSorting"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
+    }
+}
+
+/// Sort/distribution **optimizations** (Phase 3) via [`optimize_sorts`]:
+/// parallelize sorts, order-preserving variants, sort pushdown, partial sort.
+/// Runs after [`EnforceSorting`], on an already-valid plan.
 #[derive(Default, Debug)]
 pub struct OptimizeSorts {}
 
@@ -386,6 +433,29 @@ impl PhysicalOptimizerRule for OptimizeSorts {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        optimize_sorts(plan, config)
+    }
+
+    fn name(&self) -> &str {
+        "OptimizeSorts"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
+    }
+}
+
+/// Compatibility shim for the former combined rule: distribution enforcement +
+/// sorting enforcement + sort optimization, in one pass. The default pipeline no
+/// longer registers it (it uses [`EnforceDistribution`] / [`EnforceSorting`] /
+/// [`OptimizeSorts`]); it is kept so downstream chains that splice
+/// `EnsureRequirements` in by position keep working unchanged.
+impl PhysicalOptimizerRule for EnsureRequirements {
+    fn optimize(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         self.optimize_with_context(plan, &ConfigOnlyContext::new(config))
     }
 
@@ -394,17 +464,12 @@ impl PhysicalOptimizerRule for OptimizeSorts {
         plan: Arc<dyn ExecutionPlan>,
         context: &dyn PhysicalOptimizerContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Re-run distribution/ordering enforcement here (not just the sort
-        // optimizations) so operators produced by earlier optimizer rules
-        // (e.g. `WindowTopN`'s `PartitionedTopKExec`) get the parallelizing
-        // repartition that `ensure_distribution` adds. This mirrors where the
-        // former combined `EnsureRequirements` ran (after `WindowTopN`).
         let plan = enforce_requirements(plan, context)?;
         optimize_sorts(plan, context.config_options())
     }
 
     fn name(&self) -> &str {
-        "OptimizeSorts"
+        "EnsureRequirements"
     }
 
     fn schema_check(&self) -> bool {

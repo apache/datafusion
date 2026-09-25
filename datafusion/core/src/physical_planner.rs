@@ -3126,16 +3126,9 @@ impl DefaultPhysicalPlanner {
             session: session_state,
         };
 
-        // Runs the analyzer (enforcement) rules. `observer` is passed in rather
-        // than captured so the optimizer loop below can keep using it directly.
-        //
-        // `enforce_only` selects the re-runnable enforcement rules for the
-        // trailing pass: concretizers such as `JoinSelection` pick a form once
-        // and must not run again (re-running oscillates the join choice), while
-        // `EnsureRequirements` is safe to re-apply to re-fix requirements the
-        // optimizer phase rewrote.
         // First apply the analyzer rules to make the plan valid (they enforce
-        // the distribution requirements every operator declares).
+        // the distribution requirements every operator declares), then the
+        // optimizer rules to make the already-valid plan faster.
         for analyzer in analyzers {
             let before_schema = new_plan.schema();
             new_plan = analyzer
@@ -3676,10 +3669,10 @@ mod tests {
         }
     }
 
-    /// The default session state wires `EnsureRequirements` as a physical
-    /// analyzer rather than an optimizer rule.
+    /// The default session state wires `EnforceDistribution` as the physical
+    /// analyzer; ordering/optimization run in the optimizer phase.
     #[test]
-    fn default_session_wires_ensure_requirements_as_analyzer() {
+    fn default_session_wires_enforce_distribution_as_analyzer() {
         let state = make_session_state();
 
         let analyzer_names: Vec<&str> = state
@@ -3687,19 +3680,22 @@ mod tests {
             .iter()
             .map(|r| r.name())
             .collect();
-        assert!(
-            analyzer_names.contains(&"EnsureRequirements"),
-            "expected EnsureRequirements among analyzers, got {analyzer_names:?}"
+        assert_eq!(
+            analyzer_names,
+            vec!["EnforceDistribution"],
+            "analyzer phase should be distribution enforcement only, got {analyzer_names:?}"
         );
 
-        let has_ensure_optimizer = state
+        // The optimizer phase runs the decomposed enforcement + sort rules;
+        // the monolithic `EnsureRequirements` is not registered by default.
+        let optimizer_names: Vec<&str> = state
             .physical_optimizers()
             .iter()
-            .any(|r| r.name() == "EnsureRequirements");
-        assert!(
-            !has_ensure_optimizer,
-            "EnsureRequirements must not also run as an optimizer rule"
-        );
+            .map(|r| r.name())
+            .collect();
+        assert!(optimizer_names.contains(&"EnforceSorting"));
+        assert!(optimizer_names.contains(&"OptimizeSorts"));
+        assert!(!optimizer_names.contains(&"EnsureRequirements"));
     }
 
     /// A custom analyzer registered on the builder runs during physical

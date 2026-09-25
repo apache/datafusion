@@ -23,7 +23,7 @@ use std::sync::Arc;
 use crate::aggregate_statistics::AggregateStatistics;
 use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::ensure_coop::EnsureCooperative;
-use crate::ensure_requirements::OptimizeSorts;
+use crate::ensure_requirements::{EnforceDistribution, EnforceSorting, OptimizeSorts};
 use crate::filter_pushdown::FilterPushdown;
 use crate::join_selection::JoinSelection;
 use crate::limit_pushdown::LimitPushdown;
@@ -115,14 +115,14 @@ impl PhysicalOptimizer {
             // window's declared ordering without pattern-matching a SortExec)
             // and before ProjectionPushdown (which embeds projections into FilterExec).
             Arc::new(WindowTopN::new()),
-            // NOTE: requirement *enforcement* (former `EnsureRequirements` Phases
-            // 0-2) is no longer an optimizer rule; it runs as a
-            // `PhysicalAnalyzerRule` in `PhysicalAnalyzer` (see `crate::analyzer`)
-            // before this pipeline, and the planner re-applies it after any
-            // optimizer that invalidates the plan. What remains here is the
-            // sort/distribution *optimization* half (former Phase 3), split out
-            // as `OptimizeSorts` so it can run after the optimizer rules above
-            // (notably `WindowTopN`) and parallelize the operators they produce.
+            // The former combined `EnsureRequirements` is decomposed into three
+            // consecutive rules here, at the position it used to occupy. Distribution
+            // enforcement also runs earlier as the `PhysicalAnalyzerRule`; it is
+            // re-run here because `JoinSelection` / `WindowTopN` above change the
+            // required distribution. Order matters: distribution, then sorting
+            // (which reads the settled partitioning), then the sort optimizations.
+            Arc::new(EnforceDistribution::new()),
+            Arc::new(EnforceSorting::new()),
             Arc::new(OptimizeSorts::new()),
             // The CombinePartialFinalAggregate rule should be applied after distribution enforcement
             Arc::new(CombinePartialFinalAggregate::new()),
