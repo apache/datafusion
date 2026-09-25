@@ -3235,7 +3235,6 @@ mod tests {
 
     use super::*;
     use crate::RecordBatchStream;
-    use crate::aggregates::group_values::GroupValuesPrimitive;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common;
     use crate::common::collect;
@@ -3480,9 +3479,8 @@ mod tests {
 
         const KEYS: usize = 64;
         const VALUES_PER_KEY: i64 = 64;
-        const PRE_DESCRIPTOR_MEMORY_LIMIT: usize = 8192;
-        let memory_limit =
-            PRE_DESCRIPTOR_MEMORY_LIMIT + size_of::<GroupValuesPrimitive<Int64Type>>();
+        // Leave only a small amount above 8 KiB for the empty aggregate state.
+        const MEMORY_LIMIT: usize = 8_384;
         let schema = Arc::new(Schema::new(vec![
             Field::new("key", DataType::Int64, false),
             Field::new("value", DataType::Int64, false),
@@ -3540,7 +3538,7 @@ mod tests {
             schema,
         )?;
         let pool = Arc::new(PeakRecordingPool::new(Arc::new(FairSpillPool::new(
-            memory_limit,
+            MEMORY_LIMIT,
         ))));
         let context = Arc::new(
             TaskContext::default()
@@ -3582,7 +3580,7 @@ mod tests {
         }
         assert_eq!(seen.len(), KEYS);
         assert!(aggregate.metrics().unwrap().spill_count().unwrap() > 1);
-        assert!(pool.peak_reserved() <= memory_limit);
+        assert!(pool.peak_reserved() <= MEMORY_LIMIT);
         assert_eq!(pool.reserved(), 0);
         let progress = context.runtime_env().disk_manager.spilling_progress();
         assert_eq!(progress.current_bytes, 0);
