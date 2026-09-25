@@ -361,6 +361,19 @@ pub(crate) struct RowFilterContext {
     /// Measures the decode time of the output batches for the gates of the
     /// optional filters. `None` if the file has no gated optional filter.
     pub(crate) optional_savings: Option<OptionalFilterSavings>,
+    /// See [`Self::start_reader`].
+    decode_measurement: DecodeMeasurement,
+}
+
+/// Which output batches measure the decode speed, see
+/// [`RowFilterContext::start_reader`].
+struct DecodeMeasurement {
+    /// Value of `pushdown_rows_pruned` when the decoder handed out the last
+    /// reader.
+    rows_pruned: usize,
+    /// True if the row filter removed no rows of the row group of the
+    /// current reader.
+    unfiltered: bool,
 }
 
 impl RowFilterContext {
@@ -394,12 +407,17 @@ impl RowFilterContext {
                             .collect(),
                     )
                 });
+                let decode_measurement = DecodeMeasurement {
+                    rows_pruned: file_metrics.pushdown_rows_pruned.value(),
+                    unfiltered: true,
+                };
                 Some(Self {
                     prebuilt: PrebuiltRowFilterCandidateList::new(prebuilt),
                     reorder_predicates,
                     file_metrics,
                     max_predicate_cache_size,
                     optional_savings,
+                    decode_measurement,
                 })
             }
             Ok(None) => None,
@@ -408,6 +426,29 @@ impl RowFilterContext {
                 None
             }
         }
+    }
+
+    /// Call when the decoder hands out the reader of the next row group. The
+    /// decoder evaluated the row filter of the row group before: if the row
+    /// filter removed rows, the decode time of the output batches of the
+    /// reader is not measured. A row filter that removes rows spread over
+    /// the row group makes each decoded output row much more expensive
+    /// (the decoder decodes all pages and drops most rows), thus the
+    /// measured decode speed would be too slow, and the saving of a removed
+    /// row too large (see [`crate::optional_filter`]).
+    pub(crate) fn start_reader(&mut self) {
+        let rows_pruned = self.file_metrics.pushdown_rows_pruned.value();
+        let measurement = &mut self.decode_measurement;
+        measurement.unfiltered = rows_pruned == measurement.rows_pruned;
+        measurement.rows_pruned = rows_pruned;
+    }
+
+    /// The decode time of the output batches of the current reader for the
+    /// gates of the optional filters, or `None` if it is not measured.
+    pub(crate) fn measured_optional_savings(&self) -> Option<&OptionalFilterSavings> {
+        self.optional_savings
+            .as_ref()
+            .filter(|_| self.decode_measurement.unfiltered)
     }
 
     /// Whether any pushed-down predicate reads this Parquet leaf column.
@@ -475,7 +516,7 @@ impl PushDecoderStreamState {
                 let optional_savings = self
                     .row_filter_context
                     .as_ref()
-                    .and_then(|ctx| ctx.optional_savings.as_ref());
+                    .and_then(|ctx| ctx.measured_optional_savings());
                 let start = optional_savings.map(|_| Instant::now());
                 match reader.next() {
                     Some(Ok(batch)) => {
@@ -580,6 +621,9 @@ impl PushDecoderStreamState {
                     // closes.
                     if let Some(entry) = self.rg_plan.pop_front() {
                         self.byte_progress.credit(entry.bytes);
+                    }
+                    if let Some(ctx) = self.row_filter_context.as_mut() {
+                        ctx.start_reader();
                     }
                     self.active_reader = Some(reader);
                 }

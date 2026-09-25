@@ -130,6 +130,10 @@ pub(crate) struct DatafusionArrowPredicate {
     /// The gate of an optional filter in [`OptionalFilterMode::Adaptive`].
     /// `None` for all other filters.
     gate: Option<SharedOptionalFilterGate>,
+    /// The measured saving of the gate: counts the rows that the filter
+    /// removes and that the decoder can skip. `None` for all filters
+    /// without a gate, and when the output projection is not known.
+    saving: Option<Arc<OptionalFilterSaving>>,
 }
 
 /// The [`OptionalFilterGate`] of one optional filter in one file, with its
@@ -196,6 +200,7 @@ impl DatafusionArrowPredicate {
             rows_matched,
             time,
             gate: None,
+            saving: None,
         })
     }
 }
@@ -231,6 +236,9 @@ impl ArrowPredicate for DatafusionArrowPredicate {
                 let num_pruned = bool_arr.len() - num_matched;
                 self.rows_pruned.add(num_pruned);
                 self.rows_matched.add(num_matched);
+                if let Some(saving) = &self.saving {
+                    saving.record_evaluation(&bool_arr);
+                }
                 if let (Some(gate), Some(start)) = (gate.as_mut(), start) {
                     let elapsed = gate.gate.clock().now_nanos().saturating_sub(start);
                     gate.record(num_rows, num_matched, Duration::from_nanos(elapsed));
@@ -547,7 +555,7 @@ pub(crate) struct PrebuiltRowFilterCandidate {
     gate: Option<SharedOptionalFilterGate>,
     /// The measured saving that the gate reads, if the output projection of
     /// the file is known. See [`crate::optional_filter`].
-    saving: Option<OptionalFilterSaving>,
+    saving: Option<Arc<OptionalFilterSaving>>,
 }
 
 impl PrebuiltRowFilterCandidate {
@@ -556,7 +564,7 @@ impl PrebuiltRowFilterCandidate {
     }
 
     /// The measured saving of a gated optional filter.
-    pub(crate) fn optional_saving(&self) -> Option<&OptionalFilterSaving> {
+    pub(crate) fn optional_saving(&self) -> Option<&Arc<OptionalFilterSaving>> {
         self.saving.as_ref()
     }
 
@@ -684,11 +692,11 @@ pub(crate) fn prebuild_row_filter_candidates(
                     output.leaf_included(leaf)
                         && !candidate.projection_mask.leaf_included(leaf)
                 });
-                let saving = OptionalFilterSaving::new(
+                let saving = Arc::new(OptionalFilterSaving::new(
                     unread_bytes_per_row,
-                    &optional.options.decode_cost,
-                );
-                gate = gate.with_measured_saving(Arc::clone(&saving.saving));
+                    Arc::clone(&optional.options.decode_cost),
+                ));
+                gate = gate.with_measured_saving(Arc::clone(saving.measured()));
                 candidate.saving = Some(saving);
             }
             candidate.gate = Some(Arc::new(Mutex::new(OptionalFilterGateState {
@@ -786,6 +794,7 @@ pub(crate) fn row_filter_from_prebuilt(
                 rows_matched: predicate_rows_matched,
                 time: time.clone(),
                 gate: candidate.gate.clone(),
+                saving: candidate.saving.clone(),
             }) as Box<dyn ArrowPredicate>
         })
         .collect();
@@ -2763,7 +2772,9 @@ mod optional_filter_tests {
 
     /// With the output projection of the file, the gate of an optional
     /// filter adds the decode time of the output columns that the filter
-    /// does not read to the configured minimum saving.
+    /// does not read, for the removed rows that the decoder can skip, to the
+    /// configured minimum saving. It adds the row filter stage cost to the
+    /// evaluation time.
     #[test]
     fn saving_includes_decode_of_unread_output_columns() {
         use crate::optional_filter::{
@@ -2798,9 +2809,25 @@ mod optional_filter_tests {
             compressed_bytes_per_row(&metadata, |leaf| leaf == 0 || leaf == 2),
             unread
         );
-        // Before any measurement: the default decode speed.
+        // Before the filter removed any row: only the configured minimum,
+        // and the stage cost of a row filter.
         let gate = candidates[0].gate.as_ref().unwrap();
-        let expected = 5.0 + DEFAULT_DECODE_NS_PER_BYTE * unread;
+        assert_eq!(gate.lock().gate.saving_ns_per_row(), 5.0);
+        assert_eq!(
+            gate.lock().gate.overhead_ns_per_row(),
+            crate::row_filter_cost::ROW_FILTER_STAGE_NS_PER_ROW
+        );
+
+        // The filter removes one full window of 64 rows (skippable) and 32
+        // rows spread over a second window (not skippable): 2/3 of the
+        // removed rows are skippable.
+        let result: BooleanArray =
+            (0..128).map(|i| Some(i >= 64 && i % 2 == 0)).collect();
+        saving.record_evaluation(&result);
+        let expected = 5.0 + 2.0 / 3.0 * DEFAULT_DECODE_NS_PER_BYTE * unread;
+        assert!((gate.lock().gate.saving_ns_per_row() - expected).abs() < 1e-9);
+        // A filter result where all rows pass changes nothing.
+        saving.record_evaluation(&BooleanArray::from(vec![true; 64]));
         assert!((gate.lock().gate.saving_ns_per_row() - expected).abs() < 1e-9);
 
         // Output batches of 1000 rows that take 4 ns for each compressed
@@ -2810,14 +2837,14 @@ mod optional_filter_tests {
             Arc::clone(&options.decode_cost),
             &metadata,
             &output,
-            vec![saving.clone()],
+            vec![Arc::clone(saving)],
         )
         .unwrap();
-        let nanos = (4.0 * 1000.0 * output_bytes) as u64;
+        let nanos = (2.0 * 1000.0 * output_bytes) as u64;
         savings.record_output_batch(1000, Duration::from_nanos(nanos));
         let ns_per_byte = options.decode_cost.ns_per_byte();
-        assert!((ns_per_byte - 4.0).abs() < 0.01, "{ns_per_byte}");
-        let expected = 5.0 + ns_per_byte * unread;
+        assert!((ns_per_byte - 2.0).abs() < 0.01, "{ns_per_byte}");
+        let expected = 5.0 + 2.0 / 3.0 * ns_per_byte * unread;
         assert!((gate.lock().gate.saving_ns_per_row() - expected).abs() < 1e-9);
 
         // No gated optional filter: nothing to measure.
