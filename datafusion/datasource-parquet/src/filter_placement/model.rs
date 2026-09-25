@@ -18,6 +18,8 @@
 //! The placement decision for one conjunct. Pure functions, see the
 //! [module documentation](super) for the model.
 
+use datafusion_physical_expr::filter_stats::MIN_OBSERVED_ROWS;
+
 use super::stats::Observation;
 use crate::row_filter_cost::ROW_FILTER_STAGE_NS_PER_ROW;
 
@@ -32,9 +34,6 @@ pub(crate) enum Placement {
     Skip,
 }
 
-/// Minimum number of evaluated rows before a conjunct can move to the row
-/// filter.
-pub(crate) const MIN_OBSERVED_ROWS: u64 = 8192;
 
 /// A conjunct that the statistics pruned in at least this fraction of the
 /// row groups stays in the post-scan filter. See [`place_required`].
