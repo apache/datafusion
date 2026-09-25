@@ -43,6 +43,7 @@ use datafusion_common::{
     tree_node::{Transformed, TreeNode},
 };
 use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::filter::FilterConjunct;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
@@ -175,9 +176,33 @@ impl PushedDown {
 pub struct ChildFilterPushdownResult {
     pub filter: Arc<dyn PhysicalExpr>,
     pub child_results: Vec<PushedDown>,
+    /// `true` if the node that created this filter does not need it for
+    /// correctness. See [`FilterConjunct::is_optional`].
+    optional: bool,
 }
 
 impl ChildFilterPushdownResult {
+    /// Create a result for `filter`, with the properties of the conjunct
+    /// (for example, the optional flag).
+    pub fn new(filter: FilterConjunct, child_results: Vec<PushedDown>) -> Self {
+        let optional = filter.is_optional();
+        Self {
+            filter: filter.into_expr(),
+            child_results,
+            optional,
+        }
+    }
+
+    /// This filter as a [`FilterConjunct`], with its properties.
+    pub fn conjunct(&self) -> FilterConjunct {
+        let filter = Arc::clone(&self.filter);
+        if self.optional {
+            FilterConjunct::optional(filter)
+        } else {
+            FilterConjunct::required(filter)
+        }
+    }
+
     /// Combine all child results using OR logic.
     /// Returns `Yes` if **any** child supports the filter.
     /// Returns `No` if **all** children reject the filter or if there are no children.
@@ -323,7 +348,7 @@ pub struct ChildFilterDescription {
     /// Description of which filters this node is pushing down to its children.
     /// Since this is not transmitted back to the parents we can have variable sized inner arrays
     /// instead of having to track supported/unsupported.
-    pub(crate) self_filters: Vec<Arc<dyn PhysicalExpr>>,
+    pub(crate) self_filters: Vec<FilterConjunct>,
 }
 
 /// How a parent output position resolves to a child input position.
@@ -400,7 +425,13 @@ impl FilterRemapper {
         let transformed = Arc::clone(filter).transform_down(|expr| {
             if let Some(col) = expr.downcast_ref::<Column>() {
                 if let Some(remapped) = self.remap_column(col) {
-                    Ok(Transformed::yes(Arc::new(remapped)))
+                    // Keep the same `Arc` when the column does not change, so
+                    // that an unchanged filter keeps its identity.
+                    if remapped == *col {
+                        Ok(Transformed::no(expr))
+                    } else {
+                        Ok(Transformed::yes(Arc::new(remapped)))
+                    }
                 } else {
                     all_valid = false;
                     Ok(Transformed::complete(expr))
@@ -530,15 +561,29 @@ impl ChildFilterDescription {
         }
     }
 
-    /// Add a self filter (from the current node) to be pushed down to this child.
-    pub fn with_self_filter(mut self, filter: Arc<dyn PhysicalExpr>) -> Self {
-        self.self_filters.push(filter);
+    /// Add a required self filter (from the current node) to be pushed down
+    /// to this child.
+    pub fn with_self_filter(self, filter: Arc<dyn PhysicalExpr>) -> Self {
+        self.with_self_conjunct(FilterConjunct::required(filter))
+    }
+
+    /// Add an optional self filter: a filter that the current node does not
+    /// need for correctness (for example, a dynamic filter). The consumer
+    /// that accepts it can skip it.
+    pub fn with_optional_self_filter(self, filter: Arc<dyn PhysicalExpr>) -> Self {
+        self.with_self_conjunct(FilterConjunct::optional(filter))
+    }
+
+    /// Add a self filter with its properties.
+    pub fn with_self_conjunct(mut self, conjunct: FilterConjunct) -> Self {
+        self.self_filters.push(conjunct);
         self
     }
 
-    /// Add multiple self filters.
+    /// Add multiple required self filters.
     pub fn with_self_filters(mut self, filters: Vec<Arc<dyn PhysicalExpr>>) -> Self {
-        self.self_filters.extend(filters);
+        self.self_filters
+            .extend(filters.into_iter().map(FilterConjunct::required));
         self
     }
 }
@@ -621,6 +666,19 @@ impl FilterDescription {
     }
 
     pub fn self_filters(&self) -> Vec<Vec<Arc<dyn PhysicalExpr>>> {
+        self.child_filter_descriptions
+            .iter()
+            .map(|d| {
+                d.self_filters
+                    .iter()
+                    .map(|c| Arc::clone(c.expr()))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The self filters for each child, with their properties.
+    pub fn self_conjuncts(&self) -> Vec<Vec<FilterConjunct>> {
         self.child_filter_descriptions
             .iter()
             .map(|d| &d.self_filters)
