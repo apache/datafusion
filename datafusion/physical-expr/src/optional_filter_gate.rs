@@ -26,8 +26,9 @@
 //! can be larger than the benefit.
 //!
 //! [`OptionalFilterGate`] decides, batch by batch, if a stream evaluates the
-//! filter or skips it. Each stream has its own gate, and gates do not share
-//! state.
+//! filter or skips it. Each stream has its own gate. The gates of one plan
+//! site (for example all files and partitions of one scan) can share their
+//! pauses, see "Shared verdict".
 //!
 //! # State machine
 //!
@@ -110,6 +111,32 @@
 //!
 //! [`DynamicFilterPhysicalExpr`]: crate::expressions::DynamicFilterPhysicalExpr
 //! [`DynamicFilterTracker::changed`]: crate::expressions::DynamicFilterTracker::changed
+//!
+//! # Shared verdict
+//!
+//! Each gate pays for at least one window before its first decision. A scan
+//! opens many files at the same time, and a filter that removes no rows
+//! (for example a hash join filter on a column that has only matching
+//! values) then costs one window in each file. Also each gate probes on its
+//! own after each pause.
+//!
+//! Thus the gates of one plan site can share a [`SharedGateVerdict`] (see
+//! [`OptionalFilterGate::with_shared_verdict`]). Each gate publishes its
+//! pauses and the end of its pauses there. A gate that has no evidence of
+//! its own that the filter is worth its cost (before its first decision,
+//! after a change of the filter, and after a decision to pause) uses a
+//! pause that another gate published after the last shared verdict that it
+//! saw:
+//!
+//! * A new gate starts paused if the shared verdict is a pause.
+//! * A gate in its first window, or in a probe window after a pause, stops
+//!   the window and pauses. Thus after a pause of all gates, usually only
+//!   the first gate at the end of its pause probes the filter.
+//!
+//! A gate that keeps the filter does not use the pauses of other gates:
+//! with skewed data the filter can be worth its cost for some files only.
+//! A gate that sees a change of the filter clears a shared pause, because
+//! it was measured on the old filter, and starts again without evidence.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -265,6 +292,89 @@ impl MeasuredRowSaving {
     }
 }
 
+/// The last pause (or end of a pause) that the gates of one plan site
+/// published, see "Shared verdict" in the [module documentation](self).
+///
+/// Create one value for each plan site (for example each optional filter of
+/// one scan), and give a clone of the [`Arc`] to each gate of the site with
+/// [`OptionalFilterGate::with_shared_verdict`].
+///
+/// The value is one [`AtomicU64`], thus it is lock-free. Gates write it only
+/// at decisions that pause the filter or end a pause, and read it before a
+/// batch only while they have no evidence of their own.
+#[derive(Debug, Default)]
+pub struct SharedGateVerdict {
+    /// A [`Verdict`] and its sequence number, see [`Verdict::pack`].
+    word: AtomicU64,
+}
+
+/// One published verdict of a [`SharedGateVerdict`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Verdict {
+    /// The filter is not paused (or nothing was published yet).
+    Keep,
+    /// A gate paused the filter for this number of batches.
+    Pause(usize),
+}
+
+impl Verdict {
+    /// Largest pause length that fits in the packed word.
+    const MAX_BATCHES: usize = u32::MAX as usize;
+
+    /// Packs the verdict with the sequence number `seq`: the sequence
+    /// number in the low 32 bits, and the pause length (0 for
+    /// [`Verdict::Keep`]) in the high 32 bits.
+    fn pack(self, seq: u32) -> u64 {
+        let batches = match self {
+            Self::Keep => 0,
+            Self::Pause(batches) => batches.clamp(1, Self::MAX_BATCHES) as u64,
+        };
+        (batches << 32) | u64::from(seq)
+    }
+
+    /// The verdict and the sequence number in `word`.
+    fn unpack(word: u64) -> (Self, u32) {
+        let verdict = match (word >> 32) as usize {
+            0 => Self::Keep,
+            batches => Self::Pause(batches),
+        };
+        (verdict, word as u32)
+    }
+}
+
+impl SharedGateVerdict {
+    /// Creates a shared verdict without any published pause.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// True if the last published verdict is a pause.
+    pub fn is_paused(&self) -> bool {
+        matches!(self.load().0, Verdict::Pause(_))
+    }
+
+    /// The current verdict and its sequence number.
+    fn load(&self) -> (Verdict, u32) {
+        Verdict::unpack(self.word.load(Ordering::Acquire))
+    }
+
+    /// Publishes `verdict` if `replace` returns true for the current
+    /// verdict. Returns the sequence number of the published verdict.
+    fn publish_if(
+        &self,
+        verdict: Verdict,
+        replace: impl Fn(Verdict) -> bool,
+    ) -> Option<u32> {
+        self.word
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |word| {
+                let (current, seq) = Verdict::unpack(word);
+                replace(current).then(|| verdict.pack(seq.wrapping_add(1)))
+            })
+            .ok()
+            .map(|previous| (previous as u32).wrapping_add(1))
+    }
+}
+
 /// The state of an [`OptionalFilterGate`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GateState {
@@ -320,6 +430,17 @@ pub struct OptionalFilterGate {
     /// True after `begin_batch` returned `Evaluate` and before `record`.
     awaiting_record: bool,
     pauses: usize,
+    /// The verdict that this gate shares with the other gates of its plan
+    /// site, if any.
+    shared: Option<Arc<SharedGateVerdict>>,
+    /// Sequence number of the last shared verdict that this gate published
+    /// or saw.
+    shared_seq: u32,
+    /// True while this gate has no evidence of its own that the filter is
+    /// worth its cost: before its first decision, after a change of the
+    /// filter, and after a decision that paused the filter. Then it uses
+    /// the shared pauses of the other gates.
+    uses_shared_pauses: bool,
 }
 
 impl OptionalFilterGate {
@@ -344,7 +465,23 @@ impl OptionalFilterGate {
             backoff: config.initial_pause_batches,
             awaiting_record: false,
             pauses: 0,
+            shared: None,
+            shared_seq: 0,
+            uses_shared_pauses: true,
         }
+    }
+
+    /// Shares the pauses of this gate with the other gates of the same plan
+    /// site, see "Shared verdict" in the [module documentation](self). If
+    /// the shared verdict is a pause, the gate starts paused.
+    pub fn with_shared_verdict(mut self, shared: Arc<SharedGateVerdict>) -> Self {
+        let (verdict, seq) = shared.load();
+        self.shared_seq = seq;
+        if let Verdict::Pause(batches) = verdict {
+            self.start_pause(batches);
+        }
+        self.shared = Some(shared);
+        self
     }
 
     /// Uses `clock` as the clock of this gate, see [`Self::clock`].
@@ -405,6 +542,17 @@ impl OptionalFilterGate {
             self.state = GateState::new_window();
             self.probing = false;
             self.backoff = self.config.initial_pause_batches;
+            self.uses_shared_pauses = true;
+            if let Some(shared) = &self.shared {
+                // A shared pause was measured on the old filter.
+                let paused = |verdict| matches!(verdict, Verdict::Pause(_));
+                if let Some(seq) = shared.publish_if(Verdict::Keep, paused) {
+                    self.shared_seq = seq;
+                }
+            }
+        }
+        if !self.is_paused() {
+            self.use_shared_pause();
         }
 
         match &mut self.state {
@@ -472,11 +620,48 @@ impl OptionalFilterGate {
             return;
         }
         if self.should_pause(&window) {
-            self.start_pause(self.backoff);
+            let batches = self.backoff;
+            self.start_pause(batches);
+            self.uses_shared_pauses = true;
+            self.publish(Verdict::Pause(batches));
         } else {
             self.state = GateState::new_window();
             self.probing = false;
             self.backoff = self.config.initial_pause_batches;
+            if std::mem::take(&mut self.uses_shared_pauses) {
+                // The first decision, or the end of a pause.
+                self.publish(Verdict::Keep);
+            }
+        }
+    }
+
+    /// Before a batch that the gate would evaluate: if this gate uses the
+    /// shared pauses and another gate published a pause after the last
+    /// shared verdict that this gate saw, pauses the filter for the same
+    /// length. The current window is dropped.
+    fn use_shared_pause(&mut self) {
+        if !self.uses_shared_pauses {
+            return;
+        }
+        let Some(shared) = &self.shared else {
+            return;
+        };
+        let (verdict, seq) = shared.load();
+        if seq == self.shared_seq {
+            return;
+        }
+        self.shared_seq = seq;
+        if let Verdict::Pause(batches) = verdict {
+            self.start_pause(batches);
+        }
+    }
+
+    /// Publishes `verdict` to the shared verdict, if any.
+    fn publish(&mut self, verdict: Verdict) {
+        if let Some(shared) = &self.shared {
+            self.shared_seq = shared
+                .publish_if(verdict, |_| true)
+                .expect("an unconditional update always succeeds");
         }
     }
 
@@ -1037,6 +1222,124 @@ mod tests {
         assert_eq!(feed_timed(&mut gate, 0.5, 8.5), GateDecision::Evaluate);
         assert_eq!(feed_timed(&mut gate, 0.5, 8.5), GateDecision::Evaluate);
         assert!(!gate.is_paused());
+    }
+
+    fn shared_gate(
+        filter: Arc<dyn PhysicalExpr>,
+        shared: &Arc<SharedGateVerdict>,
+    ) -> OptionalFilterGate {
+        gate_with(filter).with_shared_verdict(Arc::clone(shared))
+    }
+
+    #[test]
+    fn verdict_pack_round_trip() {
+        for verdict in [Verdict::Keep, Verdict::Pause(1), Verdict::Pause(32)] {
+            assert_eq!(Verdict::unpack(verdict.pack(7)), (verdict, 7));
+            assert_eq!(Verdict::unpack(verdict.pack(u32::MAX)), (verdict, u32::MAX));
+        }
+        // Pause lengths are at least 1 and at most `MAX_BATCHES`.
+        assert_eq!(
+            Verdict::unpack(Verdict::Pause(0).pack(1)).0,
+            Verdict::Pause(1)
+        );
+        assert_eq!(
+            Verdict::unpack(Verdict::Pause(usize::MAX).pack(1)).0,
+            Verdict::Pause(Verdict::MAX_BATCHES)
+        );
+    }
+
+    /// A new gate starts from the shared pause of the other gates.
+    #[test]
+    fn new_gate_starts_with_shared_pause() {
+        let shared = Arc::new(SharedGateVerdict::new());
+        let mut first = shared_gate(static_filter(), &shared);
+        assert!(!first.is_paused());
+        assert_eq!(feed_n(&mut first, 2, 1.0), 2);
+        assert!(first.is_paused());
+        assert!(shared.is_paused());
+
+        // A new gate starts paused for the same length, then probes.
+        let mut second = shared_gate(static_filter(), &shared);
+        assert!(second.is_paused());
+        assert_eq!(second.pauses(), 1);
+        assert_eq!(skip_until_probe(&mut second, 0.5), 4);
+        // The probe keeps the filter: new gates evaluate again.
+        assert_eq!(feed(&mut second, 0.5), GateDecision::Evaluate);
+        assert!(!second.is_paused());
+        assert!(!shared.is_paused());
+        assert!(!shared_gate(static_filter(), &shared).is_paused());
+    }
+
+    /// Gates that start at the same time: a gate in its first window uses
+    /// the pause that another gate published, instead of the rest of its
+    /// own window, and only one gate probes after the pause.
+    #[test]
+    fn first_window_and_probe_use_shared_pause() {
+        let shared = Arc::new(SharedGateVerdict::new());
+        let mut gates: Vec<_> = (0..4)
+            .map(|_| shared_gate(static_filter(), &shared))
+            .collect();
+        // All gates evaluate their first batch.
+        for gate in &mut gates {
+            assert_eq!(feed(gate, 1.0), GateDecision::Evaluate);
+        }
+        // The first gate completes its window and pauses.
+        assert_eq!(feed(&mut gates[0], 1.0), GateDecision::Evaluate);
+        assert!(gates[0].is_paused());
+        // The others do not evaluate the second batch of their window.
+        for gate in &mut gates[1..] {
+            assert_eq!(feed(gate, 1.0), GateDecision::Skip);
+            assert!(gate.is_paused());
+        }
+
+        // Only the first gate probes at the end of its pause. The others
+        // use its verdict: a pause of 8 batches.
+        assert_eq!(skip_until_probe(&mut gates[0], 1.0), 4);
+        assert_eq!(feed(&mut gates[0], 1.0), GateDecision::Evaluate);
+        assert!(gates[0].is_paused());
+        for gate in &mut gates[1..] {
+            let skipped = (0..20)
+                .take_while(|_| feed(gate, 1.0) == GateDecision::Skip)
+                .count();
+            // 3 more batches of the first pause, then 8.
+            assert_eq!(skipped, 3 + 8);
+            assert_eq!(gate.pauses(), 2);
+        }
+    }
+
+    /// A gate that keeps the filter does not use the pauses of other gates
+    /// (skewed data).
+    #[test]
+    fn running_gate_ignores_shared_pause() {
+        let shared = Arc::new(SharedGateVerdict::new());
+        let mut selective = shared_gate(static_filter(), &shared);
+        assert_eq!(feed_n(&mut selective, 2, 0.1), 2);
+        assert!(!selective.is_paused());
+
+        let mut other = shared_gate(static_filter(), &shared);
+        assert_eq!(feed_n(&mut other, 2, 1.0), 2);
+        assert!(other.is_paused());
+        assert!(shared.is_paused());
+
+        assert_eq!(feed_n(&mut selective, 20, 0.1), 20);
+        assert_eq!(selective.pauses(), 0);
+    }
+
+    /// A change of the filter clears the shared pause: it was measured on
+    /// the old filter.
+    #[test]
+    fn change_clears_shared_pause() {
+        let (dynamic, filter) = dynamic_filter();
+        let shared = Arc::new(SharedGateVerdict::new());
+        let mut gate = shared_gate(Arc::clone(&filter), &shared);
+        assert_eq!(feed_n(&mut gate, 2, 1.0), 2);
+        assert!(shared.is_paused());
+
+        dynamic.update(a_gt(1)).unwrap();
+        // The gate sees the change at its next batch.
+        assert_eq!(feed(&mut gate, 0.5), GateDecision::Evaluate);
+        assert!(!shared.is_paused());
+        assert!(!shared_gate(filter, &shared).is_paused());
     }
 
     /// A clock that moves by a fixed step each time it is read.
