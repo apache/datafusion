@@ -577,9 +577,10 @@ impl DecoderReadPlans {
         //
         // Either way every required conjunct is applied; nothing is silently
         // dropped. Optional conjuncts (see `split_optional`) are not needed
-        // for correctness. They never go to the post-scan filter: they are
-        // row filter predicates (as `optional_filter_mode` says) or they are
-        // used only for statistics pruning.
+        // for correctness. They are row filter predicates (as
+        // `optional_filter_mode` says), or the adaptive filter placement
+        // places them like the required conjuncts, or they are used only for
+        // statistics pruning. A rejected optional conjunct is not used.
         // ---------------------------------------------------------------
         // Build the decoder projection (mask + per-batch transform +
         // optional post-scan filter). Encapsulating it behind
@@ -6170,13 +6171,15 @@ mod test {
             assert!(without_prior.row_filter_rows() > 0);
         }
 
-        /// An optional filter that removes no rows is paused by its gate. At
-        /// the next row group boundary, the scan removes it from the
-        /// `RowFilter`: it is not evaluated and its column is not decoded for
-        /// the row filter. Without adaptive placement, the paused filter stays
-        /// a `RowFilter` predicate that lets all rows pass.
+        /// An optional filter that removes no rows is paused by its gate.
+        /// With adaptive placement, it starts in the post-scan filter (no
+        /// evidence for a row filter). While it is paused, the scan skips it
+        /// from the next row group boundary: it is not evaluated, and its
+        /// column is not decoded if it is not an output column. Without
+        /// adaptive placement, the paused filter stays a `RowFilter`
+        /// predicate that lets all rows pass.
         #[tokio::test]
-        async fn paused_optional_filter_is_removed_from_row_filter() {
+        async fn paused_optional_filter_is_skipped() {
             let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
             let (schema, file) = write_file(&store, |i| (i % 100) as i32).await;
             let inner = logical2physical(&col("a").gt_eq(lit(0)), &schema);
@@ -6188,27 +6191,46 @@ mod test {
                 ..Default::default()
             };
 
+            // The output columns are `a` and `v`.
             let adaptive =
                 scan(&store, &schema, &file, &predicate, true, true, options()).await;
             let gated =
                 scan(&store, &schema, &file, &predicate, true, false, options()).await;
+            // The output column is `v` only.
+            let metrics = ExecutionPlanMetricsSet::new();
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[1])
+                .with_predicate(Arc::clone(&predicate))
+                .with_pushdown_filters(true)
+                .with_filter_placement(true)
+                .with_placement_sites(fixed_sites())
+                .with_optional_filters(options())
+                .with_metrics(metrics.clone())
+                .build();
+            let stream = open_file(&morselizer, file.clone()).await.unwrap();
+            let (_, rows) = count_batches_and_rows(stream).await;
+            let not_output = Scan { rows, metrics };
 
-            for scan in [&adaptive, &gated] {
+            for scan in [&adaptive, &gated, &not_output] {
                 assert_eq!(scan.rows, TOTAL_ROWS);
                 assert!(scan.count("optional_filter_rows_skipped") > 0);
             }
             // Without placement, every row goes through the row filter.
             assert_eq!(gated.row_filter_rows(), TOTAL_ROWS);
             assert_eq!(gated.count("filter_placement_changes"), 0);
-            // With placement, the row groups where the filter is paused have
-            // no row filter.
-            assert!(adaptive.count("filter_placement_changes") > 0);
-            assert!(
-                adaptive.row_filter_rows() < TOTAL_ROWS,
-                "row filter rows: {}",
-                adaptive.row_filter_rows()
-            );
-            assert_eq!(adaptive.post_scan_rows(), 0);
+            // With placement, the filter is never a row filter, and the row
+            // groups where it is paused have no post-scan filter.
+            for scan in [&adaptive, &not_output] {
+                assert_eq!(scan.row_filter_rows(), 0);
+                assert!(scan.count("filter_placement_changes") > 0);
+                assert!(
+                    scan.post_scan_rows() < TOTAL_ROWS,
+                    "post-scan rows: {}",
+                    scan.post_scan_rows()
+                );
+            }
         }
 
         /// With a limit, the results are the same when the placement moves a

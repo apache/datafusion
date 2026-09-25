@@ -24,24 +24,32 @@
 //! | Placement | Where | For |
 //! |---|---|---|
 //! | [`Placement::RowFilter`] | A predicate of the Parquet `RowFilter`: the decoder skips the other columns of the rows that it removes | Required and optional conjuncts |
-//! | [`Placement::PostScan`] | The post-scan filter, on the decoded batches | Required conjuncts |
+//! | [`Placement::PostScan`] | The post-scan filter, on the decoded batches | Required and optional conjuncts |
 //! | [`Placement::Skip`] | Not evaluated, and its columns are not decoded | Optional conjuncts in the `adaptive` optional filter mode, while the gate is paused |
 //!
 //! A row filter is not always better. It saves decode time only when it
 //! removes long runs of rows, each row filter stage has a fixed cost for
 //! each row, and the decoder fetches the columns of each row filter
 //! predicate before the other columns (one more round trip for each row
-//! group). Thus a required conjunct starts in the post-scan filter and
-//! becomes a row filter only on measured evidence. See [`model`] for the
-//! decision.
+//! group). Thus a conjunct starts in the post-scan filter and becomes a row
+//! filter only on measured evidence. See [`model`] for the decision.
+//!
+//! Required and optional conjuncts use the same model and the same
+//! measurements. The only difference: an optional conjunct (in the
+//! `adaptive` optional filter mode) is skipped while its gate is paused.
+//! In each stage (the row filter and the post-scan filter), the conjuncts
+//! are evaluated in the order of their measured rows removed for each
+//! nanosecond ([`model::evaluation_order`]), thus a cheap conjunct that
+//! removes many rows runs before an expensive one, required or optional.
 //!
 //! [`FilePlacement`] decides at file open and again at each row group
-//! boundary. The stream then rebuilds the decoder
-//! (`ParquetPushDecoder::into_builder`) with the new `RowFilter` and
-//! projection mask, and rebuilds the post-scan filter. The rebuilt decoder
-//! keeps the row selections of the remaining row groups (for example from
-//! the page index). The measurements are pooled over all files and
-//! partitions of the scan ([`PlacementSites`]).
+//! boundary. When the decoder must change (its projection mask, or the
+//! predicates or order of the `RowFilter`), the stream rebuilds it
+//! (`ParquetPushDecoder::into_builder`). The rebuilt decoder keeps the row
+//! selections of the remaining row groups (for example from the page
+//! index). When only the post-scan filter changes, the stream rebuilds
+//! only the post-scan filter. The measurements are pooled over all files
+//! and partitions of the scan ([`PlacementSites`]).
 //!
 //! The placement of a file stops changing only when a change would change
 //! the schema of the decoded batches (possible with nested columns): the
@@ -65,11 +73,11 @@ use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::ParquetMetaData;
 
 use crate::decoder_projection::PostScanConjunct;
-use crate::optional_filter::compressed_bytes_per_row;
+use crate::optional_filter::{OptionalFilterSaving, compressed_bytes_per_row};
 use crate::row_filter::{PrebuiltRowFilterCandidate, SharedOptionalFilterGate};
 
 pub(crate) use model::Placement;
-use model::{RequiredConjunctInputs, place_optional, place_required};
+use model::{ConjunctInputs, evaluation_order, place_optional, place_required};
 pub(crate) use stats::{ConjunctStats, PlacementSites, StageSelection};
 
 /// The adaptive placement settings of one scan.
@@ -114,12 +122,9 @@ impl PlacementOptions {
             return;
         }
         for (position, stats) in stats.iter().enumerate() {
-            // Optional conjuncts are not placed with these measurements.
-            if !is_optional_filter(conjuncts[position]) {
-                self.sites
-                    .stats_for(&conjuncts, position, self.scan_conjunct_count)
-                    .record_pruning(*stats);
-            }
+            self.sites
+                .stats_for(&conjuncts, position, self.scan_conjunct_count)
+                .record_pruning(*stats);
         }
     }
 }
@@ -129,27 +134,45 @@ impl PlacementOptions {
 struct ManagedConjunct {
     /// Index of the row filter candidate of the conjunct.
     candidate: usize,
-    kind: ConjunctKind,
+    /// The conjunct in terms of the file schema, for the post-scan filter
+    /// (the inner expression of an optional conjunct).
+    expr: Arc<dyn PhysicalExpr>,
+    /// The pooled measurements of the conjunct.
+    stats: Arc<ConjunctStats>,
+    /// Compressed bytes for each row of the output columns that the
+    /// conjunct does not read.
+    unread_output_bytes_per_row: f64,
+    /// Compressed bytes for each row of the output columns that the
+    /// conjunct reads.
+    read_output_bytes_per_row: f64,
+    /// `Some` for an optional conjunct with a gate (the `adaptive` optional
+    /// filter mode).
+    optional: Option<OptionalConjunct>,
     placement: Placement,
 }
 
+/// The parts of a managed optional conjunct.
 #[derive(Debug)]
-enum ConjunctKind {
-    Required {
-        /// The conjunct in terms of the file schema, for the post-scan
-        /// filter.
-        expr: Arc<dyn PhysicalExpr>,
-        stats: Arc<ConjunctStats>,
-        /// Compressed bytes for each row of the output columns that the
-        /// conjunct does not read.
-        unread_output_bytes_per_row: f64,
-        /// Compressed bytes for each row of the output columns that the
-        /// conjunct reads.
-        read_output_bytes_per_row: f64,
-    },
-    /// An optional conjunct with a gate (the `adaptive` optional filter
-    /// mode).
-    Optional { gate: SharedOptionalFilterGate },
+struct OptionalConjunct {
+    gate: SharedOptionalFilterGate,
+    /// The measured saving of the gate, which depends on the placement.
+    saving: Option<Arc<OptionalFilterSaving>>,
+}
+
+/// The placement and the evaluation order of all managed conjuncts of a
+/// file, see [`FilePlacement::snapshot`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PlacementSnapshot {
+    placements: Vec<Placement>,
+    order: Vec<usize>,
+}
+
+/// A change of the placement at a row group boundary, see
+/// [`FilePlacement::decide`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PlacementChange {
+    /// True if the predicates of the `RowFilter` or their order changed.
+    pub(crate) row_filter: bool,
 }
 
 /// The placement of the conjuncts of one file. See the [module
@@ -157,6 +180,9 @@ enum ConjunctKind {
 #[derive(Debug)]
 pub(crate) struct FilePlacement {
     conjuncts: Vec<ManagedConjunct>,
+    /// The evaluation order of `conjuncts` (indexes), see
+    /// [`model::evaluation_order`].
+    order: Vec<usize>,
     sites: Arc<PlacementSites>,
     metadata: Arc<ParquetMetaData>,
     batch_size: usize,
@@ -174,7 +200,7 @@ pub(crate) struct FilePlacement {
 impl FilePlacement {
     /// Returns `None` if no conjunct needs a placement decision.
     ///
-    /// Adds the pooled measurements of each required conjunct to its
+    /// Adds the pooled measurements of each managed conjunct to its
     /// candidate, so that the row filter records its evaluations. Makes the
     /// placement for the first row group, which has `first_row_group_rows`
     /// rows.
@@ -195,42 +221,37 @@ impl FilePlacement {
         let file_conjuncts = split_conjunction(predicate);
         let mut conjuncts = vec![];
         for (index, candidate) in candidates.iter_mut().enumerate() {
-            let kind = if let Some(gate) = candidate.gate() {
-                ConjunctKind::Optional {
-                    gate: Arc::clone(gate),
-                }
-            } else if is_optional_filter(candidate.source_expr())
-                || candidate.position() >= file_conjuncts.len()
+            if candidate.position() >= file_conjuncts.len()
+                || (candidate.gate().is_none()
+                    && is_optional_filter(candidate.source_expr()))
             {
                 // An optional conjunct in the `always` mode.
                 continue;
-            } else {
-                let stats = options.sites.stats_for(
-                    &file_conjuncts,
-                    candidate.position(),
-                    options.scan_conjunct_count,
-                );
-                candidate.set_placement_stats(Arc::clone(&stats));
-                let unread_output_bytes_per_row =
-                    compressed_bytes_per_row(metadata, |leaf| {
-                        output_projection.leaf_included(leaf)
-                            && !candidate.reads_leaf(leaf)
-                    });
-                let read_output_bytes_per_row =
-                    compressed_bytes_per_row(metadata, |leaf| {
-                        output_projection.leaf_included(leaf)
-                            && candidate.reads_leaf(leaf)
-                    });
-                ConjunctKind::Required {
-                    expr: Arc::clone(candidate.source_expr()),
-                    stats,
-                    unread_output_bytes_per_row,
-                    read_output_bytes_per_row,
-                }
-            };
+            }
+            let stats = options.sites.stats_for(
+                &file_conjuncts,
+                candidate.position(),
+                options.scan_conjunct_count,
+            );
+            candidate.set_placement_stats(Arc::clone(&stats));
+            let unread_output_bytes_per_row =
+                compressed_bytes_per_row(metadata, |leaf| {
+                    output_projection.leaf_included(leaf) && !candidate.reads_leaf(leaf)
+                });
+            let read_output_bytes_per_row = compressed_bytes_per_row(metadata, |leaf| {
+                output_projection.leaf_included(leaf) && candidate.reads_leaf(leaf)
+            });
+            let optional = candidate.gate().map(|gate| OptionalConjunct {
+                gate: Arc::clone(gate),
+                saving: candidate.optional_saving().cloned(),
+            });
             conjuncts.push(ManagedConjunct {
                 candidate: index,
-                kind,
+                expr: Arc::clone(candidate.source_expr()),
+                stats,
+                unread_output_bytes_per_row,
+                read_output_bytes_per_row,
+                optional,
                 placement: Placement::RowFilter,
             });
         }
@@ -238,6 +259,7 @@ impl FilePlacement {
             return None;
         }
         let mut placement = Self {
+            order: (0..conjuncts.len()).collect(),
             conjuncts,
             sites: Arc::clone(&options.sites),
             metadata: Arc::clone(metadata),
@@ -253,105 +275,132 @@ impl FilePlacement {
 
     /// Makes the placement for the next row group, which has
     /// `next_row_group_rows` rows. Call at each row group boundary. Returns
-    /// true if the placement changed: then rebuild the `RowFilter` and the
-    /// decoder projection.
-    pub(crate) fn decide(&mut self, next_row_group_rows: usize) -> bool {
+    /// `Some` if the placement or the evaluation order changed: then rebuild
+    /// the post-scan filter, and the decoder if its projection mask or its
+    /// `RowFilter` changed.
+    pub(crate) fn decide(
+        &mut self,
+        next_row_group_rows: usize,
+    ) -> Option<PlacementChange> {
         if self.frozen {
-            return false;
+            return None;
         }
         // A skipped optional conjunct did not see the batches of the last
         // row group. Count them down on its gate, so that the pause can
         // end.
         for conjunct in &self.conjuncts {
-            if let (Placement::Skip, ConjunctKind::Optional { gate }) =
-                (conjunct.placement, &conjunct.kind)
+            if let (Placement::Skip, Some(optional)) =
+                (conjunct.placement, &conjunct.optional)
             {
-                gate.lock().skip_rows(self.row_group_rows, self.batch_size);
+                optional
+                    .gate
+                    .lock()
+                    .skip_rows(self.row_group_rows, self.batch_size);
             }
         }
         self.row_group_rows = next_row_group_rows;
-        let changed = self.place_all(next_row_group_rows, false);
-        if changed {
-            self.changes.add(1);
+        let row_filter = self.row_filter_candidates();
+        let before = self.snapshot();
+        self.place_all(next_row_group_rows, false);
+        if self.snapshot() == before {
+            return None;
         }
-        changed
+        self.changes.add(1);
+        Some(PlacementChange {
+            row_filter: self.row_filter_candidates() != row_filter,
+        })
     }
 
-    /// Decides the placement of each conjunct. Returns true if a placement
-    /// changed.
-    fn place_all(&mut self, row_group_rows: usize, first: bool) -> bool {
+    /// Decides the placement of each conjunct and the evaluation order.
+    fn place_all(&mut self, row_group_rows: usize, first: bool) {
         let decode_ns_per_byte = self.sites.decode().ns_per_byte();
         let fetch_ns_per_row =
             self.sites.fetch().mean_nanos() / row_group_rows.max(1) as f64;
-        let mut changed = false;
+        let mut observations = Vec::with_capacity(self.conjuncts.len());
         for conjunct in &mut self.conjuncts {
-            let placement = match &conjunct.kind {
-                ConjunctKind::Required {
-                    stats,
-                    unread_output_bytes_per_row,
-                    read_output_bytes_per_row,
-                    ..
-                } => place_required(
-                    &RequiredConjunctInputs {
-                        observation: stats.observation(),
-                        unread_output_bytes_per_row: *unread_output_bytes_per_row,
-                        read_output_bytes_per_row: *read_output_bytes_per_row,
-                        decode_ns_per_byte,
-                        fetch_ns_per_row,
-                    },
-                    (!first).then_some(conjunct.placement),
-                ),
-                ConjunctKind::Optional { gate } => {
-                    place_optional(gate.lock().is_paused())
+            let observation = conjunct.stats.observation();
+            observations.push(observation);
+            let inputs = ConjunctInputs {
+                observation,
+                unread_output_bytes_per_row: conjunct.unread_output_bytes_per_row,
+                read_output_bytes_per_row: conjunct.read_output_bytes_per_row,
+                decode_ns_per_byte,
+                fetch_ns_per_row,
+            };
+            let current = (!first).then_some(conjunct.placement);
+            conjunct.placement = match &conjunct.optional {
+                None => place_required(&inputs, current),
+                Some(optional) => {
+                    let paused = optional.gate.lock().is_paused();
+                    let placement = place_optional(&inputs, paused, current);
+                    if let Some(saving) = &optional.saving {
+                        saving.set_row_filter(placement == Placement::RowFilter);
+                    }
+                    placement
                 }
             };
-            changed |= placement != conjunct.placement;
-            conjunct.placement = placement;
         }
-        changed
+        self.order = evaluation_order(&observations);
+    }
+
+    /// The placement and the evaluation order of the managed conjuncts.
+    pub(crate) fn snapshot(&self) -> PlacementSnapshot {
+        PlacementSnapshot {
+            placements: self.conjuncts.iter().map(|c| c.placement).collect(),
+            order: self.order.clone(),
+        }
+    }
+
+    /// Sets the placement and the order to `snapshot` (from
+    /// [`Self::snapshot`]) and stops all later changes. For a file where the
+    /// scan cannot apply a change.
+    pub(crate) fn restore_and_freeze(&mut self, snapshot: &PlacementSnapshot) {
+        for (conjunct, placement) in self.conjuncts.iter_mut().zip(&snapshot.placements) {
+            conjunct.placement = *placement;
+        }
+        self.order.clone_from(&snapshot.order);
+        self.frozen = true;
+    }
+
+    /// True if the placement manages the candidate at `index`.
+    pub(crate) fn manages(&self, index: usize) -> bool {
+        self.conjuncts.iter().any(|c| c.candidate == index)
+    }
+
+    /// The candidates of the managed conjuncts that are predicates of the
+    /// `RowFilter`, in evaluation order.
+    pub(crate) fn row_filter_candidates(&self) -> Vec<usize> {
+        self.in_order(Placement::RowFilter)
+            .map(|conjunct| conjunct.candidate)
+            .collect()
+    }
+
+    /// The managed conjuncts that the post-scan filter evaluates, in
+    /// evaluation order. The optional conjuncts have their gate.
+    pub(crate) fn post_scan_conjuncts(&self) -> Vec<PostScanConjunct> {
+        self.in_order(Placement::PostScan)
+            .map(|c| PostScanConjunct {
+                expr: Arc::clone(&c.expr),
+                stats: Some(Arc::clone(&c.stats)),
+                gate: c
+                    .optional
+                    .as_ref()
+                    .map(|optional| Arc::clone(&optional.gate)),
+            })
+            .collect()
+    }
+
+    /// The managed conjuncts with `placement`, in evaluation order.
+    fn in_order(&self, placement: Placement) -> impl Iterator<Item = &ManagedConjunct> {
+        self.order
+            .iter()
+            .map(|&i| &self.conjuncts[i])
+            .filter(move |c| c.placement == placement)
     }
 
     /// Number of rows of the row group at `index` in the file.
     pub(crate) fn row_group_rows(&self, index: usize) -> usize {
         usize::try_from(self.metadata.row_group(index).num_rows()).unwrap_or(0)
-    }
-
-    /// The current placement of each managed conjunct.
-    pub(crate) fn placements(&self) -> Vec<Placement> {
-        self.conjuncts.iter().map(|c| c.placement).collect()
-    }
-
-    /// Sets the placement of each managed conjunct to `placements` (from
-    /// [`Self::placements`]) and stops all later changes. For a file where
-    /// the scan cannot apply a change.
-    pub(crate) fn restore_and_freeze(&mut self, placements: &[Placement]) {
-        for (conjunct, placement) in self.conjuncts.iter_mut().zip(placements) {
-            conjunct.placement = *placement;
-        }
-        self.frozen = true;
-    }
-
-    /// True if the candidate at `index` is a predicate of the `RowFilter`.
-    pub(crate) fn in_row_filter(&self, index: usize) -> bool {
-        self.conjuncts
-            .iter()
-            .find(|c| c.candidate == index)
-            .is_none_or(|c| c.placement == Placement::RowFilter)
-    }
-
-    /// The managed conjuncts that the post-scan filter evaluates.
-    pub(crate) fn post_scan_conjuncts(&self) -> Vec<PostScanConjunct> {
-        self.conjuncts
-            .iter()
-            .filter(|c| c.placement == Placement::PostScan)
-            .filter_map(|c| match &c.kind {
-                ConjunctKind::Required { expr, stats, .. } => Some(PostScanConjunct {
-                    expr: Arc::clone(expr),
-                    stats: Some(Arc::clone(stats)),
-                }),
-                ConjunctKind::Optional { .. } => None,
-            })
-            .collect()
     }
 
     /// Sets the projection mask of the decoder, for the decode time

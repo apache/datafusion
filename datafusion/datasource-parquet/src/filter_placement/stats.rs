@@ -26,7 +26,7 @@ use std::time::Duration;
 use arrow::array::BooleanArray;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::OptionalFilterPhysicalExpr;
-use datafusion_physical_expr::filter_stats::duration_nanos;
+use datafusion_physical_expr::filter_stats::{FilterCost, duration_nanos};
 use datafusion_physical_expr::utils::is_optional_filter;
 use datafusion_pruning::ConjunctPruningStats;
 use parking_lot::Mutex;
@@ -49,9 +49,20 @@ pub(crate) struct Observation {
     pub(crate) row_groups_pruned: u64,
     /// Row groups that the conjunct alone did not prune with statistics.
     pub(crate) row_groups_kept: u64,
+    /// Evaluation time of the conjunct, in nanoseconds.
+    pub(crate) nanos: u64,
 }
 
 impl Observation {
+    /// The rows in, rows out and evaluation time.
+    pub(crate) fn cost(&self) -> FilterCost {
+        FilterCost {
+            rows_in: self.rows_in,
+            rows_out: self.rows_out,
+            nanos: self.nanos,
+        }
+    }
+
     /// Fraction of the evaluated rows that the decoder can skip, or `None`
     /// if the conjunct was not evaluated on any row.
     pub(crate) fn skippable_fraction(&self) -> Option<f64> {
@@ -80,6 +91,7 @@ pub(crate) struct ConjunctStats {
     skippable_rows: AtomicU64,
     row_groups_pruned: AtomicU64,
     row_groups_kept: AtomicU64,
+    nanos: AtomicU64,
 }
 
 impl ConjunctStats {
@@ -93,7 +105,7 @@ impl ConjunctStats {
     /// spans 64 or more rows of the file, thus the skippable rows are
     /// counted too low. The first predicate is measured exactly. See
     /// [`StageSelection`] for the post-scan filter.
-    pub(crate) fn record_evaluation(&self, result: &BooleanArray) {
+    pub(crate) fn record_evaluation(&self, result: &BooleanArray, nanos: u64) {
         let rows_in = result.len() as u64;
         if rows_in == 0 {
             return;
@@ -110,14 +122,23 @@ impl ConjunctStats {
         self.rows_in.fetch_add(rows_in, Ordering::Relaxed);
         self.rows_out.fetch_add(rows_out, Ordering::Relaxed);
         self.skippable_rows.fetch_add(skippable, Ordering::Relaxed);
+        self.nanos.fetch_add(nanos, Ordering::Relaxed);
     }
 
     /// Records one evaluation of the conjunct on `rows_in` rows, of which
-    /// `rows_out` passed and which made `skippable` rows skippable.
-    pub(crate) fn record(&self, rows_in: usize, rows_out: usize, skippable: usize) {
+    /// `rows_out` passed and which made `skippable` rows skippable, in
+    /// `nanos` nanoseconds.
+    pub(crate) fn record(
+        &self,
+        rows_in: usize,
+        rows_out: usize,
+        skippable: usize,
+        nanos: u64,
+    ) {
         if rows_in == 0 {
             return;
         }
+        self.nanos.fetch_add(nanos, Ordering::Relaxed);
         self.rows_in.fetch_add(rows_in as u64, Ordering::Relaxed);
         self.rows_out.fetch_add(rows_out as u64, Ordering::Relaxed);
         self.skippable_rows
@@ -141,6 +162,7 @@ impl ConjunctStats {
             skippable_rows: self.skippable_rows.load(Ordering::Relaxed),
             row_groups_pruned: self.row_groups_pruned.load(Ordering::Relaxed),
             row_groups_kept: self.row_groups_kept.load(Ordering::Relaxed),
+            nanos: self.nanos.load(Ordering::Relaxed),
         }
     }
 }
@@ -187,14 +209,21 @@ impl StageSelection {
     }
 
     /// Records in `stats` the evaluation of a conjunct with the result
-    /// `passed` (without nulls) for each row of the working batch.
-    pub(crate) fn record(&self, stats: &ConjunctStats, passed: &BooleanArray) {
+    /// `passed` (without nulls) for each row of the working batch, which
+    /// took `nanos` nanoseconds.
+    pub(crate) fn record(
+        &self,
+        stats: &ConjunctStats,
+        passed: &BooleanArray,
+        nanos: u64,
+    ) {
         let values = passed.values();
         match &self.complete_windows {
             None => stats.record(
                 self.input_rows,
                 values.count_set_bits(),
                 skippable_in(values),
+                nanos,
             ),
             Some(windows) => {
                 // The rows that the conjunct did not see pass.
@@ -210,6 +239,7 @@ impl StageSelection {
                     self.input_rows,
                     unseen + values.count_set_bits(),
                     skippable,
+                    nanos,
                 );
             }
         }
@@ -399,9 +429,9 @@ mod tests {
         let stats = ConjunctStats::default();
         let mut values = vec![Some(false); 128];
         values[0] = Some(true);
-        stats.record_evaluation(&bools(values));
-        stats.record_evaluation(&bools(vec![Some(true); 64]));
-        stats.record_evaluation(&bools(vec![None; 64]));
+        stats.record_evaluation(&bools(values), 10);
+        stats.record_evaluation(&bools(vec![Some(true); 64]), 10);
+        stats.record_evaluation(&bools(vec![None; 64]), 10);
         stats.record_pruning(ConjunctPruningStats {
             containers_pruned: 3,
             containers_kept: 1,
@@ -415,6 +445,7 @@ mod tests {
                 skippable_rows: 128,
                 row_groups_pruned: 3,
                 row_groups_kept: 1,
+                nanos: 30,
             }
         );
         assert_eq!(observation.skippable_fraction(), Some(0.5));
@@ -432,7 +463,7 @@ mod tests {
         // Conjunct 1 keeps every fourth row: no empty window. Exact.
         let first: BooleanArray = (0..rows).map(|i| Some(i % 4 == 0)).collect();
         let first_stats = ConjunctStats::default();
-        selection.record(&first_stats, &first);
+        selection.record(&first_stats, &first, 0);
         assert_eq!(
             first_stats.observation(),
             Observation {
@@ -449,7 +480,7 @@ mod tests {
         // thus no window is empty.
         let second: BooleanArray = (0..64).map(|i| Some(i >= 32)).collect();
         let second_stats = ConjunctStats::default();
-        selection.record(&second_stats, &second);
+        selection.record(&second_stats, &second, 0);
         assert_eq!(
             second_stats.observation(),
             Observation {
@@ -469,7 +500,7 @@ mod tests {
         // Fails input rows 0..128: two empty windows.
         let passed: BooleanArray = (0..256).map(|i| Some(i >= 128)).collect();
         let stats = ConjunctStats::default();
-        selection.record(&stats, &passed);
+        selection.record(&stats, &passed, 0);
         assert_eq!(
             stats.observation(),
             Observation {
@@ -498,7 +529,7 @@ mod tests {
             .map(|i| Some(!(32..96).contains(&i) && i != 100))
             .collect();
         let stats = ConjunctStats::default();
-        selection.record(&stats, &second);
+        selection.record(&stats, &second, 0);
         assert_eq!(
             stats.observation(),
             Observation {
@@ -513,7 +544,7 @@ mod tests {
         selection.compact(&second);
         let third: BooleanArray = (0..95).map(|i| Some(i >= 64)).collect();
         let stats = ConjunctStats::default();
-        selection.record(&stats, &third);
+        selection.record(&stats, &third, 0);
         assert_eq!(stats.observation().skippable_rows, 0);
         assert_eq!(stats.observation().rows_out, 256 - 64);
     }
@@ -531,7 +562,7 @@ mod tests {
         // all of them leaves the odd rows (not seen) passing.
         let none: BooleanArray = (0..64).map(|_| Some(false)).collect();
         let stats = ConjunctStats::default();
-        selection.record(&stats, &none);
+        selection.record(&stats, &none, 0);
         assert_eq!(
             stats.observation(),
             Observation {
