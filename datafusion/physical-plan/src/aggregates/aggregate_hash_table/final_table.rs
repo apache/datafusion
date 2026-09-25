@@ -21,8 +21,8 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 
-use crate::aggregates::AggregateExec;
 use crate::aggregates::group_values::AccumulatorPhase;
+use crate::aggregates::{AggregateExec, AggregateMode};
 
 use super::common::{
     AggregateHashTable, AggregateHashTableState, FinalMarker, HashAggregateAccumulator,
@@ -47,6 +47,30 @@ impl AggregateHashTable<FinalMarker> {
             partition,
             output_schema,
             Arc::clone(&agg.input().schema()),
+            batch_size,
+            vec![None; agg.aggr_expr().len()],
+        )
+    }
+
+    /// A table that merges partial state rows of `state_schema` for `agg`,
+    /// which does not have to be a final aggregation itself: a single stage
+    /// aggregation passes a copy of itself whose `group_by` refers to the
+    /// state columns (see `PhysicalGroupBy::as_final`), as it does to replay
+    /// its spills.
+    pub(in crate::aggregates) fn new_over_state(
+        agg: &AggregateExec,
+        state_schema: &SchemaRef,
+        partition: usize,
+        output_schema: SchemaRef,
+        batch_size: usize,
+    ) -> Result<Self> {
+        Self::new_for_input(
+            agg,
+            Arc::clone(state_schema),
+            &AggregateMode::Final,
+            partition,
+            output_schema,
+            Arc::clone(state_schema),
             batch_size,
             vec![None; agg.aggr_expr().len()],
         )
