@@ -39,7 +39,7 @@
 //! `adaptive` optional filter mode) is skipped while its gate is paused.
 //! In each stage (the row filter and the post-scan filter), the conjuncts
 //! are evaluated in the order of their measured rows removed for each
-//! nanosecond ([`model::evaluation_order`]), thus a cheap conjunct that
+//! nanosecond ([`evaluation_order`]), thus a cheap conjunct that
 //! removes many rows runs before an expensive one, required or optional.
 //!
 //! [`FilePlacement`] decides at file open and again at each row group
@@ -83,7 +83,10 @@ use crate::optional_filter::{OptionalFilterSaving, compressed_bytes_per_row};
 use crate::row_filter::{PrebuiltRowFilterCandidate, SharedOptionalFilterGate};
 
 pub(crate) use model::Placement;
-use model::{ConjunctInputs, evaluation_order, explore, place_optional, place_required};
+use model::{ConjunctInputs, explore, place_optional, place_required};
+use stats::Observation;
+
+use crate::row_filter_cost::{ChangeHysteresis, evaluation_order};
 pub(crate) use stats::{ConjunctStats, PlacementSites, StageSelection};
 
 /// The adaptive placement settings of one scan.
@@ -178,7 +181,7 @@ pub(crate) struct PlacementChange {
 pub(crate) struct FilePlacement {
     conjuncts: Vec<ManagedConjunct>,
     /// The evaluation order of `conjuncts` (indexes), see
-    /// [`model::evaluation_order`].
+    /// [`evaluation_order`].
     order: Vec<usize>,
     sites: Arc<PlacementSites>,
     metadata: Arc<ParquetMetaData>,
@@ -190,10 +193,8 @@ pub(crate) struct FilePlacement {
     decoded_bytes_per_row: f64,
     /// When true, the placement does not change any more.
     frozen: bool,
-    /// Number of changes of the placement of this file.
-    changes_made: u32,
-    /// Row group boundaries since the last change.
-    boundaries_since_change: usize,
+    /// Hysteresis on the changes of the placement of this file.
+    hysteresis: ChangeHysteresis,
     /// Number of row group boundaries where the placement changed.
     changes: Count,
 }
@@ -269,8 +270,7 @@ impl FilePlacement {
             row_group_rows: first_row_group_rows,
             decoded_bytes_per_row: 0.0,
             frozen: false,
-            changes_made: 0,
-            boundaries_since_change: 0,
+            hysteresis: ChangeHysteresis::default(),
             changes,
         };
         placement.place_all(first_row_group_rows, true);
@@ -304,8 +304,7 @@ impl FilePlacement {
             }
         }
         self.row_group_rows = next_row_group_rows;
-        self.boundaries_since_change += 1;
-        if self.boundaries_since_change <= self.change_hold() {
+        if !self.hysteresis.boundary() {
             return None;
         }
         let row_filter = self.row_filter_candidates();
@@ -315,20 +314,10 @@ impl FilePlacement {
             return None;
         }
         self.changes.add(1);
-        self.changes_made += 1;
-        self.boundaries_since_change = 0;
+        self.hysteresis.changed();
         Some(PlacementChange {
             row_filter: self.row_filter_candidates() != row_filter,
         })
-    }
-
-    /// Row group boundaries to wait after the last change before the next
-    /// change: `2^(n-1) - 1` after the `n`-th change.
-    fn change_hold(&self) -> usize {
-        1usize
-            .checked_shl(self.changes_made)
-            .map_or(usize::MAX, |doubled| doubled / 2)
-            .saturating_sub(1)
     }
 
     /// Decides the placement of each conjunct and the evaluation order.
@@ -374,7 +363,8 @@ impl FilePlacement {
                 saving.set_row_filter(conjunct.placement == Placement::RowFilter);
             }
         }
-        self.order = evaluation_order(&observations);
+        let costs: Vec<_> = observations.iter().map(Observation::cost).collect();
+        self.order = evaluation_order(&costs);
     }
 
     /// The placement and the evaluation order of the managed conjuncts.
