@@ -60,9 +60,13 @@ use tempfile::NamedTempFile;
 use crate::parquet::utils::MetricsFinder;
 
 const ROW_GROUPS: usize = 10;
-const ROWS_PER_ROW_GROUP: usize = 2000;
-/// Each row filter evaluation sees one batch of this many rows.
-const BATCH_SIZE: usize = 100;
+/// More than 6 batches. A multiple of 100 (the period of `a`) and of 1024
+/// (the write batch size of the writer), thus no page of `a` holds only a
+/// tail of values that the page index could prune.
+const ROWS_PER_ROW_GROUP: usize = 25_600;
+/// Each row filter evaluation sees one batch of this many rows. A gate
+/// decides on windows of at least 2 batches and `MIN_OBSERVED_ROWS` rows.
+const BATCH_SIZE: usize = 4096;
 
 /// A file with `ROW_GROUPS` row groups. Column `a` is `i % 100` (each row
 /// group has all values `0..100`, thus statistics cannot prune it), `rg` is
