@@ -591,15 +591,40 @@ an error when the length is passed, set <code class="docutils literal notranslat
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">TIME</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Time64(Nanosecond)</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span></code></p></td>
-<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Timestamp(Nanosecond,</span> <span class="pre">None)</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span></code>, <code class="docutils literal notranslate"><span class="pre">TIMESTAMP(p)</span></code>, <code class="docutils literal notranslate"><span class="pre">TIMESTAMP(p)</span> <span class="pre">WITHOUT</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Timestamp(unit,</span> <span class="pre">None)</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">INTERVAL</span></code></p></td>
-<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Interval(IntervalMonthDayNano)</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">TIMESTAMPTZ(p)</span></code>, <code class="docutils literal notranslate"><span class="pre">TIMESTAMP(p)</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Timestamp(unit,</span> <span class="pre">None)</span></code> by default — see the warning below</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">INTERVAL</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Interval(MonthDayNano)</span></code></p></td>
 </tr>
 </tbody>
 </table>
 </div>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p><code class="docutils literal notranslate"><span class="pre">TIMESTAMPTZ</span></code> and <code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code> do <strong>not</strong> give a timezone-aware
+type by default. The zone comes from the
+<a class="reference internal" href="../configs.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">datafusion.execution.time_zone</span></code></span></a> setting, and that setting is unset unless you
+set it. So <code class="docutils literal notranslate"><span class="pre">'2024-01-01T12:00:00Z'::timestamptz</span></code> gives <code class="docutils literal notranslate"><span class="pre">Timestamp(unit,</span> <span class="pre">None)</span></code>
+by default: the result type does not keep timezone metadata.</p>
+<p>An explicit offset in the input is still applied. DataFusion normalizes the
+value to UTC. For example, with the default setting,
+<code class="docutils literal notranslate"><span class="pre">'2024-01-01T12:00:00+07:00'::timestamptz</span></code> gives <code class="docutils literal notranslate"><span class="pre">2024-01-01T05:00:00</span></code>. It is
+not read as the local time <code class="docutils literal notranslate"><span class="pre">12:00:00</span></code>.</p>
+<p>This is a known bug. See <a class="reference external" href="https://github.com/apache/datafusion/issues/25166">issue #25166</a>. PostgreSQL and DuckDB always give an
+aware type here, because their session time zone always has a value.</p>
+<p>Set <code class="docutils literal notranslate"><span class="pre">datafusion.execution.time_zone</span></code> to make these types aware. <code class="docutils literal notranslate"><span class="pre">'UTC'</span></code> is a
+good value.</p>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">unit</span></code> comes from the optional precision <code class="docutils literal notranslate"><span class="pre">p</span></code> on the two <code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span></code> rows. Use
+<code class="docutils literal notranslate"><span class="pre">0</span></code>, <code class="docutils literal notranslate"><span class="pre">3</span></code>, <code class="docutils literal notranslate"><span class="pre">6</span></code> or <code class="docutils literal notranslate"><span class="pre">9</span></code> for <code class="docutils literal notranslate"><span class="pre">Second</span></code>, <code class="docutils literal notranslate"><span class="pre">Millisecond</span></code>, <code class="docutils literal notranslate"><span class="pre">Microsecond</span></code> or <code class="docutils literal notranslate"><span class="pre">Nanosecond</span></code>.
+DataFusion rejects each other value of <code class="docutils literal notranslate"><span class="pre">p</span></code>. If you omit <code class="docutils literal notranslate"><span class="pre">p</span></code>, the unit is
+<code class="docutils literal notranslate"><span class="pre">Nanosecond</span></code>. The precision goes after <code class="docutils literal notranslate"><span class="pre">TIMESTAMPTZ</span></code>, but before
+<code class="docutils literal notranslate"><span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code>: use <code class="docutils literal notranslate"><span class="pre">TIMESTAMPTZ(3)</span></code> or <code class="docutils literal notranslate"><span class="pre">TIMESTAMP(3)</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code>.
+<code class="docutils literal notranslate"><span class="pre">DATE</span></code>, <code class="docutils literal notranslate"><span class="pre">TIME</span></code> and <code class="docutils literal notranslate"><span class="pre">INTERVAL</span></code> do not accept a precision.</p>
 </section>
 <section id="boolean-types">
 <h2>Boolean Types<a class="headerlink" href="#boolean-types" title="Link to this heading">#</a></h2>
