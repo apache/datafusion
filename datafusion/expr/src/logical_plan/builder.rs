@@ -24,7 +24,7 @@ use std::iter::once;
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
-use crate::expr::{Alias, PlannedReplaceSelectItem, Sort as SortExpr};
+use crate::expr::{Alias, Cast, PlannedReplaceSelectItem, Sort as SortExpr};
 use crate::expr_rewriter::{
     ColumnNormalizer, coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
@@ -1537,6 +1537,18 @@ impl LogicalPlanBuilder {
                 right_columns.len()
             );
         }
+        let from_right = left_plan
+            .schema()
+            .fields()
+            .iter()
+            .zip(right_plan.schema().fields())
+            .map(|(left, right)| {
+                join_type == JoinType::Inner
+                    && left.is_nullable()
+                    && !right.is_nullable()
+                    && left.data_type() == right.data_type()
+            })
+            .collect::<Vec<_>>();
         let mut row_number_name = "__datafusion_set_operation_row_number".to_string();
         while [left_plan.schema(), right_plan.schema()]
             .iter()
@@ -1570,6 +1582,7 @@ impl LogicalPlanBuilder {
         )?;
         let left_plan = left_builder.build()?;
         let right_plan = right_builder.build()?;
+        let right_columns = right_plan.schema().columns();
         let join_keys = left_plan
             .schema()
             .fields()
@@ -1582,6 +1595,32 @@ impl LogicalPlanBuilder {
                 )
             })
             .collect();
+        let projection = left_columns
+            .into_iter()
+            .zip(right_columns)
+            .zip(from_right)
+            .zip(left_plan.schema().fields())
+            .map(|(((column, right_column), from_right), field)| {
+                let left_column = if requalified {
+                    Column::new(Some(TableReference::bare("left")), column.name)
+                } else {
+                    column
+                };
+                if from_right {
+                    let target_field = Arc::new(
+                        Field::new(&left_column.name, field.data_type().clone(), false)
+                            .with_metadata(field.metadata().clone()),
+                    );
+                    Expr::Cast(Cast::new_from_field(
+                        Box::new(Expr::Column(right_column)),
+                        target_field,
+                    ))
+                    .alias_qualified(left_column.relation, &left_column.name)
+                } else {
+                    Expr::Column(left_column)
+                }
+            })
+            .collect::<Vec<_>>();
         let joined = LogicalPlanBuilder::from(left_plan).join_detailed(
             right_plan,
             join_type,
@@ -1589,19 +1628,6 @@ impl LogicalPlanBuilder {
             None,
             NullEquality::NullEqualsNull,
         )?;
-        let projection = left_columns
-            .into_iter()
-            .map(|column| {
-                if requalified {
-                    Expr::Column(Column::new(
-                        Some(TableReference::bare("left")),
-                        column.name,
-                    ))
-                } else {
-                    Expr::Column(column)
-                }
-            })
-            .collect::<Vec<_>>();
         joined.project(projection)?.build()
     }
 
