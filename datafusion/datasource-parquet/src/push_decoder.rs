@@ -902,9 +902,13 @@ impl PushDecoderStreamState {
 
         let decoder = self.decoder.take().expect("decoder present");
         let mut builder = decoder.into_builder().map_err(DataFusionError::from)?;
-        // Filter-only rebuilds preserve the decoder's remaining selections.
-        // Runtime pruning is disabled for scans with selections, so pruned
-        // plans can be rebuilt from row-group indexes alone.
+        // `into_builder` returns the decoder's remaining row group plan with
+        // the selection of each row group that is not read yet. Thus a
+        // rebuild that changes only the filter or the projection (the
+        // fully-matched toggle, the adaptive filter placement) keeps a live
+        // row selection (for example from the page index). Runtime pruning
+        // is disabled for scans with selections, so pruned plans can be
+        // rebuilt from row-group indexes alone.
         if pruned_count > 0 {
             let selections = self
                 .rg_plan
