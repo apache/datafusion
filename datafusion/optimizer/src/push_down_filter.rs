@@ -1141,6 +1141,21 @@ impl OptimizerRule for PushDownFilter {
                 result.map_data(|plan| Ok(with_filters(keep_predicates, plan)))
             }
             LogicalPlan::Join(join) => push_down_join(join, Some(filter.predicate)),
+            // Pushes deterministic left-only predicates below the ASOF join and
+            // mirrors eligible equality-key predicates to the right input.
+            // Example:
+            //   Before:
+            //     Filter: l.key = 42
+            //       AsOfJoin: on=[l.key = r.key]
+            //         Left
+            //         Right
+            //   ---
+            //   After:
+            //     AsOfJoin: on=[l.key = r.key]
+            //       Filter: l.key = 42
+            //         Left
+            //       Filter: r.key = 42
+            //         Right
             LogicalPlan::AsOfJoin(mut join) => {
                 // ASOF emits exactly one output row per left row without
                 // changing left values, so deterministic left-only predicates
@@ -1155,6 +1170,34 @@ impl OptimizerRule for PushDownFilter {
                                     join.left.schema().is_column_from_schema(column)
                                 })
                         });
+
+                // Every matching pair has equal key values, so a deterministic
+                // predicate that refers only to left keys also holds for the
+                // corresponding right keys. Expression-based join keys are not
+                // mirrored because they cannot be replaced column-for-column.
+                let key_replacements = join
+                    .on
+                    .iter()
+                    .filter_map(|(left, right)| {
+                        Some((left.try_as_col()?, right.try_as_col()?))
+                    })
+                    .collect::<HashMap<_, _>>();
+                let mut right_predicates = Vec::new();
+                for predicate in &push_predicates {
+                    let columns = predicate.column_refs();
+                    if !columns.is_empty()
+                        && columns
+                            .iter()
+                            .all(|column| key_replacements.contains_key(column))
+                    {
+                        right_predicates
+                            .push(replace_col(predicate.clone(), &key_replacements)?);
+                    }
+                }
+                if let Some(predicate) = conjunction(right_predicates) {
+                    join.right =
+                        Arc::new(LogicalPlan::Filter(Filter::new(predicate, join.right)));
+                }
 
                 let result = if let Some(predicate) = conjunction(push_predicates) {
                     filter.predicate = predicate;
