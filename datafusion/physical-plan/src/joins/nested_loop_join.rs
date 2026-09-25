@@ -1544,18 +1544,19 @@ impl LeftSpillData {
         }
     }
 
-    /// Decrements counter of running threads, and returns `true` if caller is
-    /// the last running thread and no partition went away unfinished.
-    fn report_probe_completed(&self) -> bool {
+    /// Decrements counter of running threads. If the caller is the last
+    /// running thread and no partition went away unfinished, it is the emitter
+    /// and gets the complete visited bitmap, which it must account for.
+    fn report_probe_completed(&self) -> Option<BooleanBuffer> {
         if self.probe_threads_counter.fetch_sub(1, Ordering::AcqRel) != 1 {
-            return false;
+            return None;
         }
+        let visited = self.take_visited();
         if self.incomplete.load(Ordering::Acquire) {
             // Nobody will emit, so nobody needs the bitmap
-            drop(self.take_visited());
-            return false;
+            return None;
         }
-        true
+        Some(visited)
     }
 
     /// `count` partitions went away before they finished probing.
@@ -1880,7 +1881,7 @@ pub(crate) struct SpillStateActive {
     /// [`LeftSpillData`] for why bits are addressed this way.
     chunk_row_offset: usize,
     /// Final pass over the left spill file that emits the unmatched-left rows.
-    /// Only the elected emitter opens it.
+    /// Only the elected emitter has one, from `ProbeEnd` on.
     left_unmatched_pass: Option<LeftUnmatchedPass>,
     /// Right-side schema, used to build NULL-padded right columns.
     right_schema: SchemaRef,
@@ -1900,8 +1901,11 @@ pub(crate) struct SpillStateActive {
 /// The emitter's final pass over the left spill file. See
 /// [`NestedLoopJoinStream::handle_emit_left_unmatched_memory_limited`].
 struct LeftUnmatchedPass {
-    stream: SendableRecordBatchStream,
-    /// The complete global visited bitmap, taken from [`LeftSpillData`]
+    /// Opened on the first entry to `EmitLeftUnmatched`
+    stream: Option<SendableRecordBatchStream>,
+    /// The complete global visited bitmap, taken from [`LeftSpillData`] and
+    /// accounted for in the stream's `chunk_reservation`, so it is released
+    /// with the stream whichever way the pass ends.
     visited: BooleanBuffer,
     /// Position in the left spill file of the next batch's first row
     row_offset: usize,
@@ -2824,8 +2828,23 @@ impl NestedLoopJoinStream {
         // Decrement the shared counter exactly once for this stream. The
         // last stream to finish probing (the one that drives the counter to
         // zero) becomes the unmatched-left emitter.
-        let is_emitter = if let SpillState::Active(active) = &self.spill_state {
-            active.left_spill.report_probe_completed()
+        let is_emitter = if let SpillState::Active(active) = &mut self.spill_state {
+            match active.left_spill.report_probe_completed() {
+                Some(visited) => {
+                    if need_produce_result_in_final(self.join_type) {
+                        // Every chunk is done, which leaves `chunk_reservation`
+                        // free to account for the bitmap this stream now owns.
+                        active.chunk_reservation.grow(visited.len().div_ceil(8));
+                        active.left_unmatched_pass = Some(LeftUnmatchedPass {
+                            stream: None,
+                            visited,
+                            row_offset: 0,
+                        });
+                    }
+                    true
+                }
+                None => false,
+            }
         } else {
             match self.get_left_data() {
                 Ok(left_data) => left_data.report_probe_completed(),
@@ -2880,28 +2899,18 @@ impl NestedLoopJoinStream {
             return ControlFlow::Break(poll);
         }
 
-        let is_emitter = need_produce_result_in_final(self.join_type)
-            && self.is_unmatched_left_emitter;
         let SpillState::Active(active) = &mut self.spill_state else {
             unreachable!("memory-limited EmitLeftUnmatched without Active spill state");
         };
 
         // On first entry, the emitter opens its pass over the left spill file
-        if is_emitter && active.left_unmatched_pass.is_none() {
+        if let Some(pass) = active.left_unmatched_pass.as_mut()
+            && pass.stream.is_none()
+        {
             let join_metric = self.metrics.join_metrics.join_time.clone();
             let _join_timer = join_metric.timer();
             match active.left_spill.open_pass() {
-                Ok(stream) => {
-                    // Every chunk is done, which leaves `chunk_reservation` free
-                    // to account for the bitmap this stream now owns.
-                    let visited = active.left_spill.take_visited();
-                    active.chunk_reservation.grow(visited.len().div_ceil(8));
-                    active.left_unmatched_pass = Some(LeftUnmatchedPass {
-                        stream,
-                        visited,
-                        row_offset: 0,
-                    });
-                }
+                Ok(stream) => pass.stream = Some(stream),
                 Err(e) => return ControlFlow::Break(Poll::Ready(Some(Err(e)))),
             }
         }
@@ -2909,7 +2918,12 @@ impl NestedLoopJoinStream {
         // Poll the spill stream for the next left batch. Streams that are not
         // the emitter have nothing to read.
         let result = match active.left_unmatched_pass.as_mut() {
-            Some(pass) => match pass.stream.poll_next_unpin(cx) {
+            Some(pass) => match pass
+                .stream
+                .as_mut()
+                .expect("the pass was opened above")
+                .poll_next_unpin(cx)
+            {
                 Poll::Ready(result) => result,
                 Poll::Pending => return ControlFlow::Break(Poll::Pending),
             },
@@ -6210,6 +6224,111 @@ pub(crate) mod tests {
             .await
             .expect("the remaining partition stalled")?;
         assert_eq!(plan.left_chunk_barrier.inner.lock().chunk_index, 8);
+
+        // Nothing stays reserved, although the plan is still alive
+        assert_eq!(task_ctx.memory_pool().reserved(), 0);
+        Ok(())
+    }
+
+    /// Fails every `read_stream` of the left spill file after the first, which
+    /// is the one the chunks are read from. The final pass is the second.
+    struct FailFinalPassSpillFile {
+        inner: Arc<dyn SpillFile>,
+        reads: AtomicUsize,
+    }
+
+    impl SpillFile for FailFinalPassSpillFile {
+        fn path(&self) -> Option<&std::path::Path> {
+            self.inner.path()
+        }
+
+        fn size(&self) -> Option<u64> {
+            self.inner.size()
+        }
+
+        fn read_stream(
+            &self,
+        ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>> {
+            if self.reads.fetch_add(1, Ordering::Relaxed) > 0 {
+                return internal_err!("final pass cannot be opened");
+            }
+            self.inner.read_stream()
+        }
+
+        fn open_writer(&self) -> Result<Box<dyn SpillWriter>> {
+            self.inner.open_writer()
+        }
+    }
+
+    #[derive(Debug)]
+    struct FailFinalPassTempFileFactory {
+        inner: Arc<DiskManager>,
+    }
+
+    impl TempFileFactory for FailFinalPassTempFileFactory {
+        fn create_temp_file(&self, description: &str) -> Result<Arc<dyn SpillFile>> {
+            let file = self.inner.create_tmp_file(description)?;
+            if description != "NestedLoopJoin left spill" {
+                return Ok(file);
+            }
+            Ok(Arc::new(FailFinalPassSpillFile {
+                inner: file,
+                reads: AtomicUsize::new(0),
+            }))
+        }
+    }
+
+    /// The emitter owns the global bitmap from `ProbeEnd` on, so an error
+    /// opening the final pass does not leave it reserved on a live plan.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_nlj_memory_limited_final_pass_open_error_releases_bitmap() -> Result<()>
+    {
+        let inner = Arc::new(
+            DiskManagerBuilder::default()
+                .with_mode(DiskManagerMode::OsTmpDirectory)
+                .build()?,
+        );
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(50, 1.0)
+            .with_disk_manager_builder(DiskManagerBuilder::default().with_mode(
+                DiskManagerMode::Custom(Arc::new(FailFinalPassTempFileFactory { inner })),
+            ))
+            .build_arc()?;
+        let cfg = TaskContext::default()
+            .session_config()
+            .clone()
+            .with_batch_size(1);
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_runtime(runtime)
+                .with_session_config(cfg),
+        );
+        let right = Arc::new(RepartitionExec::try_new(
+            build_right_table_one_batch_per_row(),
+            Partitioning::RoundRobinBatch(2),
+        )?) as Arc<dyn ExecutionPlan>;
+        let plan = Arc::new(NestedLoopJoinExec::try_new(
+            build_left_table_multi_chunk(),
+            right,
+            Some(prepare_join_filter()),
+            &JoinType::Left,
+            None,
+        )?);
+
+        let streams = (0..2)
+            .map(|i| plan.execute(i, Arc::clone(&task_ctx)))
+            .collect::<Result<Vec<_>>>()?;
+        let results = tokio::time::timeout(
+            Duration::from_secs(30),
+            futures::future::join_all(streams.into_iter().map(common::collect)),
+        )
+        .await
+        .expect("the join stalled");
+        let err = results
+            .into_iter()
+            .find_map(Result::err)
+            .expect("the emitter fails to open the final pass");
+        assert_contains!(err.to_string(), "final pass cannot be opened");
 
         // Nothing stays reserved, although the plan is still alive
         assert_eq!(task_ctx.memory_pool().reserved(), 0);
