@@ -70,9 +70,11 @@ mod stats;
 use std::sync::Arc;
 use std::time::Duration;
 
+use datafusion_physical_expr::expressions::DynamicFilterTracking;
 use datafusion_physical_expr::utils::is_optional_filter;
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
 use datafusion_physical_expr_common::metrics::Count;
+use datafusion_physical_expr_common::physical_expr::snapshot_generation;
 use datafusion_pruning::ConjunctPruningStats;
 use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::ParquetMetaData;
@@ -82,7 +84,7 @@ use crate::optional_filter::{OptionalFilterSaving, compressed_bytes_per_row};
 use crate::row_filter::{PrebuiltRowFilterCandidate, SharedOptionalFilterGate};
 
 pub(crate) use model::Placement;
-use model::{ConjunctInputs, evaluation_order, place_optional, place_required};
+use model::{ConjunctInputs, evaluation_order, explore, place_optional, place_required};
 pub(crate) use stats::{ConjunctStats, PlacementSites, StageSelection};
 
 /// The adaptive placement settings of one scan.
@@ -127,11 +129,25 @@ impl PlacementOptions {
             return;
         }
         for (position, stats) in stats.iter().enumerate() {
-            self.sites
-                .stats_for(&conjuncts, position, self.scan_conjunct_count)
-                .record_pruning(*stats);
+            // The statistics prior overrides the measured evidence (see
+            // `model::place_required`). The pruning of a conjunct whose
+            // dynamic filters can still change describes the filter at file
+            // open, not the filter that the scan evaluates later (like its
+            // evaluation measurements, see
+            // `ConjunctStats::observe_generation`): it is not recorded.
+            if !can_change(conjuncts[position]) {
+                self.sites
+                    .stats_for(&conjuncts, position, self.scan_conjunct_count)
+                    .record_pruning(*stats);
+            }
         }
     }
+}
+
+/// True if `expr` has dynamic filters that are not complete, thus can
+/// still change.
+fn can_change(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    DynamicFilterTracking::classify(expr).watcher().is_some()
 }
 
 /// A conjunct whose placement [`FilePlacement`] decides.
@@ -153,6 +169,11 @@ struct ManagedConjunct {
     /// `Some` for an optional conjunct with a gate (the `adaptive` optional
     /// filter mode).
     optional: Option<OptionalConjunct>,
+    /// True if the conjunct has dynamic filters that were not complete at
+    /// file open, thus can change: then its
+    /// measurements are cleared at each change (see
+    /// [`ConjunctStats::observe_generation`]).
+    dynamic: bool,
     placement: Placement,
 }
 
@@ -261,6 +282,7 @@ impl FilePlacement {
                 unread_output_bytes_per_row,
                 read_output_bytes_per_row,
                 optional,
+                dynamic: can_change(candidate.source_expr()),
                 placement: Placement::RowFilter,
             });
         }
@@ -345,6 +367,11 @@ impl FilePlacement {
             self.sites.fetch().mean_nanos() / row_group_rows.max(1) as f64;
         let mut observations = Vec::with_capacity(self.conjuncts.len());
         for conjunct in &mut self.conjuncts {
+            if conjunct.dynamic {
+                conjunct
+                    .stats
+                    .observe_generation(snapshot_generation(&conjunct.expr));
+            }
             let observation = conjunct.stats.observation();
             observations.push(observation);
             let inputs = ConjunctInputs {
@@ -359,13 +386,22 @@ impl FilePlacement {
                 None => place_required(&inputs, current),
                 Some(optional) => {
                     let paused = optional.gate.lock().is_paused();
-                    let placement = place_optional(&inputs, paused, current);
-                    if let Some(saving) = &optional.saving {
-                        saving.set_row_filter(placement == Placement::RowFilter);
-                    }
-                    placement
+                    place_optional(&inputs, paused, current)
                 }
             };
+        }
+        let row_filter_used = self
+            .conjuncts
+            .iter()
+            .any(|conjunct| conjunct.placement == Placement::RowFilter);
+        for (conjunct, observation) in self.conjuncts.iter_mut().zip(&observations) {
+            conjunct.placement =
+                explore(conjunct.placement, observation, row_filter_used);
+            if let Some(saving) =
+                conjunct.optional.as_ref().and_then(|o| o.saving.as_ref())
+            {
+                saving.set_row_filter(conjunct.placement == Placement::RowFilter);
+            }
         }
         self.order = evaluation_order(&observations);
     }

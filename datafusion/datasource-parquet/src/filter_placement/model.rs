@@ -165,6 +165,28 @@ pub(crate) fn place_optional(
     place_required(inputs, current)
 }
 
+/// The placement of a conjunct that has no [`rank`] yet, when the row
+/// filter has other predicates: it is measured first. A conjunct that runs
+/// after the row filter sees only the rows that the row filter lets pass,
+/// thus it could never get the measurements for a better placement or
+/// order (for example a TopK filter behind an expensive `LIKE` row filter,
+/// which could remove most rows before the `LIKE`). As first predicate of
+/// the row filter it is measured on all rows. This costs one row filter
+/// stage until [`MIN_OBSERVED_ROWS`] rows are measured (pooled over the
+/// scan), then the evidence decides.
+pub(crate) fn explore(
+    placement: Placement,
+    observation: &Observation,
+    row_filter_used: bool,
+) -> Placement {
+    if row_filter_used && placement == Placement::PostScan && rank(observation).is_none()
+    {
+        Placement::RowFilter
+    } else {
+        placement
+    }
+}
+
 /// The rank of a conjunct in the evaluation order of its stage: the rows
 /// that it removed for each nanosecond of evaluation time
 /// ([`FilterCost::rows_removed_per_nano`], the ranking key of the adaptive
@@ -180,7 +202,7 @@ pub(crate) fn rank(observation: &Observation) -> Option<f64> {
 /// The evaluation order of conjuncts, as indexes into `observations`. The
 /// same rule for required and optional conjuncts: a larger [`rank`] first.
 /// A conjunct without a rank comes first, in the written order, so that it
-/// is measured on all rows of its stage.
+/// is measured on all rows of its stage (see also [`explore`]).
 pub(crate) fn evaluation_order(observations: &[Observation]) -> Vec<usize> {
     let mut order: Vec<usize> = (0..observations.len()).collect();
     // A stable sort keeps the written order for equal keys.
@@ -375,6 +397,27 @@ mod tests {
             nanos,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn unmeasured_conjunct_explores_the_row_filter() {
+        let unmeasured = measured(MIN_OBSERVED_ROWS - 1, 0, 1);
+        let known = measured(MIN_OBSERVED_ROWS, 0, 1);
+        // Only a post-scan conjunct without a rank, and only when the row
+        // filter has other predicates.
+        assert_eq!(
+            explore(Placement::PostScan, &unmeasured, true),
+            Placement::RowFilter
+        );
+        assert_eq!(
+            explore(Placement::PostScan, &unmeasured, false),
+            Placement::PostScan
+        );
+        assert_eq!(
+            explore(Placement::PostScan, &known, true),
+            Placement::PostScan
+        );
+        assert_eq!(explore(Placement::Skip, &unmeasured, true), Placement::Skip);
     }
 
     #[test]
