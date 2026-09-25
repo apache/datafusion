@@ -180,20 +180,6 @@ mod tests {
         )?))
     }
 
-    fn sampled_range_partitioning() -> Result<Partitioning> {
-        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(
-            Column::new("a", 0),
-        ))])
-        .expect("non-empty ordering");
-        let samples = [10, 20, 30, 40, 50]
-            .into_iter()
-            .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
-            .collect();
-        Ok(Partitioning::Range(
-            RangePartitioning::try_new_with_samples(ordering, samples, 3)?,
-        ))
-    }
-
     #[test]
     fn round_trip_ffi_partitioning() -> Result<()> {
         for partitioning in [
@@ -201,7 +187,6 @@ mod tests {
             Partitioning::Hash(vec![lit(1)], 10),
             Partitioning::UnknownPartitioning(10),
             range_partitioning()?,
-            sampled_range_partitioning()?,
         ] {
             let ffi_partitioning: FFI_Partitioning = (&partitioning).into();
             let returned: Partitioning = ffi_partitioning.try_into()?;
@@ -233,7 +218,17 @@ mod tests {
 
     #[test]
     fn round_trip_ffi_sampled_range_partitioning() -> Result<()> {
-        let partitioning = sampled_range_partitioning()?;
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(
+            Column::new("a", 0),
+        ))])
+        .expect("non-empty ordering");
+        let samples = [10, 20, 30, 40, 50]
+            .into_iter()
+            .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
+            .collect();
+        let partitioning = Partitioning::Range(RangePartitioning::try_new_with_samples(
+            ordering, samples, 3,
+        )?);
 
         let ffi_partitioning: FFI_Partitioning = (&partitioning).into();
         let returned: Partitioning = ffi_partitioning.try_into()?;
