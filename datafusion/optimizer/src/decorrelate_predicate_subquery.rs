@@ -535,7 +535,8 @@ fn in_values_predicate(in_values: &[(Expr, Column)]) -> Expr {
         .expect("an `IN` predicate has at least one value")
 }
 
-/// Sets [`Join::null_aware_value_keys`] on a join built by [`build_join`].
+/// Sets [`Join::null_aware_value_keys`](datafusion_expr::Join::null_aware_value_keys)
+/// on a join built by [`build_join`].
 fn with_null_aware_value_keys(
     plan: LogicalPlan,
     null_aware_value_keys: usize,
