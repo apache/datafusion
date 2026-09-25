@@ -312,19 +312,20 @@ impl ParquetAccessPlan {
                 );
             }
 
-            // Slice the bitmap without materializing selectors. Counting each
-            // row group's set bits visits the bitmap only once overall.
+            // Slice the bitmap without materializing selectors. Use row_count()
+            // to cache each partial group's count for later preparation.
             let mut offset = 0;
             let row_groups = row_group_meta_data
                 .iter()
                 .map(|rg| {
                     let row_count = rg.num_rows() as usize;
-                    let group_mask = mask.slice(offset, row_count);
+                    let group_selection =
+                        RowSelection::from(mask.slice(offset, row_count));
                     offset += row_count;
-                    match group_mask.count_set_bits() {
+                    match group_selection.row_count() {
                         0 => RowGroupAccess::Skip,
                         selected if selected == row_count => RowGroupAccess::Scan,
-                        _ => RowGroupAccess::Selection(RowSelection::from(group_mask)),
+                        _ => RowGroupAccess::Selection(group_selection),
                     }
                 })
                 .collect();
