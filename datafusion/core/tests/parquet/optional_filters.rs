@@ -64,9 +64,13 @@ use tempfile::NamedTempFile;
 use crate::parquet::utils::MetricsFinder;
 
 const ROW_GROUPS: usize = 10;
-const ROWS_PER_ROW_GROUP: usize = 2000;
-/// Each row filter evaluation sees one batch of this many rows.
-const BATCH_SIZE: usize = 100;
+/// More than 6 batches. A multiple of 100 (the period of `a`) and of 1024
+/// (the write batch size of the writer), thus no page of `a` holds only a
+/// tail of values that the page index could prune.
+const ROWS_PER_ROW_GROUP: usize = 25_600;
+/// Each row filter evaluation sees one batch of this many rows. A gate
+/// decides on windows of at least 2 batches and `MIN_OBSERVED_ROWS` rows.
+const BATCH_SIZE: usize = 4096;
 
 /// A file with `ROW_GROUPS` row groups. Column `a` is `i % 100` (each row
 /// group has all values `0..100`, thus statistics cannot prune it), `rg` is
@@ -494,10 +498,11 @@ async fn optional_filter_is_not_evaluated_post_scan() {
 /// filter from the row filter for complete row groups, and counts the rows of
 /// these row groups as skipped. It must count the rows that the row groups
 /// have, not the batch size: here each row group has 15 rows and the batch
-/// size is 8192.
+/// size is 8192. There are enough row groups for a window of the gate
+/// (`MIN_OBSERVED_ROWS` rows).
 #[tokio::test]
 async fn skipped_rows_of_placement_are_the_rows_of_the_row_groups() {
-    let row_groups = 20;
+    let row_groups = 1000;
     let rows_per_row_group = 15;
     let total_rows = row_groups * rows_per_row_group;
     let (file, schema) = write_file_with(row_groups, rows_per_row_group);
