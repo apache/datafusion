@@ -36,14 +36,17 @@ use std::sync::Arc;
 use crate::PhysicalOptimizerRule;
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{Result, assert_eq_or_internal_err, config::ConfigOptions};
+use datafusion_common::{
+    Result, assert_eq_or_internal_err, config::ConfigOptions, internal_err,
+};
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::filter::FilterConjunct;
 use datafusion_physical_expr_common::physical_expr::is_volatile;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::execution_plan::replace_children_if_necessary;
 use datafusion_physical_plan::filter_pushdown::{
     ChildFilterPushdownResult, ChildPushdownResult, FilterPushdownPhase,
-    FilterPushdownPropagation, PushedDown,
+    FilterPushdownPropagation, PushedDown, PushedDownPredicate,
 };
 
 use itertools::{Itertools, izip};
@@ -438,9 +441,13 @@ impl PhysicalOptimizerRule for FilterPushdown {
     }
 }
 
+/// `parent_predicates` carry their [`FilterConjunct`] properties (for example
+/// the optional flag). Nodes only see the expressions: the properties travel
+/// by position, because every node must return one parent filter result for
+/// each input filter, in the same order.
 fn push_down_filters(
     node: &Arc<dyn ExecutionPlan>,
-    parent_predicates: Vec<Arc<dyn PhysicalExpr>>,
+    parent_predicates: Vec<FilterConjunct>,
     config: &ConfigOptions,
     phase: FilterPushdownPhase,
 ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
@@ -452,16 +459,22 @@ fn push_down_filters(
     let children = node.children();
 
     // Filter out expressions that are not allowed for pushdown
-    let parent_filtered = FilteredVec::new(&parent_predicates, allow_pushdown_for_expr);
+    let parent_filtered = FilteredVec::new(&parent_predicates, |c: &FilterConjunct| {
+        allow_pushdown_for_expr(c.expr())
+    });
 
     let filter_description = node.gather_filters_for_pushdown(
         phase,
-        parent_filtered.items().to_vec(),
+        parent_filtered
+            .items()
+            .iter()
+            .map(|c| Arc::clone(c.expr()))
+            .collect(),
         config,
     )?;
 
     let filter_description_parent_filters = filter_description.parent_filters();
-    let filter_description_self_filters = filter_description.self_filters();
+    let filter_description_self_filters = filter_description.self_conjuncts();
     assert_eq_or_internal_err!(
         filter_description_parent_filters.len(),
         children.len(),
@@ -478,7 +491,7 @@ fn push_down_filters(
     for (child_idx, (child, parent_filters, self_filters)) in izip!(
         children,
         filter_description.parent_filters(),
-        filter_description.self_filters()
+        filter_description.self_conjuncts()
     )
     .enumerate()
     {
@@ -494,22 +507,45 @@ fn push_down_filters(
             node.name(),
             child_idx
         );
+        if cfg!(debug_assertions) {
+            check_parent_filter_order(
+                node,
+                child_idx,
+                &parent_filters,
+                &parent_filtered,
+            )?;
+        }
 
         // Filter out self_filters that contain volatile expressions and track indices
-        let self_filtered = FilteredVec::new(&self_filters, allow_pushdown_for_expr);
+        let self_filtered = FilteredVec::new(&self_filters, |c: &FilterConjunct| {
+            allow_pushdown_for_expr(c.expr())
+        });
 
         let num_self_filters = self_filtered.len();
         let mut all_predicates = self_filtered.items().to_vec();
 
+        // `parent_filters[i]` is `parent_filtered.items()[i]`, remapped by
+        // the node. Attach the properties of the original filter.
+        let parent_conjuncts = parent_filters
+            .into_iter()
+            .zip(parent_filtered.items())
+            .map(|(pushed, original)| {
+                (
+                    pushed.discriminant,
+                    original.clone().with_expr(pushed.predicate),
+                )
+            })
+            .collect_vec();
+
         // Apply second filter pass: collect indices of parent filters that can be pushed down
         let parent_filters_for_child = parent_filtered
-            .chain_filter_slice(&parent_filters, |filter| {
-                matches!(filter.discriminant, PushedDown::Yes)
+            .chain_filter_slice(&parent_conjuncts, |(discriminant, _)| {
+                matches!(discriminant, PushedDown::Yes)
             });
 
         // Add the filtered parent predicates to all_predicates
-        for filter in parent_filters_for_child.items() {
-            all_predicates.push(Arc::clone(&filter.predicate));
+        for (_, conjunct) in parent_filters_for_child.items() {
+            all_predicates.push(conjunct.clone());
         }
 
         let num_parent_filters = all_predicates.len() - num_self_filters;
@@ -548,7 +584,7 @@ fn push_down_filters(
         let self_filter_results: Vec<_> = mapped_self_results
             .into_iter()
             .zip(self_filters)
-            .map(|(support, filter)| support.wrap_expression(filter))
+            .map(|(support, filter)| support.wrap_expression(filter.into_expr()))
             .collect();
 
         self_filters_pushdown_supports.push(self_filter_results);
@@ -585,13 +621,12 @@ fn push_down_filters(
             parent_filters: parent_predicates
                 .into_iter()
                 .enumerate()
-                .map(
-                    |(parent_filter_idx, parent_filter)| ChildFilterPushdownResult {
-                        filter: parent_filter,
-                        child_results: parent_filter_pushdown_supports[parent_filter_idx]
-                            .clone(),
-                    },
-                )
+                .map(|(parent_filter_idx, parent_filter)| {
+                    ChildFilterPushdownResult::new(
+                        parent_filter,
+                        parent_filter_pushdown_supports[parent_filter_idx].clone(),
+                    )
+                })
                 .collect(),
             self_filters: self_filters_pushdown_supports,
         },
@@ -603,6 +638,39 @@ fn push_down_filters(
         res.updated_node = Some(updated_node)
     }
     Ok(res)
+}
+
+/// Debug check for the order rule that the [`FilterConjunct`] properties rely
+/// on: result `i` of a node must describe input filter `i`.
+///
+/// A node can rewrite a filter (for example, remap its columns), thus this
+/// check cannot compare expressions. It finds results that are the same
+/// `Arc` as a different input filter, which is what a node that reorders its
+/// parent filters returns.
+fn check_parent_filter_order(
+    node: &Arc<dyn ExecutionPlan>,
+    child_idx: usize,
+    results: &[PushedDownPredicate],
+    inputs: &FilteredVec<FilterConjunct>,
+) -> Result<()> {
+    let inputs = inputs.items();
+    for (idx, result) in results.iter().enumerate() {
+        if Arc::ptr_eq(&result.predicate, inputs[idx].expr()) {
+            continue;
+        }
+        let moved_from = inputs.iter().position(|input| {
+            Arc::ptr_eq(&result.predicate, input.expr())
+                && !Arc::ptr_eq(input.expr(), inputs[idx].expr())
+        });
+        if let Some(moved_from) = moved_from {
+            return internal_err!(
+                "Filter pushdown expected {} to return the parent filters in input order \
+                 for child {child_idx}, but result {idx} is input filter {moved_from}",
+                node.name()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// A helper structure for filtering elements from a vector through multiple passes while
