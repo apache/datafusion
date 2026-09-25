@@ -768,13 +768,16 @@ mod tests {
             rows_matched: Count::new(),
             eval_time: Time::new(),
         };
-        let input = || batch((0..200).map(Some).collect());
+        // Batches where half of the rows reach the optional conjunct: a
+        // window of 2 batches has more than `MIN_OBSERVED_ROWS` rows.
+        let rows = 82 * 200;
+        let input = || batch((0..rows).map(|i| Some(i % 200)).collect());
         for _ in 0..2 {
-            assert_eq!(survivors(&filter, input()).len(), 100);
+            assert_eq!(survivors(&filter, input()).len(), rows as usize / 2);
         }
         assert!(gate.lock().is_paused());
         // The paused gate skips the optional conjunct: same result.
-        assert_eq!(survivors(&filter, input()).len(), 100);
+        assert_eq!(survivors(&filter, input()).len(), rows as usize / 2);
     }
 
     #[test]
