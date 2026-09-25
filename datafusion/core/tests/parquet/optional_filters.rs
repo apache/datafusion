@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! End-to-end tests for *optional filters* in the Parquet scan with row
-//! level filter pushdown (`pushdown_filters = true`).
+//! End-to-end tests for *optional filters* in the Parquet scan.
 //!
 //! An optional filter is a predicate conjunct wrapped in an
 //! `OptionalFilterPhysicalExpr`. The scan handles it as
@@ -27,15 +26,19 @@
 //!   or while it costs more than it saves.
 //! * `pruning_only`: only statistics pruning uses it.
 //!
+//! With `pushdown_filters = false`, the scan uses optional filters only for
+//! statistics pruning, in all modes: it never evaluates them for each row.
+//!
 //! No operator makes optional filters yet, thus these tests push an
 //! `Optional(...)` predicate into the `ParquetSource` directly, with
 //! `FileSource::try_pushdown_filters` and the session configuration.
 
 use std::sync::Arc;
 
-use arrow::array::{Array, Int32Array, Int64Array, RecordBatch};
+use arrow::array::{Array, Int32Array, Int64Array, RecordBatch, StructArray};
+use arrow::buffer::NullBuffer;
 use arrow::compute::concat_batches;
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::ParquetSource;
@@ -50,7 +53,8 @@ use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::{
-    BinaryExpr, Column, DynamicFilterPhysicalExpr, OptionalFilterPhysicalExpr, lit,
+    BinaryExpr, Column, DynamicFilterPhysicalExpr, IsNotNullExpr,
+    OptionalFilterPhysicalExpr, lit,
 };
 use futures::StreamExt;
 use parquet::arrow::ArrowWriter;
@@ -153,8 +157,29 @@ fn scan_with(
     min_saving_ns_per_row: f64,
     projection: Option<Vec<usize>>,
 ) -> Arc<dyn ExecutionPlan> {
+    scan_with_pushdown(
+        file,
+        schema,
+        predicate,
+        mode,
+        min_saving_ns_per_row,
+        projection,
+        true,
+    )
+}
+
+/// Like [`scan_with`], with `pushdown_filters` set to `pushdown`.
+fn scan_with_pushdown(
+    file: &NamedTempFile,
+    schema: &SchemaRef,
+    predicate: Arc<dyn PhysicalExpr>,
+    mode: OptionalFilterMode,
+    min_saving_ns_per_row: f64,
+    projection: Option<Vec<usize>>,
+    pushdown: bool,
+) -> Arc<dyn ExecutionPlan> {
     let mut options = ConfigOptions::default();
-    options.execution.parquet.pushdown_filters = true;
+    options.execution.parquet.pushdown_filters = pushdown;
     options.execution.optional_filter_mode = mode;
     options.execution.optional_filter_min_saving_ns_per_row = min_saving_ns_per_row;
     let source = ParquetSource::new(Arc::clone(schema))
@@ -383,6 +408,187 @@ async fn optional_dynamic_filter_update_restarts_evaluation() {
     }
     let later_row_groups = ROW_GROUPS - 1 - max_rg_before_update as usize;
     assert_eq!(checked_rows, later_row_groups * ROWS_PER_ROW_GROUP / 10);
+}
+
+/// With `pushdown_filters = false`, the scan evaluates the required
+/// conjuncts after the decode (the post-scan filter), but not the optional
+/// conjuncts, in all modes. The consumer of the scan applies the optional
+/// filter again, thus the results do not change.
+#[tokio::test]
+async fn optional_filter_is_not_evaluated_post_scan() {
+    let (file, schema) = write_file();
+    let total_rows = ROW_GROUPS * ROWS_PER_ROW_GROUP;
+    let optional_filter = a_op(&schema, Operator::Lt, 10);
+    // a < 50 AND Optional(a < 10)
+    let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        a_op(&schema, Operator::Lt, 50),
+        Operator::And,
+        optional(Arc::clone(&optional_filter)),
+    ));
+    for mode in [
+        OptionalFilterMode::Always,
+        OptionalFilterMode::Adaptive,
+        OptionalFilterMode::PruningOnly,
+    ] {
+        let scan = scan_with_pushdown(
+            &file,
+            &schema,
+            Arc::clone(&predicate),
+            mode,
+            1e9,
+            None,
+            false,
+        );
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(
+            FilterExec::try_new(Arc::clone(&optional_filter), Arc::clone(&scan)).unwrap(),
+        );
+        let batches = collect(plan, session().task_ctx()).await.unwrap();
+        assert_eq!(values(&batches).len(), total_rows / 10, "mode {mode}");
+
+        // The post-scan filter has only the required conjunct `a < 50`: it
+        // keeps half of the rows. `Optional(a < 10)` would keep 10%.
+        let matched = metric(scan.as_ref(), "post_scan_rows_matched");
+        let pruned = metric(scan.as_ref(), "post_scan_rows_pruned");
+        assert_eq!(
+            (matched, pruned),
+            (total_rows / 2, total_rows / 2),
+            "mode {mode}"
+        );
+        // No row filter.
+        assert_eq!(metric(scan.as_ref(), "pushdown_rows_matched"), 0);
+        assert_eq!(metric(scan.as_ref(), "optional_filter_rows_skipped"), 0);
+    }
+
+    // With only optional conjuncts, the scan has no post-scan filter.
+    let scan = scan_with_pushdown(
+        &file,
+        &schema,
+        optional(Arc::clone(&optional_filter)),
+        OptionalFilterMode::Always,
+        1e9,
+        None,
+        false,
+    );
+    let batches = collect(Arc::clone(&scan), session().task_ctx())
+        .await
+        .unwrap();
+    assert_eq!(values(&batches).len(), total_rows);
+    assert_eq!(metric(scan.as_ref(), "post_scan_rows_matched"), 0);
+    assert_eq!(metric(scan.as_ref(), "post_scan_rows_pruned"), 0);
+}
+
+/// A file with the columns `a` (`i % 100`) and `s` (a struct that is null
+/// for each even row). The row filter cannot evaluate `s IS NOT NULL`,
+/// because the predicate reads the complete struct.
+fn write_struct_file() -> (NamedTempFile, SchemaRef) {
+    let s_fields = Fields::from(vec![Field::new("x", DataType::Int32, true)]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, false),
+        Field::new("s", DataType::Struct(s_fields.clone()), true),
+    ]));
+    let rows = ROW_GROUPS * ROWS_PER_ROW_GROUP;
+    let a: Int32Array = (0..rows).map(|i| (i % 100) as i32).collect();
+    let s = StructArray::new(
+        s_fields,
+        vec![Arc::new(Int32Array::from(vec![1; rows])) as _],
+        Some(NullBuffer::from_iter((0..rows).map(|i| i % 2 == 1))),
+    );
+    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(a), Arc::new(s)])
+        .unwrap();
+    let file = NamedTempFile::new().unwrap();
+    let mut writer =
+        ArrowWriter::try_new(file.reopen().unwrap(), Arc::clone(&schema), None).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    (file, schema)
+}
+
+/// A scan of `file` with `pushdown_filters = true`. The table provider sets
+/// `table_predicate` on the source, and the planner pushes `a < 50`. The
+/// planner does not push a predicate that reads a complete struct, but a
+/// table provider can set it.
+fn struct_scan(
+    file: &NamedTempFile,
+    schema: &SchemaRef,
+    table_predicate: Arc<dyn PhysicalExpr>,
+    mode: OptionalFilterMode,
+) -> Arc<dyn ExecutionPlan> {
+    let mut options = ConfigOptions::default();
+    options.execution.parquet.pushdown_filters = true;
+    options.execution.optional_filter_mode = mode;
+    options.execution.optional_filter_min_saving_ns_per_row = 1e9;
+    let source = ParquetSource::new(Arc::clone(schema))
+        .with_predicate(table_predicate)
+        .try_pushdown_filters(vec![a_op(schema, Operator::Lt, 50)], &options)
+        .unwrap()
+        .updated_node
+        .expect("the scan accepts the predicate");
+    let path = file.path().to_str().unwrap().to_string();
+    let size = std::fs::metadata(&path).unwrap().len();
+    let config = FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+        .with_file(PartitionedFile::new(path, size))
+        .build();
+    DataSourceExec::from_data_source(config)
+}
+
+/// With `pushdown_filters = true`, an optional conjunct that the row filter
+/// cannot evaluate for a file is not used for that file, in all modes: it
+/// does not go to the post-scan filter. A required conjunct that the row
+/// filter cannot evaluate still runs post-scan.
+#[tokio::test]
+async fn rejected_optional_filter_is_not_evaluated_post_scan() {
+    let (file, schema) = write_struct_file();
+    let total_rows = ROW_GROUPS * ROWS_PER_ROW_GROUP;
+    let s_is_not_null: Arc<dyn PhysicalExpr> = Arc::new(IsNotNullExpr::new(Arc::new(
+        Column::new_with_schema("s", &schema).unwrap(),
+    )));
+    let rows = |batches: &[RecordBatch]| -> usize {
+        batches.iter().map(RecordBatch::num_rows).sum()
+    };
+
+    for mode in [
+        OptionalFilterMode::Always,
+        OptionalFilterMode::Adaptive,
+        OptionalFilterMode::PruningOnly,
+    ] {
+        // Optional(s IS NOT NULL) AND a < 50
+        let scan =
+            struct_scan(&file, &schema, optional(Arc::clone(&s_is_not_null)), mode);
+        let batches = collect(Arc::clone(&scan), session().task_ctx())
+            .await
+            .unwrap();
+        // The row filter has only `a < 50`.
+        assert_eq!(rows(&batches), total_rows / 2, "mode {mode}");
+        assert_eq!(
+            metric(scan.as_ref(), "pushdown_rows_matched"),
+            total_rows / 2,
+            "mode {mode}"
+        );
+        // No post-scan filter.
+        assert_eq!(metric(scan.as_ref(), "post_scan_rows_matched"), 0);
+        assert_eq!(metric(scan.as_ref(), "post_scan_rows_pruned"), 0);
+    }
+
+    // Control: the same conjunct as a required conjunct runs post-scan.
+    // s IS NOT NULL AND a < 50
+    let scan = struct_scan(
+        &file,
+        &schema,
+        Arc::clone(&s_is_not_null),
+        OptionalFilterMode::Always,
+    );
+    let batches = collect(Arc::clone(&scan), session().task_ctx())
+        .await
+        .unwrap();
+    assert_eq!(rows(&batches), total_rows / 4);
+    assert_eq!(
+        metric(scan.as_ref(), "post_scan_rows_matched"),
+        total_rows / 4
+    );
+    assert_eq!(
+        metric(scan.as_ref(), "post_scan_rows_pruned"),
+        total_rows / 4
+    );
 }
 
 fn column_i32<'a>(batch: &'a RecordBatch, name: &str) -> &'a [i32] {
