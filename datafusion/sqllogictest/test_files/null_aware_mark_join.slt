@@ -298,28 +298,23 @@ WHERE (id = ANY (SELECT id FROM inner_table_with_null)) IS NULL;
 ----
 logical_plan
 01)Projection: outer_table.value
-02)--Filter: __correlated_sq_1.mark OR __correlated_sq_2.mark AND NOT __correlated_sq_3.mark AND Boolean(NULL) IS NULL
-03)----Projection: outer_table.value, __correlated_sq_1.mark, __correlated_sq_2.mark, __correlated_sq_3.mark
-04)------LeftMark Join:  Filter: outer_table.id = __correlated_sq_3.id IS TRUE
-05)--------LeftMark Join:  Filter: outer_table.id = __correlated_sq_2.id IS NULL
-06)----------LeftMark Join:  Filter: outer_table.id = __correlated_sq_1.id IS TRUE
-07)------------TableScan: outer_table projection=[id, value]
-08)------------SubqueryAlias: __correlated_sq_1
-09)--------------TableScan: inner_table_with_null projection=[id]
-10)----------SubqueryAlias: __correlated_sq_2
-11)------------TableScan: inner_table_with_null projection=[id]
-12)--------SubqueryAlias: __correlated_sq_3
-13)----------TableScan: inner_table_with_null projection=[id]
+02)--Filter: __correlated_sq_1.mark IS NOT DISTINCT FROM Boolean(true) OR __correlated_sq_2.mark IS NOT DISTINCT FROM Boolean(true) AND __correlated_sq_1.mark IS DISTINCT FROM Boolean(true) AND Boolean(NULL) IS NULL
+03)----Projection: outer_table.value, __correlated_sq_1.mark, __correlated_sq_2.mark
+04)------LeftMark Join:  Filter: outer_table.id = __correlated_sq_2.id IS NULL
+05)--------LeftMark Join:  Filter: outer_table.id = __correlated_sq_1.id IS TRUE
+06)----------TableScan: outer_table projection=[id, value]
+07)----------SubqueryAlias: __correlated_sq_1
+08)------------TableScan: inner_table_with_null projection=[id]
+09)--------SubqueryAlias: __correlated_sq_2
+10)----------TableScan: inner_table_with_null projection=[id]
 physical_plan
-01)FilterExec: mark@1 OR mark@2 AND NOT mark@3 AND NULL IS NULL, projection=[value@0]
-02)--NestedLoopJoinExec: join_type=RightMark, filter=(id@0 = id@1) IS NOT DISTINCT FROM true, projection=[value@1, mark@2, mark@3, mark@4]
+01)FilterExec: mark@1 IS NOT DISTINCT FROM true OR mark@2 IS NOT DISTINCT FROM true AND mark@1 IS DISTINCT FROM true AND NULL IS NULL, projection=[value@0]
+02)--NestedLoopJoinExec: join_type=RightMark, filter=id@0 = id@1 IS NULL, projection=[value@1, mark@2, mark@3]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----NestedLoopJoinExec: join_type=RightMark, filter=id@0 = id@1 IS NULL
-05)------DataSourceExec: partitions=1, partition_sizes=[1]
-06)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-07)--------NestedLoopJoinExec: join_type=RightMark, filter=(id@0 = id@1) IS NOT DISTINCT FROM true
-08)----------DataSourceExec: partitions=1, partition_sizes=[1]
-09)----------DataSourceExec: partitions=1, partition_sizes=[1]
+04)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)------NestedLoopJoinExec: join_type=RightMark, filter=(id@0 = id@1) IS NOT DISTINCT FROM true
+06)--------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query T rowsort
 SELECT value
@@ -338,28 +333,23 @@ WHERE (id = ANY (SELECT id FROM inner_table_no_null)) IS TRUE;
 ----
 logical_plan
 01)Projection: outer_table.value
-02)--Filter: __correlated_sq_1.mark OR __correlated_sq_2.mark AND NOT __correlated_sq_3.mark AND Boolean(NULL) IS TRUE
-03)----Projection: outer_table.value, __correlated_sq_1.mark, __correlated_sq_2.mark, __correlated_sq_3.mark
-04)------LeftMark Join:  Filter: outer_table.id = __correlated_sq_3.id IS TRUE
-05)--------LeftMark Join:  Filter: outer_table.id = __correlated_sq_2.id IS NULL
-06)----------LeftMark Join:  Filter: outer_table.id = __correlated_sq_1.id IS TRUE
-07)------------TableScan: outer_table projection=[id, value]
-08)------------SubqueryAlias: __correlated_sq_1
-09)--------------TableScan: inner_table_no_null projection=[id]
-10)----------SubqueryAlias: __correlated_sq_2
-11)------------TableScan: inner_table_no_null projection=[id]
-12)--------SubqueryAlias: __correlated_sq_3
-13)----------TableScan: inner_table_no_null projection=[id]
+02)--Filter: __correlated_sq_1.mark IS NOT DISTINCT FROM Boolean(true) OR __correlated_sq_2.mark IS NOT DISTINCT FROM Boolean(true) AND __correlated_sq_1.mark IS DISTINCT FROM Boolean(true) AND Boolean(NULL) IS TRUE
+03)----Projection: outer_table.value, __correlated_sq_1.mark, __correlated_sq_2.mark
+04)------LeftMark Join:  Filter: outer_table.id = __correlated_sq_2.id IS NULL
+05)--------LeftMark Join:  Filter: outer_table.id = __correlated_sq_1.id IS TRUE
+06)----------TableScan: outer_table projection=[id, value]
+07)----------SubqueryAlias: __correlated_sq_1
+08)------------TableScan: inner_table_no_null projection=[id]
+09)--------SubqueryAlias: __correlated_sq_2
+10)----------TableScan: inner_table_no_null projection=[id]
 physical_plan
-01)FilterExec: (mark@1 OR mark@2 AND NOT mark@3 AND NULL) IS NOT DISTINCT FROM true, projection=[value@0]
-02)--NestedLoopJoinExec: join_type=RightMark, filter=(id@0 = id@1) IS NOT DISTINCT FROM true, projection=[value@1, mark@2, mark@3, mark@4]
+01)FilterExec: (mark@1 IS NOT DISTINCT FROM true OR mark@2 IS NOT DISTINCT FROM true AND mark@1 IS DISTINCT FROM true AND NULL) IS NOT DISTINCT FROM true, projection=[value@0]
+02)--NestedLoopJoinExec: join_type=RightMark, filter=id@0 = id@1 IS NULL, projection=[value@1, mark@2, mark@3]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
-04)----NestedLoopJoinExec: join_type=RightMark, filter=id@0 = id@1 IS NULL
-05)------DataSourceExec: partitions=1, partition_sizes=[1]
-06)------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-07)--------NestedLoopJoinExec: join_type=RightMark, filter=(id@0 = id@1) IS NOT DISTINCT FROM true
-08)----------DataSourceExec: partitions=1, partition_sizes=[1]
-09)----------DataSourceExec: partitions=1, partition_sizes=[1]
+04)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)------NestedLoopJoinExec: join_type=RightMark, filter=(id@0 = id@1) IS NOT DISTINCT FROM true
+06)--------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query T rowsort
 SELECT value
@@ -581,3 +571,430 @@ DROP TABLE outer_corr_table;
 
 statement ok
 DROP TABLE outer_table;
+
+#############
+## Regression: constant (non-column) value expression in `NOT IN (subquery)`
+##
+## When the `NOT IN` predicate is not the whole `WHERE` clause, decorrelation
+## produces a mark join instead of an anti join. `3 NOT IN (1, NULL)` is
+## UNKNOWN, so the mark column must be NULL for every outer row: `NOT mark` is
+## then UNKNOWN and the row only survives via the other disjunct.
+#############
+
+statement ok
+CREATE TABLE nmconst_t1(id INT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE nmconst_t2(id INT) AS VALUES (1), (NULL);
+
+# Q3: `NOT mark` is UNKNOWN for both rows, so only `id = 1` passes.
+query I
+SELECT id FROM nmconst_t1 WHERE 3 NOT IN (SELECT id FROM nmconst_t2) OR id = 1 ORDER BY id;
+----
+1
+
+# Q4: the predicate is UNKNOWN for every row, so `IS NULL` is TRUE for both.
+query I
+SELECT id FROM nmconst_t1 WHERE (3 NOT IN (SELECT id FROM nmconst_t2)) IS NULL ORDER BY id;
+----
+1
+2
+
+# Control: no NULL in the subquery => `3 NOT IN {1}` is TRUE, never UNKNOWN.
+query I
+SELECT id FROM nmconst_t1
+WHERE (3 NOT IN (SELECT id FROM nmconst_t2 WHERE id IS NOT NULL)) IS NULL
+ORDER BY id;
+----
+
+query I
+SELECT id FROM nmconst_t1
+WHERE 3 NOT IN (SELECT id FROM nmconst_t2 WHERE id IS NOT NULL) OR id = 1
+ORDER BY id;
+----
+1
+2
+
+# Control: the constant matches a subquery row => FALSE (not UNKNOWN).
+query I
+SELECT id FROM nmconst_t1 WHERE (1 NOT IN (SELECT id FROM nmconst_t2)) IS NULL ORDER BY id;
+----
+
+query I
+SELECT id FROM nmconst_t1 WHERE 1 NOT IN (SELECT id FROM nmconst_t2) OR id = 1 ORDER BY id;
+----
+1
+
+# Positive `IN` form: `3 IN (1, NULL)` is UNKNOWN, so the mark is NULL.
+query I
+SELECT id FROM nmconst_t1 WHERE (3 IN (SELECT id FROM nmconst_t2)) IS NULL ORDER BY id;
+----
+1
+2
+
+statement ok
+DROP TABLE nmconst_t1;
+
+statement ok
+DROP TABLE nmconst_t2;
+
+##########################################################
+## Correlated NOT IN mark join with a non-equality correlation
+## https://github.com/apache/datafusion/issues/25336
+##########################################################
+
+# The non-equality correlation stays behind as a residual join filter, so the
+# mark must be NULL (UNKNOWN) only when the residual keeps a NULL on either
+# side of the comparison. Expected results are verified with DuckDB.
+
+statement ok
+CREATE TABLE nam_res_outer(id INT, z INT, g INT) AS VALUES
+(1, 10, 1),
+(2, 20, 1),
+(NULL, 30, 1),
+(4, 40, 2),
+(NULL, 1, 2),
+(5, 1, 3);
+
+statement ok
+CREATE TABLE nam_res_inner(id INT, z INT, g INT) AS VALUES
+(1, 5, 1),
+(NULL, 50, 1),
+(4, 35, 2),
+(NULL, 2, 2);
+
+query II rowsort
+SELECT id, z FROM nam_res_outer
+WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < nam_res_outer.z)) IS NULL;
+----
+2 20
+NULL 30
+
+query II rowsort
+SELECT id, z FROM nam_res_outer
+WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < nam_res_outer.z)) IS TRUE;
+----
+5 1
+NULL 1
+
+query II rowsort
+SELECT id, z FROM nam_res_outer
+WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < nam_res_outer.z)) IS FALSE;
+----
+1 10
+4 40
+
+# `NOT mark` must stay NULL for UNKNOWN rows instead of turning into TRUE.
+query II rowsort
+SELECT id, z FROM nam_res_outer
+WHERE NOT (id IN (SELECT i.id FROM nam_res_inner i WHERE i.z < nam_res_outer.z)) OR id = 4;
+----
+4 40
+5 1
+NULL 1
+
+# Positive IN goes through the same mark.
+query II rowsort
+SELECT id, z FROM nam_res_outer
+WHERE (id IN (SELECT i.id FROM nam_res_inner i WHERE i.z > nam_res_outer.z)) IS NULL;
+----
+1 10
+2 20
+4 40
+5 1
+NULL 1
+NULL 30
+
+# Equality and non-equality correlation together.
+query II rowsort
+SELECT id, z FROM nam_res_outer
+WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.g = nam_res_outer.g AND i.z < nam_res_outer.z)) IS NULL;
+----
+NULL 30
+
+query II rowsort
+SELECT id, z FROM nam_res_outer
+WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.g = nam_res_outer.g AND i.z < nam_res_outer.z)) IS TRUE;
+----
+2 20
+5 1
+NULL 1
+
+# Equality correlation only (already null-aware; control).
+query II rowsort
+SELECT id, z FROM nam_res_outer
+WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.g = nam_res_outer.g)) IS NULL;
+----
+2 20
+NULL 1
+NULL 30
+
+# In a SELECT list, the mark column shows TRUE, FALSE and NULL directly.
+query IIB rowsort
+SELECT id, z, id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < nam_res_outer.z)
+FROM nam_res_outer;
+----
+1 10 false
+2 20 NULL
+4 40 false
+5 1 true
+NULL 1 true
+NULL 30 NULL
+
+# A non-negated `IN` under `OR` does not need the null-aware join. A `Filter`
+# drops the row whether the mark is NULL or FALSE, and the null-aware join costs
+# more, because it pins the outer table as the build side and cannot be swapped.
+query TT
+EXPLAIN SELECT id FROM nam_res_outer o
+WHERE o.z > 35 OR o.id IN (SELECT i.id FROM nam_res_inner i WHERE i.z < o.z);
+----
+logical_plan
+01)Projection: o.id
+02)--Filter: o.z > Int32(35) OR __correlated_sq_1.mark
+03)----LeftMark Join: o.id = __correlated_sq_1.id Filter: __correlated_sq_1.z < o.z
+04)------SubqueryAlias: o
+05)--------TableScan: nam_res_outer projection=[id, z]
+06)------SubqueryAlias: __correlated_sq_1
+07)--------SubqueryAlias: i
+08)----------TableScan: nam_res_inner projection=[id, z]
+physical_plan
+01)FilterExec: z@1 > 35 OR mark@2, projection=[id@0]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(id@0, id@0)], filter=z@1 < z@0
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The negated form of the same query stays null-aware, because `NOT mark` tells
+# NULL from FALSE.
+query TT
+EXPLAIN SELECT id FROM nam_res_outer o
+WHERE o.z > 35 OR o.id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < o.z);
+----
+logical_plan
+01)Projection: o.id
+02)--Filter: o.z > Int32(35) OR NOT __correlated_sq_1.mark
+03)----LeftMark Join: o.id = __correlated_sq_1.id Filter: __correlated_sq_1.z < o.z null_aware
+04)------SubqueryAlias: o
+05)--------TableScan: nam_res_outer projection=[id, z]
+06)------SubqueryAlias: __correlated_sq_1
+07)--------SubqueryAlias: i
+08)----------TableScan: nam_res_inner projection=[id, z]
+physical_plan
+01)FilterExec: z@1 > 35 OR NOT mark@2, projection=[id@0]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], filter=z@1 < z@0, null_aware
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Output batches of one row split the candidate pairs checked against the
+# residual filter into many chunks.
+statement ok
+SET datafusion.execution.batch_size = 1;
+
+query II rowsort
+SELECT id, z FROM nam_res_outer
+WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < nam_res_outer.z)) IS NULL;
+----
+2 20
+NULL 30
+
+statement ok
+RESET datafusion.execution.batch_size;
+
+statement ok
+DROP TABLE nam_res_outer;
+
+statement ok
+DROP TABLE nam_res_inner;
+
+##########################################################
+## A subquery inside the `IN` value expression
+## https://github.com/apache/datafusion/pull/25339#discussion_r4056392706
+##########################################################
+
+# A mark join is non-null-aware only when a NULL mark and a FALSE mark keep the
+# same rows. That holds for a non-negated `IN` reached through `AND`/`OR`, but
+# not when the mark feeds the value expression of another `IN`: there the mark
+# is compared rather than used as a filter truth value, so `NULL IN (false)` is
+# UNKNOWN while `false IN (false)` is TRUE. The inner mark join must stay
+# null-aware however the outer `IN` is spelled.
+
+statement ok
+CREATE TABLE nam_val_t1(id INT, z INT, w INT) AS VALUES (1,10,1), (2,20,1), (NULL,30,2), (4,40,2), (5,NULL,1), (NULL,NULL,2);
+
+statement ok
+CREATE TABLE nam_val_t2(id INT, z INT, w INT) AS VALUES (1,5,1), (NULL,50,1), (4,NULL,2), (NULL,NULL,2), (2,20,3);
+
+statement ok
+CREATE TABLE nam_val_tb(b BOOLEAN) AS VALUES (false);
+
+# Expected results verified with DuckDB: every row is UNKNOWN, so none survives.
+query I
+SELECT id FROM nam_val_t1
+WHERE ((id IN (SELECT nam_val_t2.id FROM nam_val_t2 WHERE nam_val_t2.w = nam_val_t1.w)) IN (SELECT b FROM nam_val_tb)) OR id = -1
+ORDER BY id;
+----
+
+# The negated spelling of the outer `IN` reaches the same arm. Here a TRUE inner
+# mark survives (`TRUE NOT IN (false)`), so the result is non-empty and would
+# also catch a fix that simply drops every row.
+query I
+SELECT id FROM nam_val_t1
+WHERE ((id IN (SELECT nam_val_t2.id FROM nam_val_t2 WHERE nam_val_t2.w = nam_val_t1.w)) NOT IN (SELECT b FROM nam_val_tb)) OR id = -1
+ORDER BY id;
+----
+1
+4
+
+statement ok
+DROP TABLE nam_val_t1;
+
+statement ok
+DROP TABLE nam_val_t2;
+
+statement ok
+DROP TABLE nam_val_tb;
+
+##########################################################
+## Contexts that can tell a NULL mark from a FALSE mark
+##########################################################
+
+# A mark join may skip null-aware semantics only where a NULL mark and a FALSE
+# mark keep the same rows. These two contexts can tell them apart, so the mark
+# join must stay null-aware. Both cases fail if the planner ever treats them as
+# positive: `IS NOT NULL` then admits the UNKNOWN rows, and the comparison then
+# reads UNKNOWN as FALSE. Expected results verified with DuckDB.
+
+statement ok
+CREATE TABLE nam_ctx_t1(a INT, w INT) AS VALUES (1,1), (2,1), (3,1), (NULL,2), (4,2);
+
+statement ok
+CREATE TABLE nam_ctx_t2(a INT, w INT) AS VALUES (1,1), (NULL,1), (4,2), (NULL,2);
+
+# `NULL IS NOT NULL` is FALSE but `FALSE IS NOT NULL` is TRUE.
+query I
+SELECT a FROM nam_ctx_t1
+WHERE (a IN (SELECT nam_ctx_t2.a FROM nam_ctx_t2 WHERE nam_ctx_t2.w = nam_ctx_t1.w)) IS NOT NULL
+ORDER BY a;
+----
+1
+4
+
+# Two marks compared. Row a = 3 has an UNKNOWN left mark and a FALSE right mark:
+# `UNKNOWN = FALSE` is UNKNOWN, while `FALSE = FALSE` would be TRUE.
+query I
+SELECT a FROM nam_ctx_t1
+WHERE (a IN (SELECT nam_ctx_t2.a FROM nam_ctx_t2 WHERE nam_ctx_t2.w = nam_ctx_t1.w))
+    = (a IN (SELECT nam_ctx_t2.w FROM nam_ctx_t2))
+ORDER BY a;
+----
+1
+
+statement ok
+DROP TABLE nam_ctx_t1;
+
+statement ok
+DROP TABLE nam_ctx_t2;
+
+##########################################################
+## Plan guards: null-aware is taken only where it is needed
+##########################################################
+
+# Null-aware mark joins cost much more than plain ones, so the planner takes
+# them only where a NULL mark can behave differently from a FALSE mark. That
+# choice is invisible to a result assertion -- a needless null-aware join is
+# still correct, only slower -- so it is pinned here at the plan level.
+# https://github.com/apache/datafusion/pull/25339#discussion_r4056392706
+
+statement ok
+CREATE TABLE nam_guard_outer(id INT, z INT) AS VALUES (1,10), (2,20), (NULL,30);
+
+statement ok
+CREATE TABLE nam_guard_inner(id INT, z INT) AS VALUES (1,5), (NULL,50);
+
+# A non-negated `IN` reached through `OR` keeps the same rows with a NULL mark
+# and with a FALSE mark, so the join must NOT be null-aware. It is then free to
+# swap sides to `RightMark` as well.
+query TT
+EXPLAIN SELECT id FROM nam_guard_outer
+WHERE id IN (SELECT i.id FROM nam_guard_inner i) OR z > 25;
+----
+logical_plan
+01)Projection: nam_guard_outer.id
+02)--Filter: __correlated_sq_1.mark OR nam_guard_outer.z > Int32(25)
+03)----LeftMark Join: nam_guard_outer.id = __correlated_sq_1.id
+04)------TableScan: nam_guard_outer projection=[id, z]
+05)------SubqueryAlias: __correlated_sq_1
+06)--------SubqueryAlias: i
+07)----------TableScan: nam_guard_inner projection=[id]
+physical_plan
+01)FilterExec: mark@2 OR z@1 > 25, projection=[id@0]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(id@0, id@0)]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A `NOT EXISTS` sibling under the same `OR` must not change that. `EXISTS` is
+# two-valued, so its mark is never NULL and it cannot make the `IN` mark
+# observable. Treating it as negative cost this query the plain join and the
+# `RightMark` swap.
+query TT
+EXPLAIN SELECT id FROM nam_guard_outer
+WHERE id IN (SELECT i.id FROM nam_guard_inner i)
+   OR NOT EXISTS (SELECT i.id FROM nam_guard_inner i WHERE i.z > nam_guard_outer.z);
+----
+logical_plan
+01)Projection: nam_guard_outer.id
+02)--Filter: __correlated_sq_1.mark OR NOT __correlated_sq_2.mark
+03)----Projection: nam_guard_outer.id, __correlated_sq_1.mark, __correlated_sq_2.mark
+04)------LeftMark Join:  Filter: __correlated_sq_2.z > nam_guard_outer.z
+05)--------LeftMark Join: nam_guard_outer.id = __correlated_sq_1.id
+06)----------TableScan: nam_guard_outer projection=[id, z]
+07)----------SubqueryAlias: __correlated_sq_1
+08)------------SubqueryAlias: i
+09)--------------TableScan: nam_guard_inner projection=[id]
+10)--------SubqueryAlias: __correlated_sq_2
+11)----------SubqueryAlias: i
+12)------------TableScan: nam_guard_inner projection=[z]
+physical_plan
+01)FilterExec: mark@1 OR NOT mark@2, projection=[id@0]
+02)--NestedLoopJoinExec: join_type=RightMark, filter=z@1 > z@0, projection=[id@0, mark@2, mark@3]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)------HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(id@0, id@0)]
+06)--------DataSourceExec: partitions=1, partition_sizes=[1]
+07)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A constant value expression is projected as an outer column only when the
+# join ends up null-aware. This mark join does not, so the constant stays a
+# filter and no `__correlated_sq_*_value` column is produced.
+query TT
+EXPLAIN SELECT id FROM nam_guard_outer
+WHERE 3 IN (SELECT i.id FROM nam_guard_inner i) OR z > 25;
+----
+logical_plan
+01)Projection: nam_guard_outer.id
+02)--Filter: __correlated_sq_1.mark OR nam_guard_outer.z > Int32(25)
+03)----LeftMark Join:
+04)------TableScan: nam_guard_outer projection=[id, z]
+05)------SubqueryAlias: __correlated_sq_1
+06)--------Projection: CAST(i.id AS Int64)
+07)----------SubqueryAlias: i
+08)------------Filter: nam_guard_inner.id = Int32(3)
+09)--------------TableScan: nam_guard_inner projection=[id]
+physical_plan
+01)FilterExec: mark@2 OR z@1 > 25, projection=[id@0]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----NestedLoopJoinExec: join_type=RightMark
+04)------CoalescePartitionsExec
+05)--------ProjectionExec: expr=[CAST(id@0 AS Int64) as i.id]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------FilterExec: id@0 = 3
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE nam_guard_outer;
+
+statement ok
+DROP TABLE nam_guard_inner;

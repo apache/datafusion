@@ -187,14 +187,22 @@ impl SessionConfig {
         self
     }
 
-    /// Customize batch size
+    /// Set [`batch_size`]
+    ///
+    /// # Panics
+    ///
+    /// Panics if `n` is zero
+    ///
+    /// [`batch_size`]: datafusion_common::config::ExecutionOptions::batch_size
     pub fn with_batch_size(mut self, n: usize) -> Self {
         self.options_mut().execution.batch_size =
             ConfigNonZeroUsize::try_new(n).expect("batch size must be greater than zero");
         self
     }
 
-    /// Customize [`target_partitions`]
+    /// Set [`target_partitions`]
+    ///
+    /// If `n` is zero, the default value is used instead
     ///
     /// [`target_partitions`]: datafusion_common::config::ExecutionOptions::target_partitions
     pub fn with_target_partitions(mut self, n: usize) -> Self {
@@ -219,56 +227,73 @@ impl SessionConfig {
         self.options.execution.target_partitions
     }
 
-    /// Is the information schema enabled?
+    /// Get [`information_schema`]
+    ///
+    /// [`information_schema`]: datafusion_common::config::CatalogOptions::information_schema
     pub fn information_schema(&self) -> bool {
         self.options.catalog.information_schema
     }
 
-    /// Should the context create the default catalog and schema?
+    /// Get [`create_default_catalog_and_schema`]
+    ///
+    /// [`create_default_catalog_and_schema`]: datafusion_common::config::CatalogOptions::create_default_catalog_and_schema
     pub fn create_default_catalog_and_schema(&self) -> bool {
         self.options.catalog.create_default_catalog_and_schema
     }
 
-    /// Are joins repartitioned during execution?
+    /// Get [`repartition_joins`]
+    ///
+    /// [`repartition_joins`]: datafusion_common::config::OptimizerOptions::repartition_joins
     pub fn repartition_joins(&self) -> bool {
         self.options.optimizer.repartition_joins
     }
 
-    /// Are aggregates repartitioned during execution?
+    /// Get [`repartition_aggregations`]
+    ///
+    /// [`repartition_aggregations`]: datafusion_common::config::OptimizerOptions::repartition_aggregations
     pub fn repartition_aggregations(&self) -> bool {
         self.options.optimizer.repartition_aggregations
     }
 
-    /// Are window functions repartitioned during execution?
+    /// Get [`repartition_windows`]
+    ///
+    /// [`repartition_windows`]: datafusion_common::config::OptimizerOptions::repartition_windows
     pub fn repartition_window_functions(&self) -> bool {
         self.options.optimizer.repartition_windows
     }
 
-    /// Do we execute sorts in a per-partition fashion and merge afterwards,
-    /// or do we coalesce partitions first and sort globally?
+    /// Get [`repartition_sorts`]
+    ///
+    /// [`repartition_sorts`]: datafusion_common::config::OptimizerOptions::repartition_sorts
     pub fn repartition_sorts(&self) -> bool {
         self.options.optimizer.repartition_sorts
     }
 
-    /// Prefer existing sort (true) or maximize parallelism (false). See
-    /// [prefer_existing_sort] for more details
+    /// Get [`prefer_existing_sort`]
     ///
-    /// [prefer_existing_sort]: datafusion_common::config::OptimizerOptions::prefer_existing_sort
+    /// [`prefer_existing_sort`]: datafusion_common::config::OptimizerOptions::prefer_existing_sort
     pub fn prefer_existing_sort(&self) -> bool {
         self.options.optimizer.prefer_existing_sort
     }
 
-    /// Are statistics collected during execution?
+    /// Get [`collect_statistics`]
+    ///
+    /// [`collect_statistics`]: datafusion_common::config::ExecutionOptions::collect_statistics
     pub fn collect_statistics(&self) -> bool {
         self.options.execution.collect_statistics
     }
 
-    /// Compression codec for spill file
+    /// Get [`spill_compression`]
+    ///
+    /// [`spill_compression`]: datafusion_common::config::ExecutionOptions::spill_compression
     pub fn spill_compression(&self) -> SpillCompression {
         self.options.execution.spill_compression
     }
 
-    /// Selects a name for the default catalog and schema
+    /// Set [`default_catalog`] and [`default_schema`]
+    ///
+    /// [`default_catalog`]: datafusion_common::config::CatalogOptions::default_catalog
+    /// [`default_schema`]: datafusion_common::config::CatalogOptions::default_schema
     pub fn with_default_catalog_and_schema(
         mut self,
         catalog: impl Into<String>,
@@ -279,37 +304,49 @@ impl SessionConfig {
         self
     }
 
-    /// Controls whether the default catalog and schema will be automatically created
+    /// Set [`create_default_catalog_and_schema`]
+    ///
+    /// [`create_default_catalog_and_schema`]: datafusion_common::config::CatalogOptions::create_default_catalog_and_schema
     pub fn with_create_default_catalog_and_schema(mut self, create: bool) -> Self {
         self.options_mut().catalog.create_default_catalog_and_schema = create;
         self
     }
 
-    /// Enables or disables the inclusion of `information_schema` virtual tables
+    /// Set [`information_schema`]
+    ///
+    /// [`information_schema`]: datafusion_common::config::CatalogOptions::information_schema
     pub fn with_information_schema(mut self, enabled: bool) -> Self {
         self.options_mut().catalog.information_schema = enabled;
         self
     }
 
-    /// Enables or disables the use of repartitioning for joins to improve parallelism
+    /// Set [`repartition_joins`]
+    ///
+    /// [`repartition_joins`]: datafusion_common::config::OptimizerOptions::repartition_joins
     pub fn with_repartition_joins(mut self, enabled: bool) -> Self {
         self.options_mut().optimizer.repartition_joins = enabled;
         self
     }
 
-    /// Enables or disables the use of repartitioning for aggregations to improve parallelism
+    /// Set [`repartition_aggregations`]
+    ///
+    /// [`repartition_aggregations`]: datafusion_common::config::OptimizerOptions::repartition_aggregations
     pub fn with_repartition_aggregations(mut self, enabled: bool) -> Self {
         self.options_mut().optimizer.repartition_aggregations = enabled;
         self
     }
 
-    /// Sets minimum file range size for repartitioning scans
+    /// Set [`repartition_file_min_size`]
+    ///
+    /// [`repartition_file_min_size`]: datafusion_common::config::OptimizerOptions::repartition_file_min_size
     pub fn with_repartition_file_min_size(mut self, size: usize) -> Self {
         self.options_mut().optimizer.repartition_file_min_size = size;
         self
     }
 
-    /// Enables or disables the allowing unordered symmetric hash join
+    /// Set [`allow_symmetric_joins_without_pruning`]
+    ///
+    /// [`allow_symmetric_joins_without_pruning`]: datafusion_common::config::OptimizerOptions::allow_symmetric_joins_without_pruning
     pub fn with_allow_symmetric_joins_without_pruning(mut self, enabled: bool) -> Self {
         self.options_mut()
             .optimizer
@@ -317,118 +354,147 @@ impl SessionConfig {
         self
     }
 
-    /// Enables or disables the use of repartitioning for file scans
+    /// Set [`repartition_file_scans`]
+    ///
+    /// [`repartition_file_scans`]: datafusion_common::config::OptimizerOptions::repartition_file_scans
     pub fn with_repartition_file_scans(mut self, enabled: bool) -> Self {
         self.options_mut().optimizer.repartition_file_scans = enabled;
         self
     }
 
-    /// Enables or disables the use of repartitioning for window functions to improve parallelism
+    /// Set [`repartition_windows`]
+    ///
+    /// [`repartition_windows`]: datafusion_common::config::OptimizerOptions::repartition_windows
     pub fn with_repartition_windows(mut self, enabled: bool) -> Self {
         self.options_mut().optimizer.repartition_windows = enabled;
         self
     }
 
-    /// Enables or disables the use of per-partition sorting to improve parallelism
+    /// Set [`repartition_sorts`]
+    ///
+    /// [`repartition_sorts`]: datafusion_common::config::OptimizerOptions::repartition_sorts
     pub fn with_repartition_sorts(mut self, enabled: bool) -> Self {
         self.options_mut().optimizer.repartition_sorts = enabled;
         self
     }
 
-    /// Prefer existing sort (true) or maximize parallelism (false). See
-    /// [prefer_existing_sort] for more details
+    /// Set [`prefer_existing_sort`]
     ///
-    /// [prefer_existing_sort]: datafusion_common::config::OptimizerOptions::prefer_existing_sort
+    /// [`prefer_existing_sort`]: datafusion_common::config::OptimizerOptions::prefer_existing_sort
     pub fn with_prefer_existing_sort(mut self, enabled: bool) -> Self {
         self.options_mut().optimizer.prefer_existing_sort = enabled;
         self
     }
 
-    /// Prefer existing union (true). See [prefer_existing_union] for more details
+    /// Set [`prefer_existing_union`]
     ///
-    /// [prefer_existing_union]: datafusion_common::config::OptimizerOptions::prefer_existing_union
+    /// [`prefer_existing_union`]: datafusion_common::config::OptimizerOptions::prefer_existing_union
     pub fn with_prefer_existing_union(mut self, enabled: bool) -> Self {
         self.options_mut().optimizer.prefer_existing_union = enabled;
         self
     }
 
-    /// Enables or disables the use of pruning predicate for parquet readers to skip row groups
+    /// Set [`pruning`]
+    ///
+    /// [`pruning`]: datafusion_common::config::ParquetOptions::pruning
     pub fn with_parquet_pruning(mut self, enabled: bool) -> Self {
         self.options_mut().execution.parquet.pruning = enabled;
         self
     }
 
-    /// Returns true if pruning predicate should be used to skip parquet row groups
+    /// Get [`pruning`]
+    ///
+    /// [`pruning`]: datafusion_common::config::ParquetOptions::pruning
     pub fn parquet_pruning(&self) -> bool {
         self.options.execution.parquet.pruning
     }
 
-    /// Returns true if bloom filter should be used to skip parquet row groups
+    /// Get [`bloom_filter_on_read`]
+    ///
+    /// [`bloom_filter_on_read`]: datafusion_common::config::ParquetOptions::bloom_filter_on_read
     pub fn parquet_bloom_filter_pruning(&self) -> bool {
         self.options.execution.parquet.bloom_filter_on_read
     }
 
-    /// Enables or disables the use of bloom filter for parquet readers to skip row groups
+    /// Set [`bloom_filter_on_read`]
+    ///
+    /// [`bloom_filter_on_read`]: datafusion_common::config::ParquetOptions::bloom_filter_on_read
     pub fn with_parquet_bloom_filter_pruning(mut self, enabled: bool) -> Self {
         self.options_mut().execution.parquet.bloom_filter_on_read = enabled;
         self
     }
 
-    /// Returns true if page index should be used to skip parquet data pages
+    /// Get [`enable_page_index`]
+    ///
+    /// [`enable_page_index`]: datafusion_common::config::ParquetOptions::enable_page_index
     pub fn parquet_page_index_pruning(&self) -> bool {
         self.options.execution.parquet.enable_page_index
     }
 
-    /// Enables or disables the use of page index for parquet readers to skip parquet data pages
+    /// Set [`enable_page_index`]
+    ///
+    /// [`enable_page_index`]: datafusion_common::config::ParquetOptions::enable_page_index
     pub fn with_parquet_page_index_pruning(mut self, enabled: bool) -> Self {
         self.options_mut().execution.parquet.enable_page_index = enabled;
         self
     }
 
-    /// Enables or disables the collection of statistics after listing files
+    /// Set [`collect_statistics`]
+    ///
+    /// [`collect_statistics`]: datafusion_common::config::ExecutionOptions::collect_statistics
     pub fn with_collect_statistics(mut self, enabled: bool) -> Self {
         self.options_mut().execution.collect_statistics = enabled;
         self
     }
 
-    /// Get the currently configured batch size
+    /// Get [`batch_size`]
+    ///
+    /// [`batch_size`]: datafusion_common::config::ExecutionOptions::batch_size
     pub fn batch_size(&self) -> usize {
         self.options.execution.batch_size.get()
     }
 
-    /// Enables or disables the coalescence of small batches into larger batches
+    /// Set [`coalesce_batches`]
+    ///
+    /// [`coalesce_batches`]: datafusion_common::config::ExecutionOptions::coalesce_batches
     pub fn with_coalesce_batches(mut self, enabled: bool) -> Self {
         self.options_mut().execution.coalesce_batches = enabled;
         self
     }
 
-    /// Returns true if record batches will be examined between each operator
-    /// and small batches will be coalesced into larger batches.
+    /// Get [`coalesce_batches`]
+    ///
+    /// [`coalesce_batches`]: datafusion_common::config::ExecutionOptions::coalesce_batches
     pub fn coalesce_batches(&self) -> bool {
         self.options.execution.coalesce_batches
     }
 
-    /// Enables or disables the round robin repartition for increasing parallelism
+    /// Set [`enable_round_robin_repartition`]
+    ///
+    /// [`enable_round_robin_repartition`]: datafusion_common::config::OptimizerOptions::enable_round_robin_repartition
     pub fn with_round_robin_repartition(mut self, enabled: bool) -> Self {
         self.options_mut().optimizer.enable_round_robin_repartition = enabled;
         self
     }
 
-    /// Returns true if the physical plan optimizer will try to
-    /// add round robin repartition to increase parallelism to leverage more CPU cores.
+    /// Get [`enable_round_robin_repartition`]
+    ///
+    /// [`enable_round_robin_repartition`]: datafusion_common::config::OptimizerOptions::enable_round_robin_repartition
     pub fn round_robin_repartition(&self) -> bool {
         self.options.optimizer.enable_round_robin_repartition
     }
 
-    /// Enables or disables sort pushdown optimization, and currently only
-    /// applies to Parquet data source.
+    /// Set [`enable_sort_pushdown`]
+    ///
+    /// [`enable_sort_pushdown`]: datafusion_common::config::OptimizerOptions::enable_sort_pushdown
     pub fn with_enable_sort_pushdown(mut self, enabled: bool) -> Self {
         self.options_mut().optimizer.enable_sort_pushdown = enabled;
         self
     }
 
-    /// Enables or disables elimination of `ORDER BY` clauses in subqueries
-    /// when they are not required by order-sensitive operators.
+    /// Set [`enable_subquery_sort_elimination`]
+    ///
+    /// [`enable_subquery_sort_elimination`]: datafusion_common::config::SqlParserOptions::enable_subquery_sort_elimination
     pub fn with_enable_subquery_sort_elimination(mut self, enabled: bool) -> Self {
         self.options_mut()
             .sql_parser
@@ -436,8 +502,7 @@ impl SessionConfig {
         self
     }
 
-    /// Set the size of [`sort_spill_reservation_bytes`] to control
-    /// memory pre-reservation
+    /// Set [`sort_spill_reservation_bytes`]
     ///
     /// [`sort_spill_reservation_bytes`]: datafusion_common::config::ExecutionOptions::sort_spill_reservation_bytes
     pub fn with_sort_spill_reservation_bytes(
@@ -449,7 +514,7 @@ impl SessionConfig {
         self
     }
 
-    /// Set the compression codec [`spill_compression`] used when spilling data to disk.
+    /// Set [`spill_compression`]
     ///
     /// [`spill_compression`]: datafusion_common::config::ExecutionOptions::spill_compression
     pub fn with_spill_compression(mut self, spill_compression: SpillCompression) -> Self {
@@ -457,8 +522,7 @@ impl SessionConfig {
         self
     }
 
-    /// Set the size of [`sort_in_place_threshold_bytes`] to control
-    /// how sort does things.
+    /// Set [`sort_in_place_threshold_bytes`]
     ///
     /// [`sort_in_place_threshold_bytes`]: datafusion_common::config::ExecutionOptions::sort_in_place_threshold_bytes
     pub fn with_sort_in_place_threshold_bytes(
@@ -470,7 +534,9 @@ impl SessionConfig {
         self
     }
 
-    /// Enables or disables the enforcement of batch size in joins
+    /// Set [`enforce_batch_size_in_joins`]
+    ///
+    /// [`enforce_batch_size_in_joins`]: datafusion_common::config::ExecutionOptions::enforce_batch_size_in_joins
     pub fn with_enforce_batch_size_in_joins(
         mut self,
         enforce_batch_size_in_joins: bool,
@@ -480,12 +546,16 @@ impl SessionConfig {
         self
     }
 
-    /// Returns true if the joins will be enforced to output batches of the configured size
+    /// Get [`enforce_batch_size_in_joins`]
+    ///
+    /// [`enforce_batch_size_in_joins`]: datafusion_common::config::ExecutionOptions::enforce_batch_size_in_joins
     pub fn enforce_batch_size_in_joins(&self) -> bool {
         self.options.execution.enforce_batch_size_in_joins
     }
 
-    /// Toggle SQL ANSI mode for expressions, casting, and error handling
+    /// Set [`enable_ansi_mode`]
+    ///
+    /// [`enable_ansi_mode`]: datafusion_common::config::ExecutionOptions::enable_ansi_mode
     pub fn with_enable_ansi_mode(mut self, enable_ansi_mode: bool) -> Self {
         self.options_mut().execution.enable_ansi_mode = enable_ansi_mode;
         self

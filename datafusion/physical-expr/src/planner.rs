@@ -523,10 +523,12 @@ pub fn create_physical_expr(
                             schema.fields().len()
                         );
                     }
-                    let dt = schema.field(0).data_type().clone();
-                    Ok(Arc::new(ScalarSubqueryExpr::new(
-                        dt,
+                    let output_field = schema.field(0);
+                    let metadata = FieldMetadata::from(output_field.as_ref());
+                    Ok(Arc::new(ScalarSubqueryExpr::new_with_metadata(
+                        output_field.data_type().clone(),
                         e.nullable(input_dfschema)?,
+                        (!metadata.is_empty()).then_some(metadata),
                         index,
                         planning_ctx.results().clone(),
                     )))
@@ -687,6 +689,16 @@ pub fn create_physical_expr(
                 Arc::clone(schema_field),
             )))
         }
+        // Window and aggregate functions are evaluated by dedicated plan
+        // nodes, never by a physical expression. Reaching this point means
+        // the function is in a position where it cannot be evaluated, so
+        // report that instead of dumping the internal representation.
+        Expr::WindowFunction(_) => plan_err!(
+            "Window function '{e}' is not supported in this position. Window functions are supported in the SELECT list, ORDER BY, DISTINCT ON and QUALIFY"
+        ),
+        Expr::AggregateFunction(_) => plan_err!(
+            "Aggregate function '{e}' is not supported in this position. Aggregate functions are supported in the SELECT list, HAVING and ORDER BY of a query with GROUP BY"
+        ),
         other => {
             not_impl_err!("Physical plan does not support logical expression {other:?}")
         }
@@ -730,7 +742,7 @@ pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
 #[cfg(test)]
 mod tests {
     use arrow::array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, Metadata};
     use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
     use datafusion_common::HashMap;
     use datafusion_expr::physical_planning_context::{
@@ -828,6 +840,43 @@ mod tests {
     }
 
     #[test]
+    fn scalar_subquery_preserves_output_field_metadata() -> Result<()> {
+        let metadata = FieldMetadata::from(HashMap::from([(
+            EXTENSION_TYPE_NAME_KEY.to_string(),
+            "example.extension".to_string(),
+        )]));
+        let plan = LogicalPlanBuilder::empty(true)
+            .project(vec![
+                lit("a").alias_with_metadata("geometry", Some(metadata)),
+            ])?
+            .build()?;
+        let expr = scalar_subquery(Arc::new(plan));
+        let Expr::ScalarSubquery(subquery) = &expr else {
+            unreachable!()
+        };
+
+        let index = SubqueryIndex::new(0);
+        let planning_ctx = PhysicalPlanningContext::new(
+            HashMap::from([(subquery.clone(), index)]),
+            ScalarSubqueryResults::new(1),
+        );
+        let physical_expr = create_physical_expr(
+            &expr,
+            &DFSchema::empty(),
+            &ExecutionProps::new(),
+            &planning_ctx,
+        )?;
+
+        let field = physical_expr.return_field(&Schema::empty())?;
+        assert_eq!(
+            field.metadata().get(EXTENSION_TYPE_NAME_KEY),
+            Some(&"example.extension".to_string()),
+            "scalar subquery physical expr must keep ARROW extension metadata: {field:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_cast_lowering_preserves_target_field_metadata() -> Result<()> {
         let schema = test_cast_schema();
 
@@ -835,15 +884,10 @@ mod tests {
         // With exact target metadata semantics, all target metadata should propagate.
         let target_field = Arc::new(
             Field::new("cast_target", DataType::Int64, true).with_metadata(
-                [
-                    (
-                        EXTENSION_TYPE_NAME_KEY.to_string(),
-                        "arrow.json".to_string(),
-                    ),
-                    (EXTENSION_TYPE_METADATA_KEY.to_string(), "{}".to_string()),
-                    ("custom_target_meta".to_string(), "custom_value".to_string()),
-                ]
-                .into(),
+                Metadata::new()
+                    .with(EXTENSION_TYPE_NAME_KEY, "arrow.json")
+                    .with(EXTENSION_TYPE_METADATA_KEY, "{}")
+                    .with("custom_target_meta", "custom_value"),
             ),
         );
         let cast_expr = Expr::Cast(Cast::new_from_field(
@@ -913,14 +957,9 @@ mod tests {
         // With exact target metadata semantics, all target metadata should propagate.
         let target_field = Arc::new(
             Field::new("same_type_cast", DataType::Int32, true).with_metadata(
-                [
-                    (
-                        EXTENSION_TYPE_NAME_KEY.to_string(),
-                        "arrow.opaque".to_string(),
-                    ),
-                    ("custom_meta".to_string(), "custom_value".to_string()),
-                ]
-                .into(),
+                Metadata::new()
+                    .with(EXTENSION_TYPE_NAME_KEY, "arrow.opaque")
+                    .with("custom_meta", "custom_value"),
             ),
         );
 

@@ -21,17 +21,14 @@ use std::sync::Arc;
 use super::{ParquetAccessPlan, ParquetFileMetrics, RowGroupAccess};
 use crate::bloom_filter::BloomFilterStatistics;
 use crate::metadata::{has_untrusted_byte_array_stats, has_untrusted_min_max_order};
+use crate::pruning::build_inverted_predicate;
 use arrow::array::{ArrayRef, BooleanArray, UInt64Array};
 use arrow::compute::nullif;
 use arrow::datatypes::Schema;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::{Column, Result, ScalarValue};
 use datafusion_datasource::FileRange;
-use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{BinaryExpr, IsNullExpr, NotExpr};
-use datafusion_physical_expr::utils::collect_columns;
-use datafusion_physical_expr::{PhysicalExpr, PhysicalExprSimplifier};
-use datafusion_pruning::{PruningPredicate, PruningPredicateBuilder};
+use datafusion_pruning::PruningPredicate;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::basic::ColumnOrder;
 use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
@@ -72,6 +69,17 @@ impl RowGroupAccessPlanFilter {
         Self { access_plan }
     }
 
+    /// Skip every remaining row group: used when the predicate has been
+    /// proven unsatisfiable for the whole file (for example, when
+    /// constant-column substitution from file statistics collapsed it to a
+    /// constant `false`/NULL), so no row group can contain a matching row.
+    pub fn skip_all(&mut self) {
+        let indexes: Vec<usize> = self.access_plan.row_group_indexes();
+        for idx in indexes {
+            self.access_plan.skip(idx);
+        }
+    }
+
     /// Return true if there are no row groups
     pub fn is_empty(&self) -> bool {
         self.access_plan.is_empty()
@@ -93,10 +101,6 @@ impl RowGroupAccessPlanFilter {
     }
 
     /// Returns a reference to the inner access plan.
-    ///
-    /// Test-only accessor used by the shared assertion helpers in
-    /// [`crate::test_util`].
-    #[cfg(test)]
     pub(crate) fn access_plan(&self) -> &ParquetAccessPlan {
         &self.access_plan
     }
@@ -338,11 +342,6 @@ impl RowGroupAccessPlanFilter {
             column_orders,
             row_group_metadatas,
             arrow_schema,
-            // Preserve the existing row-group pruning behavior. This path only
-            // proves whether matching rows may exist, so it uses the
-            // StatisticsConverter default for older parquet-rs files where a
-            // missing null count can mean there are zero nulls.
-            missing_null_counts_as_zero: true,
         };
 
         // try to prune the row groups in a single call
@@ -397,42 +396,7 @@ impl RowGroupAccessPlanFilter {
         }
         let arrow_schema = pruning_stats.arrow_schema;
 
-        let mut inverted_expr: Arc<dyn PhysicalExpr> =
-            Arc::new(NotExpr::new(Arc::clone(predicate.orig_expr())));
-
-        // Rows where the predicate evaluates to NULL do not pass the filter.
-        // Include NULL checks in the inverted expression so a row group is only
-        // considered fully matched when every referenced column is known non-null.
-        // This is conservative for null-accepting predicates, but fully matched
-        // row groups must not have false positives.
-        let mut columns = collect_columns(predicate.orig_expr())
-            .into_iter()
-            .filter(|column| arrow_schema.field(column.index()).is_nullable())
-            .collect::<Vec<_>>();
-        columns.sort_by(|a, b| {
-            a.index()
-                .cmp(&b.index())
-                .then_with(|| a.name().cmp(b.name()))
-        });
-
-        for column in columns {
-            inverted_expr = Arc::new(BinaryExpr::new(
-                inverted_expr,
-                Operator::Or,
-                Arc::new(IsNullExpr::new(Arc::new(column))),
-            ));
-        }
-
-        // Simplify the inverted expression (e.g., NOT(c1 = 0) -> c1 != 0)
-        // before building the pruning predicate
-        let simplifier = PhysicalExprSimplifier::new(arrow_schema);
-        let Ok(inverted_expr) = simplifier.simplify(inverted_expr) else {
-            return;
-        };
-
-        let Ok(inverted_predicate) = PruningPredicateBuilder::new()
-            .with_file_schema(Arc::clone(predicate.schema()))
-            .try_build(inverted_expr)
+        let Some(inverted_predicate) = build_inverted_predicate(predicate, arrow_schema)
         else {
             return;
         };
@@ -445,11 +409,6 @@ impl RowGroupAccessPlanFilter {
                 .map(|&i| &groups[i])
                 .collect::<Vec<_>>(),
             arrow_schema,
-            // Fully matched row groups require a stronger proof: every row
-            // must pass the predicate. Missing null counts are unknown here;
-            // treating them as zero can incorrectly mark nullable row groups as
-            // fully matched and make limit pruning unsound.
-            missing_null_counts_as_zero: false,
         };
 
         let Ok(inverted_values) = inverted_predicate.prune(&inverted_pruning_stats)
@@ -533,7 +492,6 @@ pub(crate) struct RowGroupPruningStatistics<'a> {
     pub(crate) column_orders: Option<&'a [ColumnOrder]>,
     pub(crate) row_group_metadatas: Vec<&'a RowGroupMetaData>,
     pub(crate) arrow_schema: &'a Schema,
-    pub(crate) missing_null_counts_as_zero: bool,
 }
 
 impl<'a> RowGroupPruningStatistics<'a> {
@@ -548,7 +506,9 @@ impl<'a> RowGroupPruningStatistics<'a> {
             self.arrow_schema,
             self.parquet_schema,
         )?
-        .with_missing_null_counts_as_zero(self.missing_null_counts_as_zero))
+        // Missing counts cannot rule out nulls, either when pruning groups or
+        // when proving that every row matches the predicate.
+        .with_missing_null_counts_as_zero(false))
     }
 
     fn min_max_statistics_converter(
@@ -638,8 +598,10 @@ mod tests {
     use arrow::datatypes::DataType::Decimal128;
     use arrow::datatypes::{DataType, Field};
     use datafusion_expr::{cast, col, lit};
+    use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+    use datafusion_pruning::PruningPredicateBuilder;
     use parquet::arrow::ArrowSchemaConverter;
     use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
     use parquet::basic::LogicalType;
@@ -817,6 +779,48 @@ mod tests {
 
         assert_eq!(row_groups.access_plan.row_group_indexes(), vec![0, 1, 2]);
         assert_eq!(row_groups.is_fully_matched(), &vec![false, true, false]);
+    }
+
+    #[test]
+    fn row_group_pruning_predicate_missing_null_count() {
+        let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+        let schema_descr = get_test_schema_descr(vec![PrimitiveTypeField::new(
+            "c1",
+            PhysicalType::INT32,
+        )]);
+        let groups = [None, Some(0), Some(1)].map(|null_count| {
+            get_row_group_meta_data(
+                &schema_descr,
+                vec![ParquetStatistics::int32(
+                    Some(100),
+                    Some(101),
+                    None,
+                    null_count,
+                    false,
+                )],
+            )
+        });
+
+        for (expr, expected) in [
+            (col("c1").is_null(), vec![0, 2]),
+            (col("c1").is_null().or(col("c1").lt(lit(0))), vec![0, 2]),
+            (col("c1").lt(lit(0)), vec![]),
+        ] {
+            let predicate = build_test_pruning_predicate(
+                logical2physical(&expr, &schema),
+                Arc::clone(&schema),
+            );
+            let mut filter =
+                RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(groups.len()));
+            filter.prune_by_statistics(
+                &schema,
+                &schema_descr,
+                &groups,
+                &predicate,
+                &parquet_file_metrics(),
+            );
+            assert_eq!(filter.build().row_group_indexes(), expected, "{expr}");
+        }
     }
 
     #[test]

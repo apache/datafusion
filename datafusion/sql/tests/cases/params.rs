@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::logical_plan;
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Metadata};
 use datafusion_common::{
     ParamValues, ScalarValue, assert_contains,
     metadata::{ScalarAndMetadata, format_type_and_metadata},
@@ -171,7 +171,7 @@ fn test_non_prepare_statement_should_infer_types() {
 
 #[test]
 #[should_panic(
-    expected = "Expected: [NOT] NULL | TRUE | FALSE | DISTINCT | [form] NORMALIZED FROM after IS, found: $1"
+    expected = "Expected: [NOT] NULL | TRUE | FALSE | DISTINCT | [NOT] JSON [VALUE | SCALAR | ARRAY | OBJECT] [WITH | WITHOUT UNIQUE [KEYS]] | [form] NORMALIZED FROM after IS, found: $1"
 )]
 fn test_prepare_statement_to_plan_panic_is_param() {
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age is $1";
@@ -732,9 +732,8 @@ fn test_prepare_statement_to_plan_one_param() {
 fn test_update_infer_with_metadata() {
     // Here the uuid field is inferred as nullable because it appears in the filter
     // (and not in the update values, where its nullability would be inferred)
-    let uuid_field = Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
-        [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())].into(),
-    );
+    let uuid_field = Field::new("", DataType::FixedSizeBinary(16), true)
+        .with_metadata(Metadata::new().with("ARROW:extension:name", "arrow.uuid"));
     let uuid_bytes = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
     let expected_types = vec![
         (
@@ -801,9 +800,8 @@ fn test_update_infer_with_metadata() {
 
 #[test]
 fn test_insert_infer_with_metadata() {
-    let uuid_field = Field::new("", DataType::FixedSizeBinary(16), false).with_metadata(
-        [("ARROW:extension:name".to_string(), "arrow.uuid".to_string())].into(),
-    );
+    let uuid_field = Field::new("", DataType::FixedSizeBinary(16), false)
+        .with_metadata(Metadata::new().with("ARROW:extension:name", "arrow.uuid"));
     let uuid_bytes = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
     let expected_types = vec![
         ("$1", Some(uuid_field.clone().with_name("id").into())),
@@ -837,11 +835,11 @@ fn test_insert_infer_with_metadata() {
         @r#"
     ** Initial Plan:
     Dml: op=[Insert Into] table=[person_with_uuid_extension]
-      Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+      Projection: CAST(column1 AS FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>) AS id, column2 AS first_name, column3 AS last_name
         Values: ($1, $2, $3)
     ** Final Plan:
     Dml: op=[Insert Into] table=[person_with_uuid_extension]
-      Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+      Projection: CAST(column1 AS FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>) AS id, column2 AS first_name, column3 AS last_name
         Values: (FixedSizeBinary(16, "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16") FieldMetadata { inner: {"ARROW:extension:name": "arrow.uuid"} } AS $1, Utf8("Alan") AS $2, Utf8("Turing") AS $3)
     "#
     );
@@ -859,11 +857,11 @@ fn test_insert_infer_with_metadata() {
     ** Initial Plan:
     Prepare: "my_plan" [FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>, Utf8, Utf8]
       Dml: op=[Insert Into] table=[person_with_uuid_extension]
-        Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+        Projection: CAST(column1 AS FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>) AS id, column2 AS first_name, column3 AS last_name
           Values: ($1, $2, $3)
     ** Final Plan:
     Dml: op=[Insert Into] table=[person_with_uuid_extension]
-      Projection: column1 AS id, column2 AS first_name, column3 AS last_name
+      Projection: CAST(column1 AS FixedSizeBinary(16)<{"ARROW:extension:name": "arrow.uuid"}>) AS id, column2 AS first_name, column3 AS last_name
         Values: (FixedSizeBinary(16, "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16") FieldMetadata { inner: {"ARROW:extension:name": "arrow.uuid"} } AS $1, Utf8("Alan") AS $2, Utf8("Turing") AS $3)
     "#
     );

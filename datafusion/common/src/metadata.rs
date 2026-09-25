@@ -17,7 +17,7 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Metadata};
 use hashbrown::HashMap;
 
 use crate::{DataFusionError, ScalarValue, error::_plan_err};
@@ -84,14 +84,8 @@ impl From<ScalarValue> for ScalarAndMetadata {
 /// Returns a planning error with suitably formatted type representations if
 /// actual and expected do not compare to equal.
 pub fn check_metadata_with_storage_equal(
-    actual: (
-        &DataType,
-        Option<&std::collections::HashMap<String, String>>,
-    ),
-    expected: (
-        &DataType,
-        Option<&std::collections::HashMap<String, String>>,
-    ),
+    actual: (&DataType, Option<&Metadata>),
+    expected: (&DataType, Option<&Metadata>),
     what: &str,
     context: &str,
 ) -> Result<(), DataFusionError> {
@@ -161,7 +155,7 @@ pub fn coerced_fields_metadata<'a>(
 /// renderings.
 pub fn format_type_and_metadata(
     data_type: &DataType,
-    metadata: Option<&std::collections::HashMap<String, String>>,
+    metadata: Option<&Metadata>,
 ) -> String {
     match metadata {
         Some(metadata) if !metadata.is_empty() => {
@@ -209,10 +203,7 @@ pub fn format_type_and_metadata(
 pub struct FieldMetadata {
     /// The inner metadata of a literal expression, which is a map of string
     /// keys to string values.
-    ///
-    /// Note this is not a `HashMap` because `HashMap` does not provide
-    /// implementations for traits like `Debug` and `Hash`.
-    inner: Arc<BTreeMap<String, String>>,
+    inner: Metadata,
 }
 
 impl Default for FieldMetadata {
@@ -225,7 +216,7 @@ impl FieldMetadata {
     /// Create a new empty metadata instance.
     pub fn new_empty() -> Self {
         Self {
-            inner: Arc::new(BTreeMap::new()),
+            inner: Metadata::new(),
         }
     }
 
@@ -291,31 +282,28 @@ impl FieldMetadata {
     }
 
     /// Create a new metadata instance from a `Field`'s metadata.
+    ///
+    /// This is cheap, as [`Metadata`] is cheap to clone.
     pub fn new_from_field(field: &Field) -> Self {
-        let inner = field
-            .metadata()
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
         Self {
-            inner: Arc::new(inner),
+            inner: field.metadata().clone(),
         }
     }
 
     /// Create a new metadata instance from a map of string keys to string values.
     pub fn new(inner: BTreeMap<String, String>) -> Self {
         Self {
-            inner: Arc::new(inner),
+            inner: Metadata::from(inner),
         }
     }
 
-    /// Get the inner metadata as a reference to a `BTreeMap`.
-    pub fn inner(&self) -> &BTreeMap<String, String> {
+    /// Get the inner [`Metadata`]
+    pub fn inner(&self) -> &Metadata {
         &self.inner
     }
 
-    /// Return the inner metadata
-    pub fn into_inner(self) -> Arc<BTreeMap<String, String>> {
+    /// Return the inner [`Metadata`]
+    pub fn into_inner(self) -> Metadata {
         self.inner
     }
 
@@ -324,8 +312,7 @@ impl FieldMetadata {
         if other.is_empty() {
             return;
         }
-        let other = Arc::unwrap_or_clone(other.into_inner());
-        Arc::make_mut(&mut self.inner).extend(other);
+        self.inner.extend(other.inner);
     }
 
     /// Returns true if the metadata is empty.
@@ -340,10 +327,14 @@ impl FieldMetadata {
 
     /// Convert this `FieldMetadata` into a `HashMap<String, String>`
     pub fn to_hashmap(&self) -> std::collections::HashMap<String, String> {
-        self.inner
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
+        (&self.inner).into()
+    }
+
+    /// Convert this `FieldMetadata` into an arrow [`Metadata`]
+    ///
+    /// This is cheap, as [`Metadata`] is cheap to clone.
+    pub fn to_metadata(&self) -> Metadata {
+        self.inner.clone()
     }
 
     /// Updates the metadata on the Field with this metadata, if it is not empty.
@@ -352,7 +343,7 @@ impl FieldMetadata {
             return field;
         }
 
-        field.with_metadata(self.to_hashmap())
+        field.with_metadata(self.inner.clone())
     }
 
     /// Updates the metadata on the FieldRef with this metadata, if it is not empty.
@@ -361,8 +352,26 @@ impl FieldMetadata {
             return field_ref;
         }
 
-        Arc::make_mut(&mut field_ref).set_metadata(self.to_hashmap());
+        Arc::make_mut(&mut field_ref).set_metadata(self.inner.clone());
         field_ref
+    }
+}
+
+impl From<&FieldMetadata> for Metadata {
+    fn from(value: &FieldMetadata) -> Self {
+        value.to_metadata()
+    }
+}
+
+impl From<Metadata> for FieldMetadata {
+    fn from(value: Metadata) -> Self {
+        Self { inner: value }
+    }
+}
+
+impl From<&Metadata> for FieldMetadata {
+    fn from(value: &Metadata) -> Self {
+        Self::from(value.clone())
     }
 }
 
@@ -380,7 +389,9 @@ impl From<BTreeMap<String, String>> for FieldMetadata {
 
 impl From<std::collections::HashMap<String, String>> for FieldMetadata {
     fn from(map: std::collections::HashMap<String, String>) -> Self {
-        Self::new(map.into_iter().collect())
+        Self {
+            inner: Metadata::from(map),
+        }
     }
 }
 
@@ -398,18 +409,17 @@ impl From<&std::collections::HashMap<String, String>> for FieldMetadata {
 /// From hashbrown map
 impl From<HashMap<String, String>> for FieldMetadata {
     fn from(map: HashMap<String, String>) -> Self {
-        let inner = map.into_iter().collect();
-        Self::new(inner)
+        Self {
+            inner: map.into_iter().collect(),
+        }
     }
 }
 
 impl From<&HashMap<String, String>> for FieldMetadata {
     fn from(map: &HashMap<String, String>) -> Self {
-        let inner = map
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        Self::new(inner)
+        Self {
+            inner: map.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        }
     }
 }
 
@@ -418,12 +428,11 @@ mod tests {
     use super::*;
 
     fn field_with(name: &str, dt: DataType, pairs: &[(&str, &str)]) -> Field {
-        Field::new(name, dt, true).with_metadata(
-            pairs
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-        )
+        let metadata: std::collections::HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        Field::new(name, dt, true).with_metadata(metadata)
     }
 
     #[test]
