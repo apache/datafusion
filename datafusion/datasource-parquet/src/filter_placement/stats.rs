@@ -91,6 +91,12 @@ impl Observation {
         (self.rows_in > 0).then(|| self.skippable_rows as f64 / self.rows_in as f64)
     }
 
+    /// Fraction of the evaluated rows that passed, or `None` if the
+    /// conjunct was not evaluated on any row.
+    pub(crate) fn pass_ratio(&self) -> Option<f64> {
+        (self.rows_in > 0).then(|| self.rows_out as f64 / self.rows_in as f64)
+    }
+
     /// Fraction of the row groups that the conjunct pruned with statistics,
     /// or `None` if there is no statistics pruning result.
     pub(crate) fn pruned_fraction(&self) -> Option<f64> {
@@ -344,6 +350,27 @@ pub(crate) struct PlacementSites {
 }
 
 impl PlacementSites {
+    /// Sites with a decode speed of `decode_ns_per_byte` and a fetch
+    /// latency of `fetch_ns`, weighted so that the measurements of a test
+    /// do not change them, for deterministic placement decisions.
+    #[cfg(test)]
+    pub(crate) fn with_fixed_costs(decode_ns_per_byte: f64, fetch_ns: f64) -> Self {
+        const WEIGHT: u64 = 1 << 40;
+        let sites = Self::default();
+        let weighted = |ns: f64| (ns * WEIGHT as f64) as u64;
+        sites
+            .decode
+            .nanos
+            .store(weighted(decode_ns_per_byte), Ordering::Relaxed);
+        sites.decode.bytes.store(WEIGHT, Ordering::Relaxed);
+        sites
+            .fetch
+            .nanos
+            .store(weighted(fetch_ns), Ordering::Relaxed);
+        sites.fetch.fetches.store(WEIGHT, Ordering::Relaxed);
+        sites
+    }
+
     /// The fetch latency of the scan.
     pub(crate) fn fetch(&self) -> &FetchCost {
         &self.fetch

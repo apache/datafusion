@@ -3133,7 +3133,9 @@ mod optional_filter_tests {
     /// passed to `record`, thus the test is deterministic.
     #[test]
     fn file_placement_follows_gate_and_measurements() {
-        use crate::filter_placement::{FilePlacement, Placement, PlacementOptions};
+        use crate::filter_placement::{
+            FilePlacement, Placement, PlacementOptions, PlacementSites,
+        };
         use arrow::array::BooleanArray;
         use datafusion_physical_plan::metrics::Count;
 
@@ -3147,9 +3149,13 @@ mod optional_filter_tests {
         let metrics = ExecutionPlanMetricsSet::new();
         let mut candidates =
             prebuild(&predicate, &file_schema, &metadata, &options, &metrics);
-        let placement_options =
-            PlacementOptions::new(true, Arc::default(), Some(&predicate));
-        let output = ProjectionMask::all();
+        // A slow decode: a row filter that skips rows saves a lot.
+        let sites = Arc::new(PlacementSites::with_fixed_costs(1000.0, 0.0));
+        let placement_options = PlacementOptions::new(true, sites, Some(&predicate));
+        // The output columns are `b`, `c` and `s`: the required conjunct
+        // reads no output column (no second decode in a row filter).
+        let output =
+            ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [1, 2, 3]);
         let batch_size = 100;
         let changes = Count::new();
         let mut placement = FilePlacement::try_new(
@@ -3165,9 +3171,10 @@ mod optional_filter_tests {
         .unwrap();
         let required = candidates.iter().position(|c| !c.is_optional()).unwrap();
         let gated = candidates.iter().position(|c| c.is_optional()).unwrap();
-        // Initial rule: the required conjunct does not read `b` and `c`,
-        // thus it starts as a row filter. The gate is not paused.
-        assert_eq!(placement.placements(), vec![Placement::RowFilter; 2]);
+        // Without measurements, the required conjunct starts in the
+        // post-scan filter. The gate is not paused.
+        assert!(!placement.in_row_filter(required));
+        assert!(placement.in_row_filter(gated));
 
         // The gate pauses the optional filter: it removed no row in its
         // first window (`sample_batches` = 2).
@@ -3180,7 +3187,7 @@ mod optional_filter_tests {
         assert!(gate.lock().is_paused());
         assert!(placement.decide(1000));
         assert!(!placement.in_row_filter(gated));
-        assert!(placement.in_row_filter(required));
+        assert!(!placement.in_row_filter(required));
         assert_eq!(changes.value(), 1);
 
         // The pause (`initial_pause_batches` = 4) ends while the scan skips
@@ -3189,21 +3196,30 @@ mod optional_filter_tests {
         assert!(placement.in_row_filter(gated));
         assert!(!gate.lock().is_paused());
 
-        // The required conjunct removes every second row: no run of removed
-        // rows that the decoder can skip, thus it moves to the post-scan
-        // filter.
-        let scattered: BooleanArray = (0..20_000).map(|i| Some(i % 2 == 0)).collect();
-        let stats = candidates[required].placement_stats.clone().unwrap();
-        stats.record_evaluation(&scattered);
-        assert!(placement.decide(1000));
-        assert!(!placement.in_row_filter(required));
+        // The post-scan filter measures the required conjunct.
         let post_scan = placement.post_scan_conjuncts();
         assert_eq!(post_scan.len(), 1);
         assert_eq!(post_scan[0].expr.to_string(), "a@0 > 5");
+        let stats = post_scan[0].stats.clone().unwrap();
+
+        // It removes every second row: no run of removed rows that the
+        // decoder can skip, thus it stays in the post-scan filter.
+        let scattered: BooleanArray = (0..20_000).map(|i| Some(i % 2 == 0)).collect();
+        stats.record_evaluation(&scattered);
+        assert!(!placement.decide(1000));
+        assert!(!placement.in_row_filter(required));
+
+        // More rows where it removes a long run of rows: it moves to the
+        // row filter.
+        let clustered: BooleanArray = (0..40_000).map(|i| Some(i >= 30_000)).collect();
+        stats.record_evaluation(&clustered);
+        assert!(placement.decide(1000));
+        assert!(placement.in_row_filter(required));
+        assert!(placement.post_scan_conjuncts().is_empty());
 
         // A frozen placement does not change.
         let before = placement.placements();
-        placement.restore_and_freeze(&[Placement::RowFilter, Placement::RowFilter]);
+        placement.restore_and_freeze(&[Placement::PostScan, Placement::PostScan]);
         assert!(!placement.decide(1000));
         assert_ne!(placement.placements(), before);
         assert_eq!(changes.value(), 3);

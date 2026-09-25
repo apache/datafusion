@@ -1269,9 +1269,11 @@ config_namespace! {
         /// When true and `datafusion.execution.parquet.pushdown_filters` is
         /// true, the Parquet scan decides for each filter conjunct if it is a
         /// row filter (late materialization) or a filter on the decoded
-        /// batches. The scan measures the rows that each conjunct removes, the
-        /// decode time and the fetch latency, and it changes the placement at
-        /// row group boundaries. When `datafusion.execution.optional_filter_mode`
+        /// batches. Each conjunct starts as a filter on the decoded batches.
+        /// The scan measures the rows that each conjunct removes, the decode
+        /// time and the fetch latency, and it makes a conjunct a row filter at
+        /// a row group boundary only when the decode time that the row filter
+        /// saves is more than its cost. When `datafusion.execution.optional_filter_mode`
         /// is `adaptive`, an optional filter that is paused is also removed
         /// from the row filter, thus its columns are not decoded.
         pub adaptive_filter_placement: bool, default = false
