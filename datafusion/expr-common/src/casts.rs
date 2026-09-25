@@ -114,15 +114,16 @@ fn is_date_type(data_type: &DataType) -> bool {
 /// drop them - [`try_cast_numeric_literal`] returns `None` for a `Date64` value not
 /// divisible by 86_400_000, so an inexact `Date64` -> `Date32` fold never happens.
 ///
-/// **Timezone Shifts:**
-/// Conversions between timezone-naive and timezone-aware timestamps are
-/// mathematically bijective (shifting the physical value by the timezone offset),
-/// rather than many-to-one lossy. However, we return `true` here to block unwrapping
-/// as an intentionally conservative guard. If we returned `false`, `unwrap_cast_in_comparison`
-/// would strip the cast but fail to shift the underlying literal, returning incorrect
-/// query results. (A robust alternative would be to allow the unwrap and shift the literal,
-/// preserving pushdown and pruning.) Only UTC-equivalent timezones (where the shift is
-/// exactly zero) are allowed to bypass this guard.
+/// **Timezone shifts:** Arrow casts a naive timestamp to a timezone-aware one by
+/// interpreting the naive value as local time in the target zone and shifting it by
+/// that zone's offset. `try_cast_numeric_literal` cannot apply the shift: it re-labels
+/// the integer. So a timezone-aware literal is reported as lossy against a naive
+/// target unless the zone's offset is always zero. The cast is not a bijection either:
+/// a local time in a DST gap has no instant, and a local time in a DST fold has two,
+/// so "shift the literal instead" is not a drop-in alternative.
+///
+/// The opposite cast (timezone-aware -> naive) is a plain re-label in Arrow, so a naive
+/// literal is never lossy against a timezone-aware target.
 fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
     if from_type == to_type {
         return false;
@@ -130,34 +131,33 @@ fn is_lossy_temporal_cast(from_type: &DataType, to_type: &DataType) -> bool {
     if is_date_type(from_type) && is_date_type(to_type) {
         return false;
     }
-    if let (DataType::Timestamp(_, from_tz), DataType::Timestamp(_, to_tz)) =
+    if let (DataType::Timestamp(_, Some(tz)), DataType::Timestamp(_, None)) =
         (from_type, to_type)
     {
-        match (from_tz, to_tz) {
-            (Some(tz), None) | (None, Some(tz))
-                if !is_zero_offset_timezone(tz.as_ref()) =>
-            {
-                return true;
-            }
-            _ => {}
-        }
+        return !is_zero_offset_timezone(tz.as_ref());
     }
     (is_date_type(from_type) && to_type.is_temporal())
         || (is_date_type(to_type) && from_type.is_temporal())
 }
 
-/// Returns true if the timezone is known to have a fixed zero offset from UTC.
+/// Returns true if `tz` is a timezone whose offset from UTC is always zero, so that
+/// casting a naive timestamp to `Timestamp(_, Some(tz))` does not move the value.
 ///
-/// This is used to determine if a cast between a timezone-aware and timezone-naive
-/// timestamp is lossy. If the timezone is strictly UTC-equivalent, the cast is
-/// a lossless re-labeling of the integer value.
+/// Arrow's timezone parser accepts three fixed-offset shapes (`+HH:MM`, `+HHMM`,
+/// `+HH`, with either sign) and otherwise an IANA name. A fixed offset is zero when
+/// all of its digits are zero. IANA names are accepted only from the list of UTC
+/// aliases below: a geographic zone such as `Europe/London` has a zero offset for
+/// part of the year only, so it is never accepted. The IANA lookup is case-sensitive,
+/// so `utc` is not a valid timezone and does not need to be listed.
 fn is_zero_offset_timezone(tz: &str) -> bool {
     match tz {
-        // Standard UTC identifiers
-        "UTC" | "Etc/UTC" | "GMT" | "Etc/GMT" | "Greenwich" | "Z" => true,
-        // Common fixed offset zero strings parsed by Arrow
-        "+00:00" | "-00:00" | "+0:00" | "-0:00" => true,
-        _ => false,
+        "UTC" | "Etc/UTC" | "UCT" | "Etc/UCT" | "Universal" | "Etc/Universal"
+        | "Zulu" | "Etc/Zulu" | "GMT" | "Etc/GMT" | "GMT0" | "Etc/GMT0" | "GMT+0"
+        | "Etc/GMT+0" | "GMT-0" | "Etc/GMT-0" | "Greenwich" | "Etc/Greenwich" => true,
+        _ => matches!(
+            tz.strip_prefix(['+', '-']).map(str::as_bytes),
+            Some(b"00" | b"0000" | b"00:00")
+        ),
     }
 }
 
@@ -1045,15 +1045,26 @@ mod tests {
         let ts_sgt =
             DataType::Timestamp(TimeUnit::Millisecond, Some("Asia/Singapore".into()));
 
-        // Naive <-> UTC is NOT lossy (UTC offset is 0, so literal cast is exact)
+        let ts_zero_offset =
+            DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".into()));
+        let ts_zero_offset_short =
+            DataType::Timestamp(TimeUnit::Millisecond, Some("-0000".into()));
+        let ts_offset = DataType::Timestamp(TimeUnit::Millisecond, Some("+08:00".into()));
+        // Zero-offset zone <-> naive is NOT lossy: the cast does not move the value
         assert!(!is_lossy_temporal_cast(&ts_naive, &ts_utc));
         assert!(!is_lossy_temporal_cast(&ts_utc, &ts_naive));
-        assert!(!is_lossy_temporal_cast(&ts_naive, &ts_etc_utc));
-        assert!(!is_lossy_temporal_cast(&ts_naive, &ts_gmt));
-
-        // Naive <-> Non-UTC is lossy because it ignores session timezone
-        assert!(is_lossy_temporal_cast(&ts_naive, &ts_sgt));
+        assert!(!is_lossy_temporal_cast(&ts_etc_utc, &ts_naive));
+        assert!(!is_lossy_temporal_cast(&ts_gmt, &ts_naive));
+        assert!(!is_lossy_temporal_cast(&ts_zero_offset, &ts_naive));
+        assert!(!is_lossy_temporal_cast(&ts_zero_offset_short, &ts_naive));
+        // A non-zero zone literal against a naive target is lossy: Arrow shifts the
+        // column by the zone offset, and the re-labeled literal would not be shifted
         assert!(is_lossy_temporal_cast(&ts_sgt, &ts_naive));
+        assert!(is_lossy_temporal_cast(&ts_offset, &ts_naive));
+        // A naive literal against a timezone-aware target is not lossy: Arrow casts
+        // timezone-aware -> naive by re-labeling the value
+        assert!(!is_lossy_temporal_cast(&ts_naive, &ts_sgt));
+        assert!(!is_lossy_temporal_cast(&ts_naive, &ts_offset));
 
         // Tz-aware <-> Tz-aware is not lossy (both are UTC under the hood)
         assert!(!is_lossy_temporal_cast(&ts_utc, &ts_sgt));

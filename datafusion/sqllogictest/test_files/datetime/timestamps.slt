@@ -5676,7 +5676,8 @@ select count(*) from t_25095, u_25095 where t_25095.ts::timestamptz = u_25095.ts
 ----
 1
 
-# A timezone-aware column against a timezone-naive literal
+# A timezone-aware column against a timezone-naive literal. The coercion casts the
+# literal, not the column, so this query does not go through unwrap_cast at all
 query I
 select count(*) from u_25095 where tstz = TIMESTAMP '2024-11-01T00:00:00';
 ----
@@ -5686,7 +5687,7 @@ select count(*) from u_25095 where tstz = TIMESTAMP '2024-11-01T00:00:00';
 statement ok
 set datafusion.execution.time_zone = 'UTC';
 
-# The explain output should show that the cast 	s::timestamptz has been removed
+# The explain output should show that the cast `ts::timestamptz` has been removed
 # because we allow unwrap_cast_in_comparison for UTC offsets
 query TT
 EXPLAIN select count(*) from t_25095 where ts::timestamptz = '2024-11-01T00:00:00Z'::timestamptz;
