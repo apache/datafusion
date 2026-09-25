@@ -990,6 +990,27 @@ impl AggregateExec {
         Ok(replacement.with_limit_options(limit_options))
     }
 
+    /// Rebuild this exec with replacement aggregate expressions.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the replacement expressions are incompatible with the retained
+    /// output schema. Use [`Self::try_with_new_aggr_exprs`] to handle that error.
+    #[deprecated(
+        since = "56.0.0",
+        note = "Use `try_with_new_aggr_exprs` to handle incompatible replacement expressions"
+    )]
+    pub fn with_new_aggr_exprs(
+        &self,
+        aggr_expr: impl Into<Arc<[Arc<AggregateFunctionExpr>]>>,
+    ) -> Self {
+        self.try_with_new_aggr_exprs(aggr_expr).unwrap_or_else(|error| {
+            panic!(
+                "AggregateExec::with_new_aggr_exprs received incompatible replacement expressions: {error}. Use try_with_new_aggr_exprs to handle this error"
+            )
+        })
+    }
+
     /// Clone this exec, overriding only the limit hint.
     pub fn with_new_limit_options(&self, limit_options: Option<LimitOptions>) -> Self {
         let mut new = self.clone().with_limit_options(limit_options);
@@ -9201,6 +9222,38 @@ mod tests {
                 .any(Option::is_some),
             "array_agg ORDER BY must require ordered input"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn deprecated_replacement_api_delegates_to_fallible_replacement() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int64, true)]));
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let unordered = Arc::new(
+            AggregateExprBuilder::new(array_agg_udaf(), vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("values")
+                .build()?,
+        );
+        let ordered = Arc::new(
+            AggregateExprBuilder::new(array_agg_udaf(), vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("values")
+                .order_by(vec![PhysicalSortExpr::new_default(col("b", &schema)?)])
+                .build()?,
+        );
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new_single(vec![]),
+            vec![unordered],
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?;
+
+        #[expect(deprecated)]
+        let replacement = aggregate.with_new_aggr_exprs(vec![ordered]);
+        assert!(replacement.required_input_ordering()[0].is_some());
         Ok(())
     }
 
