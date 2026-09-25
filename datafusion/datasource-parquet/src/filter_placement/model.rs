@@ -21,6 +21,7 @@
 use datafusion_physical_expr::filter_stats::MIN_OBSERVED_ROWS;
 
 use super::stats::Observation;
+use crate::row_filter_cost;
 use crate::row_filter_cost::ROW_FILTER_STAGE_NS_PER_ROW;
 
 /// Where the scan evaluates one conjunct of its predicate.
@@ -168,30 +169,10 @@ pub(crate) fn explore(
     }
 }
 
-/// The rank of a conjunct in the evaluation order of its stage: the rows
-/// that it removed for each nanosecond of evaluation time
-/// ([`FilterCost::rows_removed_per_nano`], the ranking key of the adaptive
-/// conjunct order of `FilterExec`). `None` before [`MIN_OBSERVED_ROWS`]
-/// evaluated rows.
+/// The rank of a conjunct in the evaluation order of its stage, see
+/// [`row_filter_cost::rank`].
 pub(crate) fn rank(observation: &Observation) -> Option<f64> {
-    if observation.rows_in < MIN_OBSERVED_ROWS {
-        return None;
-    }
-    observation.cost().rows_removed_per_nano()
-}
-
-/// The evaluation order of conjuncts, as indexes into `observations`. The
-/// same rule for required and optional conjuncts: a larger [`rank`] first.
-/// A conjunct without a rank comes first, in the written order, so that it
-/// is measured on all rows of its stage (see also [`explore`]).
-pub(crate) fn evaluation_order(observations: &[Observation]) -> Vec<usize> {
-    let mut order: Vec<usize> = (0..observations.len()).collect();
-    // A stable sort keeps the written order for equal keys.
-    order.sort_by(|&a, &b| {
-        let key = |i: usize| rank(&observations[i]).unwrap_or(f64::INFINITY);
-        key(b).total_cmp(&key(a))
-    });
-    order
+    row_filter_cost::rank(&observation.cost())
 }
 
 #[cfg(test)]
@@ -370,27 +351,5 @@ mod tests {
             Placement::PostScan
         );
         assert_eq!(explore(Placement::Skip, &unmeasured, true), Placement::Skip);
-    }
-
-    #[test]
-    fn order_by_rows_removed_per_nanosecond() {
-        let rows = MIN_OBSERVED_ROWS * 10;
-        // Removes 90% at 1 ns for each row: 0.9 rows for each ns.
-        let cheap_selective = measured(rows, rows / 10, rows);
-        // Removes 95% at 16 ns for each row: about 0.06 rows for each ns.
-        let expensive = measured(rows, rows / 20, 16 * rows);
-        // Removes nothing at 1 ns for each row.
-        let useless = measured(rows, rows, rows);
-        let unmeasured = measured(MIN_OBSERVED_ROWS - 1, 0, 1);
-        assert_eq!(rank(&unmeasured), None);
-        assert_eq!(
-            evaluation_order(&[expensive, useless, cheap_selective]),
-            vec![2, 0, 1]
-        );
-        // Unmeasured conjuncts first, in the written order.
-        assert_eq!(
-            evaluation_order(&[expensive, unmeasured, cheap_selective, unmeasured]),
-            vec![1, 3, 2, 0]
-        );
     }
 }
