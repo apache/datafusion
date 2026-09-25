@@ -1125,7 +1125,8 @@ impl FileSource for ParquetSource {
             metrics: _,
             // Carried by `base`.
             table_schema: _,
-            // Encoded as `predicate` (the AND of all conjuncts).
+            // Encoded as `predicate` (the AND of all conjuncts) and one
+            // optional flag for each term.
             filter,
             // Rebuilt from the decode context.
             parquet_file_reader_factory: _,
@@ -1151,6 +1152,13 @@ impl FileSource for ParquetSource {
             .to_expr_opt()
             .map(|pred| ctx.encode_expr(&pred))
             .transpose()?;
+        // Write the flags only if a conjunct is optional, so that a filter
+        // with only required conjuncts has the same encoding as before.
+        let optional_predicate_conjuncts = if filter.optional().next().is_some() {
+            filter.split_optional_flags()
+        } else {
+            vec![]
+        };
         let sort_order_for_reorder = sort_order_for_reorder
             .as_ref()
             .map(|ordering| -> datafusion_common::Result<_> {
@@ -1173,6 +1181,7 @@ impl FileSource for ParquetSource {
             sort_order_for_reorder,
             reverse_row_groups: *reverse_row_groups,
             metadata_size_hint,
+            optional_predicate_conjuncts,
         };
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::ParquetScan(node)),
@@ -1214,6 +1223,7 @@ impl ParquetSource {
             sort_order_for_reorder,
             reverse_row_groups,
             metadata_size_hint,
+            optional_predicate_conjuncts,
         } = scan;
 
         let base_conf = base_conf.as_ref().ok_or_else(|| {
@@ -1296,7 +1306,8 @@ impl ParquetSource {
         source.metadata_size_hint = metadata_size_hint;
 
         if let Some(predicate) = predicate {
-            source = source.with_predicate(predicate);
+            source.filter =
+                PhysicalFilter::from_split_flags(predicate, optional_predicate_conjuncts);
         }
         let base_config =
             FileScanConfig::try_from_proto(base_conf, ctx, Arc::new(source))?;

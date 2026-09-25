@@ -1950,6 +1950,12 @@ pub struct FilterExecNode {
     pub batch_size: u32,
     #[prost(uint32, optional, tag = "11")]
     pub fetch: ::core::option::Option<u32>,
+    /// One flag for each term of the root AND chain of `expr`: true if the term
+    /// is optional (a consumer can skip it without an effect on the result).
+    /// Empty means that all terms are required. A reader that does not know this
+    /// field applies all terms, which is correct.
+    #[prost(bool, repeated, tag = "12")]
+    pub optional_conjuncts: ::prost::alloc::vec::Vec<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FileGroup {
@@ -2035,6 +2041,11 @@ pub struct ParquetScanExecNode {
     /// Source-specific footer prefetch size. Absent means no hint.
     #[prost(uint64, optional, tag = "7")]
     pub metadata_size_hint: ::core::option::Option<u64>,
+    /// One flag for each term of the root AND chain of `predicate`: true if the
+    /// term is optional. Empty means that all terms are required. A reader that
+    /// does not know this field applies all terms, which is correct.
+    #[prost(bool, repeated, tag = "8")]
+    pub optional_predicate_conjuncts: ::prost::alloc::vec::Vec<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CsvScanExecNode {
