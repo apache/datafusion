@@ -2374,7 +2374,9 @@ impl ExecutionPlan for AggregateExec {
             && let Some(self_dyn_filter) = &self.dynamic_filter
         {
             let dyn_filter = Arc::clone(&self_dyn_filter.filter);
-            child_desc = child_desc.with_self_filter(dyn_filter);
+            // The aggregate still computes its result from all rows it gets,
+            // so the input does not need this filter for correctness.
+            child_desc = child_desc.with_optional_self_filter(dyn_filter);
         }
 
         Ok(FilterDescription::new().with_child(child_desc))

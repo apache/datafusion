@@ -1633,7 +1633,9 @@ impl ExecutionPlan for SortExec {
         if let Some(filter) = &self.filter
             && config.optimizer.enable_topk_dynamic_filter_pushdown
         {
-            child = child.with_self_filter(filter.read().expr());
+            // `SortExec` still sorts and limits all rows it gets, so the input
+            // does not need this filter for correctness.
+            child = child.with_optional_self_filter(filter.read().expr());
         }
 
         Ok(FilterDescription::new().with_child(child))
