@@ -1916,17 +1916,11 @@ impl RowGroupsPrunedParquetOpen {
             // installed filter is owned by the decoder and is not
             // recoverable once replaced.
             let first_rg_fully_matched = rg_plan.front().is_some_and(|e| e.fully_matched);
-            let mut row_filter_context = precomputed_context;
-            // A rebuild at a row group boundary cannot keep a live row
-            // selection (#24355), thus the adaptive filter placement keeps
-            // its first decision for this file.
-            if has_row_selection
-                && let Some(placement) = row_filter_context
-                    .as_mut()
-                    .and_then(|ctx| ctx.placement.as_mut())
-            {
-                placement.freeze();
-            }
+            // The adaptive filter placement can change at a row group
+            // boundary also when a row selection is live: the rebuild keeps
+            // the selections of the remaining row groups (see
+            // `PushDecoderStreamState::rebuild_decoder_at_boundary`).
+            let row_filter_context = precomputed_context;
 
             let mut builder = decoder_config.build(selections, reader_metadata.clone());
             let mut filter_installed = false;
@@ -5693,6 +5687,16 @@ mod test {
             store: &Arc<dyn ObjectStore>,
             a: impl Fn(usize) -> i32,
         ) -> (SchemaRef, PartitionedFile) {
+            write_file_with_pages(store, a, None).await
+        }
+
+        /// Like [`write_file`], with at most `page_rows` rows in each data
+        /// page if it is `Some`.
+        async fn write_file_with_pages(
+            store: &Arc<dyn ObjectStore>,
+            a: impl Fn(usize) -> i32,
+            page_rows: Option<usize>,
+        ) -> (SchemaRef, PartitionedFile) {
             let schema = Arc::new(Schema::new(vec![
                 Field::new("a", DataType::Int32, false),
                 Field::new("v", DataType::Int64, false),
@@ -5705,9 +5709,14 @@ mod test {
                 ],
             )
             .unwrap();
-            let props = WriterProperties::builder()
-                .set_max_row_group_row_count(Some(ROWS_PER_ROW_GROUP))
-                .build();
+            let mut props = WriterProperties::builder()
+                .set_max_row_group_row_count(Some(ROWS_PER_ROW_GROUP));
+            if let Some(page_rows) = page_rows {
+                props = props
+                    .set_data_page_row_count_limit(page_rows)
+                    .set_write_batch_size(page_rows);
+            }
+            let props = props.build();
             let size = write_parquet_batches(
                 Arc::clone(store),
                 "placement.parquet",
@@ -5808,6 +5817,115 @@ mod test {
             assert_eq!(adaptive.post_scan_rows(), TOTAL_ROWS - ROWS_PER_ROW_GROUP);
             assert_eq!(row_filter.row_filter_rows(), TOTAL_ROWS);
             assert_eq!(post_scan.post_scan_rows(), TOTAL_ROWS);
+        }
+
+        /// The values of `v` that a scan with the page index returns, and
+        /// its metrics.
+        async fn scan_values_with_page_index(
+            store: &Arc<dyn ObjectStore>,
+            schema: &SchemaRef,
+            file: &PartitionedFile,
+            predicate: &Arc<dyn PhysicalExpr>,
+            pushdown_filters: bool,
+            filter_placement: bool,
+        ) -> (Vec<i64>, ExecutionPlanMetricsSet) {
+            let metrics = ExecutionPlanMetricsSet::new();
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(store))
+                .with_schema(Arc::clone(schema))
+                .with_predicate(Arc::clone(predicate))
+                .with_pushdown_filters(pushdown_filters)
+                .with_filter_placement(filter_placement)
+                .with_enable_page_index(true)
+                .with_metrics(metrics.clone())
+                .build();
+            let stream = open_file(&morselizer, file.clone()).await.unwrap();
+            let batches = stream.try_collect::<Vec<_>>().await.unwrap();
+            let values = batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(1)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .values()
+                        .to_vec()
+                })
+                .collect();
+            (values, metrics)
+        }
+
+        /// The page index skips the first pages of the first row group
+        /// (`v >= 1000`) and pages of the second and third row groups
+        /// (`v < 20000 OR v >= 40000`), thus the scan has a live row
+        /// selection. The placement still changes at the first row group
+        /// boundary, the rebuilt decoder keeps the selections of the
+        /// remaining row groups, and the result is the same as with a row
+        /// filter only and with a post-scan filter only.
+        #[tokio::test]
+        async fn placement_changes_with_page_index_selection() {
+            use datafusion_physical_plan::metrics::MetricValue;
+
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (schema, file) =
+                write_file_with_pages(&store, |i| (i % 2) as i32, Some(100)).await;
+            let predicate = logical2physical(
+                &col("a").eq(lit(0)).and(col("v").gt_eq(lit(1000_i64))).and(
+                    col("v")
+                        .lt(lit(20_000_i64))
+                        .or(col("v").gt_eq(lit(40_000_i64))),
+                ),
+                &schema,
+            );
+
+            let (adaptive, adaptive_metrics) = scan_values_with_page_index(
+                &store, &schema, &file, &predicate, true, true,
+            )
+            .await;
+            let (row_filter, row_filter_metrics) = scan_values_with_page_index(
+                &store, &schema, &file, &predicate, true, false,
+            )
+            .await;
+            let (post_scan, post_scan_metrics) = scan_values_with_page_index(
+                &store, &schema, &file, &predicate, false, false,
+            )
+            .await;
+
+            let expected: Vec<i64> = (1000..20_000)
+                .chain(40_000..TOTAL_ROWS as i64)
+                .step_by(2)
+                .collect();
+            assert_eq!(adaptive, expected);
+            assert_eq!(row_filter, expected);
+            assert_eq!(post_scan, expected);
+
+            // The page index skipped rows: the selection is not select-all.
+            let MetricValue::PruningMetrics {
+                pruning_metrics, ..
+            } = adaptive_metrics
+                .clone_inner()
+                .sum_by_name("page_index_rows_pruned")
+                .unwrap()
+            else {
+                panic!("expected page pruning metrics");
+            };
+            // Whole pages only: a page that has a row in the result is kept.
+            assert!(pruning_metrics.pruned() > 20_000);
+            assert!(
+                counter_metric_value(&adaptive_metrics, "filter_placement_changes") > 0
+            );
+            // The rebuilt decoder fetches only the pages that the selections
+            // keep, as the scans that do not change the placement. A rebuild
+            // that dropped the selections of the remaining row groups fetches
+            // the pruned pages of the second and third row groups.
+            let bytes = |metrics: &ExecutionPlanMetricsSet| {
+                counter_metric_value(metrics, "bytes_scanned")
+            };
+            assert!(
+                bytes(&adaptive_metrics)
+                    <= bytes(&row_filter_metrics).max(bytes(&post_scan_metrics))
+            );
         }
 
         /// A filter that removes long runs of rows saves decode time in a row
