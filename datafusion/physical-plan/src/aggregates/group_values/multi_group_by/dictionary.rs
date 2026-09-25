@@ -181,6 +181,12 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
         .unwrap();
     }
 
+    fn is_cached(&self, values: &ArrayRef) -> bool {
+        self.cached_values
+            .as_ref()
+            .is_some_and(|cached| std::ptr::addr_eq(cached.as_ptr(), Arc::as_ptr(values)))
+    }
+
     /// Makes `val_hashes` and `val_to_inner` correspond to `dict_values`,
     /// reusing them when they were already built for this same values array.
     ///
@@ -190,11 +196,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
     /// rather than O(rows). `take_n` remaps `inner` and clears
     /// `cached_values`, forcing a rebuild.
     fn sync_value_cache(&mut self, dict_values: &ArrayRef) {
-        if self.cached_values.as_ref().is_some_and(|cached| {
-            cached
-                .upgrade()
-                .is_some_and(|values| Arc::ptr_eq(&values, dict_values))
-        }) {
+        if self.is_cached(dict_values) {
             return;
         }
         self.hash_values(dict_values);
@@ -985,11 +987,7 @@ mod tests {
             usize::MAX,
             "unreferenced value resolved"
         );
-        assert!(col.cached_values.as_ref().is_some_and(|cached| {
-            cached
-                .upgrade()
-                .is_some_and(|value| Arc::ptr_eq(&value, &values))
-        }));
+        assert!(col.is_cached(&values));
         assert_eq!(col.inner.len(), 2);
     }
 
@@ -1025,11 +1023,7 @@ mod tests {
         col.vectorized_append(&second, &[0]).unwrap();
 
         assert!(
-            col.cached_values.as_ref().is_some_and(|cached| {
-                cached.upgrade().is_some_and(|value| {
-                    Arc::ptr_eq(&value, second.as_dictionary::<Int32Type>().values())
-                })
-            }),
+            col.is_cached(second.as_dictionary::<Int32Type>().values()),
             "cache should track the most recent values array"
         );
         assert_eq!(col.inner.len(), 1, "'a' must dedup across both arrays");
@@ -1074,11 +1068,7 @@ mod tests {
         let mut col = utf8_col();
 
         col.append_val(&batch, 0).unwrap();
-        assert!(col.cached_values.as_ref().is_some_and(|cached| {
-            cached
-                .upgrade()
-                .is_some_and(|value| Arc::ptr_eq(&value, &values))
-        }));
+        assert!(col.is_cached(&values));
 
         col.vectorized_append(&batch, &[0, 1]).unwrap();
         assert_eq!(col.inner.len(), 2, "'a' must not be duplicated");
