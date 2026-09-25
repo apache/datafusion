@@ -956,7 +956,11 @@ impl AggregateExec {
                 limit_options,
                 ..
             } => (Arc::clone(filter_expr), *limit_options),
-            AggregateKind::DistinctLimit { .. } => (Arc::from([]), None),
+            AggregateKind::DistinctLimit { limit, .. } => {
+                // An empty replacement is used by optimizer passes that only
+                // recompute plan properties; retain DISTINCT's early-stop hint.
+                (Arc::from([]), Some(LimitOptions::new(*limit)))
+            }
         };
         let filter_expr = if aggr_expr.is_empty() {
             filter_expr

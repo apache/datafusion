@@ -27,11 +27,14 @@ use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctio
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use datafusion_physical_optimizer::update_aggr_exprs::OptimizeAggregateOrder;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
+use datafusion_physical_plan::empty::EmptyExec;
+use datafusion_physical_plan::limit::LocalLimitExec;
 
 use crate::physical_optimizer::test_utils::parquet_exec_with_sort;
 
@@ -101,6 +104,34 @@ fn single_group_by_gets_the_group_by_prefix() -> Result<()> {
     assert!(
         dbg.contains("is_input_pre_ordered: true"),
         "expected the flag set for a single grouping set, got: {dbg}"
+    );
+    Ok(())
+}
+
+#[test]
+fn empty_aggregate_replacement_retains_distinct_soft_limit() -> Result<()> {
+    let schema = abc_schema();
+    let aggregate = AggregateExec::try_new(
+        AggregateMode::Single,
+        PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]),
+        vec![],
+        vec![],
+        Arc::new(EmptyExec::new(Arc::clone(&schema))),
+        Arc::clone(&schema),
+    )?;
+    let plan: Arc<dyn ExecutionPlan> =
+        Arc::new(LocalLimitExec::new(Arc::new(aggregate), 10));
+    let mut config = ConfigOptions::default();
+    config.optimizer.enable_distinct_aggregation_soft_limit = true;
+
+    let limited = LimitedDistinctAggregation::new().optimize(plan, &config)?;
+    let optimized = OptimizeAggregateOrder::new().optimize(limited, &config)?;
+    let aggregate = optimized.children()[0]
+        .downcast_ref::<AggregateExec>()
+        .expect("limit child remains an AggregateExec");
+    assert_eq!(
+        aggregate.limit_options().map(|options| options.limit()),
+        Some(10)
     );
     Ok(())
 }
