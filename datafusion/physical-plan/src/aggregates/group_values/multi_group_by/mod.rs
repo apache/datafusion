@@ -281,12 +281,7 @@ impl VectorizedOperationBuffers {
         self.append_row_indices.shrink_to(num_rows);
         self.equal_to_row_indices.shrink_to(num_rows);
         self.equal_to_group_indices.shrink_to(num_rows);
-        // `BooleanBufferBuilder` has no `shrink_to`; `finish` replaces its
-        // backing buffer with an empty one. Rebuild capacity for the requested
-        // row count, then restore the empty logical state.
-        drop(self.equal_to_results.finish());
-        self.equal_to_results.append_n(num_rows, false);
-        self.equal_to_results.truncate(0);
+        self.equal_to_results = BooleanBufferBuilder::new(num_rows);
         self.remaining_row_indices.shrink_to(num_rows);
     }
 
