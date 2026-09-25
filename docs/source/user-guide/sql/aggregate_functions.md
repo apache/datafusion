@@ -92,6 +92,7 @@ SELECT SUM(x) WITHIN GROUP (ORDER BY x) FROM t;
 - [first_value](#first_value)
 - [grouping](#grouping)
 - [last_value](#last_value)
+- [map_agg](#map_agg)
 - [max](#max)
 - [mean](#mean)
 - [median](#median)
@@ -369,6 +370,30 @@ last_value(expression [ORDER BY expression])
 +-----------------------------------------------+
 | last_element                                  |
 +-----------------------------------------------+
+```
+
+### `map_agg`
+
+Returns a map created from the key and value expression elements. For each row, the key expression becomes a map key and the value expression becomes the corresponding map value.
+
+```sql
+map_agg(key, value)
+```
+
+#### Arguments
+
+- **key**: Expression used as the map key. Can be a column or any valid expression.
+- **value**: Expression used as the map value. Can be a column or any valid expression.
+
+#### Example
+
+```sql
+> SELECT map_agg(column_key, column_value) FROM table_name;
++-------------------------------------+
+| map_agg(column_key, column_value)   |
++-------------------------------------+
+| {key1: value1, key2: value2, ...}    |
++-------------------------------------+
 ```
 
 ### `max`
