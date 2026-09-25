@@ -924,6 +924,29 @@ config_namespace! {
         /// Support for build_side.num_rows() >= u32::MAX will be added in the future.
         pub perfect_hash_join_min_key_density: f64, default = 0.15
 
+        /// Enable an exact integer membership prefilter for hash joins with a single
+        /// integer key when the build side uses a hash table and the join is not
+        /// null-aware. It skips lookups for absent keys while retaining NULLs and
+        /// probe rows for the original join logic.
+        pub enable_join_integer_prefilter: bool, default = false
+
+        /// Maximum number of integer values covered by the join prefilter bitmap
+        /// (`max_key - min_key + 1`). Zero disables bitmap construction.
+        /// Larger ranges fall back to normal hash table lookups.
+        pub join_integer_prefilter_max_key_range: u64, default = 262144
+
+        /// The integer prefilter must prune more than this fraction of all sampled
+        /// probe rows, including NULLs, to keep filtering. Must be finite and in
+        /// [0, 1], validated when executing the join.
+        pub join_integer_prefilter_min_pruning_ratio: f64, default = 0.5
+
+        /// Minimum input probe rows in each integer prefilter sampling window,
+        /// including NULLs. Must be greater than zero. Windows end at batch boundaries.
+        /// Unprofitable samples initially pause for 10 times this many input rows;
+        /// consecutive failures double the pause up to 128 times. A profitable
+        /// sample resets the pause to 10 times this many rows.
+        pub join_integer_prefilter_sample_rows: ConfigNonZeroUsize, default = non_zero_usize_default(12288)
+
         /// When set to true, record batches will be examined between each operator and
         /// small batches will be coalesced into larger batches. This is helpful when there
         /// are highly selective filters or joins that could produce tiny output batches. The
