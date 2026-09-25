@@ -35,6 +35,7 @@ use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::basic::{ColumnOrder, LogicalType, SortOrder, Type as PhysicalType};
 use parquet::data_type::{ByteArray, FixedLenByteArray};
+use parquet::file::metadata::page_index::{PageIndex, PageIndexBuilder};
 use parquet::file::metadata::{
     ColumnChunkMetaData, ColumnIndexBuilder, FileMetaData, OffsetIndexBuilder,
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, ParquetMetaDataWriter,
@@ -136,16 +137,25 @@ impl TestFile {
             .build()
             .unwrap();
 
-        let mut column_index = metadata.column_index().unwrap().clone();
+        // Give the first row group's string column the same untrusted-looking
+        // bounds in its page index when the column order is missing or unknown.
+        let mut page_index = metadata
+            .page_index()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<PageIndex>()
+            .unwrap()
+            .clone()
+            .into_builder();
         if matches!(order, StatisticsOrder::Missing | StatisticsOrder::Unknown) {
             let mut index = ColumnIndexBuilder::new(PhysicalType::BYTE_ARRAY);
-            index.append(false, "aé".as_bytes().to_vec(), b"b".to_vec(), 0);
-            column_index[0][0] = index.build().unwrap();
+            index.append(false, "aé".as_bytes().to_vec(), b"b".to_vec(), 0, None);
+            page_index.put_column_index(index.build().unwrap(), 0, 0);
         }
         let metadata = metadata
             .into_builder()
             .set_row_groups(row_groups)
-            .set_column_index(Some(column_index))
+            .set_page_index(Some(Arc::new(page_index.build())))
             .build();
 
         // Keep the real data pages, and serialize the replacement statistics
@@ -177,8 +187,10 @@ impl TestFile {
                 bytes[new_end..new_end + 4].copy_from_slice(&metadata_len.to_le_bytes());
             } else {
                 // Change the first union member from field 1 (TYPEORDER) to
-                // an unrecognized field 2. The numeric column stays known.
-                bytes[start + 2] = 0x2c;
+                // an unrecognized field 4 (fields 2 and 3 are
+                // IEEE754TotalOrder and INT96TimestampOrder as of arrow 60).
+                // The numeric column stays known.
+                bytes[start + 2] = 0x4c;
             }
         }
 
@@ -261,18 +273,20 @@ impl TestFile {
         physical: &Arc<dyn PhysicalExpr>,
         plan: ParquetAccessPlan,
     ) -> usize {
-        let mut builder = ParquetRecordBatchReaderBuilder::try_new(self.bytes.clone())
+        plan.prepare(self.metadata.row_groups())
             .unwrap()
-            .with_row_groups(plan.row_group_indexes());
-        if let Some(selection) = plan
-            .into_overall_row_selection(self.metadata.row_groups())
-            .unwrap()
-        {
-            builder = builder.with_row_selection(selection);
-        }
-        builder
-            .build()
-            .unwrap()
+            .row_groups
+            .into_iter()
+            .flat_map(|rg| {
+                let mut builder =
+                    ParquetRecordBatchReaderBuilder::try_new(self.bytes.clone())
+                        .unwrap()
+                        .with_row_groups(vec![rg.selection.row_group_index()]);
+                if let Some(selection) = rg.selection.selection() {
+                    builder = builder.with_row_selection(selection.clone());
+                }
+                builder.build().unwrap()
+            })
             .map(|batch| {
                 let batch = batch.unwrap();
                 let matches = physical
@@ -543,16 +557,21 @@ fn single_column_metadata(
             .build()
             .unwrap(),
     )));
+    // Attach a single-page column and offset index mirroring `statistics`.
     let mut column_index = ColumnIndexBuilder::new(physical_type);
     column_index.append(
         false,
         statistics.min_bytes_opt().unwrap().to_vec(),
         statistics.max_bytes_opt().unwrap().to_vec(),
         0,
+        None,
     );
     let mut offset_index = OffsetIndexBuilder::new();
     offset_index.append_row_count(3);
     offset_index.append_offset_and_size(0, 1);
+    let mut page_index = PageIndexBuilder::new(1, 1);
+    page_index.put_column_index(column_index.build().unwrap(), 0, 0);
+    page_index.put_offset_index(offset_index.build(), 0, 0);
     let column = ColumnChunkMetaData::builder(schema.column(0))
         .set_num_values(3)
         .set_statistics(statistics)
@@ -568,8 +587,7 @@ fn single_column_metadata(
         vec![group],
     )
     .into_builder()
-    .set_column_index(Some(vec![vec![column_index.build().unwrap()]]))
-    .set_offset_index(Some(vec![vec![offset_index.build()]]))
+    .set_page_index(Some(Arc::new(page_index.build())))
     .build()
 }
 
@@ -737,7 +755,7 @@ fn undefined_int96_order_is_never_trusted() {
             .build()
             .unwrap(),
     ));
-    assert_eq!(schema.column(0).sort_order(), SortOrder::UNDEFINED);
+    assert_eq!(schema.column(0).sort_order(), SortOrder::INT96_TIMESTAMP);
 
     for order in [
         None,
@@ -746,6 +764,7 @@ fn undefined_int96_order_is_never_trusted() {
         Some(ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNDEFINED)),
         Some(ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED)),
         Some(ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED)),
+        Some(ColumnOrder::INT96_TIMESTAMP_ORDER),
     ] {
         assert!(
             has_untrusted_min_max_order(

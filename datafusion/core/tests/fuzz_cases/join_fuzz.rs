@@ -20,8 +20,10 @@ use std::time::SystemTime;
 
 use crate::fuzz_cases::join_fuzz::JoinTestType::{HjSmj, NljHj};
 
-use arrow::array::{Array, ArrayRef, BinaryArray, Float64Array, Int32Array};
-use arrow::compute::SortOptions;
+use arrow::array::{
+    Array, ArrayRef, BinaryArray, BooleanArray, Float64Array, Int32Array, UInt32Array,
+};
+use arrow::compute::{SortOptions, take_record_batch};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
@@ -865,7 +867,30 @@ impl JoinFuzzTestCase {
     }
 
     fn nested_loop_join(&self) -> Arc<NestedLoopJoinExec> {
-        let (left, right) = self.left_right();
+        let (_, right) = self.left_right();
+        self.nested_loop_join_with_right(right)
+    }
+
+    /// A nested loop join whose right side is spread over `partitions` partitions
+    fn nested_loop_join_partitioned_right(
+        &self,
+        partitions: usize,
+    ) -> Arc<NestedLoopJoinExec> {
+        let mut right = vec![vec![]; partitions];
+        for (i, batch) in self.input2.iter().enumerate() {
+            right[i % partitions].push(batch.clone());
+        }
+        let right =
+            MemorySourceConfig::try_new_exec(&right, self.input2[0].schema(), None)
+                .unwrap();
+        self.nested_loop_join_with_right(right)
+    }
+
+    fn nested_loop_join_with_right(
+        &self,
+        right: Arc<dyn ExecutionPlan>,
+    ) -> Arc<NestedLoopJoinExec> {
+        let (left, _) = self.left_right();
 
         let column_indices = self.column_indices();
         let intermediate_schema = self.intermediate_schema();
@@ -1272,6 +1297,97 @@ async fn test_filtered_join_spill_fuzz() {
     }
 }
 
+/// Fuzz test: compare NLJ under memory pressure against the same NLJ without a
+/// memory limit, for every join type. Under pressure the left side is spilled
+/// and read back in chunks that several right partitions probe, so this
+/// exercises the unmatched rows that have to be tracked across chunks and
+/// across partitions, with chunk boundaries that random batch sizes make
+/// different on every run.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_nested_loop_join_spill_fuzz() {
+    let join_types = [
+        JoinType::Inner,
+        JoinType::Left,
+        JoinType::Right,
+        JoinType::Full,
+        JoinType::LeftSemi,
+        JoinType::LeftAnti,
+        JoinType::LeftMark,
+        JoinType::RightSemi,
+        JoinType::RightAnti,
+        JoinType::RightMark,
+    ];
+
+    let runtime_spill = RuntimeEnvBuilder::new()
+        .with_memory_limit(4096, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()
+        .unwrap();
+
+    for join_type in join_types {
+        // The staggered batches are slices that each report the size of the
+        // buffers they share, which no batch fits the memory limit with. Copy
+        // them, so that the limit is exceeded part way through the left side
+        // and chunks span several batches.
+        let left = make_staggered_batches_i32(500, true)
+            .iter()
+            .map(|batch| {
+                let all_rows = UInt32Array::from_iter_values(0..batch.num_rows() as u32);
+                take_record_batch(batch, &all_rows).unwrap()
+            })
+            .collect();
+        let test_case = JoinFuzzTestCase::new(
+            left,
+            make_staggered_batches_i32(500, true),
+            join_type,
+            Some(Box::new(col_lt_col_filter)),
+        );
+
+        for batch_size in [7, 100] {
+            let session_config = SessionConfig::new().with_batch_size(batch_size);
+
+            // Baseline (no memory limit)
+            let ctx = SessionContext::new_with_config(session_config.clone());
+            let expected = collect(
+                test_case.nested_loop_join_partitioned_right(4),
+                ctx.task_ctx(),
+            )
+            .await
+            .unwrap();
+
+            // With spilling
+            let nlj = test_case.nested_loop_join_partitioned_right(4);
+            let task_ctx_spill = Arc::new(
+                TaskContext::default()
+                    .with_session_config(session_config)
+                    .with_runtime(Arc::clone(&runtime_spill)),
+            );
+            let spilled =
+                collect(Arc::clone(&nlj) as Arc<dyn ExecutionPlan>, task_ctx_spill)
+                    .await
+                    .unwrap();
+            assert!(
+                nlj.metrics().unwrap().spill_count().unwrap_or(0) > 0,
+                "{join_type:?} batch_size={batch_size}: expected the join to spill"
+            );
+
+            let expected_fmt = pretty_format_batches(&expected).unwrap().to_string();
+            let spilled_fmt = pretty_format_batches(&spilled).unwrap().to_string();
+            let mut expected_sorted: Vec<&str> = expected_fmt.trim().lines().collect();
+            expected_sorted.sort_unstable();
+            let mut spilled_sorted: Vec<&str> = spilled_fmt.trim().lines().collect();
+            spilled_sorted.sort_unstable();
+
+            assert_eq!(
+                expected_sorted, spilled_sorted,
+                "Content mismatch for {join_type:?} batch_size={batch_size}"
+            );
+        }
+    }
+}
+
 /// Return randomly sized record batches with:
 /// two sorted int32 columns 'a', 'b' ranged from 0..99 as join columns
 /// two random int32 columns 'x', 'y' as other columns
@@ -1492,7 +1608,7 @@ fn pwmj_plan(
     // ordering at all -- they only read the buffered side's min/max -- so they are fed the
     // left side unsorted, which is the input shape they will see in a real plan.
     let buffered = match join_type {
-        JoinType::RightSemi | JoinType::RightAnti => left,
+        JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => left,
         _ => {
             let sort_options = match op {
                 Operator::Lt | Operator::LtEq => SortOptions::new(true, true),
@@ -1600,6 +1716,47 @@ async fn pwmj_collect_id_pairs(
     pairs
 }
 
+/// Executes every output partition concurrently and returns a `LeftMark`/`RightMark` join's
+/// rows as `(id, mark)` pairs, sorted so partition interleaving does not affect the
+/// comparison. `mark` is documented to never be NULL (see `JoinType::LeftMark`), so it is
+/// unwrapped rather than carried as `Option<bool>`.
+async fn pwmj_collect_mark_pairs(
+    plan: Arc<dyn ExecutionPlan>,
+    task_ctx: Arc<TaskContext>,
+) -> Vec<(i32, bool)> {
+    let streams = (0..plan.output_partitioning().partition_count())
+        .map(|partition| plan.execute(partition, Arc::clone(&task_ctx)).unwrap())
+        .collect::<Vec<_>>();
+    let per_partition =
+        futures::future::join_all(streams.into_iter().map(|stream| {
+            SpawnedTask::spawn(async move { common::collect(stream).await })
+        }))
+        .await;
+
+    let mut pairs = Vec::new();
+    for batches in per_partition {
+        for batch in batches.unwrap().unwrap() {
+            let id = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            // `mark` is always the last column: it is appended after either side's own
+            // columns (see `build_join_schema`).
+            let mark = batch
+                .column(batch.num_columns() - 1)
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .unwrap();
+            for row in 0..batch.num_rows() {
+                pairs.push((id.value(row), mark.value(row)));
+            }
+        }
+    }
+    pairs.sort_unstable();
+    pairs
+}
+
 /// Differential test for every join type `PiecewiseMergeJoin` supports, against a
 /// `NestedLoopJoin` oracle, run once over `i32` keys and once over `f64` keys via
 /// [`run_pwmj_fuzz`].
@@ -1637,6 +1794,8 @@ async fn run_pwmj_fuzz<K: PwmjFuzzKey + std::fmt::Debug>(task_ctx: &Arc<TaskCont
         JoinType::LeftAnti,
         JoinType::RightSemi,
         JoinType::RightAnti,
+        JoinType::LeftMark,
+        JoinType::RightMark,
     ];
 
     for seed in 0..60u64 {
@@ -1668,11 +1827,48 @@ async fn run_pwmj_fuzz<K: PwmjFuzzKey + std::fmt::Debug>(task_ctx: &Arc<TaskCont
                 // folded one partition per task and then combined -- a reduction the
                 // single-partition shape below never reaches.
                 let buffered = match join_type {
-                    JoinType::RightSemi | JoinType::RightAnti => {
+                    JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
                         pwmj_parts_exec(&left_ids, &left_keys, buffered_nparts)
                     }
                     _ => pwmj_single_exec(&left_ids, &left_keys),
                 };
+
+                // Mark joins output every row of their side with a `mark` column rather than
+                // a filtered subset, so they are compared as `(id, mark)` pairs instead of
+                // the `(left id, right id)` pairs every other join type here uses.
+                if matches!(join_type, JoinType::LeftMark | JoinType::RightMark) {
+                    let got = pwmj_collect_mark_pairs(
+                        pwmj_plan(
+                            buffered,
+                            pwmj_parts_exec(&right_ids, &right_keys, nparts),
+                            op,
+                            join_type,
+                        ),
+                        Arc::clone(task_ctx),
+                    )
+                    .await;
+                    let want = pwmj_collect_mark_pairs(
+                        pwmj_nlj_oracle_plan::<K>(
+                            pwmj_single_exec(&left_ids, &left_keys),
+                            pwmj_single_exec(&right_ids, &right_keys),
+                            op,
+                            join_type,
+                        ),
+                        Arc::clone(task_ctx),
+                    )
+                    .await;
+
+                    assert_eq!(
+                        got,
+                        want,
+                        "mismatch key_type={} seed={seed} op={op:?} join_type={join_type:?} \
+                         nparts={nparts} buffered_nparts={buffered_nparts} \
+                         left_keys={left_keys:?} right_keys={right_keys:?}",
+                        std::any::type_name::<K>(),
+                    );
+                    continue;
+                }
+
                 let got = pwmj_collect_id_pairs(
                     pwmj_plan(
                         buffered,
@@ -1699,7 +1895,7 @@ async fn run_pwmj_fuzz<K: PwmjFuzzKey + std::fmt::Debug>(task_ctx: &Arc<TaskCont
                     want,
                     "mismatch key_type={} seed={seed} op={op:?} join_type={join_type:?} \
                      nparts={nparts} buffered_nparts={buffered_nparts} \
-                      left_keys={left_keys:?} right_keys={right_keys:?}",
+                     left_keys={left_keys:?} right_keys={right_keys:?}",
                     std::any::type_name::<K>(),
                 );
             }

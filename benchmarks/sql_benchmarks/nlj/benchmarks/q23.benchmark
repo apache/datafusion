@@ -2,7 +2,7 @@ name Q23
 group nlj
 
 expect_plan NestedLoopJoinExec
-expect_plan join_type: RightAnti
+expect_plan join_type=RightAnti
 
 init
 CREATE TABLE nlj_final_left AS

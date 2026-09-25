@@ -2,7 +2,7 @@ name Q22
 group nlj
 
 expect_plan NestedLoopJoinExec
-expect_plan join_type: RightSemi
+expect_plan join_type=RightSemi
 
 # Materialize the threshold so the filter keeps both join inputs.
 # Keep the left input smaller so the default optimizer preserves RightSemi.

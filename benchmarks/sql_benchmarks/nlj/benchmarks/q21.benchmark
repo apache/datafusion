@@ -2,7 +2,7 @@ name Q21
 group nlj
 
 expect_plan NestedLoopJoinExec
-expect_plan join_type: RightAnti
+expect_plan join_type=RightAnti
 
 run
 -- Q21: RIGHT ANTI 2K x 2K | staged matches with 260-byte filter strings

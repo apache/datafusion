@@ -37,7 +37,7 @@ use crate::projection::{ProjectionExec, ProjectionExpr};
 use crate::sorts::sort::SortExec;
 use crate::spill::spill_manager::SpillManager;
 use crate::test::TestMemoryExec;
-use crate::test::exec::BarrierExec;
+use crate::test::exec::{BarrierExec, PanicExec};
 use crate::test::{build_table_i32, build_table_i32_two_cols};
 use crate::{ExecutionPlan, RecordBatchStream, common};
 use crate::{
@@ -527,6 +527,207 @@ fn projection_pushdown_without_filter() -> Result<()> {
     Ok(())
 }
 
+/// The buffered side panics when polled, so these pass only if an empty streamed
+/// partition ends the join before the buffered input is touched.
+fn empty_left_and_panicking_right() -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>) {
+    let left = build_table(
+        ("a1", &Vec::<i32>::new()),
+        ("b1", &Vec::<i32>::new()),
+        ("c1", &Vec::<i32>::new()),
+    );
+    let right_schema =
+        build_table(("a2", &vec![1]), ("b1", &vec![1]), ("c2", &vec![1])).schema();
+    let right: Arc<dyn ExecutionPlan> = Arc::new(PanicExec::new(right_schema, 1));
+    (left, right)
+}
+
+fn on_b1(
+    left: &Arc<dyn ExecutionPlan>,
+    right: &Arc<dyn ExecutionPlan>,
+) -> Result<JoinOn> {
+    Ok(vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+    )])
+}
+
+#[tokio::test]
+async fn join_empty_streamed_side_never_polls_buffered_side() -> Result<()> {
+    // Left-probing joins stream the left side; the right side must stay untouched.
+    for join_type in [Inner, Left, LeftSemi, LeftAnti, LeftMark] {
+        let (left, right) = empty_left_and_panicking_right();
+        let on = on_b1(&left, &right)?;
+        let (_, batches) = join_collect(left, right, on, join_type).await?;
+        assert_eq!(
+            batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+            0,
+            "{join_type:?}"
+        );
+    }
+    // Right-probing joins stream the right side; the left side must stay untouched.
+    for join_type in [Right, RightSemi, RightAnti] {
+        let (empty, panicking) = empty_left_and_panicking_right();
+        let on = on_b1(&panicking, &empty)?;
+        let (_, batches) = join_collect(panicking, empty, on, join_type).await?;
+        assert_eq!(
+            batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+            0,
+            "{join_type:?}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_full_empty_left_still_emits_buffered_rows() -> Result<()> {
+    let left = build_table(
+        ("a1", &Vec::<i32>::new()),
+        ("b1", &Vec::<i32>::new()),
+        ("c1", &Vec::<i32>::new()),
+    );
+    let right = build_table(
+        ("a2", &vec![10, 20]),
+        ("b1", &vec![4, 5]),
+        ("c2", &vec![70, 80]),
+    );
+    let on = on_b1(&left, &right)?;
+    let (_, batches) = join_collect(left, right, on, Full).await?;
+    assert_snapshot!(batches_to_string(&batches), @r"
+    +----+----+----+----+----+----+
+    | a1 | b1 | c1 | a2 | b1 | c2 |
+    +----+----+----+----+----+----+
+    |    |    |    | 10 | 4  | 70 |
+    |    |    |    | 20 | 5  | 80 |
+    +----+----+----+----+----+----+
+    ");
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_inner_and_semi_finish_once_buffered_side_is_exhausted() -> Result<()> {
+    let right = build_table(
+        ("a2", &Vec::<i32>::new()),
+        ("b1", &Vec::<i32>::new()),
+        ("c2", &Vec::<i32>::new()),
+    );
+    for join_type in [Inner, LeftSemi] {
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 6]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let on = on_b1(&left, &right)?;
+        let (_, batches) = join_collect(left, Arc::clone(&right), on, join_type).await?;
+        assert_eq!(
+            batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+            0,
+            "{join_type:?}"
+        );
+    }
+    // Anti and mark joins still emit every unmatched streamed row.
+    let left = build_table(
+        ("a1", &vec![1, 2]),
+        ("b1", &vec![4, 5]),
+        ("c1", &vec![7, 8]),
+    );
+    let on = on_b1(&left, &right)?;
+    let (_, batches) = join_collect(left, right, on, LeftAnti).await?;
+    assert_snapshot!(batches_to_string(&batches), @r"
+    +----+----+----+
+    | a1 | b1 | c1 |
+    +----+----+----+
+    | 1  | 4  | 7  |
+    | 2  | 5  | 8  |
+    +----+----+----+
+    ");
+    Ok(())
+}
+
+/// One streamed row below a large buffered key group: the streamed side is exhausted
+/// after the first comparison, and the join must give the group's reservation back before
+/// it hands out its final batch, not when the stream is dropped.
+#[tokio::test]
+async fn join_left_releases_buffered_reservation_before_final_batch() -> Result<()> {
+    let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![1]));
+    let right = build_table_from_batches(
+        (0..16)
+            .map(|_| {
+                build_table_i32(
+                    ("a2", &vec![2; 4096]),
+                    ("b1", &vec![2; 4096]),
+                    ("c2", &vec![2; 4096]),
+                )
+            })
+            .collect(),
+    );
+    let on = on_b1(&left, &right)?;
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(2_000_000, 1.0)
+        .build_arc()?;
+    let ctx = Arc::new(TaskContext::default().with_runtime(Arc::clone(&runtime)));
+    let mut stream = join(left, right, on, Left)?.execute(0, ctx)?;
+    let batch = stream.next().await.unwrap()?;
+    assert_eq!(batch.num_rows(), 1);
+    assert_eq!(
+        runtime.memory_pool.reserved(),
+        0,
+        "reservation held at the final batch"
+    );
+    assert!(stream.next().await.is_none());
+    assert_eq!(
+        runtime.memory_pool.reserved(),
+        0,
+        "reservation held after EOF"
+    );
+    Ok(())
+}
+
+/// The parent join consumes the child's final batch while the child stream is still alive,
+/// with spilling disabled so a reservation the child failed to release surfaces as an error.
+#[tokio::test]
+async fn join_chain_reuses_memory_released_by_completed_child() -> Result<()> {
+    let left = build_table(("a1", &vec![1]), ("b1", &vec![1]), ("c1", &vec![1]));
+    let right = build_table_from_batches(
+        (0..16)
+            .map(|_| {
+                build_table_i32(
+                    ("a2", &vec![2; 4096]),
+                    ("b1", &vec![2; 4096]),
+                    ("c2", &vec![2; 4096]),
+                )
+            })
+            .collect(),
+    );
+    let on = on_b1(&left, &right)?;
+    let child: Arc<dyn ExecutionPlan> = Arc::new(join(left, right, on, Left)?);
+    let parent_right = build_table_from_batches(
+        (0..10)
+            .map(|_| {
+                build_table_i32(
+                    ("a3", &vec![1; 4096]),
+                    ("b3", &vec![1; 4096]),
+                    ("c3", &vec![1; 4096]),
+                )
+            })
+            .collect(),
+    );
+    let on = vec![(
+        Arc::new(Column::new("a1", 0)) as _,
+        Arc::new(Column::new("a3", 0)) as _,
+    )];
+    let parent = join(child, parent_right, on, Inner)?;
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(2_000_000, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+        )
+        .build_arc()?;
+    let ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+    let batches = common::collect(parent.execute(0, ctx)?).await?;
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 40_960);
+    Ok(())
+}
+
 #[tokio::test]
 async fn join_inner_one() -> Result<()> {
     let left = build_table(
@@ -939,6 +1140,200 @@ async fn join_left_different_columns_count_with_filter() -> Result<()> {
     | 20 | 5  |    |    |    |
     | 30 | 6  |    |    |    |
     +----+----+----+----+----+
+    ");
+    Ok(())
+}
+
+/// A filter whose intermediate schema lists a right column before a left one
+/// (the layout `JoinFilter::swap` produces when a join's inputs are swapped)
+#[tokio::test]
+async fn join_left_with_filter_columns_right_before_left() -> Result<()> {
+    // select *
+    // from t2
+    // left join t1 on t2.b1 = t1.b1 and t2.a2 > t1.a1
+
+    let left = build_table_two_cols(
+        ("a2", &vec![10, 20, 30]),
+        ("b1", &vec![4, 5, 6]), // 6 does not exist on the right
+    );
+
+    let right = build_table(
+        ("a1", &vec![1, 21, 3]), // 20(t2.a2) > 1(t1.a1)
+        ("b1", &vec![4, 5, 7]),
+        ("c1", &vec![7, 8, 9]),
+    );
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+    )];
+
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a2", 1)),
+            Operator::Gt,
+            Arc::new(Column::new("a1", 0)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("a1", DataType::Int32, true),
+            Field::new("a2", DataType::Int32, true),
+        ])),
+    );
+
+    let (_, batches) = join_collect_with_filter(left, right, on, filter, Left).await?;
+
+    assert_snapshot!(batches_to_string(&batches), @r"
+    +----+----+----+----+----+
+    | a2 | b1 | a1 | b1 | c1 |
+    +----+----+----+----+----+
+    | 10 | 4  | 1  | 4  | 7  |
+    | 20 | 5  |    |    |    |
+    | 30 | 6  |    |    |    |
+    +----+----+----+----+----+
+    ");
+    Ok(())
+}
+
+/// Same filter layout for a right join, whose streamed side is the join's
+/// right input, so the streamed/buffered arrays reach `get_filter_columns`
+/// swapped back into join-side order
+#[tokio::test]
+async fn join_right_with_filter_columns_right_before_left() -> Result<()> {
+    // select *
+    // from t2
+    // right join t1 on t2.b1 = t1.b1 and t2.a2 > t1.a1
+
+    let left = build_table_two_cols(("a2", &vec![10, 20, 30]), ("b1", &vec![4, 5, 6]));
+
+    let right = build_table(
+        ("a1", &vec![1, 21, 3]), // 20(t2.a2) > 21(t1.a1) is false
+        ("b1", &vec![4, 5, 7]),  // 7 does not exist on the left
+        ("c1", &vec![7, 8, 9]),
+    );
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+    )];
+
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a2", 1)),
+            Operator::Gt,
+            Arc::new(Column::new("a1", 0)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("a1", DataType::Int32, true),
+            Field::new("a2", DataType::Int32, true),
+        ])),
+    );
+
+    let (_, batches) = join_collect_with_filter(left, right, on, filter, Right).await?;
+
+    assert_snapshot!(batches_to_sort_string(&batches), @r"
+    +----+----+----+----+----+
+    | a2 | b1 | a1 | b1 | c1 |
+    +----+----+----+----+----+
+    |    |    | 21 | 5  | 8  |
+    |    |    | 3  | 7  | 9  |
+    | 10 | 4  | 1  | 4  | 7  |
+    +----+----+----+----+----+
+    ");
+    Ok(())
+}
+
+/// A filter whose intermediate schema interleaves the two sides (Left, Right,
+/// Left), which neither "left columns first" nor "right columns first" produces
+#[tokio::test]
+async fn join_left_with_filter_columns_interleaved() -> Result<()> {
+    // select *
+    // from t1
+    // left join t2 on t1.b1 = t2.b1 and t1.a1 < t2.a2 and t2.a2 < t1.c1
+
+    let left = build_table(
+        ("a1", &vec![1, 2, 3]),
+        ("b1", &vec![4, 5, 6]), // 6 does not exist on the right
+        ("c1", &vec![10, 3, 30]),
+    );
+
+    // Grouping the filter columns by side would evaluate `a1 < c1 and c1 < a2`,
+    // which is false for b1 = 4 and true for b1 = 5: the opposite of the filter.
+    let right = build_table(
+        ("a2", &vec![5, 20, 7]), // 1 < 5 < 10, but 2 < 20 < 3 is false
+        ("b1", &vec![4, 5, 7]),
+        ("c2", &vec![70, 80, 90]),
+    );
+
+    let on = vec![(
+        Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+    )];
+
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a1", 0)),
+                Operator::Lt,
+                Arc::new(Column::new("a2", 1)),
+            )),
+            Operator::And,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("a2", 1)),
+                Operator::Lt,
+                Arc::new(Column::new("c1", 2)),
+            )),
+        )),
+        vec![
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 0,
+                side: JoinSide::Right,
+            },
+            ColumnIndex {
+                index: 2,
+                side: JoinSide::Left,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("a1", DataType::Int32, true),
+            Field::new("a2", DataType::Int32, true),
+            Field::new("c1", DataType::Int32, true),
+        ])),
+    );
+
+    let (_, batches) = join_collect_with_filter(left, right, on, filter, Left).await?;
+
+    assert_snapshot!(batches_to_string(&batches), @r"
+    +----+----+----+----+----+----+
+    | a1 | b1 | c1 | a2 | b1 | c2 |
+    +----+----+----+----+----+----+
+    | 1  | 4  | 10 | 5  | 4  | 70 |
+    | 2  | 5  | 3  |    |    |    |
+    | 3  | 6  | 30 |    |    |    |
+    +----+----+----+----+----+----+
     ");
     Ok(())
 }
@@ -6770,6 +7165,82 @@ async fn swap_inputs_swaps_the_projection() -> Result<()> {
     let expected = common::collect(join.execute(0, Arc::clone(&task_ctx))?).await?;
     let actual = common::collect(swapped.execute(0, task_ctx)?).await?;
     assert_eq!(expected, actual);
+
+    Ok(())
+}
+
+/// Swapping the inputs swaps the filter too, which lists its right columns before
+/// its left ones afterwards. The swapped join must still evaluate the same predicate.
+#[tokio::test]
+async fn swap_inputs_swaps_the_filter() -> Result<()> {
+    let left = build_table(
+        ("a1", &vec![1, 2, 3, 4]), // 4 does not exist on the right
+        ("b1", &vec![10, 20, 30, 40]),
+        ("c1", &vec![100, 200, 300, 400]),
+    );
+    let right = build_table(
+        ("a2", &vec![1, 2, 3, 5]), // 5 does not exist on the left
+        ("b2", &vec![11, 15, 33, 55]),
+        ("c2", &vec![111, 222, 333, 555]),
+    );
+    let on: JoinOn = vec![(
+        Arc::new(Column::new("a1", 0)) as _,
+        Arc::new(Column::new("a2", 0)) as _,
+    )];
+    // b1 > b2 holds for key 2 alone, and b2 > b1 for keys 1 and 3, so reading the
+    // two columns from the wrong sides changes the result.
+    let filter = JoinFilter::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("b1", 0)),
+            Operator::Gt,
+            Arc::new(Column::new("b2", 1)),
+        )),
+        vec![
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Right,
+            },
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("b1", DataType::Int32, true),
+            Field::new("b2", DataType::Int32, true),
+        ])),
+    );
+
+    for join_type in [
+        Inner, Left, Right, Full, LeftSemi, LeftAnti, RightSemi, RightAnti,
+    ] {
+        let join = SortMergeJoinExec::try_new(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            Some(filter.clone()),
+            join_type,
+            vec![SortOptions::default()],
+            NullEquality::NullEqualsNothing,
+        )?;
+
+        let swapped = join.swap_inputs()?;
+        assert_eq!(
+            swapped.schema().fields(),
+            join.schema().fields(),
+            "swapping must not change what the {join_type:?} join emits"
+        );
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let expected = common::collect(join.execute(0, Arc::clone(&task_ctx))?).await?;
+        let actual = common::collect(swapped.execute(0, task_ctx)?).await?;
+        // Swapping changes which side is streamed, and with it the row order.
+        assert_eq!(
+            batches_to_sort_string(&expected),
+            batches_to_sort_string(&actual),
+            "swapping must not change the result of the {join_type:?} join"
+        );
+    }
 
     Ok(())
 }

@@ -23,7 +23,7 @@ statement ok
 SET datafusion.optimizer.join_reordering = false
 
 statement ok
-SET datafusion.execution.batch_size = 256
+SET datafusion.execution.batch_size = 4
 
 statement ok
 CREATE TABLE existence_left AS
@@ -34,12 +34,17 @@ SELECT CASE WHEN value = 0 OR value = 1 THEN 65
 FROM range(20)
 
 statement ok
+SET datafusion.execution.batch_size = 256
+
+statement ok
 CREATE TABLE existence_right AS
 SELECT 1000 + value AS payload,
        CASE WHEN (value * 2) % 129 = 128 THEN NULL ELSE (value * 2) % 129 END AS k,
        'payload-' || value AS label
 FROM range(129)
 
+# The left side spans five batches. Single-row probes and the multi-row range
+# after compaction must resolve rows across those batch boundaries.
 # Multiple compactions must retain original right-row indices and payloads.
 # The noncontiguous survivors shrink from 129 to 64, 32, then 15 candidates.
 # With batch_size=256, 15 candidates trigger a multi-left-row range. Repeated
@@ -70,7 +75,7 @@ logical_plan
 05)----TableScan: existence_right projection=[payload, k, label]
 physical_plan
 01)NestedLoopJoinExec: join_type=RightSemi, filter=threshold@0 > k@1
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
+02)--DataSourceExec: partitions=1, partition_sizes=[5]
 03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
@@ -85,7 +90,7 @@ logical_plan
 05)----TableScan: existence_right projection=[payload, k, label]
 physical_plan
 01)NestedLoopJoinExec: join_type=RightAnti, filter=threshold@0 > k@1
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
+02)--DataSourceExec: partitions=1, partition_sizes=[5]
 03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Repeated matches within and across left ranges must only decrement remaining

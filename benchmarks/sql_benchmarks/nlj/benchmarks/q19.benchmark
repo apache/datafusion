@@ -2,7 +2,7 @@ name Q19
 group nlj
 
 expect_plan NestedLoopJoinExec
-expect_plan join_type: RightAnti
+expect_plan join_type=RightAnti
 
 run
 -- Q19: RIGHT ANTI 4K x 4K | no matches; the maximum sum is 4096 * 4096 - 1

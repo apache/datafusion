@@ -2,7 +2,7 @@ name Q20
 group nlj
 
 expect_plan NestedLoopJoinExec
-expect_plan join_type: RightSemi
+expect_plan join_type=RightSemi
 
 run
 -- Q20: RIGHT SEMI 2K x 2K | staged matches with 260-byte filter strings
