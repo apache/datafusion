@@ -478,10 +478,12 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
         | LogicalPlan::Ddl(DdlStatement::CreateExternalTable(_))
         | LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(_))
         | LogicalPlan::Ddl(DdlStatement::CreateCatalog(_))
+        | LogicalPlan::Ddl(DdlStatement::CreateExternalCatalog(_))
         | LogicalPlan::Ddl(DdlStatement::CreateIndex(_))
         | LogicalPlan::Ddl(DdlStatement::DropTable(_))
         | LogicalPlan::Ddl(DdlStatement::DropView(_))
         | LogicalPlan::Ddl(DdlStatement::DropCatalogSchema(_))
+        | LogicalPlan::Ddl(DdlStatement::DropCatalog(_))
         | LogicalPlan::Ddl(DdlStatement::CreateFunction(_))
         | LogicalPlan::Ddl(DdlStatement::DropFunction(_))
         | LogicalPlan::Statement(_) => false,
