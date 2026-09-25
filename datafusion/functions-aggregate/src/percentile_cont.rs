@@ -1047,6 +1047,12 @@ fn calculate_percentile<T: ArrowPrimitiveType, I: PercentileInterpolator<T>>(
     values: &mut [T::Native],
     percentile: f64,
 ) -> Result<Option<T::Native>> {
+    if !percentile.is_finite() || !(0.0..=1.0).contains(&percentile) {
+        return datafusion_common::exec_err!(
+            "Percentile value must be between 0.0 and 1.0 inclusive, got {percentile}"
+        );
+    }
+
     let cmp = |x: &T::Native, y: &T::Native| x.compare(*y);
 
     let len = values.len();
@@ -1262,4 +1268,33 @@ mod tests {
             "interpolation should split into two additive parts without overflowing"
         );
     }
+
+    #[test]
+    fn test_calculate_percentile_bounds_validation() {
+        let mut values = vec![10000i64, 20000i64, 30000i64];
+
+        // Negative percentile
+        let err_neg =
+            calculate_percentile::<Decimal64Type, DecimalInterpolator>(&mut values, -0.5);
+        assert!(err_neg.is_err(), "negative percentile must return error");
+        assert!(
+            err_neg.unwrap_err().to_string().contains("between 0.0 and 1.0"),
+            "error must specify valid range"
+        );
+
+        // Percentile > 1.0
+        let err_gt1 =
+            calculate_percentile::<Decimal64Type, DecimalInterpolator>(&mut values, 1.5);
+        assert!(err_gt1.is_err(), "percentile > 1.0 must return error");
+        assert!(
+            err_gt1.unwrap_err().to_string().contains("between 0.0 and 1.0"),
+            "error must specify valid range"
+        );
+
+        // NaN percentile
+        let err_nan =
+            calculate_percentile::<Decimal64Type, DecimalInterpolator>(&mut values, f64::NAN);
+        assert!(err_nan.is_err(), "NaN percentile must return error");
+    }
 }
+
