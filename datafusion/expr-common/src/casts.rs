@@ -156,7 +156,7 @@ fn is_zero_offset_timezone(tz: &str) -> bool {
         | "Etc/GMT+0" | "GMT-0" | "Etc/GMT-0" | "Greenwich" | "Etc/Greenwich" => true,
         _ => matches!(
             tz.strip_prefix(['+', '-']).map(str::as_bytes),
-            Some(b"00" | b"0000" | b"00:00")
+            Some(b"0" | b"00" | b"0000" | b"0:00" | b"00:00")
         ),
     }
 }
