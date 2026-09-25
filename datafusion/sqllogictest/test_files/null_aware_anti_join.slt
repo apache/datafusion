@@ -655,11 +655,15 @@ CREATE TABLE naconst_corr_t2(id INT, g INT) AS VALUES (1, 1), (NULL, 2);
 # A non-equality correlation stays in the join filter. Row (1, 1) sees the NULL
 # of (NULL, 2), so its `NOT IN` is UNKNOWN; row (2, 2) sees an empty subquery,
 # so its `NOT IN` is TRUE. Expected results verified with DuckDB.
-query error DataFusion error: Error during planning: null_aware LeftAnti join requires equi\-join keys, but the join has none
+query I
 SELECT id FROM naconst_corr_t1 WHERE 3 NOT IN (SELECT id FROM naconst_corr_t2 WHERE naconst_corr_t2.g > naconst_corr_t1.g) ORDER BY id;
+----
+2
 
-query error DataFusion error: Error during planning: null_aware LeftAnti join requires equi\-join keys, but the join has none
+query I
 SELECT id FROM naconst_corr_t1 WHERE NOT (3 IN (SELECT id FROM naconst_corr_t2 WHERE naconst_corr_t2.g > naconst_corr_t1.g)) ORDER BY id;
+----
+2
 
 statement ok
 DROP TABLE naconst_corr_t1;
@@ -683,17 +687,17 @@ query I
 SELECT z FROM naconst_corr_t3 WHERE 1 NOT IN (SELECT naconst_corr_t4.id FROM naconst_corr_t4 WHERE naconst_corr_t4.z = naconst_corr_t3.z) ORDER BY z;
 ----
 7
-10
+NULL
 
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query I
 SELECT z FROM naconst_corr_t3 WHERE 2 NOT IN (SELECT naconst_corr_t4.id FROM naconst_corr_t4 WHERE naconst_corr_t4.z = naconst_corr_t3.z) ORDER BY z;
 ----
-10
+NULL
 
-query error DataFusion error: Error during planning: null_aware LeftAnti join requires equi\-join keys, but the join has none
+query I
 SELECT z FROM naconst_corr_t3 WHERE 1 NOT IN (SELECT naconst_corr_t4.id FROM naconst_corr_t4 WHERE naconst_corr_t4.z > naconst_corr_t3.z) ORDER BY z;
+----
+NULL
 
 # The projected value column must be the FIRST equi-join key: a null-aware hash
 # join reads `on[0]` as the `NOT IN` value key and `on[1..]` as correlation
@@ -702,16 +706,19 @@ query TT
 EXPLAIN SELECT z FROM naconst_corr_t3 WHERE 1 NOT IN (SELECT naconst_corr_t4.id FROM naconst_corr_t4 WHERE naconst_corr_t4.z = naconst_corr_t3.z);
 ----
 logical_plan
-01)LeftAnti Join: naconst_corr_t3.z = __correlated_sq_1.z Filter: Int64(1) = __correlated_sq_1.naconst_corr_t4.id null_aware
-02)--TableScan: naconst_corr_t3 projection=[z]
-03)--SubqueryAlias: __correlated_sq_1
-04)----Projection: CAST(naconst_corr_t4.id AS Int64), naconst_corr_t4.z
-05)------TableScan: naconst_corr_t4 projection=[id, z]
+01)Projection: naconst_corr_t3.z
+02)--LeftAnti Join: __correlated_sq_1_value = __correlated_sq_1.naconst_corr_t4.id, naconst_corr_t3.z = __correlated_sq_1.z null_aware
+03)----Projection: naconst_corr_t3.z, Int64(1) AS __correlated_sq_1_value
+04)------TableScan: naconst_corr_t3 projection=[z]
+05)----SubqueryAlias: __correlated_sq_1
+06)------Projection: CAST(naconst_corr_t4.id AS Int64), naconst_corr_t4.z
+07)--------TableScan: naconst_corr_t4 projection=[id, z]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(z@0, z@1)], filter=1 = naconst_corr_t4.id@0, null_aware
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
-03)--ProjectionExec: expr=[CAST(id@0 AS Int64) as naconst_corr_t4.id, z@1 as z]
-04)----DataSourceExec: partitions=1, partition_sizes=[1]
+01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(__correlated_sq_1_value@1, naconst_corr_t4.id@0), (z@0, z@1)], projection=[z@0], null_aware
+02)--ProjectionExec: expr=[z@0 as z, 1 as __correlated_sq_1_value]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--ProjectionExec: expr=[CAST(id@0 AS Int64) as naconst_corr_t4.id, z@1 as z]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 DROP TABLE naconst_corr_t3;

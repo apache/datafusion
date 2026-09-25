@@ -23,7 +23,7 @@ use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
 use arrow::array::{
     Array, ArrayRef, BooleanArray, Float64Array, GenericListArray, NullBufferBuilder,
-    OffsetSizeTrait, Scalar,
+    OffsetSizeTrait, Scalar, new_empty_array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion_common::cast::{
@@ -35,6 +35,20 @@ use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 
 use datafusion_expr::ColumnarValue;
 use itertools::Itertools as _;
+
+/// Empty every valid list row, preserving parent nulls and the given child field.
+pub(crate) fn empty_list_values<O: OffsetSizeTrait>(
+    list: &GenericListArray<O>,
+    field: FieldRef,
+) -> ArrayRef {
+    let values = new_empty_array(field.data_type());
+    Arc::new(GenericListArray::<O>::new(
+        field,
+        OffsetBuffer::new_zeroed(list.len()),
+        values,
+        list.nulls().cloned(),
+    ))
+}
 
 /// Computes the return type of a function that produces a list with the same
 /// inner field as `array_type`, plus an element that may be null when
@@ -610,8 +624,9 @@ pub(crate) mod tests {
     ///
     /// 1. Correctness: results match those from equivalent inputs with compact
     ///    child storage.
-    /// 2. Capacity: output buffers retain little memory, catching reservations
-    ///    based on the full backing child array rather than the visible slice.
+    /// 2. Capacity: newly created outputs retain little memory, catching
+    ///    reservations based on the full child rather than the visible slice.
+    ///    Returning the original input is allowed for no-op cases.
     pub(crate) fn check_sliced_list_behavior(
         run: impl Fn(&ArrayRef) -> Result<ArrayRef>,
     ) -> Result<()> {
@@ -640,11 +655,13 @@ pub(crate) mod tests {
             let compact = arrow::compute::cast(&compact, &data_type)?;
             // Middle slice, empty slice, empty row, and null row with child data.
             for (offset, len) in [(0, 3), (0, 0), (1, 1), (2, 1)] {
-                let result = run(&input.slice(1 + offset, len))?;
+                let sliced = input.slice(1 + offset, len);
+                let result = run(&sliced)?;
                 let expected = run(&compact.slice(offset, len))?;
                 assert_eq!(result.as_ref(), expected.as_ref());
                 assert!(
-                    result.get_buffer_memory_size() < 1024,
+                    Arc::ptr_eq(&result, &sliced)
+                        || result.get_buffer_memory_size() < 1024,
                     "{data_type}: {} bytes for {len} rows",
                     result.get_buffer_memory_size()
                 );
