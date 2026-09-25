@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 
+use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
@@ -122,7 +123,11 @@ fn replacement_order_requirement_is_enforced() -> Result<()> {
     let ordered = AggregateExprBuilder::new(array_agg_udaf(), vec![col("b", &schema)?])
         .schema(Arc::clone(&schema))
         .alias("values")
-        .order_by(vec![PhysicalSortExpr::new_default(col("b", &schema)?)])
+        .order_by(vec![
+            PhysicalSortExpr::new_default(col("b", &schema)?)
+                .desc()
+                .nulls_first(),
+        ])
         .build()?;
     let aggregate = AggregateExec::try_new(
         AggregateMode::Single,
@@ -144,6 +149,7 @@ fn replacement_order_requirement_is_enforced() -> Result<()> {
         .downcast_ref::<SortExec>()
         .expect("requirement enforcement inserts a SortExec for array_agg ORDER BY");
     assert_eq!(sort.expr()[0].expr.to_string(), "b@0");
+    assert_eq!(sort.expr()[0].options, SortOptions::new(true, true));
     Ok(())
 }
 
