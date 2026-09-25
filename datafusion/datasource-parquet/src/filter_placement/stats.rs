@@ -23,8 +23,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use arrow::array::{Array, BooleanArray};
-use arrow::buffer::BooleanBuffer;
+use arrow::array::BooleanArray;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::OptionalFilterPhysicalExpr;
 use datafusion_physical_expr::filter_stats::duration_nanos;
@@ -33,40 +32,7 @@ use datafusion_pruning::ConjunctPruningStats;
 use parking_lot::Mutex;
 
 use crate::optional_filter::DEFAULT_DECODE_NS_PER_BYTE;
-
-/// Number of rows in one window of [`skippable_rows`].
-///
-/// The Parquet decoder skips the rows that a row filter removes only when
-/// the removed rows make long runs. Its default selection policy
-/// (`RowSelectionPolicy::Auto { threshold: 32 }`) decodes all rows and then
-/// filters them when the runs are shorter than 32 rows on average. A window
-/// of 64 rows is one `u64` of the filter result.
-pub(crate) const SKIP_WINDOW_ROWS: usize = 64;
-
-/// Rows of `result` in windows of [`SKIP_WINDOW_ROWS`] rows where no row
-/// passes (a `null` does not pass). These are the rows that a row filter
-/// lets the decoder skip for the other columns. A partial window at the end
-/// is counted if no row in it passes.
-pub(crate) fn skippable_rows(result: &BooleanArray) -> usize {
-    let values = result.values();
-    match result.nulls() {
-        Some(nulls) => skippable_in(&(values & nulls.inner())),
-        None => skippable_in(values),
-    }
-}
-
-/// Rows of `passed` in windows of [`SKIP_WINDOW_ROWS`] rows where no bit is
-/// set, see [`skippable_rows`].
-fn skippable_in(passed: &BooleanBuffer) -> usize {
-    let chunks = passed.bit_chunks();
-    let full = chunks.iter().filter(|chunk| *chunk == 0).count() * SKIP_WINDOW_ROWS;
-    let remainder = if chunks.remainder_len() > 0 && chunks.remainder_bits() == 0 {
-        chunks.remainder_len()
-    } else {
-        0
-    };
-    full + remainder
-}
+use crate::row_filter_cost::{SKIP_WINDOW_ROWS, skippable_in, skippable_rows};
 
 /// What the scan measured for one conjunct: in the row filter or in the
 /// post-scan filter, and in the row group statistics pruning.
@@ -77,7 +43,7 @@ pub(crate) struct Observation {
     /// Rows that passed the conjunct.
     pub(crate) rows_out: u64,
     /// Rows in windows where no row passed the conjunct, see
-    /// [`skippable_rows`] and [`StageSelection`].
+    /// [`skippable_rows`](crate::row_filter_cost::skippable_rows) and [`StageSelection`].
     pub(crate) skippable_rows: u64,
     /// Row groups that the conjunct alone pruned with statistics.
     pub(crate) row_groups_pruned: u64,
@@ -426,27 +392,6 @@ mod tests {
 
     fn bools(values: impl IntoIterator<Item = Option<bool>>) -> BooleanArray {
         values.into_iter().collect()
-    }
-
-    #[test]
-    fn skippable_rows_counts_empty_windows() {
-        // Window 0 (rows 0..64) has one passing row, window 1 has none, the
-        // partial window (rows 128..160) has none.
-        let mut values = vec![Some(false); 160];
-        values[10] = Some(true);
-        assert_eq!(skippable_rows(&bools(values.clone())), 64 + 32);
-
-        // A null does not pass.
-        values[70] = None;
-        assert_eq!(skippable_rows(&bools(values.clone())), 64 + 32);
-
-        // One passing row in the partial window.
-        values[150] = Some(true);
-        assert_eq!(skippable_rows(&bools(values)), 64);
-
-        // Scattered passing rows: no window is empty.
-        let scattered = (0..640).map(|i| Some(i % 50 == 0));
-        assert_eq!(skippable_rows(&bools(scattered)), 0);
     }
 
     #[test]
