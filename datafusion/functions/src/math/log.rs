@@ -28,6 +28,7 @@ use arrow_buffer::i256;
 use datafusion_common::types::NativeType;
 use datafusion_common::{Result, ScalarValue, exec_err, plan_datafusion_err, plan_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, TypeSignature,
@@ -201,7 +202,6 @@ impl ScalarUDFImpl for LogFunc {
     fn is_strict(&self) -> bool {
         true
     }
-
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
         let (base_sort_properties, num_sort_properties) = if input.len() == 1 {
             // log(x) defaults to log(10, x)
@@ -209,19 +209,73 @@ impl ScalarUDFImpl for LogFunc {
         } else {
             (input[0].sort_properties, input[1].sort_properties)
         };
-        match (num_sort_properties, base_sort_properties) {
-            (first @ SortProperties::Ordered(num), SortProperties::Ordered(base))
-                if num.descending != base.descending
-                    && num.nulls_first == base.nulls_first =>
-            {
-                Ok(first)
+        // Monotonicity of log_base(x) holds if and only if base > 1.0.
+        // For base in (0, 1), log_base(x) is strictly decreasing (inverting sort order).
+        // For base <= 0 or base == 1, log is undefined or non-real.
+        let base_gt_one = if input.len() > 1 {
+            let base_range = &input[0].range;
+            if let Ok(one) = ScalarValue::new_one(&base_range.lower().data_type()) {
+                if let Ok(one_point) = Interval::try_new(one.clone(), one) {
+                    base_range.gt(&one_point)? == Interval::TRUE
+                } else {
+                    false
+                }
+            } else {
+                false
             }
+        } else {
+            // Default base 10 > 1
+            true
+        };
+
+        if !base_gt_one {
+            return Ok(SortProperties::Unordered);
+        }
+
+        match (num_sort_properties, base_sort_properties) {
             (
                 first @ (SortProperties::Ordered(_) | SortProperties::Singleton),
                 SortProperties::Singleton,
             ) => Ok(first),
+            (first @ SortProperties::Ordered(num), SortProperties::Ordered(base))
+                if num.descending != base.descending
+                    && num.nulls_first == base.nulls_first =>
+            {
+                // When both base and num vary, varying base monotonicity (d/db log_b(x) < 0)
+                // also requires proving num > 1.0.
+                let num_range = if input.len() > 1 { &input[1].range } else { &input[0].range };
+                let num_gt_one = if let Ok(one) = ScalarValue::new_one(&num_range.lower().data_type()) {
+                    if let Ok(one_point) = Interval::try_new(one.clone(), one) {
+                        num_range.gt(&one_point)? == Interval::TRUE
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if num_gt_one {
+                    Ok(first)
+                } else {
+                    Ok(SortProperties::Unordered)
+                }
+            }
             (SortProperties::Singleton, second @ SortProperties::Ordered(_)) => {
-                Ok(-second)
+                // When base varies and num is singleton, d/db log_b(x) < 0 requires num > 1.0
+                let num_range = if input.len() > 1 { &input[1].range } else { &input[0].range };
+                let num_gt_one = if let Ok(one) = ScalarValue::new_one(&num_range.lower().data_type()) {
+                    if let Ok(one_point) = Interval::try_new(one.clone(), one) {
+                        num_range.gt(&one_point)? == Interval::TRUE
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if num_gt_one {
+                    Ok(-second)
+                } else {
+                    Ok(SortProperties::Unordered)
+                }
             }
             _ => Ok(SortProperties::Unordered),
         }
@@ -725,22 +779,35 @@ mod tests {
 
     #[test]
     fn test_log_output_ordering() {
+        // Range proving base > 1.0 and num > 1.0 (e.g. [2.0, 10.0])
+        let gt_one_range = Interval::try_new(
+            ScalarValue::from(2.0),
+            ScalarValue::from(10.0),
+        )
+        .unwrap();
+
         // [Unordered, Ascending, Descending, Literal]
         let orders = [
-            ExprProperties::new_unknown(),
-            ExprProperties::new_unknown().with_order(SortProperties::Ordered(
-                SortOptions {
-                    descending: false,
-                    nulls_first: true,
-                },
-            )),
-            ExprProperties::new_unknown().with_order(SortProperties::Ordered(
-                SortOptions {
-                    descending: true,
-                    nulls_first: true,
-                },
-            )),
-            ExprProperties::new_unknown().with_order(SortProperties::Singleton),
+            ExprProperties::new_unknown().with_range(gt_one_range.clone()),
+            ExprProperties::new_unknown()
+                .with_range(gt_one_range.clone())
+                .with_order(SortProperties::Ordered(
+                    SortOptions {
+                        descending: false,
+                        nulls_first: true,
+                    },
+                )),
+            ExprProperties::new_unknown()
+                .with_range(gt_one_range.clone())
+                .with_order(SortProperties::Ordered(
+                    SortOptions {
+                        descending: true,
+                        nulls_first: true,
+                    },
+                )),
+            ExprProperties::new_unknown()
+                .with_range(gt_one_range.clone())
+                .with_order(SortProperties::Singleton),
         ];
 
         let log = LogFunc::new();
@@ -813,20 +880,53 @@ mod tests {
         assert_eq!(results, expected);
 
         // Test with different `nulls_first`
-        let base_order = ExprProperties::new_unknown().with_order(
-            SortProperties::Ordered(SortOptions {
-                descending: true,
-                nulls_first: true,
-            }),
-        );
-        let num_order = ExprProperties::new_unknown().with_order(
-            SortProperties::Ordered(SortOptions {
-                descending: false,
-                nulls_first: false,
-            }),
-        );
+        let base_order = ExprProperties::new_unknown()
+            .with_range(gt_one_range.clone())
+            .with_order(
+                SortProperties::Ordered(SortOptions {
+                    descending: true,
+                    nulls_first: true,
+                }),
+            );
+        let num_order = ExprProperties::new_unknown()
+            .with_range(gt_one_range.clone())
+            .with_order(
+                SortProperties::Ordered(SortOptions {
+                    descending: false,
+                    nulls_first: false,
+                }),
+            );
         assert_eq!(
             log.output_ordering(&[base_order, num_order]).unwrap(),
+            SortProperties::Unordered
+        );
+
+        // Test base in (0, 1), e.g. base = 0.5:
+        // When base < 1.0, ln(base) < 0 which inverts monotonicity.
+        // It must NOT claim ascending order (must return Unordered to prevent invalid sort omission).
+        let sub_one_range = Interval::try_new(
+            ScalarValue::from(0.2),
+            ScalarValue::from(0.8),
+        )
+        .unwrap();
+        let sub_one_base = ExprProperties::new_unknown()
+            .with_range(sub_one_range)
+            .with_order(SortProperties::Singleton);
+        let asc_num = ExprProperties::new_unknown()
+            .with_range(gt_one_range.clone())
+            .with_order(SortProperties::Ordered(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }));
+        assert_eq!(
+            log.output_ordering(&[sub_one_base, asc_num.clone()]).unwrap(),
+            SortProperties::Unordered
+        );
+
+        // Test unknown / unbounded base: must return Unordered
+        let unknown_base = ExprProperties::new_unknown().with_order(SortProperties::Singleton);
+        assert_eq!(
+            log.output_ordering(&[unknown_base, asc_num]).unwrap(),
             SortProperties::Unordered
         );
     }
