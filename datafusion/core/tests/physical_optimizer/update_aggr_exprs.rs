@@ -22,11 +22,13 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
+use datafusion_functions_aggregate::array_agg::array_agg_udaf;
 use datafusion_functions_aggregate::first_last::first_value_udaf;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use datafusion_physical_optimizer::update_aggr_exprs::OptimizeAggregateOrder;
 use datafusion_physical_plan::ExecutionPlan;
@@ -35,6 +37,7 @@ use datafusion_physical_plan::aggregates::{
 };
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::limit::LocalLimitExec;
+use datafusion_physical_plan::sorts::sort::SortExec;
 
 use crate::physical_optimizer::test_utils::parquet_exec_with_sort;
 
@@ -105,6 +108,42 @@ fn single_group_by_gets_the_group_by_prefix() -> Result<()> {
         dbg.contains("is_input_pre_ordered: true"),
         "expected the flag set for a single grouping set, got: {dbg}"
     );
+    Ok(())
+}
+
+#[test]
+fn replacement_order_requirement_is_enforced() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, false)]));
+    let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+    let unordered = AggregateExprBuilder::new(array_agg_udaf(), vec![col("b", &schema)?])
+        .schema(Arc::clone(&schema))
+        .alias("values")
+        .build()?;
+    let ordered = AggregateExprBuilder::new(array_agg_udaf(), vec![col("b", &schema)?])
+        .schema(Arc::clone(&schema))
+        .alias("values")
+        .order_by(vec![PhysicalSortExpr::new_default(col("b", &schema)?)])
+        .build()?;
+    let aggregate = AggregateExec::try_new(
+        AggregateMode::Single,
+        PhysicalGroupBy::new_single(vec![]),
+        vec![Arc::new(unordered)],
+        vec![None],
+        input,
+        Arc::clone(&schema),
+    )?;
+
+    let replacement = aggregate.try_with_new_aggr_exprs(vec![Arc::new(ordered)])?;
+    let optimized = EnsureRequirements::new()
+        .optimize(Arc::new(replacement), &ConfigOptions::default())?;
+    let aggregate = optimized
+        .downcast_ref::<AggregateExec>()
+        .expect("requirement enforcement keeps the AggregateExec at the root");
+    let sort = aggregate
+        .input()
+        .downcast_ref::<SortExec>()
+        .expect("requirement enforcement inserts a SortExec for array_agg ORDER BY");
+    assert_eq!(sort.expr()[0].expr.to_string(), "b@0");
     Ok(())
 }
 
