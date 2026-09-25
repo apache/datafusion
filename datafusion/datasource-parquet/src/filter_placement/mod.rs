@@ -66,7 +66,7 @@ use crate::row_filter::{PrebuiltRowFilterCandidate, SharedOptionalFilterGate};
 
 pub(crate) use model::Placement;
 use model::{RequiredConjunctInputs, place_optional, place_required};
-pub(crate) use stats::{ConjunctStats, PlacementSites};
+pub(crate) use stats::{ConjunctStats, PlacementSites, StageSelection};
 
 /// The adaptive placement settings of one scan.
 #[derive(Debug, Clone, Default)]
