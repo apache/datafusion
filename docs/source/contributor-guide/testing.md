@@ -84,9 +84,18 @@ refactored. In rough order of preference:
 1. Use [sqllogictest](#sqllogictests-tests) (`.slt`) tests for any behavior that can
    be expressed in SQL.
 2. End-to-end tests that use public APIs such as the DataFrame API, for behavior
-   that cannot be expressed in SQL.
+   that cannot be expressed in SQL. For example, DataFrame tests live in
+   [`datafusion/core/tests/dataframe`] and run as part of the `core_integration`
+   test binary:
+
+   ```shell
+   cargo test -p datafusion --test core_integration -- dataframe
+   ```
+
 3. Rust unit tests for logic that cannot practically be reached through
    SQL or DataFrame public APIs.
+
+[`datafusion/core/tests/dataframe`]: https://github.com/apache/datafusion/tree/main/datafusion/core/tests/dataframe
 
 ## Unit tests
 
