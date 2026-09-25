@@ -3340,15 +3340,14 @@ mod optional_filter_tests {
         assert!(placement.decide(1000).is_none());
         let change = placement.decide(1000).unwrap();
         assert!(change.row_filter);
-        assert_eq!(placement.row_filter_candidates(), vec![on_a]);
-        // The optional conjunct on `b` is not measured yet: it comes first.
-        assert_eq!(
-            post_scan(&placement),
-            vec![entry("b@1 >= 0", true), entry("a@0 > 5", false)]
-        );
+        // The optional conjunct on `b` is not measured yet: now that the
+        // row filter is used, it is the first row filter predicate, so that
+        // it is measured on all rows.
+        assert_eq!(placement.row_filter_candidates(), vec![on_b, on_a]);
+        assert_eq!(post_scan(&placement), vec![entry("a@0 > 5", false)]);
 
-        // The optional conjunct on `b` removes nothing: it ranks last. Only
-        // the post-scan order changes. After the third change, the next
+        // The optional conjunct on `b` removes nothing: no evidence for the
+        // row filter, and it ranks last. After the third change, the next
         // change waits for 3 row group boundaries (hysteresis).
         stats_of("b@1 >= 0")
             .record_evaluation(&BooleanArray::from(vec![true; 20_000]), 20_000);
@@ -3356,7 +3355,8 @@ mod optional_filter_tests {
             assert!(placement.decide(1000).is_none());
         }
         let change = placement.decide(1000).unwrap();
-        assert!(!change.row_filter);
+        assert!(change.row_filter);
+        assert_eq!(placement.row_filter_candidates(), vec![on_a]);
         assert_eq!(
             post_scan(&placement),
             vec![entry("a@0 > 5", false), entry("b@1 >= 0", true)]

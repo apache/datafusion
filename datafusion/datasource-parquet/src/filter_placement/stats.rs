@@ -91,6 +91,9 @@ pub(crate) struct ConjunctStats {
     row_groups_pruned: AtomicU64,
     row_groups_kept: AtomicU64,
     nanos: AtomicU64,
+    /// The generation of the conjunct that the evaluation measurements are
+    /// for, see [`Self::observe_generation`].
+    generation: AtomicU64,
 }
 
 impl ConjunctStats {
@@ -142,6 +145,28 @@ impl ConjunctStats {
         self.rows_out.fetch_add(rows_out as u64, Ordering::Relaxed);
         self.skippable_rows
             .fetch_add(skippable as u64, Ordering::Relaxed);
+    }
+
+    /// Clears the evaluation measurements (not the statistics pruning
+    /// result) when `generation` is newer than the generation that they are
+    /// for. `generation` is the sum of the generations of the dynamic
+    /// filters in the conjunct ([`snapshot_generation`]): a new generation
+    /// is a new filter, and the measurements of the old filter do not
+    /// describe it. Generations only increase, thus a caller with an older
+    /// value does not clear the measurements again.
+    ///
+    /// [`snapshot_generation`]: datafusion_physical_expr_common::physical_expr::snapshot_generation
+    pub(crate) fn observe_generation(&self, generation: u64) {
+        if self.generation.fetch_max(generation, Ordering::Relaxed) < generation {
+            for counter in [
+                &self.rows_in,
+                &self.rows_out,
+                &self.skippable_rows,
+                &self.nanos,
+            ] {
+                counter.store(0, Ordering::Relaxed);
+            }
+        }
     }
 
     /// The pooled values. The values are not read at the same instant.
@@ -412,6 +437,21 @@ mod tests {
 
     fn bools(values: impl IntoIterator<Item = Option<bool>>) -> BooleanArray {
         values.into_iter().collect()
+    }
+
+    #[test]
+    fn new_generation_clears_evaluation_measurements() {
+        let stats = ConjunctStats::default();
+        stats.observe_generation(3);
+        stats.record_evaluation(&bools(vec![Some(false); 64]), 10);
+        // The same or an older generation keeps the measurements.
+        stats.observe_generation(3);
+        stats.observe_generation(2);
+        assert_eq!(stats.observation().rows_in, 64);
+        // A new generation clears them.
+        stats.observe_generation(4);
+        let observation = stats.observation();
+        assert_eq!((observation.rows_in, observation.nanos), (0, 0));
     }
 
     #[test]
