@@ -26,7 +26,7 @@ use crate::ParquetFileSchemaProvider;
 use crate::opener::ParquetMorselizer;
 use crate::opener::build_pruning_predicates;
 use crate::opener::build_virtual_columns_state;
-use crate::optional_filter::{DecodeCost, OptionalFilterOptions};
+use crate::optional_filter::{DecodeCost, OptionalFilterOptions, OptionalFilterSites};
 use crate::row_filter::can_expr_be_pushed_down_with_schemas;
 use arrow_schema::Fields;
 use arrow_schema::extension::ExtensionType;
@@ -339,6 +339,10 @@ pub struct ParquetSource {
     /// partitions and files of this scan. The gates of the optional filters
     /// use it. Replaced each time the predicate changes.
     optional_filter_decode_cost: Arc<DecodeCost>,
+    /// The shared pauses of the gates of each optional filter, shared by all
+    /// partitions and files of this scan. Replaced each time the predicate
+    /// changes.
+    optional_filter_sites: Arc<OptionalFilterSites>,
 }
 
 impl ParquetSource {
@@ -369,6 +373,7 @@ impl ParquetSource {
             optional_filter_mode: OptionalFilterMode::default(),
             optional_filter_gate_config: OptionalFilterGateConfig::default(),
             optional_filter_decode_cost: Arc::default(),
+            optional_filter_sites: Arc::default(),
         }
     }
 
@@ -402,6 +407,7 @@ impl ParquetSource {
         let mut conf = self.clone();
         conf.predicate = Some(Arc::clone(&predicate));
         conf.optional_filter_decode_cost = Arc::default();
+        conf.optional_filter_sites = Arc::default();
         conf
     }
 
@@ -703,6 +709,7 @@ impl FileSource for ParquetSource {
                 mode: self.optional_filter_mode,
                 gate_config: self.optional_filter_gate_config,
                 decode_cost: Arc::clone(&self.optional_filter_decode_cost),
+                sites: Arc::clone(&self.optional_filter_sites),
             },
         }))
     }
@@ -926,6 +933,7 @@ impl FileSource for ParquetSource {
         source.optional_filter_mode = config.execution.optional_filter_mode;
         source.optional_filter_gate_config = (&config.execution).into();
         source.optional_filter_decode_cost = Arc::default();
+        source.optional_filter_sites = Arc::default();
         let source = Arc::new(source);
         // If pushdown_filters is false we tell our parents that they still have to handle the filters,
         // even if we updated the predicate to include the filters (they will only be used for stats pruning).
@@ -1163,6 +1171,7 @@ impl FileSource for ParquetSource {
             optional_filter_gate_config: _,
             // Runtime state, recreated when the source is decoded.
             optional_filter_decode_cost: _,
+            optional_filter_sites: _,
         } = self;
 
         if schema_provider.is_some() {
@@ -2268,6 +2277,11 @@ mod tests {
         assert!(!Arc::ptr_eq(
             &updated.optional_filter_decode_cost,
             &source.optional_filter_decode_cost
+        ));
+        // And the shared pauses of the gates are new.
+        assert!(!Arc::ptr_eq(
+            &updated.optional_filter_sites,
+            &source.optional_filter_sites
         ));
     }
 }
