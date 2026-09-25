@@ -9186,8 +9186,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn replacement_recomputes_ordering_requirements() -> Result<()> {
+    fn aggregate_replacement_fixture()
+    -> Result<(AggregateExec, Arc<AggregateFunctionExpr>)> {
         let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int64, true)]));
         let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
         let unordered = Arc::new(
@@ -9211,6 +9211,12 @@ mod tests {
             input,
             Arc::clone(&schema),
         )?;
+        Ok((aggregate, ordered))
+    }
+
+    #[test]
+    fn replacement_recomputes_ordering_requirements() -> Result<()> {
+        let (aggregate, ordered) = aggregate_replacement_fixture()?;
         assert!(
             aggregate
                 .required_input_ordering()
@@ -9231,29 +9237,7 @@ mod tests {
 
     #[test]
     fn deprecated_replacement_api_delegates_to_fallible_replacement() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int64, true)]));
-        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
-        let unordered = Arc::new(
-            AggregateExprBuilder::new(array_agg_udaf(), vec![col("b", &schema)?])
-                .schema(Arc::clone(&schema))
-                .alias("values")
-                .build()?,
-        );
-        let ordered = Arc::new(
-            AggregateExprBuilder::new(array_agg_udaf(), vec![col("b", &schema)?])
-                .schema(Arc::clone(&schema))
-                .alias("values")
-                .order_by(vec![PhysicalSortExpr::new_default(col("b", &schema)?)])
-                .build()?,
-        );
-        let aggregate = AggregateExec::try_new(
-            AggregateMode::Single,
-            PhysicalGroupBy::new_single(vec![]),
-            vec![unordered],
-            vec![None],
-            input,
-            Arc::clone(&schema),
-        )?;
+        let (aggregate, ordered) = aggregate_replacement_fixture()?;
 
         #[expect(deprecated)]
         let replacement = aggregate.with_new_aggr_exprs(vec![ordered]);
@@ -9424,22 +9408,22 @@ mod tests {
                     HashMap::from([("key".to_string(), "value".to_string())]),
                 ),
             ]));
-        assert!(
-            changed_field_metadata
-                .try_with_new_aggr_exprs(vec![Arc::clone(&renamed_count)])
-                .is_err()
-        );
+        let error = changed_field_metadata
+            .try_with_new_aggr_exprs(vec![Arc::clone(&renamed_count)])
+            .expect_err("field metadata change must be rejected");
+        assert!(matches!(error, DataFusionError::Plan(_)));
+        assert!(error.to_string().contains("metadata"));
 
         let mut changed_schema_metadata = aggregate.clone();
         changed_schema_metadata.schema = Arc::new(Schema::new_with_metadata(
             vec![aggregate.schema().field(0).as_ref().clone()],
             HashMap::from([("key".to_string(), "value".to_string())]),
         ));
-        assert!(
-            changed_schema_metadata
-                .try_with_new_aggr_exprs(vec![renamed_count])
-                .is_err()
-        );
+        let error = changed_schema_metadata
+            .try_with_new_aggr_exprs(vec![renamed_count])
+            .expect_err("schema metadata change must be rejected");
+        assert!(matches!(error, DataFusionError::Plan(_)));
+        assert!(error.to_string().contains("metadata"));
         Ok(())
     }
 
