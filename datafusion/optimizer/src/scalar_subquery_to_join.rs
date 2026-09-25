@@ -447,7 +447,7 @@ mod tests {
     use datafusion_expr::test::function_stub::sum;
 
     use crate::assert_optimized_plan_eq_display_indent_snapshot;
-    use datafusion_expr::{Between, col, expr, out_ref_col, scalar_subquery};
+    use datafusion_expr::{Between, col, expr, out_ref_col, rollup, scalar_subquery};
     use datafusion_functions_aggregate::min_max::{max, min};
 
     macro_rules! assert_optimized_plan_equal {
@@ -462,6 +462,46 @@ mod tests {
                 @ $expected,
             )
         }};
+    }
+
+    /// A correlated scalar subquery whose aggregate uses `ROLLUP` keeps its
+    /// correlation: the empty set yields a row for outer rows the filter matches
+    /// nothing for, and the join that would replace the filter cannot produce it.
+    /// <https://github.com/apache/datafusion/issues/25519>
+    #[test]
+    fn scalar_subquery_with_rollup_is_not_decorrelated() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(
+                    col("orders.o_custkey")
+                        .eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
+                )?
+                .aggregate(
+                    vec![rollup(vec![col("orders.o_custkey")])],
+                    vec![max(col("orders.o_custkey"))],
+                )?
+                .project(vec![max(col("orders.o_custkey"))])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .filter(col("customer.c_custkey").eq(scalar_subquery(sq)))?
+            .project(vec![col("customer.c_custkey")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: customer.c_custkey [c_custkey:Int64]
+          Filter: customer.c_custkey = (<subquery>) [c_custkey:Int64, c_name:Utf8]
+            Subquery: [max(orders.o_custkey):Int64;N]
+              Projection: max(orders.o_custkey) [max(orders.o_custkey):Int64;N]
+                Aggregate: groupBy=[[ROLLUP (orders.o_custkey)]], aggr=[[max(orders.o_custkey)]] [o_custkey:Int64;N, __grouping_id:UInt8, max(orders.o_custkey):Int64;N]
+                  Filter: orders.o_custkey = outer_ref(customer.c_custkey) [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+                    TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+        "
+        )
     }
 
     /// Test multiple correlated subqueries

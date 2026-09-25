@@ -88,7 +88,7 @@ num-traits = { workspace = true }
 parking_lot = { workspace = true }
 pin-project-lite = { workspace = true }
 serde_json = { workspace = true, features = ["preserve_order"] }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
 arrow-data = { workspace = true }
@@ -127,6 +127,11 @@ loom = { workspace = true }
 [[bench]]
 harness = false
 name = "partial_ordering"
+
+[[bench]]
+harness = false
+name = "partial_sort"
+required-features = ["test_utils"]
 
 [[bench]]
 harness = false
@@ -188,3 +193,7 @@ name = "window_filter"
 [[bench]]
 harness = false
 name = "range_repartition"
+
+[[bench]]
+harness = false
+name = "unnest"

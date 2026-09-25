@@ -49,7 +49,7 @@ pub async fn client() -> Result<(), Box<dyn std::error::Error>> {
     let request = tonic::Request::new(FlightDescriptor {
         r#type: flight_descriptor::DescriptorType::Path as i32,
         cmd: Default::default(),
-        path: vec![format!("{}", parquet_temp.path_str()?)],
+        path: vec![parquet_temp.path_str()?.to_string()],
     });
 
     let schema_result = client.get_schema(request).await?.into_inner();

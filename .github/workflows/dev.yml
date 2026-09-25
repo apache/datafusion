@@ -19,6 +19,10 @@ name: Dev
 on:
   push:
     branches-ignore:
+      # Commits reach main through the merge queue, which runs this workflow at
+      # the same SHA, so do not repeat the jobs after the merge. Release
+      # branches and every other branch keep their post-push runs.
+      - 'main'
       - 'gh-readonly-queue/**'
       - 'dependabot/**'
   pull_request:
@@ -38,7 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Install HawkEye
-        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c  # v2.87.6
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3  # v2.87.16
         with:
           tool: hawkeye@7.0.0
       - name: Run license header check
@@ -66,7 +70,7 @@ jobs:
           source ci/scripts/utils/tool_versions.sh
           echo "LYCHEE_VERSION=${LYCHEE_VERSION}" >> "$GITHUB_ENV"
       - name: Install lychee
-        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c  # v2.87.6
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3  # v2.87.16
         with:
           tool: lychee@${{ env.LYCHEE_VERSION }}
       - name: Run markdown link check
@@ -91,7 +95,7 @@ jobs:
       # it may cause checks to fail more often.
       # We can upgrade it manually once a while.
       - name: Install typos
-        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c  # v2.87.6
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3  # v2.87.16
         with:
           tool: typos@1.37.0
       - name: Run typos check

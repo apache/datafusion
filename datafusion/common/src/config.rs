@@ -23,7 +23,9 @@ use arrow_ipc::CompressionType;
 use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::{_config_datafusion_err, _config_err};
 use crate::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
-use crate::parquet_config::{DFParquetStatistics, DFParquetWriterVersion};
+use crate::parquet_config::{
+    DFParquetCompression, DFParquetStatistics, DFParquetWriterVersion,
+};
 use crate::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
@@ -301,7 +303,7 @@ config_namespace! {
         pub collect_spans: bool, default = false
 
         /// Specifies the recursion depth limit when parsing complex SQL Queries
-        pub recursion_limit: ConfigNonZeroUsize, default = non_zero_usize_default(50)
+        pub recursion_limit: ConfigNonZeroUsize, default = non_zero_usize_default(51)
 
         /// Specifies the default null ordering for query results. There are 4 options:
         /// - `nulls_max`: Nulls appear last in ascending order.
@@ -1038,12 +1040,13 @@ config_namespace! {
         /// SEMI, LEFT ANTI, LEFT MARK, FULL) when the right side has multiple
         /// partitions.
         ///
-        /// This fallback coordinates per-chunk left state (visited bitmap and
-        /// probe-thread counter) across all right-side partitions, which
-        /// assumes every partition runs in the same process. Distributed
-        /// engines that execute each output partition as an independent task
-        /// (e.g. Ballista, datafusion-distributed) build a separate coordinator
-        /// per task and poll only one partition, so the cross-partition
+        /// This fallback shares left-side state (the current left chunk, the
+        /// visited bitmap and the probe-thread counter) across all right-side
+        /// partitions, which assumes every partition runs in the same process.
+        /// Distributed engines that execute each output partition as an
+        /// independent task (e.g. Ballista, datafusion-distributed) give each
+        /// task its own copy
+        /// of this state and poll only one partition, so the cross-partition
         /// counter never reaches zero and the fallback would stall. Such
         /// engines should set this to `false`: the coordinated fallback is then
         /// disabled for left-emitting multi-partition joins, which instead fail
@@ -1442,7 +1445,7 @@ config_namespace! {
         ///
         /// Note that this default setting is not the same as
         /// the default parquet writer setting.
-        pub compression: Option<String>, transform = str::to_lowercase, default = Some("zstd(3)".into())
+        pub compression: Option<DFParquetCompression>, default = Some(DFParquetCompression::Zstd(3))
 
         /// (writing) Sets if dictionary encoding is enabled. If NULL, uses
         /// default parquet writer setting
@@ -1509,7 +1512,7 @@ config_namespace! {
         /// (writing) Controls whether DataFusion will attempt to speed up writing
         /// parquet files by serializing them in parallel. Each column
         /// in each row group in each output file are serialized in parallel
-        /// leveraging a maximum possible core count of n_files*n_row_groups*n_columns.
+        /// leveraging a maximum possible core count of n_files\*n_row_groups\*n_columns.
         pub allow_single_file_parallelism: bool, default = true
 
         /// (writing) By default parallel parquet writer is tuned for minimum
@@ -4684,6 +4687,85 @@ mod tests {
         let mut scalar = DFParquetStatistics::Page;
         assert!(ConfigField::set(&mut scalar, "typo", "none").is_err());
         assert_eq!(scalar, DFParquetStatistics::Page);
+    }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn test_parquet_compression_validation() {
+        use crate::{config::ConfigOptions, parquet_config::DFParquetCompression};
+
+        let mut config = ConfigOptions::default();
+        assert_eq!(
+            config.execution.parquet.compression,
+            Some(DFParquetCompression::Zstd(3))
+        );
+
+        for (value, expected) in [
+            ("snappy", DFParquetCompression::Snappy),
+            ("GZIP(6)", DFParquetCompression::Gzip(6)),
+            ("'zstd(22)'", DFParquetCompression::Zstd(22)),
+        ] {
+            config
+                .set("datafusion.execution.parquet.compression", value)
+                .unwrap();
+            assert_eq!(config.execution.parquet.compression, Some(expected));
+        }
+
+        for (value, message) in [
+            (
+                "zstdd(3)",
+                "Unknown or unsupported parquet compression: zstdd(3)",
+            ),
+            (
+                "zstd",
+                "zstd compression requires specifying a level such as zstd(4)",
+            ),
+            (
+                "snappy(2)",
+                "Compression snappy does not support specifying a level",
+            ),
+            ("zstd(23)", "Invalid compression level 23 for zstd"),
+        ] {
+            let err = config
+                .set("datafusion.execution.parquet.compression", value)
+                .unwrap_err();
+            assert_contains!(err.to_string(), message);
+            // A rejected value leaves the previous one in place.
+            assert_eq!(
+                config.execution.parquet.compression,
+                Some(DFParquetCompression::Zstd(22))
+            );
+        }
+
+        // An unset value can arise from deserialization. An invalid update must
+        // leave that state unchanged rather than inserting the default.
+        config.execution.parquet.compression = None;
+        assert!(
+            config
+                .set("datafusion.execution.parquet.compression", "zstd")
+                .is_err()
+        );
+        assert_eq!(config.execution.parquet.compression, None);
+
+        config.execution.parquet.compression = Some(DFParquetCompression::Lz4);
+        assert!(
+            config
+                .set("datafusion.execution.parquet.compression.typo", "snappy")
+                .is_err()
+        );
+        assert!(
+            config
+                .reset("datafusion.execution.parquet.compression.typo")
+                .is_err()
+        );
+        assert_eq!(
+            config.execution.parquet.compression,
+            Some(DFParquetCompression::Lz4)
+        );
+
+        let mut scalar = DFParquetCompression::Lz4;
+        assert!(ConfigField::set(&mut scalar, "typo", "snappy").is_err());
+        assert_eq!(scalar, DFParquetCompression::Lz4);
     }
 
     #[cfg(feature = "parquet")]

@@ -18,8 +18,8 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, ByteView, GenericStringArray, OffsetSizeTrait,
-    PrimitiveArray, StringArrayType, StringViewArray, make_view, new_null_array,
+    Array, ArrayRef, AsArray, ByteView, OffsetSizeTrait, PrimitiveArray, StringArrayType,
+    StringViewArray, make_view, new_null_array,
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{DataType, Int64Type};
@@ -27,6 +27,7 @@ use arrow_buffer::NullBuffer;
 
 use crate::strings::GenericStringArrayBuilder;
 use crate::utils::make_scalar_function;
+use datafusion_common::utils::offset_span_len;
 use datafusion_common::{
     Result, ScalarValue, exec_datafusion_err, exec_err, utils::take_function_args,
 };
@@ -153,7 +154,7 @@ fn substr_index(args: &[ArrayRef]) -> Result<ArrayRef> {
                 count_array,
                 GenericStringArrayBuilder::<i32>::with_capacity(
                     string_array.len(),
-                    visible_string_bytes(string_array),
+                    offset_span_len(string_array.offsets()),
                 ),
             )
         }
@@ -167,7 +168,7 @@ fn substr_index(args: &[ArrayRef]) -> Result<ArrayRef> {
                 count_array,
                 GenericStringArrayBuilder::<i64>::with_capacity(
                     string_array.len(),
-                    visible_string_bytes(string_array),
+                    offset_span_len(string_array.offsets()),
                 ),
             )
         }
@@ -231,7 +232,7 @@ fn substr_index_scalar(
                 count,
                 GenericStringArrayBuilder::<i32>::with_capacity(
                     arr.len(),
-                    visible_string_bytes(arr),
+                    offset_span_len(arr.offsets()),
                 ),
             )
         }
@@ -243,7 +244,7 @@ fn substr_index_scalar(
                 count,
                 GenericStringArrayBuilder::<i64>::with_capacity(
                     arr.len(),
-                    visible_string_bytes(arr),
+                    offset_span_len(arr.offsets()),
                 ),
             )
         }
@@ -251,14 +252,6 @@ fn substr_index_scalar(
     }?;
 
     Ok(ColumnarValue::Array(result))
-}
-
-#[inline]
-fn visible_string_bytes<T: OffsetSizeTrait>(
-    string_array: &GenericStringArray<T>,
-) -> usize {
-    let offsets = string_array.value_offsets();
-    offsets[offsets.len() - 1].as_usize() - offsets[0].as_usize()
 }
 
 fn substr_index_general<'a, S, O>(
@@ -323,9 +316,9 @@ fn substr_index_view(
     }
 
     let data_buffers = if has_out_of_line {
-        string_array.data_buffers().to_vec()
+        Arc::clone(string_array.data_buffers())
     } else {
-        vec![]
+        Arc::from([])
     };
 
     // Safety: each appended view is either:
@@ -455,9 +448,9 @@ fn substr_index_scalar_view(
     }
 
     let data_buffers = if has_out_of_line {
-        string_array.data_buffers().to_vec()
+        Arc::clone(string_array.data_buffers())
     } else {
-        vec![]
+        Arc::from([])
     };
 
     // Safety: each appended view is either:
