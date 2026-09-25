@@ -17,8 +17,8 @@ use crate::decoder_projection::DecoderProjection;
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
-    DecoderBuilderConfig, InitialDecoderState, PushDecoderStreamState, RgPlanEntry,
-    RowFilterContext, RowGroupPruner, RowGroupReverser,
+    DecoderBuilderConfig, InitialDecoderState, PushDecoderStreamState, ReadAhead,
+    RgPlanEntry, RowFilterContext, RowGroupPruner, RowGroupReverser,
 };
 use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
 use crate::{
@@ -75,6 +75,7 @@ use parquet::arrow::arrow_reader::{
 };
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::parquet_column;
+use parquet::arrow::push_decoder::RequestGranularity;
 use parquet::bloom_filter::Sbbf;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMetaData};
 
@@ -295,6 +296,9 @@ pub(super) struct ParquetMorselizer {
     /// How row groups are assigned to the byte ranges of a split file. Sourced
     /// from `datafusion.execution.parquet.row_group_range_assignment`.
     pub row_group_range_assignment: RowGroupRangeAssignment,
+    /// Read-ahead window in bytes. If set, decode a batch at a time. Sourced
+    /// from `datafusion.execution.parquet.read_ahead_bytes`.
+    pub read_ahead_bytes: Option<u64>,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
     /// Whether to also reverse the rows of each row group, making a reversed
@@ -491,6 +495,7 @@ struct PreparedParquetOpen {
     max_in_list_size: usize,
     enable_rle_to_dictionary: bool,
     row_group_range_assignment: RowGroupRangeAssignment,
+    read_ahead_bytes: Option<u64>,
     reverse_row_groups: bool,
     reverse_rows: bool,
     memory_pool: Option<Arc<dyn MemoryPool>>,
@@ -644,7 +649,20 @@ impl ParquetOpenState {
                 if prepared_row_groups.row_groups.is_fully_pruned() {
                     return Ok(ParquetOpenState::Done);
                 }
-                if prepared_row_groups.should_load_page_index()? {
+                // Streaming fetches pages when an offset index exists, so also load
+                // it when a row group is larger than the read-ahead window.
+                let loaded = &prepared_row_groups.prepared.loaded;
+                let streaming = match loaded.prepared.read_ahead_bytes {
+                    Some(window) if loaded.prepared.enable_page_index => {
+                        let metadata = loaded.reader_metadata.metadata();
+                        prepared_row_groups
+                            .row_groups
+                            .row_group_indexes()
+                            .any(|idx| row_group_bytes(metadata.row_group(idx)) > window)
+                    }
+                    _ => false,
+                };
+                if streaming || prepared_row_groups.should_load_page_index()? {
                     Ok(ParquetOpenState::LoadPageIndex(
                         prepared_row_groups.load_page_index().boxed(),
                     ))
@@ -1000,6 +1018,7 @@ impl ParquetMorselizer {
             max_in_list_size: self.max_in_list_size,
             enable_rle_to_dictionary: self.enable_rle_to_dictionary,
             row_group_range_assignment: self.row_group_range_assignment,
+            read_ahead_bytes: self.read_ahead_bytes,
             reverse_row_groups: self.reverse_row_groups,
             reverse_rows: self.reverse_rows,
             memory_pool: self.memory_pool.clone(),
@@ -1734,6 +1753,27 @@ impl RowGroupsPrunedParquetOpen {
             None => DecoderReadPlans::try_new(&prepared, &reader_metadata)?,
         };
 
+        // Bytes of the row groups in this file range, credited to
+        // `bytes_processed` as the scan finishes with them (see below).
+        let in_range_bytes: u64 = rg_metadata
+            .iter()
+            .filter(|rg_meta| {
+                prepared.file_range.as_ref().is_none_or(|range| {
+                    row_group_in_range(
+                        rg_meta,
+                        range,
+                        prepared.row_group_range_assignment,
+                    )
+                })
+            })
+            .map(row_group_bytes)
+            .sum();
+
+        // A `reverse_rows` scan buffers a full row group before it returns a
+        // row, so batch-granular decoding and read-ahead do not apply to it.
+        let read_ahead_bytes =
+            prepared.read_ahead_bytes.filter(|_| !prepared.reverse_rows);
+
         // Lazily-registered suppression counter shared by the open-time first-RG
         // skip below and the stream's per-RG toggle (registered on first use so
         // scans that never suppress don't carry a zero-valued counter).
@@ -1832,6 +1872,10 @@ impl RowGroupsPrunedParquetOpen {
                 }
             }
 
+            if read_ahead_bytes.is_some() {
+                builder = builder.with_request_granularity(RequestGranularity::Batch);
+            }
+
             InitialDecoderState {
                 decoder: builder.build()?,
                 rg_plan,
@@ -1852,19 +1896,6 @@ impl RowGroupsPrunedParquetOpen {
         // plan it was built from was pruned by range with the same assignment.
         // The planned row groups are therefore a subset of the in-range ones,
         // and subtracting leaves exactly those the scan will skip.
-        let in_range_bytes: u64 = rg_metadata
-            .iter()
-            .filter(|rg_meta| {
-                prepared.file_range.as_ref().is_none_or(|range| {
-                    row_group_in_range(
-                        rg_meta,
-                        range,
-                        prepared.row_group_range_assignment,
-                    )
-                })
-            })
-            .map(row_group_bytes)
-            .sum();
         let planned_bytes: u64 = rg_plan.iter().map(|entry| entry.bytes).sum();
         byte_progress.credit(in_range_bytes.saturating_sub(planned_bytes));
 
@@ -1902,11 +1933,13 @@ impl RowGroupsPrunedParquetOpen {
             .file_metrics
             .row_groups_pruned_dynamic_filter
             .clone();
+        let read_ahead =
+            read_ahead_bytes.map(|window| ReadAhead::new(window, decoder.scan_plan()));
         let stream = PushDecoderStreamState {
             decoder: Some(decoder),
             active_reader: None,
             rg_plan,
-            reader: prepared.async_file_reader,
+            reader: Some(prepared.async_file_reader),
             decoder_projection,
             arrow_reader_metrics,
             predicate_cache_inner_records,
@@ -1928,6 +1961,7 @@ impl RowGroupsPrunedParquetOpen {
                 });
                 RowGroupReverser::new(prepared.limit, reservation)
             }),
+            read_ahead,
         }
         .into_stream();
 
@@ -2264,6 +2298,7 @@ mod test {
         max_in_list_size: usize,
         enable_rle_to_dictionary: bool,
         row_group_range_assignment: RowGroupRangeAssignment,
+        read_ahead_bytes: Option<u64>,
         reverse_row_groups: bool,
         reverse_rows: bool,
         memory_pool: Option<Arc<dyn MemoryPool>>,
@@ -2486,6 +2521,7 @@ mod test {
                 max_in_list_size: MAX_IN_LIST_SIZE,
                 enable_rle_to_dictionary: false,
                 row_group_range_assignment: RowGroupRangeAssignment::default(),
+                read_ahead_bytes: None,
                 reverse_row_groups: false,
                 reverse_rows: false,
                 memory_pool: None,
@@ -2712,6 +2748,7 @@ mod test {
                 max_in_list_size: self.max_in_list_size,
                 enable_rle_to_dictionary: self.enable_rle_to_dictionary,
                 row_group_range_assignment: self.row_group_range_assignment,
+                read_ahead_bytes: self.read_ahead_bytes,
                 reverse_row_groups: self.reverse_row_groups,
                 reverse_rows: self.reverse_rows,
                 memory_pool: self.memory_pool.clone(),
