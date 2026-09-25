@@ -72,6 +72,10 @@ fn optimized_flag(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
     let agg = optimized
         .downcast_ref::<AggregateExec>()
         .expect("optimizer keeps the AggregateExec at the root");
+    assert!(
+        agg.required_input_ordering()[0].is_some(),
+        "optimized aggregate must retain its aggregate ORDER BY requirement"
+    );
     Ok(format!("{:?}", agg.aggr_expr()[0].fun().inner()))
 }
 

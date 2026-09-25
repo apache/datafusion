@@ -188,7 +188,7 @@ use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TreeNodeRecursion};
 use datafusion_common::{
     ColumnStatistics, Constraint, Constraints, Result, ScalarValue,
-    assert_eq_or_internal_err, internal_err, not_impl_err,
+    assert_eq_or_internal_err, internal_err, not_impl_err, plan_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate, AggregateMetrics};
@@ -941,31 +941,53 @@ impl AggregateExec {
         Some(Transformed::yes(self))
     }
 
-    /// Function used in `OptimizeAggregateOrder` optimizer rule,
-    /// where we need parts of the new value, others cloned from the old one
-    /// Rewrites aggregate exec with new aggregate expressions.
-    pub fn with_new_aggr_exprs(
+    /// Rebuild this exec with replacement aggregate expressions.
+    ///
+    /// Output field names are retained for optimizer stability. All other schema
+    /// dimensions must match the replacement expressions.
+    pub fn try_with_new_aggr_exprs(
         &self,
         aggr_expr: impl Into<Arc<[Arc<AggregateFunctionExpr>]>>,
-    ) -> Self {
+    ) -> Result<Self> {
         let aggr_expr = aggr_expr.into();
-        let mut new = self.clone();
-        match &mut new.kind {
-            AggregateKind::General { aggr_expr: old, .. } => *old = aggr_expr,
-            AggregateKind::DistinctLimit { .. } if aggr_expr.is_empty() => {}
-            AggregateKind::DistinctLimit { group_by, .. } => {
-                // An accumulator rewrite cannot inherit DISTINCT's early stop.
-                new.kind = AggregateKind::General {
-                    group_by: Arc::clone(group_by),
-                    // The previous `DistinctLimit` type doesn't include filter
-                    filter_expr: vec![None; aggr_expr.len()].into(),
-                    aggr_expr,
-                    limit_options: None,
-                };
-            }
+        let (filter_expr, limit_options) = match &self.kind {
+            AggregateKind::General {
+                filter_expr,
+                limit_options,
+                ..
+            } => (Arc::clone(filter_expr), *limit_options),
+            AggregateKind::DistinctLimit { .. } => (Arc::from([]), None),
+        };
+        let filter_expr = if aggr_expr.is_empty() {
+            filter_expr
+        } else if filter_expr.is_empty() {
+            vec![None; aggr_expr.len()].into()
+        } else {
+            filter_expr
+        };
+
+        if aggr_expr.len() != filter_expr.len() {
+            return plan_err!(
+                "Cannot replace aggregate expressions: expected {} filter expression(s), got {} aggregate expression(s)",
+                filter_expr.len(),
+                aggr_expr.len()
+            );
         }
-        new.metrics = ExecutionPlanMetricsSet::new();
-        new
+
+        let replacement_schema =
+            create_schema(&self.input.schema(), self.group_by(), &aggr_expr, self.mode)?;
+        validate_replacement_schema(&self.schema, &replacement_schema)?;
+
+        let replacement = Self::try_new_with_schema(
+            self.mode,
+            Arc::clone(self.group_by()),
+            aggr_expr.to_vec(),
+            filter_expr,
+            Arc::clone(&self.input),
+            Arc::clone(&self.input_schema),
+            Arc::clone(&self.schema),
+        )?;
+        Ok(replacement.with_limit_options(limit_options))
     }
 
     /// Clone this exec, overriding only the limit hint.
@@ -2825,6 +2847,38 @@ impl AggregateExec {
 
 /// Creates the output schema for an [`AggregateExec`] containing the group by columns followed
 /// by the aggregate columns.
+fn validate_replacement_schema(retained: &Schema, replacement: &Schema) -> Result<()> {
+    if retained.fields().len() != replacement.fields().len() {
+        return plan_err!(
+            "Cannot replace aggregate expressions: output field count differs (expected {}, got {})",
+            retained.fields().len(),
+            replacement.fields().len()
+        );
+    }
+    if retained.metadata() != replacement.metadata() {
+        return plan_err!(
+            "Cannot replace aggregate expressions: output schema metadata differs"
+        );
+    }
+    if let Some((index, (retained, replacement))) = retained
+        .fields()
+        .iter()
+        .zip(replacement.fields())
+        .enumerate()
+        .find(|(_, (retained, replacement))| {
+            retained.data_type() != replacement.data_type()
+                || retained.is_nullable() != replacement.is_nullable()
+                || retained.metadata() != replacement.metadata()
+        })
+    {
+        return plan_err!(
+            "Cannot replace aggregate expressions: output field {index} is incompatible \
+             (retained: {retained:?}, replacement: {replacement:?})"
+        );
+    }
+    Ok(())
+}
+
 fn create_schema(
     input_schema: &Schema,
     group_by: &PhysicalGroupBy,
@@ -3367,7 +3421,7 @@ mod tests {
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::first_last::{first_value_udaf, last_value_udaf};
     use datafusion_functions_aggregate::median::median_udaf;
-    use datafusion_functions_aggregate::min_max::min_udaf;
+    use datafusion_functions_aggregate::min_max::{max_udaf, min_udaf};
     use datafusion_functions_aggregate::sum::sum_udaf;
     use datafusion_physical_expr::Partitioning;
     use datafusion_physical_expr::PhysicalSortExpr;
@@ -9104,6 +9158,183 @@ mod tests {
         )?);
 
         assert!(plan_contains_expression_id(&projection, expression_id)?);
+        Ok(())
+    }
+
+    #[test]
+    fn replacement_recomputes_ordering_requirements() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int64, true)]));
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let unordered = Arc::new(
+            AggregateExprBuilder::new(array_agg_udaf(), vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("values")
+                .build()?,
+        );
+        let ordered = Arc::new(
+            AggregateExprBuilder::new(array_agg_udaf(), vec![col("b", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("values")
+                .order_by(vec![PhysicalSortExpr::new_default(col("b", &schema)?)])
+                .build()?,
+        );
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new_single(vec![]),
+            vec![unordered],
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?;
+        assert!(
+            aggregate
+                .required_input_ordering()
+                .iter()
+                .all(Option::is_none)
+        );
+
+        let replacement = aggregate.try_with_new_aggr_exprs(vec![ordered])?;
+        assert!(
+            replacement
+                .required_input_ordering()
+                .iter()
+                .any(Option::is_some),
+            "array_agg ORDER BY must require ordered input"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn replacement_rebuilds_dynamic_filter() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let min = Arc::new(
+            AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("value")
+                .build()?,
+        );
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(vec![]),
+            vec![min],
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?;
+        let old_filter = aggregate.dynamic_filter.as_ref().expect("MIN is supported");
+        *old_filter.accumulator_dyn_filter_info[0]
+            .shared_bound
+            .lock() = ScalarValue::Int64(Some(42));
+        let old_id = old_filter.filter.expression_id();
+
+        let max = Arc::new(
+            AggregateExprBuilder::new(max_udaf(), vec![col("a", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("value")
+                .build()?,
+        );
+        let replacement = aggregate.try_with_new_aggr_exprs(vec![max])?;
+        let filter = replacement
+            .dynamic_filter
+            .as_ref()
+            .expect("MAX is supported");
+        assert!(matches!(
+            filter.accumulator_dyn_filter_info[0].aggr_type,
+            DynamicFilterAggregateType::Max
+        ));
+        assert_eq!(filter.accumulator_dyn_filter_info[0].aggr_index, 0);
+        assert_eq!(
+            *filter.accumulator_dyn_filter_info[0].shared_bound.lock(),
+            ScalarValue::Null
+        );
+        assert_ne!(filter.filter.expression_id(), old_id);
+
+        let sum = Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("a", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("value")
+                .build()?,
+        );
+        let unsupported = replacement.try_with_new_aggr_exprs(vec![sum])?;
+        assert!(unsupported.dynamic_expressions_produced().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn replacement_validates_schema_except_output_names() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let count = Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col("a", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("count_a")
+                .build()?,
+        );
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Single,
+            PhysicalGroupBy::new_single(vec![]),
+            vec![count],
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?;
+
+        let average = Arc::new(
+            AggregateExprBuilder::new(avg_udaf(), vec![col("a", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("avg_a")
+                .build()?,
+        );
+        let error = aggregate
+            .try_with_new_aggr_exprs(vec![average])
+            .expect_err("return type change must be rejected");
+        assert!(error.to_string().contains("incompatible"));
+
+        let min = Arc::new(
+            AggregateExprBuilder::new(min_udaf(), vec![col("a", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("min_a")
+                .build()?,
+        );
+        let error = aggregate
+            .try_with_new_aggr_exprs(vec![min])
+            .expect_err("nullability change must be rejected");
+        assert!(error.to_string().contains("incompatible"));
+
+        let renamed_count = Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col("a", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("renamed_count_a")
+                .build()?,
+        );
+        let renamed =
+            aggregate.try_with_new_aggr_exprs(vec![Arc::clone(&renamed_count)])?;
+        assert_eq!(renamed.schema().field(0).name(), "count_a");
+
+        let mut changed_field_metadata = aggregate.clone();
+        changed_field_metadata.schema =
+            Arc::new(Schema::new(vec![
+                aggregate.schema().field(0).as_ref().clone().with_metadata(
+                    HashMap::from([("key".to_string(), "value".to_string())]),
+                ),
+            ]));
+        assert!(
+            changed_field_metadata
+                .try_with_new_aggr_exprs(vec![Arc::clone(&renamed_count)])
+                .is_err()
+        );
+
+        let mut changed_schema_metadata = aggregate.clone();
+        changed_schema_metadata.schema = Arc::new(Schema::new_with_metadata(
+            vec![aggregate.schema().field(0).as_ref().clone()],
+            HashMap::from([("key".to_string(), "value".to_string())]),
+        ));
+        assert!(
+            changed_schema_metadata
+                .try_with_new_aggr_exprs(vec![renamed_count])
+                .is_err()
+        );
         Ok(())
     }
 
