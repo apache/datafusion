@@ -48,7 +48,8 @@
 //! ```
 //!
 //! * In `Evaluate`, the gate collects the rows in, the rows out and the
-//!   evaluation time of `sample_batches` batches (a *window*). Then it
+//!   evaluation time of at least `sample_batches` batches and at least
+//!   [`MIN_OBSERVED_ROWS`] rows (a *window*). Then it
 //!   decides (see below). To pause, it goes to `Paused` for `backoff` batches
 //!   and doubles `backoff` (up to `max_pause_batches`). To keep the filter,
 //!   it stays in `Evaluate`, sets `backoff` to `initial_pause_batches` and
@@ -146,7 +147,9 @@ use datafusion_common::config::ExecutionOptions;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 use crate::expressions::DynamicFilterTracking;
-use crate::filter_stats::{Clock, FilterCost, SystemClock, duration_nanos};
+use crate::filter_stats::{
+    Clock, FilterCost, MIN_OBSERVED_ROWS, SystemClock, duration_nanos,
+};
 
 /// A running filter is paused by the cost rule only if its cost is larger
 /// than this multiple of its saving. See the [module documentation](self).
@@ -595,7 +598,12 @@ impl OptionalFilterGate {
         };
         window.add(rows_in as u64, rows_out as u64, duration_nanos(elapsed));
         *batches_in_window += 1;
-        if *batches_in_window >= self.config.sample_batches {
+        // A window has at least `sample_batches` batches and
+        // `MIN_OBSERVED_ROWS` rows: fewer rows are not enough evidence for a
+        // decision.
+        if *batches_in_window >= self.config.sample_batches
+            && window.rows_in >= MIN_OBSERVED_ROWS
+        {
             let window = *window;
             self.decide(window);
         }
@@ -707,7 +715,14 @@ mod tests {
     use datafusion_common::cast::as_boolean_array;
     use datafusion_expr::Operator;
 
-    const ROWS: usize = 1000;
+    /// Rows of each test batch: two batches make a window of
+    /// `MIN_OBSERVED_ROWS` rows.
+    const ROWS: usize = MIN_OBSERVED_ROWS as usize / 2;
+
+    /// `ROWS` values of `value(i)`.
+    fn values(value: impl Fn(i32) -> Option<i32>) -> Vec<Option<i32>> {
+        (0..ROWS as i32).map(value).collect()
+    }
 
     fn static_filter() -> Arc<dyn PhysicalExpr> {
         lit(true)
@@ -994,6 +1009,25 @@ mod tests {
         assert_eq!(gate.begin_batch(), GateDecision::Evaluate);
     }
 
+    /// Small batches (for example after a selective row filter) have a
+    /// large fixed cost for each row. The window grows until it has
+    /// `MIN_OBSERVED_ROWS` rows: small batches do not decide early.
+    #[test]
+    fn window_needs_min_observed_rows() {
+        let mut gate = new_gate();
+        let small = 3;
+        let batches = MIN_OBSERVED_ROWS as usize / small;
+        for _ in 0..batches {
+            assert_eq!(gate.begin_batch(), GateDecision::Evaluate);
+            // 8000 ns for each row, and no row removed.
+            gate.record(small, small, Duration::from_nanos(8000 * small as u64));
+        }
+        assert!(!gate.is_paused());
+        assert_eq!(gate.begin_batch(), GateDecision::Evaluate);
+        gate.record(small, small, Duration::from_nanos(8000 * small as u64));
+        assert!(gate.is_paused());
+    }
+
     #[test]
     fn empty_window_makes_no_decision() {
         let mut gate = new_gate();
@@ -1021,10 +1055,10 @@ mod tests {
     #[test]
     fn evaluate_selective_filter() {
         let mut gate = gate_with(col_gt(8));
-        let input = batch((0..10).map(Some).collect());
+        let input = batch(values(|i| Some(i % 10)));
         for _ in 0..10 {
             let result = evaluate(&mut gate, &input).expect("evaluated");
-            assert_eq!(result.true_count(), 1);
+            assert_eq!(result.true_count(), ROWS / 10);
         }
         assert_eq!(gate.pauses(), 0);
     }
@@ -1032,7 +1066,7 @@ mod tests {
     #[test]
     fn evaluate_filter_that_removes_no_rows_skips() {
         let mut gate = gate_with(col_gt(0));
-        let input = batch((1..=10).map(Some).collect());
+        let input = batch(values(|i| Some(i % 10 + 1)));
         assert!(evaluate(&mut gate, &input).is_some());
         assert!(evaluate(&mut gate, &input).is_some());
         for _ in 0..4 {
@@ -1045,12 +1079,10 @@ mod tests {
     fn evaluate_counts_null_as_not_passing() {
         let mut gate = gate_with(col_gt(0));
         // 9 of 10 rows are null: the filter removes them.
-        let mut values = vec![None; 9];
-        values.push(Some(5));
-        let input = batch(values);
+        let input = batch(values(|i| (i % 10 == 0).then_some(5)));
         for _ in 0..10 {
             let result = evaluate(&mut gate, &input).expect("evaluated");
-            assert_eq!(result.null_count(), 9);
+            assert_eq!(result.null_count(), ROWS - ROWS.div_ceil(10));
         }
         assert_eq!(gate.pauses(), 0);
     }
@@ -1087,8 +1119,8 @@ mod tests {
         assert_eq!(skip_until_probe(&mut gate, 0.07), 4);
         assert_eq!(feed_timed(&mut gate, 0.07, 70.0), GateDecision::Evaluate);
         // `skip_until_probe` evaluated the first batch with no time. The
-        // window costs 70 µs and saves 1860 * 20 ns = 37.2 µs: still too
-        // much.
+        // window costs 70 ns for each row of one batch and saves 0.93 * 20
+        // ns for each row of two batches: still too much.
         assert!(gate.is_paused());
         assert_eq!(skip_until_probe(&mut gate, 0.07), 8);
     }
@@ -1358,15 +1390,15 @@ mod tests {
     /// A consumer measures the time with the clock of the gate.
     #[test]
     fn consumer_measures_time_with_gate_clock() {
-        // Each evaluation takes 10 µs for 10 rows: 1000 ns for each row.
+        // Each evaluation takes 1000 ns for each row.
         let clock = Arc::new(SteppingClock {
             now: AtomicU64::new(0),
-            step: 10_000,
+            step: 1000 * ROWS as u64,
         });
         let mut gate =
             OptionalFilterGate::new(col_gt(8), OptionalFilterGateConfig::default())
                 .with_clock(clock);
-        let input = batch((0..10).map(Some).collect());
+        let input = batch(values(|i| Some(i % 10)));
         // The filter removes 90% of the rows, but it costs 1000 ns for each
         // row, and each removed row saves 20 ns.
         assert!(evaluate(&mut gate, &input).is_some());
