@@ -71,6 +71,7 @@
 //! [`OptionalFilterPhysicalExpr`]: datafusion_physical_expr::expressions::OptionalFilterPhysicalExpr
 //! [`OptionalFilterGate`]: datafusion_physical_expr::optional_filter_gate::OptionalFilterGate
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -78,10 +79,12 @@ use std::time::Duration;
 use arrow::array::BooleanArray;
 
 use datafusion_common::config::OptionalFilterMode;
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::filter_stats::duration_nanos;
 use datafusion_physical_expr::optional_filter_gate::{
-    MeasuredRowSaving, OptionalFilterGateConfig,
+    MeasuredRowSaving, OptionalFilterGateConfig, SharedGateVerdict,
 };
+use parking_lot::Mutex;
 use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::ParquetMetaData;
 
@@ -303,12 +306,39 @@ impl OptionalFilterSavings {
     }
 }
 
+/// The shared pauses of the gates of the optional filters of one scan, one
+/// [`SharedGateVerdict`] for each optional filter, shared by all partitions
+/// and files of the scan.
+///
+/// The scan rewrites its predicate for each file, thus a filter is
+/// identified by its [`PhysicalExpr::expression_id`] (a
+/// `DynamicFilterPhysicalExpr` has one, and the rewrites keep it). The
+/// gates of a filter without an id do not share their pauses.
+#[derive(Debug, Default)]
+pub(crate) struct OptionalFilterSites {
+    verdicts: Mutex<HashMap<u64, Arc<SharedGateVerdict>>>,
+}
+
+impl OptionalFilterSites {
+    /// The shared verdict of the optional filter `filter` (the expression
+    /// inside the `OptionalFilterPhysicalExpr`), or `None` if it has no
+    /// expression id.
+    pub(crate) fn verdict_for(
+        &self,
+        filter: &Arc<dyn PhysicalExpr>,
+    ) -> Option<Arc<SharedGateVerdict>> {
+        let id = filter.expression_id()?;
+        Some(Arc::clone(self.verdicts.lock().entry(id).or_default()))
+    }
+}
+
 /// The optional filter settings of one scan, see the [module
 /// documentation](self).
 ///
-/// Each file makes its own gates: gates do not share state between files
-/// or partitions. Only the decode speed ([`DecodeCost`]) is shared by all
-/// partitions and files of the scan.
+/// Each file makes its own gates. The gates of one optional filter share
+/// their pauses in all partitions and files of the scan
+/// ([`OptionalFilterSites`]), and the decode speed ([`DecodeCost`]) is
+/// shared by all partitions and files of the scan.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct OptionalFilterOptions {
     /// How the row filter handles optional conjuncts.
@@ -317,4 +347,26 @@ pub(crate) struct OptionalFilterOptions {
     pub(crate) gate_config: OptionalFilterGateConfig,
     /// The decode speed of the output columns of the scan.
     pub(crate) decode_cost: Arc<DecodeCost>,
+    /// The shared pauses of the gates of each optional filter.
+    pub(crate) sites: Arc<OptionalFilterSites>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
+
+    #[test]
+    fn sites_share_verdicts_by_expression_id() {
+        let sites = OptionalFilterSites::default();
+        let dynamic: Arc<dyn PhysicalExpr> =
+            Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
+        let other: Arc<dyn PhysicalExpr> =
+            Arc::new(DynamicFilterPhysicalExpr::new(vec![], lit(true)));
+        let first = sites.verdict_for(&dynamic).unwrap();
+        assert!(Arc::ptr_eq(&first, &sites.verdict_for(&dynamic).unwrap()));
+        assert!(!Arc::ptr_eq(&first, &sites.verdict_for(&other).unwrap()));
+        // A filter without an expression id has no shared verdict.
+        assert!(sites.verdict_for(&lit(true)).is_none());
+    }
 }
