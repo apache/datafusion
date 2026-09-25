@@ -769,7 +769,7 @@ drop table t;
 # Dropping schemas
 ##########
 
-statement error DataFusion error: Execution error: Cannot drop schema foo_schema because other tables depend on it: bar
+statement error DataFusion error: Execution error: Cannot drop schema foo_schema containing tables: bar
 DROP SCHEMA foo_schema;
 
 statement ok
@@ -1312,3 +1312,47 @@ insert into t values (map{null: 1}, null);
 
 statement ok
 drop table t;
+
+# Test create/drop catalog
+statement ok
+create catalog cat;
+
+statement ok
+create catalog if not exists cat;
+
+statement ok
+create schema cat.schema;
+
+statement ok
+create table cat.schema.table (id int);
+
+statement error DataFusion error: Execution error: Cannot drop catalog containing schemas: schema
+drop catalog cat;
+
+statement ok
+drop catalog cat cascade;
+
+statement error DataFusion error: Execution error: Catalog 'cat' doesn't exist\.
+drop catalog cat;
+
+statement ok
+drop catalog if exists cat;
+
+# Test that catalog and database are interchangeable
+statement ok
+create database cat;
+
+statement error DataFusion error: Execution error: Catalog 'cat' already exists
+create catalog cat;
+
+statement ok
+drop catalog cat;
+
+statement ok
+create catalog cat;
+
+statement error DataFusion error: Execution error: Catalog 'cat' already exists
+create database cat;
+
+statement ok
+drop database cat;
