@@ -24,6 +24,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use arrow::array::{Array, BooleanArray};
+use arrow::buffer::BooleanBuffer;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::OptionalFilterPhysicalExpr;
 use datafusion_physical_expr::filter_stats::duration_nanos;
@@ -48,10 +49,15 @@ pub(crate) const SKIP_WINDOW_ROWS: usize = 64;
 /// is counted if no row in it passes.
 pub(crate) fn skippable_rows(result: &BooleanArray) -> usize {
     let values = result.values();
-    let passed = match result.nulls() {
-        Some(nulls) => values & nulls.inner(),
-        None => values.clone(),
-    };
+    match result.nulls() {
+        Some(nulls) => skippable_in(&(values & nulls.inner())),
+        None => skippable_in(values),
+    }
+}
+
+/// Rows of `passed` in windows of [`SKIP_WINDOW_ROWS`] rows where no bit is
+/// set, see [`skippable_rows`].
+fn skippable_in(passed: &BooleanBuffer) -> usize {
     let chunks = passed.bit_chunks();
     let full = chunks.iter().filter(|chunk| *chunk == 0).count() * SKIP_WINDOW_ROWS;
     let remainder = if chunks.remainder_len() > 0 && chunks.remainder_bits() == 0 {
@@ -70,7 +76,8 @@ pub(crate) struct Observation {
     pub(crate) rows_in: u64,
     /// Rows that passed the conjunct.
     pub(crate) rows_out: u64,
-    /// Rows in windows where no row passed, see [`skippable_rows`].
+    /// Rows in windows where no row passed the conjunct, see
+    /// [`skippable_rows`] and [`StageSelection`].
     pub(crate) skippable_rows: u64,
     /// Row groups that the conjunct alone pruned with statistics.
     pub(crate) row_groups_pruned: u64,
@@ -104,8 +111,16 @@ pub(crate) struct ConjunctStats {
 }
 
 impl ConjunctStats {
-    /// Records one evaluation of the conjunct. `result` has one value for
-    /// each evaluated row.
+    /// Records one evaluation of the conjunct as a row filter predicate.
+    /// `result` has one value for each evaluated row.
+    ///
+    /// The decoder evaluates a row filter predicate only on the rows that
+    /// the earlier predicates let pass, thus the windows of a predicate
+    /// that is not the first one are windows of these rows, not of the
+    /// rows of the file. This is an approximation: an empty window then
+    /// spans 64 or more rows of the file, thus the skippable rows are
+    /// counted too low. The first predicate is measured exactly. See
+    /// [`StageSelection`] for the post-scan filter.
     pub(crate) fn record_evaluation(&self, result: &BooleanArray) {
         let rows_in = result.len() as u64;
         if rows_in == 0 {
@@ -123,6 +138,18 @@ impl ConjunctStats {
         self.rows_in.fetch_add(rows_in, Ordering::Relaxed);
         self.rows_out.fetch_add(rows_out, Ordering::Relaxed);
         self.skippable_rows.fetch_add(skippable, Ordering::Relaxed);
+    }
+
+    /// Records one evaluation of the conjunct on `rows_in` rows, of which
+    /// `rows_out` passed and which made `skippable` rows skippable.
+    pub(crate) fn record(&self, rows_in: usize, rows_out: usize, skippable: usize) {
+        if rows_in == 0 {
+            return;
+        }
+        self.rows_in.fetch_add(rows_in as u64, Ordering::Relaxed);
+        self.rows_out.fetch_add(rows_out as u64, Ordering::Relaxed);
+        self.skippable_rows
+            .fetch_add(skippable as u64, Ordering::Relaxed);
     }
 
     /// Records the row group statistics pruning result of the conjunct for
@@ -143,6 +170,103 @@ impl ConjunctStats {
             row_groups_pruned: self.row_groups_pruned.load(Ordering::Relaxed),
             row_groups_kept: self.row_groups_kept.load(Ordering::Relaxed),
         }
+    }
+}
+
+/// Measures the conjuncts of one batch of the post-scan filter in the
+/// positions of its input batch.
+///
+/// The post-scan filter evaluates its conjuncts one after the other and
+/// compacts the working batch to the rows that are still live (see
+/// `PostScanFilter`). Windows of the compacted rows are not windows of the
+/// decoded rows, thus a conjunct after a compaction must not count its
+/// skippable rows on its own result.
+///
+/// A conjunct that moves to the row filter runs after the row filter
+/// predicates and before all post-scan conjuncts: its input is the input
+/// batch of the post-scan filter, not the rows that the earlier post-scan
+/// conjuncts let pass. Thus each conjunct is measured on the input batch.
+/// Before the first compaction it was evaluated on all rows of the input
+/// batch and the measurement is exact. After a compaction, it was not
+/// evaluated on the rows that the compaction removed; these rows count as
+/// passing. This counts too few skippable rows (a conservative
+/// approximation: the conjunct is a row filter only if its measured saving
+/// pays for it). The first conjunct is always exact.
+///
+/// Only a window whose rows are all in the working batch can be skippable.
+/// Thus this keeps these windows and their first row in the working batch,
+/// and the cost is O(rows / 64) for each conjunct and compaction.
+#[derive(Debug)]
+pub(crate) struct StageSelection {
+    input_rows: usize,
+    /// The windows of the input batch whose rows are all in the working
+    /// batch, as (rows of the window, first row in the working batch).
+    /// `None` if the working batch is the input batch (not compacted).
+    complete_windows: Option<Vec<(usize, usize)>>,
+}
+
+impl StageSelection {
+    /// For an input batch of `input_rows` rows.
+    pub(crate) fn new(input_rows: usize) -> Self {
+        Self {
+            input_rows,
+            complete_windows: None,
+        }
+    }
+
+    /// Records in `stats` the evaluation of a conjunct with the result
+    /// `passed` (without nulls) for each row of the working batch.
+    pub(crate) fn record(&self, stats: &ConjunctStats, passed: &BooleanArray) {
+        let values = passed.values();
+        match &self.complete_windows {
+            None => stats.record(
+                self.input_rows,
+                values.count_set_bits(),
+                skippable_in(values),
+            ),
+            Some(windows) => {
+                // The rows that the conjunct did not see pass.
+                let unseen = self.input_rows - values.len();
+                let skippable = windows
+                    .iter()
+                    .filter(|(len, start)| {
+                        values.slice(*start, *len).count_set_bits() == 0
+                    })
+                    .map(|(len, _)| len)
+                    .sum();
+                stats.record(
+                    self.input_rows,
+                    unseen + values.count_set_bits(),
+                    skippable,
+                );
+            }
+        }
+    }
+
+    /// The working batch is compacted to the rows of `live` (a selection of
+    /// the rows of the working batch, without nulls).
+    pub(crate) fn compact(&mut self, live: &BooleanArray) {
+        let live = live.values();
+        let windows: Vec<(usize, usize)> = match self.complete_windows.take() {
+            Some(windows) => windows,
+            None => (0..self.input_rows)
+                .step_by(SKIP_WINDOW_ROWS)
+                .map(|start| (SKIP_WINDOW_ROWS.min(self.input_rows - start), start))
+                .collect(),
+        };
+        // `rank` is the number of live rows before `position`: the row of
+        // the new working batch at `position`.
+        let mut rank = 0;
+        let mut position = 0;
+        let mut complete = Vec::with_capacity(windows.len());
+        for (len, start) in windows {
+            rank += live.slice(position, start - position).count_set_bits();
+            position = start;
+            if live.slice(start, len).count_set_bits() == len {
+                complete.push((len, rank));
+            }
+        }
+        self.complete_windows = Some(complete);
     }
 }
 
@@ -325,6 +449,126 @@ mod tests {
         assert_eq!(observation.pruned_fraction(), Some(0.75));
         assert_eq!(Observation::default().skippable_fraction(), None);
         assert_eq!(Observation::default().pruned_fraction(), None);
+    }
+
+    /// A conjunct after a compaction is measured in the positions of the
+    /// input batch, with the rows that it did not see as passing.
+    #[test]
+    fn stage_selection_measures_on_input_positions() {
+        let rows = 256;
+        let mut selection = StageSelection::new(rows);
+        // Conjunct 1 keeps every fourth row: no empty window. Exact.
+        let first: BooleanArray = (0..rows).map(|i| Some(i % 4 == 0)).collect();
+        let first_stats = ConjunctStats::default();
+        selection.record(&first_stats, &first);
+        assert_eq!(
+            first_stats.observation(),
+            Observation {
+                rows_in: 256,
+                rows_out: 64,
+                skippable_rows: 0,
+                ..Default::default()
+            }
+        );
+        // The working batch is compacted to the 64 live rows.
+        selection.compact(&first);
+        // Conjunct 2 fails the live rows of input rows 0..128 (the first 32
+        // working rows). The rows that conjunct 1 removed count as passing,
+        // thus no window is empty.
+        let second: BooleanArray = (0..64).map(|i| Some(i >= 32)).collect();
+        let second_stats = ConjunctStats::default();
+        selection.record(&second_stats, &second);
+        assert_eq!(
+            second_stats.observation(),
+            Observation {
+                rows_in: 256,
+                rows_out: 256 - 32,
+                skippable_rows: 0,
+                ..Default::default()
+            }
+        );
+    }
+
+    /// Before a compaction, a conjunct is measured exactly on all rows,
+    /// also after an earlier conjunct.
+    #[test]
+    fn stage_selection_is_exact_before_compaction() {
+        let selection = StageSelection::new(256);
+        // Fails input rows 0..128: two empty windows.
+        let passed: BooleanArray = (0..256).map(|i| Some(i >= 128)).collect();
+        let stats = ConjunctStats::default();
+        selection.record(&stats, &passed);
+        assert_eq!(
+            stats.observation(),
+            Observation {
+                rows_in: 256,
+                rows_out: 128,
+                skippable_rows: 128,
+                ..Default::default()
+            }
+        );
+    }
+
+    /// A window whose rows are all in the working batch after a compaction
+    /// is measured on the rows of the working batch.
+    #[test]
+    fn stage_selection_keeps_complete_windows() {
+        let mut selection = StageSelection::new(256);
+        // Removes input rows 0..64 and the odd rows of 64..128.
+        let first: BooleanArray = (0..256)
+            .map(|i| Some(i >= 128 || (i >= 64 && i % 2 == 0)))
+            .collect();
+        selection.compact(&first);
+        // 160 working rows: 32 rows of window 1, then windows 2 and 3
+        // (working rows 32..96 and 96..160). Fails working rows 32..96 and
+        // one row of window 3.
+        let second: BooleanArray = (0..160)
+            .map(|i| Some(!(32..96).contains(&i) && i != 100))
+            .collect();
+        let stats = ConjunctStats::default();
+        selection.record(&stats, &second);
+        assert_eq!(
+            stats.observation(),
+            Observation {
+                rows_in: 256,
+                rows_out: 256 - 65,
+                skippable_rows: 64,
+                ..Default::default()
+            }
+        );
+        // Compact again: window 2 has no live row and window 3 lost a row,
+        // thus no window is complete. Nothing is skippable any more.
+        selection.compact(&second);
+        let third: BooleanArray = (0..95).map(|i| Some(i >= 64)).collect();
+        let stats = ConjunctStats::default();
+        selection.record(&stats, &third);
+        assert_eq!(stats.observation().skippable_rows, 0);
+        assert_eq!(stats.observation().rows_out, 256 - 64);
+    }
+
+    /// Two compactions: the second maps through the first.
+    #[test]
+    fn stage_selection_composes_compactions() {
+        let mut selection = StageSelection::new(256);
+        // Keep the even rows, then (of those) the ones in the upper half.
+        let even: BooleanArray = (0..256).map(|i| Some(i % 2 == 0)).collect();
+        selection.compact(&even);
+        let upper: BooleanArray = (0..128).map(|i| Some(i >= 64)).collect();
+        selection.compact(&upper);
+        // 64 working rows: the even rows of 128..256. A conjunct that fails
+        // all of them leaves the odd rows (not seen) passing.
+        let none: BooleanArray = (0..64).map(|_| Some(false)).collect();
+        let stats = ConjunctStats::default();
+        selection.record(&stats, &none);
+        assert_eq!(
+            stats.observation(),
+            Observation {
+                rows_in: 256,
+                rows_out: 192,
+                skippable_rows: 0,
+                ..Default::default()
+            }
+        );
     }
 
     #[test]
