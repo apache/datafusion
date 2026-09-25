@@ -40,7 +40,9 @@ use datafusion_common::{
     tree_node::{TreeNode, TreeNodeRecursion},
 };
 use datafusion_datasource::{
-    PartitionedFile, file_groups::FileGroup, file_scan_config::FileScanConfigBuilder,
+    PartitionedFile,
+    file_groups::FileGroup,
+    file_scan_config::{FileScanConfig, FileScanConfigBuilder},
 };
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::ScalarUDF;
@@ -874,6 +876,31 @@ fn test_node_handles_child_pushdown_result() {
     );
 }
 
+/// The optimizer keeps the properties of each parent filter (for example, the
+/// optional flag) by position. A node that returns its parent filters in a
+/// different order breaks this rule, and debug builds report an error.
+#[test]
+fn test_reordered_parent_filters_are_rejected() {
+    let scan = TestScanBuilder::new(schema()).with_support(true).build();
+    let predicate = conjunction([
+        col_lit_predicate("a", "foo", &schema()),
+        col_lit_predicate("b", "bar", &schema()),
+    ]);
+    let node = TestNode::new(false, scan, col_lit_predicate("a", "baz", &schema()))
+        .with_reversed_parent_filters();
+    let plan = Arc::new(FilterExec::try_new(predicate, Arc::new(node)).unwrap());
+    let result = FilterPushdown::new().optimize(plan, &ConfigOptions::default());
+    if cfg!(debug_assertions) {
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains(
+                "expected TestInsertExec to return the parent filters in input order"
+            ),
+            "{err}"
+        );
+    }
+}
+
 // Not portable to sqllogictest: requires manually constructing
 // `SortExec(CoalescePartitionsExec(scan))`. A SQL `ORDER BY ... LIMIT` over a
 // multi-partition scan plans as `SortPreservingMergeExec(SortExec(scan))`
@@ -1534,6 +1561,58 @@ async fn test_hashjoin_dynamic_filter_pushdown_collect_left() {
     +----+----+-----+----+----+-----+
     ",
     );
+}
+
+/// The hash join marks its dynamic filter as optional. `TestSource` does not
+/// override `FileSource::try_pushdown_filter`, so the default method gives it
+/// the dynamic filter through `try_pushdown_filters`, without the flag. The
+/// source applies it as a required filter, and the result is correct.
+#[tokio::test]
+async fn test_hashjoin_optional_dynamic_filter_default_source() {
+    let (build_side_schema, build_scan, probe_side_schema, probe_scan) =
+        hashjoin_pushdown_scans();
+    let on = vec![(
+        col("a", &build_side_schema).unwrap(),
+        col("a", &probe_side_schema).unwrap(),
+    )];
+    let plan = Arc::new(
+        HashJoinExec::try_new(
+            build_scan,
+            probe_scan,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            datafusion_common::NullEquality::NullEqualsNothing,
+            false,
+        )
+        .unwrap(),
+    ) as Arc<dyn ExecutionPlan>;
+
+    let mut config = ConfigOptions::default();
+    config.execution.parquet.pushdown_filters = true;
+    config.optimizer.enable_dynamic_filter_pushdown = true;
+    let (plan, batches) = optimize_and_collect_pushdown_plan(plan, config).await;
+
+    let probe_filter = plan.children()[1]
+        .downcast_ref::<DataSourceExec>()
+        .unwrap()
+        .data_source()
+        .downcast_ref::<FileScanConfig>()
+        .unwrap()
+        .file_source()
+        .filter()
+        .unwrap();
+    insta::assert_snapshot!(probe_filter, @"DynamicFilter [ a@0 >= aa AND a@0 <= ab AND a@0 IN (SET) ([aa, ab]) ]");
+    insta::assert_snapshot!(pretty_format_batches(&batches).unwrap(), @r"
+    +----+----+-----+----+----+-----+
+    | a  | b  | c   | a  | b  | e   |
+    +----+----+-----+----+----+-----+
+    | aa | ba | 1.0 | aa | ba | 1.0 |
+    | ab | bb | 2.0 | ab | bb | 2.0 |
+    +----+----+-----+----+----+-----+
+    ");
 }
 
 #[test]

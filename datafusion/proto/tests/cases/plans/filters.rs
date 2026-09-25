@@ -101,3 +101,65 @@ fn roundtrip_filter_projection_states() -> Result<()> {
 
     Ok(())
 }
+
+/// The optional flag of each conjunct survives a round trip. A reader that
+/// does not know the flags (simulated by clearing them) applies all
+/// conjuncts as required.
+#[test]
+fn roundtrip_filter_optional_conjuncts() -> Result<()> {
+    use datafusion::physical_expr::filter::{FilterConjunct, PhysicalFilter};
+    use datafusion_proto::physical_plan::AsExecutionPlan;
+    use datafusion_proto::protobuf::PhysicalPlanNode;
+    use datafusion_proto::protobuf::physical_plan_node::PhysicalPlanType;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int64, false),
+        Field::new("b", DataType::Int64, false),
+    ]));
+    let a_gt_1 = binary(col("a", &schema)?, Operator::Gt, lit(1i64), &schema)?;
+    let b_lt_9 = binary(col("b", &schema)?, Operator::Lt, lit(9i64), &schema)?;
+    let filter = PhysicalFilter::new([
+        FilterConjunct::required(a_gt_1),
+        FilterConjunct::optional(b_lt_9),
+    ]);
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(
+        FilterExecBuilder::new_with_filter(filter, Arc::new(EmptyExec::new(schema)))
+            .build()?,
+    );
+    let conjuncts = |plan: &Arc<dyn ExecutionPlan>| {
+        plan.downcast_ref::<FilterExec>()
+            .unwrap()
+            .filter()
+            .conjuncts()
+            .iter()
+            .map(|c| (c.to_string(), c.is_optional()))
+            .collect::<Vec<_>>()
+    };
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let result =
+        roundtrip_test_and_return(Arc::clone(&plan), &ctx, &codec, &proto_converter)?;
+    assert_eq!(
+        conjuncts(&result),
+        vec![
+            ("a@0 > 1".to_string(), false),
+            ("b@1 < 9".to_string(), true)
+        ]
+    );
+
+    // A reader that does not know `optional_conjuncts`.
+    let mut node = PhysicalPlanNode::try_from_physical_plan(plan, &codec)?;
+    let Some(PhysicalPlanType::Filter(filter_node)) = &mut node.physical_plan_type else {
+        panic!("expected a FilterExecNode");
+    };
+    assert_eq!(filter_node.optional_conjuncts, vec![false, true]);
+    filter_node.optional_conjuncts.clear();
+    let result = node.try_into_physical_plan(&ctx.task_ctx(), &codec)?;
+    assert_eq!(
+        conjuncts(&result),
+        vec![("a@0 > 1 AND b@1 < 9".to_string(), false)]
+    );
+    Ok(())
+}

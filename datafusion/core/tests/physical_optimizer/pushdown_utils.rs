@@ -452,6 +452,9 @@ pub(crate) struct TestNode {
     inject_filter: bool,
     input: Arc<dyn ExecutionPlan>,
     predicate: Arc<dyn PhysicalExpr>,
+    /// Return the parent filters in reverse order (a bug) from
+    /// `gather_filters_for_pushdown`.
+    reverse_parent_filters: bool,
 }
 
 impl TestNode {
@@ -464,7 +467,15 @@ impl TestNode {
             inject_filter,
             input,
             predicate,
+            reverse_parent_filters: false,
         }
+    }
+
+    /// Make `gather_filters_for_pushdown` return the parent filters in
+    /// reverse order, which breaks the filter pushdown contract.
+    pub fn with_reversed_parent_filters(mut self) -> Self {
+        self.reverse_parent_filters = true;
+        self
     }
 }
 
@@ -497,11 +508,11 @@ impl ExecutionPlan for TestNode {
         _: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         assert_eq!(children.len(), 1);
-        Ok(Arc::new(TestNode::new(
-            self.inject_filter,
-            children[0].clone(),
-            self.predicate.clone(),
-        )))
+        Ok(Arc::new(TestNode {
+            input: children[0].clone(),
+            predicate: self.predicate.clone(),
+            ..*self
+        }))
     }
 
     fn with_new_children(
@@ -525,9 +536,12 @@ impl ExecutionPlan for TestNode {
     fn gather_filters_for_pushdown(
         &self,
         _phase: FilterPushdownPhase,
-        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        mut parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
+        if self.reverse_parent_filters {
+            parent_filters.reverse();
+        }
         // Since TestNode marks all parent filters as supported and adds its own filter,
         // we use from_child to create a description with all parent filters supported
         let child = &self.input;
