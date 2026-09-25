@@ -1053,6 +1053,11 @@ impl BitwiseSortMergeJoinStream {
         loop {
             self.emit_outer_batch()?;
             self.emit_completed_batches(emitter).await;
+            // The remaining outer rows can no longer match. Anti and mark joins still emit
+            // them; a semi join is finished without reading them.
+            if matches!(self.join_type, JoinType::LeftSemi | JoinType::RightSemi) {
+                break;
+            }
             if !self.next_outer_batch().await? {
                 break;
             }
