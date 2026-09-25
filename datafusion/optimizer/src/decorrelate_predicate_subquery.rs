@@ -28,16 +28,20 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    Column, DFSchemaRef, ExprSchema, NullEquality, Result, ScalarValue,
-    assert_or_internal_err, plan_err,
+    Column, DFSchema, DFSchemaRef, ExprSchema, NullEquality, Result, ScalarValue,
+    assert_or_internal_err, internal_datafusion_err, internal_err, not_impl_err,
+    plan_err,
 };
-use datafusion_expr::expr::{Exists, InSubquery};
+use datafusion_expr::expr::{Exists, InSubquery, in_subquery_tuple_values};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
-use datafusion_expr::utils::{conjunction, expr_to_columns, split_conjunction_owned};
+use datafusion_expr::utils::{
+    can_hash, conjunction, expr_to_columns, find_valid_equijoin_key_pair,
+    split_conjunction_owned,
+};
 use datafusion_expr::{
-    BinaryExpr, Expr, Filter, LogicalPlan, LogicalPlanBuilder, Operator, exists,
-    in_subquery, lit, not, not_exists, not_in_subquery, when,
+    BinaryExpr, Expr, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, Operator,
+    exists, in_subquery, lit, not, not_exists, not_in_subquery, when,
 };
 
 use log::debug;
@@ -248,7 +252,11 @@ fn rewrite_inner_subqueries(
             subquery: Subquery { subquery, .. },
             negated,
         }) => {
-            let rewritten = if materialize_in_value {
+            // A tuple `IN` gets its nullable mark from a null-aware mark join:
+            // the three marks below compare the tuple as a single value.
+            let rewritten = if materialize_in_value
+                && in_subquery_tuple_values(&expr, &subquery)?.is_none()
+            {
                 in_subquery_value_mark_join(
                     &cur_input,
                     &subquery,
@@ -268,7 +276,7 @@ fn rewrite_inner_subqueries(
                     Some(&in_predicate),
                     negated,
                     alias,
-                    needs_null_aware_mark,
+                    needs_null_aware_mark || materialize_in_value,
                 )?
             };
             match rewritten {
@@ -433,7 +441,7 @@ fn build_join_top(
         subquery,
         in_predicate_opt.as_ref(),
         join_type,
-        subquery_alias,
+        &subquery_alias,
         true,
     )
 }
@@ -471,7 +479,7 @@ fn mark_join(
         subquery,
         in_predicate_opt,
         JoinType::LeftMark,
-        alias,
+        &alias,
         needs_null_aware_mark,
     )?
     .map(|plan| (plan, exists_expr)))
@@ -510,16 +518,71 @@ fn join_keys_may_be_null(
     Ok(false)
 }
 
-/// Combines the `IN`/`NOT IN` equality with the correlation predicates, if any.
+/// Combines the `IN`/`NOT IN` equalities, one per value, with the correlation
+/// predicates, if any.
 ///
-/// The equality stays the leading conjunct so that it becomes `on[0]`, the key
-/// position a null-aware hash join reads as the `NOT IN` value key (see
-/// `HashJoinExec::null_aware`).
-fn in_predicate_first(in_predicate: Expr, correlation: Option<Expr>) -> Expr {
-    match correlation {
-        Some(correlation) => in_predicate.and(correlation),
-        None => in_predicate,
+/// The equalities stay the leading conjuncts, in order, so that they become
+/// `on[..V]`, the key positions a null-aware hash join reads as the `NOT IN`
+/// value keys (see `HashJoinExec::null_aware`).
+fn in_join_filter(
+    in_values: &[(Expr, Column)],
+    correlation: Option<Expr>,
+) -> Result<Expr> {
+    conjunction(
+        in_values
+            .iter()
+            .map(|(value, column)| Expr::eq(value.clone(), Expr::Column(column.clone())))
+            .chain(correlation),
+    )
+    .ok_or_else(|| internal_datafusion_err!("an `IN` predicate has at least one value"))
+}
+
+/// Sets [`Join::null_aware_value_keys`](datafusion_expr::Join::null_aware_value_keys)
+/// on a join built by [`build_join`].
+fn with_null_aware_value_keys(
+    plan: LogicalPlan,
+    null_aware_value_keys: usize,
+) -> Result<LogicalPlan> {
+    let LogicalPlan::Join(join) = plan else {
+        return internal_err!("expected a join, got {}", plan.display());
+    };
+    Ok(LogicalPlan::Join(
+        join.with_null_aware_value_keys(null_aware_value_keys),
+    ))
+}
+
+/// Errors unless every `NOT IN` value pair becomes a hashable equi-join key.
+///
+/// A null-aware hash join reads its first `V` keys as the value keys. A pair
+/// that stays in the join filter instead (see
+/// `split_eq_and_noneq_join_predicate`) would shift a correlation key into the
+/// value key range and silently change the result.
+fn check_null_aware_value_keys(
+    in_values: &[(Expr, Column)],
+    left_schema: &DFSchema,
+    right_schema: &DFSchema,
+) -> Result<()> {
+    for (value, column) in in_values {
+        let column = Expr::Column(column.clone());
+        let hashable = match find_valid_equijoin_key_pair(
+            value,
+            &column,
+            left_schema,
+            right_schema,
+        )? {
+            Some((left, right)) => {
+                can_hash(&left.get_type(left_schema)?)
+                    && can_hash(&right.get_type(right_schema)?)
+            }
+            None => false,
+        };
+        if !hashable {
+            return not_impl_err!(
+                "NOT IN subquery comparing {value} with {column} is not supported: the pair is not a hashable equi-join key"
+            );
+        }
     }
+    Ok(())
 }
 
 fn build_join(
@@ -527,7 +590,7 @@ fn build_join(
     subquery: &LogicalPlan,
     in_predicate_opt: Option<&Expr>,
     join_type: JoinType,
-    alias: String,
+    alias: &str,
     needs_null_aware_mark: bool,
 ) -> Result<Option<LogicalPlan>> {
     let mut pull_up = PullUpCorrelatedExpr::new()
@@ -551,14 +614,15 @@ fn build_join(
     // alias the join filter
     let join_filter_opt = conjunction(pull_up.join_filters)
         .map_or(Ok(None), |filter| {
-            replace_qualified_name(filter, &all_correlated_cols, &alias).map(Some)
+            replace_qualified_name(filter, &all_correlated_cols, alias).map(Some)
         })?;
 
-    // The outer value expression of an `IN`/`NOT IN` predicate, recorded together
-    // with the subquery column it is compared against, a name for the column it
-    // can be projected as, and the correlation predicates that share the join
-    // filter with it.
-    let mut in_value_expr = None;
+    // The outer value expressions of an `IN`/`NOT IN` predicate — one for a
+    // scalar `IN`, one per tuple element for `(a, b) IN (SELECT x, y ...)` —
+    // each paired with the subquery column it is compared against, together
+    // with the correlation predicates that share the join filter with them.
+    let mut in_values: Vec<(Expr, Column)> = vec![];
+    let mut in_correlation = None;
 
     let mut join_filter = match (join_filter_opt, in_predicate_opt.cloned()) {
         (
@@ -569,14 +633,29 @@ fn build_join(
                 right,
             })),
         ) => {
-            let value_name = format!("{alias}_value");
-            let right_col = create_col_from_scalar_expr(&right, alias)?;
-            let value = left.deref().clone();
-            let in_predicate = Expr::eq(value.clone(), Expr::Column(right_col.clone()));
-            let join_filter = in_predicate_first(in_predicate, correlation_opt.clone());
-            in_value_expr = Some((value, right_col, value_name, correlation_opt));
-
-            join_filter
+            in_values = match in_subquery_tuple_values(&left, subquery)? {
+                // `in_predicate` compares the whole tuple with the first
+                // subquery column; pair each element with its own column.
+                Some(values) => values
+                    .iter()
+                    .enumerate()
+                    .map(|(i, value)| {
+                        let column = Expr::Column(Column::from(
+                            subquery.schema().qualified_field(i),
+                        ));
+                        Ok((
+                            value.clone(),
+                            create_col_from_scalar_expr(&column, alias.to_string())?,
+                        ))
+                    })
+                    .collect::<Result<_>>()?,
+                None => vec![(
+                    left.deref().clone(),
+                    create_col_from_scalar_expr(&right, alias.to_string())?,
+                )],
+            };
+            in_correlation = correlation_opt;
+            in_join_filter(&in_values, in_correlation.clone())?
         }
         (Some(join_filter), _) => join_filter,
         (None, None) => lit(true),
@@ -613,34 +692,57 @@ fn build_join(
     // Projecting the constant as a column of the outer side turns the predicate
     // into a real equi-join key, which fixes all three. It only pays for itself
     // on a join that ends up null-aware.
+    //
+    // Every constant element of a tuple is projected the same way, so that all
+    // value keys lead the equi-join keys in order.
     let mut projected_left = None;
-    if let Some((value, right_col, mut value_name, correlation_opt)) = in_value_expr
-        && value.column_refs().is_empty()
-        && null_aware
+    if null_aware
+        && in_values
+            .iter()
+            .any(|(value, _)| value.column_refs().is_empty())
     {
-        // The projected column is unqualified, so a left field that already has
-        // this name — however unlikely — would make the reference ambiguous.
         let left_schema = left.schema();
-        while left_schema.fields().iter().any(|f| f.name() == &value_name) {
-            value_name.push('_');
-        }
-        let value_col = Column::new_unqualified(value_name);
-        let projections = left_schema
+        let mut projections = left_schema
             .columns()
             .into_iter()
             .map(Expr::from)
-            .chain(std::iter::once(value.alias(value_col.name())))
             .collect::<Vec<_>>();
+        let is_tuple = in_values.len() > 1;
+        for (i, (value, _)) in in_values.iter_mut().enumerate() {
+            if !value.column_refs().is_empty() {
+                continue;
+            }
+            let mut value_name = if is_tuple {
+                format!("{alias}_value_{i}")
+            } else {
+                format!("{alias}_value")
+            };
+            // The projected column is unqualified, so a left field that already
+            // has this name — however unlikely — would make the reference
+            // ambiguous.
+            while left_schema.fields().iter().any(|f| f.name() == &value_name) {
+                value_name.push('_');
+            }
+            let value_col = Column::new_unqualified(value_name);
+            let constant = std::mem::replace(value, Expr::Column(value_col.clone()));
+            projections.push(constant.alias(value_col.name()));
+        }
         projected_left = Some(
             LogicalPlanBuilder::from(left.clone())
                 .project(projections)?
                 .build()?,
         );
-        // Rebuild the `IN` equality against the projected column.
-        let in_predicate = Expr::eq(Expr::Column(value_col), Expr::Column(right_col));
-        join_filter = in_predicate_first(in_predicate, correlation_opt);
+        // Rebuild the `IN` equalities against the projected columns.
+        join_filter = in_join_filter(&in_values, in_correlation)?;
     }
     let left = projected_left.as_ref().unwrap_or(left);
+    if null_aware {
+        check_null_aware_value_keys(&in_values, left.schema(), sub_query_alias.schema())?;
+    }
+    // The `IN` equalities lead the join filter, so after they are extracted
+    // into equi-join keys the first `null_aware_value_keys` keys are the
+    // `NOT IN` value keys (see `Join::null_aware_value_keys`).
+    let null_aware_value_keys = in_values.len().max(1);
 
     if matches!(join_type, JoinType::LeftMark | JoinType::RightMark) {
         let right_schema = sub_query_alias.schema();
@@ -680,16 +782,19 @@ fn build_join(
         // nullable mark column. A non-equality correlation stays behind as a
         // join filter, which the hash join also applies when it decides
         // whether a NULL makes the mark UNKNOWN.
-        let new_plan = LogicalPlanBuilder::from(left.clone())
-            .join_detailed_with_options(
-                right_projected,
-                join_type,
-                (Vec::<Column>::new(), Vec::<Column>::new()),
-                Some(join_filter),
-                NullEquality::NullEqualsNothing,
-                null_aware,
-            )?
-            .build()?;
+        let new_plan = with_null_aware_value_keys(
+            LogicalPlanBuilder::from(left.clone())
+                .join_detailed_with_options(
+                    right_projected,
+                    join_type,
+                    (Vec::<Column>::new(), Vec::<Column>::new()),
+                    Some(join_filter),
+                    NullEquality::NullEqualsNothing,
+                    null_aware,
+                )?
+                .build()?,
+            null_aware_value_keys,
+        )?;
 
         debug!(
             "predicate subquery optimized:\n{}",
@@ -702,16 +807,19 @@ fn build_join(
     // join our sub query into the main plan
     let new_plan = if null_aware {
         // Use join_detailed_with_options to set null_aware flag
-        LogicalPlanBuilder::from(left.clone())
-            .join_detailed_with_options(
-                sub_query_alias,
-                join_type,
-                (Vec::<Column>::new(), Vec::<Column>::new()), // No equijoin keys, filter-based join
-                Some(join_filter),
-                NullEquality::NullEqualsNothing,
-                true, // null_aware
-            )?
-            .build()?
+        with_null_aware_value_keys(
+            LogicalPlanBuilder::from(left.clone())
+                .join_detailed_with_options(
+                    sub_query_alias,
+                    join_type,
+                    (Vec::<Column>::new(), Vec::<Column>::new()), // No equijoin keys, filter-based join
+                    Some(join_filter),
+                    NullEquality::NullEqualsNothing,
+                    true, // null_aware
+                )?
+                .build()?,
+            null_aware_value_keys,
+        )?
     } else {
         LogicalPlanBuilder::from(left.clone())
             .join_on(sub_query_alias, join_type, Some(join_filter))?

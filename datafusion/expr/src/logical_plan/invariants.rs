@@ -22,7 +22,7 @@ use datafusion_common::{
 
 use crate::{
     Aggregate, DmlStatement, Expr, Filter, Join, JoinType, LogicalPlan, Window, WriteOp,
-    expr::{Exists, InSubquery, SetComparison},
+    expr::{Exists, InSubquery, SetComparison, in_subquery_tuple_values},
     expr_rewriter::strip_outer_reference,
     utils::{collect_subquery_cols, split_conjunction},
 };
@@ -224,13 +224,20 @@ pub fn check_subquery_expr(
         }
     } else {
         if let Expr::InSubquery(subquery) = expr {
-            // InSubquery should only return one column
-            if subquery.subquery.subquery.schema().fields().len() > 1 {
-                return plan_err!(
-                    "InSubquery should only return one column, but found {}: {}",
-                    subquery.subquery.subquery.schema().fields().len(),
-                    subquery.subquery.subquery.schema().field_names().join(", ")
-                );
+            // InSubquery should only return one column, unless it is a
+            // multi-column `(a, b) IN (SELECT x, y ...)` with one tuple element
+            // per subquery column.
+            let num_subquery_cols = subquery.subquery.subquery.schema().fields().len();
+            match in_subquery_tuple_values(&subquery.expr, &subquery.subquery.subquery)? {
+                Some(_) => {}
+                None if num_subquery_cols > 1 => {
+                    return plan_err!(
+                        "InSubquery should only return one column, but found {}: {}",
+                        num_subquery_cols,
+                        subquery.subquery.subquery.schema().field_names().join(", ")
+                    );
+                }
+                None => {}
             }
         }
         if let Expr::SetComparison(set_comparison) = expr

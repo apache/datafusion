@@ -688,6 +688,7 @@ impl LogicalPlan {
                 schema: _,
                 null_equality,
                 null_aware,
+                null_aware_value_keys,
             }) => {
                 let schema =
                     build_join_schema(left.schema(), right.schema(), &join_type)?;
@@ -710,6 +711,7 @@ impl LogicalPlan {
                     schema: DFSchemaRef::new(schema),
                     null_equality,
                     null_aware,
+                    null_aware_value_keys,
                 }))
             }
             LogicalPlan::AsOfJoin(AsOfJoin {
@@ -991,6 +993,7 @@ impl LogicalPlan {
                 on,
                 null_equality,
                 null_aware,
+                null_aware_value_keys,
                 ..
             }) => {
                 let (left, right) = self.only_two_inputs(inputs)?;
@@ -1033,6 +1036,7 @@ impl LogicalPlan {
                     schema: DFSchemaRef::new(schema),
                     null_equality: *null_equality,
                     null_aware: *null_aware,
+                    null_aware_value_keys: *null_aware_value_keys,
                 }))
             }
             LogicalPlan::AsOfJoin(AsOfJoin {
@@ -2253,6 +2257,7 @@ impl LogicalPlan {
                         join_constraint,
                         join_type,
                         null_aware,
+                        null_aware_value_keys,
                         ..
                     }) => {
                         let join_expr: Vec<String> =
@@ -2261,8 +2266,12 @@ impl LogicalPlan {
                             .as_ref()
                             .map(|expr| format!(" Filter: {expr}"))
                             .unwrap_or_else(|| "".to_string());
-                        let null_aware_expr =
-                            if *null_aware { " null_aware" } else { "" };
+                        let null_aware_expr = match (*null_aware, *null_aware_value_keys)
+                        {
+                            (false, _) => "".to_string(),
+                            (true, 0 | 1) => " null_aware".to_string(),
+                            (true, n) => format!(" null_aware(value_keys={n})"),
+                        };
                         let join_type = if filter.is_none()
                             && keys.is_empty()
                             && *join_type == JoinType::Inner
@@ -4453,6 +4462,17 @@ pub struct Join {
     /// For `LeftMark`, the generated `mark` column becomes nullable so unmatched rows can produce
     /// `NULL` rather than `false` when SQL three-valued logic requires it.
     pub null_aware: bool,
+    /// Number of `NOT IN` value keys of a null-aware join; ignored unless
+    /// [`Self::null_aware`] is set.
+    ///
+    /// A scalar `x NOT IN (SELECT y ...)` has one value key, a multi-column
+    /// `(a, b) NOT IN (SELECT x, y ...)` one per tuple element. The value keys
+    /// are the leading equi-join keys (`on[..n]`, or the leading equality
+    /// conjuncts of `filter` before they are extracted into `on`); any keys
+    /// after them are correlation scope keys of a correlated subquery. A NULL
+    /// in a value key follows SQL three-valued logic across the whole tuple,
+    /// while the scope keys only select which subquery rows are compared.
+    pub null_aware_value_keys: usize,
 }
 
 /// The ordered comparison used by an [`AsOfJoin`].
@@ -4680,7 +4700,15 @@ impl Join {
             schema: Arc::new(join_schema),
             null_equality,
             null_aware,
+            null_aware_value_keys: 1,
         })
+    }
+
+    /// Sets the number of `NOT IN` value keys of a null-aware join, see
+    /// [`Self::null_aware_value_keys`].
+    pub fn with_null_aware_value_keys(mut self, null_aware_value_keys: usize) -> Self {
+        self.null_aware_value_keys = null_aware_value_keys;
+        self
     }
 
     /// Create Join with input which wrapped with projection, this method is used in physical planning only to help
@@ -4735,6 +4763,7 @@ impl Join {
                 schema: Arc::new(join_schema),
                 null_equality: original_join.null_equality,
                 null_aware: original_join.null_aware,
+                null_aware_value_keys: original_join.null_aware_value_keys,
             },
             requalified,
         ))
@@ -6778,6 +6807,7 @@ mod tests {
                 schema: Arc::new(left_schema.join(&right_schema)?),
                 null_equality: NullEquality::NullEqualsNothing,
                 null_aware: false,
+                null_aware_value_keys: 1,
             }))
         }
 

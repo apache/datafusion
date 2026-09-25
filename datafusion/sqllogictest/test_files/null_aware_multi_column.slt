@@ -1,0 +1,410 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Multi-column `(a, b) NOT IN (SELECT x, y ...)` under SQL three-valued logic.
+# A tuple comparison is UNKNOWN only when no element pair is a definite
+# mismatch and at least one of them involves a NULL: `(NULL, 8) = (1, 2)` is
+# `UNKNOWN AND FALSE`, which is FALSE, while `(NULL, 2) = (1, 2)` is UNKNOWN.
+# The batch size sweep exercises the chunked UNKNOWN candidate pairing of the
+# null-aware hash join. Plans are checked in null_aware_anti_join.slt.
+# Matrix rules: no EXPLAIN, no in-file SET of a swept knob, rowsort every
+# multi-row query.
+
+# configMatrix: datafusion.execution.batch_size=1,2,100,8192
+
+statement ok
+CREATE TABLE mc_outer(a INT, b INT, value TEXT) AS VALUES
+(1, 2, 'x'),
+(3, 4, 'y'),
+(5, 6, 'z'),
+(NULL, 8, 'w'),
+(3, NULL, 'v'),
+(NULL, NULL, 'u');
+
+statement ok
+CREATE TABLE mc_inner_null(x INT, y INT) AS VALUES
+(1, 2),
+(NULL, 4);
+
+statement ok
+CREATE TABLE mc_inner_no_null(x INT, y INT) AS VALUES
+(1, 2);
+
+statement ok
+CREATE TABLE mc_empty(x INT, y INT);
+
+#############
+## NULL in the subquery
+#############
+
+# (1, 2) matches. (3, 4) vs (NULL, 4) is `UNKNOWN AND TRUE`. (3, NULL) vs
+# (NULL, 4) and (NULL, NULL) vs (1, 2) have no definite mismatch.
+# (5, 6) and (NULL, 8) mismatch both inner rows.
+query IIT rowsort
+SELECT * FROM mc_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM mc_inner_null);
+----
+5 6 z
+NULL 8 w
+
+#############
+## NULL only in the outer tuple
+#############
+
+# (3, NULL) and (NULL, 8) have a definite mismatch with (1, 2), so they are
+# kept; (NULL, NULL) vs (1, 2) is UNKNOWN.
+query IIT rowsort
+SELECT * FROM mc_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM mc_inner_no_null);
+----
+3 4 y
+3 NULL v
+5 6 z
+NULL 8 w
+
+# `NOT IN (<empty>)` is TRUE for every row, NULLs included.
+query IIT rowsort
+SELECT * FROM mc_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM mc_empty);
+----
+1 2 x
+3 4 y
+3 NULL v
+5 6 z
+NULL 8 w
+NULL NULL u
+
+#############
+## Three columns
+#############
+
+statement ok
+CREATE TABLE mc3_outer(a INT, b INT, c INT) AS VALUES
+(1, 2, 3),
+(4, 5, 6),
+(7, 8, 9);
+
+statement ok
+CREATE TABLE mc3_inner(x INT, y INT, z INT) AS VALUES
+(1, 2, 3),
+(4, NULL, 6);
+
+# (1, 2, 3) matches; (4, 5, 6) vs (4, NULL, 6) is UNKNOWN.
+query III rowsort
+SELECT * FROM mc3_outer
+WHERE (a, b, c) NOT IN (SELECT x, y, z FROM mc3_inner);
+----
+7 8 9
+
+#############
+## Constant elements
+#############
+
+# The constant is a join key in its tuple position. (1, 2) matches;
+# (NULL, 2) vs (1, 2) is `UNKNOWN AND TRUE`; (3, 2) and (5, 2) mismatch both
+# inner rows.
+query IIT rowsort
+SELECT * FROM mc_outer
+WHERE (a, 2) NOT IN (SELECT x, y FROM mc_inner_null);
+----
+3 4 y
+3 NULL v
+5 6 z
+
+# An all-literal tuple is folded into a struct literal before decorrelation.
+# (5, 6) mismatches both inner rows, so every outer row is kept.
+query T rowsort
+SELECT value FROM mc_outer
+WHERE (5, 6) NOT IN (SELECT x, y FROM mc_inner_null);
+----
+u
+v
+w
+x
+y
+z
+
+query BBB
+SELECT
+  (1, 2) NOT IN (SELECT x, y FROM mc_inner_null) AS matched,
+  (3, 4) NOT IN (SELECT x, y FROM mc_inner_null) AS unknown,
+  (5, 6) NOT IN (SELECT x, y FROM mc_inner_null) AS mismatched;
+----
+false NULL true
+
+#############
+## Correlated subqueries
+#############
+
+statement ok
+CREATE TABLE mc_corr_outer(a INT, b INT, grp INT) AS VALUES
+(1, 2, 1),
+(1, 3, 1),
+(2, 5, 1),
+(NULL, 9, 2),
+(NULL, 8, 2),
+(4, 9, 3),
+(4, 9, NULL);
+
+statement ok
+CREATE TABLE mc_corr_inner(x INT, y INT, grp INT) AS VALUES
+(1, 2, 1),
+(NULL, 3, 1),
+(4, 9, 2);
+
+# grp 1 holds (1, 2) and (NULL, 3); grp 2 holds (4, 9).
+# (1, 2, 1) matches; (1, 3, 1) vs (NULL, 3) and (NULL, 9, 2) vs (4, 9) are
+# UNKNOWN; (2, 5, 1) and (NULL, 8, 2) mismatch every row in scope; grp 3 and a
+# NULL grp have an empty scope.
+query III rowsort
+SELECT * FROM mc_corr_outer o
+WHERE (a, b) NOT IN (SELECT x, y FROM mc_corr_inner i WHERE i.grp = o.grp);
+----
+2 5 1
+4 9 3
+4 9 NULL
+NULL 8 2
+
+query IIIB rowsort
+SELECT a, b, grp,
+  (a, b) NOT IN (SELECT x, y FROM mc_corr_inner i WHERE i.grp = o.grp) AS r
+FROM mc_corr_outer o;
+----
+1 2 1 false
+1 3 1 NULL
+2 5 1 true
+4 9 3 true
+4 9 NULL true
+NULL 8 2 true
+NULL 9 2 NULL
+
+statement ok
+CREATE TABLE mc_lt_outer(k INT, a INT, b INT) AS VALUES
+(1, 1, 2),
+(2, 1, 2),
+(3, NULL, 5),
+(4, 7, 7),
+(5, 4, 2);
+
+statement ok
+CREATE TABLE mc_lt_inner(k INT, x INT, y INT) AS VALUES
+(1, 1, 2),
+(3, NULL, 2),
+(3, 9, 5);
+
+# A non-equality correlation. k=1 has an empty scope; k=2 matches (1, 2);
+# (NULL, 5) and (7, 7) mismatch every row in scope; (4, 2) vs (NULL, 2) at
+# k=3 is `UNKNOWN AND TRUE`.
+query III rowsort
+SELECT * FROM mc_lt_outer o
+WHERE (a, b) NOT IN (SELECT x, y FROM mc_lt_inner i WHERE i.k < o.k);
+----
+1 1 2
+3 NULL 5
+4 7 7
+
+#############
+## NOT IN as a nullable value
+#############
+
+# (1, 2) matches: false. (3, 4), (3, NULL) and (NULL, NULL) are UNKNOWN: NULL.
+# (5, 6) and (NULL, 8) mismatch both inner rows: true.
+query IIB rowsort
+SELECT a, b, (a, b) NOT IN (SELECT x, y FROM mc_inner_null) AS r
+FROM mc_outer;
+----
+1 2 false
+3 4 NULL
+3 NULL NULL
+5 6 true
+NULL 8 true
+NULL NULL NULL
+
+# Under OR only a TRUE `NOT IN` keeps a row on its own.
+query IIT rowsort
+SELECT * FROM mc_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM mc_inner_null) OR value = 'y';
+----
+3 4 y
+5 6 z
+NULL 8 w
+
+#############
+## Element types
+#############
+
+statement ok
+CREATE TABLE mc_wide_inner(x BIGINT, y DOUBLE) AS VALUES
+(1, 2.0),
+(3, NULL);
+
+# Each element is coerced to its column. (1, 2) matches (1, 2.0); (3, 4),
+# (3, NULL), (NULL, 8) and (NULL, NULL) have no definite mismatch with
+# (3, NULL) or (1, 2.0).
+query IIT rowsort
+SELECT * FROM mc_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM mc_wide_inner);
+----
+5 6 z
+
+statement ok
+CREATE TABLE mc_float_outer(a DOUBLE, b DOUBLE) AS VALUES
+(NULL, 0.0),
+(1.0, 0.0),
+(2.0, 5.0);
+
+statement ok
+CREATE TABLE mc_float_inner(x DOUBLE, y DOUBLE) AS VALUES
+(1.0, arrow_cast('-0.0', 'Float64'));
+
+statement ok
+CREATE TABLE mc_float_inner_null(x DOUBLE, y DOUBLE) AS VALUES
+(NULL, arrow_cast('-0.0', 'Float64'));
+
+# `0.0 = -0.0`, so (1, 0) matches and (NULL, 0) vs (1, -0.0) is
+# `UNKNOWN AND TRUE`.
+query RR rowsort
+SELECT * FROM mc_float_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM mc_float_inner);
+----
+2 5
+
+query RRB rowsort
+SELECT a, b, (a, b) NOT IN (SELECT x, y FROM mc_float_inner) FROM mc_float_outer;
+----
+1 0 false
+2 5 true
+NULL 0 NULL
+
+query RR rowsort
+SELECT * FROM mc_float_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM mc_float_inner_null);
+----
+2 5
+
+# A null-aware hash join needs every value pair as a hashable equi-join key.
+# RunEndEncoded is not hashable, so the join is rejected instead of reading a
+# correlation key as a value key.
+statement ok
+CREATE TABLE mc_ree_outer AS
+SELECT k, arrow_cast(a, 'RunEndEncoded("run_ends": non-null Int32, "values": Int32)') AS a, b
+FROM mc_lt_outer;
+
+statement ok
+CREATE TABLE mc_ree_inner AS
+SELECT k, arrow_cast(x, 'RunEndEncoded("run_ends": non-null Int32, "values": Int32)') AS x, y
+FROM mc_lt_inner;
+
+statement error NOT IN subquery comparing .* is not supported: the pair is not a hashable equi-join key
+SELECT * FROM mc_ree_outer o
+WHERE (a, b) NOT IN (SELECT x, y FROM mc_ree_inner i WHERE i.k = o.k);
+
+statement error NOT IN subquery comparing .* is not supported: the pair is not a hashable equi-join key
+SELECT * FROM mc_ree_outer o
+WHERE a NOT IN (SELECT x FROM mc_ree_inner i WHERE i.k = o.k);
+
+#############
+## Tuple and subquery column counts
+#############
+
+statement error The number of columns in the tuple \(2\) must match the number of columns in the subquery \(3\)
+SELECT * FROM mc_outer WHERE (a, b) NOT IN (SELECT x, y, x AS z FROM mc_inner_no_null);
+
+statement error The number of columns in the tuple \(3\) must match the number of columns in the subquery \(2\)
+SELECT * FROM mc_outer WHERE (a, b, a) NOT IN (SELECT x, y FROM mc_inner_no_null);
+
+statement error Too many columns! The subquery should only return one column
+SELECT * FROM mc_outer WHERE a NOT IN (SELECT x, y FROM mc_inner_no_null);
+
+# Against a single struct column the tuple is one struct value, not a
+# multi-column `IN`.
+query IIT rowsort
+SELECT * FROM mc_outer
+WHERE (a, b) IN (SELECT struct(x, y) FROM mc_inner_no_null);
+----
+1 2 x
+
+#############
+## Placeholders take their tuple column's type
+#############
+
+statement ok
+PREPARE mc_tuple_not_in AS SELECT value FROM mc_outer
+WHERE ($1, b) NOT IN (SELECT x, y FROM mc_inner_no_null);
+
+# ($1 = 1): (1, 2) matches; (1, NULL) vs (1, 2) is UNKNOWN; the rest mismatch.
+query T rowsort
+EXECUTE mc_tuple_not_in(1);
+----
+w
+y
+z
+
+statement ok
+DEALLOCATE mc_tuple_not_in;
+
+#############
+## Cleanup
+#############
+
+statement ok
+DROP TABLE mc_outer;
+
+statement ok
+DROP TABLE mc_inner_null;
+
+statement ok
+DROP TABLE mc_inner_no_null;
+
+statement ok
+DROP TABLE mc_empty;
+
+statement ok
+DROP TABLE mc3_outer;
+
+statement ok
+DROP TABLE mc3_inner;
+
+statement ok
+DROP TABLE mc_corr_outer;
+
+statement ok
+DROP TABLE mc_corr_inner;
+
+statement ok
+DROP TABLE mc_lt_outer;
+
+statement ok
+DROP TABLE mc_lt_inner;
+
+statement ok
+DROP TABLE mc_wide_inner;
+
+statement ok
+DROP TABLE mc_float_outer;
+
+statement ok
+DROP TABLE mc_float_inner;
+
+statement ok
+DROP TABLE mc_float_inner_null;
+
+statement ok
+DROP TABLE mc_ree_outer;
+
+statement ok
+DROP TABLE mc_ree_inner;
