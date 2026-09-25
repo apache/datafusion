@@ -27,6 +27,8 @@ use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::{
     DecoderProjection, DecoderProjectionBuilder, PostScanConjunct,
 };
+#[cfg(test)]
+use crate::filter_placement::PlacementSites;
 use crate::filter_placement::{FilePlacement, PlacementOptions};
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
 use crate::optional_filter::OptionalFilterOptions;
@@ -2364,6 +2366,7 @@ mod test {
         preserve_order: bool,
         optional_filters: OptionalFilterOptions,
         filter_placement: bool,
+        placement_sites: Option<Arc<PlacementSites>>,
     }
 
     #[test]
@@ -2589,6 +2592,7 @@ mod test {
                 preserve_order: false,
                 optional_filters: OptionalFilterOptions::default(),
                 filter_placement: false,
+                placement_sites: None,
             }
         }
 
@@ -2687,9 +2691,16 @@ mod test {
             self
         }
 
-        /// Set whether the scan must preserve file order.
+        /// Set whether the scan uses the adaptive filter placement.
         fn with_filter_placement(mut self, enable: bool) -> Self {
             self.filter_placement = enable;
+            self
+        }
+
+        /// Sets the pooled measurements of the adaptive filter placement,
+        /// for example [`PlacementSites::with_fixed_costs`].
+        fn with_placement_sites(mut self, sites: Arc<PlacementSites>) -> Self {
+            self.placement_sites = Some(sites);
             self
         }
 
@@ -2750,7 +2761,7 @@ mod test {
 
             let filter_placement = PlacementOptions::new(
                 self.filter_placement,
-                Arc::default(),
+                self.placement_sites.unwrap_or_default(),
                 self.predicate.as_ref(),
             );
             Ok(ParquetMorselizer {
@@ -5728,6 +5739,17 @@ mod test {
             (schema, file)
         }
 
+        /// Fixed costs for deterministic placement decisions: 10 ns to
+        /// decode each compressed byte and no fetch latency.
+        fn fixed_sites() -> Arc<PlacementSites> {
+            Arc::new(PlacementSites::with_fixed_costs(10.0, 0.0))
+        }
+
+        /// `a` makes runs of 1000 rows with the values 0 and 1.
+        fn runs_of_1000(i: usize) -> i32 {
+            ((i / 1000) % 2) as i32
+        }
+
         struct Scan {
             rows: usize,
             metrics: ExecutionPlanMetricsSet,
@@ -5765,6 +5787,7 @@ mod test {
                 .with_predicate(Arc::clone(predicate))
                 .with_pushdown_filters(pushdown_filters)
                 .with_filter_placement(filter_placement)
+                .with_placement_sites(fixed_sites())
                 .with_optional_filters(optional_filters)
                 .with_metrics(metrics.clone())
                 .build();
@@ -5775,12 +5798,10 @@ mod test {
 
         /// A filter that removes every second row saves no decode time in a
         /// row filter: the removed rows do not make runs that the decoder can
-        /// skip. The scan starts it as a row filter (the initial rule: the
-        /// filter does not read `v`), measures it in the first row group and
-        /// moves it to the post-scan filter at the first row group boundary.
-        /// The result is the same in all placements.
+        /// skip. The scan starts it in the post-scan filter and it stays
+        /// there. The result is the same in all placements.
         #[tokio::test]
-        async fn scattered_filter_moves_post_scan_at_row_group_boundary() {
+        async fn scattered_filter_stays_post_scan() {
             let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
             let (schema, file) = write_file(&store, |i| (i % 2) as i32).await;
             let predicate = logical2physical(&col("a").eq(lit(0)), &schema);
@@ -5812,9 +5833,9 @@ mod test {
             for scan in [&adaptive, &row_filter, &post_scan] {
                 assert_eq!(scan.rows, TOTAL_ROWS / 2);
             }
-            assert_eq!(adaptive.count("filter_placement_changes"), 1);
-            assert_eq!(adaptive.row_filter_rows(), ROWS_PER_ROW_GROUP);
-            assert_eq!(adaptive.post_scan_rows(), TOTAL_ROWS - ROWS_PER_ROW_GROUP);
+            assert_eq!(adaptive.count("filter_placement_changes"), 0);
+            assert_eq!(adaptive.row_filter_rows(), 0);
+            assert_eq!(adaptive.post_scan_rows(), TOTAL_ROWS);
             assert_eq!(row_filter.row_filter_rows(), TOTAL_ROWS);
             assert_eq!(post_scan.post_scan_rows(), TOTAL_ROWS);
         }
@@ -5836,6 +5857,7 @@ mod test {
                 .with_predicate(Arc::clone(predicate))
                 .with_pushdown_filters(pushdown_filters)
                 .with_filter_placement(filter_placement)
+                .with_placement_sites(fixed_sites())
                 .with_enable_page_index(true)
                 .with_metrics(metrics.clone())
                 .build();
@@ -5859,17 +5881,20 @@ mod test {
         /// The page index skips the first pages of the first row group
         /// (`v >= 1000`) and pages of the second and third row groups
         /// (`v < 20000 OR v >= 40000`), thus the scan has a live row
-        /// selection. The placement still changes at the first row group
-        /// boundary, the rebuilt decoder keeps the selections of the
-        /// remaining row groups, and the result is the same as with a row
-        /// filter only and with a post-scan filter only.
+        /// selection. `a = 0` passes the first row of each page of 100
+        /// rows: the page index cannot prune its pages, but it leaves empty
+        /// windows of 64 rows, thus it moves to the row filter. The placement
+        /// changes at a row group boundary, the rebuilt decoder keeps the
+        /// selections of the remaining row groups, and the result is the
+        /// same as with a row filter only and with a post-scan filter only.
         #[tokio::test]
         async fn placement_changes_with_page_index_selection() {
             use datafusion_physical_plan::metrics::MetricValue;
 
             let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
             let (schema, file) =
-                write_file_with_pages(&store, |i| (i % 2) as i32, Some(100)).await;
+                write_file_with_pages(&store, |i| i32::from(i % 100 != 0), Some(100))
+                    .await;
             let predicate = logical2physical(
                 &col("a").eq(lit(0)).and(col("v").gt_eq(lit(1000_i64))).and(
                     col("v")
@@ -5894,7 +5919,7 @@ mod test {
 
             let expected: Vec<i64> = (1000..20_000)
                 .chain(40_000..TOTAL_ROWS as i64)
-                .step_by(2)
+                .filter(|v| v % 100 == 0)
                 .collect();
             assert_eq!(adaptive, expected);
             assert_eq!(row_filter, expected);
@@ -5929,9 +5954,11 @@ mod test {
         }
 
         /// A filter that removes long runs of rows saves decode time in a row
-        /// filter, thus it stays a row filter.
+        /// filter. The scan starts it in the post-scan filter, measures it in
+        /// the first row group and moves it to the row filter at the first
+        /// row group boundary.
         #[tokio::test]
-        async fn clustered_filter_stays_row_filter() {
+        async fn clustered_filter_moves_to_row_filter() {
             let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
             // `a` increases by 1 every 1000 rows.
             let (schema, file) = write_file(&store, |i| (i / 1000) as i32).await;
@@ -5951,15 +5978,16 @@ mod test {
             )
             .await;
             assert_eq!(adaptive.rows, 20_000);
-            assert_eq!(adaptive.count("filter_placement_changes"), 0);
-            assert_eq!(adaptive.row_filter_rows(), TOTAL_ROWS);
-            assert_eq!(adaptive.post_scan_rows(), 0);
+            assert_eq!(adaptive.count("filter_placement_changes"), 1);
+            assert_eq!(adaptive.post_scan_rows(), ROWS_PER_ROW_GROUP);
+            assert_eq!(adaptive.row_filter_rows(), TOTAL_ROWS - ROWS_PER_ROW_GROUP);
         }
 
         /// A filter that reads all output columns cannot save decode time in
-        /// a row filter, thus it starts in the post-scan filter.
+        /// a row filter, thus it stays in the post-scan filter, also where it
+        /// removes long runs of rows.
         #[tokio::test]
-        async fn filter_on_all_output_columns_starts_post_scan() {
+        async fn filter_on_all_output_columns_stays_post_scan() {
             let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
             let (schema, file) = write_file(&store, |i| (i / 1000) as i32).await;
             let predicate = logical2physical(&col("a").lt(lit(10)), &schema);
@@ -5971,6 +5999,7 @@ mod test {
                 .with_predicate(predicate)
                 .with_pushdown_filters(true)
                 .with_filter_placement(true)
+                .with_placement_sites(fixed_sites())
                 .with_metrics(metrics.clone())
                 .build();
             let stream = open_file(&morselizer, file).await.unwrap();
@@ -6024,13 +6053,14 @@ mod test {
         }
 
         /// With a limit, the results are the same when the placement moves a
-        /// filter to the post-scan filter in the middle of the file.
+        /// filter to the row filter in the middle of the file.
         #[tokio::test]
         async fn limit_is_applied_after_placement_change() {
             let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-            let (schema, file) = write_file(&store, |i| (i % 2) as i32).await;
+            let (schema, file) = write_file(&store, runs_of_1000).await;
             let predicate = logical2physical(&col("a").eq(lit(0)), &schema);
-            let limit = ROWS_PER_ROW_GROUP / 2 + 100;
+            // The first row group has 8384 rows with `a = 0`.
+            let limit = 9000;
             let metrics = ExecutionPlanMetricsSet::new();
             let morselizer = ParquetMorselizerBuilder::new()
                 .with_store(Arc::clone(&store))
@@ -6038,6 +6068,7 @@ mod test {
                 .with_predicate(predicate)
                 .with_pushdown_filters(true)
                 .with_filter_placement(true)
+                .with_placement_sites(fixed_sites())
                 .with_limit(limit)
                 .with_metrics(metrics.clone())
                 .build();
@@ -6055,7 +6086,10 @@ mod test {
                         .to_vec()
                 })
                 .collect();
-            let expected: Vec<i64> = (0..limit as i64).map(|i| i * 2).collect();
+            let expected: Vec<i64> = (0..TOTAL_ROWS as i64)
+                .filter(|v| (v / 1000) % 2 == 0)
+                .take(limit)
+                .collect();
             assert_eq!(values, expected);
             assert_eq!(
                 counter_metric_value(&metrics, "filter_placement_changes"),
