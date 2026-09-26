@@ -34,6 +34,7 @@ pub mod regexpinstr;
 pub mod regexplike;
 pub mod regexpmatch;
 pub mod regexpreplace;
+pub mod regexpsplittoarray;
 
 /// Arrow's regex kernels treat null flags as no flags, but reject empty flags.
 /// Normalize empty strings without copying the string buffers.
@@ -49,6 +50,10 @@ make_udf_function!(regexpinstr::RegexpInstrFunc, regexp_instr);
 make_udf_function!(regexpmatch::RegexpMatchFunc, regexp_match);
 make_udf_function!(regexplike::RegexpLikeFunc, regexp_like);
 make_udf_function!(regexpreplace::RegexpReplaceFunc, regexp_replace);
+make_udf_function!(
+    regexpsplittoarray::RegexpSplitToArrayFunc,
+    regexp_split_to_array
+);
 
 pub mod expr_fn {
     use datafusion_expr::Expr;
@@ -69,6 +74,15 @@ pub mod expr_fn {
             args.push(flags);
         }
         super::regexp_count().call(args)
+    }
+
+    /// Splits a string into an array using a regular-expression delimiter.
+    pub fn regexp_split_to_array(values: Expr, regex: Expr, flags: Option<Expr>) -> Expr {
+        let mut args = vec![values, regex];
+        if let Some(flags) = flags {
+            args.push(flags);
+        }
+        super::regexp_split_to_array().call(args)
     }
 
     /// Returns a list of regular expression matches in a string.
@@ -140,6 +154,7 @@ pub fn functions() -> Vec<Arc<datafusion_expr::ScalarUDF>> {
         regexp_instr(),
         regexp_like(),
         regexp_replace(),
+        regexp_split_to_array(),
     ]
 }
 
@@ -162,6 +177,34 @@ pub(crate) fn start_to_byte_offset(value: &str, start: i64) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::start_to_byte_offset;
+    use datafusion_expr::expr::ScalarFunction;
+    use datafusion_expr::{Expr, col, lit};
+
+    #[test]
+    fn regexp_split_to_array_expr_arguments() {
+        let values = col("values");
+        let pattern = lit(",");
+        let flags = lit("i");
+
+        for (flags, expected) in [
+            (None, vec![values.clone(), pattern.clone()]),
+            (
+                Some(flags.clone()),
+                vec![values.clone(), pattern.clone(), flags.clone()],
+            ),
+        ] {
+            let actual = super::expr_fn::regexp_split_to_array(
+                values.clone(),
+                pattern.clone(),
+                flags,
+            );
+            let expected = Expr::ScalarFunction(ScalarFunction::new_udf(
+                super::regexp_split_to_array(),
+                expected,
+            ));
+            assert_eq!(actual, expected);
+        }
+    }
 
     #[test]
     fn empty_flags_match_omitted_flags() {
