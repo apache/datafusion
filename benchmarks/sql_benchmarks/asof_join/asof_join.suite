@@ -5,6 +5,7 @@
 # - latest right row at or before, or earliest right row at or after, each left row
 # - narrow integer or wide UTF-8 payloads
 # - selective left-side predicates that can run before matching
+# - equality-key predicates that can also prune the right input
 
 description = "ASOF join SQL benchmarks"
 
@@ -24,3 +25,7 @@ description = "Run the pre-sorted keyed ASOF join query."
 [[examples]]
 command = "cargo run --release --bin benchmark_runner -- asof_join --query 8"
 description = "Run the selective left-filter ASOF join query."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- asof_join --query 9"
+description = "Run the equality-key filter ASOF join query."
