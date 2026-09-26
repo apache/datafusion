@@ -1345,9 +1345,13 @@ impl HashJoinExec {
             PartitionMode::Auto => Partitioning::UnknownPartitioning(
                 right.output_partitioning().partition_count(),
             ),
-            PartitionMode::Partitioned => {
-                symmetric_join_output_partitioning(left, right, &join_type)?
-            }
+            PartitionMode::Partitioned => symmetric_join_output_partitioning(
+                left,
+                right,
+                &join_type,
+                on,
+                &mut eq_properties,
+            )?,
         };
 
         let emission_type =

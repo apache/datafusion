@@ -52,7 +52,9 @@ use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::{JoinType, Operator};
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
-use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal, binary, lit};
+use datafusion_physical_expr::expressions::{
+    BinaryExpr, Column, Literal, binary, case, is_not_null, lit,
+};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, OrderingRequirements, PhysicalSortExpr,
@@ -79,6 +81,7 @@ use datafusion_physical_plan::execution_plan::ExecutionPlan;
 use datafusion_physical_plan::expressions::col;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::JoinOn;
+use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -1411,6 +1414,184 @@ fn range_left_anti_hash_join_rehashes_incompatible_null_options() -> Result<()> 
     "
     );
 
+    Ok(())
+}
+
+/// Builds a Full `HashJoinExec` over two scans laid out by `partitioning`. The right side
+/// columns are aliased to `a1` and `b1`.
+fn co_partitioned_full_join(
+    partitioning: Partitioning,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let left = parquet_exec_with_output_partitioning(partitioning.clone());
+    let right = projection_exec_with_alias(
+        parquet_exec_with_output_partitioning(partitioning),
+        vec![
+            ("a".to_string(), "a1".to_string()),
+            ("b".to_string(), "b1".to_string()),
+        ],
+    );
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("a1", &right.schema())?) as _,
+    )];
+    Ok(hash_join_exec(left, right, &join_on, &JoinType::Full))
+}
+
+/// Builds `coalesce(first, second)` over two columns of `join` in its physical CASE form.
+fn coalesced_key(
+    join: &Arc<dyn ExecutionPlan>,
+    first: &str,
+    second: &str,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let first = Arc::new(Column::new_with_schema(first, &join.schema())?) as _;
+    let second = Arc::new(Column::new_with_schema(second, &join.schema())?) as _;
+    case(
+        None,
+        vec![(is_not_null(Arc::clone(&first))?, first)],
+        Some(second),
+    )
+}
+
+/// Inner joins `join` on `key` with a scan laid out by `partitioning`, then runs the
+/// distribution rule over the result.
+fn plan_join_on_key(
+    join: Arc<dyn ExecutionPlan>,
+    key: Arc<dyn PhysicalExpr>,
+    partitioning: Partitioning,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let right = parquet_exec_with_output_partitioning(partitioning);
+    let on = vec![(
+        key,
+        Arc::new(Column::new_with_schema("c", &right.schema())?) as _,
+    )];
+    let top = hash_join_exec(join, right, &on, &JoinType::Inner);
+    Ok(TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(top, &DISTRIB_DISTRIB_SORT))
+}
+
+#[test]
+fn full_hash_join_keeps_hash_partitioning_on_coalesced_key() -> Result<()> {
+    let join =
+        co_partitioned_full_join(Partitioning::Hash(vec![col("a", &schema())?], 4))?;
+    let key = coalesced_key(&join, "a", "a1")?;
+    let plan =
+        plan_join_on_key(join, key, Partitioning::Hash(vec![col("c", &schema())?], 4))?;
+
+    assert_plan!(
+        plan,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(CASE WHEN a@0 IS NOT NULL THEN a@0 ELSE a1@5 END, c@2)]
+      HashJoinExec: mode=Partitioned, join_type=Full, on=[(a@0, a1@0)]
+        DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Hash([a@0], 4), file_type=parquet
+        ProjectionExec: expr=[a@0 as a1, b@1 as b1]
+          DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Hash([a@0], 4), file_type=parquet
+      DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Hash([c@2], 4), file_type=parquet
+    "
+    );
+    Ok(())
+}
+
+#[test]
+fn full_hash_join_keeps_range_partitioning_on_coalesced_key() -> Result<()> {
+    let join = co_partitioned_full_join(range_partitioning(
+        "a",
+        [10, 20, 30],
+        SortOptions::default(),
+    )?)?;
+    let key = coalesced_key(&join, "a", "a1")?;
+    let plan = plan_join_on_key(
+        join,
+        key,
+        range_partitioning("c", [10, 20, 30], SortOptions::default())?,
+    )?;
+
+    assert_plan!(
+        plan,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(CASE WHEN a@0 IS NOT NULL THEN a@0 ELSE a1@5 END, c@2)]
+      HashJoinExec: mode=Partitioned, join_type=Full, on=[(a@0, a1@0)]
+        DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+        ProjectionExec: expr=[a@0 as a1, b@1 as b1]
+          DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
+      DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([c@2 ASC], [(10), (20), (30)], 4), file_type=parquet
+    "
+    );
+    Ok(())
+}
+
+#[test]
+fn full_hash_join_rehashes_plain_key_after_join() -> Result<()> {
+    let join =
+        co_partitioned_full_join(Partitioning::Hash(vec![col("a", &schema())?], 4))?;
+    let key = Arc::new(Column::new_with_schema("a", &join.schema())?) as _;
+    let plan =
+        plan_join_on_key(join, key, Partitioning::Hash(vec![col("c", &schema())?], 4))?;
+
+    assert_plan!(
+        plan,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, c@2)]
+      RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
+        HashJoinExec: mode=Partitioned, join_type=Full, on=[(a@0, a1@0)]
+          DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Hash([a@0], 4), file_type=parquet
+          ProjectionExec: expr=[a@0 as a1, b@1 as b1]
+            DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Hash([a@0], 4), file_type=parquet
+      DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Hash([c@2], 4), file_type=parquet
+    "
+    );
+    Ok(())
+}
+
+#[test]
+fn full_hash_join_keeps_partitioning_on_reversed_coalesced_key() -> Result<()> {
+    let join =
+        co_partitioned_full_join(Partitioning::Hash(vec![col("a", &schema())?], 4))?;
+    let key = coalesced_key(&join, "a1", "a")?;
+    let plan =
+        plan_join_on_key(join, key, Partitioning::Hash(vec![col("c", &schema())?], 4))?;
+
+    assert_plan!(
+        plan,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(CASE WHEN a1@5 IS NOT NULL THEN a1@5 ELSE a@0 END, c@2)]
+      HashJoinExec: mode=Partitioned, join_type=Full, on=[(a@0, a1@0)]
+        DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Hash([a@0], 4), file_type=parquet
+        ProjectionExec: expr=[a@0 as a1, b@1 as b1]
+          DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Hash([a@0], 4), file_type=parquet
+      DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Hash([c@2], 4), file_type=parquet
+    "
+    );
+    Ok(())
+}
+
+#[test]
+fn swapped_full_hash_join_keeps_partitioning_on_coalesced_key() -> Result<()> {
+    let join =
+        co_partitioned_full_join(Partitioning::Hash(vec![col("a", &schema())?], 4))?;
+    let swapped = join
+        .downcast_ref::<HashJoinExec>()
+        .expect("hash_join_exec builds a HashJoinExec")
+        .swap_inputs(PartitionMode::Partitioned)?;
+    let key = coalesced_key(&swapped, "a", "a1")?;
+    let plan = plan_join_on_key(
+        swapped,
+        key,
+        Partitioning::Hash(vec![col("c", &schema())?], 4),
+    )?;
+
+    assert_plan!(
+        plan,
+        @r"
+    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(CASE WHEN a@0 IS NOT NULL THEN a@0 ELSE a1@5 END, c@2)]
+      ProjectionExec: expr=[a@2 as a, b@3 as b, c@4 as c, d@5 as d, e@6 as e, a1@0 as a1, b1@1 as b1]
+        HashJoinExec: mode=Partitioned, join_type=Full, on=[(a1@0, a@0)]
+          ProjectionExec: expr=[a@0 as a1, b@1 as b1]
+            DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Hash([a@0], 4), file_type=parquet
+          DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Hash([a@0], 4), file_type=parquet
+      DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Hash([c@2], 4), file_type=parquet
+    "
+    );
     Ok(())
 }
 

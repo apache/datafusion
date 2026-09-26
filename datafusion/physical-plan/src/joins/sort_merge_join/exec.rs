@@ -326,8 +326,13 @@ impl SortMergeJoinExec {
             join_on,
         )?;
 
-        let mut output_partitioning =
-            symmetric_join_output_partitioning(left, right, &join_type)?;
+        let mut output_partitioning = symmetric_join_output_partitioning(
+            left,
+            right,
+            &join_type,
+            join_on,
+            &mut eq_properties,
+        )?;
 
         if let Some(projection) = projection {
             let mapping = ProjectionMapping::from_indices(projection, schema)?;
