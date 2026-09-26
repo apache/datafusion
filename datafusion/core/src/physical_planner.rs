@@ -19,6 +19,7 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use crate::datasource::file_format::file_type_to_format;
@@ -191,6 +192,85 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
             planning_ctx,
         )
     }
+}
+
+/// Rendering used to tell one plan from another when deciding whether a rule
+/// has already been seen to leave a plan alone.
+///
+/// Verbose so that node detail is included, and with the schema appended so
+/// that two plans differing only in nullability are not taken for one. This is
+/// still not a structural equality: anything no node prints is invisible here.
+/// A plan a rule has been observed to return unchanged, kept alive alongside
+/// its fingerprint.
+///
+/// The `Arc` is held rather than a raw address so that pointer equality is a
+/// sound identity check: while this entry lives the node cannot be dropped, so
+/// its address cannot be handed to a different plan. That is what lets the
+/// lookup below answer from the pointer alone and skip rendering entirely.
+type ProvenFixpoint = (Arc<dyn ExecutionPlan>, String);
+
+/// Configured rule names that no rule in the chain answers to.
+///
+/// A name is matched against what a rule reports as its `name()`, so a typo or
+/// a rule since renamed upstream leaves the entry doing nothing at all. That is
+/// silent otherwise: the option keeps working, just never on the rule the user
+/// meant. Returned in the order configured so the warning reads back the way it
+/// was written.
+fn unmatched_rule_names<'a>(
+    configured: &'a str,
+    available: &HashSet<&str>,
+) -> Vec<&'a str> {
+    configured
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && !available.contains(name))
+        .collect()
+}
+
+fn plan_fingerprint(plan: &dyn ExecutionPlan) -> String {
+    let mut out = displayable(plan)
+        .set_show_schema(true)
+        .indent(true)
+        .to_string();
+    // The rendering above is what a node chooses to print plus its schema. The
+    // properties a rule most often rewrites, partitioning and ordering, are not
+    // part of that for every node, and two plans that differ only in them would
+    // otherwise compare equal and one would be skipped as though it were the
+    // other. Append them per node, in the same pre-order the rendering uses.
+    //
+    // `equivalence_properties` is rendered with `Debug`, not `Display`: the
+    // latter prints the equivalence and ordering classes but omits the table
+    // constraints, which also factor into whether a requirement is satisfied.
+    // `EnsureRequirements` reads all of it when deciding whether a sort or a
+    // distribution requirement already holds, so a rule that updates only the
+    // omitted part would leave this fingerprint unchanged and have its work
+    // skipped by a later pass.
+    //
+    // This is still short of a structural identity: anything a node neither
+    // prints nor exposes through `PlanProperties` remains invisible. There is
+    // no structural comparison for `ExecutionPlan` to use instead today.
+    fn append_properties(plan: &dyn ExecutionPlan, depth: usize, out: &mut String) {
+        let props = plan.properties();
+        // Writing to a `String` cannot fail, so the result is discarded.
+        let _ = write!(
+            out,
+            "\n{:indent$}props[{}]: partitioning={:?} ordering={:?} \
+emission={:?} boundedness={:?} equivalence={:?}",
+            "",
+            plan.name(),
+            props.output_partitioning(),
+            props.output_ordering(),
+            props.emission_type,
+            props.boundedness,
+            props.equivalence_properties(),
+            indent = depth * 2,
+        );
+        for child in plan.children() {
+            append_properties(child.as_ref(), depth + 1, out);
+        }
+    }
+    append_properties(plan, 0, &mut out);
+    out
 }
 
 impl DefaultPhysicalPlanner {
@@ -3122,13 +3202,149 @@ impl DefaultPhysicalPlanner {
         let optimizer_context = SessionOptimizerContext {
             session: session_state,
         };
+        // For each rule `skip_unchanged_physical_rules` names, the plans that
+        // rule has been *observed* to leave untouched, so a later pass handed
+        // one of them can return it instead of re-deriving it.
+        //
+        // A plan is recorded only after the rule has actually run on it and
+        // produced the same plan back, so nothing here is an assumption: a
+        // skip replays an outcome already seen. That matters because a rule
+        // is not required to reach its fixpoint in one pass, and the plan it
+        // returns is frequently not yet one. Keying on the plan the rule was
+        // *given* rather than on the plan it last *returned* is what keeps
+        // those two cases apart.
+        //
+        // Plans are keyed by rendered form rather than by pointer, because a
+        // rule that changes nothing still commonly rebuilds the tree and
+        // returns a fresh object. `HashSet<String>` compares on collision, so
+        // two plans that hash alike are not confused for one another.
+        //
+        // Scoped to this call, which keeps the config out of the key: it
+        // cannot change midway through one optimization run. Rule instances
+        // are shared between queries, so this must not live on the rule.
+        let configured = &session_state
+            .config_options()
+            .optimizer
+            .skip_unchanged_physical_rules;
+        let mut fixpoints = (!configured.is_empty()).then(|| {
+            let names: HashSet<&str> = configured
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .collect();
+            (names, HashMap::<&str, Vec<ProvenFixpoint>>::new())
+        });
+
+        if fixpoints.is_some() {
+            let available: HashSet<&str> =
+                optimizers.iter().map(|rule| rule.name()).collect();
+            let unmatched = unmatched_rule_names(configured, &available);
+            if !unmatched.is_empty() {
+                log::warn!(
+                    "skip_unchanged_physical_rules names no rule in this chain: {}. \
+                     Check the spelling against the names EXPLAIN VERBOSE prints; \
+                     an unmatched name has no effect.",
+                    unmatched.join(", ")
+                );
+            }
+        }
+
         for optimizer in optimizers {
+            // `Some` when the rule is named and this plan is not already known
+            // to be one of its fixpoints: carries the input to record below.
+            let mut pending: Option<ProvenFixpoint> = None;
+            if let Some((names, seen)) = fixpoints.as_ref()
+                && names.contains(optimizer.name())
+            {
+                let known = seen.get(optimizer.name());
+
+                // The same object coming back around is the common case when
+                // the rules in between left the plan alone, and it settles
+                // identity without rendering anything.
+                let same_object = known.is_some_and(|entries| {
+                    entries.iter().any(|(plan, _)| Arc::ptr_eq(plan, &new_plan))
+                });
+
+                // Otherwise the plan has to be rendered: a rule that changed
+                // nothing still commonly rebuilds the tree, so a different
+                // object can still be the same plan.
+                let fingerprint =
+                    (!same_object).then(|| plan_fingerprint(new_plan.as_ref()));
+                let same_content = fingerprint.as_ref().is_some_and(|rendered| {
+                    known.is_some_and(|entries| {
+                        entries.iter().any(|(_, seen_fp)| seen_fp == rendered)
+                    })
+                });
+
+                if same_object || same_content {
+                    // This rule has already run on this exact plan and left it
+                    // alone, so running it again yields the same plan. Debug
+                    // builds check that rather than trusting it.
+                    //
+                    // Off under `cfg(test)`: re-running the rule makes a skipped
+                    // pass indistinguishable from one that ran, since both leave
+                    // the same call count behind, which would leave every unit
+                    // test below unable to tell the feature working from the
+                    // feature absent. Integration tests compile the library
+                    // without `cfg(test)` and so still exercise this.
+                    #[cfg(all(debug_assertions, not(test)))]
+                    {
+                        let rerun = optimizer
+                            .optimize_with_context(
+                                Arc::clone(&new_plan),
+                                &optimizer_context,
+                            )
+                            .map_err(|e| {
+                                DataFusionError::Context(
+                                    optimizer.name().to_string(),
+                                    Box::new(e),
+                                )
+                            })?;
+                        debug_assert_eq!(
+                            plan_fingerprint(rerun.as_ref()),
+                            plan_fingerprint(new_plan.as_ref()),
+                            "PhysicalOptimizer rule '{}' is named in \
+                             datafusion.optimizer.skip_unchanged_physical_rules \
+                             but stopped leaving a plan it had left alone before \
+                             untouched, so it does not depend only on the plan \
+                             and the config",
+                            optimizer.name(),
+                        );
+                    }
+                    observer(new_plan.as_ref(), optimizer.as_ref());
+                    continue;
+                }
+
+                // Not a known fixpoint, so the rule runs. `fingerprint` is
+                // `Some` here: `same_object` was false, or the branch above
+                // would have been taken.
+                if let Some(rendered) = fingerprint {
+                    pending = Some((Arc::clone(&new_plan), rendered));
+                }
+            }
+
             let before_schema = new_plan.schema();
             new_plan = optimizer
                 .optimize_with_context(new_plan, &optimizer_context)
                 .map_err(|e| {
                     DataFusionError::Context(optimizer.name().to_string(), Box::new(e))
                 })?;
+            // Record a fixpoint only where the rule demonstrably produced
+            // the plan it was given. A rule still working towards its
+            // fixpoint records nothing, so its next pass is not skipped.
+            if let Some((input, fingerprint)) = pending
+                && let Some((_, seen)) = fixpoints.as_mut()
+            {
+                // Handing back the object it was given proves the rule left the
+                // plan alone, without rendering the result to find out.
+                let unchanged = Arc::ptr_eq(&input, &new_plan)
+                    || plan_fingerprint(new_plan.as_ref()) == fingerprint;
+                if unchanged {
+                    seen.entry(optimizer.name())
+                        .or_default()
+                        .push((input, fingerprint));
+                }
+            }
 
             // This only checks the schema in release build, and performs additional checks in debug mode.
             OptimizationInvariantChecker::new(optimizer)
@@ -3525,7 +3741,7 @@ mod tests {
     use std::fmt::{self, Debug};
     use std::mem::size_of_val;
     use std::ops::{BitAnd, Not};
-    use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 
     use super::*;
     use crate::datasource::MemTable;
@@ -3565,6 +3781,13 @@ mod tests {
     use datafusion_functions_aggregate::count::{count_all, count_udaf};
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
+    use datafusion_physical_expr::expressions::Column as PhysColumn;
+    use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
+    use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
     use datafusion_physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
     use datafusion_session::QueryPlanner;
@@ -3848,6 +4071,875 @@ mod tests {
         assert!(physical_plan.is::<EmptyExec>());
         assert!(query_planner_invoked.load(AtomicOrdering::Relaxed));
         assert!(invoked.load(AtomicOrdering::Relaxed));
+        Ok(())
+    }
+
+    /// Counts its invocations and hands the plan back untouched, mimicking a
+    /// rule that finds nothing to do on an already-satisfied plan.
+    #[derive(Debug)]
+    struct CountingNoopRule {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl PhysicalOptimizerRule for CountingNoopRule {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.calls.fetch_add(1, AtomicOrdering::Relaxed);
+            Ok(plan)
+        }
+
+        fn name(&self) -> &str {
+            "counting_noop_rule"
+        }
+
+        fn schema_check(&self) -> bool {
+            true
+        }
+    }
+
+    /// Stands in for the instrumentation wrappers downstream projects put
+    /// around every rule to time or trace it. Naming rules by name is what
+    /// lets such a wrapper keep working, since it already has to report the
+    /// name it wraps for `EXPLAIN VERBOSE` to stay readable.
+    #[derive(Debug)]
+    struct WrappingRule {
+        inner: Arc<dyn PhysicalOptimizerRule + Send + Sync>,
+        reports_inner_name: bool,
+    }
+
+    impl PhysicalOptimizerRule for WrappingRule {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.inner.optimize(plan, config)
+        }
+
+        fn optimize_with_context(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            context: &dyn PhysicalOptimizerContext,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.inner.optimize_with_context(plan, context)
+        }
+
+        fn name(&self) -> &str {
+            if self.reports_inner_name {
+                self.inner.name()
+            } else {
+                "wrapping_rule"
+            }
+        }
+
+        fn schema_check(&self) -> bool {
+            self.inner.schema_check()
+        }
+    }
+
+    /// Expected invocations of a rule listed twice and named in the config.
+    /// Debug builds verify the idempotence claim by running a skipped rule
+    /// anyway and asserting it changed nothing, so the call still happens
+    /// there: what the skip saves in debug is nothing, and in release it is
+    /// the whole second pass.
+    /// Calls a rule receives when its repeated pass is skipped.
+    ///
+    /// One: the first pass. The self-check that would re-run it is compiled
+    /// out under `cfg(test)` precisely so this number differs from the two
+    /// calls an unskipped chain makes.
+    const SKIPPED_CALLS: usize = 1;
+
+    /// A context whose physical rule list is exactly `rules`, with the given
+    /// value for `skip_unchanged_physical_rules`.
+    fn session_with_rules(
+        skip_config: &str,
+        rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
+    ) -> SessionContext {
+        let mut config = SessionConfig::new();
+        config.options_mut().optimizer.skip_unchanged_physical_rules =
+            skip_config.to_string();
+        let state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_default_features()
+            .with_physical_optimizer_rules(rules)
+            .build();
+        SessionContext::new_with_state(state)
+    }
+
+    /// Plans the same rule twice, which is the shape a custom rule list takes
+    /// when a rewrite between the two passes may or may not fire, and reports
+    /// how many times the rule was actually asked to optimize.
+    async fn run_repeated_rule(skip_config: &str) -> Result<usize> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let rule = || {
+            Arc::new(CountingNoopRule {
+                calls: Arc::clone(&calls),
+            }) as Arc<dyn PhysicalOptimizerRule + Send + Sync>
+        };
+        let ctx = session_with_rules(skip_config, vec![rule(), rule()]);
+        let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+        ctx.state().create_physical_plan(&logical_plan).await?;
+        Ok(calls.load(AtomicOrdering::Relaxed))
+    }
+
+    /// Returns a plan equal to its input but built fresh, the way a rule that
+    /// rewrites the tree and then rewrites it back leaves it.
+    #[derive(Debug)]
+    struct RebuildingNoopRule {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl PhysicalOptimizerRule for RebuildingNoopRule {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.calls.fetch_add(1, AtomicOrdering::Relaxed);
+            // Build an equal node from scratch. Going through
+            // `with_new_children` would not do: it routes to
+            // `replace_children_if_necessary`, whose fast path returns the
+            // original object when the child pointers are unchanged, so the
+            // rule would hand back the very Arc it was given and never
+            // exercise the path this rule exists to cover.
+            // Rebuild the same node type so the plan is unchanged; only the
+            // object is new. `with_new_children` would not do: it routes to
+            // `replace_children_if_necessary`, whose fast path hands back the
+            // original object when the child pointers are unchanged, so the
+            // rule would return the very Arc it was given and never exercise
+            // the path this rule exists to cover.
+            let rebuilt: Arc<dyn ExecutionPlan> = if plan.name() == "EmptyExec" {
+                Arc::new(EmptyExec::new(plan.schema()))
+            } else {
+                Arc::new(PlaceholderRowExec::new(plan.schema()))
+            };
+            Ok(rebuilt)
+        }
+
+        fn name(&self) -> &str {
+            "rebuilding_noop_rule"
+        }
+
+        fn schema_check(&self) -> bool {
+            true
+        }
+    }
+
+    /// Runs `RebuildingNoopRule` twice in a row, returning how often it ran.
+    async fn run_repeated_rebuilding_rule(skip_config: &str) -> Result<usize> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let rule = || {
+            Arc::new(RebuildingNoopRule {
+                calls: Arc::clone(&calls),
+            }) as Arc<dyn PhysicalOptimizerRule + Send + Sync>
+        };
+        let ctx = session_with_rules(skip_config, vec![rule(), rule()]);
+        let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+        ctx.state().create_physical_plan(&logical_plan).await?;
+        Ok(calls.load(AtomicOrdering::Relaxed))
+    }
+
+    /// The skip must survive a rule that rebuilds the tree.
+    ///
+    /// The lookup answers from the pointer first, which only works while the
+    /// rule hands the same object back. A rule that changed nothing still
+    /// commonly returns a fresh tree, and most of the no-op passes measured on
+    /// a real chain did exactly that, so the content comparison behind the
+    /// pointer check is what carries the feature. Deleting the pointer fast
+    /// path would not fail this test; deleting the fallback would.
+    #[tokio::test]
+    async fn skip_unchanged_survives_a_rule_that_rebuilds_the_tree() -> Result<()> {
+        assert_eq!(
+            run_repeated_rebuilding_rule("rebuilding_noop_rule").await?,
+            SKIPPED_CALLS,
+            "a rebuilt but identical plan must still count as the fixpoint \
+             already proven, or the pointer check would be the only path"
+        );
+        // And it stays off when unnamed, like every other rule.
+        assert_eq!(run_repeated_rebuilding_rule("").await?, 2);
+        Ok(())
+    }
+
+    /// A named rule is called once instead of twice: the second entry receives
+    /// the exact plan the first returned.
+    #[tokio::test]
+    async fn skip_unchanged_skips_the_repeated_pass() -> Result<()> {
+        assert_eq!(
+            run_repeated_rule("counting_noop_rule").await?,
+            SKIPPED_CALLS
+        );
+        Ok(())
+    }
+
+    /// Off unless the rule is named, so an empty config behaves exactly as
+    /// before this feature existed, and a name that matches nothing, whether a
+    /// typo or a rule that is not in this list, is simply inert.
+    #[tokio::test]
+    async fn skip_unchanged_is_inert_unless_the_rule_is_named() -> Result<()> {
+        assert_eq!(run_repeated_rule("").await?, 2);
+        assert_eq!(run_repeated_rule("some_other_rule").await?, 2);
+        assert_eq!(run_repeated_rule("counting_noop_rul").await?, 2);
+        Ok(())
+    }
+
+    /// The config is a list, and reading it tolerates the spacing people
+    /// actually write.
+    #[test]
+    fn unmatched_names_are_reported_so_a_typo_is_not_silent() {
+        let available: HashSet<&str> = ["EnsureRequirements", "OutputRequirements"]
+            .into_iter()
+            .collect();
+
+        // A name the chain answers to is not reported.
+        assert!(unmatched_rule_names("EnsureRequirements", &available).is_empty());
+
+        // A typo is, which is the whole point: the option would otherwise keep
+        // working while never touching the rule the user meant.
+        assert_eq!(
+            unmatched_rule_names("EnsureRequirement", &available),
+            vec!["EnsureRequirement"]
+        );
+
+        // Matching is exact, so case differences are reported rather than
+        // silently accepted.
+        assert_eq!(
+            unmatched_rule_names("ensurerequirements", &available),
+            vec!["ensurerequirements"]
+        );
+
+        // The spacing people actually write is tolerated, and only the unknown
+        // entries come back, in the order they were configured.
+        assert_eq!(
+            unmatched_rule_names(
+                " EnsureRequirements , Nonsense ,, OutputRequirements , Other ",
+                &available
+            ),
+            vec!["Nonsense", "Other"]
+        );
+
+        // Nothing configured, nothing to report.
+        assert!(unmatched_rule_names("", &available).is_empty());
+        assert!(unmatched_rule_names("  ,  ", &available).is_empty());
+    }
+
+    #[tokio::test]
+    async fn skip_unchanged_reads_a_list_of_names() -> Result<()> {
+        for config in [
+            "counting_noop_rule,some_other_rule",
+            "some_other_rule, counting_noop_rule",
+            "  counting_noop_rule ,, ",
+        ] {
+            assert_eq!(run_repeated_rule(config).await?, SKIPPED_CALLS, "{config}");
+        }
+        Ok(())
+    }
+
+    /// Replaces the plan with an equivalent new object, standing in for a
+    /// rewrite that fires only for some queries.
+    #[derive(Debug)]
+    struct RewritingRule {
+        name: &'static str,
+        rewrite: bool,
+    }
+
+    impl PhysicalOptimizerRule for RewritingRule {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            if self.rewrite {
+                // Must change the plan, not merely rebuild it: the input here
+                // is already an `EmptyExec` with this schema, so returning
+                // another one leaves the plan identical and the pass that
+                // follows would be skipped as a fixpoint it never reached.
+                Ok(Arc::new(CoalescePartitionsExec::new(plan)))
+            } else {
+                Ok(plan)
+            }
+        }
+
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn schema_check(&self) -> bool {
+            true
+        }
+    }
+
+    /// The shape this feature exists for: a chain that enforces requirements,
+    /// applies its own rewrites, and enforces again after each one. Only the
+    /// enforcement passes that follow a rewrite which actually fired have work
+    /// to do; the others receive the plan the previous enforcement produced.
+    ///
+    /// Here the first rewrite fires and the second does not, so of three
+    /// enforcement passes exactly two must run.
+    #[tokio::test]
+    async fn skip_unchanged_handles_an_interleaved_chain() -> Result<()> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let enforce = || {
+            Arc::new(CountingNoopRule {
+                calls: Arc::clone(&calls),
+            }) as Arc<dyn PhysicalOptimizerRule + Send + Sync>
+        };
+        let rewrite = |name, rewrite| {
+            Arc::new(RewritingRule { name, rewrite })
+                as Arc<dyn PhysicalOptimizerRule + Send + Sync>
+        };
+
+        let ctx = session_with_rules(
+            "counting_noop_rule",
+            vec![
+                enforce(), // runs: nothing memoized yet
+                rewrite("rewrite_that_fires", true),
+                enforce(), // runs: the plan changed
+                rewrite("rewrite_that_does_not", false),
+                enforce(), // skipped: plan is unchanged
+            ],
+        );
+        let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+        ctx.state().create_physical_plan(&logical_plan).await?;
+
+        // Two enforcement passes have real work; the third is skipped.
+        assert_eq!(calls.load(AtomicOrdering::Relaxed), 2);
+        Ok(())
+    }
+
+    /// The memo is per optimization run, not per rule instance: planning a
+    /// second query must not let the first query's plan suppress a call.
+    #[tokio::test]
+    async fn skip_unchanged_does_not_leak_between_plans() -> Result<()> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let ctx = session_with_rules(
+            "counting_noop_rule",
+            vec![Arc::new(CountingNoopRule {
+                calls: Arc::clone(&calls),
+            })],
+        );
+        let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+        ctx.state().create_physical_plan(&logical_plan).await?;
+        ctx.state().create_physical_plan(&logical_plan).await?;
+        // Once per plan; a rule-level memo would have suppressed the second.
+        // The rule is listed once here, so the debug self-check never fires.
+        assert_eq!(calls.load(AtomicOrdering::Relaxed), 2);
+        Ok(())
+    }
+
+    /// Rules are matched by the name they report, so a rule wrapped for timing
+    /// or tracing is reached through the name the wrapper passes through, with
+    /// no cooperation needed from the wrapper beyond what `EXPLAIN VERBOSE`
+    /// already requires of it. A wrapper that renames what it wraps is
+    /// addressed by its own name instead.
+    #[tokio::test]
+    async fn skip_unchanged_follows_the_name_a_wrapper_reports() -> Result<()> {
+        async fn wrapped_calls(
+            reports_inner_name: bool,
+            skip_config: &str,
+        ) -> Result<usize> {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let rule = || {
+                Arc::new(WrappingRule {
+                    inner: Arc::new(CountingNoopRule {
+                        calls: Arc::clone(&calls),
+                    }),
+                    reports_inner_name,
+                }) as Arc<dyn PhysicalOptimizerRule + Send + Sync>
+            };
+            let ctx = session_with_rules(skip_config, vec![rule(), rule()]);
+            let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+            ctx.state().create_physical_plan(&logical_plan).await?;
+            Ok(calls.load(AtomicOrdering::Relaxed))
+        }
+
+        assert_eq!(
+            wrapped_calls(true, "counting_noop_rule").await?,
+            SKIPPED_CALLS
+        );
+        assert_eq!(wrapped_calls(false, "counting_noop_rule").await?, 2);
+        assert_eq!(wrapped_calls(false, "wrapping_rule").await?, SKIPPED_CALLS);
+        Ok(())
+    }
+
+    /// Changes the plan a fixed number of times and is a no-op after that,
+    /// standing in for a rule that needs several passes to converge.
+    /// `EnsureRequirements` is one: on real plans its distribution and sorting
+    /// phases can each still find work on a plan it produced itself.
+    #[derive(Debug)]
+    struct ConvergesAfter {
+        remaining: AtomicUsize,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl PhysicalOptimizerRule for ConvergesAfter {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.calls.fetch_add(1, AtomicOrdering::Relaxed);
+            if self.remaining.load(AtomicOrdering::Relaxed) == 0 {
+                return Ok(plan);
+            }
+            self.remaining.fetch_sub(1, AtomicOrdering::Relaxed);
+            Ok(Arc::new(CoalescePartitionsExec::new(plan)))
+        }
+
+        fn name(&self) -> &str {
+            "counting_noop_rule"
+        }
+
+        fn schema_check(&self) -> bool {
+            true
+        }
+    }
+
+    /// The case that makes "skip what the rule last returned" wrong and this
+    /// design right: a rule still working towards its fixpoint must keep
+    /// running. Only a plan the rule has been seen to leave alone is recorded,
+    /// so the passes that still have work to do are never skipped, and the
+    /// plan comes out exactly as it does with the optimization off.
+    #[tokio::test]
+    async fn skip_unchanged_does_not_skip_a_rule_that_has_not_converged() -> Result<()> {
+        async fn run(skip_config: &str) -> Result<(usize, String)> {
+            let calls = Arc::new(AtomicUsize::new(0));
+            // Shared across the five entries, as one rule instance repeated in
+            // a chain would be: it converges after two rewrites.
+            let rule = Arc::new(ConvergesAfter {
+                remaining: AtomicUsize::new(2),
+                calls: Arc::clone(&calls),
+            }) as Arc<dyn PhysicalOptimizerRule + Send + Sync>;
+            let ctx = session_with_rules(
+                skip_config,
+                (0..5).map(|_| Arc::clone(&rule)).collect(),
+            );
+            let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+            let plan = ctx.state().create_physical_plan(&logical_plan).await?;
+            Ok((
+                calls.load(AtomicOrdering::Relaxed),
+                displayable(plan.as_ref()).indent(true).to_string(),
+            ))
+        }
+
+        let (off_calls, off_plan) = run("").await?;
+        let (on_calls, on_plan) = run("counting_noop_rule").await?;
+
+        // Five entries, all of which run with the optimization off.
+        assert_eq!(off_calls, 5);
+        // With it on, the two rewriting passes and the one that proves the
+        // fixpoint still run; only the last two are skipped.
+        assert_eq!(on_calls, 3 + 2 * (SKIPPED_CALLS - 1));
+        // And the plan is unaffected, which is the point.
+        assert_eq!(on_plan, off_plan);
+        Ok(())
+    }
+
+    /// The fingerprint has to separate plans that differ only in properties a
+    /// node does not print. Partitioning is the common case: a rule that
+    /// repartitions leaves the rendered tree looking the same at the node it
+    /// changed, and two such plans would otherwise be taken for one another.
+    #[tokio::test]
+    async fn fingerprint_separates_plans_differing_only_in_partitioning() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let one = Arc::new(EmptyExec::new(Arc::clone(&schema))) as Arc<dyn ExecutionPlan>;
+        let many = Arc::new(EmptyExec::new(Arc::clone(&schema)).with_partitions(4))
+            as Arc<dyn ExecutionPlan>;
+
+        // EmptyExec prints the same either way ...
+        assert_eq!(
+            displayable(one.as_ref())
+                .set_show_schema(true)
+                .indent(true)
+                .to_string(),
+            displayable(many.as_ref())
+                .set_show_schema(true)
+                .indent(true)
+                .to_string(),
+            "precondition: the rendering alone does not distinguish them",
+        );
+        // ... so the fingerprint carries the properties as well.
+        assert_ne!(
+            plan_fingerprint(one.as_ref()),
+            plan_fingerprint(many.as_ref())
+        );
+        Ok(())
+    }
+
+    /// Ordering is the property this feature cares about most, since
+    /// `EnsureRequirements`, the rule that motivates it, exists to rewrite
+    /// ordering and distribution. A node that does not print its ordering
+    /// leaves two such plans rendering identically, so the fingerprint has to
+    /// reach into the properties to tell them apart.
+    #[tokio::test]
+    async fn fingerprint_separates_plans_differing_only_in_ordering() -> Result<()> {
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let unordered = Arc::new(NoOpExecutionPlan::new(Arc::clone(&schema)))
+            as Arc<dyn ExecutionPlan>;
+        let ordered = Arc::new(NoOpExecutionPlan::ordered_on(Arc::clone(&schema), "a"))
+            as Arc<dyn ExecutionPlan>;
+
+        // Precondition: the rendering, schema included, cannot tell them apart.
+        assert_eq!(
+            displayable(unordered.as_ref())
+                .set_show_schema(true)
+                .indent(true)
+                .to_string(),
+            displayable(ordered.as_ref())
+                .set_show_schema(true)
+                .indent(true)
+                .to_string(),
+            "the node does not print its ordering, so the rendering is the same",
+        );
+        // And confirm the orderings really do differ, so the test is not
+        // passing on two identically-unordered plans.
+        assert!(unordered.properties().output_ordering().is_none());
+        assert!(ordered.properties().output_ordering().is_some());
+
+        assert_ne!(
+            plan_fingerprint(unordered.as_ref()),
+            plan_fingerprint(ordered.as_ref()),
+            "a plan that claims an ordering must not be taken for one that does not",
+        );
+        Ok(())
+    }
+
+    /// The fingerprint has to separate plans that differ only in nullability.
+    /// Most nodes do not print their schema, so without asking for it two such
+    /// plans render identically and one would be skipped as though it were the
+    /// other.
+    /// Two plans alike in everything the other fields cover, differing only in
+    /// their equivalence group.
+    ///
+    /// `EnsureRequirements` decides whether a sort or distribution requirement
+    /// already holds by consulting the equivalence properties, so a rule that
+    /// updates only those has done real work. Were they left out of the
+    /// fingerprint, that work would look like no change at all and the next
+    /// pass would be skipped on a plan that is not the one recorded.
+    #[tokio::test]
+    async fn fingerprint_separates_plans_differing_only_in_equivalences() -> Result<()> {
+        let schema: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+        ]));
+        let plain = Arc::new(NoOpExecutionPlan::new(Arc::clone(&schema)))
+            as Arc<dyn ExecutionPlan>;
+        let with_equality = Arc::new(NoOpExecutionPlan::with_equal_columns(
+            Arc::clone(&schema),
+            "a",
+            "b",
+        )) as Arc<dyn ExecutionPlan>;
+
+        // Precondition: the rendering, schema included, cannot tell them apart.
+        assert_eq!(
+            displayable(plain.as_ref())
+                .set_show_schema(true)
+                .indent(true)
+                .to_string(),
+            displayable(with_equality.as_ref())
+                .set_show_schema(true)
+                .indent(true)
+                .to_string(),
+            "the node does not print its equivalences, so the rendering is the same",
+        );
+        // Nor can the other properties the fingerprint already covered: the
+        // ordering is absent on both, so this test fails unless the
+        // equivalences themselves are part of the fingerprint.
+        assert!(plain.properties().output_ordering().is_none());
+        assert!(with_equality.properties().output_ordering().is_none());
+        assert_eq!(
+            format!("{:?}", plain.properties().output_partitioning()),
+            format!("{:?}", with_equality.properties().output_partitioning()),
+        );
+
+        assert_ne!(
+            plan_fingerprint(plain.as_ref()),
+            plan_fingerprint(with_equality.as_ref()),
+            "a plan whose columns are known equal is not the plan without that \
+             knowledge, and skipping a rule on one as though it were the other \
+             would drop the rule's work",
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fingerprint_separates_plans_differing_only_in_nullability() -> Result<()> {
+        let nullable = Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Int64,
+            true,
+        )])))) as Arc<dyn ExecutionPlan>;
+        let not_null = Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Int64,
+            false,
+        )])))) as Arc<dyn ExecutionPlan>;
+
+        // Without the schema these two are indistinguishable ...
+        assert_eq!(
+            displayable(nullable.as_ref()).indent(true).to_string(),
+            displayable(not_null.as_ref()).indent(true).to_string(),
+            "precondition: the plans render the same when the schema is left out",
+        );
+        // ... which is why the fingerprint asks for it.
+        assert_ne!(
+            plan_fingerprint(nullable.as_ref()),
+            plan_fingerprint(not_null.as_ref()),
+        );
+        Ok(())
+    }
+
+    /// Queries chosen to reach the operators the built-in rules act on.
+    const PLAN_CORPUS: &[&str] = &[
+        "SELECT a, sum(b) FROM t GROUP BY a ORDER BY a",
+        "SELECT count(*) FROM t",
+        "SELECT DISTINCT a FROM t",
+        "SELECT * FROM t ORDER BY b LIMIT 5",
+        "SELECT a FROM t WHERE b > 10 ORDER BY a LIMIT 3",
+        "SELECT t.a, u.d FROM t JOIN u ON t.a = u.c",
+        "SELECT a, row_number() OVER (PARTITION BY a ORDER BY b) FROM t",
+        "SELECT a, b FROM t UNION ALL SELECT c, d FROM u",
+        "SELECT a, sum(b) FROM t GROUP BY a HAVING sum(b) > 5 ORDER BY a LIMIT 2",
+    ];
+
+    /// Plans every query in [`PLAN_CORPUS`] through `rules`.
+    async fn corpus_plans(
+        skip_config: &str,
+        rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
+    ) -> Result<Vec<String>> {
+        let ctx = session_with_rules(skip_config, rules);
+        ctx.sql("CREATE TABLE t(a INT, b INT) AS VALUES (1,10),(2,20),(1,30)")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("CREATE TABLE u(c INT, d INT) AS VALUES (1,100),(3,300)")
+            .await?
+            .collect()
+            .await?;
+        let mut plans = Vec::with_capacity(PLAN_CORPUS.len());
+        for query in PLAN_CORPUS {
+            let plan = ctx.sql(query).await?.create_physical_plan().await?;
+            plans.push(displayable(plan.as_ref()).indent(true).to_string());
+        }
+        Ok(plans)
+    }
+
+    /// The built-in list with two further enforcement passes appended, as a
+    /// downstream list has after inserting rewrites of its own behind the
+    /// built-in enforcement. This is the shape that motivates the feature.
+    fn rules_with_trailing_enforcement()
+    -> Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> {
+        let mut rules = PhysicalOptimizer::default().rules;
+        rules.push(Arc::new(EnsureRequirements::new()));
+        rules.push(Arc::new(EnsureRequirements::new()));
+        rules
+    }
+
+    /// Turning the optimization on must change how often a rule runs and
+    /// nothing else, so every plan in the corpus has to come out identical.
+    #[tokio::test]
+    async fn skip_unchanged_leaves_the_plan_alone() -> Result<()> {
+        let skipped =
+            corpus_plans("EnsureRequirements", rules_with_trailing_enforcement()).await?;
+        let stock = corpus_plans("", rules_with_trailing_enforcement()).await?;
+        assert_eq!(skipped, stock);
+        Ok(())
+    }
+
+    /// Runs `rules` over the corpus and records the plan immediately after each
+    /// rule, so a rewrite can be observed before a later rule normalizes it
+    /// away. Returns one snapshot list per query.
+    async fn corpus_snapshots_per_rule(
+        rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
+    ) -> Result<Vec<Vec<String>>> {
+        let ctx = session_with_rules("", rules);
+        ctx.sql("CREATE TABLE t(a INT, b INT) AS VALUES (1,10),(2,20),(1,30)")
+            .await?
+            .collect()
+            .await?;
+        ctx.sql("CREATE TABLE u(c INT, d INT) AS VALUES (1,100),(3,300)")
+            .await?
+            .collect()
+            .await?;
+
+        let planner = DefaultPhysicalPlanner::default();
+        let state = ctx.state();
+        let mut per_query = Vec::with_capacity(PLAN_CORPUS.len());
+        for query in PLAN_CORPUS {
+            let logical = state.create_logical_plan(query).await?;
+            let logical = state.optimize(&logical)?;
+            let initial = planner.create_initial_plan(&logical, &state).await?;
+            let snapshots = Rc::new(RefCell::new(Vec::new()));
+            let sink = Rc::clone(&snapshots);
+            planner.optimize_physical_plan(initial, &state, move |plan, rule| {
+                sink.borrow_mut().push(format!(
+                    "{}\n{}",
+                    rule.name(),
+                    plan_fingerprint(plan)
+                ));
+            })?;
+            per_query.push(Rc::try_unwrap(snapshots).unwrap().into_inner());
+        }
+        Ok(per_query)
+    }
+
+    /// Naming a rule in the config asserts that running it on its own output
+    /// arrives at the same plan. This checks that claim for every built-in rule
+    /// by running each one twice in place.
+    ///
+    /// The comparison is on the plan captured *immediately after* the duplicated
+    /// rule, not on the final plan: a later rule can normalize away a rewrite
+    /// the second invocation made, which would let a non-idempotent rule pass.
+    ///
+    /// All built-in rules pass today. A rule that stops being idempotent breaks
+    /// the promise for anyone who named it, which is what this guards.
+    #[tokio::test]
+    async fn builtin_rules_are_idempotent() -> Result<()> {
+        let stock = PhysicalOptimizer::default().rules;
+
+        for (position, rule) in stock.iter().enumerate() {
+            let mut doubled = stock.clone();
+            doubled.insert(position + 1, Arc::clone(rule));
+            let per_query = corpus_snapshots_per_rule(doubled).await?;
+
+            for (q, snapshots) in per_query.iter().enumerate() {
+                // The rule under test occupies both `position` and `position+1`.
+                // If it is idempotent the second pass leaves the first's output
+                // alone, so the two snapshots are identical.
+                let first = &snapshots[position];
+                let second = &snapshots[position + 1];
+                assert_eq!(
+                    first.split_once('\n').map(|(_, p)| p),
+                    second.split_once('\n').map(|(_, p)| p),
+                    "'{}' (position {position}) changed the plan when run on its \
+                     own output, on corpus query {q}: {}",
+                    rule.name(),
+                    PLAN_CORPUS[q],
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Proves the snapshot-per-rule comparison is what makes the idempotence
+    /// check meaningful. A rule that rewrites on its second invocation, paired
+    /// with a later rule that normalizes that rewrite away, leaves the final
+    /// plan identical. Comparing only the end of the chain would call such a
+    /// rule idempotent; comparing right after it does not.
+    #[tokio::test]
+    async fn idempotence_check_sees_a_rewrite_a_later_rule_undoes() -> Result<()> {
+        /// Wraps its input in a Coalesce the second time it is asked.
+        #[derive(Debug)]
+        struct RewritesOnSecondCall {
+            calls: Arc<AtomicUsize>,
+        }
+        impl PhysicalOptimizerRule for RewritesOnSecondCall {
+            fn optimize(
+                &self,
+                plan: Arc<dyn ExecutionPlan>,
+                _config: &ConfigOptions,
+            ) -> Result<Arc<dyn ExecutionPlan>> {
+                if self.calls.fetch_add(1, AtomicOrdering::Relaxed) == 0 {
+                    return Ok(plan);
+                }
+                Ok(Arc::new(CoalescePartitionsExec::new(plan)))
+            }
+            fn name(&self) -> &str {
+                "rewrites_on_second_call"
+            }
+            fn schema_check(&self) -> bool {
+                true
+            }
+        }
+
+        /// Strips the Coalesce back off, standing in for a later normalizer.
+        #[derive(Debug)]
+        struct StripsCoalesce;
+        impl PhysicalOptimizerRule for StripsCoalesce {
+            fn optimize(
+                &self,
+                plan: Arc<dyn ExecutionPlan>,
+                _config: &ConfigOptions,
+            ) -> Result<Arc<dyn ExecutionPlan>> {
+                if plan.name() == "CoalescePartitionsExec" {
+                    return Ok(Arc::clone(plan.children()[0]));
+                }
+                Ok(plan)
+            }
+            fn name(&self) -> &str {
+                "strips_coalesce"
+            }
+            fn schema_check(&self) -> bool {
+                true
+            }
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let rule = || {
+            Arc::new(RewritesOnSecondCall {
+                calls: Arc::clone(&calls),
+            }) as Arc<dyn PhysicalOptimizerRule + Send + Sync>
+        };
+        let rules = vec![
+            rule(),
+            rule(),
+            Arc::new(StripsCoalesce) as Arc<dyn PhysicalOptimizerRule + Send + Sync>,
+        ];
+
+        let ctx = session_with_rules("", rules);
+        let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+        let state = ctx.state();
+        let logical = state.optimize(&logical_plan)?;
+        let planner = DefaultPhysicalPlanner::default();
+        let initial = planner.create_initial_plan(&logical, &state).await?;
+
+        let snapshots = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&snapshots);
+        let final_plan =
+            planner.optimize_physical_plan(initial, &state, move |plan, _| {
+                sink.borrow_mut().push(plan_fingerprint(plan));
+            })?;
+        let snapshots = Rc::try_unwrap(snapshots).unwrap().into_inner();
+
+        // The end of the chain hides it: the normalizer removed the rewrite.
+        assert_eq!(
+            plan_fingerprint(final_plan.as_ref()),
+            snapshots[0],
+            "precondition: the final plan matches the first pass, so a \
+             final-plan comparison would see nothing",
+        );
+        // Snapshotting right after each rule does not.
+        assert_ne!(
+            snapshots[0], snapshots[1],
+            "the second invocation rewrote its own output and the check must see it",
+        );
+        Ok(())
+    }
+
+    /// `EXPLAIN VERBOSE` renders one plan snapshot per rule from the observer
+    /// callback, so a skipped rule still has to report the plan it would have
+    /// returned. Otherwise enabling the optimization would silently shorten
+    /// the explain output.
+    #[tokio::test]
+    async fn skip_unchanged_still_reports_every_rule_to_the_observer() -> Result<()> {
+        async fn explain_with(skip_config: &str) -> Result<String> {
+            let rule = || {
+                Arc::new(CountingNoopRule {
+                    calls: Arc::new(AtomicUsize::new(0)),
+                }) as Arc<dyn PhysicalOptimizerRule + Send + Sync>
+            };
+            let ctx = session_with_rules(skip_config, vec![rule(), rule()]);
+            let batches = ctx.sql("EXPLAIN VERBOSE SELECT 1").await?.collect().await?;
+            Ok(arrow::util::pretty::pretty_format_batches(&batches)?.to_string())
+        }
+
+        let skipped = explain_with("counting_noop_rule").await?;
+        assert_eq!(skipped, explain_with("").await?);
+        // Both passes are reported, including the one that did not run.
+        assert_eq!(skipped.matches("counting_noop_rule").count(), 2);
         Ok(())
     }
 
@@ -5188,6 +6280,50 @@ mod tests {
             let cache = Self::compute_properties(schema);
             Self {
                 cache: Arc::new(cache),
+            }
+        }
+
+        /// Same node, but claiming an output ordering on `column`. Its
+        /// rendering is identical to [`Self::new`]'s, which is what makes it
+        /// useful for checking that the fingerprint looks past the rendering.
+        fn ordered_on(schema: SchemaRef, column: &str) -> Self {
+            let mut eq = EquivalenceProperties::new(Arc::clone(&schema));
+            if let Some(ordering) = LexOrdering::new(vec![PhysicalSortExpr::new(
+                Arc::new(PhysColumn::new_with_schema(column, &schema).unwrap()),
+                SortOptions::default(),
+            )]) {
+                eq.add_orderings(vec![ordering.into_iter().collect::<Vec<_>>()]);
+            }
+            Self {
+                cache: Arc::new(PlanProperties::new(
+                    eq,
+                    Partitioning::UnknownPartitioning(1),
+                    EmissionType::Incremental,
+                    Boundedness::Bounded,
+                )),
+            }
+        }
+
+        /// Same node again, but declaring two of its columns equal.
+        ///
+        /// Nothing else differs: the rendering, the schema, the partitioning
+        /// and the output ordering all match [`Self::new`]'s. Only the
+        /// equivalence group does, which is the part `EnsureRequirements`
+        /// consults when deciding whether a requirement is already satisfied.
+        fn with_equal_columns(schema: SchemaRef, left: &str, right: &str) -> Self {
+            let mut eq = EquivalenceProperties::new(Arc::clone(&schema));
+            eq.add_equal_conditions(
+                Arc::new(PhysColumn::new_with_schema(left, &schema).unwrap()),
+                Arc::new(PhysColumn::new_with_schema(right, &schema).unwrap()),
+            )
+            .unwrap();
+            Self {
+                cache: Arc::new(PlanProperties::new(
+                    eq,
+                    Partitioning::UnknownPartitioning(1),
+                    EmissionType::Incremental,
+                    Boundedness::Bounded,
+                )),
             }
         }
 
