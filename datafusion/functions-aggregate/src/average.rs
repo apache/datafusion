@@ -350,6 +350,10 @@ impl AggregateUDFImpl for Avg {
         }
     }
 
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::Insensitive
+    }
+
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.is_distinct {
             // Decimal accumulator actually uses a different precision during accumulation,

@@ -2927,6 +2927,31 @@ GRC 110 [30.0, 80.0]
 FRA 250 [50.0, 200.0]
 TUR 175 [75.0, 100.0]
 
+# ORDER BY is ignored by order-insensitive aggregators. These aggregators used
+# to panic because their ORDER BY expressions were passed to the accumulator as
+# extra input columns (issue #25401).
+statement ok
+CREATE TABLE insensitive_order_by (g INT, k INT, v INT) AS VALUES
+  (1, 2, 6), (1, 1, 3), (2, 4, 12), (2, 3, 10);
+
+query IRIIIRRRR
+SELECT g,
+  avg(v ORDER BY k),
+  bit_and(v ORDER BY k),
+  bit_or(v ORDER BY k),
+  bit_xor(v ORDER BY k),
+  var_samp(v ORDER BY k),
+  var_pop(v ORDER BY k),
+  stddev_pop(v ORDER BY k),
+  round(stddev(v ORDER BY k), 4)
+FROM insensitive_order_by GROUP BY g ORDER BY g;
+----
+1 4.5 2 7 5 4.5 2.25 1.5 2.1213
+2 11 8 14 6 2 1 1 1.4142
+
+statement ok
+DROP TABLE insensitive_order_by;
+
 # test_reverse_aggregate_expr5
 # If all of the ordering sensitive aggregation functions are reversible
 # we should be able to reverse requirements, if this helps to remove a SortExec.
