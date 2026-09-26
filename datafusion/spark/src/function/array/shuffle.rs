@@ -187,8 +187,7 @@ fn general_array_shuffle<O: OffsetSizeTrait>(
         // skip the null value
         if array.is_null(row_index) {
             nulls.push(false);
-            offsets.push(offsets[row_index] + O::one());
-            mutable.try_extend(0, 0, 1)?;
+            offsets.push(offsets[row_index]);
             continue;
         }
         nulls.push(true);
@@ -272,8 +271,45 @@ fn fixed_size_array_shuffle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::{Int32Array, ListArray};
+    use arrow::buffer::NullBuffer;
     use arrow::datatypes::Field;
     use datafusion_expr::ReturnFieldArgs;
+
+    #[test]
+    fn test_shuffle_null_lists() -> Result<()> {
+        let field = Arc::new(Field::new_list_field(DataType::Int32, false));
+        let input = ListArray::new(
+            Arc::clone(&field),
+            OffsetBuffer::new(vec![0, 0, 0, 1, 1].into()),
+            Arc::new(Int32Array::from(vec![42])),
+            Some(NullBuffer::from(vec![false, true, true, false])),
+        );
+        let empty_child = ListArray::new(
+            Arc::clone(&field),
+            OffsetBuffer::new(vec![0, 0, 0].into()),
+            Arc::new(Int32Array::from(Vec::<i32>::new())),
+            Some(NullBuffer::from(vec![false, true])),
+        );
+
+        for (list, expected_values_len) in
+            [(empty_child, 0), (input.clone(), 1), (input.slice(3, 1), 0)]
+        {
+            for data_type in [list.data_type().clone(), LargeList(Arc::clone(&field))] {
+                let array = arrow::compute::cast(&list, &data_type)?;
+                let result = array_shuffle_with_seed(&[Arc::clone(&array)], Some(0))?;
+                assert_eq!(result.as_ref(), array.as_ref());
+                // Null rows need no placeholder child value.
+                let values_len = match data_type {
+                    List(_) => as_list_array(&result)?.values().len(),
+                    LargeList(_) => as_large_list_array(&result)?.values().len(),
+                    _ => unreachable!(),
+                };
+                assert_eq!(values_len, expected_values_len);
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_shuffle_nullability() {
