@@ -1847,6 +1847,26 @@ config_namespace! {
         /// See: <https://trino.io/docs/current/admin/dynamic-filtering.html#dynamic-filter-collection-thresholds>
         pub hash_join_inlist_pushdown_max_distinct_values: usize, default = 150
 
+        /// Maximum number of distinct build-side values to retain for row-group/file
+        /// min/max-based pruning once the build side is too large for `InList` pushdown
+        /// and falls back to an opaque hash-table-lookup filter. Set to 0 to disable.
+        ///
+        /// On by default: the check is footer-only (no bloom filter or extra I/O),
+        /// reusing the sorted-domain rewrite an ordinary large `IN (...)` list already
+        /// gets, so a container is kept only if its own min/max overlaps a value.
+        ///
+        /// When engaged, `EXPLAIN`'s `pruning_predicate=` gains an extra
+        /// `IN_SET_INTERSECTS(<col>_min, <col>_max, <n> values)` clause - the visible
+        /// sign this ran, distinct from the plain min/max bounds every join pushes down.
+        pub hash_join_dynamic_pruning_max_distinct_values: usize, default = 100_000
+
+        /// Companion size cap (bytes) for `hash_join_dynamic_pruning_max_distinct_values`,
+        /// mirroring `hash_join_inlist_pushdown_max_size`. Set to 0 to disable.
+        ///
+        /// Checked against the *raw*, undeduplicated build-side column, so this also
+        /// guards against few distinct values but many duplicate rows.
+        pub hash_join_dynamic_pruning_max_size: usize, default = 8 * 1024 * 1024
+
         /// The default filter selectivity used by Filter Statistics
         /// when an exact selectivity cannot be determined. Valid values are
         /// between 0 (no selectivity) and 100 (all rows are selected).

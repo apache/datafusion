@@ -28,7 +28,7 @@ use crate::string_in_list::{BinaryInListPruningExpr, StringInListPruningExpr};
 
 use arrow::array::AsArray;
 use arrow::{
-    array::{ArrayRef, BooleanArray, new_null_array},
+    array::{Array, ArrayRef, BooleanArray, new_null_array},
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::{RecordBatch, RecordBatchOptions},
 };
@@ -52,6 +52,7 @@ use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee};
 use datafusion_physical_expr::{PhysicalExprRef, expressions as phys_expr};
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr_opt;
+use datafusion_physical_plan::joins::HashTableLookupExpr;
 use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
 
 /// Used to prove that arbitrary predicates (boolean expression) can not
@@ -1520,6 +1521,186 @@ impl CompactInListDomain {
     }
 }
 
+/// Builds the same kind of compact, sorted-domain "may match" expression as
+/// [`build_compact_in_list_expr`], but for a [`HashTableLookupExpr`] (a large join
+/// build side pushed down as an opaque hash-table lookup, not exposed via
+/// [`InListExpr`]): tests container min/max stats against the build-side values.
+///
+/// Always `IN` semantics (`lookup` never represents `NOT IN`) with nulls already
+/// stripped, so this skips the negation/all-null-list handling
+/// `build_compact_in_list_expr` needs.
+///
+/// The domain itself is built once per build side and cached in the lookup; every
+/// later `PruningPredicate` only rebinds it to that container's statistics columns.
+///
+/// Deliberately **not** gated by `max_in_list_size`: that cap is for literal SQL
+/// `IN (...)` lists, and its small default (20) would defeat this for every build
+/// side big enough to reach here. `hash_join_dynamic_pruning_max_distinct_values`
+/// and `_max_size` bound this instead.
+///
+/// [`InListExpr`]: datafusion_physical_expr::expressions::InListExpr
+fn build_hash_lookup_pruning_expr(
+    lookup: &HashTableLookupExpr,
+    schema: &Schema,
+    required_columns: &mut RequiredColumns,
+) -> Option<Arc<dyn PhysicalExpr>> {
+    // Composite (multi-column) keys have no IN-list equivalent.
+    let on_columns = lookup.children();
+    let [column_expr] = on_columns[..] else {
+        return None;
+    };
+    let column = column_expr.downcast_ref::<phys_expr::Column>()?;
+    let field = schema.fields().get(column.index())?;
+    if field.name() != column.name() {
+        return None;
+    }
+    let data_type = match field.data_type() {
+        DataType::Dictionary(_, value) => value.as_ref(),
+        data_type => data_type,
+    };
+
+    // Roll back appended statistics columns if the rewrite cannot be completed.
+    // `RequiredColumns::stat_column_expr` only appends entries.
+    let required_columns_len = required_columns.columns.len();
+    let rewritten = (|| {
+        let min = required_columns
+            .min_column_expr(column, column_expr, field)
+            .ok()?;
+        let max = required_columns
+            .max_column_expr(column, column_expr, field)
+            .ok()?;
+        let non_null =
+            build_is_null_column_expr(column_expr, schema, required_columns, true)?;
+        // The cached expression holds the sorted domain and takes its min/max as
+        // children, so rebinding it to this container's statistics is a clone.
+        let may_match = lookup
+            .cached_pruning_expr(data_type, |array| {
+                build_in_list_domain_expr(
+                    data_type,
+                    array,
+                    Arc::clone(&min),
+                    Arc::clone(&max),
+                )
+            })?
+            .with_new_children(vec![min, max])
+            .ok()?;
+        Some(Arc::new(phys_expr::BinaryExpr::new(
+            non_null,
+            Operator::And,
+            may_match,
+        )) as Arc<dyn PhysicalExpr>)
+    })();
+    if rewritten.is_none() {
+        required_columns.columns.truncate(required_columns_len);
+    }
+    rewritten
+}
+
+/// Collects `array`'s non-null values into an `IN` domain over `data_type` and
+/// wraps it in the matching pruning expression, which sorts and deduplicates them.
+/// `None` for a type the domain cannot hold.
+///
+/// A dictionary-encoded build side contributes its dictionary values, including any
+/// no longer referenced by a key. Extra values only make the domain match more
+/// containers, never fewer, so this stays conservative.
+fn build_in_list_domain_expr(
+    data_type: &DataType,
+    array: &dyn Array,
+    min: PhysicalExprRef,
+    max: PhysicalExprRef,
+) -> Option<PhysicalExprRef> {
+    let values = match array.data_type() {
+        DataType::Dictionary(_, _) => array.as_any_dictionary().values(),
+        _ => array,
+    };
+    Some(if data_type.is_string() {
+        let values = string_values(values)?;
+        if values.is_empty() {
+            return None;
+        }
+        Arc::new(StringInListPruningExpr::new(
+            SetMembership::In,
+            min,
+            max,
+            values,
+        ))
+    } else if matches!(
+        data_type,
+        DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+    ) {
+        let values = binary_values(values)?;
+        if values.is_empty() {
+            return None;
+        }
+        Arc::new(BinaryInListPruningExpr::new(
+            SetMembership::In,
+            min,
+            max,
+            values,
+        ))
+    } else {
+        let domain = PrimitiveInListDomain::from_array(data_type, values)?;
+        if domain.is_empty() {
+            return None;
+        }
+        domain.into_expr(SetMembership::In, min, max)
+    })
+}
+
+/// `array`'s non-null values, for any of the string layouts. The domain compares
+/// bytes, so the layout the build side happens to use does not have to match the
+/// column's.
+fn string_values(array: &dyn Array) -> Option<Vec<String>> {
+    let to_owned = |value: &str| value.to_owned();
+    Some(match array.data_type() {
+        DataType::Utf8 => array
+            .as_string::<i32>()
+            .iter()
+            .flatten()
+            .map(to_owned)
+            .collect(),
+        DataType::LargeUtf8 => array
+            .as_string::<i64>()
+            .iter()
+            .flatten()
+            .map(to_owned)
+            .collect(),
+        DataType::Utf8View => array
+            .as_string_view()
+            .iter()
+            .flatten()
+            .map(to_owned)
+            .collect(),
+        _ => return None,
+    })
+}
+
+/// `array`'s non-null values, for any of the binary layouts. See [`string_values`].
+fn binary_values(array: &dyn Array) -> Option<Vec<Box<[u8]>>> {
+    let to_owned = |value: &[u8]| Box::<[u8]>::from(value);
+    Some(match array.data_type() {
+        DataType::Binary => array
+            .as_binary::<i32>()
+            .iter()
+            .flatten()
+            .map(to_owned)
+            .collect(),
+        DataType::LargeBinary => array
+            .as_binary::<i64>()
+            .iter()
+            .flatten()
+            .map(to_owned)
+            .collect(),
+        DataType::BinaryView => array
+            .as_binary_view()
+            .iter()
+            .flatten()
+            .map(to_owned)
+            .collect(),
+        _ => return None,
+    })
+}
+
 /// Keep large literal lists of supported ordered types compact instead of
 /// building a per-value tree: an OR tree for `IN`, an AND chain for `NOT IN`.
 ///
@@ -1815,6 +1996,41 @@ fn build_predicate_expression(
         } else {
             return unhandled_hook.handle(expr);
         }
+    }
+    if let Some(lookup) = expr.downcast_ref::<HashTableLookupExpr>() {
+        return build_hash_lookup_pruning_expr(lookup, schema, required_columns)
+            .unwrap_or_else(|| unhandled_hook.handle(expr));
+    }
+    // A partitioned hash join hides its per-partition filters under a `CASE` on the
+    // repartition hash. A row takes exactly one branch, so a container may match
+    // only if some branch may: the branches' disjunction is a sound relaxation, and
+    // the `WHEN`s (a hash, which no statistics describe) can be dropped.
+    if let Some(case) = expr.downcast_ref::<phys_expr::CaseExpr>() {
+        // Only a Boolean `CASE` is a predicate; anything else is a value for
+        // whatever compares it to handle.
+        if !matches!(case.data_type(schema), Ok(DataType::Boolean)) {
+            return unhandled_hook.handle(expr);
+        }
+        // A missing `ELSE` yields NULL, which never matches, so it adds nothing.
+        return case
+            .when_then_expr()
+            .iter()
+            .map(|(_, then)| then)
+            .chain(case.else_expr())
+            .map(|branch| {
+                build_predicate_expression(
+                    branch,
+                    schema,
+                    required_columns,
+                    unhandled_hook,
+                    max_in_list_size,
+                    properties,
+                )
+            })
+            .reduce(|acc, branch| {
+                Arc::new(phys_expr::BinaryExpr::new(acc, Operator::Or, branch)) as _
+            })
+            .unwrap_or_else(|| unhandled_hook.handle(expr));
     }
 
     let (left, op, right) = {
@@ -2407,6 +2623,10 @@ mod tests {
         self as phys_expr, DynamicFilterPhysicalExpr,
     };
     use datafusion_physical_expr::planner::logical2physical;
+    use datafusion_physical_plan::joins::join_hash_map::{
+        JoinHashMapType, JoinHashMapU32,
+    };
+    use datafusion_physical_plan::joins::{Map, SeededRandomState};
     use itertools::Itertools;
 
     #[derive(Debug, Default)]
@@ -7339,5 +7559,122 @@ mod tests {
         let expected =
             "c1_null_count@2 != row_count@3 AND c1_min@0 <= a AND a <= c1_max@1";
         assert_eq!(res.to_string(), expected);
+    }
+
+    /// A hash map holding `distinct_count` entries - only the count matters for
+    /// `num_of_distinct_key()`, which decides whether the build side needs dedup.
+    fn hash_map_with_distinct_count(distinct_count: usize) -> Arc<Map> {
+        let mut hash_map = JoinHashMapU32::with_capacity(distinct_count);
+        let hashes: Vec<u64> =
+            (0..distinct_count as u64).map(|i| 100 * (i + 1)).collect();
+        JoinHashMapType::update_from_iter(
+            &mut hash_map,
+            Box::new(hashes.iter().enumerate()),
+            0,
+        );
+        Arc::new(Map::HashMap(Box::new(hash_map)))
+    }
+
+    #[test]
+    fn test_hash_lookup_pruning_via_min_max() {
+        let map = hash_map_with_distinct_count(3);
+
+        let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
+        let column: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("b", 0));
+        // Duplicates and nulls are the domain's to handle, not the build side's.
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(10),
+            Some(20),
+            Some(10),
+            None,
+            Some(30),
+        ]));
+        let lookup: Arc<dyn PhysicalExpr> = Arc::new(HashTableLookupExpr::new(
+            vec![Arc::clone(&column)],
+            SeededRandomState::with_seed(1),
+            map,
+            "hash_lookup".to_string(),
+            Some(values),
+        ));
+
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .try_build(lookup)
+            .unwrap();
+
+        // No `with_contained` call anywhere: `contained()` always returns `None`,
+        // matching real row-group/file statistics (no bloom filter). Exclusion here
+        // can only come from the min/max-only rewrite, not from `LiteralGuarantee`.
+        let statistics = TestStatistics::new().with(
+            "b",
+            ContainerStats::new_i32(
+                vec![Some(5), Some(15), Some(100)],
+                vec![Some(8), Some(25), Some(200)],
+            ),
+        );
+
+        let result = predicate.prune(&statistics).unwrap();
+        // Container 0 ([5,8]) and container 2 ([100,200]) contain none of {10,20,30};
+        // container 1 ([15,25]) contains 20 - kept.
+        assert_eq!(result, vec![false, true, false]);
+    }
+
+    #[test]
+    fn test_partition_routed_hash_lookup_pruning() {
+        let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
+        let column: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("b", 0));
+
+        // One branch per build partition, each holding its own slice of the build
+        // side, as `build_partitioned_filter` produces them.
+        let branch = |values: Vec<i32>| -> Arc<dyn PhysicalExpr> {
+            let values: ArrayRef = Arc::new(Int32Array::from(values));
+            Arc::new(HashTableLookupExpr::new(
+                vec![Arc::clone(&column)],
+                SeededRandomState::with_seed(1),
+                hash_map_with_distinct_count(3),
+                "hash_lookup".to_string(),
+                Some(values),
+            ))
+        };
+        let routing: Arc<dyn PhysicalExpr> =
+            Arc::new(phys_expr::Literal::new(ScalarValue::UInt64(Some(0))));
+        let when = |partition: u64| -> Arc<dyn PhysicalExpr> {
+            Arc::new(phys_expr::Literal::new(ScalarValue::UInt64(Some(
+                partition,
+            ))))
+        };
+        let case: Arc<dyn PhysicalExpr> = Arc::new(
+            phys_expr::CaseExpr::try_new(
+                Some(routing),
+                vec![
+                    (when(0), branch(vec![10, 20, 30])),
+                    (when(1), branch(vec![40, 50, 60])),
+                ],
+                // Partitions with no build rows reject everything routed to them.
+                Some(Arc::new(phys_expr::Literal::new(ScalarValue::Boolean(
+                    Some(false),
+                )))),
+            )
+            .unwrap(),
+        );
+
+        let predicate = PruningPredicateBuilder::new()
+            .with_file_schema(Arc::clone(&schema))
+            .try_build(case)
+            .unwrap();
+
+        let statistics = TestStatistics::new().with(
+            "b",
+            ContainerStats::new_i32(
+                vec![Some(5), Some(15), Some(45), Some(100)],
+                vec![Some(8), Some(25), Some(55), Some(200)],
+            ),
+        );
+
+        let result = predicate.prune(&statistics).unwrap();
+        // Container 1 ([15,25]) holds 20 from the first branch and container 2
+        // ([45,55]) holds 50 from the second, so a branch may match in each. The
+        // other two intersect neither branch, nor the `ELSE`.
+        assert_eq!(result, vec![false, true, true, false]);
     }
 }

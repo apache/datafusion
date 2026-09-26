@@ -17,10 +17,10 @@
 
 //! Hash computation and hash table lookup expressions for dynamic filtering
 
-use std::{fmt::Display, hash::Hash, sync::Arc};
+use std::{fmt::Display, hash::Hash, sync::Arc, sync::OnceLock};
 
 use arrow::{
-    array::{ArrayRef, UInt64Array},
+    array::{Array, ArrayRef, UInt64Array},
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
@@ -32,6 +32,7 @@ use datafusion_common::internal_err;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr_common::dyn_eq::DynHash;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, PhysicalExprRef};
+use parking_lot::Mutex;
 
 use crate::joins::Map;
 
@@ -271,6 +272,46 @@ impl HashExpr {
     }
 }
 
+/// A build side's pruning domain: the raw values until pruning first needs them,
+/// then the expression built from them. `PruningPredicate` is rebuilt for file,
+/// row-group and page-index pruning of every file in a scan, so the domain is built
+/// once here and rebound to each container's statistics instead.
+struct PruningDomain {
+    /// `None` once taken to build `expr`, or if no values were retained at all.
+    raw: Mutex<Option<ArrayRef>>,
+    /// The expression and the type it was built for; `None` if that failed, so the
+    /// attempt is not repeated.
+    expr: OnceLock<Option<(DataType, PhysicalExprRef)>>,
+}
+
+impl PruningDomain {
+    fn new(raw: Option<ArrayRef>) -> Self {
+        Self {
+            raw: Mutex::new(raw),
+            expr: OnceLock::new(),
+        }
+    }
+
+    /// The pruning expression for `data_type`, which `build` constructs from the raw
+    /// build-side values on the first call, releasing the array right after. `None`
+    /// if there are no usable values, or if an earlier caller built the domain for a
+    /// different type - a file whose column type has evolved goes unpruned.
+    fn get_or_build(
+        &self,
+        data_type: &DataType,
+        build: impl FnOnce(&dyn Array) -> Option<PhysicalExprRef>,
+    ) -> Option<PhysicalExprRef> {
+        let (built_for, expr) = self
+            .expr
+            .get_or_init(|| {
+                let raw = self.raw.lock().take()?;
+                Some((data_type.clone(), build(raw.as_ref())?))
+            })
+            .as_ref()?;
+        (built_for == data_type).then(|| Arc::clone(expr))
+    }
+}
+
 /// Physical expression that checks join keys in a [`Map`] (hash table or array map).
 ///
 /// Returns a [`BooleanArray`](arrow::array::BooleanArray) indicating if join keys (from `on_columns`) exist in the map.
@@ -284,6 +325,8 @@ pub struct HashTableLookupExpr {
     map: Arc<Map>,
     /// Description for display
     description: String,
+    /// Pruning-only build-side values, shared with every derived expression.
+    pruning_domain: Arc<PruningDomain>,
 }
 impl HashTableLookupExpr {
     /// Create a new HashTableLookupExpr
@@ -293,6 +336,7 @@ impl HashTableLookupExpr {
     /// * `random_state` - SeededRandomState for hashing
     /// * `map` - Map to check membership (hash table or array map)
     /// * `description` - Description for debugging
+    /// * `raw_pruning_values` - undeduplicated build-side values for pruning only, or `None`
     ///
     /// # Public Only for Internal Use:
     /// `datafusion-proto` tests require this constructor, but it is not part of
@@ -303,13 +347,26 @@ impl HashTableLookupExpr {
         random_state: SeededRandomState,
         map: Arc<Map>,
         description: String,
+        raw_pruning_values: Option<ArrayRef>,
     ) -> Self {
         Self {
             on_columns,
             random_state,
             map,
             description,
+            pruning_domain: Arc::new(PruningDomain::new(raw_pruning_values)),
         }
+    }
+
+    /// The pruning expression for this build side, which `build` constructs from
+    /// its raw values on the first call and every later call reuses. `None` if no
+    /// values were kept, or if one was already built for a different `data_type`.
+    pub fn cached_pruning_expr(
+        &self,
+        data_type: &DataType,
+        build: impl FnOnce(&dyn Array) -> Option<PhysicalExprRef>,
+    ) -> Option<PhysicalExprRef> {
+        self.pruning_domain.get_or_build(data_type, build)
     }
 }
 impl std::fmt::Debug for HashTableLookupExpr {
@@ -363,12 +420,13 @@ impl PhysicalExpr for HashTableLookupExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        Ok(Arc::new(HashTableLookupExpr::new(
-            children,
-            self.random_state.clone(),
-            Arc::clone(&self.map),
-            self.description.clone(),
-        )))
+        Ok(Arc::new(HashTableLookupExpr {
+            on_columns: children,
+            random_state: self.random_state.clone(),
+            map: Arc::clone(&self.map),
+            description: self.description.clone(),
+            pruning_domain: Arc::clone(&self.pruning_domain),
+        }))
     }
 
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
@@ -414,6 +472,7 @@ impl PhysicalExpr for HashTableLookupExpr {
             random_state: _,
             map: _,
             description: _,
+            pruning_domain: _,
         } = self;
 
         // HashTableLookupExpr holds a runtime Arc<Map> (the build-side hash
@@ -459,7 +518,9 @@ fn evaluate_columns(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::joins::join_hash_map::JoinHashMapU32;
+    use crate::joins::join_hash_map::{JoinHashMapType, JoinHashMapU32};
+    use arrow::array::AsArray;
+    use arrow::datatypes::Int32Type;
     use datafusion_physical_expr::expressions::Column;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::Hasher;
@@ -468,6 +529,89 @@ mod tests {
         let mut hasher = DefaultHasher::new();
         value.hash(&mut hasher);
         hasher.finish()
+    }
+
+    /// Builds a `JoinHashMapU32` containing exactly `distinct_hashes.len()` entries -
+    /// only the count matters for `num_of_distinct_key()`, not the hash content.
+    fn hash_map_with_distinct_count(distinct_hashes: &[u64]) -> Arc<Map> {
+        let mut map = JoinHashMapU32::with_capacity(distinct_hashes.len());
+        JoinHashMapType::update_from_iter(
+            &mut map,
+            Box::new(distinct_hashes.iter().enumerate()),
+            0,
+        );
+        Arc::new(Map::HashMap(Box::new(map)))
+    }
+
+    fn build_domain(
+        expr: &HashTableLookupExpr,
+        seen: &std::cell::RefCell<Vec<Vec<Option<i32>>>>,
+    ) -> Option<PhysicalExprRef> {
+        expr.cached_pruning_expr(&DataType::Int32, |array| {
+            seen.borrow_mut()
+                .push(array.as_primitive::<Int32Type>().iter().collect());
+            Some(Arc::new(
+                datafusion_physical_expr::expressions::Literal::new(
+                    datafusion_common::ScalarValue::Boolean(Some(true)),
+                ),
+            ))
+        })
+    }
+
+    fn lookup_with(raw_values: Option<Vec<i32>>) -> HashTableLookupExpr {
+        HashTableLookupExpr::new(
+            vec![Arc::new(Column::new("a", 0))],
+            SeededRandomState::with_seed(1),
+            hash_map_with_distinct_count(&[100, 200, 300]),
+            "hash_lookup".to_string(),
+            raw_values.map(|v| Arc::new(arrow::array::Int32Array::from(v)) as ArrayRef),
+        )
+    }
+
+    #[test]
+    fn test_cached_pruning_domain() {
+        let expr = lookup_with(Some(vec![3, 1, 3]));
+        let seen = std::cell::RefCell::new(Vec::new());
+        let built = build_domain(&expr, &seen).expect("domain built");
+
+        assert_eq!(seen.borrow().as_slice(), [vec![Some(3), Some(1), Some(3)]]);
+
+        // Second call is served from the cache: same expression, builder not re-run.
+        let again = build_domain(&expr, &seen).expect("domain cached");
+        assert!(Arc::ptr_eq(&built, &again));
+        assert_eq!(seen.borrow().len(), 1);
+
+        // Assert domain absent for other data types
+        assert!(
+            expr.cached_pruning_expr(&DataType::Int64, |_| unreachable!())
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_cached_pruning_domain_absent_when_not_populated() {
+        let seen = std::cell::RefCell::new(Vec::new());
+        assert!(build_domain(&lookup_with(None), &seen).is_none());
+        assert!(seen.borrow().is_empty());
+    }
+
+    #[test]
+    fn test_cached_pruning_domain_shared_with_derived_children() {
+        let expr = lookup_with(Some(vec![1, 2, 3]));
+        let seen = std::cell::RefCell::new(Vec::new());
+        let built = build_domain(&expr, &seen).expect("domain built");
+
+        let derived = Arc::new(expr)
+            .with_new_children(vec![Arc::new(Column::new("a", 7))])
+            .unwrap();
+        let derived = derived.downcast_ref::<HashTableLookupExpr>().unwrap();
+
+        assert_eq!(derived.children()[0].to_string(), "a@7");
+        assert!(Arc::ptr_eq(
+            &built,
+            &build_domain(derived, &seen).expect("domain shared")
+        ));
+        assert_eq!(seen.borrow().len(), 1);
     }
 
     #[test]
@@ -748,6 +892,7 @@ mod tests {
             SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup".to_string(),
+            None,
         );
 
         let expr2 = HashTableLookupExpr::new(
@@ -755,6 +900,7 @@ mod tests {
             SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup".to_string(),
+            None,
         );
 
         assert_eq!(expr1, expr2);
@@ -773,6 +919,7 @@ mod tests {
             SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup".to_string(),
+            None,
         );
 
         let expr2 = HashTableLookupExpr::new(
@@ -780,6 +927,7 @@ mod tests {
             SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup".to_string(),
+            None,
         );
 
         assert_ne!(expr1, expr2);
@@ -796,6 +944,7 @@ mod tests {
             SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup_one".to_string(),
+            None,
         );
 
         let expr2 = HashTableLookupExpr::new(
@@ -803,6 +952,7 @@ mod tests {
             SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup_two".to_string(),
+            None,
         );
 
         assert_ne!(expr1, expr2);
@@ -822,6 +972,7 @@ mod tests {
             SeededRandomState::with_seed(1),
             hash_map1,
             "lookup".to_string(),
+            None,
         );
 
         let expr2 = HashTableLookupExpr::new(
@@ -829,6 +980,7 @@ mod tests {
             SeededRandomState::with_seed(1),
             hash_map2,
             "lookup".to_string(),
+            None,
         );
 
         // Different Arc pointers means not equal (uses Arc::ptr_eq)
@@ -846,6 +998,7 @@ mod tests {
             SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup".to_string(),
+            None,
         );
 
         let expr2 = HashTableLookupExpr::new(
@@ -853,6 +1006,7 @@ mod tests {
             SeededRandomState::with_seed(1),
             Arc::clone(&hash_map),
             "lookup".to_string(),
+            None,
         );
 
         // Equal expressions should have equal hashes
