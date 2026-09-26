@@ -170,9 +170,13 @@ impl FilterCost {
 /// probe row and looks them up in its hash table. A row that the dynamic
 /// filter of the join removes in the scan does not get this work, thus this
 /// is the saving of a removed row. The work that depends on a match (the
-/// output of a matched row) is not in it: the filter does not remove
-/// matched rows. The producer of a dynamic filter measures it and the
-/// consumers of the filter read it (see
+/// check of the candidates of the lookup and the output of a matched row)
+/// is not in it: the filter removes only rows without a match. While the
+/// filter is on, most rows that reach the producer are matches, thus work
+/// that only matches get would make the saving too large (TPC-DS SF1 Q31:
+/// 6 ns for each probe row with the check, 0.1 to 1.2 ns without it). The
+/// producer of a dynamic filter measures it and the consumers of the filter
+/// read it (see
 /// [`DynamicFilterPhysicalExpr::removed_row_work`]).
 ///
 /// Lock-free.
