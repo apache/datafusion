@@ -66,9 +66,7 @@ use datafusion_common::Column;
 use datafusion_common::HashMap as DFHashMap;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::format::ExplainAnalyzeCategories;
-use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
-};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     DFSchema, DFSchemaRef, ScalarValue, exec_err, internal_datafusion_err, internal_err,
     not_impl_err, plan_err,
@@ -3407,7 +3405,7 @@ impl<'a> OptimizationInvariantChecker<'a> {
     /// In debug mode, this recursively walks the entire physical plan
     /// and performs [`ExecutionPlan::check_invariants`].
     pub fn check(
-        &mut self,
+        &self,
         plan: &Arc<dyn ExecutionPlan>,
         previous_schema: &Arc<Schema>,
     ) -> Result<()> {
@@ -3424,7 +3422,14 @@ impl<'a> OptimizationInvariantChecker<'a> {
 
         // check invariants per each ExecutionPlan node
         #[cfg(debug_assertions)]
-        plan.visit(self)?;
+        plan.apply(|node| {
+            // Checks for the more permissive `InvariantLevel::Always`.
+            // Plans are not guaranteed to be executable after each physical optimizer run.
+            node.check_invariants(InvariantLevel::Always).map_err(|e|
+                e.context(format!("Invariant for ExecutionPlan node '{}' failed for PhysicalOptimizer rule '{}'", node.name(), self.rule.name()))
+            )?;
+            Ok(TreeNodeRecursion::Continue)
+        })?;
 
         Ok(())
     }
@@ -3479,43 +3484,24 @@ fn is_allowed_field_change(old_field: &Field, new_field: &Field) -> Result<()> {
     }
 }
 
-impl<'n> TreeNodeVisitor<'n> for OptimizationInvariantChecker<'_> {
-    type Node = Arc<dyn ExecutionPlan>;
-
-    fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
-        // Checks for the more permissive `InvariantLevel::Always`.
-        // Plans are not guaranteed to be executable after each physical optimizer run.
-        node.check_invariants(InvariantLevel::Always).map_err(|e|
-            e.context(format!("Invariant for ExecutionPlan node '{}' failed for PhysicalOptimizer rule '{}'", node.name(), self.rule.name()))
-        )?;
-        Ok(TreeNodeRecursion::Continue)
-    }
-}
-
 /// Check [`ExecutionPlan`] invariants per [`InvariantLevel`].
 struct InvariantChecker(InvariantLevel);
 
 impl InvariantChecker {
     /// Checks that the plan is executable, returning an Error if not.
-    pub fn check(&mut self, plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
+    pub fn check(&self, plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
         // check invariants per each ExecutionPlan node
-        plan.visit(self)?;
+        plan.apply(|node| {
+            node.check_invariants(self.0).map_err(|e| {
+                e.context(format!(
+                    "Invariant for ExecutionPlan node '{}' failed",
+                    node.name()
+                ))
+            })?;
+            Ok(TreeNodeRecursion::Continue)
+        })?;
 
         Ok(())
-    }
-}
-
-impl<'n> TreeNodeVisitor<'n> for InvariantChecker {
-    type Node = Arc<dyn ExecutionPlan>;
-
-    fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
-        node.check_invariants(self.0).map_err(|e| {
-            e.context(format!(
-                "Invariant for ExecutionPlan node '{}' failed",
-                node.name()
-            ))
-        })?;
-        Ok(TreeNodeRecursion::Continue)
     }
 }
 
