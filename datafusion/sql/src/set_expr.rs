@@ -187,7 +187,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     fn row_number_for_set_operation(&self) -> Result<Arc<datafusion_expr::WindowUDF>> {
         let Some(row_number) = self.context_provider.get_window_meta("row_number") else {
-            return plan_err!("row_number window function is not registered");
+            return plan_err!(
+                "INTERSECT ALL and EXCEPT ALL require the row_number window function, which is not registered"
+            );
         };
         Ok(row_number)
     }
