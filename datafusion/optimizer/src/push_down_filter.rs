@@ -1508,19 +1508,10 @@ fn unalias(expr: &Expr) -> &Expr {
 
 /// check whether the expression uses the columns in `check_map`.
 fn contain<T>(e: &Expr, check_map: &HashMap<String, T>) -> bool {
-    let mut is_contain = false;
-    e.apply(|expr| {
-        if let Expr::Column(c) = &expr
-            && check_map.contains_key(&c.flat_name())
-        {
-            is_contain = true;
-            Ok(TreeNodeRecursion::Stop)
-        } else {
-            Ok(TreeNodeRecursion::Continue)
-        }
+    e.exists(|expr| {
+        Ok(matches!(expr, Expr::Column(c) if check_map.contains_key(&c.flat_name())))
     })
-    .unwrap();
-    is_contain
+    .unwrap()
 }
 
 fn with_filters(predicates: Vec<Expr>, plan: LogicalPlan) -> LogicalPlan {
