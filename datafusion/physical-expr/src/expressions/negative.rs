@@ -28,9 +28,9 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{Result, internal_err, plan_err};
+use datafusion_common::{Result, ScalarValue, internal_err, plan_err};
 use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::sort_properties::ExprProperties;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 #[expect(deprecated)]
 use datafusion_expr::statistics::Distribution::{
     self, Bernoulli, Exponential, Gaussian, Generic, Uniform,
@@ -115,10 +115,9 @@ impl PhysicalExpr for NegativeExpr {
     }
 
     /// Given the child interval of a NegativeExpr, it calculates the NegativeExpr's interval.
-    /// It replaces the upper and lower bounds after multiplying them with -1.
-    /// Ex: `(a, b]` => `[-b, -a)`
+    /// Reflects the bounds unless signed integer negation can wrap.
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
-        children[0].arithmetic_negate()
+        negate_bounds(children[0])
     }
 
     /// Returns a new [`Interval`] of a NegativeExpr  that has the existing `interval` given that
@@ -128,7 +127,7 @@ impl PhysicalExpr for NegativeExpr {
         interval: &Interval,
         children: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
-        let negated_interval = interval.arithmetic_negate()?;
+        let negated_interval = negate_bounds(interval)?;
 
         Ok(children[0]
             .intersect(negated_interval)?
@@ -160,11 +159,17 @@ impl PhysicalExpr for NegativeExpr {
         }
     }
 
-    /// The ordering of a [`NegativeExpr`] is simply the reverse of its child.
+    /// Negation reverses ordering only when the input cannot cross a wrap.
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
         Ok(ExprProperties {
-            sort_properties: -children[0].sort_properties,
-            range: children[0].range.clone().arithmetic_negate()?,
+            sort_properties: if children[0].sort_properties != SortProperties::Singleton
+                && negation_may_wrap(&children[0].range)
+            {
+                SortProperties::Unordered
+            } else {
+                -children[0].sort_properties
+            },
+            range: negate_bounds(&children[0].range)?,
             preserves_lex_ordering: false,
             // Negation is one-to-one but reverses the ordering direction.
             strictly_order_preserving: false,
@@ -193,6 +198,26 @@ impl PhysicalExpr for NegativeExpr {
             ))),
         }))
     }
+}
+
+fn negate_bounds(range: &Interval) -> Result<Interval> {
+    if range.data_type() == DataType::Null {
+        return Ok(range.clone());
+    }
+    if range.data_type().is_signed_integer() && negation_may_wrap(range) {
+        // Do not derive bounds across a possible integer wrap.
+        return Interval::make_unbounded(&range.data_type());
+    }
+    range.arithmetic_negate()
+}
+
+// Signed integer array negation wraps at the minimum value.
+fn negation_may_wrap(range: &Interval) -> bool {
+    let data_type = range.data_type();
+    data_type == DataType::Null
+        || (data_type.is_signed_integer()
+            && (range.lower().is_null()
+                || ScalarValue::min(&data_type).as_ref() == Some(range.lower())))
 }
 
 #[cfg(feature = "proto")]
@@ -286,6 +311,130 @@ mod tests {
         test_array_negative_op!(Float32, Float32Array, 2345.0f32, 1234.0f32);
         test_array_negative_op!(Float64, Float64Array, 23456.0f64, 12345.0f64);
         Ok(())
+    }
+
+    #[test]
+    fn test_wrapping_negation_properties() {
+        let expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
+        let ordered = SortProperties::Ordered(Default::default());
+        for data_type in [Int8, Int16, Int32, Int64] {
+            let minimum = ScalarValue::min(&data_type).unwrap();
+            let full = Interval::make_unbounded(&data_type).unwrap();
+            let singleton = Interval::try_new(minimum.clone(), minimum.clone()).unwrap();
+            for range in [
+                full.clone(),
+                singleton.clone(),
+                Interval::try_new(ScalarValue::try_from(&data_type).unwrap(), minimum)
+                    .unwrap(),
+            ] {
+                let child = ExprProperties::new_unknown()
+                    .with_range(range.clone())
+                    .with_order(ordered);
+                let result = expr.get_properties(&[child]).unwrap();
+                assert_eq!(result.sort_properties, SortProperties::Unordered);
+                assert_eq!(result.range, full);
+                assert_eq!(expr.evaluate_bounds(&[&range]).unwrap(), full);
+                assert_eq!(
+                    expr.propagate_constraints(&range, &[&full]).unwrap(),
+                    Some(vec![full.clone()])
+                );
+            }
+            let child = ExprProperties::new_unknown()
+                .with_range(singleton)
+                .with_order(SortProperties::Singleton);
+            assert_eq!(
+                expr.get_properties(&[child]).unwrap().sort_properties,
+                SortProperties::Singleton
+            );
+        }
+    }
+
+    #[test]
+    fn test_non_wrapping_negation_properties() {
+        let expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
+        let ranges = [
+            Interval::make(Some(i8::MIN + 1), Some(1_i8)).unwrap(),
+            Interval::make(Some(i16::MIN + 1), Some(1_i16)).unwrap(),
+            Interval::make(Some(i32::MIN + 1), Some(1_i32)).unwrap(),
+            Interval::make(Some(i64::MIN + 1), Some(1_i64)).unwrap(),
+            Interval::make(Some(-2_f32), Some(1_f32)).unwrap(),
+            Interval::make(Some(-2_f64), Some(1_f64)).unwrap(),
+            Interval::make_unbounded(&Float32).unwrap(),
+            Interval::make_unbounded(&Float64).unwrap(),
+        ];
+        for range in ranges {
+            let expected_range = range.arithmetic_negate().unwrap();
+            for descending in [false, true] {
+                for nulls_first in [false, true] {
+                    let ordered = SortProperties::Ordered(arrow::compute::SortOptions {
+                        descending,
+                        nulls_first,
+                    });
+                    let child = ExprProperties::new_unknown()
+                        .with_range(range.clone())
+                        .with_order(ordered);
+                    let result = expr.get_properties(&[child]).unwrap();
+                    assert_eq!(result.sort_properties, -ordered);
+                    assert_eq!(result.range, expected_range);
+                }
+            }
+            assert_eq!(expr.evaluate_bounds(&[&range]).unwrap(), expected_range);
+            assert_eq!(
+                expr.propagate_constraints(&expected_range, &[&range])
+                    .unwrap(),
+                Some(vec![range])
+            );
+        }
+    }
+
+    #[test]
+    fn test_unknown_negation_properties() {
+        let expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
+        for order in [
+            SortProperties::Ordered(Default::default()),
+            SortProperties::Unordered,
+            SortProperties::Singleton,
+        ] {
+            let child = ExprProperties::new_unknown().with_order(order);
+            let range = child.range.clone();
+            let result = expr.get_properties(&[child]).unwrap();
+            assert_eq!(
+                result.sort_properties,
+                if order == SortProperties::Singleton {
+                    SortProperties::Singleton
+                } else {
+                    SortProperties::Unordered
+                }
+            );
+            assert_eq!(result.range, range);
+            assert_eq!(expr.evaluate_bounds(&[&range]).unwrap(), range);
+        }
+    }
+
+    #[test]
+    fn test_negation_bounds_errors() {
+        let expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
+        // Boolean intervals cannot be negated. All callers must propagate the error.
+        let range = Interval::make(Some(false), Some(true)).unwrap();
+        let child = ExprProperties::new_unknown().with_range(range.clone());
+        // Compare the error messages without call-site-dependent backtraces.
+        let expected = range.arithmetic_negate().unwrap_err().strip_backtrace();
+        assert_eq!(
+            expr.evaluate_bounds(&[&range])
+                .unwrap_err()
+                .strip_backtrace(),
+            expected
+        );
+        assert_eq!(
+            expr.get_properties(&[child]).unwrap_err().strip_backtrace(),
+            expected
+        );
+        assert_eq!(
+            expr.propagate_constraints(&range, &[&range])
+                .unwrap_err()
+                .strip_backtrace(),
+            expected
+        );
     }
 
     #[test]
