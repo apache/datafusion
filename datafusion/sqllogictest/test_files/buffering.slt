@@ -1,0 +1,136 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+statement ok
+CREATE EXTERNAL TABLE t1 STORED AS PARQUET LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE t2 STORED AS PARQUET LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE t3 STORED AS PARQUET LOCATION '../../parquet-testing/data/alltypes_plain.parquet';
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+# No BufferExec should be present (disabled by default).
+query TT
+EXPLAIN SELECT * FROM t1;
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], file_type=parquet
+
+# Small scan should be wrapped with BufferExec.
+statement ok
+set datafusion.execution.small_scan_buffering_threshold = 1048576;
+
+
+query TT
+EXPLAIN SELECT * FROM t1;
+----
+physical_plan
+01)BufferExec: capacity=1048576
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], file_type=parquet
+
+# Verify execution produces correct results through BufferExec
+query I
+SELECT count(*) FROM t1;
+----
+8
+
+# Scan size smaller than threshold should not be buffered
+statement ok
+set datafusion.execution.small_scan_buffering_threshold = 10;
+
+
+query TT
+EXPLAIN SELECT * FROM t1;
+----
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id, bool_col, tinyint_col, smallint_col, int_col, bigint_col, float_col, double_col, date_string_col, string_col, timestamp_col], file_type=parquet
+
+# Hash Join probe buffering with hash_join_buffering_capacity > 0 (small scans disabled)
+statement ok
+set datafusion.execution.small_scan_buffering_threshold = 0;
+
+statement ok
+set datafusion.execution.hash_join_buffering_capacity = 65536;
+
+query TT
+EXPLAIN SELECT t1.id, t2.id FROM t1 JOIN t2 ON t1.id = t2.id;
+----
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], file_type=parquet
+03)--BufferExec: capacity=65536
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+# Hash join probe buffering and small scan buffering. The probe side is buffered by hash join buffering. Its inner small
+# scan must NOT be double-buffered. The build side (if small) gets small scan buffering.
+statement ok
+set datafusion.execution.hash_join_buffering_capacity = 65536;
+
+statement ok
+set datafusion.execution.small_scan_buffering_threshold = 1048576;
+
+query TT
+EXPLAIN SELECT t1.id, t2.id FROM t1 JOIN t2 ON t1.id = t2.id;
+----
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)]
+02)--BufferExec: capacity=1048576
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], file_type=parquet
+04)--BufferExec: capacity=65536
+05)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+# nested joins: Ensure optimizer buffers multiple nested hash joins
+statement ok
+set datafusion.execution.hash_join_buffering_capacity = 65536;
+
+statement ok
+set datafusion.execution.small_scan_buffering_threshold = 1048576;
+
+query TT
+EXPLAIN SELECT t1.id, t2.id, t3.id FROM t1 JOIN t2 ON t1.id = t2.id JOIN t3 ON t1.id = t3.id;
+----
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0)]
+03)----BufferExec: capacity=1048576
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], file_type=parquet
+05)----BufferExec: capacity=65536
+06)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+07)--BufferExec: capacity=65536
+08)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+# Clean up
+
+statement ok
+reset datafusion.explain.physical_plan_only;
+
+statement ok
+reset datafusion.execution.hash_join_buffering_capacity;
+
+statement ok
+reset datafusion.execution.small_scan_buffering_threshold;
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
+
+statement ok
+DROP TABLE t3;
