@@ -877,6 +877,27 @@ SELECT g, var(v ORDER BY i) FROM agg_order_by_t GROUP BY g ORDER BY g;
 1 2
 2 4
 
+# Test percentile_cont without WITHIN GROUP
+query IR
+SELECT g, percentile_cont(v, 0.25) FROM agg_order_by_t GROUP BY g ORDER BY g;
+----
+1 1.5
+2 6
+
+# Test percentile_cont with WITHIN GROUP
+query IR
+SELECT g, percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM agg_order_by_t GROUP BY g ORDER BY g;
+----
+1 2
+2 7
+
+# Test percentile_cont with WITHIN GROUP and descending order
+query IR
+SELECT g, percentile_cont(0.25) WITHIN GROUP (ORDER BY v DESC) FROM agg_order_by_t GROUP BY g ORDER BY g;
+----
+1 2.5
+2 8
+
 statement ok
 DROP TABLE agg_order_by_t;
 
