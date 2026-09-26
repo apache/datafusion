@@ -293,6 +293,27 @@ impl PhysicalOptimizerRule for EnsureRequirements {
         "EnsureRequirements"
     }
 
+    // Enforcement is idempotent by specification: applying it to a plan
+    // whose requirements already hold must change nothing. Empirically it is
+    // not yet: declaring `idempotent() -> true` here changes 35 plans across
+    // eight sqllogictest files, because a second application rewrites
+    // sort-preserving merges to other members of the ordering equivalence
+    // class (and in at least one case replaces a CoalescePartitionsExec with
+    // a costlier merge). Until re-application is a proven no-op, this stays
+    // on the default, and fixing that is the gate for declaring it.
+
+    /// The rule reads nothing but the plan and the session configuration, so
+    /// a call handing it a plan it has been observed to leave unchanged can
+    /// be skipped. This is the saving that matters to chains that interleave
+    /// rewrites with enforcement: most rewrites do not fire on most plans,
+    /// and the enforcement pass scheduled behind each one then re-derives a
+    /// plan it has already settled. Note this is safe even though the rule
+    /// is not (yet) idempotent: an observed fixpoint is replayed, never
+    /// predicted, and a plan the rule oscillates on records no fixpoint.
+    fn deterministic(&self) -> bool {
+        true
+    }
+
     fn schema_check(&self) -> bool {
         true
     }

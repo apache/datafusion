@@ -102,6 +102,9 @@ use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr, create_physical_sort_exprs,
 };
+use datafusion_physical_optimizer::plan_signature::{
+    PhysicalPlanSignature, plan_fingerprint,
+};
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::joins::PiecewiseMergeJoinExec;
@@ -2034,6 +2037,72 @@ impl DefaultPhysicalPlanner {
 /// For example, if we have something like `GROUPING SETS ((a,b,c),(a),(b),(b,c))`
 /// we would expand this to `GROUPING SETS ((a,b,c),(a,NULL,NULL),(NULL,b,NULL),(NULL,b,c))
 /// (see <https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS>)
+/// A plan a deterministic rule was observed to return unchanged, with the
+/// full fingerprint it was recorded under.
+type ObservedFixpoint = (Arc<dyn ExecutionPlan>, String);
+
+/// Applies one physical optimizer rule with the same bookkeeping the plain
+/// path performs: error context, the optimization invariant check, debug
+/// logging, and the observer callback.
+fn apply_physical_rule<F>(
+    optimizer: &Arc<dyn PhysicalOptimizerRule + Send + Sync>,
+    plan: Arc<dyn ExecutionPlan>,
+    context: &dyn PhysicalOptimizerContext,
+    observer: &mut F,
+) -> Result<Arc<dyn ExecutionPlan>>
+where
+    F: FnMut(&dyn ExecutionPlan, &dyn PhysicalOptimizerRule),
+{
+    let before_schema = plan.schema();
+    let new_plan = optimizer
+        .optimize_with_context(plan, context)
+        .map_err(|e| {
+            DataFusionError::Context(optimizer.name().to_string(), Box::new(e))
+        })?;
+
+    // This only checks the schema in release build, and performs additional checks in debug mode.
+    OptimizationInvariantChecker::new(optimizer).check(&new_plan, &before_schema)?;
+
+    debug!(
+        "Optimized physical plan by {}:\n{}\n",
+        optimizer.name(),
+        displayable(new_plan.as_ref()).indent(false)
+    );
+    observer(new_plan.as_ref(), optimizer.as_ref());
+    Ok(new_plan)
+}
+
+/// Runs one rule repeatedly at this call site until the plan's signature
+/// repeats or `max_passes` is reached.
+///
+/// The starting signature seeds the set, so a call whose first application
+/// changes nothing stops after that one application, costing what a plain
+/// call costs plus two signatures. Keeping every prior signature rather than
+/// only the last one also terminates cycles: a plan oscillating A to B to A
+/// revisits a seen form on the second application, where a last-pass-only
+/// comparison would spin to `max_passes`.
+fn converge_physical_rule<F>(
+    optimizer: &Arc<dyn PhysicalOptimizerRule + Send + Sync>,
+    plan: Arc<dyn ExecutionPlan>,
+    context: &dyn PhysicalOptimizerContext,
+    max_passes: usize,
+    observer: &mut F,
+) -> Result<Arc<dyn ExecutionPlan>>
+where
+    F: FnMut(&dyn ExecutionPlan, &dyn PhysicalOptimizerRule),
+{
+    let mut seen = HashSet::with_capacity(4);
+    seen.insert(PhysicalPlanSignature::new(plan.as_ref()));
+    let mut new_plan = plan;
+    for _pass in 0..max_passes.max(1) {
+        new_plan = apply_physical_rule(optimizer, new_plan, context, observer)?;
+        if !seen.insert(PhysicalPlanSignature::new(new_plan.as_ref())) {
+            break;
+        }
+    }
+    Ok(new_plan)
+}
+
 fn merge_grouping_set_physical_expr(
     grouping_sets: &[Vec<Expr>],
     input_dfschema: &DFSchema,
@@ -3122,24 +3191,91 @@ impl DefaultPhysicalPlanner {
         let optimizer_context = SessionOptimizerContext {
             session: session_state,
         };
+        let options = session_state.config_options();
+        // Plans each deterministic rule has been observed to leave unchanged
+        // in this run, so a later call handing one back can be skipped. The
+        // fingerprint is kept in full rather than hashed: a collision here
+        // would skip a rule that had work to do, and for an enforcement pass
+        // that means an invalid plan, not a missed optimization.
+        let mut fixpoints: HashMap<&str, Vec<ObservedFixpoint>> = HashMap::new();
+        // A rule that declares itself idempotent runs to convergence at each
+        // of its call sites; every other rule runs exactly once, in list
+        // order, as before.
         for optimizer in optimizers {
-            let before_schema = new_plan.schema();
-            new_plan = optimizer
-                .optimize_with_context(new_plan, &optimizer_context)
-                .map_err(|e| {
-                    DataFusionError::Context(optimizer.name().to_string(), Box::new(e))
-                })?;
+            let mut pending: Option<ObservedFixpoint> = None;
+            if optimizer.deterministic() {
+                let known = fixpoints.get(optimizer.name());
 
-            // This only checks the schema in release build, and performs additional checks in debug mode.
-            OptimizationInvariantChecker::new(optimizer)
-                .check(&new_plan, &before_schema)?;
+                // The same object coming back around is the common case when
+                // the rules in between left the plan alone, and it settles
+                // identity without rendering anything.
+                let same_object = known.is_some_and(|entries| {
+                    entries.iter().any(|(plan, _)| Arc::ptr_eq(plan, &new_plan))
+                });
 
-            debug!(
-                "Optimized physical plan by {}:\n{}\n",
-                optimizer.name(),
-                displayable(new_plan.as_ref()).indent(false)
-            );
-            observer(new_plan.as_ref(), optimizer.as_ref())
+                // Otherwise the plan has to be rendered: a rule that changed
+                // nothing still commonly rebuilds the tree, so a different
+                // object can still be the same plan.
+                let fingerprint =
+                    (!same_object).then(|| plan_fingerprint(new_plan.as_ref()));
+                let same_content = fingerprint.as_ref().is_some_and(|rendered| {
+                    known.is_some_and(|entries| {
+                        entries.iter().any(|(_, seen)| seen == rendered)
+                    })
+                });
+
+                if same_object || same_content {
+                    // This rule already ran on this exact plan and left it
+                    // alone; being deterministic, it would do so again.
+                    observer(new_plan.as_ref(), optimizer.as_ref());
+                    continue;
+                }
+                if let Some(rendered) = fingerprint {
+                    pending = Some((Arc::clone(&new_plan), rendered));
+                }
+            }
+
+            let input = Arc::clone(&new_plan);
+            new_plan = if optimizer.idempotent() {
+                converge_physical_rule(
+                    optimizer,
+                    new_plan,
+                    &optimizer_context,
+                    options.optimizer.max_passes,
+                    &mut observer,
+                )?
+            } else {
+                apply_physical_rule(
+                    optimizer,
+                    new_plan,
+                    &optimizer_context,
+                    &mut observer,
+                )?
+            };
+
+            // Record a fixpoint only where the rule demonstrably produced the
+            // plan it was given. A rule still working towards its fixpoint
+            // records nothing, so its next call is not skipped. `pending` is
+            // always `Some` here: a call that reaches this point was not
+            // skipped, so the lookup rendered its input. What gets recorded
+            // is the *output* object, the one that continues down the chain,
+            // so a later call handing it back hits the pointer tier without
+            // rendering anything.
+            if optimizer.deterministic() {
+                let recorded = if Arc::ptr_eq(&input, &new_plan) {
+                    // Same object back: the input fingerprint is the output's.
+                    pending.map(|(_, rendered)| (Arc::clone(&new_plan), rendered))
+                } else {
+                    pending.and_then(|(_, rendered)| {
+                        let output_rendered = plan_fingerprint(new_plan.as_ref());
+                        (output_rendered == rendered)
+                            .then(|| (Arc::clone(&new_plan), output_rendered))
+                    })
+                };
+                if let Some(entry) = recorded {
+                    fixpoints.entry(optimizer.name()).or_default().push(entry);
+                }
+            }
         }
 
         // This runs once after all optimizer runs are complete,
@@ -3516,6 +3652,342 @@ impl<'n> TreeNodeVisitor<'n> for InvariantChecker {
             ))
         })?;
         Ok(TreeNodeRecursion::Continue)
+    }
+}
+
+#[cfg(test)]
+mod iterative_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+    use super::converge_physical_rule;
+    use arrow::datatypes::Schema;
+    use datafusion_common::Result;
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_physical_optimizer::optimizer::ConfigOnlyContext;
+    use datafusion_physical_plan::ExecutionPlan;
+    use datafusion_physical_plan::empty::EmptyExec;
+    use datafusion_physical_plan::limit::GlobalLimitExec;
+    use datafusion_session::PhysicalOptimizerRule;
+
+    fn limit_depth(plan: &Arc<dyn ExecutionPlan>) -> usize {
+        if plan.name() == "GlobalLimitExec" {
+            1 + limit_depth(plan.children()[0])
+        } else {
+            0
+        }
+    }
+
+    /// Wraps the plan in one more limit per call until `depth` is reached,
+    /// then returns its input unchanged: a rule that needs several
+    /// applications to converge, the way an enforcement pass that does not
+    /// settle in one sweep does.
+    #[derive(Debug)]
+    struct WrapUntil {
+        depth: usize,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl PhysicalOptimizerRule for WrapUntil {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.calls.fetch_add(1, AtomicOrdering::Relaxed);
+            if limit_depth(&plan) < self.depth {
+                Ok(Arc::new(GlobalLimitExec::new(plan, 0, Some(10))))
+            } else {
+                Ok(plan)
+            }
+        }
+
+        fn name(&self) -> &str {
+            "wrap_until"
+        }
+
+        fn schema_check(&self) -> bool {
+            true
+        }
+    }
+
+    /// Wraps an unwrapped plan and unwraps a wrapped one: a rule that never
+    /// converges, only oscillates, standing in for the measured case of an
+    /// enforcement pass whose adjacent applications undo each other.
+    #[derive(Debug)]
+    struct Oscillator {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl PhysicalOptimizerRule for Oscillator {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            self.calls.fetch_add(1, AtomicOrdering::Relaxed);
+            if plan.name() == "GlobalLimitExec" {
+                Ok(Arc::clone(plan.children()[0]))
+            } else {
+                Ok(Arc::new(GlobalLimitExec::new(plan, 0, Some(10))))
+            }
+        }
+
+        fn name(&self) -> &str {
+            "oscillator"
+        }
+
+        fn schema_check(&self) -> bool {
+            true
+        }
+    }
+
+    fn empty_plan() -> Arc<dyn ExecutionPlan> {
+        Arc::new(EmptyExec::new(Arc::new(Schema::empty())))
+    }
+
+    type Rule = Arc<dyn PhysicalOptimizerRule + Send + Sync>;
+
+    /// A declared rule iterates exactly until its fixpoint: three
+    /// applications that each wrap once, then the one proving application.
+    #[test]
+    fn converges_to_the_fixpoint() -> Result<()> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let rule: Rule = Arc::new(WrapUntil {
+            depth: 3,
+            calls: Arc::clone(&calls),
+        });
+        let config = ConfigOptions::new();
+        let plan = converge_physical_rule(
+            &rule,
+            empty_plan(),
+            &ConfigOnlyContext::new(&config),
+            10,
+            &mut |_, _| {},
+        )?;
+        assert_eq!(limit_depth(&plan), 3);
+        assert_eq!(
+            calls.load(AtomicOrdering::Relaxed),
+            4,
+            "three applications that wrap, one that proves the fixpoint"
+        );
+        Ok(())
+    }
+
+    /// A rule oscillating between two forms terminates on the first revisit,
+    /// because every prior signature is kept, not only the last one.
+    #[test]
+    fn terminates_on_a_cycle() -> Result<()> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let rule: Rule = Arc::new(Oscillator {
+            calls: Arc::clone(&calls),
+        });
+        let config = ConfigOptions::new();
+        let plan = converge_physical_rule(
+            &rule,
+            empty_plan(),
+            &ConfigOnlyContext::new(&config),
+            10,
+            &mut |_, _| {},
+        )?;
+        assert_eq!(
+            calls.load(AtomicOrdering::Relaxed),
+            2,
+            "application one wraps (new form), application two unwraps back \
+             to the seeded form and the revisit stops the loop"
+        );
+        assert_eq!(limit_depth(&plan), 0);
+        Ok(())
+    }
+
+    /// The saving that matters to interleaved chains: a deterministic rule
+    /// scheduled twice, whose second call receives the plan it already left
+    /// alone, is skipped outright, even when the rules in between rebuilt an
+    /// equal tree. A rule that never returned its input unchanged records no
+    /// fixpoint and is never skipped, which is what keeps this safe for
+    /// non-idempotent rules.
+    #[tokio::test]
+    async fn deterministic_rules_skip_observed_fixpoints() -> Result<()> {
+        use crate::execution::session_state::SessionStateBuilder;
+        use crate::prelude::{SessionConfig, SessionContext};
+        use datafusion_expr::LogicalPlanBuilder;
+        use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
+
+        /// A no-op that declares determinism and counts its calls.
+        #[derive(Debug)]
+        struct DeterministicNoop {
+            calls: Arc<AtomicUsize>,
+        }
+        impl PhysicalOptimizerRule for DeterministicNoop {
+            fn optimize(
+                &self,
+                plan: Arc<dyn ExecutionPlan>,
+                _config: &ConfigOptions,
+            ) -> Result<Arc<dyn ExecutionPlan>> {
+                self.calls.fetch_add(1, AtomicOrdering::Relaxed);
+                Ok(plan)
+            }
+            fn name(&self) -> &str {
+                "deterministic_noop"
+            }
+            fn schema_check(&self) -> bool {
+                true
+            }
+            fn deterministic(&self) -> bool {
+                true
+            }
+        }
+
+        /// Returns an equal plan built fresh, the way a rule that changed
+        /// nothing still commonly rebuilds the tree: forces the skip to go
+        /// through the fingerprint, not the pointer.
+        #[derive(Debug)]
+        struct RebuildingNoop;
+        impl PhysicalOptimizerRule for RebuildingNoop {
+            fn optimize(
+                &self,
+                plan: Arc<dyn ExecutionPlan>,
+                _config: &ConfigOptions,
+            ) -> Result<Arc<dyn ExecutionPlan>> {
+                let rebuilt: Arc<dyn ExecutionPlan> = if plan.name() == "EmptyExec" {
+                    Arc::new(EmptyExec::new(plan.schema()))
+                } else {
+                    Arc::new(PlaceholderRowExec::new(plan.schema()))
+                };
+                Ok(rebuilt)
+            }
+            fn name(&self) -> &str {
+                "rebuilding_noop"
+            }
+            fn schema_check(&self) -> bool {
+                true
+            }
+        }
+
+        async fn calls_with_rebuild_between(rebuild: bool) -> Result<usize> {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let noop = || {
+                Arc::new(DeterministicNoop {
+                    calls: Arc::clone(&calls),
+                }) as Arc<dyn PhysicalOptimizerRule + Send + Sync>
+            };
+            let mut rules = vec![noop()];
+            if rebuild {
+                rules.push(Arc::new(RebuildingNoop));
+            }
+            rules.push(noop());
+            let state = SessionStateBuilder::new()
+                .with_config(SessionConfig::new())
+                .with_default_features()
+                .with_physical_optimizer_rules(rules)
+                .build();
+            let ctx = SessionContext::new_with_state(state);
+            let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+            ctx.state().create_physical_plan(&logical_plan).await?;
+            Ok(calls.load(AtomicOrdering::Relaxed))
+        }
+
+        assert_eq!(
+            calls_with_rebuild_between(false).await?,
+            1,
+            "the second call received the exact object the first left alone"
+        );
+        assert_eq!(
+            calls_with_rebuild_between(true).await?,
+            1,
+            "a rebuilt but identical plan must still count as the fixpoint \
+             already proven, or the pointer check would be the only path"
+        );
+        Ok(())
+    }
+
+    /// The dispatch consults the rule, not a name list: an undeclared rule
+    /// scheduled twice runs exactly twice (the authored count is preserved),
+    /// while a declared rule converges at its single call site.
+    #[tokio::test]
+    async fn dispatch_preserves_authored_counts_for_undeclared_rules() -> Result<()> {
+        use crate::execution::session_state::SessionStateBuilder;
+        use crate::prelude::{SessionConfig, SessionContext};
+        use datafusion_expr::LogicalPlanBuilder;
+
+        /// Same wrapping behaviour as [`WrapUntil`], but declared idempotent.
+        #[derive(Debug)]
+        struct DeclaredWrapUntil(WrapUntil);
+        impl PhysicalOptimizerRule for DeclaredWrapUntil {
+            fn optimize(
+                &self,
+                plan: Arc<dyn ExecutionPlan>,
+                config: &ConfigOptions,
+            ) -> Result<Arc<dyn ExecutionPlan>> {
+                self.0.optimize(plan, config)
+            }
+            fn name(&self) -> &str {
+                "declared_wrap_until"
+            }
+            fn schema_check(&self) -> bool {
+                true
+            }
+            fn idempotent(&self) -> bool {
+                true
+            }
+        }
+
+        let undeclared_calls = Arc::new(AtomicUsize::new(0));
+        let declared_calls = Arc::new(AtomicUsize::new(0));
+        let undeclared = || {
+            Arc::new(WrapUntil {
+                depth: 0,
+                calls: Arc::clone(&undeclared_calls),
+            }) as Arc<dyn PhysicalOptimizerRule + Send + Sync>
+        };
+        let declared: Arc<dyn PhysicalOptimizerRule + Send + Sync> =
+            Arc::new(DeclaredWrapUntil(WrapUntil {
+                depth: 2,
+                calls: Arc::clone(&declared_calls),
+            }));
+
+        let state = SessionStateBuilder::new()
+            .with_config(SessionConfig::new())
+            .with_default_features()
+            .with_physical_optimizer_rules(vec![undeclared(), undeclared(), declared])
+            .build();
+        let ctx = SessionContext::new_with_state(state);
+        let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+        ctx.state().create_physical_plan(&logical_plan).await?;
+
+        assert_eq!(
+            undeclared_calls.load(AtomicOrdering::Relaxed),
+            2,
+            "an undeclared rule runs exactly as often as the chain scheduled it"
+        );
+        assert_eq!(
+            declared_calls.load(AtomicOrdering::Relaxed),
+            3,
+            "a declared rule converges at its call site: two wrapping \
+             applications and one proving application"
+        );
+        Ok(())
+    }
+
+    /// An already-converged call site costs one application: the seeded
+    /// signature answers the proving question immediately.
+    #[test]
+    fn a_no_op_call_site_costs_one_application() -> Result<()> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let rule: Rule = Arc::new(WrapUntil {
+            depth: 0,
+            calls: Arc::clone(&calls),
+        });
+        let config = ConfigOptions::new();
+        converge_physical_rule(
+            &rule,
+            empty_plan(),
+            &ConfigOnlyContext::new(&config),
+            10,
+            &mut |_, _| {},
+        )?;
+        assert_eq!(calls.load(AtomicOrdering::Relaxed), 1);
+        Ok(())
     }
 }
 
