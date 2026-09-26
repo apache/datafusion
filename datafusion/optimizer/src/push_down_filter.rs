@@ -786,6 +786,39 @@ fn infer_join_predicates_impl<
     Ok(())
 }
 
+/// Whether `expr` depends on any of the columns named in `names`.
+///
+/// This is `Expr::column_refs` plus the outer columns that any subquery inside
+/// `expr` correlates on. A subquery records those in
+/// `Subquery::outer_ref_columns` rather than as an `Expr::Column` in the
+/// predicate, and `Expr`'s own traversal does not descend into that field, so
+/// looking only at `column_refs` would report such a predicate as depending on
+/// nothing and let it be pushed past a node that asked to keep those columns.
+fn references_any_column(expr: &Expr, names: &HashSet<String>) -> bool {
+    if expr.column_refs().iter().any(|c| names.contains(&c.name)) {
+        return true;
+    }
+
+    let mut found = false;
+    expr.apply(|e| {
+        let outer_refs = match e {
+            Expr::Exists(exists) => &exists.subquery.outer_ref_columns,
+            Expr::InSubquery(in_subquery) => &in_subquery.subquery.outer_ref_columns,
+            Expr::ScalarSubquery(subquery) => &subquery.outer_ref_columns,
+            _ => return Ok(TreeNodeRecursion::Continue),
+        };
+        if outer_refs.iter().any(|outer_ref| {
+            matches!(outer_ref, Expr::OuterReferenceColumn(_, c) if names.contains(&c.name))
+        }) {
+            found = true;
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .expect("traversal is infallible");
+    found
+}
+
 impl OptimizerRule for PushDownFilter {
     fn name(&self) -> &str {
         "push_down_filter"
@@ -1318,12 +1351,7 @@ impl OptimizerRule for PushDownFilter {
                 let predicate_push_or_keep: Vec<bool> =
                     split_conjunction(&filter.predicate)
                         .iter()
-                        .map(|expr| {
-                            !expr
-                                .column_refs()
-                                .iter()
-                                .any(|c| prevent_cols.contains(&c.name))
-                        })
+                        .map(|expr| !references_any_column(expr, &prevent_cols))
                         .collect();
 
                 // all predicates are kept, no changes needed
@@ -1556,7 +1584,7 @@ mod tests {
         ColumnarValue, ExprFunctionExt, Extension, LogicalPlanBuilder,
         ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableScan, TableSource,
         TableType, UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition, col,
-        in_list, in_subquery, lit,
+        exists, in_list, in_subquery, lit, out_ref_col,
     };
 
     use crate::OptimizerContext;
@@ -2209,6 +2237,43 @@ mod tests {
         fn supports_limit_pushdown(&self) -> bool {
             false // Disallow limit push-down by default
         }
+    }
+
+    #[test]
+    fn user_defined_plan_outer_referenced_column() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // A subquery correlated on `test.c` — the column `NoopPlan` refuses to
+        // have predicates pushed past. The correlation is carried by the
+        // subquery's `outer_ref_columns`, not by an `Expr::Column` in the
+        // predicate itself.
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+            .filter(out_ref_col(DataType::UInt32, "test.c").eq(col("sq.a")))?
+            .project(vec![col("sq.a")])?
+            .build()?;
+
+        let custom_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoopPlan {
+                input: vec![table_scan.clone()],
+                schema: Arc::clone(table_scan.schema()),
+            }),
+        });
+        let plan = LogicalPlanBuilder::from(custom_plan)
+            .filter(exists(Arc::new(subquery)))?
+            .build()?;
+
+        // The predicate depends on `test.c`, so it must stay above NoopPlan.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: EXISTS (<subquery>)
+          Subquery:
+            Projection: sq.a
+              TableScan: sq, full_filters=[outer_ref(test.c) = sq.a]
+          NoopPlan
+            TableScan: test
+        "
+        )
     }
 
     #[test]
