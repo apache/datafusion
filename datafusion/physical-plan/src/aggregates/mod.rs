@@ -3323,6 +3323,7 @@ pub fn evaluate_group_by(
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::mem::size_of;
     use std::task::{Context, Poll};
 
     use super::*;
@@ -3571,7 +3572,8 @@ mod tests {
 
         const KEYS: usize = 64;
         const VALUES_PER_KEY: i64 = 64;
-        const MEMORY_LIMIT: usize = 8192;
+        // Leave only a small amount above 8 KiB for the empty aggregate state.
+        const MEMORY_LIMIT: usize = 8_384;
         let schema = Arc::new(Schema::new(vec![
             Field::new("key", DataType::Int64, false),
             Field::new("value", DataType::Int64, false),
@@ -3975,8 +3977,8 @@ mod tests {
         )];
 
         let task_ctx = if spill {
-            // adjust the max memory size to have the partial aggregate result for spill mode.
-            new_spill_ctx(4, 500)
+            // Includes the descriptor-aware empty grouping-set table state.
+            new_spill_ctx(4, 700)
         } else {
             Arc::new(TaskContext::default())
         };
@@ -3994,6 +3996,14 @@ mod tests {
             collect(partial_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
 
         if spill {
+            let early_emit_count = partial_aggregate
+                .metrics()
+                .unwrap()
+                .sum_by_name("early_emit_count")
+                .unwrap()
+                .as_usize();
+            assert!(early_emit_count > 0);
+
             // In spill mode, we test with the limited memory, if the mem usage exceeds,
             // we trigger the early emit rule, which turns out the partial aggregate result.
             allow_duplicates! {

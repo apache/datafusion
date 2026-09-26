@@ -36,12 +36,12 @@ mod single_group_by;
 use datafusion_physical_expr::binary_map::OutputType;
 use multi_group_by::GroupValuesColumn;
 
-pub(crate) use single_group_by::primitive::HashValue;
+pub(crate) use single_group_by::primitive::{GroupValuesPrimitive, HashValue};
 
 use crate::aggregates::{
     group_values::single_group_by::{
         boolean::GroupValuesBoolean, bytes::GroupValuesBytes,
-        bytes_view::GroupValuesBytesView, primitive::GroupValuesPrimitive,
+        bytes_view::GroupValuesBytesView,
     },
     order::GroupOrdering,
 };
