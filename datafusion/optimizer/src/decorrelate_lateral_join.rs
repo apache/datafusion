@@ -107,7 +107,9 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
     // Walk the subquery plan bottom-up, extracting correlated filter
     // predicates into join conditions and converting ungrouped aggregates
     // into group-by aggregates keyed on the correlation columns.
-    let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
+    let mut pull_up = PullUpCorrelatedExpr::new()
+        .with_need_handle_count_bug(true)
+        .with_column_refs_above_aggregate(subquery_plan);
     let rewritten_subquery = subquery_plan.clone().rewrite(&mut pull_up).data()?;
     if !pull_up.can_pull_up {
         return Ok(Transformed::no(LogicalPlan::Join(join)));
