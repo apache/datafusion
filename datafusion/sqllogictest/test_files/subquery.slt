@@ -2848,3 +2848,154 @@ DROP TABLE gs_outer;
 
 statement ok
 DROP TABLE gs_inner;
+
+# Regression test for #25507: a correlated filter below the side of an outer
+# join that the join fills with NULLs must not be pulled above the join. The
+# filter decides which rows of the other side are unmatched, so once it is
+# above the join the rows that get NULLs are different.
+statement ok
+CREATE TABLE oj_outer(k INT) AS VALUES (1), (5);
+
+statement ok
+CREATE TABLE oj_a(id INT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE oj_b(id INT, y INT) AS VALUES (1, 1), (2, 2);
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# The correlated filter is on the right side of a LEFT JOIN, so the subquery
+# stays correlated.
+query TT
+EXPLAIN SELECT oj_outer.k, EXISTS (SELECT 1 FROM oj_a LEFT JOIN (SELECT * FROM oj_b WHERE oj_b.y = oj_outer.k) AS b ON oj_a.id = b.id WHERE b.y IS NULL) AS e FROM oj_outer;
+----
+logical_plan
+01)Projection: oj_outer.k, EXISTS (<subquery>) AS e
+02)--Subquery:
+03)----Projection: Int64(1)
+04)------Filter: b.y IS NULL
+05)--------Left Join: oj_a.id = b.id
+06)----------TableScan: oj_a
+07)----------SubqueryAlias: b
+08)------------Projection: oj_b.id, oj_b.y
+09)--------------Filter: oj_b.y = outer_ref(oj_outer.k)
+10)----------------TableScan: oj_b
+11)--TableScan: oj_outer projection=[k]
+
+# It errors rather than returning wrong results. The right answer is
+# `(1, true), (5, true)`.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT oj_outer.k, EXISTS (SELECT 1 FROM oj_a LEFT JOIN (SELECT * FROM oj_b WHERE oj_b.y = oj_outer.k) AS b ON oj_a.id = b.id WHERE b.y IS NULL) AS e FROM oj_outer;
+
+# The same for IN. The right answer is `(1, true), (5, NULL)`.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression InSubquery
+SELECT oj_outer.k, oj_outer.k IN (SELECT b.y FROM oj_a LEFT JOIN (SELECT * FROM oj_b WHERE oj_b.y = oj_outer.k) AS b ON oj_a.id = b.id) AS m FROM oj_outer;
+
+# And for EXISTS and NOT EXISTS in WHERE. `oj_a` is never empty, so the right
+# answers are every row and no row.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT oj_outer.k FROM oj_outer WHERE EXISTS (SELECT 1 FROM oj_a LEFT JOIN (SELECT * FROM oj_b WHERE oj_b.y = oj_outer.k) AS b ON oj_a.id = b.id);
+
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT oj_outer.k FROM oj_outer WHERE NOT EXISTS (SELECT 1 FROM oj_a LEFT JOIN (SELECT * FROM oj_b WHERE oj_b.y = oj_outer.k) AS b ON oj_a.id = b.id);
+
+# And for a scalar subquery. The right answer is `(1, 1), (5, 2)`.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT oj_outer.k, (SELECT count(*) FROM oj_a LEFT JOIN (SELECT * FROM oj_b WHERE oj_b.y = oj_outer.k) AS b ON oj_a.id = b.id WHERE b.y IS NULL) AS c FROM oj_outer;
+
+# The left side of a RIGHT JOIN, and either side of a FULL JOIN.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT oj_outer.k, EXISTS (SELECT 1 FROM (SELECT * FROM oj_b WHERE oj_b.y = oj_outer.k) AS b RIGHT JOIN oj_a ON oj_a.id = b.id WHERE b.y IS NULL) AS e FROM oj_outer;
+
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT oj_outer.k, EXISTS (SELECT 1 FROM (SELECT * FROM oj_b WHERE oj_b.y = oj_outer.k) AS b FULL JOIN oj_a ON oj_a.id = b.id WHERE b.y IS NULL) AS e FROM oj_outer;
+
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT oj_outer.k, EXISTS (SELECT 1 FROM oj_a FULL JOIN (SELECT * FROM oj_b WHERE oj_b.y = oj_outer.k) AS b ON oj_a.id = b.id WHERE b.y IS NULL) AS e FROM oj_outer;
+
+# The filter can sit deeper below the nullable side, here under an inner join.
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT oj_outer.k, EXISTS (SELECT 1 FROM oj_a LEFT JOIN (SELECT oj_b.id, oj_b.y FROM oj_b JOIN oj_a AS a2 ON oj_b.id = a2.id WHERE oj_b.y = oj_outer.k) AS b ON oj_a.id = b.id WHERE b.y IS NULL) AS e FROM oj_outer;
+
+# A correlated filter on the preserved side of a LEFT JOIN is still pulled up.
+query TT
+EXPLAIN SELECT oj_outer.k, EXISTS (SELECT 1 FROM (SELECT * FROM oj_a WHERE oj_a.id = oj_outer.k) AS a LEFT JOIN oj_b ON a.id = oj_b.id WHERE oj_b.y IS NULL) AS e FROM oj_outer;
+----
+logical_plan
+01)Projection: oj_outer.k, __correlated_sq_1.mark AS e
+02)--LeftMark Join: oj_outer.k = __correlated_sq_1.id
+03)----TableScan: oj_outer projection=[k]
+04)----SubqueryAlias: __correlated_sq_1
+05)------Projection: a.id
+06)--------Filter: oj_b.y IS NULL
+07)----------Projection: a.id, oj_b.y
+08)------------Left Join: a.id = oj_b.id
+09)--------------SubqueryAlias: a
+10)----------------TableScan: oj_a projection=[id]
+11)--------------TableScan: oj_b projection=[id, y]
+
+query IB
+SELECT oj_outer.k, EXISTS (SELECT 1 FROM (SELECT * FROM oj_a WHERE oj_a.id = oj_outer.k) AS a LEFT JOIN oj_b ON a.id = oj_b.id) AS e FROM oj_outer ORDER BY oj_outer.k;
+----
+1 true
+5 false
+
+# So is one on the preserved side of a RIGHT JOIN.
+query IB
+SELECT oj_outer.k, EXISTS (SELECT 1 FROM oj_b RIGHT JOIN (SELECT * FROM oj_a WHERE oj_a.id = oj_outer.k) AS a ON a.id = oj_b.id) AS e FROM oj_outer ORDER BY oj_outer.k;
+----
+1 true
+5 false
+
+# And one on either side of an inner join.
+query TT
+EXPLAIN SELECT oj_outer.k, EXISTS (SELECT 1 FROM oj_a JOIN (SELECT * FROM oj_b WHERE oj_b.y = oj_outer.k) AS b ON oj_a.id = b.id) AS e FROM oj_outer;
+----
+logical_plan
+01)Projection: oj_outer.k, __correlated_sq_1.mark AS e
+02)--LeftMark Join: oj_outer.k = __correlated_sq_1.y
+03)----TableScan: oj_outer projection=[k]
+04)----SubqueryAlias: __correlated_sq_1
+05)------Projection: b.y
+06)--------RightSemi Join: oj_a.id = b.id
+07)----------TableScan: oj_a projection=[id]
+08)----------SubqueryAlias: b
+09)------------TableScan: oj_b projection=[id, y]
+
+query IB
+SELECT oj_outer.k, EXISTS (SELECT 1 FROM oj_a JOIN (SELECT * FROM oj_b WHERE oj_b.y = oj_outer.k) AS b ON oj_a.id = b.id) AS e FROM oj_outer ORDER BY oj_outer.k;
+----
+1 true
+5 false
+
+# A correlated filter above the outer join is pulled up as before, even when it
+# reads a column of the nullable side.
+query TT
+EXPLAIN SELECT oj_outer.k FROM oj_outer WHERE EXISTS (SELECT 1 FROM oj_a LEFT JOIN oj_b ON oj_a.id = oj_b.id WHERE oj_b.y = oj_outer.k);
+----
+logical_plan
+01)LeftSemi Join: oj_outer.k = __correlated_sq_1.y
+02)--TableScan: oj_outer projection=[k]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Projection: oj_b.y
+05)------Left Join: oj_a.id = oj_b.id
+06)--------TableScan: oj_a projection=[id]
+07)--------TableScan: oj_b projection=[id, y]
+
+query I
+SELECT oj_outer.k FROM oj_outer WHERE EXISTS (SELECT 1 FROM oj_a LEFT JOIN oj_b ON oj_a.id = oj_b.id WHERE oj_b.y = oj_outer.k) ORDER BY oj_outer.k;
+----
+1
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+statement ok
+DROP TABLE oj_outer;
+
+statement ok
+DROP TABLE oj_a;
+
+statement ok
+DROP TABLE oj_b;
