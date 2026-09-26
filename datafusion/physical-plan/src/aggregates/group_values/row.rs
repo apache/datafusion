@@ -320,10 +320,12 @@ pub(crate) fn encode_array_if_necessary(
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            Ok(Arc::new(StructArray::try_new(
+            // A zero-field struct has no child to infer the length from.
+            Ok(Arc::new(StructArray::try_new_with_length(
                 expected_fields.clone(),
                 arrays,
                 struct_array.nulls().cloned(),
+                struct_array.len(),
             )?))
         }
         (DataType::List(expected_field), &DataType::List(_)) => {
