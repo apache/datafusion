@@ -35,6 +35,7 @@ in the community:
 | `clickbench_sorted`   | ClickBench benchmark using a pre-sorted hits file.                 |
 | `h2o`                 | The `h2o` benchmark                                                |
 | `hj`                  | Hash join benchmark                                                |
+| `hj_ordered_subset`   | Hash join dynamic filter on a probe table sorted by the join key, where the build side matches an ordered subset of the key range (1 day, 10 days) or a scattered 1% (control). Subgroups (`--subgroup`): `partitioned`, `collect_left`. Size the data with `HJOS_DAYS`, `HJOS_ROWS_PER_DAY` and `HJOS_RG_SIZE`. |
 | `imdb`                | IMDb benchmark                                                     |
 | `nlj`                 | Nested‑loop join benchmark                                         |
 | `null_aware_join`     | Null-aware (`NOT IN`) hash join micro-benchmarks. Q01-Q03 are uncorrelated `NOT IN` across NULL fractions and are linear in the table size (`NAJ_LARGE_ROWS`, default `1000000`). Q04-Q08 are correlated, so the correlation predicate stays behind as a join filter that the join applies per candidate (build row × probe row) pair while deciding which outer rows are UNKNOWN; without an equality correlation there are no scope keys to narrow those pairs, so their cost grows with the square of `NAJ_ROWS` (default `10000`). Q08 adds an equality correlation, which turns those pairs into a hash lookup. All tables are built inline from `range()`, so there is no data step. |

@@ -9754,6 +9754,9 @@ impl serde::Serialize for HashJoinExecNode {
         if self.fetch.is_some() {
             len += 1;
         }
+        if self.dynamic_filter_bounds.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.HashJoinExecNode", len)?;
         if let Some(v) = self.left.as_ref() {
             struct_ser.serialize_field("left", v)?;
@@ -9796,6 +9799,9 @@ impl serde::Serialize for HashJoinExecNode {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("fetch", ToString::to_string(&v).as_str())?;
         }
+        if let Some(v) = self.dynamic_filter_bounds.as_ref() {
+            struct_ser.serialize_field("dynamicFilterBounds", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -9822,6 +9828,8 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
             "dynamic_filter",
             "dynamicFilter",
             "fetch",
+            "dynamic_filter_bounds",
+            "dynamicFilterBounds",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -9837,6 +9845,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
             NullAware,
             DynamicFilter,
             Fetch,
+            DynamicFilterBounds,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -9869,6 +9878,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                             "nullAware" | "null_aware" => Ok(GeneratedField::NullAware),
                             "dynamicFilter" | "dynamic_filter" => Ok(GeneratedField::DynamicFilter),
                             "fetch" => Ok(GeneratedField::Fetch),
+                            "dynamicFilterBounds" | "dynamic_filter_bounds" => Ok(GeneratedField::DynamicFilterBounds),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -9899,6 +9909,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                 let mut null_aware__ = None;
                 let mut dynamic_filter__ = None;
                 let mut fetch__ = None;
+                let mut dynamic_filter_bounds__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Left => {
@@ -9972,6 +9983,12 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                                 map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
+                        GeneratedField::DynamicFilterBounds => {
+                            if dynamic_filter_bounds__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("dynamicFilterBounds"));
+                            }
+                            dynamic_filter_bounds__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(HashJoinExecNode {
@@ -9986,6 +10003,7 @@ impl<'de> serde::Deserialize<'de> for HashJoinExecNode {
                     null_aware: null_aware__.unwrap_or_default(),
                     dynamic_filter: dynamic_filter__,
                     fetch: fetch__,
+                    dynamic_filter_bounds: dynamic_filter_bounds__,
                 })
             }
         }
