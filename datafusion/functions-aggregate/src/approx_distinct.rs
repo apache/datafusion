@@ -126,6 +126,39 @@ impl<A: Accumulator> Accumulator for ApproxDistinctBitmapWrapper<A> {
     }
 }
 
+fn merge_serialized<T: Hash + ?Sized>(
+    hll: &mut HyperLogLog<T>,
+    bytes: &[u8],
+) -> Result<()> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    if bytes.len() == NUM_REGISTERS {
+        let other: HyperLogLog<T> = bytes.try_into()?;
+        hll.merge(&other);
+    } else {
+        if !bytes.len().is_multiple_of(size_of::<u64>()) {
+            return internal_err!(
+                "approx_distinct: malformed sparse state: length {} is not a multiple of {}",
+                bytes.len(),
+                size_of::<u64>()
+            );
+        }
+        if bytes.len() > SPARSE_LIMIT * size_of::<u64>() {
+            return internal_err!(
+                "approx_distinct: malformed sparse state: length {} exceeds sparse limit {}",
+                bytes.len(),
+                SPARSE_LIMIT * size_of::<u64>()
+            );
+        }
+        for chunk in bytes.as_chunks::<{ size_of::<u64>() }>().0 {
+            let h = u64::from_le_bytes(*chunk);
+            hll.add_hashed(h);
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct HLLAccumulator {
     hll: HyperLogLog<u8>,
@@ -172,8 +205,7 @@ impl Accumulator for HLLAccumulator {
             let v = v.ok_or_else(|| {
                 internal_datafusion_err!("Impossibly got empty binary array from states")
             })?;
-            let other = v.try_into()?;
-            self.hll.merge(&other);
+            merge_serialized(&mut self.hll, v)?;
         }
         Ok(())
     }
@@ -232,8 +264,7 @@ where
             let v = v.ok_or_else(|| {
                 internal_datafusion_err!("Impossibly got empty binary array from states")
             })?;
-            let other = v.try_into()?;
-            self.hll.merge(&other);
+            merge_serialized(&mut self.hll, v)?;
         }
         Ok(())
     }
@@ -1015,7 +1046,7 @@ mod tests {
         use arrow::array::{
             AsArray, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
             Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
-            IntervalYearMonthArray, StringViewArray,
+            IntervalYearMonthArray, StringArray, StringViewArray,
         };
         use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano, i256};
         use std::sync::Arc;
@@ -1358,6 +1389,61 @@ mod tests {
                 distinct_count(&mut acc_split)
             );
             assert_eq!(distinct_count(&mut acc_single), 3);
+        }
+
+        /// Grouped state (empty, sparse and dense rows) must merge into the
+        /// ungrouped accumulator.
+        #[test]
+        fn hll_acc_merges_grouped_state() {
+            let sparse = 10;
+            let dense = SPARSE_LIMIT * 4;
+            let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+                (0..sparse + dense).map(|i| format!("value-{i}")),
+            ));
+            let group_indices: Vec<usize> = (0..sparse + dense)
+                .map(|i| if i < sparse { 1 } else { 2 })
+                .collect();
+
+            let mut grouped = HllGroupsAccumulator::new();
+            grouped
+                .update_batch(std::slice::from_ref(&values), &group_indices, None, 3)
+                .unwrap();
+            let state = grouped.state(EmitTo::All).unwrap();
+
+            let mut direct = HLLAccumulator::new();
+            direct.update_batch(std::slice::from_ref(&values)).unwrap();
+
+            let mut merged = HLLAccumulator::new();
+            merged.merge_batch(&state).unwrap();
+
+            assert_eq!(distinct_count(&mut merged), distinct_count(&mut direct));
+        }
+
+        /// Grouped state (empty, sparse and dense rows) must merge into the
+        /// ungrouped numeric accumulator.
+        #[test]
+        fn numeric_acc_merges_grouped_state() {
+            let sparse = 10;
+            let dense = SPARSE_LIMIT * 4;
+            let values: ArrayRef =
+                Arc::new(Int64Array::from_iter_values(0..(sparse + dense) as i64));
+            let group_indices: Vec<usize> = (0..sparse + dense)
+                .map(|i| if i < sparse { 1 } else { 2 })
+                .collect();
+
+            let mut grouped = HllGroupsAccumulator::new();
+            grouped
+                .update_batch(std::slice::from_ref(&values), &group_indices, None, 3)
+                .unwrap();
+            let state = grouped.state(EmitTo::All).unwrap();
+
+            let mut direct = NumericHLLAccumulator::<Int64Type>::new();
+            direct.update_batch(std::slice::from_ref(&values)).unwrap();
+
+            let mut merged = NumericHLLAccumulator::<Int64Type>::new();
+            merged.merge_batch(&state).unwrap();
+
+            assert_eq!(merged.evaluate().unwrap(), direct.evaluate().unwrap());
         }
     }
 
