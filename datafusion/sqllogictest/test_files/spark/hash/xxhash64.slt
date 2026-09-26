@@ -195,3 +195,12 @@ SELECT id, xxhash64(id, name) FROM xxhash_test ORDER BY id;
 
 statement ok
 DROP TABLE xxhash_test;
+
+# A NULL struct hashes like any other NULL, whatever its fields still hold
+query BII
+SELECT s IS NULL,
+       xxhash64(s),
+       xxhash64(arrow_cast(NULL, 'Struct("a": Int64, "b": Utf8)'))
+FROM (SELECT nullif(s, s) AS s FROM (SELECT named_struct('a', 1, 'b', 'x') AS s));
+----
+true 42 42
