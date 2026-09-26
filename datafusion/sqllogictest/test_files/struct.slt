@@ -1803,3 +1803,78 @@ drop view struct_ctor_view;
 
 statement ok
 drop table struct_ctor_null;
+
+# A sub-query projection that renames a column to the name of a different
+# column of the same input, with a struct field read above it. Leaf projection
+# pushdown resolved the parent's column references through the rename map and
+# added the renamed input column a second time, which made the output schema
+# ambiguous (https://github.com/apache/datafusion/issues/25446).
+statement ok
+create table rename_swap_struct(a int, b int, s struct<x varchar>) as values (1, 10, {x: 'p'}), (2, 20, {x: 'q'});
+
+# a rename beside a same-name alias, under a filter
+query IIT
+select b, a, s['x'] from (select rename_swap_struct.a as b, rename_swap_struct.b as a, s from rename_swap_struct) where a > 0 order by b;
+----
+1 10 p
+2 20 q
+
+# the same shape under a limit
+query IIT rowsort
+select b, a, s['x'] from (select rename_swap_struct.a as b, rename_swap_struct.b as a, s from rename_swap_struct) limit 10;
+----
+1 10 p
+2 20 q
+
+# a swap of two column names
+query IIT
+select a, c, s['x'] from (select rename_swap_struct.b as a, rename_swap_struct.a as c, s from rename_swap_struct) where a > 0 order by a;
+----
+10 1 p
+20 2 q
+
+# the same shape under an order by
+query IIT
+select b, a, s['x'] from (select rename_swap_struct.a as b, rename_swap_struct.b as a, s from rename_swap_struct) order by b;
+----
+1 10 p
+2 20 q
+
+# the same shape under a group by
+query III
+select b, a, count(s['x']) from (select rename_swap_struct.a as b, rename_swap_struct.b as a, s from rename_swap_struct) group by b, a order by b;
+----
+1 10 1
+2 20 1
+
+# the rename stays above the extraction projection, and the struct field is
+# still read at the scan
+query TT
+explain select b, a, s['x'] from (select rename_swap_struct.a as b, rename_swap_struct.b as a, s from rename_swap_struct) where a > 0;
+----
+logical_plan
+01)Projection: rename_swap_struct.a AS b, rename_swap_struct.b AS a, __datafusion_extracted_1 AS rename_swap_struct.s[x]
+02)--Filter: rename_swap_struct.b > Int32(0)
+03)----Projection: get_field(rename_swap_struct.s, Utf8("x")) AS __datafusion_extracted_1, rename_swap_struct.a, rename_swap_struct.b
+04)------TableScan: rename_swap_struct projection=[a, b, s]
+physical_plan
+01)ProjectionExec: expr=[a@1 as b, b@2 as a, __datafusion_extracted_1@0 as rename_swap_struct.s[x]]
+02)--FilterExec: b@2 > 0
+03)----ProjectionExec: expr=[get_field(s@2, x) as __datafusion_extracted_1, a@0 as a, b@1 as b]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table rename_swap_struct;
+
+# The same swap where the struct field name is also a column name of the table.
+statement ok
+create table rename_swap_struct_field(a int, b int, s struct<b varchar>) as values (1, 10, {b: 'p'}), (2, 20, {b: 'q'});
+
+query IIT
+select a, b, s['b'] from (select b as a, a as b, s from rename_swap_struct_field limit 100) order by a;
+----
+10 1 p
+20 2 q
+
+statement ok
+drop table rename_swap_struct_field;
