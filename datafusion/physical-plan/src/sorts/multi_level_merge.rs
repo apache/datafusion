@@ -415,11 +415,19 @@ impl MultiLevelMergeBuilder {
                     && self.sorted_streams.is_empty()
                     && !self.sorted_spill_files.is_empty()
                 {
-                    // If one intermediate merge can leave a final pass with the
-                    // admitted fan-in, merge only the runs needed to get there.
-                    // Keep the admitted reservation so sizing does not change
-                    // reservation lifetime or admission under contention.
-                    let needed = self.sorted_spill_files.len() + 1;
+                    // The next admission starts with two read buffers per run.
+                    // Fit both those buffers and any replay headroom in the
+                    // existing grant: another partition may take every spare
+                    // byte while this intermediate pass writes to disk.
+                    let final_fan_in = sorted_spill_files.len() * buffer_size / 2;
+                    let final_fan_in = if self.reserve_replay_headroom {
+                        final_fan_in / 2
+                    } else {
+                        final_fan_in
+                    };
+                    let needed = self.sorted_spill_files.len() + sorted_spill_files.len()
+                        - final_fan_in
+                        + 1;
                     if needed < sorted_spill_files.len() {
                         let (first, first_limit) = &sorted_spill_files[0];
                         // A wider pending run or a smaller output batch limit can
@@ -436,6 +444,10 @@ impl MultiLevelMergeBuilder {
                         if uniform_runs {
                             let unused = sorted_spill_files.split_off(needed);
                             self.sorted_spill_files.splice(0..0, unused);
+                            // Keep the grant through intermediate EOF and the
+                            // spill write, then transfer it to the next admission.
+                            // This does not reserve additional pool memory.
+                            self.reservation = memory_reservation.take();
                         }
                     }
                 }
@@ -955,6 +967,10 @@ impl RecordBatchStream for StreamAttachedReservation {
 }
 
 #[cfg(test)]
+#[path = "multi_level_merge/intermediate_sizing_tests.rs"]
+mod intermediate_sizing_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -971,11 +987,14 @@ mod tests {
         ExecutionPlanMetricsSet, SpillMetrics,
     };
 
-    fn test_schema() -> SchemaRef {
+    pub(super) fn test_schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, false)]))
     }
 
-    fn build_spill_manager(env: &Arc<RuntimeEnv>, schema: &SchemaRef) -> SpillManager {
+    pub(super) fn build_spill_manager(
+        env: &Arc<RuntimeEnv>,
+        schema: &SchemaRef,
+    ) -> SpillManager {
         SpillManager::new(
             Arc::clone(env),
             SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
@@ -985,7 +1004,7 @@ mod tests {
 
     /// Spill `values` (which must already be sorted) as a single sorted run and
     /// return it as a `SortedSpillFile` carrying its recorded largest-batch memory.
-    fn make_sorted_spill_file(
+    pub(super) fn make_sorted_spill_file(
         spill_manager: &SpillManager,
         schema: &SchemaRef,
         values: Vec<i64>,
@@ -1009,7 +1028,7 @@ mod tests {
         }
     }
 
-    fn build_merge_builder(
+    pub(super) fn build_merge_builder(
         spill_manager: SpillManager,
         schema: SchemaRef,
         sorted_spill_files: Vec<SortedSpillFile>,
@@ -1034,7 +1053,8 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::full_batches(9, 128, 3)]
+    #[case::full_batches(8, 128, 6)]
+    #[case::replay_headroom_limits_sizing(9, 128, 7)]
     #[case::unchanged_selection(13, 128, 7)]
     #[case::short_batches(9, 64, 7)]
     #[tokio::test]
@@ -1059,7 +1079,8 @@ mod tests {
             .collect();
         let batch_memory = files[0].max_record_batch_memory;
         // Ordinary admission seats seven inputs with read-ahead and equal replay
-        // headroom. Nine runs need only three merged inputs to reach that fan-in;
+        // headroom. The retained buffer grant can admit three final inputs plus
+        // their replay headroom, so eight runs need six merged inputs. Nine or
         // thirteen runs require all seven and exercise the unchanged selection.
         // Short input batches can grow when merged, so they must keep the original
         // selection to avoid adding a pass with the larger output batch budget.

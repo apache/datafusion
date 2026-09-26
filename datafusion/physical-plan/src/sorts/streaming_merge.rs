@@ -171,16 +171,16 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
-    /// Limit the last intermediate merge to the inputs needed to reach the
-    /// final replay fan-in. The ordered replay path can use the larger final pass.
+    /// Limit intermediate rewrites when the retained buffer reservation can
+    /// also admit the final replay pass with its headroom.
     /// `min_spill_batch_rows` is the minimum largest-batch row count across input
     /// runs. A run without a full batch disables sizing for the whole replay,
     /// since merging short batches can increase the intermediate run's budget.
     pub(crate) fn with_intermediate_merge_sizing(
         mut self,
-        min_spill_batch_rows: usize,
+        min_spill_batch_rows: Option<usize>,
     ) -> Self {
-        self.min_spill_batch_rows = Some(min_spill_batch_rows);
+        self.min_spill_batch_rows = min_spill_batch_rows;
         self
     }
 
