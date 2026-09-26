@@ -40,6 +40,7 @@ use stabby::vec::Vec as SVec;
 mod partition_evaluator;
 mod partition_evaluator_args;
 mod range;
+mod window_state;
 
 use crate::arrow_wrappers::WrappedSchema;
 use crate::util::{
