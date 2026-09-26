@@ -708,7 +708,36 @@ impl Optimizer {
                         new_plan = data;
                         observer(&new_plan, rule.as_ref());
                         if transformed {
-                            has_subqueries = plan_has_subqueries(&new_plan);
+                            // Only rescan for subqueries when this pass
+                            // already saw one: none of the built-in rules
+                            // construct a subquery expression or
+                            // `LogicalPlan::Subquery` from scratch, so a
+                            // plan without subqueries is expected to stay
+                            // that way. A custom rule (added via
+                            // `Optimizer::with_rules` or
+                            // `SessionState::add_optimizer_rule`) that
+                            // breaks this assumption and introduces a
+                            // subquery into a plan that had none simply has
+                            // that subquery's inner plan picked up starting
+                            // from the next pass rather than this one.
+                            if has_subqueries {
+                                // Refresh after changed rules so
+                                // decorrelation can move later rules onto
+                                // the in-place path; that path refreshes
+                                // parent schemas after child schemas
+                                // change.
+                                has_subqueries = plan_has_subqueries(&new_plan);
+                            } else {
+                                #[cfg(debug_assertions)]
+                                if plan_has_subqueries(&new_plan) {
+                                    debug!(
+                                        "optimizer rule '{}' introduced a subquery into a plan that had none (pass {})",
+                                        rule.name(),
+                                        i
+                                    );
+                                    has_subqueries = true;
+                                }
+                            }
                             log_plan(rule.name(), &new_plan);
                         } else {
                             debug!(
@@ -966,6 +995,33 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn optimizer_terminates_after_one_pass_when_no_rule_transforms() -> Result<()> {
+        let opt = Optimizer::with_rules(vec![Arc::new(NoopRule {})]);
+        let config = OptimizerContext::new().with_max_passes(16);
+        // A plan with more than one node so the rule's per-node traversal
+        // visits several nodes, all of which it declines to transform.
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a"), col("b"), col("c")])?
+            .build()?;
+
+        let observed_rule_names = Arc::new(Mutex::new(Vec::new()));
+        let observed_rule_names_clone = Arc::clone(&observed_rule_names);
+        opt.optimize(plan, &config, move |_plan, rule| {
+            observed_rule_names_clone
+                .lock()
+                .unwrap()
+                .push(rule.name().to_string());
+        })?;
+
+        // A rule that never transforms should cause the optimizer to stop
+        // after a single pass, so the observer sees the rule exactly once.
+        let observed_rule_names = observed_rule_names.lock().unwrap();
+        assert_eq!(observed_rule_names.as_slice(), ["noop_rule"]);
+
+        Ok(())
+    }
+
     fn add_metadata_to_fields(schema: &DFSchema) -> DFSchemaRef {
         let new_fields = schema
             .iter()
@@ -1116,6 +1172,32 @@ mod tests {
             Ok(Transformed::yes(LogicalPlan::Projection(
                 Projection::try_new(exprs, Arc::clone(&projection.input))?,
             )))
+        }
+    }
+
+    /// A rule that never transforms the plan.
+    #[derive(Default, Debug)]
+    struct NoopRule {}
+
+    impl OptimizerRule for NoopRule {
+        fn name(&self) -> &str {
+            "noop_rule"
+        }
+
+        fn apply_order(&self) -> Option<ApplyOrder> {
+            Some(ApplyOrder::TopDown)
+        }
+
+        fn supports_rewrite(&self) -> bool {
+            true
+        }
+
+        fn rewrite(
+            &self,
+            plan: LogicalPlan,
+            _config: &dyn OptimizerConfig,
+        ) -> Result<Transformed<LogicalPlan>> {
+            Ok(Transformed::no(plan))
         }
     }
 }
