@@ -106,7 +106,7 @@ pub trait GroupColumn: Send + Sync {
         self.len() == 0
     }
 
-    /// Returns the number of bytes used by this [`GroupColumn`]
+    /// Returns this column's concrete owner descriptor and retained allocations.
     fn size(&self) -> usize;
 
     /// Builds a new array from all of the stored rows
@@ -275,6 +275,23 @@ impl VectorizedOperationBuffers {
         self.equal_to_row_indices.clear();
         self.equal_to_group_indices.clear();
         self.remaining_row_indices.clear();
+    }
+
+    fn clear_shrink(&mut self, num_rows: usize) {
+        self.clear();
+        self.append_row_indices.shrink_to(num_rows);
+        self.equal_to_row_indices.shrink_to(num_rows);
+        self.equal_to_group_indices.shrink_to(num_rows);
+        self.equal_to_results = BooleanBufferBuilder::new(num_rows);
+        self.remaining_row_indices.shrink_to(num_rows);
+    }
+
+    fn size(&self) -> usize {
+        self.append_row_indices.allocated_size()
+            + self.equal_to_row_indices.allocated_size()
+            + self.equal_to_group_indices.allocated_size()
+            + self.equal_to_results.capacity() / 8
+            + self.remaining_row_indices.allocated_size()
     }
 }
 
@@ -1155,8 +1172,25 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
     }
 
     fn size(&self) -> usize {
-        let group_values_size: usize = self.group_values.iter().map(|v| v.size()).sum();
-        group_values_size + self.map_size + self.hashes_buffer.allocated_size()
+        let group_values_size = self.group_values.allocated_size()
+            + self
+                .group_values
+                .iter()
+                .map(|value| value.size())
+                .sum::<usize>();
+        let group_index_lists_size = self.group_index_lists.allocated_size()
+            + self
+                .group_index_lists
+                .iter()
+                .map(VecAllocExt::allocated_size)
+                .sum::<usize>();
+        size_of::<Self>()
+            + group_values_size
+            + self.map_size
+            + group_index_lists_size
+            + self.emit_group_index_list_buffer.allocated_size()
+            + self.vectorized_operation_buffers.size()
+            + self.hashes_buffer.allocated_size()
     }
 
     fn is_empty(&self) -> bool {
@@ -1305,8 +1339,10 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         // Such structures are only used in `non-streaming` case
         if !STREAMING {
             self.group_index_lists.clear();
+            self.group_index_lists.shrink_to(num_rows);
             self.emit_group_index_list_buffer.clear();
-            self.vectorized_operation_buffers.clear();
+            self.emit_group_index_list_buffer.shrink_to(num_rows);
+            self.vectorized_operation_buffers.clear_shrink(num_rows);
         }
     }
 }
@@ -1346,7 +1382,7 @@ mod tests {
         compute::{concat_batches, take},
         util::pretty::pretty_format_batches,
     };
-    use datafusion_common::utils::proxy::HashTableAllocExt;
+    use datafusion_common::{Result, utils::proxy::HashTableAllocExt};
     use datafusion_expr::{EmitTo, GroupSelection};
 
     use crate::aggregates::group_values::{
@@ -1356,6 +1392,79 @@ mod tests {
     use super::{
         GroupIndexView, group_column_supported_type, make_group_column, supported_schema,
     };
+
+    #[test]
+    fn collision_emit_and_vectorized_buffers_retain_capacity() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group",
+            DataType::Int32,
+            false,
+        )]));
+        let mut group_values = GroupValuesColumn::<false>::try_new(schema).unwrap();
+        let input: ArrayRef = Arc::new(Int32Array::from_iter_values(0..32));
+        let baseline = group_values.size();
+
+        group_values.intern(&[Arc::clone(&input)], &mut vec![])?;
+        group_values.intern(&[input], &mut vec![])?;
+        assert!(
+            group_values
+                .vectorized_operation_buffers
+                .append_row_indices
+                .capacity()
+                > 0
+        );
+        assert!(
+            group_values
+                .vectorized_operation_buffers
+                .equal_to_row_indices
+                .capacity()
+                > 0
+        );
+        assert!(
+            group_values
+                .vectorized_operation_buffers
+                .equal_to_results
+                .capacity()
+                / 8
+                > 0
+        );
+        assert!(group_values.size() > baseline);
+
+        insert_non_inline_group_index_view(&mut group_values, u64::MAX, vec![1, 2]);
+        group_values.emit(EmitTo::First(1))?;
+        assert!(!group_values.group_index_lists.is_empty());
+        assert!(group_values.emit_group_index_list_buffer.capacity() > 0);
+        assert!(group_values.size() > baseline);
+
+        let input: ArrayRef = Arc::new(Int32Array::from_iter_values(0..32));
+        group_values.intern(&[input], &mut vec![])?;
+        assert!(group_values.size() > baseline);
+        Ok(())
+    }
+
+    #[test]
+    fn clear_shrink_releases_vectorized_and_emit_scratch_capacity() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group",
+            DataType::Int32,
+            false,
+        )]));
+        let mut group_values = GroupValuesColumn::<false>::try_new(schema)?;
+        let baseline = group_values.size();
+        let buffers = &mut group_values.vectorized_operation_buffers;
+        buffers.append_row_indices.push(0);
+        buffers.equal_to_row_indices.push(0);
+        buffers.equal_to_group_indices.push(0);
+        buffers.equal_to_results.append(true);
+        buffers.remaining_row_indices.push(0);
+        group_values.emit_group_index_list_buffer.push(0);
+
+        assert!(group_values.size() > baseline);
+        group_values.clear_shrink(0);
+
+        assert_eq!(group_values.size(), baseline);
+        Ok(())
+    }
 
     /// A mixed group-by key of several native columns plus one nested column
     /// that has no type-specialized `GroupColumn`.

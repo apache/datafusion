@@ -166,6 +166,11 @@ required-features = ["test_utils"]
 
 [[bench]]
 harness = false
+name = "partial_aggregate_emit"
+required-features = ["test_utils"]
+
+[[bench]]
+harness = false
 name = "compute_statistics"
 
 [[bench]]
