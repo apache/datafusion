@@ -257,6 +257,67 @@ git pull
 
 Note: if `gh` is installed, you can also run `gh pr checkout $PR_NUMBER` instead of `git fetch upstream pull/$PR_NUMBER/head:pr-$PR_NUMBER`
 
+### In CI
+
+The `Benchmarks` workflow (`.github/workflows/benchmark.yml`) runs TPC-H SF10
+for a candidate commit (`head`) and for the commit it sits on (`base`), on one
+machine, and fails when `head` is slower than the limits allow. SF10 rather
+than SF1, because SF1 queries finish in milliseconds where runner noise
+dominates.
+
+It runs on every push to `main`, so a regression no pull request measured is
+still pinned to the one merge that introduced it. On a pull request it is
+opt-in, at half an hour of runner time: add the `performance` label, or start it
+from the Actions tab, where the scale factor, round and iteration counts, the
+regression limits and the cargo profile can be overridden. A failure on `main`
+blocks nothing, so read it as a bisect already done for you.
+
+Three jobs: one resolves the base commit, two build a `benchmark_runner` each
+(a runner per side, so the builds are simultaneous), and the last measures both
+binaries. Both sides use the `release-nonlto` profile, which roughly halves the
+build; dispatch with `release` for cross-crate inlining effects or for numbers
+comparable with locally posted `bench.sh` results.
+
+The measuring job **interleaves** the sides: a pass of one, a pass of the other,
+six times, alternating which leads. This matters more than any choice of
+statistic -- measured in two blocks, anything that drifts between them moves one
+side only and reads as a code change. The round count is even so each side leads
+equally; dispatch more rounds to tighten a marginal verdict.
+
+Which machine the run lands on follows from the trigger. GitHub withholds `vars`
+from fork pull requests, so `vars.USE_RUNS_ON` reads as empty there and the run
+falls back to a 4-vCPU `ubuntu-latest`, as the rest of `rust.yml` also does; a
+push to `main` or a manual dispatch gets the 16-vCPU runner. So a labelled fork
+pull request is a coarse signal and the `main` run after the merge is the
+measurement. On that faster machine an SF10 query that takes 300ms on four vCPUs
+takes under 100ms, and a 20% regression on it falls inside the 25ms floor below,
+so dispatch a smaller `min_delta_ms` when the shortest queries are the ones in
+question.
+
+If you edit the workflow, note that `benchmark_runner` locates `sql_benchmarks`
+through the `CARGO_MANIFEST_DIR` baked in at compile time, so each side's
+checkout has to sit at the same absolute path in the job that builds it and the
+job that runs it -- hence the fixed `/tmp` root, and the check that each binary
+still sees the `tpch` suite before measuring. The comparison table goes to the
+job summary, and every round's JSON plus the table are uploaded as the
+`tpch-comparison` artifact.
+
+Runners are shared machines, so treat the numbers as a signal rather than a
+measurement. A query has to clear three bars to fail the gate:
+
+- the **median of its per-round ratios** is above `1.20x`, so one slow pass on
+  either side cannot decide the verdict
+- the regression costs at least **25ms**, which is what keeps an SF1 run from
+  failing on its short queries
+- it is larger than the **spread the base side showed against itself**, since a
+  query whose own baseline moved 26% between rounds cannot support a 25% verdict
+
+The total time is gated at `1.05x` under the same noise floor. Anything that
+clears the first bar but not the others is printed under "Not counted against
+the gate" rather than dropped. Local runs on quiet hardware remain the way to
+confirm a result, and a PR that changes the TPC-H benchmark files themselves is
+measured against its own queries, which makes the comparison advisory.
+
 ### Running Benchmarks Manually
 
 Assuming data is in the `data` directory, the `tpch` benchmark can be run with a command like this:
@@ -295,6 +356,28 @@ $ git checkout my_branch
 $ cargo run --release --bin tpch -- benchmark datafusion --iterations 5 --path ./data --format parquet -o /tmp/output_branch/tpch.json
 # compare the results:
 uv run ./compare.py /tmp/output_main/tpch.json  /tmp/output_branch/tpch.json
+```
+
+To use `compare.py` as a pass/fail gate (this is what CI does), pass one or both
+of the regression limits. Without them it only prints the comparison and always
+exits successfully.
+
+```shell
+# exit non-zero if a single query is more than 20% slower and at least 25ms
+# slower, or if the total time is more than 5% slower
+./compare.py /tmp/output_main/tpch.json /tmp/output_branch/tpch.json \
+  --fail-threshold 1.20 --fail-total-threshold 1.05 --fail-min-delta-ms 25
+```
+
+Either path can also be a *directory* of summary files, one per measurement
+round, which is how CI runs it: the gate then rules on the median of the
+per-round ratios and reports how much each side varied against itself. Rounds
+are paired in sorted filename order, so name them `round01.json` and so on.
+
+```shell
+# six rounds per side, measured alternately rather than one side at a time
+./compare.py /tmp/output_main /tmp/output_branch \
+  --fail-threshold 1.20 --fail-total-threshold 1.05 --fail-min-delta-ms 25
 ```
 
 This will produce output like:
