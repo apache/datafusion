@@ -296,9 +296,8 @@ fn interval_literal(interval_value: SQLExpr, negative: bool) -> Result<String> {
                 return not_impl_err!(
                     "Unsupported interval argument. Long number not supported: {interval_value:?}"
                 );
-            } else {
-                v.to_string()
             }
+            v.to_string()
         }
         SQLExpr::UnaryOp { op, expr } => {
             let negative = match op {

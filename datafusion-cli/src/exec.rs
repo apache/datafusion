@@ -69,7 +69,7 @@ pub async fn exec_from_lines(
     reader: &mut BufReader<File>,
     print_options: &PrintOptions,
 ) -> Result<()> {
-    let mut query = "".to_owned();
+    let mut query = String::new();
 
     for line in reader.lines() {
         match line {
@@ -79,10 +79,10 @@ pub async fn exec_from_lines(
                 query.push_str(line);
                 if line.ends_with(';') {
                     match exec_and_print(ctx, print_options, query).await {
-                        Ok(_) => {}
+                        Ok(()) => {}
                         Err(err) => eprintln!("{err}"),
                     }
-                    query = "".to_string();
+                    query = String::new();
                 } else {
                     query.push('\n');
                 }
@@ -175,7 +175,7 @@ pub async fn exec_from_repl(
                     rl.add_history_entry(line.trim_end())?;
                     tokio::select! {
                         res = exec_and_print(ctx, print_options, line) => match res {
-                            Ok(_) => {}
+                            Ok(()) => {}
                             Err(err) => eprintln!("{err}"),
                         },
                         _ = signal::ctrl_c() => {

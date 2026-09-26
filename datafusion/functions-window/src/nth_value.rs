@@ -407,9 +407,8 @@ impl PartitionEvaluator for NthValueEvaluator {
                                 state.window_frame_range.end - 1;
                         }
                         return Ok(());
-                    } else {
-                        // Fall through to the main case because there are no nulls
                     }
+                    // Fall through to the main case because there are no nulls
                 }
                 // Do not memoize for other kinds when nulls are ignored
                 NthValueKind::Last | NthValueKind::Nth => return Ok(()),

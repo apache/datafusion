@@ -517,9 +517,8 @@ where
                     if let Ok(inner) = r {
                         val = Some(Ok(op2(inner)));
                         break;
-                    } else {
-                        val = Some(r);
                     }
+                    val = Some(r);
                 }
             }
 

@@ -524,7 +524,7 @@ impl SqlBenchmark {
 
         while let Some(result) = reader_result {
             match result {
-                Ok(_) => {
+                Ok(()) => {
                     if !is_blank_or_comment_line(&line) {
                         // boxing required because of recursion
                         Box::pin(self.process_line(ctx, &mut reader, &mut line)).await?;
@@ -852,7 +852,7 @@ impl BenchmarkDirective {
 
         loop {
             match reader_result {
-                Some(Ok(_)) => {
+                Some(Ok(())) => {
                     if is_comment_line(line) {
                         // comment, ignore
                     } else if is_blank_line(line) {
@@ -984,7 +984,7 @@ impl BenchmarkDirective {
 
         loop {
             match reader_result {
-                Some(Ok(_)) => {
+                Some(Ok(())) => {
                     if line.trim() == "----" {
                         found_break = true;
                         break;
@@ -1073,7 +1073,7 @@ impl BenchmarkDirective {
 
         loop {
             match reader_result {
-                Some(Ok(_)) => {
+                Some(Ok(())) => {
                     if line.trim() == "----" {
                         found_break = true;
                         break;
@@ -1136,7 +1136,7 @@ impl BenchmarkDirective {
 
         loop {
             match reader_result {
-                Some(Ok(_)) => {
+                Some(Ok(())) => {
                     if is_comment_line(line) {
                         // Clear the line buffer for the next iteration.
                         line.clear();
@@ -1483,7 +1483,7 @@ fn read_query_from_reader(
 
     loop {
         match reader_result {
-            Some(Ok(_)) => {
+            Some(Ok(())) => {
                 if is_comment_line(&line) {
                     // comment, ignore
                 } else if is_blank_line(&line) {
