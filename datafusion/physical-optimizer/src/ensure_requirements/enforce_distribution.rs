@@ -41,7 +41,6 @@ use crate::utils::{
 use arrow::compute::SortOptions;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
-use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::Transformed;
 use datafusion_expr::logical_plan::{Aggregate, JoinType};
 use datafusion_physical_expr::expressions::{Column, NoOp};
@@ -62,7 +61,9 @@ use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, PartitionMode, SortMergeJoinExec,
 };
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
-use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::repartition::{
+    RepartitionExec, round_robin_beneficial_for_rows,
+};
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
@@ -995,8 +996,7 @@ struct DistributionChildState {
 )]
 fn get_repartition_requirement_status(
     plan: &Arc<dyn ExecutionPlan>,
-    batch_size: usize,
-    should_use_estimates: bool,
+    config: &ConfigOptions,
     stats_ctx: &StatisticsContext,
 ) -> Result<Vec<RepartitionRequirementStatus>> {
     let mut needs_alignment = false;
@@ -1009,14 +1009,12 @@ fn get_repartition_requirement_status(
     {
         // Decide whether adding a round robin is beneficial depending on
         // the statistical information we have on the number of rows:
-        let roundrobin_beneficial_stats = match stats_ctx
-            .compute(child.as_ref(), &StatisticsArgs::new())?
-            .num_rows
-        {
-            Precision::Exact(n_rows) => n_rows > batch_size,
-            Precision::Inexact(n_rows) => !should_use_estimates || (n_rows > batch_size),
-            Precision::Absent => true,
-        };
+        let roundrobin_beneficial_stats = round_robin_beneficial_for_rows(
+            &stats_ctx
+                .compute(child.as_ref(), &StatisticsArgs::new())?
+                .num_rows,
+            config,
+        );
         let is_hash = matches!(
             requirement,
             Distribution::HashPartitioned(_) | Distribution::KeyPartitioned(_)
@@ -1375,10 +1373,6 @@ pub fn ensure_distribution_with_stats(
     // When `false`, round robin repartition will not be added to increase parallelism
     let enable_round_robin = config.optimizer.enable_round_robin_repartition;
     let repartition_file_scans = config.optimizer.repartition_file_scans;
-    let batch_size = config.execution.batch_size.get();
-    let should_use_estimates = config
-        .execution
-        .use_row_number_estimates_to_optimize_partitioning;
     let subset_satisfaction_threshold = config.optimizer.subset_repartition_threshold;
     let unbounded_and_pipeline_friendly = dist_context.plan.boundedness().is_unbounded()
         && matches!(
@@ -1455,12 +1449,8 @@ pub fn ensure_distribution_with_stats(
         || plan.is::<SortMergeJoinExec>();
 
     let input_distributions = plan.input_distribution_requirements();
-    let repartition_status_flags = get_repartition_requirement_status(
-        &plan,
-        batch_size,
-        should_use_estimates,
-        stats_ctx,
-    )?;
+    let repartition_status_flags =
+        get_repartition_requirement_status(&plan, config, stats_ctx)?;
     // This loop iterates over all the children to:
     // - Increase parallelism for every child if it is beneficial.
     // - Satisfy the distribution requirements of every child, if it is not
