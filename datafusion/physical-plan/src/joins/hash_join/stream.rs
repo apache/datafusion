@@ -32,7 +32,9 @@ use crate::joins::hash_join::probe_completion::ProbeSideSummary;
 use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
-use crate::joins::utils::{OnceFut, equal_rows_arr, matchable_join_keys};
+use crate::joins::utils::{
+    JoinKeyComparator, OnceFut, equal_rows_arr, matchable_join_keys,
+};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
     RecordBatchStream, SendableRecordBatchStream, handle_state,
@@ -386,6 +388,9 @@ pub(super) struct HashJoinStream {
     probe_indices_buffer: Vec<u32>,
     /// Scratch space for build indices during hash lookup
     build_indices_buffer: Vec<u64>,
+    /// Key comparator for the current probe batch, built on first use and
+    /// reused by every chunk of that batch
+    probe_key_comparator: Option<JoinKeyComparator>,
 
     /// Scratch space for scope-key hashes in the null-aware mark pass, reused
     /// across probe batches. Separate from `hashes_buffer`, which still holds
@@ -475,6 +480,7 @@ pub(super) fn lookup_join_hashmap(
     offset: MapOffset,
     probe_indices_buffer: &mut Vec<u32>,
     build_indices_buffer: &mut Vec<u64>,
+    key_comparator: &mut Option<JoinKeyComparator>,
 ) -> Result<(UInt64Array, UInt32Array, Option<MapOffset>)> {
     let next_offset = build_hashmap.get_matched_indices_with_limit_offset(
         hashes_buffer,
@@ -490,14 +496,13 @@ pub(super) fn lookup_join_hashmap(
     let probe_indices_unfiltered: UInt32Array =
         std::mem::take(probe_indices_buffer).into();
 
-    // TODO: optimize equal_rows_arr to avoid allocation of intermediate arrays
-    // https://github.com/apache/datafusion/issues/12131
     let (build_indices, probe_indices) = equal_rows_arr(
         &build_indices_unfiltered,
         &probe_indices_unfiltered,
         build_side_values,
         probe_side_values,
         null_equality,
+        key_comparator,
     )?;
 
     // Reclaim buffers
@@ -580,6 +585,7 @@ impl HashJoinStream {
             hashes_buffer,
             probe_indices_buffer: Vec::with_capacity(batch_size),
             build_indices_buffer: Vec::with_capacity(batch_size),
+            probe_key_comparator: None,
             // Left unallocated: only correlated null-aware joins ever use
             // these, and they grow them on first use.
             null_mark_hashes_buffer: Vec::new(),
@@ -769,6 +775,8 @@ impl HashJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<StatefulStreamResult<Option<RecordBatch>>>> {
+        // The comparator refers to the previous probe batch's key arrays.
+        self.probe_key_comparator = None;
         match ready!(self.right.poll_next_unpin(cx)) {
             None => {
                 // Release the probe-side input pipeline's resources. The schema
@@ -880,6 +888,11 @@ impl HashJoinStream {
             return Ok(StatefulStreamResult::Continue);
         }
 
+        // Array map lookups move their index buffers into the arrays below.
+        // Keep a handle on those buffers so they can be reused as scratch
+        // space once this chunk's output batch is built.
+        let mut array_map_buffers = None;
+
         // get the matched by join keys indices
         let (left_indices, right_indices, next_offset) = match build_side.left_data.map()
         {
@@ -894,6 +907,7 @@ impl HashJoinStream {
                 state.offset,
                 &mut self.probe_indices_buffer,
                 &mut self.build_indices_buffer,
+                &mut self.probe_key_comparator,
             )?,
             Map::ArrayMap(array_map) => {
                 let next_offset = array_map.get_matched_indices_with_limit_offset(
@@ -903,11 +917,15 @@ impl HashJoinStream {
                     &mut self.probe_indices_buffer,
                     &mut self.build_indices_buffer,
                 )?;
-                (
-                    UInt64Array::from(self.build_indices_buffer.clone()),
-                    UInt32Array::from(self.probe_indices_buffer.clone()),
-                    next_offset,
-                )
+                let build_indices: UInt64Array =
+                    std::mem::take(&mut self.build_indices_buffer).into();
+                let probe_indices: UInt32Array =
+                    std::mem::take(&mut self.probe_indices_buffer).into();
+                array_map_buffers = Some((
+                    build_indices.values().clone(),
+                    probe_indices.values().clone(),
+                ));
+                (build_indices, probe_indices, next_offset)
             }
         };
 
@@ -1008,6 +1026,14 @@ impl HashJoinStream {
             None,
         )?;
 
+        // Reclaim the array map scratch buffers now that no index array
+        // refers to them.
+        drop((left_indices, right_indices));
+        if let Some((build_buffer, probe_buffer)) = array_map_buffers {
+            self.build_indices_buffer = build_buffer.into();
+            self.probe_indices_buffer = probe_buffer.into();
+        }
+
         let push_status = self.output_buffer.push_batch(batch)?;
 
         timer.done();
@@ -1015,6 +1041,7 @@ impl HashJoinStream {
         // If limit reached, finish and move to Completed state
         if push_status == PushBatchStatus::LimitReached {
             self.output_buffer.finish()?;
+            self.probe_key_comparator = None;
             self.state = HashJoinStreamState::Completed;
             return Ok(StatefulStreamResult::Continue);
         }
@@ -1568,6 +1595,7 @@ fn for_each_scope_match(
             offset,
             probe_indices_buffer,
             build_indices_buffer,
+            &mut None,
         )?;
 
         if !build_indices.is_empty() {

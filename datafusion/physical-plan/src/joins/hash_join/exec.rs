@@ -3452,8 +3452,8 @@ mod tests {
 
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryViewArray, Date32Array, DictionaryArray,
-        Int32Array, Int64Array, StringArray, StringViewArray, StructArray, UInt32Array,
-        UInt64Array,
+        Float64Array, Int32Array, Int64Array, StringArray, StringViewArray, StructArray,
+        UInt32Array, UInt64Array,
     };
     use arrow::buffer::NullBuffer;
     use arrow::datatypes::{DataType, Field, Int32Type};
@@ -4060,6 +4060,221 @@ mod tests {
 
         assert_join_metrics!(metrics, 3);
         assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
+        Ok(())
+    }
+
+    /// Two-column keys (Int32, Float64) take the general comparator path.
+    /// Small batch sizes split each probe batch into several lookup chunks,
+    /// so the key comparison must stay correct across chunk boundaries:
+    /// `-0.0` still equals `0.0`. NULL keys are also present on both sides;
+    /// under `NullEqualsNothing` those rows are skipped by the lookup before
+    /// any key comparison, so they must not appear in the output.
+    #[rstest]
+    #[tokio::test]
+    async fn join_inner_multi_key_float_zero_and_nulls_across_chunks(
+        #[values(8192, 3, 2, 1)] batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        let schema = |suffix: &str| {
+            Arc::new(Schema::new(vec![
+                Field::new(format!("k{suffix}"), DataType::Int32, true),
+                Field::new(format!("f{suffix}"), DataType::Float64, true),
+                Field::new(format!("v{suffix}"), DataType::Int32, true),
+            ]))
+        };
+        let table = |suffix: &str,
+                     k: Vec<Option<i32>>,
+                     f: Vec<Option<f64>>,
+                     v: Vec<i32>|
+         -> Result<Arc<dyn ExecutionPlan>> {
+            let schema = schema(suffix);
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(k)),
+                    Arc::new(Float64Array::from(f)),
+                    Arc::new(Int32Array::from(v)),
+                ],
+            )?;
+            TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)
+                .map(|exec| exec as _)
+        };
+
+        let left = table(
+            "1",
+            vec![Some(1), Some(1), Some(1), Some(2), Some(1)],
+            vec![Some(-0.0), Some(0.0), None, Some(1.5), Some(-0.0)],
+            vec![10, 11, 12, 13, 14],
+        )?;
+        let right = table(
+            "2",
+            vec![Some(1), Some(1), Some(2), Some(1)],
+            vec![Some(0.0), None, Some(1.5), Some(-0.0)],
+            vec![100, 101, 102, 103],
+        )?;
+
+        let on = vec![
+            (
+                Arc::new(Column::new_with_schema("k1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("k2", &right.schema())?) as _,
+            ),
+            (
+                Arc::new(Column::new_with_schema("f1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("f2", &right.schema())?) as _,
+            ),
+        ];
+
+        let (_, batches, _) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+------+----+----+------+-----+
+            | k1 | f1   | v1 | k2 | f2   | v2  |
+            +----+------+----+----+------+-----+
+            | 1  | -0.0 | 10 | 1  | -0.0 | 103 |
+            | 1  | -0.0 | 10 | 1  | 0.0  | 100 |
+            | 1  | -0.0 | 14 | 1  | -0.0 | 103 |
+            | 1  | -0.0 | 14 | 1  | 0.0  | 100 |
+            | 1  | 0.0  | 11 | 1  | -0.0 | 103 |
+            | 1  | 0.0  | 11 | 1  | 0.0  | 100 |
+            | 2  | 1.5  | 13 | 2  | 1.5  | 102 |
+            +----+------+----+----+------+-----+
+            ");
+        }
+
+        Ok(())
+    }
+
+    /// Two probe batches carry different multi-column keys at the same row
+    /// positions. Each batch has to be compared against its own key arrays;
+    /// a comparator left over from the first batch would drop the second
+    /// batch's match.
+    #[rstest]
+    #[tokio::test]
+    async fn join_inner_multi_key_across_probe_batches(
+        #[values(8192, 1)] batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+        let left = build_table_two_cols(
+            ("a1", &vec![Some(1), Some(1)]),
+            ("b1", &vec![Some(10), Some(20)]),
+        );
+
+        let right_schema = Arc::new(Schema::new(vec![
+            Field::new("a2", DataType::Int32, true),
+            Field::new("b2", DataType::Int32, true),
+        ]));
+        let probe_batch = |b: i32| {
+            RecordBatch::try_new(
+                Arc::clone(&right_schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1])),
+                    Arc::new(Int32Array::from(vec![b])),
+                ],
+            )
+        };
+        let right = TestMemoryExec::try_new_exec(
+            &[vec![probe_batch(10)?, probe_batch(20)?]],
+            Arc::clone(&right_schema),
+            None,
+        )?;
+
+        let on = vec![
+            (
+                Arc::new(Column::new_with_schema("a1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("a2", &right.schema())?) as _,
+            ),
+            (
+                Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+            ),
+        ];
+
+        let (_, batches, _) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+----+----+----+
+            | a1 | b1 | a2 | b2 |
+            +----+----+----+----+
+            | 1  | 10 | 1  | 10 |
+            | 1  | 20 | 1  | 20 |
+            +----+----+----+----+
+            ");
+        }
+
+        Ok(())
+    }
+
+    /// An integer key joined through the perfect hash (array map) path, with
+    /// more candidate pairs than the batch size so each probe batch is
+    /// emitted over several chunks.
+    #[rstest]
+    #[tokio::test]
+    async fn join_inner_array_map_across_chunks(
+        #[values(8192, 3, 2, 1)] batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, true);
+        let left = build_table(
+            ("a1", &vec![1, 2, 3, 4, 5, 6]),
+            ("b1", &vec![1, 1, 1, 2, 2, 3]),
+            ("c1", &vec![7, 8, 9, 10, 11, 12]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30, 40]),
+            ("b1", &vec![1, 2, 3, 4]),
+            ("c2", &vec![70, 80, 90, 100]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        let (_, batches, metrics) = join_collect(
+            left,
+            right,
+            on,
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 1  | 7  | 10 | 1  | 70 |
+            | 2  | 1  | 8  | 10 | 1  | 70 |
+            | 3  | 1  | 9  | 10 | 1  | 70 |
+            | 4  | 2  | 10 | 20 | 2  | 80 |
+            | 5  | 2  | 11 | 20 | 2  | 80 |
+            | 6  | 3  | 12 | 30 | 3  | 90 |
+            +----+----+----+----+----+----+
+            ");
+        }
+
+        assert_join_metrics!(metrics, 6);
+        assert_phj_used(&metrics, true);
 
         Ok(())
     }
@@ -6389,6 +6604,7 @@ mod tests {
             (0, None),
             &mut probe_indices_buffer,
             &mut build_indices_buffer,
+            &mut None,
         )?;
 
         let left_ids: UInt64Array = vec![0, 1].into();
@@ -6451,6 +6667,7 @@ mod tests {
             (0, None),
             &mut probe_indices_buffer,
             &mut build_indices_buffer,
+            &mut None,
         )?;
 
         // We still expect to match rows 0 and 1 on both sides
