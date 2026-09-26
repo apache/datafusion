@@ -17,7 +17,7 @@
 
 use crate::logical_plan::producer::SubstraitProducer;
 use datafusion::common::DFSchema;
-use datafusion::logical_expr::Limit;
+use datafusion::logical_expr::{Limit, LogicalPlan, lit};
 use std::sync::Arc;
 use substrait::proto::rel::RelType;
 use substrait::proto::{FetchRel, Rel, fetch_rel};
@@ -28,10 +28,27 @@ pub fn from_limit(
 ) -> datafusion::common::Result<Box<Rel>> {
     let input = producer.handle_plan(limit.input.as_ref())?;
     let empty_schema = Arc::new(DFSchema::empty());
-    let offset_mode = limit
-        .skip
-        .as_ref()
-        .map(|expr| producer.handle_expr(expr.as_ref(), &empty_schema))
+
+    // A provider-level skip pushdown (see `push_down_limit`) may have moved
+    // some or all of this `Limit`'s skip into the child `TableScan::skip`,
+    // reducing `limit.skip` accordingly (down to `None`/0 when the scan
+    // handles the whole skip itself). Substrait's `ReadRel` has no field of
+    // its own for it, so it must be folded back into this `FetchRel`'s
+    // offset — otherwise it is silently lost when the plan is serialized.
+    let scan_offset = match limit.input.as_ref() {
+        LogicalPlan::TableScan(scan) => scan.skip,
+        _ => None,
+    };
+    let skip_expr = match (limit.skip.as_deref(), scan_offset) {
+        (Some(limit_skip), Some(scan_skip)) => {
+            Some(limit_skip.clone() + lit(scan_skip as i64))
+        }
+        (Some(skip), None) => Some(skip.clone()),
+        (None, Some(skip)) => Some(lit(skip as i64)),
+        (None, None) => None,
+    };
+    let offset_mode = skip_expr
+        .map(|expr| producer.handle_expr(&expr, &empty_schema))
         .transpose()?
         .map(Box::new)
         .map(fetch_rel::OffsetMode::OffsetExpr);
