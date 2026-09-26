@@ -182,14 +182,9 @@ impl ExprSchemable for Expr {
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn get_type(&self, schema: &dyn ExprSchema) -> Result<DataType> {
         match self {
-            Expr::Alias(Alias { expr, name, .. }) => match &**expr {
-                Expr::Placeholder(Placeholder { field, .. }) => match &field {
-                    None => schema.data_type(&Column::from_name(name)).cloned(),
-                    Some(field) => Ok(field.data_type().clone()),
-                },
-                _ => expr.get_type(schema),
-            },
-            Expr::Negative(expr) => expr.get_type(schema),
+            Expr::Alias(Alias { expr, .. }) | Expr::Negative(expr) => {
+                expr.get_type(schema)
+            }
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
             Expr::OuterReferenceColumn(field, _) => Ok(field.data_type().clone()),
             Expr::ScalarVariable(field, _) => Ok(field.data_type().clone()),
@@ -1283,6 +1278,21 @@ mod tests {
         assert_eq!(
             (expr_alias_field.data_type(), expr_alias_field.is_nullable()),
             (&DataType::Utf8, false)
+        );
+    }
+
+    #[test]
+    fn test_untyped_aliased_placeholder_in_empty_schema() {
+        // A UNION arm computes the type of `$1 AS a` against the input of the
+        // projection, which does not have a column `a`.
+        let schema = DFSchema::empty();
+        let expr = Expr::Placeholder(Placeholder::new_with_field("$1".to_string(), None))
+            .alias("a");
+
+        assert_eq!(expr.get_type(&schema).unwrap(), DataType::Null);
+        assert_eq!(
+            expr.to_field(&schema).unwrap().1.data_type(),
+            &DataType::Null
         );
     }
 
