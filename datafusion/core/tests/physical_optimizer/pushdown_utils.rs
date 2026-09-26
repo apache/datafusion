@@ -383,6 +383,10 @@ impl OptimizationTest {
         let mut parquet_pushdown_config = ConfigOptions::default();
         parquet_pushdown_config.execution.parquet.pushdown_filters =
             allow_pushdown_filters;
+        // These tests check where the filters go, not the parallelism of the
+        // plan. With more target partitions, a file scan keeps a filter above
+        // it when it has fewer partitions (see `FileScanConfig`).
+        parquet_pushdown_config.execution.target_partitions = 1;
 
         let input = format_execution_plan(&input_plan);
         let input_schema = input_plan.schema();

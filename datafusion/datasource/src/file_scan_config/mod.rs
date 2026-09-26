@@ -49,9 +49,11 @@ use datafusion_expr::Operator;
 
 use crate::source::OpenArgs;
 use datafusion_common::stats::{Precision, is_known_empty};
-use datafusion_physical_expr::expressions::{BinaryExpr, Column};
+use datafusion_physical_expr::expressions::{
+    BinaryExpr, Column, OptionalFilterPhysicalExpr,
+};
 use datafusion_physical_expr::projection::{ProjectionExprs, ProjectionMapping};
-use datafusion_physical_expr::utils::reassign_expr_columns;
+use datafusion_physical_expr::utils::{is_optional_filter, reassign_expr_columns};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, split_conjunction};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
@@ -62,8 +64,9 @@ use datafusion_physical_plan::execution_plan::SchedulingType;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType,
     display::{ProjectSchemaDisplay, display_orderings},
-    filter_pushdown::FilterPushdownPropagation,
+    filter_pushdown::{FilterPushdownPropagation, PushedDown},
     metrics::ExecutionPlanMetricsSet,
+    repartition::round_robin_beneficial_for_rows,
 };
 use log::{debug, warn};
 use std::any::Any;
@@ -1055,9 +1058,37 @@ impl DataSource for FileScanConfig {
             .map(|filter| reassign_expr_columns(filter, table_schema))
             .collect::<Result<Vec<_>>>()?;
 
-        let result = self
+        // A filter that the scan applies runs in the partitions of the scan.
+        // If the optimizer would run a `FilterExec` above this scan in more
+        // partitions than the scan has, keep the required filters above the
+        // scan. The file source gets them as optional filters: it can use
+        // them to prune, and it can skip them, because the filter above
+        // removes the rows.
+        let keep_above = self.filters_run_in_more_partitions_above(config)?;
+        let kept_above: Vec<bool> = remapped_filters
+            .iter()
+            .map(|filter| keep_above && !is_optional_filter(filter))
+            .collect();
+        let remapped_filters = remapped_filters
+            .into_iter()
+            .zip(&kept_above)
+            .map(|(filter, kept_above)| {
+                if *kept_above {
+                    Arc::new(OptionalFilterPhysicalExpr::new(filter)) as _
+                } else {
+                    filter
+                }
+            })
+            .collect();
+
+        let mut result = self
             .file_source
             .try_pushdown_filters(remapped_filters, config)?;
+        for (pushed_down, kept_above) in result.filters.iter_mut().zip(kept_above) {
+            if kept_above {
+                *pushed_down = PushedDown::No;
+            }
+        }
         match result.updated_node {
             Some(new_file_source) => {
                 let mut new_file_scan_config = self.clone();
@@ -1304,6 +1335,49 @@ impl FileScanConfig {
             &self.file_groups,
             None,
         )
+    }
+
+    /// Returns `true` if a filter above this scan runs in more partitions than
+    /// a filter in this scan.
+    ///
+    /// A filter that the scan applies runs in the partitions of the scan. A
+    /// `FilterExec` above the scan runs in the partitions of its input. If
+    /// the scan cannot give `target_partitions` partitions, the
+    /// `EnforceDistribution` rule puts a round-robin `RepartitionExec`
+    /// between the scan and the `FilterExec`, when the input can have more
+    /// rows than one batch. The `FilterExec` then runs in
+    /// `target_partitions` partitions.
+    ///
+    /// This function uses the same checks as `EnforceDistribution`: the
+    /// partitions that [`DataSource::repartitioned`] gives, and
+    /// [`round_robin_beneficial_for_rows`] on the rows that the scan reads.
+    /// The rows before the filter are the input of that round-robin
+    /// repartition. An exact count is a limit: when it is at most one batch,
+    /// a round-robin repartition cannot split the work.
+    fn filters_run_in_more_partitions_above(
+        &self,
+        config: &ConfigOptions,
+    ) -> Result<bool> {
+        let target_partitions = config.execution.target_partitions;
+        let partitions = self.output_partitioning().partition_count();
+        if !config.optimizer.enable_round_robin_repartition
+            || partitions >= target_partitions
+            || !round_robin_beneficial_for_rows(&self.statistics.num_rows, config)
+        {
+            return Ok(false);
+        }
+        if !config.optimizer.repartition_file_scans {
+            return Ok(true);
+        }
+        let repartitioned = self.repartitioned(
+            target_partitions,
+            config.optimizer.repartition_file_min_size,
+            self.eq_properties().output_ordering(),
+        )?;
+        let partitions = repartitioned
+            .map(|source| source.output_partitioning().partition_count())
+            .unwrap_or(partitions);
+        Ok(partitions < target_partitions)
     }
 
     /// Get the file schema (schema of the files without partition columns)
@@ -4126,5 +4200,194 @@ mod tests {
         ]);
 
         assert!(!would_duplicate_costly_exprs(&inner, &outer));
+    }
+
+    /// Tests for the filters that stay above a scan that cannot give the
+    /// parallelism of a filter above it.
+    mod filters_above_scan {
+        use super::*;
+        use datafusion_physical_expr::expressions::{binary, lit};
+
+        /// A file source that applies all filters that it gets.
+        #[derive(Clone)]
+        struct FilteringSource {
+            metrics: ExecutionPlanMetricsSet,
+            table_schema: TableSchema,
+            filter: Option<Arc<dyn PhysicalExpr>>,
+        }
+
+        impl FileSource for FilteringSource {
+            fn create_file_opener(
+                &self,
+                _object_store: Arc<dyn ObjectStore>,
+                _base_config: &FileScanConfig,
+                _partition: usize,
+            ) -> Result<Arc<dyn crate::file_stream::FileOpener>> {
+                unimplemented!()
+            }
+
+            fn table_schema(&self) -> &TableSchema {
+                &self.table_schema
+            }
+
+            fn with_batch_size(&self, _batch_size: usize) -> Arc<dyn FileSource> {
+                Arc::new(self.clone())
+            }
+
+            fn metrics(&self) -> &ExecutionPlanMetricsSet {
+                &self.metrics
+            }
+
+            fn file_type(&self) -> &str {
+                "filtering"
+            }
+
+            fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+                self.filter.clone()
+            }
+
+            fn try_pushdown_filters(
+                &self,
+                filters: Vec<Arc<dyn PhysicalExpr>>,
+                _config: &ConfigOptions,
+            ) -> Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
+                let pushed_down = vec![PushedDown::Yes; filters.len()];
+                let source = Self {
+                    filter: Some(datafusion_physical_expr::conjunction(filters)),
+                    ..self.clone()
+                };
+                Ok(
+                    FilterPushdownPropagation::with_parent_pushdown_result(pushed_down)
+                        .with_updated_node(Arc::new(source) as _),
+                )
+            }
+
+            fn apply_expressions(
+                &self,
+                _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+            ) -> Result<TreeNodeRecursion> {
+                Ok(TreeNodeRecursion::Continue)
+            }
+        }
+
+        fn schema() -> SchemaRef {
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]))
+        }
+
+        /// A scan of `files` files of `file_size` bytes each, one file in each
+        /// partition, with `num_rows` rows in total.
+        fn scan(files: usize, file_size: u64, num_rows: usize) -> FileScanConfig {
+            let schema = schema();
+            let source = FilteringSource {
+                metrics: ExecutionPlanMetricsSet::new(),
+                table_schema: TableSchema::from(&schema),
+                filter: None,
+            };
+            let files = (0..files)
+                .map(|i| {
+                    FileGroup::new(vec![PartitionedFile::new(
+                        format!("f{i}.parquet"),
+                        file_size,
+                    )])
+                })
+                .collect::<Vec<_>>();
+            FileScanConfigBuilder::new(
+                ObjectStoreUrl::local_filesystem(),
+                Arc::new(source),
+            )
+            .with_file_groups(files)
+            .with_statistics(
+                Statistics::new_unknown(&schema)
+                    .with_num_rows(Precision::Exact(num_rows)),
+            )
+            .build()
+        }
+
+        fn config(target_partitions: usize) -> ConfigOptions {
+            let mut config = ConfigOptions::default();
+            config.execution.target_partitions = target_partitions;
+            config
+        }
+
+        fn a_gt_5() -> Arc<dyn PhysicalExpr> {
+            binary(
+                col("a", &schema()).unwrap(),
+                Operator::Gt,
+                lit(5),
+                &schema(),
+            )
+            .unwrap()
+        }
+
+        /// Pushes `a > 5` into `scan`. Returns if the scan applies it, and
+        /// the filter of the new file source.
+        fn push(
+            scan: &FileScanConfig,
+            filter: Arc<dyn PhysicalExpr>,
+            config: &ConfigOptions,
+        ) -> (Vec<PushedDown>, String) {
+            let result = scan.try_pushdown_filters(vec![filter], config).unwrap();
+            let node = result.updated_node.expect("the source takes the filter");
+            let node = node.downcast_ref::<FileScanConfig>().unwrap();
+            let filter = node.file_source.filter().unwrap().to_string();
+            (result.filters, filter)
+        }
+
+        #[test]
+        fn filter_stays_above_a_scan_that_cannot_split() {
+            // One small file: the scan has one partition and cannot split
+            // the file, thus a filter above the scan runs in 4 partitions.
+            let (pushed_down, filter) =
+                push(&scan(1, 1024, 100_000), a_gt_5(), &config(4));
+            assert!(matches!(pushed_down[..], [PushedDown::No]));
+            assert_eq!(filter, "Optional(a@0 > 5)");
+        }
+
+        #[test]
+        fn scan_applies_the_filter_when_it_has_the_partitions() {
+            // One file for each target partition.
+            let (pushed_down, filter) =
+                push(&scan(4, 1024, 100_000), a_gt_5(), &config(4));
+            assert!(matches!(pushed_down[..], [PushedDown::Yes]));
+            assert_eq!(filter, "a@0 > 5");
+
+            // One large file that the scan splits into 4 byte ranges.
+            let (pushed_down, filter) =
+                push(&scan(1, 1 << 30, 100_000), a_gt_5(), &config(4));
+            assert!(matches!(pushed_down[..], [PushedDown::Yes]));
+            assert_eq!(filter, "a@0 > 5");
+
+            // One target partition.
+            let (pushed_down, _) = push(&scan(1, 1024, 100_000), a_gt_5(), &config(1));
+            assert!(matches!(pushed_down[..], [PushedDown::Yes]));
+        }
+
+        #[test]
+        fn scan_applies_the_filter_when_a_round_robin_does_not_help() {
+            // The scan reads at most one batch: a round-robin repartition
+            // cannot split the work.
+            let (pushed_down, _) = push(&scan(1, 1024, 8192), a_gt_5(), &config(4));
+            assert!(matches!(pushed_down[..], [PushedDown::Yes]));
+            let (pushed_down, _) = push(&scan(1, 1024, 0), a_gt_5(), &config(4));
+            assert!(matches!(pushed_down[..], [PushedDown::Yes]));
+
+            // Round-robin repartitions are off.
+            let mut config = config(4);
+            config.optimizer.enable_round_robin_repartition = false;
+            let (pushed_down, _) = push(&scan(1, 1024, 100_000), a_gt_5(), &config);
+            assert!(matches!(pushed_down[..], [PushedDown::Yes]));
+        }
+
+        #[test]
+        fn optional_filter_goes_into_the_scan() {
+            // An optional filter is not needed for correctness, thus it does
+            // not need a filter above the scan.
+            let optional: Arc<dyn PhysicalExpr> =
+                Arc::new(OptionalFilterPhysicalExpr::new(a_gt_5()));
+            let (pushed_down, filter) =
+                push(&scan(1, 1024, 100_000), optional, &config(4));
+            assert!(matches!(pushed_down[..], [PushedDown::Yes]));
+            assert_eq!(filter, "Optional(a@0 > 5)");
+        }
     }
 }

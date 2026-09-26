@@ -49,10 +49,12 @@ use arrow::array::{Array, ArrayRef, UInt32Array, UInt64Array};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::instant::Instant;
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, internal_datafusion_err, internal_err,
 };
 use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr::filter_stats::{RemovedRowWork, duration_nanos};
 
 use datafusion_common::hash_utils::RandomState;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
@@ -382,6 +384,16 @@ pub(super) struct HashJoinStream {
     batch_size: usize,
     /// Scratch space for computing hashes
     hashes_buffer: Vec<u64>,
+    /// The work measurements of the dynamic filters that this join produces
+    /// (see [`RemovedRowWork`]). The join records the rows of each probe
+    /// batch and the time of the work that it does for a probe row whether
+    /// or not the row matches: the evaluation and the hashes of the join
+    /// keys and the hash table lookup. A row that the dynamic filter removes
+    /// before the join does not get this work. The check of the candidates
+    /// of the lookup and the output are not in it: only matches get them,
+    /// and while the filter is on, most probe rows are matches. Empty
+    /// without dynamic filter pushdown.
+    removed_row_work: Vec<Arc<RemovedRowWork>>,
     /// Scratch space for probe indices during hash lookup
     probe_indices_buffer: Vec<u32>,
     /// Scratch space for build indices during hash lookup
@@ -412,6 +424,18 @@ pub(super) struct HashJoinStream {
 impl RecordBatchStream for HashJoinStream {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
+    }
+}
+
+/// Records the time since `start` in `works` (see the `removed_row_work`
+/// field of [`HashJoinStream`]), without rows: the rows of a probe batch are
+/// recorded once, when the batch arrives.
+fn record_lookup_work(works: &[Arc<RemovedRowWork>], start: Option<Instant>) {
+    if let Some(start) = start {
+        let nanos = duration_nanos(start.elapsed());
+        for work in works {
+            work.record(0, nanos);
+        }
     }
 }
 
@@ -484,7 +508,27 @@ pub(super) fn lookup_join_hashmap(
         probe_indices_buffer,
         build_indices_buffer,
     );
+    let (build_indices, probe_indices) = equal_candidates(
+        build_side_values,
+        probe_side_values,
+        null_equality,
+        probe_indices_buffer,
+        build_indices_buffer,
+    )?;
+    Ok((build_indices, probe_indices, next_offset))
+}
 
+/// Keeps the candidates of a hash table lookup (the indices in
+/// `probe_indices_buffer` and `build_indices_buffer`) whose join keys are
+/// equal, and returns their indices. Only the probe rows with a candidate
+/// (a match or a hash collision) get this work.
+fn equal_candidates(
+    build_side_values: &[ArrayRef],
+    probe_side_values: &[ArrayRef],
+    null_equality: NullEquality,
+    probe_indices_buffer: &mut Vec<u32>,
+    build_indices_buffer: &mut Vec<u64>,
+) -> Result<(UInt64Array, UInt32Array)> {
     let build_indices_unfiltered: UInt64Array =
         std::mem::take(build_indices_buffer).into();
     let probe_indices_unfiltered: UInt32Array =
@@ -504,7 +548,7 @@ pub(super) fn lookup_join_hashmap(
     *build_indices_buffer = build_indices_unfiltered.into_parts().1.into();
     *probe_indices_buffer = probe_indices_unfiltered.into_parts().1.into();
 
-    Ok((build_indices, probe_indices, next_offset))
+    Ok((build_indices, probe_indices))
 }
 
 /// Counts the number of distinct elements in the input array.
@@ -585,11 +629,30 @@ impl HashJoinStream {
             null_mark_hashes_buffer: Vec::new(),
             null_mark_probe_indices_buffer: Vec::new(),
             null_mark_build_indices_buffer: Vec::new(),
+            removed_row_work: vec![],
             right_side_ordered,
             build_report: BuildReportHandle::new(partition, mode, build_accumulator),
             mode,
             output_buffer,
             null_aware,
+        }
+    }
+
+    /// Records the work for each probe row in `works`, see
+    /// the `removed_row_work` field.
+    pub(super) fn with_removed_row_work(
+        mut self,
+        works: Vec<Arc<RemovedRowWork>>,
+    ) -> Self {
+        self.removed_row_work = works;
+        self
+    }
+
+    /// Records `rows` probe rows and `nanos` nanoseconds of work for each
+    /// row in the dynamic filters of this join.
+    fn record_removed_row_work(&self, rows: usize, nanos: u64) {
+        for work in &self.removed_row_work {
+            work.record(rows as u64, nanos);
         }
     }
 
@@ -779,6 +842,7 @@ impl HashJoinStream {
                 self.state = HashJoinStreamState::ExhaustedProbeSide;
             }
             Some(Ok(batch)) => {
+                let work_start = (!self.removed_row_work.is_empty()).then(Instant::now);
                 // Precalculate hash values for fetched batch
                 let keys_values = evaluate_expressions_to_arrays(&self.on_right, &batch)?;
 
@@ -797,6 +861,12 @@ impl HashJoinStream {
                     None
                 };
 
+                if let Some(work_start) = work_start {
+                    self.record_removed_row_work(
+                        batch.num_rows(),
+                        duration_nanos(work_start.elapsed()),
+                    );
+                }
                 self.join_metrics.input_batches.add(1);
                 self.join_metrics.input_rows.add(batch.num_rows());
 
@@ -880,21 +950,33 @@ impl HashJoinStream {
             return Ok(StatefulStreamResult::Continue);
         }
 
-        // get the matched by join keys indices
+        // get the matched by join keys indices. The lookup of the hashes is
+        // the work that every probe row gets, and a dynamic filter saves it
+        // for each row that it removes: its time goes to `removed_row_work`.
+        // The check and the output of the candidates is work for the matches
+        // only, which a dynamic filter does not remove.
+        let work_start = (!self.removed_row_work.is_empty()).then(Instant::now);
         let (left_indices, right_indices, next_offset) = match build_side.left_data.map()
         {
-            Map::HashMap(map) => lookup_join_hashmap(
-                map.as_ref(),
-                build_side.left_data.values(),
-                &state.values,
-                self.null_equality,
-                &self.hashes_buffer,
-                state.valid_keys.as_ref(),
-                self.batch_size,
-                state.offset,
-                &mut self.probe_indices_buffer,
-                &mut self.build_indices_buffer,
-            )?,
+            Map::HashMap(map) => {
+                let next_offset = map.get_matched_indices_with_limit_offset(
+                    &self.hashes_buffer,
+                    state.valid_keys.as_ref(),
+                    self.batch_size,
+                    state.offset,
+                    &mut self.probe_indices_buffer,
+                    &mut self.build_indices_buffer,
+                );
+                record_lookup_work(&self.removed_row_work, work_start);
+                let (left_indices, right_indices) = equal_candidates(
+                    build_side.left_data.values(),
+                    &state.values,
+                    self.null_equality,
+                    &mut self.probe_indices_buffer,
+                    &mut self.build_indices_buffer,
+                )?;
+                (left_indices, right_indices, next_offset)
+            }
             Map::ArrayMap(array_map) => {
                 let next_offset = array_map.get_matched_indices_with_limit_offset(
                     &state.values,
@@ -903,6 +985,7 @@ impl HashJoinStream {
                     &mut self.probe_indices_buffer,
                     &mut self.build_indices_buffer,
                 )?;
+                record_lookup_work(&self.removed_row_work, work_start);
                 (
                     UInt64Array::from(self.build_indices_buffer.clone()),
                     UInt32Array::from(self.probe_indices_buffer.clone()),
@@ -910,7 +993,6 @@ impl HashJoinStream {
                 )
             }
         };
-
         let matched_probe_rows = state.count_new_matched_probe_rows(&right_indices);
 
         self.join_metrics

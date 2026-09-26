@@ -104,8 +104,8 @@ physical_plan
 02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/join_dynamic_filter_transfer/dim.parquet]]}, projection=[d_key, d_val], file_type=parquet
 03)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 04)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(m_key@0, f_key@0)], projection=[m_key@0, m_c@1, f_e@3]
-05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/join_dynamic_filter_transfer/mid.parquet]]}, projection=[m_key, m_c], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
-06)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/join_dynamic_filter_transfer/fact.parquet]]}, projection=[f_key, f_e], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/join_dynamic_filter_transfer/mid.parquet]]}, projection=[m_key, m_c], file_type=parquet, predicate=Optional(DynamicFilter [ empty ]), dynamic_rg_pruning=eligible
+06)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/join_dynamic_filter_transfer/fact.parquet]]}, projection=[f_key, f_e], file_type=parquet, predicate=Optional(DynamicFilter [ empty ]) AND Optional(DynamicFilter [ empty ]), dynamic_rg_pruning=eligible
 
 query TII rowsort
 SELECT d.d_val, m.m_c, f.f_e

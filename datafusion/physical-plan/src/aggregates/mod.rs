@@ -194,7 +194,9 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate, AggregateMetrics};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::expressions::{
+    Column, DynamicFilterPhysicalExpr, OptionalFilterPhysicalExpr, lit,
+};
 use datafusion_physical_expr::{
     ConstExpr, EquivalenceProperties, physical_exprs_contains,
 };
@@ -2373,8 +2375,12 @@ impl ExecutionPlan for AggregateExec {
             && config.optimizer.enable_aggregate_dynamic_filter_pushdown
             && let Some(self_dyn_filter) = &self.dynamic_filter
         {
+            // The aggregate itself computes the correct result from all input
+            // rows, so the filter is not needed for correctness: mark the
+            // pushed copy as optional.
             let dyn_filter = Arc::clone(&self_dyn_filter.filter);
-            child_desc = child_desc.with_self_filter(dyn_filter);
+            child_desc = child_desc
+                .with_self_filter(Arc::new(OptionalFilterPhysicalExpr::new(dyn_filter)));
         }
 
         Ok(FilterDescription::new().with_child(child_desc))

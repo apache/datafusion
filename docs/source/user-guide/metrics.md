@@ -38,9 +38,13 @@ DataFusion operators expose runtime metrics so you can understand where time is 
 
 ### FilterExec
 
-| Metric      | Description                                                       |
-| ----------- | ----------------------------------------------------------------- |
-| selectivity | Selectivity of the filter, calculated as output_rows / input_rows |
+| Metric                       | Description                                                                                                                                                                                                                               |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| selectivity                  | Selectivity of the filter, calculated as output_rows / input_rows                                                                                                                                                                         |
+| adaptive_reorders            | Number of partition streams that changed the order of the conjuncts of the predicate. Only present when `datafusion.execution.adaptive_filter_reordering` is true and the predicate has two or more conjuncts and no volatile expression. |
+| optional_filter_rows_skipped | Rows that went past an optional filter without evaluation, because the filter was paused. Only present when `datafusion.execution.optional_filter_mode` is `adaptive` and the predicate has optional filters.                             |
+| optional_filter_pauses       | Number of times that an optional filter was paused because it removed no rows or cost more than it saved. Only present when `datafusion.execution.optional_filter_mode` is `adaptive` and the predicate has optional filters.             |
+| optional_filter_eval_time    | Time spent to evaluate the optional filters. Only present when `datafusion.execution.optional_filter_mode` is `adaptive` and the predicate has optional filters.                                                                          |
 
 ### HashJoinExec
 
