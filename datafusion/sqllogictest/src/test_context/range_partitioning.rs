@@ -187,6 +187,8 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         sparse_output_partitioning,
         None,
     );
+
+    register_sampled_range_stream_table(ctx, schema);
 }
 
 fn register_parquet_listing_table(
@@ -276,6 +278,48 @@ fn register_unbounded_range_stream_table(
         ),
     )
     .expect("test stream table registration should succeed");
+}
+
+/// A finite source with more retained samples than effective range boundaries.
+/// The physical metadata is needed because logical listing tables currently
+/// describe only their effective split points.
+fn register_sampled_range_stream_table(ctx: &SessionContext, schema: Arc<Schema>) {
+    const PARTITIONS: [&[(i32, i32, i32)]; 3] = [
+        &[(1, 1, 10), (10, 1, 100)],
+        &[(20, 1, 200), (30, 1, 300)],
+        &[(40, 1, 400), (50, 1, 500)],
+    ];
+
+    let output_partitioning = PhysicalPartitioning::Range(
+        PhysicalRangePartitioning::try_new_with_samples(
+            [PhysicalSortExpr {
+                expr: physical_col("range_key", &schema)
+                    .expect("range key should exist in stream schema"),
+                options: SortOptions::default(),
+            }]
+            .into(),
+            [10, 20, 30, 40, 50]
+                .into_iter()
+                .map(|value| SplitPoint::new(vec![ScalarValue::Int32(Some(value))]))
+                .collect(),
+            PARTITIONS.len(),
+        )
+        .expect("sampled range partitioning should be valid"),
+    );
+    let partitions = PARTITIONS
+        .into_iter()
+        .map(|rows| range_stream_partition(Arc::clone(&schema), rows))
+        .collect();
+
+    ctx.register_table(
+        "sampled_range_partitioned",
+        Arc::new(
+            StreamingTable::try_new(schema, partitions)
+                .expect("sampled range table should be valid")
+                .with_output_partitioning(output_partitioning),
+        ),
+    )
+    .expect("sampled range table registration should succeed");
 }
 
 fn range_stream_partition(
