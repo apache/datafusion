@@ -1549,19 +1549,22 @@ impl LogicalPlanBuilder {
                     && left.data_type() == right.data_type()
             })
             .collect::<Vec<_>>();
+        // Each side gets its own row number column name, so the two synthetic
+        // columns never collide with each other. The sides are then only
+        // requalified when the user's own columns conflict.
         let mut row_number_name = "__datafusion_set_operation_row_number".to_string();
-        while [left_plan.schema(), right_plan.schema()]
-            .iter()
-            .any(|schema| {
-                schema
-                    .fields()
-                    .iter()
-                    .any(|field| field.name() == &row_number_name)
-            })
+        let name_in_use = |name: &str| {
+            [left_plan.schema(), right_plan.schema()]
+                .iter()
+                .any(|schema| schema.fields().iter().any(|field| field.name() == name))
+        };
+        while name_in_use(&row_number_name)
+            || name_in_use(&format!("{row_number_name}_right"))
         {
             row_number_name.push('_');
         }
-        let with_row_number = |plan: LogicalPlan, columns: &[Column]| {
+        let right_row_number_name = format!("{row_number_name}_right");
+        let with_row_number = |plan: LogicalPlan, columns: &[Column], name: &str| {
             let mut window = crate::expr::WindowFunction::new(
                 crate::WindowFunctionDefinition::WindowUDF(Arc::clone(row_number)),
                 vec![],
@@ -1569,57 +1572,55 @@ impl LogicalPlanBuilder {
             window.params.partition_by =
                 columns.iter().cloned().map(Expr::Column).collect();
             LogicalPlanBuilder::from(plan)
-                .window(vec![
-                    Expr::WindowFunction(Box::new(window)).alias(&row_number_name),
-                ])?
+                .window(vec![Expr::WindowFunction(Box::new(window)).alias(name)])?
                 .build()
         };
-        let left_plan = with_row_number(left_plan, &left_columns)?;
-        let right_plan = with_row_number(right_plan, &right_columns)?;
+        let left_plan = with_row_number(left_plan, &left_columns, &row_number_name)?;
+        let right_plan =
+            with_row_number(right_plan, &right_columns, &right_row_number_name)?;
         let (left_builder, right_builder, requalified) = requalify_sides_if_needed(
             LogicalPlanBuilder::from(left_plan),
             LogicalPlanBuilder::from(right_plan),
         )?;
         let left_plan = left_builder.build()?;
         let right_plan = right_builder.build()?;
-        let right_columns = right_plan.schema().columns();
-        let join_keys = left_plan
-            .schema()
-            .fields()
+        // Requalifying can also rename columns (`x` becomes `x:1` when two
+        // relations on one side both have an `x`), so read the join keys from
+        // the schemas the join actually sees.
+        let left_join_columns = left_plan.schema().columns();
+        let right_join_columns = right_plan.schema().columns();
+        let join_keys = left_join_columns
             .iter()
-            .zip(right_plan.schema().fields().iter())
-            .map(|(left_field, right_field)| {
-                (
-                    Column::from_name(left_field.name()),
-                    Column::from_name(right_field.name()),
-                )
-            })
+            .cloned()
+            .zip(right_join_columns.iter().cloned())
             .collect();
+        // The output keeps the left input's qualifiers and names, so a query
+        // can keep referring to them after the set operation.
         let projection = left_columns
             .into_iter()
-            .zip(right_columns)
+            .zip(left_join_columns)
+            .zip(right_join_columns)
             .zip(from_right)
             .zip(left_plan.schema().fields())
-            .map(|(((column, right_column), from_right), field)| {
-                let left_column = if requalified {
-                    Column::new(Some(TableReference::bare("left")), column.name)
-                } else {
-                    column
-                };
-                if from_right {
-                    let target_field = Arc::new(
-                        Field::new(&left_column.name, field.data_type().clone(), false)
-                            .with_metadata(field.metadata().clone()),
-                    );
-                    Expr::Cast(Cast::new_from_field(
-                        Box::new(Expr::Column(right_column)),
-                        target_field,
-                    ))
-                    .alias_qualified(left_column.relation, &left_column.name)
-                } else {
-                    Expr::Column(left_column)
-                }
-            })
+            .map(
+                |((((column, left_column), right_column), from_right), field)| {
+                    let expr = if from_right {
+                        let target_field = Arc::new(
+                            Field::new(&column.name, field.data_type().clone(), false)
+                                .with_metadata(field.metadata().clone()),
+                        );
+                        Expr::Cast(Cast::new_from_field(
+                            Box::new(Expr::Column(right_column)),
+                            target_field,
+                        ))
+                    } else if requalified {
+                        Expr::Column(left_column)
+                    } else {
+                        return Expr::Column(column);
+                    };
+                    expr.alias_qualified(column.relation, column.name)
+                },
+            )
             .collect::<Vec<_>>();
         let joined = LogicalPlanBuilder::from(left_plan).join_detailed(
             right_plan,

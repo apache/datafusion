@@ -1659,7 +1659,9 @@ async fn self_referential_intersect_all() -> Result<()> {
         \n      WindowAggr: windowExpr=[[row_number() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
         \n        Filter: data.a < Int64(5)\
         \n          TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
-        true,
+        // The plan keeps the `data` qualifier on its output, but Substrait
+        // does not carry qualifiers, so the round trip comes back as `left.a`.
+        false,
     )
     .await
 }
@@ -1678,7 +1680,9 @@ async fn self_referential_except_all() -> Result<()> {
         \n      WindowAggr: windowExpr=[[row_number() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
         \n        Filter: data.a < Int64(5)\
         \n          TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
-        true,
+        // The plan keeps the `data` qualifier on its output, but Substrait
+        // does not carry qualifiers, so the round trip comes back as `left.a`.
+        false,
     )
     .await
 }
