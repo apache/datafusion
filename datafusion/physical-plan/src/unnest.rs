@@ -1226,7 +1226,7 @@ impl ListArrayType for FixedSizeListArray {
     }
 
     fn value_offsets(&self, row: usize) -> (i64, i64) {
-        let start = self.value_offset(row) as i64;
+        let start = self.value_offset_at(row) as i64;
         (start, start + self.value_length() as i64)
     }
 }

@@ -693,6 +693,7 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
                 parquet_options::EncodingOpt::Encoding(encoding)
             }),
             bloom_filter_on_read: global_options.global.bloom_filter_on_read,
+            dictionary_filter_on_read: global_options.global.dictionary_filter_on_read,
             bloom_filter_on_write: global_options.global.bloom_filter_on_write,
             bloom_filter_fpp_opt: global_options.global.bloom_filter_fpp.map(|fpp| {
                 parquet_options::BloomFilterFppOpt::BloomFilterFpp(fpp)

@@ -212,6 +212,36 @@ url = "2.5.7"
 uuid = "1.23"
 zstd = { version = "0.14", default-features = false }
 
+# TEMPORARY patch: apache/arrow-rs#10420 (the dictionary-page decode API
+# this branch's Parquet dictionary row-group pruning depends on) is merged
+# to arrow-rs `main` but not yet in a release. This patch tracks arrow-rs
+# `main` until a release containing it ships; remove this block and bump
+# the arrow/parquet versions above once it does -- do not merge this patch
+# as-is. Because it tracks a branch rather than a tag, a `cargo update`
+# after arrow-rs branches for its next major version (e.g. 61.x) will
+# silently stop resolving this patch against the version we expect --
+# recheck this comment's premises whenever `cargo update` touches
+# arrow-rs/parquet crates.
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs", branch = "main" }
+arrow-arith = { git = "https://github.com/apache/arrow-rs", branch = "main" }
+arrow-array = { git = "https://github.com/apache/arrow-rs", branch = "main" }
+arrow-avro = { git = "https://github.com/apache/arrow-rs", branch = "main" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs", branch = "main" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs", branch = "main" }
+arrow-cmp = { git = "https://github.com/apache/arrow-rs", branch = "main" }
+arrow-csv = { git = "https://github.com/apache/arrow-rs", branch = "main" }
+arrow-data = { git = "https://github.com/apache/arrow-rs", branch = "main" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs", branch = "main" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs", branch = "main" }
+arrow-json = { git = "https://github.com/apache/arrow-rs", branch = "main" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs", branch = "main" }
+arrow-row = { git = "https://github.com/apache/arrow-rs", branch = "main" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs", branch = "main" }
+arrow-select = { git = "https://github.com/apache/arrow-rs", branch = "main" }
+arrow-string = { git = "https://github.com/apache/arrow-rs", branch = "main" }
+parquet = { git = "https://github.com/apache/arrow-rs", branch = "main" }
+
 # Keep this list sorted alphabetically.
 # See https://github.com/apache/datafusion/issues/18467 for the ongoing effort of
 # picking useful non-default lints.

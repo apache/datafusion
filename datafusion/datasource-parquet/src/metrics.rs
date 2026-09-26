@@ -74,6 +74,8 @@ pub struct ParquetFileMetrics {
     pub predicate_evaluation_errors: Count,
     /// Number of row groups pruned by bloom filters
     pub row_groups_pruned_bloom_filter: PruningMetrics,
+    /// Number of row groups pruned by exact Parquet dictionary-page values
+    pub row_groups_pruned_dictionary: PruningMetrics,
     /// Number of row groups pruned due to limit pruning.
     pub limit_pruned_row_groups: PruningMetrics,
     /// Number of row groups pruned by statistics
@@ -209,6 +211,11 @@ impl ParquetFileMetrics {
             .with_type(MetricType::Summary)
             .pruning_metrics("row_groups_pruned_bloom_filter", partition);
 
+        let row_groups_pruned_dictionary = builder
+            .clone()
+            .with_type(MetricType::Summary)
+            .pruning_metrics("row_groups_pruned_dictionary", partition);
+
         let limit_pruned_row_groups = builder
             .clone()
             .with_type(MetricType::Summary)
@@ -300,6 +307,7 @@ impl ParquetFileMetrics {
             files_ranges_pruned_statistics,
             predicate_evaluation_errors,
             row_groups_pruned_bloom_filter,
+            row_groups_pruned_dictionary,
             limit_pruned_row_groups,
             row_groups_pruned_statistics,
             row_groups_pruned_dynamic_filter,
