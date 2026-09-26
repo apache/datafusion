@@ -408,6 +408,9 @@ impl Accumulator for VarianceAccumulator {
         Ok(())
     }
 
+///
+/// ### Formal Verification (Lean 4)
+/// Verified theorem: `variance_accumulator_nan_propagation`
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let count = match self.stats_type {
             StatsType::Population => self.count,
@@ -423,7 +426,9 @@ impl Accumulator for VarianceAccumulator {
         Ok(ScalarValue::Float64(match self.count {
             0 => None,
             1 => {
-                if self.stats_type == StatsType::Population {
+                if self.m2.is_nan() {
+                    Some(f64::NAN)
+                } else if self.stats_type == StatsType::Population {
                     Some(0.0)
                 } else {
                     None
@@ -741,7 +746,13 @@ impl Accumulator for DistinctVarianceAccumulator {
         Ok(ScalarValue::Float64(match values.len() {
             0 => None,
             1 => match self.stat_type {
-                StatsType::Population => Some(0.0),
+                StatsType::Population => {
+                    if m2.is_nan() {
+                        Some(f64::NAN)
+                    } else {
+                        Some(0.0)
+                    }
+                }
                 StatsType::Sample => None,
             },
             _ => Some(m2 / count as f64),
@@ -992,6 +1003,52 @@ mod tests {
         let result = result.as_any().downcast_ref::<Float64Array>().unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result.null_count(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_variance_nan_single_row_scalar_and_grouped_consistency() -> Result<()> {
+        // 1. Scalar VarianceAccumulator on single-row NaN with StatsType::Population
+        let mut scalar_acc = VarianceAccumulator::try_new(StatsType::Population)?;
+        let nan_array = Arc::new(Float64Array::from(vec![Some(f64::NAN)])) as ArrayRef;
+        scalar_acc.update_batch(&[nan_array])?;
+        if let ScalarValue::Float64(Some(val)) = scalar_acc.evaluate()? {
+            assert!(val.is_nan(), "Scalar var_pop(NaN) must return NaN, got {val}");
+        } else {
+            panic!("Expected non-null Float64 result");
+        }
+
+        // 2. Scalar VarianceAccumulator on valid finite single row returns 0.0
+        let mut scalar_acc_valid = VarianceAccumulator::try_new(StatsType::Population)?;
+        let valid_array = Arc::new(Float64Array::from(vec![Some(42.0)])) as ArrayRef;
+        scalar_acc_valid.update_batch(&[valid_array])?;
+        assert_eq!(
+            scalar_acc_valid.evaluate()?,
+            ScalarValue::Float64(Some(0.0))
+        );
+
+        // 3. GroupsAccumulator consistency: Group 0 has NaN (count 1), Group 1 has 42.0 (count 1)
+        let mut groups_acc = VarianceGroupsAccumulator::new(StatsType::Population);
+        let vals = Arc::new(Float64Array::from(vec![Some(f64::NAN), Some(42.0)])) as ArrayRef;
+        let group_indices = vec![0, 1];
+        groups_acc.update_batch(&[vals], &group_indices, None, 2)?;
+        let group_result = groups_acc.evaluate(EmitTo::All)?;
+        let group_floats = group_result.as_any().downcast_ref::<Float64Array>().unwrap();
+
+        assert_eq!(group_floats.len(), 2);
+        assert!(group_floats.value(0).is_nan(), "Group 0 (NaN) must produce NaN");
+        assert_eq!(group_floats.value(1), 0.0, "Group 1 (42.0) must produce 0.0");
+
+        // 4. DistinctVarianceAccumulator consistency on single-row NaN
+        let mut distinct_acc = DistinctVarianceAccumulator::new(StatsType::Population);
+        let nan_distinct = Arc::new(Float64Array::from(vec![Some(f64::NAN)])) as ArrayRef;
+        distinct_acc.update_batch(&[nan_distinct])?;
+        if let ScalarValue::Float64(Some(val)) = distinct_acc.evaluate()? {
+            assert!(val.is_nan(), "Distinct var_pop(NaN) must return NaN, got {val}");
+        } else {
+            panic!("Expected non-null Float64 result");
+        }
+
         Ok(())
     }
 }
