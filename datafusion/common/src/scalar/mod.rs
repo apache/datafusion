@@ -1712,14 +1712,21 @@ impl ScalarValue {
                     ScalarValue::new_list(&[], field.data_type(), field.is_nullable());
                 Ok(ScalarValue::List(list))
             }
-            DataType::FixedSizeList(field, _size) => {
-                let empty_arr = new_empty_array(field.data_type());
-                let values = Arc::new(
-                    SingleRowListArrayBuilder::new(empty_arr)
-                        .with_field(field)
-                        .build_fixed_size_list_array(0),
-                );
-                Ok(ScalarValue::FixedSizeList(values))
+            DataType::FixedSizeList(field, size) => {
+                let list_size = size.to_usize().ok_or_else(|| {
+                    _internal_datafusion_err!("FixedSizeList size cannot be negative")
+                })?;
+                let values = ScalarValue::new_default(field.data_type())?
+                    .to_array_of_size(list_size)?;
+                Ok(ScalarValue::FixedSizeList(Arc::new(
+                    FixedSizeListArray::try_new_with_length(
+                        Arc::clone(field),
+                        *size,
+                        values,
+                        None,
+                        1,
+                    )?,
+                )))
             }
             DataType::LargeList(field) => {
                 let list = ScalarValue::new_large_list(&[], field.data_type());
@@ -5026,12 +5033,32 @@ impl ScalarValue {
         macro_rules! gc_list {
             ($field:expr, $offset_type:ty, $array_type:ty) => {{
                 let list = array.as_list::<$offset_type>();
-                Arc::new(<$array_type>::new(
-                    Arc::clone($field),
-                    list.offsets().clone(),
-                    ScalarValue::compact_view_buffers(Arc::clone(list.values())),
-                    list.nulls().cloned(),
-                )) as ArrayRef
+                let offsets = list.offsets().clone();
+                let values = ScalarValue::compact_view_buffers(Arc::clone(list.values()));
+                if !$field.is_nullable()
+                    && values.is_nullable()
+                    && values.logical_null_count() == 0
+                {
+                    let data = ArrayData::builder(
+                        GenericListArray::<$offset_type>::DATA_TYPE_CONSTRUCTOR(
+                            Arc::clone($field),
+                        ),
+                    )
+                    .len(list.len())
+                    .nulls(list.nulls().cloned())
+                    .add_buffer(offsets.into_inner().into_inner())
+                    .add_child_data(values.to_data())
+                    .build()
+                    .expect("compacted list array should contain valid data");
+                    Arc::new(GenericListArray::<$offset_type>::from(data)) as ArrayRef
+                } else {
+                    Arc::new(<$array_type>::new(
+                        Arc::clone($field),
+                        offsets,
+                        values,
+                        list.nulls().cloned(),
+                    )) as ArrayRef
+                }
             }};
         }
         // Macro for the i32/i64-offset list-view pair (ListView / LargeListView).
