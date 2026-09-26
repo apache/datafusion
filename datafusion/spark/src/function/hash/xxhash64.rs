@@ -424,6 +424,34 @@ mod tests {
     }
 
     #[test]
+    fn test_xxhash64_null_struct_ignores_fields() {
+        use arrow::array::StructArray;
+        use arrow::buffer::NullBuffer;
+        use arrow::datatypes::{Field, Fields};
+
+        // Row 1 is NULL but its fields still hold values.
+        let fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+        let struct_array = StructArray::new(
+            fields,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 1])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["x", "x"])) as ArrayRef,
+            ],
+            Some(NullBuffer::from(vec![true, false])),
+        );
+        let array_ref: ArrayRef = Arc::new(struct_array);
+
+        let mut hashes = vec![DEFAULT_SEED; 2];
+        create_xxhash64_hashes(&[array_ref], &mut hashes).unwrap();
+
+        assert_ne!(hashes[0], DEFAULT_SEED);
+        assert_eq!(hashes[1], DEFAULT_SEED);
+    }
+
+    #[test]
     fn test_xxhash64_list() {
         use arrow::array::ListArray;
         use arrow::buffer::OffsetBuffer;
