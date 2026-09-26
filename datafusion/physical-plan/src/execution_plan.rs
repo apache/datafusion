@@ -706,10 +706,9 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// [`MetricsSet`]s may change as execution progresses, the
     /// specific metrics will not.
     ///
-    /// Once `self.execute()` has returned (technically the future is
-    /// resolved) for all available partitions, the set of metrics
-    /// should be complete. If this function is called prior to
-    /// `execute()` new metrics may appear in subsequent calls.
+    /// New metrics may be registered during execution, including while streams
+    /// returned by [`Self::execute`] are being polled. Call again to obtain
+    /// metrics registered since the previous snapshot.
     fn metrics(&self) -> Option<MetricsSet> {
         None
     }

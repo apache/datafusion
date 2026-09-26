@@ -866,6 +866,9 @@ pub mod tests {
 
         let observed = metric_foreign.metrics().expect("metrics should be present");
         assert_eq!(observed.output_rows(), Some(42));
+        assert_eq!(observed.for_partition(0).output_rows(), Some(11));
+        assert_eq!(observed.for_partition(1).output_rows(), Some(31));
+        assert_eq!(observed.for_partition(2).iter().count(), 0);
 
         Ok(())
     }

@@ -1359,6 +1359,42 @@ mod tests {
     use datafusion_physical_expr::expressions::lit;
 
     #[test]
+    fn partition_metrics_exclude_derived_plan_metrics() {
+        use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+        use datafusion_datasource::source::DataSourceExec;
+        use datafusion_execution::object_store::ObjectStoreUrl;
+        use datafusion_physical_plan::ExecutionPlan;
+        use datafusion_physical_plan::metrics::MetricBuilder;
+
+        let source = Arc::new(ParquetSource::new(Arc::new(Schema::empty())));
+        let metrics = source.metrics().clone();
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+                .build();
+        let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
+        assert_eq!(plan.metrics().unwrap().for_partition(0).iter().count(), 0);
+        MetricBuilder::new(&metrics).output_rows(0).add(10);
+        MetricBuilder::new(&metrics).output_rows(1).add(20);
+        MetricBuilder::new(&metrics).global_counter("global").add(1);
+        let selected = plan.metrics().unwrap().for_partition(0);
+        assert_eq!(selected.output_rows(), Some(10));
+        assert!(selected.iter().all(|m| m.partition() == Some(0)));
+        let full = plan.metrics().unwrap();
+        assert_eq!(full.output_rows(), Some(30));
+        assert!(
+            full.iter().any(
+                |m| m.value().name() == "output_rows_skew" && m.partition().is_none()
+            )
+        );
+        MetricBuilder::new(&metrics).output_rows(0).add(5);
+        assert_eq!(selected.output_rows(), Some(10));
+        assert_eq!(
+            plan.metrics().unwrap().for_partition(0).output_rows(),
+            Some(15)
+        );
+    }
+
+    #[test]
     fn test_reverse_scan_default_value() {
         use arrow::datatypes::Schema;
 
