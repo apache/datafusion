@@ -1093,7 +1093,15 @@ message PhysicalExprNode {
     PhysicalLambdaVariableExprNode lambda_variable = 26;
     PhysicalRangeExprNode range_expr = 27;
     PhysicalSqlSimilarToPatternNode sql_similar_to_pattern = 28;
+    PhysicalBetweenNode between = 29;
   }
+}
+
+message PhysicalBetweenNode {
+  PhysicalExprNode expr = 1;
+  bool negated = 2;
+  PhysicalExprNode low = 3;
+  PhysicalExprNode high = 4;
 }
 
 message PhysicalDynamicFilterNode {
