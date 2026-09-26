@@ -31,7 +31,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{JoinSide, JoinType, Result};
-use datafusion_physical_expr::expressions::Column;
+use datafusion_expr_common::operator::Operator;
+use datafusion_physical_expr::expressions::{BinaryExpr, Column, InListExpr};
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::joins::NestedLoopJoinExec;
@@ -348,6 +349,16 @@ impl<'a> JoinFilterRewriter<'a> {
         let depends_on_other_side =
             self.depends_on_join_side(&expr, self.join_side.negate())?;
         if depends_on_other_side || is_volatile(&expr) {
+            // Hoisting children out of a strict predicate would bypass its row masks.
+            if expr.downcast_ref::<BinaryExpr>().is_some_and(|expr| {
+                expr.strict_short_circuit()
+                    && matches!(expr.op(), Operator::And | Operator::Or)
+            }) || expr
+                .downcast_ref::<InListExpr>()
+                .is_some_and(|expr| expr.strict_short_circuit())
+            {
+                return Ok(Transformed::no(expr));
+            }
             return expr.map_children(|expr| self.rewrite(expr));
         }
 
@@ -432,7 +443,6 @@ impl<'a> JoinFilterRewriter<'a> {
 mod test {
     use super::*;
     use arrow::datatypes::{DataType, Field, FieldRef, Schema};
-    use datafusion_expr_common::operator::Operator;
     use datafusion_functions::math::random;
     use datafusion_physical_expr::ScalarFunctionExpr;
     use datafusion_physical_expr::expressions::{binary, lit};
@@ -510,6 +520,48 @@ mod test {
           ProjectionExec: expr=[x@0 as x, x@0 + 1 as join_proj_push_down_2]
             EmptyExec
         ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn strict_predicates_keep_guarded_join_computations() -> Result<()> {
+        let (left_schema, right_schema) = create_simple_schemas();
+        let schema = Schema::new(vec![
+            left_schema.field(0).clone(),
+            right_schema.field(0).clone(),
+        ]);
+        let a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let x: Arc<dyn PhysicalExpr> = Arc::new(Column::new("x", 1));
+        let division = binary(lit(1), Operator::Divide, Arc::clone(&a), &schema)?;
+        let comparison =
+            binary(Arc::clone(&division), Operator::Gt, Arc::clone(&x), &schema)?;
+        let filters: [Arc<dyn PhysicalExpr>; 3] = [
+            Arc::new(
+                BinaryExpr::new(lit(false), Operator::And, Arc::clone(&comparison))
+                    .with_strict_short_circuit(true),
+            ),
+            Arc::new(
+                BinaryExpr::new(lit(true), Operator::Or, comparison)
+                    .with_strict_short_circuit(true),
+            ),
+            Arc::new(InListExpr::try_new_with_strict_short_circuit(
+                a,
+                vec![lit(0), division, x],
+                false,
+                &schema,
+            )?),
+        ];
+        for filter in filters {
+            let plan = run_test(
+                left_schema.clone(),
+                right_schema.clone(),
+                a_x(),
+                None,
+                |_| Ok(filter),
+                JoinType::Inner,
+            )?;
+            assert!(!plan.contains("ProjectionExec"), "{plan}");
+        }
         Ok(())
     }
 

@@ -36,7 +36,7 @@ use datafusion_common::{Result, ScalarValue, tree_node::Transformed};
 use datafusion_expr::Operator;
 
 use crate::PhysicalExpr;
-use crate::expressions::{BinaryExpr, InListExpr, Literal, NotExpr, in_list, lit};
+use crate::expressions::{BinaryExpr, InListExpr, Literal, NotExpr, lit};
 
 /// Attempts to simplify NOT expressions by applying one level of transformation
 ///
@@ -76,23 +76,31 @@ pub fn simplify_not_expr(
     // Handle NOT(IN list) -> NOT IN list
     if let Some(in_list_expr) = inner_expr.downcast_ref::<InListExpr>() {
         let negated = !in_list_expr.negated();
-        let new_in_list = in_list(
+        let constructor = if in_list_expr.strict_short_circuit() {
+            InListExpr::try_new_with_strict_short_circuit
+        } else {
+            InListExpr::try_new
+        };
+        let new_in_list = constructor(
             Arc::clone(in_list_expr.expr()),
             in_list_expr.list().to_vec(),
-            &negated,
+            negated,
             schema,
         )?;
-        return Ok(Transformed::yes(new_in_list));
+        return Ok(Transformed::yes(Arc::new(new_in_list)));
     }
 
     // Handle NOT(binary_expr)
     if let Some(binary_expr) = inner_expr.downcast_ref::<BinaryExpr>() {
         if let Some(negated_op) = binary_expr.op().negate() {
-            let new_binary = Arc::new(BinaryExpr::new(
-                Arc::clone(binary_expr.left()),
-                negated_op,
-                Arc::clone(binary_expr.right()),
-            ));
+            let new_binary = Arc::new(
+                BinaryExpr::new(
+                    Arc::clone(binary_expr.left()),
+                    negated_op,
+                    Arc::clone(binary_expr.right()),
+                )
+                .with_strict_short_circuit(binary_expr.strict_short_circuit()),
+            );
             return Ok(Transformed::yes(new_binary));
         }
 
@@ -104,8 +112,10 @@ pub fn simplify_not_expr(
                     Arc::new(NotExpr::new(Arc::clone(binary_expr.left())));
                 let not_right: Arc<dyn PhysicalExpr> =
                     Arc::new(NotExpr::new(Arc::clone(binary_expr.right())));
-                let new_binary =
-                    Arc::new(BinaryExpr::new(not_left, Operator::Or, not_right));
+                let new_binary = Arc::new(
+                    BinaryExpr::new(not_left, Operator::Or, not_right)
+                        .with_strict_short_circuit(binary_expr.strict_short_circuit()),
+                );
                 return Ok(Transformed::yes(new_binary));
             }
             Operator::Or => {
@@ -114,8 +124,10 @@ pub fn simplify_not_expr(
                     Arc::new(NotExpr::new(Arc::clone(binary_expr.left())));
                 let not_right: Arc<dyn PhysicalExpr> =
                     Arc::new(NotExpr::new(Arc::clone(binary_expr.right())));
-                let new_binary =
-                    Arc::new(BinaryExpr::new(not_left, Operator::And, not_right));
+                let new_binary = Arc::new(
+                    BinaryExpr::new(not_left, Operator::And, not_right)
+                        .with_strict_short_circuit(binary_expr.strict_short_circuit()),
+                );
                 return Ok(Transformed::yes(new_binary));
             }
             _ => {}

@@ -287,6 +287,51 @@ fn roundtrip_call_null_scalar_struct_dict() -> Result<()> {
 }
 
 #[test]
+fn roundtrip_strict_short_circuit() -> Result<()> {
+    use datafusion::physical_expr::expressions::InListExpr;
+
+    let schema = Schema::new(vec![Field::new("a", DataType::Boolean, true)]);
+    let codec = DefaultPhysicalExtensionCodec {};
+    let converter = DefaultPhysicalProtoConverter {};
+    let task_ctx = SessionContext::new().task_ctx();
+    let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
+    for inner_strict in [false, true] {
+        for outer_strict in [false, true] {
+            // Linearization must retain different policies within one AND chain.
+            let inner = Arc::new(
+                BinaryExpr::new(col("a", &schema)?, Operator::And, lit(true))
+                    .with_strict_short_circuit(inner_strict),
+            );
+            let expr: Arc<dyn PhysicalExpr> = Arc::new(
+                BinaryExpr::new(inner, Operator::And, lit(false))
+                    .with_strict_short_circuit(outer_strict),
+            );
+            let proto = converter.physical_expr_to_proto(&expr, &codec)?;
+            let decoded =
+                converter.proto_to_physical_expr(&proto, &schema, &decode_ctx)?;
+            assert!(expr.eq(&decoded));
+        }
+    }
+    let expr: Arc<dyn PhysicalExpr> =
+        Arc::new(InListExpr::try_new_with_strict_short_circuit(
+            col("a", &schema)?,
+            vec![lit(true), col("a", &schema)?],
+            false,
+            &schema,
+        )?);
+    let proto = converter.physical_expr_to_proto(&expr, &codec)?;
+    let decoded = converter.proto_to_physical_expr(&proto, &schema, &decode_ctx)?;
+    assert!(expr.eq(&decoded));
+    assert!(
+        decoded
+            .downcast_ref::<InListExpr>()
+            .unwrap()
+            .strict_short_circuit()
+    );
+    Ok(())
+}
+
+#[test]
 fn roundtrip_binary_expr_overflow() -> Result<()> {
     use arrow::record_batch::RecordBatch;
     use datafusion_proto::bytes::{physical_plan_from_bytes, physical_plan_to_bytes};

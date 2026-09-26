@@ -18675,6 +18675,9 @@ impl serde::Serialize for PhysicalBinaryExprNode {
         if self.fail_on_overflow {
             len += 1;
         }
+        if self.strict_short_circuit {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalBinaryExprNode", len)?;
         if let Some(v) = self.l.as_ref() {
             struct_ser.serialize_field("l", v)?;
@@ -18690,6 +18693,9 @@ impl serde::Serialize for PhysicalBinaryExprNode {
         }
         if self.fail_on_overflow {
             struct_ser.serialize_field("failOnOverflow", &self.fail_on_overflow)?;
+        }
+        if self.strict_short_circuit {
+            struct_ser.serialize_field("strictShortCircuit", &self.strict_short_circuit)?;
         }
         struct_ser.end()
     }
@@ -18707,6 +18713,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalBinaryExprNode {
             "operands",
             "fail_on_overflow",
             "failOnOverflow",
+            "strict_short_circuit",
+            "strictShortCircuit",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -18716,6 +18724,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalBinaryExprNode {
             Op,
             Operands,
             FailOnOverflow,
+            StrictShortCircuit,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -18742,6 +18751,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalBinaryExprNode {
                             "op" => Ok(GeneratedField::Op),
                             "operands" => Ok(GeneratedField::Operands),
                             "failOnOverflow" | "fail_on_overflow" => Ok(GeneratedField::FailOnOverflow),
+                            "strictShortCircuit" | "strict_short_circuit" => Ok(GeneratedField::StrictShortCircuit),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -18766,6 +18776,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalBinaryExprNode {
                 let mut op__ = None;
                 let mut operands__ = None;
                 let mut fail_on_overflow__ = None;
+                let mut strict_short_circuit__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::L => {
@@ -18798,6 +18809,12 @@ impl<'de> serde::Deserialize<'de> for PhysicalBinaryExprNode {
                             }
                             fail_on_overflow__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::StrictShortCircuit => {
+                            if strict_short_circuit__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("strictShortCircuit"));
+                            }
+                            strict_short_circuit__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(PhysicalBinaryExprNode {
@@ -18806,6 +18823,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalBinaryExprNode {
                     op: op__.unwrap_or_default(),
                     operands: operands__.unwrap_or_default(),
                     fail_on_overflow: fail_on_overflow__.unwrap_or_default(),
+                    strict_short_circuit: strict_short_circuit__.unwrap_or_default(),
                 })
             }
         }
@@ -20526,6 +20544,9 @@ impl serde::Serialize for PhysicalInListNode {
         if self.negated {
             len += 1;
         }
+        if self.strict_short_circuit {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalInListNode", len)?;
         if let Some(v) = self.expr.as_ref() {
             struct_ser.serialize_field("expr", v)?;
@@ -20535,6 +20556,9 @@ impl serde::Serialize for PhysicalInListNode {
         }
         if self.negated {
             struct_ser.serialize_field("negated", &self.negated)?;
+        }
+        if self.strict_short_circuit {
+            struct_ser.serialize_field("strictShortCircuit", &self.strict_short_circuit)?;
         }
         struct_ser.end()
     }
@@ -20549,6 +20573,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalInListNode {
             "expr",
             "list",
             "negated",
+            "strict_short_circuit",
+            "strictShortCircuit",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -20556,6 +20582,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalInListNode {
             Expr,
             List,
             Negated,
+            StrictShortCircuit,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -20580,6 +20607,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalInListNode {
                             "expr" => Ok(GeneratedField::Expr),
                             "list" => Ok(GeneratedField::List),
                             "negated" => Ok(GeneratedField::Negated),
+                            "strictShortCircuit" | "strict_short_circuit" => Ok(GeneratedField::StrictShortCircuit),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -20602,6 +20630,7 @@ impl<'de> serde::Deserialize<'de> for PhysicalInListNode {
                 let mut expr__ = None;
                 let mut list__ = None;
                 let mut negated__ = None;
+                let mut strict_short_circuit__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Expr => {
@@ -20622,12 +20651,19 @@ impl<'de> serde::Deserialize<'de> for PhysicalInListNode {
                             }
                             negated__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::StrictShortCircuit => {
+                            if strict_short_circuit__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("strictShortCircuit"));
+                            }
+                            strict_short_circuit__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(PhysicalInListNode {
                     expr: expr__,
                     list: list__.unwrap_or_default(),
                     negated: negated__.unwrap_or_default(),
+                    strict_short_circuit: strict_short_circuit__.unwrap_or_default(),
                 })
             }
         }

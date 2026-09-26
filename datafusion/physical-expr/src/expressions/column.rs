@@ -21,15 +21,18 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
+use arrow::array::{Array, BooleanArray};
+use arrow::compute::filter;
 use arrow::datatypes::FieldRef;
 use arrow::{
     datatypes::{DataType, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{Result, internal_err, plan_err};
+use datafusion_common::{Result, exec_err, internal_err, plan_err};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr_common::placement::ExpressionPlacement;
+use datafusion_physical_expr_common::utils::scatter;
 
 /// Represents the column at a given index in a RecordBatch
 ///
@@ -121,6 +124,27 @@ impl PhysicalExpr for Column {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         self.bounds_check(batch.schema().as_ref())?;
         Ok(ColumnarValue::Array(Arc::clone(batch.column(self.index))))
+    }
+
+    fn evaluate_selection(
+        &self,
+        batch: &RecordBatch,
+        selection: &BooleanArray,
+    ) -> Result<ColumnarValue> {
+        if selection.len() != batch.num_rows() {
+            return exec_err!(
+                "Selection array length does not match batch row count: {} != {}",
+                selection.len(),
+                batch.num_rows()
+            );
+        }
+        let value = self.evaluate(batch)?.into_array(batch.num_rows())?;
+        if selection.null_count() == 0 && !selection.has_false() {
+            return Ok(ColumnarValue::Array(value));
+        }
+        // A column reference needs only its own array, not a filtered copy of the batch.
+        let selected = filter(value.as_ref(), selection)?;
+        scatter(selection, selected.as_ref()).map(ColumnarValue::Array)
     }
 
     fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
@@ -267,6 +291,36 @@ mod test {
     use arrow::record_batch::RecordBatch;
 
     use std::sync::Arc;
+
+    #[test]
+    fn selection_preserves_nulls_and_reuses_all_selected_input() {
+        use arrow::array::{AsArray, BooleanArray};
+
+        let values =
+            StringArray::from(vec![Some("first"), None, Some("third"), Some("last")]);
+        let batch =
+            RecordBatch::try_from_iter([("value", Arc::new(values) as _)]).unwrap();
+        let column = Column::new("value", 0);
+        let selection =
+            BooleanArray::from(vec![Some(false), Some(true), None, Some(true)]);
+        let result = column
+            .evaluate_selection(&batch, &selection)
+            .unwrap()
+            .into_array(batch.num_rows())
+            .unwrap();
+        assert_eq!(
+            result.as_string::<i32>(),
+            &StringArray::from(vec![None, None, None, Some("last")])
+        );
+
+        let all = BooleanArray::from(vec![true; batch.num_rows()]);
+        let result = column
+            .evaluate_selection(&batch, &all)
+            .unwrap()
+            .into_array(batch.num_rows())
+            .unwrap();
+        assert!(Arc::ptr_eq(&result, batch.column(0)));
+    }
 
     #[test]
     fn out_of_bounds_data_type() {

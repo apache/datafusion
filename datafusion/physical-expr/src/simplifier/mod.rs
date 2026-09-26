@@ -422,6 +422,56 @@ mod tests {
     }
 
     #[test]
+    fn test_not_preserves_strict_short_circuit() -> Result<()> {
+        use crate::expressions::InListExpr;
+        use arrow::array::{ArrayRef, AsArray, BooleanArray, Int64Array};
+        use arrow::record_batch::RecordBatch;
+
+        let batch = RecordBatch::try_from_iter([(
+            "x",
+            Arc::new(Int64Array::from(vec![0, 1])) as ArrayRef,
+        )])?;
+        let schema = batch.schema();
+        let simplifier = PhysicalExprSimplifier::new(&schema);
+        let x = col("x", &schema)?;
+        let division: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            lit(1_i64),
+            Operator::Divide,
+            Arc::clone(&x),
+        ));
+        let right: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::clone(&division),
+            Operator::Gt,
+            lit(0_i64),
+        ));
+        for (op, guard_op, expected) in [
+            (Operator::And, Operator::NotEq, vec![true, false]),
+            (Operator::Or, Operator::Eq, vec![false, false]),
+        ] {
+            let guard = Arc::new(BinaryExpr::new(Arc::clone(&x), guard_op, lit(0_i64)));
+            let guarded = Arc::new(
+                BinaryExpr::new(guard, op, Arc::clone(&right))
+                    .with_strict_short_circuit(true),
+            );
+            let simplified = simplifier.simplify(Arc::new(NotExpr::new(guarded)))?;
+            let result = simplified.evaluate(&batch)?.into_array(batch.num_rows())?;
+            assert_eq!(result.as_boolean(), &BooleanArray::from(expected));
+        }
+        for negated in [false, true] {
+            let guarded = Arc::new(InListExpr::try_new_with_strict_short_circuit(
+                Arc::clone(&x),
+                vec![lit(0_i64), Arc::clone(&division)],
+                negated,
+                &schema,
+            )?);
+            let simplified = simplifier.simplify(Arc::new(NotExpr::new(guarded)))?;
+            let result = simplified.evaluate(&batch)?.into_array(batch.num_rows())?;
+            assert_eq!(result.as_boolean(), &BooleanArray::from(vec![negated; 2]));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_double_not_in_list() -> Result<()> {
         let schema = not_test_schema();
         let simplifier = PhysicalExprSimplifier::new(&schema);

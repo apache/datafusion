@@ -16,15 +16,15 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayRef, Float32Array, Int16Array, Int32Array, StringArray, StringViewArray,
-    TimestampNanosecondArray, UInt8Array,
+    Array, ArrayRef, BooleanArray, Float32Array, Int16Array, Int32Array, ListArray,
+    StringArray, StringViewArray, TimestampNanosecondArray, UInt8Array,
 };
-use arrow::datatypes::{Field, Schema};
+use arrow::datatypes::{Field, Int32Type, Schema};
 use arrow::record_batch::RecordBatch;
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr::expressions::{col, in_list, lit};
+use datafusion_physical_expr::expressions::{InListExpr, col, in_list, lit};
 use rand::distr::Alphanumeric;
 use rand::prelude::*;
 use std::any::TypeId;
@@ -260,11 +260,21 @@ fn do_bench_with_columns(
         .map(|f| col(f.name(), &schema).unwrap())
         .collect();
 
+    let strict = InListExpr::try_new_with_strict_short_circuit(
+        col("a", &schema).unwrap(),
+        list_exprs.clone(),
+        false,
+        &schema,
+    )
+    .unwrap();
     let expr = in_list(col("a", &schema).unwrap(), list_exprs, &false, &schema).unwrap();
     let batch = RecordBatch::try_new(Arc::new(schema), columns).unwrap();
 
     c.bench_function(name, |b| {
         b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+    });
+    c.bench_function(&format!("{name}/strict"), |b| {
+        b.iter(|| black_box(strict.evaluate(black_box(&batch)).unwrap()))
     });
 }
 
@@ -432,6 +442,24 @@ fn criterion_benchmark(c: &mut Criterion) {
     // Column-reference path benchmarks (non-constant list expressions)
     bench_with_columns_int32(c);
     bench_with_columns_utf8(c);
+
+    // After the first candidate, only the final row remains unresolved. Later
+    // candidates should not repeatedly compare the matched rows' list payloads.
+    let values: ArrayRef = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(
+        (0..ARRAY_LENGTH).map(|_| Some((0..256).map(Some))),
+    ));
+    let last_row = BooleanArray::from(
+        (0..ARRAY_LENGTH)
+            .map(|row| row + 1 == ARRAY_LENGTH)
+            .collect::<Vec<_>>(),
+    );
+    let candidate = arrow::compute::nullif(values.as_ref(), &last_row).unwrap();
+    do_bench_with_columns(
+        c,
+        "in_list_cols/List/width=256/list=28/match=all_but_last",
+        values,
+        &vec![candidate; 28],
+    );
 }
 
 criterion_group! {
