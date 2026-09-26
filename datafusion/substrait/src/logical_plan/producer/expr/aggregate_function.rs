@@ -56,7 +56,6 @@ pub fn from_aggregate_function(
     let function_anchor = producer.register_function(func.name().to_string());
     let (_, output_field) = Expr::AggregateFunction(agg_fn.clone()).to_field(schema)?;
     let output_type = to_substrait_type_from_field(producer, &output_field)?;
-    #[expect(deprecated)]
     Ok(Measure {
         measure: Some(AggregateFunction {
             function_reference: function_anchor,
@@ -68,7 +67,6 @@ pub fn from_aggregate_function(
                 false => AggregationInvocation::All as i32,
             },
             phase: AggregationPhase::Unspecified as i32,
-            args: vec![],
             options: vec![],
         }),
         filter: match filter {

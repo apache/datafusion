@@ -418,16 +418,7 @@
                 }
               },
               "groupings": [{
-                "groupingExpressions": [{
-                  "selection": {
-                    "directReference": {
-                      "structField": {
-                      }
-                    },
-                    "rootReference": {
-                    }
-                  }
-                }]
+                "expressionReferences": [0]
               }],
               "measures": [{
                 "measure": {
@@ -439,6 +430,16 @@
                     }
                   },
                   "invocation": "AGGREGATION_INVOCATION_ALL"
+                }
+              }],
+              "groupingExpressions": [{
+                "selection": {
+                  "directReference": {
+                    "structField": {
+                    }
+                  },
+                  "rootReference": {
+                  }
                 }
               }]
             }

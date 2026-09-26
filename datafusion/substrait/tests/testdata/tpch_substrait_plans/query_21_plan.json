@@ -988,16 +988,7 @@
                     }
                   },
                   "groupings": [{
-                    "groupingExpressions": [{
-                      "selection": {
-                        "directReference": {
-                          "structField": {
-                          }
-                        },
-                        "rootReference": {
-                        }
-                      }
-                    }]
+                    "expressionReferences": [0]
                   }],
                   "measures": [{
                     "measure": {
@@ -1009,6 +1000,16 @@
                         }
                       },
                       "invocation": "AGGREGATION_INVOCATION_ALL"
+                    }
+                  }],
+                  "groupingExpressions": [{
+                    "selection": {
+                      "directReference": {
+                        "structField": {
+                        }
+                      },
+                      "rootReference": {
+                      }
                     }
                   }]
                 }
@@ -1041,7 +1042,11 @@
               }]
             }
           },
-          "count": "100"
+          "countExpr": {
+            "literal": {
+              "i64": "100"
+            }
+          }
         }
       },
       "names": ["S_NAME", "NUMWAIT"]

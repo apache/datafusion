@@ -1148,7 +1148,11 @@
               }]
             }
           },
-          "count": "100"
+          "countExpr": {
+            "literal": {
+              "i64": "100"
+            }
+          }
         }
       },
       "names": ["S_ACCTBAL", "S_NAME", "N_NAME", "P_PARTKEY", "P_MFGR", "S_ADDRESS", "S_PHONE", "S_COMMENT"]
