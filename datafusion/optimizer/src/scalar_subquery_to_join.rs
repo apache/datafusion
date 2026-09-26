@@ -351,7 +351,9 @@ fn build_join(
     // join with `Boolean(true)`) when the
     // `enable_physical_uncorrelated_scalar_subquery` option is disabled.
     let subquery_plan = subquery.subquery.as_ref();
-    let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
+    let mut pull_up = PullUpCorrelatedExpr::new()
+        .with_need_handle_count_bug(true)
+        .with_column_refs_above_aggregate(subquery_plan);
     let decorrelated_subquery = subquery_plan.clone().rewrite(&mut pull_up).data()?;
     if !pull_up.can_pull_up {
         return Ok(None);
