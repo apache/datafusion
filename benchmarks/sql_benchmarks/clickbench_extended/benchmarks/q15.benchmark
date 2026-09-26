@@ -1,0 +1,21 @@
+name Q15
+group clickbench_extended
+subgroup ${CLICKBENCH_TYPE:-single}
+
+init sql_benchmarks/clickbench/init/set_config.sql
+
+load sql_benchmarks/clickbench/init/load-${CLICKBENCH_TYPE:-single}.sql
+
+assert I
+SELECT COUNT(*) > 0 from hits;
+----
+true
+
+run
+SELECT MAX(c) FROM (
+    SELECT covar_samp("ResolutionWidth", "ResolutionHeight") as c
+    FROM hits
+    GROUP BY "UserID"
+);
+
+result sql_benchmarks/clickbench_extended/results/q15.csv
