@@ -769,11 +769,39 @@ impl ListingTable {
             .with_expr_adapter(self.expr_adapter_factory.clone())
             .build();
 
+        // Pass the (non partition) filters to the file format, which may use
+        // them e.g. to prune files while planning. Filters are still evaluated
+        // above the scan (see `supports_filters_pushdown`), so filters that
+        // cannot be converted are simply not passed and never fail the scan.
+        let physical_filters = if filters.is_empty() {
+            vec![]
+        } else {
+            match DFSchema::try_from(Arc::clone(&self.table_schema)) {
+                Ok(df_schema) => filters
+                    .iter()
+                    .filter_map(|filter| {
+                        state
+                            .create_physical_expr(filter.clone(), &df_schema)
+                            .inspect_err(|e| {
+                                log::debug!(
+                                    "Not passing filter {filter} to the file format: {e}"
+                                )
+                            })
+                            .ok()
+                    })
+                    .collect::<Vec<_>>(),
+                Err(e) => {
+                    log::debug!("Not passing filters to the file format: {e}");
+                    vec![]
+                }
+            }
+        };
+
         // create the execution plan
         let plan = self
             .options
             .format
-            .create_physical_plan(state, scan_config)
+            .create_physical_plan(state, scan_config, &physical_filters)
             .await?;
 
         Ok(ScanResult::new(plan))

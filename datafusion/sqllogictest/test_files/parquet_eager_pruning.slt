@@ -1,0 +1,239 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for eager parquet pruning (datafusion.execution.parquet.eager_pruning)
+#
+# The test file has 10 row groups of 100 rows, with data pages of 10 rows and a
+# bloom filter on column `s`. Column `a` is sorted and holds 0 to 999. Column
+# `s` holds 's000' to 's999' scattered across all row groups.
+#
+# NOTE that parquet options are read when a table is created, so the table
+# must be recreated to see the effects of a setting
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query I
+COPY (
+  SELECT value AS a, concat('s', lpad(CAST((value * 37) % 1000 AS VARCHAR), 3, '0')) AS s
+  FROM generate_series(0, 999)
+  ORDER BY a
+)
+TO 'test_files/scratch/parquet_eager_pruning/t/0.parquet'
+STORED AS PARQUET
+OPTIONS (
+  'format.max_row_group_size' '100',
+  'format.data_page_row_count_limit' '10',
+  'format.write_batch_size' '10',
+  'format.bloom_filter_enabled::s' true,
+  'format.bloom_filter_fpp::s' 0.0001
+);
+----
+1000
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+statement ok
+set datafusion.explain.show_statistics = true;
+
+######
+# Eager pruning is disabled by default
+######
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_eager_pruning/t/';
+
+query TT
+EXPLAIN SELECT a FROM t WHERE a < 150;
+----
+physical_plan
+01)FilterExec: a@0 < 150, statistics=[Rows=Inexact(150), Bytes=Inexact(1200), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(149)) Null=Exact(0) ScanBytes=Inexact(1200))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_eager_pruning/t/0.parquet]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], file_type=parquet, predicate=a@0 < 150, pruning_predicate=a_null_count@1 != row_count@2 AND a_min@0 < 150, required_guarantees=[], statistics=[Rows=Inexact(1000), Bytes=Inexact(8000), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(999)) Null=Inexact(0) ScanBytes=Inexact(8000))]]
+
+statement ok
+DROP TABLE t;
+
+######
+# Row group statistics
+######
+
+statement ok
+set datafusion.execution.parquet.eager_pruning = 'row_groups';
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_eager_pruning/t/';
+
+query TT
+EXPLAIN SELECT a FROM t WHERE a < 150;
+----
+physical_plan
+01)FilterExec: a@0 < 150, statistics=[Rows=Inexact(150), Bytes=Inexact(1200), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(149)) Null=Exact(0) ScanBytes=Inexact(1200))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_eager_pruning/t/0.parquet]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], file_type=parquet, predicate=a@0 < 150, pruning_predicate=a_null_count@1 != row_count@2 AND a_min@0 < 150, required_guarantees=[], eager_pruning=[level=row_groups, files_pruned=0/1, row_groups_pruned=8/10, rows_pruned=800/1000], statistics=[Rows=Inexact(200), Bytes=Inexact(1600), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(199)) Null=Inexact(0) ScanBytes=Inexact(1600))]]
+
+query I
+SELECT count(*) FROM t WHERE a < 150;
+----
+150
+
+# Row group statistics cannot prune `a = 123` below a row group
+query TT
+EXPLAIN SELECT a FROM t WHERE a = 123;
+----
+physical_plan
+01)FilterExec: a@0 = 123, statistics=[Rows=Inexact(1), Bytes=Inexact(8), [(Col[0]: Min=Exact(Int64(123)) Max=Exact(Int64(123)) Null=Exact(0) Distinct=Exact(1) ScanBytes=Inexact(8))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_eager_pruning/t/0.parquet]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], file_type=parquet, predicate=a@0 = 123, pruning_predicate=a_null_count@2 != row_count@3 AND a_min@0 <= 123 AND 123 <= a_max@1, required_guarantees=[a in (123)], eager_pruning=[level=row_groups, files_pruned=0/1, row_groups_pruned=9/10, rows_pruned=900/1000], statistics=[Rows=Inexact(100), Bytes=Inexact(800), [(Col[0]: Min=Inexact(Int64(100)) Max=Inexact(Int64(199)) Null=Inexact(0) ScanBytes=Inexact(800))]]
+
+# No rows can be pruned
+query TT
+EXPLAIN SELECT a FROM t WHERE a >= 0;
+----
+physical_plan
+01)FilterExec: a@0 >= 0, statistics=[Rows=Inexact(1000), Bytes=Inexact(8000), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(999)) Null=Exact(0) ScanBytes=Inexact(8000))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_eager_pruning/t/0.parquet]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], file_type=parquet, predicate=a@0 >= 0, pruning_predicate=a_null_count@1 != row_count@2 AND a_max@0 >= 0, required_guarantees=[], eager_pruning=[level=row_groups, files_pruned=0/1, row_groups_pruned=0/10, rows_pruned=0/1000], statistics=[Rows=Inexact(1000), Bytes=Inexact(8000), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(999)) Null=Inexact(0) ScanBytes=Inexact(8000))]]
+
+statement ok
+DROP TABLE t;
+
+######
+# Page index
+######
+
+statement ok
+set datafusion.execution.parquet.eager_pruning = 'page_index';
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_eager_pruning/t/';
+
+query TT
+EXPLAIN SELECT a FROM t WHERE a = 123;
+----
+physical_plan
+01)FilterExec: a@0 = 123, statistics=[Rows=Inexact(1), Bytes=Inexact(1), [(Col[0]: Min=Exact(Int64(123)) Max=Exact(Int64(123)) Null=Exact(0) Distinct=Exact(1) ScanBytes=Inexact(1))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_eager_pruning/t/0.parquet]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], file_type=parquet, predicate=a@0 = 123, pruning_predicate=a_null_count@2 != row_count@3 AND a_min@0 <= 123 AND 123 <= a_max@1, required_guarantees=[a in (123)], eager_pruning=[level=page_index, files_pruned=0/1, row_groups_pruned=9/10, rows_pruned=990/1000], statistics=[Rows=Inexact(10), Bytes=Inexact(80), [(Col[0]: Min=Inexact(Int64(100)) Max=Inexact(Int64(199)) Null=Inexact(0) ScanBytes=Inexact(80))]]
+
+query IT
+SELECT a, s FROM t WHERE a = 123;
+----
+123 s551
+
+statement ok
+DROP TABLE t;
+
+######
+# Bloom filters
+######
+
+statement ok
+set datafusion.execution.parquet.eager_pruning = 'bloom_filters';
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_eager_pruning/t/';
+
+# 's5005' is within the min/max range of every row group, but absent
+query TT
+EXPLAIN SELECT a FROM t WHERE s = 's5005';
+----
+physical_plan
+01)FilterExec: s@1 = s5005, projection=[a@0], statistics=[Rows=Inexact(0), Bytes=Inexact(0), [(Col[0]:)]]
+02)--DataSourceExec: file_groups={1 group: [[]]}, projection=[a, s], output_ordering=[a@0 ASC NULLS LAST], file_type=parquet, predicate=s@1 = s5005, pruning_predicate=s_null_count@2 != row_count@3 AND s_min@0 <= s5005 AND s5005 <= s_max@1, required_guarantees=[s in (s5005)], eager_pruning=[level=bloom_filters, files_pruned=1/1, row_groups_pruned=10/10, rows_pruned=1000/1000], statistics=[Rows=Inexact(0), Bytes=Inexact(0), [(Col[0]:),(Col[1]:)]]
+
+query I
+SELECT count(*) FROM t WHERE s = 's5005';
+----
+0
+
+query I
+SELECT count(*) FROM t WHERE s = 's500';
+----
+1
+
+statement ok
+DROP TABLE t;
+
+######
+# Scans with more files than eager_pruning_file_limit are not pruned
+######
+
+statement ok
+set datafusion.execution.parquet.eager_pruning_file_limit = 0;
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_eager_pruning/t/';
+
+query TT
+EXPLAIN SELECT a FROM t WHERE a < 150;
+----
+physical_plan
+01)FilterExec: a@0 < 150, statistics=[Rows=Inexact(150), Bytes=Inexact(1200), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(149)) Null=Exact(0) ScanBytes=Inexact(1200))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_eager_pruning/t/0.parquet]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], file_type=parquet, predicate=a@0 < 150, pruning_predicate=a_null_count@1 != row_count@2 AND a_min@0 < 150, required_guarantees=[], eager_pruning=[level=bloom_filters, skipped=1 files exceed eager_pruning_file_limit 0], statistics=[Rows=Inexact(1000), Bytes=Inexact(8000), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(999)) Null=Inexact(0) ScanBytes=Inexact(8000))]]
+
+statement ok
+DROP TABLE t;
+
+statement ok
+reset datafusion.execution.parquet.eager_pruning_file_limit;
+
+statement ok
+reset datafusion.execution.parquet.eager_pruning;
+
+######
+# Eager pruning can be enabled for a single table
+######
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_eager_pruning/t/'
+OPTIONS ('format.eager_pruning' 'row_groups');
+
+query TT
+EXPLAIN SELECT a FROM t WHERE a < 150;
+----
+physical_plan
+01)FilterExec: a@0 < 150, statistics=[Rows=Inexact(150), Bytes=Inexact(1200), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(149)) Null=Exact(0) ScanBytes=Inexact(1200))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_eager_pruning/t/0.parquet]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], file_type=parquet, predicate=a@0 < 150, pruning_predicate=a_null_count@1 != row_count@2 AND a_min@0 < 150, required_guarantees=[], eager_pruning=[level=row_groups, files_pruned=0/1, row_groups_pruned=8/10, rows_pruned=800/1000], statistics=[Rows=Inexact(200), Bytes=Inexact(1600), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(199)) Null=Inexact(0) ScanBytes=Inexact(1600))]]
+
+statement ok
+DROP TABLE t;
+
+######
+# Invalid values
+######
+
+statement error Invalid eager parquet pruning level: full\. Expected one of: disabled, row_groups, page_index, bloom_filters
+set datafusion.execution.parquet.eager_pruning = 'full';
+
+statement ok
+set datafusion.explain.show_statistics = false;
+
+statement ok
+set datafusion.explain.physical_plan_only = false;
+
+# The SLT runner sets `target_partitions` to 4
+statement ok
+set datafusion.execution.target_partitions = 4;
