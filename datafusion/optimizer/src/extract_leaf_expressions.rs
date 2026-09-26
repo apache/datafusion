@@ -637,6 +637,19 @@ impl<'a> LeafExpressionExtractor<'a> {
     }
 }
 
+/// The way `schema` names `col`, or `None` when `schema` does not hold it
+/// or the name is ambiguous.
+///
+/// The result always carries the qualifier the schema gives the field, so
+/// two spellings of the same input column compare equal, and a column pushed
+/// into a projection reads as the input spells it.
+fn resolve_against(schema: &DFSchema, col: &Column) -> Option<Column> {
+    schema
+        .qualified_field_from_column(col)
+        .ok()
+        .map(Column::from)
+}
+
 /// Build an extraction projection above the target node (shared by both passes).
 ///
 /// If the target is an existing projection, merges into it. This requires
@@ -702,27 +715,27 @@ fn build_extraction_projection_impl(
         // than target_schema (the projection's output) because columns produced
         // by alias expressions (e.g., CSE's __common_expr_N) exist in the output but
         // not the input, and cannot be added as pass-through Column references.
+        //
+        // Compare both sides in the input's spelling (see `resolve_against`).
+        // Without this, a bare `c` and a qualified `t.c` do not match, and the
+        // merged projection holds both, which `Projection::try_new` rejects as
+        // ambiguous. Eliminating the empty side of a union makes this shape.
+        // A same-name alias (`t.c AS c`) counts as a pass-through of `t.c`.
+        let input_schema = existing.input.schema();
         let existing_cols: IndexSet<Column> = existing
             .expr
             .iter()
-            .filter_map(|e| {
-                if let Expr::Column(c) = e {
-                    Some(c.clone())
-                } else {
-                    None
-                }
-            })
+            .filter_map(|e| resolve_against(input_schema, passthrough_column(e)?))
             .collect();
 
-        let input_schema = existing.input.schema();
         for col in columns_needed {
             let col_expr = Expr::Column(col.clone());
             let resolved = replace_cols_by_name(col_expr, &replace_map)?;
             if let Expr::Column(resolved_col) = &resolved
-                && !existing_cols.contains(resolved_col)
-                && input_schema.has_column(resolved_col)
+                && let Some(input_col) = resolve_against(input_schema, resolved_col)
+                && !existing_cols.contains(&input_col)
             {
-                proj_exprs.push(Expr::Column(resolved_col.clone()));
+                proj_exprs.push(Expr::Column(input_col));
             }
             // If resolved to non-column expr, it's already computed by existing projection
         }
@@ -2344,6 +2357,83 @@ mod tests {
               Filter: __datafusion_extracted_2 = Int32(1)
                 Projection: leaf_udf(test.a, Utf8("x")) AS __datafusion_extracted_2, test.a, test.b, test.c, leaf_udf(test.b, Utf8("y")) AS __datafusion_extracted_1
                   TableScan: test projection=[a, b, c]
+
+        ## Optimized
+        (same as after pushdown)
+        "#)
+    }
+
+    /// A filter can name a column bare (`a`) while the projection below it
+    /// outputs the qualified `test.a`, as eliminating the empty side of a union
+    /// leaves behind. The merge must match the two, and not add a bare `a`
+    /// beside `test.a`, which is an ambiguous schema.
+    #[test]
+    fn test_merge_bare_column_into_qualified_projection() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let projection = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                col("test.a"),
+                col("test.b"),
+                (col("test.c") + lit(1)).alias("d"),
+            ])?
+            .build()?;
+        let predicate =
+            leaf_udf(Expr::Column(Column::new_unqualified("a")), "x").eq(lit(1));
+        let plan = LogicalPlan::Filter(datafusion_expr::Filter::try_new(
+            predicate,
+            Arc::new(projection),
+        )?);
+
+        assert_stages!(plan, @r#"
+        ## Original Plan
+        Filter: leaf_udf(a, Utf8("x")) = Int32(1)
+          Projection: test.a, test.b, test.c + Int32(1) AS d
+            TableScan: test projection=[a, b, c]
+
+        ## After Extraction
+        Projection: test.a, test.b, d
+          Filter: __datafusion_extracted_1 = Int32(1)
+            Projection: test.a, test.b, test.c + Int32(1) AS d, leaf_udf(a, Utf8("x")) AS __datafusion_extracted_1
+              TableScan: test projection=[a, b, c]
+
+        ## After Pushdown
+        (same as after extraction)
+
+        ## Optimized
+        (same as after pushdown)
+        "#)
+    }
+
+    /// A projection can spell a pass-through column as a same-name alias
+    /// (`test.a AS a`). Merging an extraction into it must treat that alias as
+    /// the pass-through it is, and not add `test.a` beside the `a` it outputs,
+    /// which is an ambiguous schema.
+    #[test]
+    fn test_merge_into_projection_with_same_name_alias() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                col("test.a").alias("a"),
+                col("test.b").alias("b"),
+                col("test.c").alias("c"),
+            ])?
+            .filter(leaf_udf(col("a"), "x").eq(lit(1)))?
+            .build()?;
+
+        assert_stages!(plan, @r#"
+        ## Original Plan
+        Filter: leaf_udf(a, Utf8("x")) = Int32(1)
+          Projection: test.a AS a, test.b AS b, test.c AS c
+            TableScan: test projection=[a, b, c]
+
+        ## After Extraction
+        Projection: a, b, c
+          Filter: __datafusion_extracted_1 = Int32(1)
+            Projection: test.a AS a, test.b AS b, test.c AS c, leaf_udf(test.a, Utf8("x")) AS __datafusion_extracted_1
+              TableScan: test projection=[a, b, c]
+
+        ## After Pushdown
+        (same as after extraction)
 
         ## Optimized
         (same as after pushdown)
