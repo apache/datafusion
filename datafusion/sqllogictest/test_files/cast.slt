@@ -262,3 +262,32 @@ set datafusion.optimizer.expand_views_at_output = false;
 
 statement ok
 drop table t;
+
+# Casting integer ids to strings in a view and back to integers in the filter
+# must not use string-ordered interval bounds derived from numeric statistics.
+
+statement ok
+COPY (SELECT column1 AS id FROM (VALUES (2), (10)))
+TO 'test_files/scratch/cast/cast_interval_ids.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE cast_interval_ids
+STORED AS PARQUET
+LOCATION 'test_files/scratch/cast/cast_interval_ids.parquet';
+
+statement ok
+CREATE VIEW cast_interval_text_ids AS
+SELECT CAST(id AS VARCHAR) AS id FROM cast_interval_ids;
+
+query T
+SELECT id FROM cast_interval_text_ids WHERE CAST(id AS INT) > 1 ORDER BY id;
+----
+10
+2
+
+statement ok
+DROP VIEW cast_interval_text_ids;
+
+statement ok
+DROP TABLE cast_interval_ids;
