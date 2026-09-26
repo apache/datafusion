@@ -232,6 +232,39 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
         }
     }
 
+    /// Resolves `val_idx` to its slot in `inner`, memorizing the result in
+    /// `val_to_inner`. Returns `usize::MAX` when the value is not in `inner`
+    /// — unlike `find_or_insert_value`, this never appends.
+    ///
+    /// A miss is deliberately not memoized: a value absent from `inner` today
+    /// can still be interned by a later append, so only positive results are
+    /// cached. That is what keeps `val_to_inner` fill-only and never stale.
+    ///
+    /// Callers must have run [`Self::sync_value_cache`] for `dict_values`.
+    fn lookup_inner_slot(&mut self, dict_values: &ArrayRef, val_idx: usize) -> usize {
+        let cached = self.val_to_inner[val_idx];
+        if cached != usize::MAX {
+            return cached;
+        }
+
+        let slot = if dict_values.is_null(val_idx) {
+            self.null_inner_slot.unwrap_or(usize::MAX)
+        } else {
+            let hash = self.val_hashes[val_idx];
+            let inner = &*self.inner;
+            self.value_dedup
+                .find(hash, |&(entry_hash, slot)| {
+                    entry_hash == hash && inner.equal_to(slot, dict_values, val_idx)
+                })
+                .map_or(usize::MAX, |&(_, slot)| slot)
+        };
+
+        if slot != usize::MAX {
+            self.val_to_inner[val_idx] = slot;
+        }
+        slot
+    }
+
     fn find_or_insert_null(&mut self) -> Result<usize> {
         if let Some(slot) = self.null_inner_slot {
             return Ok(slot);
@@ -240,69 +273,6 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
         self.inner.append_val(&self.null_array, 0)?;
         self.null_inner_slot = Some(slot);
         Ok(slot)
-    }
-
-    fn build_lookup_table(
-        &self,
-        dict_values: &ArrayRef,
-        val_hashes: &[u64],
-    ) -> Vec<usize> {
-        let num_distinct = dict_values.len();
-        let mut table = vec![usize::MAX; num_distinct + 1];
-        let inner = &*self.inner;
-        for val_idx in 0..num_distinct {
-            if dict_values.is_null(val_idx) {
-                table[val_idx] = self.null_inner_slot.unwrap_or(usize::MAX);
-            } else {
-                let hash = val_hashes[val_idx];
-                if let Some(&(_, slot)) =
-                    self.value_dedup.find(hash, |&(entry_hash, slot)| {
-                        entry_hash == hash && inner.equal_to(slot, dict_values, val_idx)
-                    })
-                {
-                    table[val_idx] = slot;
-                }
-            }
-        }
-        table[num_distinct] = self.null_inner_slot.unwrap_or(usize::MAX);
-        table
-    }
-
-    /// Per-row fallback for `vectorized_equal_to` used when the number of rows
-    /// to check is smaller than the dictionary cardinality, making the O(D)
-    /// lookup-table build more expensive than direct value comparison.
-    ///
-    /// `#[cold]` + `#[inline(never)]` keeps this code out of the hot
-    /// lookup-table loops in `vectorized_equal_to` so LLVM can pipeline them.
-    #[cold]
-    #[inline(never)]
-    fn equal_to_per_row(
-        &self,
-        lhs_rows: &[usize],
-        dict_values: &ArrayRef,
-        dict: &DictionaryArray<K>,
-        rhs_rows: &[usize],
-        equal_to_results: &mut BooleanBufferBuilder,
-    ) {
-        let group_to_inner = self.group_to_inner.as_slice();
-        for (idx, (&lhs_row, &rhs_row)) in
-            lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
-        {
-            if !equal_to_results.get_bit(idx) {
-                continue;
-            }
-            let lhs_slot = group_to_inner[lhs_row];
-            let equal = match dict.key(rhs_row) {
-                None => self.inner.equal_to(lhs_slot, &self.null_array, 0),
-                Some(val_idx) if dict_values.is_null(val_idx) => {
-                    self.inner.equal_to(lhs_slot, &self.null_array, 0)
-                }
-                Some(val_idx) => self.inner.equal_to(lhs_slot, dict_values, val_idx),
-            };
-            if !equal {
-                equal_to_results.set_bit(idx, false);
-            }
-        }
     }
 }
 
@@ -348,59 +318,39 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
         let dict = array.as_dictionary::<K>();
         let dict_keys = dict.keys();
         let dict_values = dict.values();
-        let num_distinct = dict_values.len();
 
-        // The fallback is in a separate #[cold] function so its code does not
-        // appear inline here and cannot prevent LLVM from pipelining / unrolling
-        // the hot lookup-table loops below.
-        if rhs_rows.len() < num_distinct {
-            self.equal_to_per_row(
-                lhs_rows,
-                dict_values,
-                dict,
-                rhs_rows,
-                equal_to_results,
-            );
-            return;
-        }
+        self.sync_value_cache(dict_values);
 
-        let mut val_hashes = vec![0u64; dict_values.len()];
-        create_hashes(
-            std::slice::from_ref(dict_values),
-            &self.random_state,
-            &mut val_hashes,
-        )
-        .unwrap();
-        let lookup = self.build_lookup_table(dict_values, &val_hashes);
-
-        let group_to_inner = self.group_to_inner.as_slice();
-
+        let raw_keys = dict_keys.values();
         if dict_keys.null_count() == 0 {
             // No null keys : skip the get_bit guard: we only ever write false,
             // so overwriting an already-false bit is a no-op.
-            let raw_keys = dict_keys.values();
             for (idx, (&lhs_row, &rhs_row)) in
                 lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
             {
-                let rhs_slot = lookup[raw_keys[rhs_row].as_usize()];
-                if rhs_slot == usize::MAX || group_to_inner[lhs_row] != rhs_slot {
+                let val_idx = raw_keys[rhs_row].as_usize();
+                let rhs_slot = self.lookup_inner_slot(dict_values, val_idx);
+                if rhs_slot == usize::MAX || self.group_to_inner[lhs_row] != rhs_slot {
                     equal_to_results.set_bit(idx, false);
                 }
             }
         } else {
             let null_buf = dict_keys.nulls().unwrap();
-            let raw_keys = dict_keys.values();
             for (idx, (&lhs_row, &rhs_row)) in
                 lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
             {
                 if equal_to_results.get_bit(idx) {
-                    let val_idx = if null_buf.is_null(rhs_row) {
-                        num_distinct
+                    // A null key is not a position in the values array, so it
+                    // resolves straight to the null slot instead of going
+                    // through `val_to_inner`.
+                    let rhs_slot = if null_buf.is_null(rhs_row) {
+                        self.null_inner_slot.unwrap_or(usize::MAX)
                     } else {
-                        raw_keys[rhs_row].as_usize()
+                        let val_idx = raw_keys[rhs_row].as_usize();
+                        self.lookup_inner_slot(dict_values, val_idx)
                     };
-                    let rhs_slot = lookup[val_idx];
-                    if rhs_slot == usize::MAX || group_to_inner[lhs_row] != rhs_slot {
+                    if rhs_slot == usize::MAX || self.group_to_inner[lhs_row] != rhs_slot
+                    {
                         equal_to_results.set_bit(idx, false);
                     }
                 }
