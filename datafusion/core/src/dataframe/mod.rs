@@ -72,6 +72,7 @@ use datafusion_catalog::Session;
 use datafusion_expr::extension_types::DFArrayFormatterFactory;
 use futures::future::BoxFuture;
 
+#[derive(Clone)]
 /// Contains options that control how data is
 /// written out from a DataFrame
 pub struct DataFrameWriteOptions {
