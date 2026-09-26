@@ -170,7 +170,10 @@ impl RunOpt {
         let logical_plan = state.optimize(&logical_plan)?;
         let physical_plan = state.create_physical_plan(&logical_plan).await?;
 
-        let statistics = capture_statistics(physical_plan.as_ref())?;
+        let statistics = capture_statistics(
+            physical_plan.as_ref(),
+            &state.statistics_registry().cloned().unwrap_or_default(),
+        )?;
         collect(Arc::clone(&physical_plan), state.task_ctx()).await?;
 
         let mut report = Vec::with_capacity(statistics.len());
@@ -234,10 +237,12 @@ enum QError {
     ExactZero,
 }
 
-fn capture_statistics(plan: &dyn ExecutionPlan) -> Result<Vec<CapturedStatistics>> {
-    let statistics_context = StatisticsRegistry::default_with_builtin_providers();
+fn capture_statistics(
+    plan: &dyn ExecutionPlan,
+    statistics_context: &StatisticsRegistry,
+) -> Result<Vec<CapturedStatistics>> {
     let mut result = vec![];
-    capture_statistics_inner(plan, &statistics_context, "0", &mut result)?;
+    capture_statistics_inner(plan, statistics_context, "0", &mut result)?;
     Ok(result)
 }
 
