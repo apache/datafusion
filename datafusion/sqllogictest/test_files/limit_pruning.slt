@@ -113,6 +113,79 @@ select a from fully_matched_limit where a >= 3 order by a limit 4;
 statement ok
 drop table fully_matched_limit;
 
+# A fetched SortPreservingMergeExec must preserve scan order when pushing down
+# its limit. Otherwise, limit pruning can skip the first partially matched row
+# group in favor of the following fully matched row group.
+statement ok
+CREATE TABLE ordered_limit_source(id INT, passes INT) AS VALUES
+  (1, 0),
+  (2, 1),
+  (3, 1),
+  (4, 1),
+  (5, 1),
+  (6, 1),
+  (101, 1),
+  (102, 1),
+  (103, 1);
+
+query I
+COPY (SELECT * FROM ordered_limit_source WHERE id < 100 ORDER BY id)
+TO 'test_files/scratch/limit_pruning/ordered_limit/a.parquet'
+STORED AS PARQUET
+OPTIONS (
+  'format.max_row_group_size' '3'
+);
+----
+6
+
+query I
+COPY (SELECT * FROM ordered_limit_source WHERE id >= 100 ORDER BY id)
+TO 'test_files/scratch/limit_pruning/ordered_limit/b.parquet'
+STORED AS PARQUET
+OPTIONS (
+  'format.max_row_group_size' '3'
+);
+----
+3
+
+statement ok
+drop table ordered_limit_source;
+
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+CREATE EXTERNAL TABLE ordered_limit(id INT, passes INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/limit_pruning/ordered_limit/'
+WITH ORDER (id ASC);
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+query TT
+explain select * from ordered_limit where passes = 1 order by id limit 3;
+----
+physical_plan
+01)SortPreservingMergeExec: [id@0 ASC NULLS LAST], fetch=3
+02)--DataSourceExec: <slt:ignore>limit=3, output_ordering=[id@0 ASC NULLS LAST], file_type=parquet<slt:ignore>
+
+query II
+select * from ordered_limit where passes = 1 order by id limit 3;
+----
+2 1
+3 1
+4 1
+
+statement ok
+drop table ordered_limit;
+
+statement ok
+reset datafusion.explain.physical_plan_only;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
 # limit_pruned_row_groups=0 total → 0 matched
 # because of order by, scan needs to preserve sort, so limit pruning is disabled
 query TT
