@@ -361,6 +361,280 @@ async fn test_query_parameters_with_metadata() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_limit_offset_parameters() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    for (sql, values, expected_value) in [
+        ("SELECT 20 AS value LIMIT $1", vec![1_i64], 20_i64),
+        (
+            "SELECT value FROM (VALUES (10), (20)) AS t(value) ORDER BY value OFFSET $1",
+            vec![1],
+            20,
+        ),
+        (
+            "SELECT value FROM (VALUES (10), (20), (30)) AS t(value) \
+             ORDER BY value LIMIT $1 OFFSET $2",
+            vec![1, 1],
+            20,
+        ),
+        ("SELECT $1 AS value LIMIT $1", vec![1], 1),
+        (
+            "SELECT $1 AS value FROM (VALUES (0), (0)) AS t(dummy) OFFSET $1",
+            vec![1],
+            1,
+        ),
+    ] {
+        let df = ctx.sql(sql).await?;
+        let parameter_types = df.logical_plan().get_parameter_types()?;
+        let expected_types: HashMap<String, Option<DataType>> = (1..=values.len())
+            .map(|index| (format!("${index}"), Some(DataType::Int64)))
+            .collect();
+        let results = df
+            .with_param_values(
+                values
+                    .into_iter()
+                    .map(ScalarValue::from)
+                    .collect::<Vec<_>>(),
+            )?
+            .collect()
+            .await?;
+
+        println!(
+            "{sql}\nparameters={parameter_types:?}\n{}",
+            batches_to_sort_string(&results)
+        );
+        assert_eq!(results.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+        assert_eq!(
+            ScalarValue::try_from_array(results[0].column(0), 0)?,
+            ScalarValue::Int64(Some(expected_value))
+        );
+        assert_eq!(parameter_types, expected_types, "{sql}");
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_limit_offset_parameters_named() -> Result<()> {
+    let ctx = SessionContext::new();
+    let df = ctx
+        .sql(
+            "SELECT value FROM (VALUES (10), (20), (30)) AS t(value) \
+             ORDER BY value LIMIT $rows OFFSET $skip",
+        )
+        .await?;
+    assert_eq!(
+        df.logical_plan().get_parameter_types()?,
+        HashMap::from([
+            ("$rows".to_string(), Some(DataType::Int64)),
+            ("$skip".to_string(), Some(DataType::Int64)),
+        ])
+    );
+    let results = df
+        .with_param_values(vec![
+            ("rows", ScalarValue::Int64(Some(1))),
+            ("skip", ScalarValue::Int64(Some(1))),
+        ])?
+        .collect()
+        .await?;
+    datafusion::assert_batches_eq!(
+        [
+            "+-------+",
+            "| value |",
+            "+-------+",
+            "| 20    |",
+            "+-------+"
+        ],
+        &results
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_limit_offset_parameters_keep_field_metadata() -> Result<()> {
+    let ctx = SessionContext::new();
+    let metadata = HashMap::from([("some_key".to_string(), "some_value".to_string())]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("value", DataType::Int32, false).with_metadata(metadata.clone()),
+    ]));
+    ctx.register_batch(
+        "t",
+        RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 1]))])?,
+    )?;
+
+    for clause in ["LIMIT", "OFFSET"] {
+        let sql = format!("SELECT $1 AS value FROM t WHERE value = $1 {clause} $1");
+        let df = ctx.sql(&sql).await?;
+        let fields = df.logical_plan().get_parameter_fields()?;
+        let field = fields["$1"].as_ref().unwrap();
+        assert_eq!(field.data_type(), &DataType::Int32);
+        assert_eq!(field.metadata(), &metadata);
+
+        let results = df
+            .with_param_values(ParamValues::List(vec![ScalarAndMetadata::new(
+                ScalarValue::Int32(Some(1)),
+                Some(metadata.clone().into()),
+            )]))?
+            .collect()
+            .await?;
+        datafusion::assert_batches_eq!(
+            [
+                "+-------+",
+                "| value |",
+                "+-------+",
+                "| 1     |",
+                "+-------+"
+            ],
+            &results
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_limit_offset_parameters_leave_cast_inputs_unresolved() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    for sql in [
+        "SELECT $1 AS value",
+        "SELECT $1 AS value LIMIT CAST($1 AS INT)",
+    ] {
+        let df = ctx.sql(sql).await?;
+        assert_eq!(
+            df.logical_plan().get_parameter_types()?,
+            HashMap::from([("$1".to_string(), None)])
+        );
+        let results = df
+            .with_param_values(vec![ScalarValue::from("1")])?
+            .collect()
+            .await?;
+        datafusion::assert_batches_eq!(
+            [
+                "+-------+",
+                "| value |",
+                "+-------+",
+                "| 1     |",
+                "+-------+"
+            ],
+            &results
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_limit_offset_parameters_keep_inferred_type() -> Result<()> {
+    let ctx = SessionContext::new();
+    let sql = "SELECT $1 + CAST(1 AS INT) AS value \
+               FROM (SELECT $1) AS t LIMIT $1";
+    let df = ctx.sql(sql).await?;
+    let parameter_types = df.logical_plan().get_parameter_types()?;
+    let results = df
+        .with_param_values(vec![ScalarValue::Int32(Some(1))])?
+        .collect()
+        .await?;
+
+    assert_eq!(
+        parameter_types,
+        HashMap::from([("$1".to_string(), Some(DataType::Int32))])
+    );
+    datafusion::assert_batches_eq!(
+        [
+            "+-------+",
+            "| value |",
+            "+-------+",
+            "| 2     |",
+            "+-------+"
+        ],
+        &results
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_limit_offset_parameters_reject_type_conflicts() -> Result<()> {
+    let ctx = SessionContext::new();
+    let df = ctx
+        .sql(
+            "SELECT $1 + CAST(1 AS INT) AS a, \
+             $1 + CAST(1 AS DOUBLE) AS b LIMIT $1",
+        )
+        .await?;
+    let error = df
+        .logical_plan()
+        .get_parameter_fields()
+        .expect_err("conflicting parameter types must fail");
+    assert_contains!(error.to_string(), "Conflicting types for id $1");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_limit_offset_parameters_prepare_execute() -> Result<()> {
+    let ctx = SessionContext::new();
+    let sql = "PREPARE page AS SELECT value \
+               FROM (VALUES (10), (20), (30)) AS t(value) \
+               ORDER BY value LIMIT $1 OFFSET $2";
+    let plan = ctx.state().create_logical_plan(sql).await?;
+    ctx.sql(sql).await?.collect().await?;
+    let results = ctx.sql("EXECUTE page(1, 1)").await?.collect().await?;
+
+    println!(
+        "{}\n{}",
+        plan.display_indent(),
+        batches_to_sort_string(&results)
+    );
+    assert_snapshot!(batches_to_sort_string(&results), @r"
+    +-------+
+    | value |
+    +-------+
+    | 20    |
+    +-------+
+    ");
+    assert_eq!(
+        plan.get_parameter_types()?,
+        HashMap::from([
+            ("$1".to_string(), Some(DataType::Int64)),
+            ("$2".to_string(), Some(DataType::Int64)),
+        ])
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_limit_offset_parameters_prepare_mixed_types() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    for sql in [
+        "PREPARE untyped_page AS SELECT $1 AS value LIMIT $2",
+        "PREPARE untyped_page AS SELECT $1 AS value \
+         FROM (VALUES (0), (0)) AS t(dummy) OFFSET $2",
+    ] {
+        ctx.sql(sql).await?.collect().await?;
+        let results = ctx
+            .sql("EXECUTE untyped_page('row', 1)")
+            .await?
+            .collect()
+            .await?;
+        datafusion::assert_batches_eq!(
+            [
+                "+-------+",
+                "| value |",
+                "+-------+",
+                "| row   |",
+                "+-------+"
+            ],
+            &results
+        );
+        ctx.sql("DEALLOCATE untyped_page").await?.collect().await?;
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_version_function() {
     let expected_version = format!(
         "Apache DataFusion {}, {} on {}",
