@@ -666,9 +666,9 @@ impl Partitioning {
     /// Returns `Ok(None)` when the message carries no `partition_method`, which
     /// the wire format uses to mean "no output partitioning declared"; callers
     /// for which it is required should turn that into their own error.
-    pub fn try_from_proto(
+    pub fn try_from_proto<S>(
         node: &datafusion_proto_models::protobuf::Partitioning,
-        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_, S>,
     ) -> Result<Option<Self>> {
         use datafusion_common::utils::usize_from_wire;
         use datafusion_common::{ScalarValue, internal_datafusion_err, internal_err};
@@ -1474,7 +1474,6 @@ mod ordering_proto_tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
     use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
     use datafusion_physical_expr_common::sort_expr::{
         LexRequirement, PhysicalSortExpr, PhysicalSortRequirement,
@@ -1516,7 +1515,8 @@ mod ordering_proto_tests {
 
         let schema = schema();
         let decoder = StubDecoder::ok();
-        let decode_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let decode_ctx = session.ctx(&schema, &decoder);
         let decoded = sort_exprs_try_from_proto(&nodes, &decode_ctx).unwrap();
         assert_eq!(
             decoded.iter().map(|expr| expr.options).collect::<Vec<_>>(),
@@ -1569,7 +1569,8 @@ mod ordering_proto_tests {
 
         let schema = schema();
         let decoder = StubDecoder::ok();
-        let decode_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let decode_ctx = session.ctx(&schema, &decoder);
         let err = sort_exprs_try_from_proto(&nodes, &decode_ctx).unwrap_err();
         assert!(
             err.to_string()
@@ -1589,7 +1590,6 @@ mod partition_count_proto_tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{ScalarValue, SplitPoint};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
     use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
     use datafusion_proto_models::protobuf;
@@ -1626,7 +1626,8 @@ mod partition_count_proto_tests {
     fn try_from_proto_narrows_every_counted_variant() {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let decoder = StubDecoder::ok();
-        let decode_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let decode_ctx = session.ctx(&schema, &decoder);
 
         for method in counted_methods(u64::MAX) {
             let decoded =
@@ -1704,7 +1705,8 @@ mod partition_count_proto_tests {
 
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let decoder = StubDecoder::ok();
-        let decode_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let decode_ctx = session.ctx(&schema, &decoder);
         let decoded = Partitioning::try_from_proto(&node, &decode_ctx)
             .unwrap()
             .unwrap();

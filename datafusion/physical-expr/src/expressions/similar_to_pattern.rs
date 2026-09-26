@@ -160,7 +160,7 @@ impl SqlSimilarToPattern {
     /// [`PhysicalExprNode`]: datafusion_proto_models::protobuf::PhysicalExprNode
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
-        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
+        ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_, crate::proto::ExprDecodeSession<'_>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         use datafusion_physical_expr_common::expect_expr_variant;
         use datafusion_proto_models::protobuf;
@@ -316,7 +316,6 @@ mod proto_tests {
     };
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::DataFusionError;
-    use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
     use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
     use datafusion_proto_models::protobuf::{
         PhysicalExprNode, PhysicalSqlSimilarToPatternNode, physical_expr_node,
@@ -372,7 +371,8 @@ mod proto_tests {
         let node = pattern_node(Some(Box::new(column_node("a"))));
         let schema = Schema::empty();
         let decoder = StubDecoder::ok();
-        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let ctx = session.ctx(&schema, &decoder);
 
         let decoded = SqlSimilarToPattern::try_from_proto(&node, &ctx).unwrap();
         let pattern = decoded
@@ -386,7 +386,8 @@ mod proto_tests {
         let node = column_node("a");
         let schema = Schema::empty();
         let decoder = UnreachableDecoder;
-        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let ctx = session.ctx(&schema, &decoder);
         let err = SqlSimilarToPattern::try_from_proto(&node, &ctx).unwrap_err();
         assert!(matches!(
             err,
@@ -400,7 +401,8 @@ mod proto_tests {
         let node = pattern_node(None);
         let schema = Schema::empty();
         let decoder = UnreachableDecoder;
-        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let ctx = session.ctx(&schema, &decoder);
         let err = SqlSimilarToPattern::try_from_proto(&node, &ctx).unwrap_err();
         assert!(matches!(
             err,
@@ -414,7 +416,8 @@ mod proto_tests {
         let node = pattern_node(Some(Box::new(column_node("a"))));
         let schema = Schema::empty();
         let decoder = StubDecoder::failing_on(1);
-        let ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let session = crate::proto_test_util::TestSession::default();
+        let ctx = session.ctx(&schema, &decoder);
         let err = SqlSimilarToPattern::try_from_proto(&node, &ctx).unwrap_err();
         assert!(matches!(err, DataFusionError::Internal(msg) if msg.contains("call 1")));
     }
