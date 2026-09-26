@@ -512,6 +512,35 @@ from data
 ----
 NaN NaN
 
+# correlation with NaN in only one column propagates NaN (not SQL NULL)
+query R
+SELECT corr(x, y)
+FROM (VALUES (1.0, 'NaN'::double), (2.0, 3.0), (3.0, 4.0)) AS t(x, y);
+----
+NaN
+
+query R
+SELECT corr(x, y)
+FROM (VALUES ('NaN'::double, 1.0), (2.0, 3.0), (3.0, 4.0)) AS t(x, y);
+----
+NaN
+
+# Grouped correlation with NaN in one column
+query IR
+SELECT id, corr(x, y)
+FROM (
+    VALUES
+        (1, 1.0, 'NaN'::double),
+        (1, 2.0, 3.0),
+        (2, 1.0, 2.0),
+        (2, 2.0, 4.0)
+) AS t(id, x, y)
+GROUP BY id
+ORDER BY id;
+----
+1 NaN
+2 1
+
 # csv_query_variance_1
 query R
 SELECT var_pop(c2) FROM aggregate_test_100
