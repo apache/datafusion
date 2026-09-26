@@ -39,11 +39,11 @@ use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::{ScalarFunctionExpr, expressions};
-use datafusion::prelude::SessionConfig;
-use datafusion::scalar::ScalarValue;
-use datafusion_physical_expr_adapter::{
+use datafusion::physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
 };
+use datafusion::prelude::SessionConfig;
+use datafusion::scalar::ScalarValue;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{ObjectStoreExt, PutPayload};
