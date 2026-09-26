@@ -417,11 +417,23 @@ impl Interval {
     }
 
     /// Casts this interval to `data_type` using `cast_options`.
+    /// Numeric endpoints that fail to cast become unbounded,
+    /// regardless of `cast_options.safe`. Other cast errors are propagated.
     pub fn cast_to(
         &self,
         data_type: &DataType,
         cast_options: &CastOptions,
     ) -> Result<Self> {
+        // Estimated endpoints may overflow even when all runtime values fit.
+        let bound_options = CastOptions {
+            safe: true,
+            ..cast_options.clone()
+        };
+        let cast_options = if self.data_type().is_numeric() && data_type.is_numeric() {
+            &bound_options
+        } else {
+            cast_options
+        };
         Self::try_new(
             cast_scalar_value(&self.lower, data_type, cast_options)?,
             cast_scalar_value(&self.upper, data_type, cast_options)?,
@@ -2261,15 +2273,239 @@ impl NullableInterval {
 mod tests {
     use crate::{
         interval_arithmetic::{
-            Interval, handle_overflow, next_value, prev_value, satisfy_greater,
+            Interval, cast_scalar_value, handle_overflow, next_value, prev_value,
+            satisfy_greater,
         },
         operator::Operator,
     };
 
     use crate::interval_arithmetic::NullableInterval;
+    use arrow::compute::CastOptions;
     use arrow::datatypes::DataType;
     use datafusion_common::rounding::{next_down, next_up};
     use datafusion_common::{Result, ScalarValue};
+
+    #[test]
+    fn test_numeric_cast_out_of_range_bounds() {
+        for safe in [false, true] {
+            let options = CastOptions {
+                safe,
+                ..Default::default()
+            };
+            for source in [
+                DataType::Int64,
+                DataType::Float64,
+                DataType::Decimal128(10, 0),
+            ] {
+                for (lower, upper, expected_lower, expected_upper) in [
+                    (Some(-129i64), Some(42), None, Some(42i8)),
+                    (Some(-42), Some(128), Some(-42), None),
+                    (Some(-129), Some(128), None, None),
+                    (Some(-128), Some(127), Some(-128i8), Some(127i8)),
+                    (Some(128), Some(129), None, None),
+                    (Some(-130), Some(-129), None, None),
+                    (None, Some(42), None, Some(42)),
+                    (Some(-42), None, Some(-42), None),
+                ] {
+                    let input = Interval::make(lower, upper)
+                        .unwrap()
+                        .cast_to(&source, &options)
+                        .unwrap();
+                    assert_eq!(
+                        input.cast_to(&DataType::Int8, &options).unwrap(),
+                        Interval::make(expected_lower, expected_upper).unwrap(),
+                        "{source}: {input}, safe={safe}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_numeric_cast_bounds_across_types() {
+        for safe in [false, true] {
+            let options = CastOptions {
+                safe,
+                ..Default::default()
+            };
+            // Cover unsigned, floating-point and decimal sources and targets.
+            for source in [
+                DataType::Int64,
+                DataType::UInt64,
+                DataType::Float64,
+                DataType::Decimal128(10, 2),
+                DataType::Decimal256(30, 3),
+            ] {
+                let input = Interval::make(Some(42i64), Some(1000))
+                    .unwrap()
+                    .cast_to(&source, &options)
+                    .unwrap();
+                for target in
+                    [DataType::Int8, DataType::UInt8, DataType::Decimal128(3, 1)]
+                {
+                    let lower = ScalarValue::Int64(Some(42)).cast_to(&target).unwrap();
+                    assert_eq!(
+                        input.cast_to(&target, &options).unwrap(),
+                        Interval::try_new(lower, ScalarValue::try_from(&target).unwrap())
+                            .unwrap(),
+                        "{source} -> {target}, safe={safe}"
+                    );
+                }
+            }
+            assert_eq!(
+                Interval::make(Some(-1i64), Some(42))
+                    .unwrap()
+                    .cast_to(&DataType::UInt8, &options)
+                    .unwrap(),
+                Interval::make(Some(0u8), Some(42)).unwrap()
+            );
+
+            // Fractional inputs retain truncation, including with one overflowing bound.
+            for lower in [-129.5f64, -42.5] {
+                for source in [DataType::Float64, DataType::Decimal128(10, 2)] {
+                    let input = Interval::make(Some(lower), Some(42.5))
+                        .unwrap()
+                        .cast_to(&source, &options)
+                        .unwrap();
+                    let expected_lower = if lower < -128.0 { None } else { Some(-42i8) };
+                    assert_eq!(
+                        input.cast_to(&DataType::Int8, &options).unwrap(),
+                        Interval::make(expected_lower, Some(42)).unwrap()
+                    );
+                }
+            }
+            // Float overflow is normalized by Interval::try_new.
+            assert_eq!(
+                Interval::make(Some(0.0f64), Some(f64::MAX))
+                    .unwrap()
+                    .cast_to(&DataType::Float32, &options)
+                    .unwrap(),
+                Interval::make(Some(0.0f32), None).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn test_numeric_cast_bounds_contain_values() {
+        let types = [
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Float32,
+            DataType::Float64,
+            DataType::Decimal128(3, 0),
+            DataType::Decimal128(10, 2),
+            DataType::Decimal128(20, -2),
+            DataType::Decimal256(30, 3),
+        ];
+        let samples = [
+            i64::MIN,
+            -16777217,
+            -65537,
+            -129,
+            -128,
+            -1,
+            0,
+            1,
+            42,
+            127,
+            128,
+            255,
+            256,
+            65536,
+            16777217,
+            i64::MAX,
+        ];
+        let safe_options = CastOptions {
+            safe: true,
+            ..Default::default()
+        };
+        let cast = |value: &ScalarValue, target: &DataType| {
+            cast_scalar_value(value, target, &safe_options)
+        };
+        for source in &types {
+            let mut values = samples
+                .iter()
+                .map(|value| cast(&ScalarValue::from(*value), source))
+                .collect::<Result<Vec<_>>>()
+                .unwrap();
+            values.retain(|value| !value.is_null());
+            for target in &types {
+                let converted = values
+                    .iter()
+                    .map(|value| cast(value, target))
+                    .collect::<Result<Vec<_>>>()
+                    .unwrap();
+                for safe in [false, true] {
+                    let options = CastOptions {
+                        safe,
+                        ..Default::default()
+                    };
+                    for start in 0..values.len() {
+                        for end in start..values.len() {
+                            let input = Interval::try_new(
+                                values[start].clone(),
+                                values[end].clone(),
+                            )
+                            .unwrap();
+                            let bounds = input.cast_to(target, &options).unwrap();
+                            for value in &converted[start..=end] {
+                                if !value.is_null() {
+                                    assert!(
+                                        (bounds.lower.is_null()
+                                            || bounds.lower <= *value)
+                                            && (bounds.upper.is_null()
+                                                || *value <= bounds.upper),
+                                        "{source} -> {target}, {input} -> {bounds}, value={value}, safe={safe}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_non_numeric_cast_retains_error_policy() {
+        let strict = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let safe = CastOptions {
+            safe: true,
+            ..strict.clone()
+        };
+        // Exercise failures at either endpoint, preserving the valid opposite bound.
+        for (lower, upper, expected_lower, expected_upper) in [
+            ("not a number", "not a number", None, None),
+            ("1", "not a number", Some(1i8), None),
+            ("!", "42", None, Some(42i8)),
+        ] {
+            let input = Interval::try_new(
+                ScalarValue::Utf8(Some(lower.into())),
+                ScalarValue::Utf8(Some(upper.into())),
+            )
+            .unwrap();
+            assert!(input.cast_to(&DataType::Int8, &strict).is_err());
+            assert_eq!(
+                input.cast_to(&DataType::Int8, &safe).unwrap(),
+                Interval::make(expected_lower, expected_upper).unwrap()
+            );
+        }
+        let numeric = Interval::make(Some(0i64), Some(1)).unwrap();
+        assert!(
+            numeric
+                .cast_to(&DataType::Struct(Default::default()), &safe)
+                .is_err()
+        );
+    }
 
     #[test]
     fn test_next_prev_value() -> Result<()> {
