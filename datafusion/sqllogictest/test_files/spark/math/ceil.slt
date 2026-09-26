@@ -41,15 +41,24 @@ SELECT ceil(-0.1::decimal(1,1)), arrow_typeof(ceil(-0.1::decimal(1,1)));
 
 ## Original Query: SELECT ceil(3.1411, -3);
 ## PySpark 3.5.5 Result: {'ceil(3.1411, -3)': Decimal('1000'), 'typeof(ceil(3.1411, -3))': 'decimal(4,0)', 'typeof(3.1411)': 'decimal(5,4)', 'typeof(-3)': 'int'}
-## TODO: 2-argument ceil(value, scale) is not yet implemented
-#query
-#SELECT ceil(3.1411::decimal(5,4), -3::int);
+query RT
+SELECT ceil(3.1411::decimal(5,4), -3), arrow_typeof(ceil(3.1411::decimal(5,4), -3));
+----
+1000 Decimal128(4, 0)
 
 ## Original Query: SELECT ceil(3.1411, 3);
 ## PySpark 3.5.5 Result: {'ceil(3.1411, 3)': Decimal('3.142'), 'typeof(ceil(3.1411, 3))': 'decimal(5,3)', 'typeof(3.1411)': 'decimal(5,4)', 'typeof(3)': 'int'}
-## TODO: 2-argument ceil(value, scale) is not yet implemented
-#query
-#SELECT ceil(3.1411::decimal(5,4), 3::int);
+#
+# Spelled `ceiling` rather than `ceil` on purpose. sqlparser recognises
+# `CEIL(<expr>, <unsigned literal>)` as the SQL-standard scale form and hands it to the
+# planner as `CeilFloorKind::Scale`, which datafusion/sql rejects with "CEIL with scale is
+# not supported" before any function is resolved. A negative scale does not match that
+# production, which is why the case above can use `ceil` directly. The `ceiling` alias is
+# parsed as an ordinary function call in both cases.
+query RT
+SELECT ceiling(3.1411::decimal(5,4), 3), arrow_typeof(ceiling(3.1411::decimal(5,4), 3));
+----
+3.142 Decimal128(5, 3)
 
 ## Original Query: SELECT ceil(5);
 ## PySpark 3.5.5 Result: {'CEIL(5)': 5, 'typeof(CEIL(5))': 'bigint', 'typeof(5)': 'int'}
