@@ -33,7 +33,7 @@ use crate::{
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow_schema::{FieldRef, SortOptions};
-use datafusion_common::{Result, exec_err};
+use datafusion_common::{Result, assert_or_internal_err, exec_err};
 use datafusion_expr::{
     LimitEffect, PartitionEvaluator, ReversedUDWF, SetMonotonicity, WindowFrame,
     WindowFunctionDefinition, WindowUDF,
@@ -78,15 +78,13 @@ pub fn schema_add_window_field(
         .map(|f| f.as_ref().clone())
         .collect_vec();
     // Skip extending schema for UDAF
-    if let WindowFunctionDefinition::AggregateUDF(_) = window_fn {
-        Ok(Arc::new(Schema::new(window_fields)))
-    } else {
+    if !matches!(window_fn, WindowFunctionDefinition::AggregateUDF(_)) {
         window_fields.extend_from_slice(&[window_expr_return_field
             .as_ref()
             .clone()
             .with_name(fn_name)]);
-        Ok(Arc::new(Schema::new(window_fields)))
     }
+    Ok(Arc::new(Schema::new(window_fields)))
 }
 
 /// Create a physical expression for window function
@@ -297,7 +295,14 @@ impl StandardWindowFunctionExpr for WindowUDFExpr {
     }
 
     fn limit_effect(&self) -> LimitEffect {
-        self.fun.inner().limit_effect(self.args.as_slice())
+        match self.fun.inner().limit_effect(self.args.as_slice()) {
+            // The function's offset counts non-null values, so it cannot bound
+            // the number of input rows needed when NULLs are skipped.
+            LimitEffect::Relative(_) | LimitEffect::Absolute(_) if self.ignore_nulls => {
+                LimitEffect::Unknown
+            }
+            effect => effect,
+        }
     }
 }
 
@@ -570,7 +575,7 @@ pub(crate) fn window_equivalence_properties(
                                 Arc::new(window_col),
                                 SortOptions::new(true, false),
                             )]);
-                        };
+                        }
                     }
                 }
             }
@@ -607,20 +612,17 @@ pub fn get_best_fitting_window(
     // of the window_exprs are same.
     let partitionby_exprs = window_exprs[0].partition_by();
     let orderby_keys = window_exprs[0].order_by();
-    let (should_reverse, input_order_mode) =
-        if let Some((should_reverse, input_order_mode)) =
-            get_window_mode(partitionby_exprs, orderby_keys, input)?
-        {
-            (should_reverse, input_order_mode)
-        } else {
-            return Ok(None);
-        };
+    let Some((should_reverse, input_order_mode)) =
+        get_window_mode(partitionby_exprs, orderby_keys, input)?
+    else {
+        return Ok(None);
+    };
     let is_unbounded = input.boundedness().is_unbounded();
     if !is_unbounded && input_order_mode != InputOrderMode::Sorted {
         // Executor has bounded input and `input_order_mode` is not `InputOrderMode::Sorted`
         // in this case removing the sort is not helpful, return:
         return Ok(None);
-    };
+    }
 
     let window_expr = if should_reverse {
         if let Some(reversed_window_expr) = window_exprs
@@ -628,6 +630,20 @@ pub fn get_best_fitting_window(
             .map(|e| e.get_reverse_expr())
             .collect::<Option<Vec<_>>>()
         {
+            // The rebuilt exec derives its schema from `WindowExpr::field()`, so a
+            // reversal that renames the output field would silently change this
+            // node's schema while parent nodes still reference the old column
+            // names. Catch that here, where the culprit is identifiable.
+            for (reversed, original) in reversed_window_expr.iter().zip(window_exprs) {
+                let (reversed_field, original_field) =
+                    (reversed.field()?, original.field()?);
+                assert_or_internal_err!(
+                    reversed_field.name() == original_field.name(),
+                    "Reversing window expression changed its output field name from {} to {}",
+                    original_field.name(),
+                    reversed_field.name()
+                );
+            }
             reversed_window_expr
         } else {
             // Cannot take reverse of any of the window expr

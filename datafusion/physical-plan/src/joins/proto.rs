@@ -159,3 +159,96 @@ pub(crate) fn join_filter_from_proto(
         Arc::new(schema),
     ))
 }
+
+/// Field-level tests for the shared join enum conversions.
+///
+/// The proto enums and the `datafusion_common` ones are numbered differently,
+/// so these round trips are what stands between a by-name match and a numeric
+/// cast that silently turns a `LEFT SEMI` join into a `FULL` one. Every variant
+/// is listed explicitly: adding one to either side without teaching the
+/// conversion about it fails to compile here.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const JOIN_TYPES: [JoinType; 10] = [
+        JoinType::Inner,
+        JoinType::Left,
+        JoinType::Right,
+        JoinType::Full,
+        JoinType::LeftSemi,
+        JoinType::RightSemi,
+        JoinType::LeftAnti,
+        JoinType::RightAnti,
+        JoinType::LeftMark,
+        JoinType::RightMark,
+    ];
+
+    #[test]
+    fn join_type_round_trips_by_name() {
+        for join_type in JOIN_TYPES {
+            let wire = i32::from(join_type_to_proto(join_type));
+            assert_eq!(
+                join_type_from_proto(wire, "test").unwrap(),
+                join_type,
+                "{join_type:?} did not survive the round trip"
+            );
+        }
+    }
+
+    /// The two numberings are not interchangeable, which is why the conversion
+    /// cannot be a cast. If this ever stops holding the by-name matches are
+    /// still correct — but the cast that replaces them would not be.
+    #[test]
+    fn join_type_numbering_differs_between_the_two_enums() {
+        assert!(
+            JOIN_TYPES
+                .iter()
+                .any(|&jt| i32::from(join_type_to_proto(jt)) != jt as i32),
+            "expected at least one JoinType to be numbered differently on the wire"
+        );
+    }
+
+    #[test]
+    fn join_type_from_proto_rejects_an_unknown_value() {
+        let err = join_type_from_proto(99, "TestExec").unwrap_err();
+        assert!(err.to_string().contains("TestExec: unknown JoinType 99"));
+    }
+
+    #[test]
+    fn join_side_round_trips_by_name() {
+        for side in [JoinSide::Left, JoinSide::Right, JoinSide::None] {
+            let wire = i32::from(join_side_to_proto(side));
+            assert_eq!(join_side_from_proto(wire, "test").unwrap(), side);
+        }
+    }
+
+    #[test]
+    fn join_side_from_proto_rejects_an_unknown_value() {
+        let err = join_side_from_proto(99, "TestExec").unwrap_err();
+        assert!(err.to_string().contains("TestExec: unknown JoinSide 99"));
+    }
+
+    #[test]
+    fn null_equality_round_trips_by_name() {
+        for null_equality in [
+            NullEquality::NullEqualsNothing,
+            NullEquality::NullEqualsNull,
+        ] {
+            let wire = i32::from(null_equality_to_proto(null_equality));
+            assert_eq!(
+                null_equality_from_proto(wire, "test").unwrap(),
+                null_equality
+            );
+        }
+    }
+
+    #[test]
+    fn null_equality_from_proto_rejects_an_unknown_value() {
+        let err = null_equality_from_proto(99, "TestExec").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("TestExec: unknown NullEquality 99")
+        );
+    }
+}

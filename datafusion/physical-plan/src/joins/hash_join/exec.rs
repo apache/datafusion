@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fmt;
 use std::mem::size_of;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::vec;
 
@@ -28,11 +27,12 @@ use crate::execution_plan::{
 };
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation,
+    FilterPushdownPropagation, PushedDownPredicate,
 };
 use crate::joins::Map;
 use crate::joins::array_map::ArrayMap;
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
+use crate::joins::hash_join::probe_completion::{ProbeCompletion, ProbeSideSummary};
 use crate::joins::hash_join::shared_bounds::{
     ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
 };
@@ -41,8 +41,8 @@ use crate::joins::hash_join::stream::{
 };
 use crate::joins::join_hash_map::{JoinHashMapU32, JoinHashMapU64};
 use crate::joins::utils::{
-    OnceAsync, OnceFut, asymmetric_join_output_partitioning, reorder_output_after_swap,
-    swap_join_projection, update_hash,
+    OnceAsync, OnceFut, asymmetric_join_output_partitioning, emits_unmatched_left_rows,
+    is_existence_join, reorder_output_after_swap, swap_join_projection, update_hash,
 };
 use crate::joins::{JoinOn, JoinOnRef, PartitionMode, SharedBitmapBuilder};
 use crate::metrics::{Count, MetricBuilder, MetricCategory};
@@ -69,15 +69,17 @@ use crate::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
 
-use arrow::array::{ArrayRef, BooleanBufferBuilder};
+use arrow::array::{Array, ArrayRef, BooleanBufferBuilder, UInt64Array};
 use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_schema::{DataType, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::utils::memory::{RecordBatchMemoryCounter, estimate_memory_size};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_common::utils::memory::{
+    RecordBatchMemoryCounter, estimate_memory_size, get_record_batch_memory_size,
+};
 use datafusion_common::{
     JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
     plan_err, project_schema,
@@ -93,7 +95,7 @@ use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, l
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
-use datafusion_common::hash_utils::RandomState;
+use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::TryStreamExt;
@@ -107,9 +109,15 @@ pub(crate) const HASH_JOIN_SEED: SeededRandomState =
 
 const ARRAY_MAP_CREATED_COUNT_METRIC_NAME: &str = "array_map_created_count";
 
+/// Decides whether the build side should be joined with an [`ArrayMap`]
+/// (perfect hash join), returning the `(min, max)` key range to build it over.
+///
+/// On `Some`, the memory of the [`ArrayMap`] has already been added to
+/// `reservation`; the caller concatenates the build batches and creates the map
+/// with [`ArrayMap::try_new`].
 #[expect(clippy::too_many_arguments)]
-fn try_create_array_map(
-    bounds: &Option<PartitionBounds>,
+fn array_map_key_range(
+    bounds: Option<&PartitionBounds>,
     schema: &SchemaRef,
     batches: &[RecordBatch],
     on_left: &[PhysicalExprRef],
@@ -117,8 +125,10 @@ fn try_create_array_map(
     perfect_hash_join_small_build_threshold: usize,
     perfect_hash_join_min_key_density: f64,
     null_equality: NullEquality,
-) -> Result<Option<(ArrayMap, RecordBatch, Vec<ArrayRef>)>> {
-    if on_left.len() != 1 {
+) -> Result<Option<(u64, u64)>> {
+    // `bounds` are also collected for dynamic filters, on any key type, so the
+    // key type cannot be inferred from their presence.
+    if !is_perfect_hash_join_candidate(on_left, schema)? {
         return Ok(None);
     }
 
@@ -182,12 +192,100 @@ fn try_create_array_map(
     let mem_size = ArrayMap::estimate_memory_size(min_val, max_val, num_row);
     reservation.try_grow(mem_size)?;
 
-    let batch = concat_batches(schema, batches)?;
-    let left_values = evaluate_expressions_to_arrays(on_left, &batch)?;
+    Ok(Some((min_val, max_val)))
+}
 
-    let array_map = ArrayMap::try_new(&left_values[0], min_val, max_val)?;
+/// The build rows whose scalar `NOT IN` value key is NULL, used by correlated
+/// null-aware joins (see [`NullAwareMode`]).
+///
+/// Such rows are UNKNOWN whenever *any* probe row in their correlation scope
+/// passes the join filter, so every probe row must be tested against them.
+/// Restricting this lookup to the NULL-valued build rows keeps it
+/// proportional to the number of NULLs instead of enumerating every scope
+/// match of every probe row.
+pub(super) struct NullValueBuildRows {
+    /// Hash table keyed by the correlation scope values of the NULL-valued
+    /// build rows. Stored positions index into `scope_values`/`build_indices`,
+    /// not the full build batch. `None` when the join has no correlation
+    /// scope keys, so every probe row is in scope.
+    pub(super) scope_map: Option<Box<dyn JoinHashMapType>>,
+    /// Correlation scope key values of the NULL-valued build rows.
+    pub(super) scope_values: Vec<ArrayRef>,
+    /// Maps positions in `map`/`scope_values` back to row indices in the full
+    /// build batch.
+    pub(super) build_indices: UInt64Array,
+}
 
-    Ok(Some((array_map, batch, left_values)))
+/// Null-aware (`NOT IN`) semantics of a hash join, derived from
+/// [`HashJoinExec::null_aware`] and the join type.
+///
+/// Only these combinations are legal (see [`Self::try_new`]), so the
+/// stream matches on this instead of re-checking `null_aware && join_type == ..`.
+///
+/// A `correlated` join has correlation scope keys (`on[1..]`, see
+/// [`HashJoinExec::null_aware`]) or a join filter, or both. A NULL then makes
+/// `NOT IN` UNKNOWN only for the build rows whose scope and filter keep that
+/// NULL, so the join records the decision per build row in the null-indices
+/// bitmap instead of in shared probe-side flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum NullAwareMode {
+    /// `build.key NOT IN (probe.key)`: emits build rows. When uncorrelated,
+    /// none of them are emitted once any probe key is NULL.
+    LeftAnti { correlated: bool },
+    /// Uncorrelated `probe.key NOT IN (build.key)`: emits probe rows, and
+    /// none of them once any build key is NULL.
+    RightAnti,
+    /// `NOT IN` as a nullable mark column on the build rows.
+    LeftMark { correlated: bool },
+}
+
+impl NullAwareMode {
+    /// Validates that `null_aware` may be set for this join and returns its mode.
+    pub(super) fn try_new(
+        join_type: JoinType,
+        partition_mode: PartitionMode,
+        num_keys: usize,
+        has_filter: bool,
+    ) -> Result<Self> {
+        let correlated = num_keys > 1 || has_filter;
+        let mode = match (join_type, partition_mode) {
+            (JoinType::LeftAnti, _) => Self::LeftAnti { correlated },
+            // `PartitionMode::CollectLeft` is safe because `RightAnti` is probe-driven
+            (JoinType::RightAnti, PartitionMode::CollectLeft) => Self::RightAnti,
+            (JoinType::LeftMark, _) => Self::LeftMark { correlated },
+            _ => {
+                return plan_err!(
+                    "null_aware can only be true for LeftAnti joins and RightAnti joins with `CollectLeft` `PartitionMode`, or LeftMark joins, got {join_type} with {partition_mode}"
+                );
+            }
+        };
+        match mode {
+            Self::RightAnti if num_keys != 1 => plan_err!(
+                "null_aware {join_type} joins only support single column join key, got {num_keys} columns"
+            ),
+            // Correlated joins share the per-build-row null bitmap across all
+            // probe partitions.
+            Self::LeftMark { .. } | Self::LeftAnti { correlated: true }
+                if partition_mode == PartitionMode::Partitioned =>
+            {
+                plan_err!(
+                    "null_aware joins require PartitionMode::CollectLeft, got PartitionMode::Partitioned"
+                )
+            }
+            Self::RightAnti if has_filter => {
+                plan_err!("null_aware RightAnti join does not support a join filter")
+            }
+            _ => Ok(mode),
+        }
+    }
+
+    /// Whether this join decides UNKNOWN per build row (see [`NullAwareMode`]).
+    pub(super) fn is_correlated(self) -> bool {
+        matches!(
+            self,
+            Self::LeftAnti { correlated: true } | Self::LeftMark { correlated: true }
+        )
+    }
 }
 
 /// HashTable and input data for the left (build side) of a join
@@ -195,15 +293,27 @@ pub(super) struct JoinLeftData {
     /// The hash table with indices into `batch`
     /// Arc is used to allow sharing with SharedBuildAccumulator for hash map pushdown
     pub(super) map: Arc<Map>,
+    /// Hash table over correlated scope keys for correlated null-aware joins.
+    ///
+    /// Key 0 is the scalar `NOT IN` value key and keys 1..N are correlated
+    /// equality scope keys. This map covers all build rows and is probed only
+    /// with NULL-valued probe rows; the complementary direction uses
+    /// `null_value_build_rows`. `None` when there are no scope keys.
+    null_aware_scope_map: Option<Box<dyn JoinHashMapType>>,
+    /// The build rows whose value key is NULL (see [`NullValueBuildRows`]).
+    /// `None` when the build side has no NULL value keys.
+    null_value_build_rows: Option<NullValueBuildRows>,
     /// The input rows for the build side
     batch: RecordBatch,
     /// The build side on expressions values
     values: Vec<ArrayRef>,
     /// Shared bitmap builder for visited left indices
     visited_indices_bitmap: SharedBitmapBuilder,
-    /// Counter of running probe-threads, potentially
-    /// able to update `visited_indices_bitmap`
-    probe_threads_counter: AtomicUsize,
+    /// Shared bitmap builder for null marks
+    null_indices_bitmap: SharedBitmapBuilder,
+    /// Tracks which probe partition finishes last and what the partitions
+    /// collectively saw. See [`ProbeCompletion`] for the invariant it upholds.
+    probe_completion: ProbeCompletion,
     /// We need to keep this field to maintain accurate memory accounting, even though we don't directly use it.
     /// Without holding onto this reservation, the recorded memory usage would become inconsistent with actual usage.
     /// This could hide potential out-of-memory issues, especially when upstream operators increase their memory consumption.
@@ -216,17 +326,22 @@ pub(super) struct JoinLeftData {
     /// Membership testing strategy for filter pushdown
     /// Contains either InList values for small build sides or hash table reference for large build sides
     pub(super) membership: PushdownStrategy,
-    /// Shared atomic flag indicating if any probe partition saw data (for null-aware anti joins)
-    /// This is shared across all probe partitions to provide global knowledge
-    pub(super) probe_side_non_empty: AtomicBool,
-    /// Shared atomic flag indicating if any probe partition saw NULL in join keys (for null-aware anti joins)
-    pub(super) probe_side_has_null: AtomicBool,
+    // For RightAnti joins, where the build side is a smaller subquery, truthy if has null for the single join key
+    pub(super) build_side_has_null: bool,
 }
 
 impl JoinLeftData {
     /// return a reference to the map
     pub(super) fn map(&self) -> &Map {
         &self.map
+    }
+
+    pub(super) fn null_aware_scope_map(&self) -> Option<&dyn JoinHashMapType> {
+        self.null_aware_scope_map.as_deref()
+    }
+
+    pub(super) fn null_value_build_rows(&self) -> Option<&NullValueBuildRows> {
+        self.null_value_build_rows.as_ref()
     }
 
     /// returns a reference to the build side batch
@@ -261,15 +376,38 @@ impl JoinLeftData {
         &self.visited_indices_bitmap
     }
 
+    pub(super) fn null_indices_bitmap(&self) -> &SharedBitmapBuilder {
+        &self.null_indices_bitmap
+    }
+
     /// returns a reference to the InList values for filter pushdown
     pub(super) fn membership(&self) -> &PushdownStrategy {
         &self.membership
     }
 
-    /// Decrements the counter of running threads, and returns `true`
-    /// if caller is the last running thread
-    pub(super) fn report_probe_completed(&self) -> bool {
-        self.probe_threads_counter.fetch_sub(1, Ordering::Relaxed) == 1
+    /// Records what a probe partition saw in one batch, for the null-aware
+    /// rules evaluated in the final stage.
+    pub(super) fn record_probe_batch(&self, non_empty: bool, has_null: bool) {
+        self.probe_completion.record_batch(non_empty, has_null);
+    }
+
+    /// Whether some probe partition has already recorded a NULL join key.
+    ///
+    /// Only an early-exit hint for the probe phase: it may lag behind sibling
+    /// partitions. Final-stage decisions must use the [`ProbeSideSummary`]
+    /// returned by [`Self::report_probe_completed`] instead.
+    pub(super) fn probe_side_has_null_hint(&self) -> bool {
+        self.probe_completion.saw_null_key_hint()
+    }
+
+    /// Marks this probe partition as finished, returning `Some` for the last
+    /// one together with what every partition saw.
+    ///
+    /// The summary is reachable only through this call, which is what stops
+    /// the final stage from reading the shared flags before its own
+    /// decrement. See [`ProbeCompletion`] for why that ordering matters.
+    pub(super) fn report_probe_completed(&self) -> Option<ProbeSideSummary> {
+        self.probe_completion.report_completed()
     }
 }
 
@@ -424,21 +562,7 @@ impl HashJoinExecBuilder {
         } = self;
 
         // Validate null_aware flag
-        if exec.null_aware {
-            let join_type = exec.join_type();
-            if !matches!(join_type, JoinType::LeftAnti) {
-                return plan_err!(
-                    "null_aware can only be true for LeftAnti joins, got {join_type}"
-                );
-            }
-            let on = exec.on();
-            if on.len() != 1 {
-                return plan_err!(
-                    "null_aware anti join only supports single column join key, got {} columns",
-                    on.len()
-                );
-            }
-        }
+        exec.null_aware_mode()?;
 
         if preserve_properties {
             return Ok(exec);
@@ -572,7 +696,7 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
 /// 4. build_side.num_rows() < u32::MAX
 /// 5. NullEqualsNothing || (NullEqualsNull && build side doesn't contain null)
 ///
-/// See [`try_create_array_map`] for more details.
+/// See [`array_map_key_range`] for more details.
 ///
 /// Note that when using [`PartitionMode::Partitioned`], the build side is split into multiple
 /// partitions. This can cause a dense build side to become sparse within each partition,
@@ -769,7 +893,22 @@ pub struct HashJoinExec {
     column_indices: Vec<ColumnIndex>,
     /// The equality null-handling behavior of the join algorithm.
     pub null_equality: NullEquality,
-    /// Flag to indicate if this is a null-aware anti join
+    /// Flag to indicate if this join uses null-aware equality semantics.
+    ///
+    /// Set for the physical lowering of scalar `NOT IN` subqueries (producing
+    /// `JoinType::LeftAnti` at the top level of a filter or `JoinType::LeftMark`
+    /// inside a larger expression). When `true`, NULLs in the join keys follow
+    /// SQL `NOT IN` three-valued logic rather than ordinary equi-join semantics.
+    /// A join filter holds the non-equality part of a correlated subquery, and
+    /// only the probe rows that pass it take part in the three-valued logic.
+    ///
+    /// Key-ordering convention (relied on positionally, not enforced): for a
+    /// null-aware `LeftAnti` or `LeftMark` join with more than one key, `on[0]`
+    /// is the scalar `NOT IN` value key and `on[1..N]` are the correlated
+    /// equality scope keys.
+    /// Reordering these keys would silently produce wrong results, which is why
+    /// such joins are pinned to `PartitionMode::CollectLeft` (the only key
+    /// reorderer acts solely on `PartitionMode::Partitioned`).
     pub null_aware: bool,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: Arc<PlanProperties>,
@@ -802,6 +941,7 @@ impl fmt::Debug for HashJoinExec {
             .field("left_fut", &self.left_fut)
             .field("random_state", &self.random_state)
             .field("mode", &self.mode)
+            .field("null_aware", &self.null_aware)
             .field("metrics", &self.metrics)
             .field("projection", &self.projection)
             .field("column_indices", &self.column_indices)
@@ -861,16 +1001,88 @@ impl HashJoinExec {
         Arc::new(DynamicFilterPhysicalExpr::new(right_keys, lit(true)))
     }
 
+    /// Join types whose output rows all carry a matching key on both sides.
+    ///
+    /// For these a parent filter over one side's join keys can be transferred
+    /// to the other side's input: an input row that fails the transferred
+    /// filter can only pair with rows that fail the original, so pruning it
+    /// changes nothing, and once the transferred filter is applied exactly on
+    /// one side every output row satisfies the original. Outer, anti and mark
+    /// joins also emit unmatched rows, whose key on the other side is absent,
+    /// so the transferred filter is not exact for them.
+    fn supports_key_transfer(join_type: JoinType) -> bool {
+        matches!(
+            join_type,
+            JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi
+        )
+    }
+
+    /// Maps each output column that is a plain `Column` join key on one side
+    /// to the key expression on the other side, as `(to_right, to_left)`.
+    ///
+    /// `column_indices` are the (projected) output columns of this join. A key
+    /// column that appears in several `on` pairs maps to the first of them.
+    fn key_transfer_maps(
+        &self,
+        column_indices: &[ColumnIndex],
+    ) -> (KeyTransferMap, KeyTransferMap) {
+        // A transferred filter compares the other side's key with literals
+        // typed for this side's key. The planner coerces both keys to one
+        // type, and `try_new` does not check it, so make the assumption
+        // explicit here.
+        debug_assert!(
+            self.on.iter().all(|(left_key, right_key)| {
+                left_key.data_type(&self.left.schema()).ok()
+                    == right_key.data_type(&self.right.schema()).ok()
+            }),
+            "join key data types differ: {:?}",
+            self.on
+        );
+        let mut to_right = HashMap::new();
+        let mut to_left = HashMap::new();
+        for (output_idx, ci) in column_indices.iter().enumerate() {
+            let (map, other_key) = match ci.side {
+                JoinSide::Left => (
+                    &mut to_right,
+                    self.on
+                        .iter()
+                        .find(|(left_key, _)| is_column_at(left_key, ci.index))
+                        .map(|(_, right_key)| right_key),
+                ),
+                JoinSide::Right => (
+                    &mut to_left,
+                    self.on
+                        .iter()
+                        .find(|(_, right_key)| is_column_at(right_key, ci.index))
+                        .map(|(left_key, _)| left_key),
+                ),
+                // Only mark joins produce mark columns, and
+                // `supports_key_transfer` excludes them; this arm is here for
+                // exhaustiveness.
+                JoinSide::None => continue,
+            };
+            if let Some(other_key) = other_key {
+                map.insert(output_idx, Arc::clone(other_key));
+            }
+        }
+        (to_right, to_left)
+    }
+
     fn allow_join_dynamic_filter_pushdown(&self, config: &ConfigOptions) -> bool {
         let (_, probe_preserved) = self.join_type.on_lr_is_preserved();
         if !probe_preserved || !config.optimizer.enable_join_dynamic_filter_pushdown {
             return false;
         }
 
-        // A null-aware anti join emits a build-side NULL only when the probe
-        // is truly empty. The pushed filter can empty the probe by pruning
-        // every row, which would surface that NULL wrongly. A NOT NULL build
-        // key cannot produce such a NULL, so the filter stays there.
+        // Null-aware joins tolerate probe pruning only while the build side
+        // has no NULL keys (the pushed filter keeps NULL-valued probe rows via
+        // the `IS NULL` escape in `preserve_probe_nulls`, but prunes others):
+        // - LeftAnti emits a build-side NULL only when the probe is truly
+        //   empty, and pruning every probe row would surface that NULL wrongly.
+        // - Null-aware LeftMark marks a NULL-valued build row UNKNOWN when any
+        //   probe row shares its correlation scope, and a pruned probe row
+        //   would be missed by that scan.
+        // NOT NULL build keys rule out both, so the filter stays there.
         if self.null_aware
             && self.on.iter().any(|(build_key, _)| {
                 build_key.nullable(&self.left.schema()).unwrap_or(true)
@@ -986,11 +1198,34 @@ impl HashJoinExec {
 
     /// Set the dynamic filter on this hash join.
     ///
+    /// Setting a dynamic filter is what makes the join compute and publish
+    /// build-side bounds during execution. [`Self::handle_child_pushdown_result`]
+    /// sets one after finding a consumer for it in the probe side. Callers wiring a
+    /// filter up by hand take on that check themselves.
+    ///
     /// Resets any internal state that depends on any existing dynamic filter.
     ///
     /// Validates that the filter's children reference valid columns in
     /// the probe (right) side's schema.
+    #[deprecated(
+        since = "56.0.0",
+        note = "unused by DataFusion; `HashJoinExec` restores its dynamic filter in `HashJoinExec::try_from_proto`, which sets the field directly. There is no replacement; please open an issue if you have a use case for it."
+    )]
     pub fn with_dynamic_filter_expr(
+        self,
+        filter: Arc<DynamicFilterPhysicalExpr>,
+    ) -> Result<Self> {
+        self.set_dynamic_filter(filter)
+    }
+
+    /// Set the dynamic filter on this hash join, resetting any internal state
+    /// that depends on an existing one and validating that the filter's
+    /// children reference valid columns in the probe (right) side's schema.
+    ///
+    /// Only used to restore the filter when decoding a serialized plan: every
+    /// other code path installs the filter in
+    /// [`ExecutionPlan::handle_child_pushdown_result`].
+    fn set_dynamic_filter(
         mut self,
         filter: Arc<DynamicFilterPhysicalExpr>,
     ) -> Result<Self> {
@@ -1007,19 +1242,28 @@ impl HashJoinExec {
         Ok(self)
     }
 
+    /// The null-aware semantics of this join, if [`Self::null_aware`] is set.
+    ///
+    /// Errors if `null_aware` is set on a join that does not support it.
+    pub(super) fn null_aware_mode(&self) -> Result<Option<NullAwareMode>> {
+        self.null_aware
+            .then(|| {
+                NullAwareMode::try_new(
+                    self.join_type,
+                    self.mode,
+                    self.on.len(),
+                    self.filter.is_some(),
+                )
+            })
+            .transpose()
+    }
+
     /// Calculate order preservation flags for this hash join.
     fn maintains_input_order(join_type: JoinType) -> Vec<bool> {
-        vec![
-            false,
-            matches!(
-                join_type,
-                JoinType::Inner
-                    | JoinType::Right
-                    | JoinType::RightAnti
-                    | JoinType::RightSemi
-                    | JoinType::RightMark
-            ),
-        ]
+        // The output follows the probe (right) order only when every output
+        // row is produced while scanning the probe side. Joins that also emit
+        // rows from the build-side visited bitmap at the end break that order.
+        vec![false, !need_produce_result_in_final(join_type)]
     }
 
     /// Get probe side information for the hash join.
@@ -1076,28 +1320,22 @@ impl HashJoinExec {
             }
         };
 
-        let emission_type = if left.boundedness().is_unbounded() {
-            EmissionType::Final
-        } else if right.pipeline_behavior() == EmissionType::Incremental {
-            match join_type {
-                // If we only need to generate matched rows from the probe side,
-                // we can emit rows incrementally.
-                JoinType::Inner
-                | JoinType::LeftSemi
-                | JoinType::RightSemi
-                | JoinType::Right
-                | JoinType::RightAnti
-                | JoinType::RightMark => EmissionType::Incremental,
-                // If we need to generate unmatched rows from the *build side*,
-                // we need to emit them at the end.
-                JoinType::Left
-                | JoinType::LeftAnti
-                | JoinType::LeftMark
-                | JoinType::Full => EmissionType::Both,
-            }
-        } else {
-            right.pipeline_behavior()
-        };
+        let emission_type =
+            // LeftSemi does not emit rows during probing. It records matching build-side
+            // rows in a bitmap and can only emit them after the probe side is exhausted.
+            if left.boundedness().is_unbounded() || join_type == JoinType::LeftSemi {
+                EmissionType::Final
+            } else if right.pipeline_behavior() == EmissionType::Incremental {
+                // Unmatched build-side rows can only be emitted once the probe side
+                // is exhausted; everything else is emitted incrementally.
+                if emits_unmatched_left_rows(join_type) {
+                    EmissionType::Both
+                } else {
+                    EmissionType::Incremental
+                }
+            } else {
+                right.pipeline_behavior()
+            };
 
         // If contains projection, update the PlanProperties.
         if let Some(projection) = projection {
@@ -1171,17 +1409,10 @@ impl HashJoinExec {
             ))
             .with_partition_mode(partition_mode)
             .build()?;
-        // In case of anti / semi joins or if there is embedded projection in HashJoinExec, output column order is preserved, no need to add projection again
-        if matches!(
-            self.join_type(),
-            JoinType::LeftSemi
-                | JoinType::RightSemi
-                | JoinType::LeftAnti
-                | JoinType::RightAnti
-                | JoinType::LeftMark
-                | JoinType::RightMark
-        ) || self.projection.is_some()
-        {
+        // Semi / anti / mark joins output columns from one side only, so
+        // swapping does not reorder them; an embedded projection already fixes
+        // the order too. Otherwise a projection restores the original order.
+        if is_existence_join(self.join_type) || self.projection.is_some() {
             Ok(Arc::new(new_join))
         } else {
             reorder_output_after_swap(Arc::new(new_join), &left.schema(), &right.schema())
@@ -1436,20 +1667,9 @@ impl ExecutionPlan for HashJoinExec {
              consider using CoalescePartitionsExec or the EnforceDistribution rule"
         );
 
-        // Only compute a dynamic filter when the probe subtree contains a consumer.
-        // Searching from `self` would always find the producer expression owned by this join.
-        let enable_dynamic_filter_pushdown = if self
+        let enable_dynamic_filter_pushdown = self
             .allow_join_dynamic_filter_pushdown(context.session_config().options())
-        {
-            self.dynamic_filter
-                .as_ref()
-                .and_then(|df| df.filter.expression_id())
-                .map(|id| plan_contains_expression_id(&self.right, id))
-                .transpose()?
-                .unwrap_or(false)
-        } else {
-            false
-        };
+            && self.dynamic_filter.is_some();
 
         let join_metrics = BuildProbeJoinMetrics::new(partition, &self.metrics);
 
@@ -1486,6 +1706,8 @@ impl ExecutionPlan for HashJoinExec {
             .flatten()
             .flatten();
 
+        let null_aware = self.null_aware_mode()?;
+
         let left_fut = match self.mode {
             PartitionMode::CollectLeft => self.left_fut.try_once(|| {
                 let left_stream = self.left.execute(0, Arc::clone(&context))?;
@@ -1504,6 +1726,7 @@ impl ExecutionPlan for HashJoinExec {
                     enable_dynamic_filter_pushdown,
                     Arc::clone(context.session_config().options()),
                     self.null_equality,
+                    null_aware,
                     array_map_created_count,
                 ))
             })?,
@@ -1524,6 +1747,7 @@ impl ExecutionPlan for HashJoinExec {
                     enable_dynamic_filter_pushdown,
                     Arc::clone(context.session_config().options()),
                     self.null_equality,
+                    null_aware,
                     array_map_created_count,
                 ))
             }
@@ -1574,7 +1798,7 @@ impl ExecutionPlan for HashJoinExec {
             self.right.output_ordering().is_some(),
             build_accumulator,
             self.mode,
-            self.null_aware,
+            null_aware,
             self.fetch,
         )))
     }
@@ -1684,13 +1908,14 @@ impl ExecutionPlan for HashJoinExec {
         // 1. `lr_is_preserved` gates whether a side is eligible at all.
         // 2. For each filter, we check that all column references belong to the
         //    target child (using `column_indices` to map output column positions
-        //    to join sides). This is critical for correctness: name-based matching
-        //    alone (as done by `ChildFilterDescription::from_child`) can incorrectly
-        //    push filters when different join sides have columns with the same name
-        //    (e.g. nested mark joins both producing "mark" columns).
+        //    to join sides). Columns are mapped by position, never by name:
+        //    different join sides, or a nested join on one side, can produce
+        //    columns with the same name (e.g. nested mark joins both producing
+        //    "mark" columns, or several `id` columns).
         let (left_preserved, right_preserved) = lr_is_preserved(self.join_type);
 
-        // Build the set of allowed column indices for each side
+        // Map each output position to its input position, accounting for the
+        // join's projection.
         let column_indices: Vec<ColumnIndex> = match self.projection.as_ref() {
             Some(projection) => projection
                 .iter()
@@ -1699,74 +1924,53 @@ impl ExecutionPlan for HashJoinExec {
             None => self.column_indices.clone(),
         };
 
-        let (mut left_allowed, mut right_allowed) = (HashSet::new(), HashSet::new());
-        column_indices
-            .iter()
-            .enumerate()
-            .for_each(|(output_idx, ci)| {
-                match ci.side {
-                    JoinSide::Left => left_allowed.insert(output_idx),
-                    JoinSide::Right => right_allowed.insert(output_idx),
-                    // Mark columns - don't allow pushdown to either side
-                    JoinSide::None => false,
-                };
-            });
-
-        // For semi joins, filters on output join keys can also be pushed to the
-        // non-output side: every emitted row has an equal key there. This is not
-        // true for anti joins, whose emitted rows have no match.
-        match self.join_type {
-            JoinType::LeftSemi => {
-                let left_key_indices: HashSet<usize> = self
-                    .on
-                    .iter()
-                    .filter_map(|(left_key, _)| {
-                        left_key.downcast_ref::<Column>().map(|c| c.index())
-                    })
-                    .collect();
-                for (output_idx, ci) in column_indices.iter().enumerate() {
-                    if ci.side == JoinSide::Left && left_key_indices.contains(&ci.index) {
-                        right_allowed.insert(output_idx);
-                    }
+        let (mut left_mapping, mut right_mapping) = (HashMap::new(), HashMap::new());
+        for (output_idx, ci) in column_indices.iter().enumerate() {
+            match ci.side {
+                JoinSide::Left => {
+                    left_mapping.insert(output_idx, ci.index);
                 }
-            }
-            JoinType::RightSemi => {
-                let right_key_indices: HashSet<usize> = self
-                    .on
-                    .iter()
-                    .filter_map(|(_, right_key)| {
-                        right_key.downcast_ref::<Column>().map(|c| c.index())
-                    })
-                    .collect();
-                for (output_idx, ci) in column_indices.iter().enumerate() {
-                    if ci.side == JoinSide::Right && right_key_indices.contains(&ci.index)
-                    {
-                        left_allowed.insert(output_idx);
-                    }
+                JoinSide::Right => {
+                    right_mapping.insert(output_idx, ci.index);
                 }
+                // Mark columns cannot be pushed to either side.
+                JoinSide::None => {}
             }
-            _ => {}
         }
 
-        let left_child = if left_preserved {
-            ChildFilterDescription::from_child_with_allowed_indices(
-                &parent_filters,
-                left_allowed,
-                self.left(),
-            )?
+        // Transfer filters across the equi-join keys: a parent filter over one
+        // side's join-key columns holds for every matching row of the other
+        // side too, so it is also pushed there, rewritten over that side's key
+        // expressions. This is how a dynamic filter from a join above reaches
+        // the scans on both sides of this join, and how a semi join prunes its
+        // non-output side. Like the plain column routing, a transfer only
+        // targets a side that `lr_is_preserved` permits.
+        let (to_right, to_left) = if Self::supports_key_transfer(self.join_type) {
+            self.key_transfer_maps(&column_indices)
         } else {
-            ChildFilterDescription::all_unsupported(&parent_filters)
+            Default::default()
+        };
+        let describe_child = |preserved: bool,
+                              column_mapping: HashMap<usize, usize>,
+                              key_map: &KeyTransferMap,
+                              child: &Arc<dyn ExecutionPlan>|
+         -> Result<ChildFilterDescription> {
+            if !preserved {
+                return Ok(ChildFilterDescription::all_unsupported(&parent_filters));
+            }
+            let mut description = ChildFilterDescription::from_child_with_column_mapping(
+                &parent_filters,
+                column_mapping,
+                child,
+            )?;
+            transfer_key_filters(&parent_filters, key_map, &mut description)?;
+            Ok(description)
         };
 
-        let mut right_child = if right_preserved {
-            ChildFilterDescription::from_child_with_allowed_indices(
-                &parent_filters,
-                right_allowed,
-                self.right(),
-            )?
-        } else {
-            ChildFilterDescription::all_unsupported(&parent_filters)
-        };
+        let left_child =
+            describe_child(left_preserved, left_mapping, &to_left, self.left())?;
+        let mut right_child =
+            describe_child(right_preserved, right_mapping, &to_right, self.right())?;
 
         // Add dynamic filters in Post phase if enabled. Skip when this join
         // already carries a dynamic filter from a previous pass — the shared
@@ -1799,21 +2003,40 @@ impl ExecutionPlan for HashJoinExec {
         let right_child_self_filters = &child_pushdown_result.self_filters[1]; // We only push down filters to the right child
         // We expect 0 or 1 self filters
         if let Some(filter) = right_child_self_filters.first() {
-            // Note that we don't check PushdDownPredicate::discrimnant because even if nothing said
-            // "yes, I can fully evaluate this filter" things might still use it for statistics -> it's worth updating
             let predicate = Arc::clone(&filter.predicate);
             if let Ok(dynamic_filter) =
                 Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
             {
-                // We successfully pushed down our self filter - we need to make a new node with the dynamic filter
-                let new_node = self
-                    .builder()
-                    .with_dynamic_filter(Some(HashJoinExecDynamicFilter {
-                        filter: dynamic_filter,
-                        build_accumulator: OnceLock::new(),
-                    }))
-                    .build_exec()?;
-                result = result.with_updated_node(new_node);
+                // Note that we don't check `PushedDownPredicate::discriminant`: a node
+                // that replies `PushedDown::No` may still retain the filter for
+                // statistics pruning, so the reply does not tell us whether anyone will
+                // actually read the filter. Instead we look for a consumer holding the
+                // expression in the probe subtree.
+                //
+                // `self` here is the join with its post-pushdown children, so anything
+                // that accepted the filter is already wired into `self.right`. Searching
+                // from `self` would always find the producer expression pushed by this
+                // join. This is the last chance to make the decision: the Post-phase
+                // `FilterPushdown` rule is the final rule that mutates the plan.
+                let has_consumer = dynamic_filter
+                    .expression_id()
+                    .map(|id| plan_contains_expression_id(&self.right, id))
+                    .transpose()?
+                    .unwrap_or(false);
+                if has_consumer {
+                    // Our self filter reached a consumer: rebuild the node holding onto
+                    // the dynamic filter so that `execute` populates it from the build
+                    // side. If it did not, we leave `dynamic_filter` as `None` and skip
+                    // the (not cheap) bounds accumulation entirely.
+                    let new_node = self
+                        .builder()
+                        .with_dynamic_filter(Some(HashJoinExecDynamicFilter {
+                            filter: dynamic_filter,
+                            build_accumulator: OnceLock::new(),
+                        }))
+                        .build_exec()?;
+                    result = result.with_updated_node(new_node);
+                }
             }
         }
         Ok(result)
@@ -1844,11 +2067,39 @@ impl ExecutionPlan for HashJoinExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
 
-        let left = ctx.encode_child(self.left())?;
-        let right = ctx.encode_child(self.right())?;
+        // Destructure exhaustively (no `..`) so that a newly added field is a
+        // compile error here instead of being silently left out of the proto.
+        let Self {
+            left,
+            right,
+            on,
+            filter,
+            join_type,
+            mode,
+            projection,
+            null_equality,
+            null_aware,
+            dynamic_filter,
+            fetch,
+            // derived from the children's schemas by the builder on decode
+            join_schema: _,
+            // runtime build-side state, not part of the plan
+            left_fut: _,
+            // the fixed `HASH_JOIN_SEED` constant, set identically by the
+            // builder on decode
+            random_state: _,
+            // runtime metrics, not part of the plan
+            metrics: _,
+            // recomputed by the builder on decode
+            column_indices: _,
+            // recomputed by the builder on decode
+            cache: _,
+        } = self;
 
-        let on = self
-            .on()
+        let left = ctx.encode_child(left)?;
+        let right = ctx.encode_child(right)?;
+
+        let on = on
             .iter()
             .map(|(l, r)| -> Result<protobuf::JoinOn> {
                 Ok(protobuf::JoinOn {
@@ -1858,27 +2109,28 @@ impl ExecutionPlan for HashJoinExec {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let join_type = crate::joins::proto::join_type_to_proto(*self.join_type());
-        let null_equality =
-            crate::joins::proto::null_equality_to_proto(self.null_equality());
+        let join_type = crate::joins::proto::join_type_to_proto(*join_type);
+        let null_equality = crate::joins::proto::null_equality_to_proto(*null_equality);
         // `PartitionMode` is specific to `HashJoinExec`, so its conversion stays
         // inline (by-name on purpose: the enums are numbered differently).
-        let partition_mode = match self.partition_mode() {
+        let partition_mode = match mode {
             PartitionMode::CollectLeft => protobuf::PartitionMode::CollectLeft,
             PartitionMode::Partitioned => protobuf::PartitionMode::Partitioned,
             PartitionMode::Auto => protobuf::PartitionMode::Auto,
         };
 
-        let filter = self
-            .filter()
+        let filter = filter
+            .as_ref()
             .map(|f| crate::joins::proto::join_filter_to_proto(f, ctx))
             .transpose()?;
 
-        let dynamic_filter = self
-            .dynamic_expressions_produced()
-            .into_iter()
-            .next()
-            .map(|expr| ctx.encode_expr(&expr))
+        let dynamic_filter = dynamic_filter
+            .as_ref()
+            .map(|df| {
+                let df_expr: Arc<dyn PhysicalExpr> =
+                    Arc::clone(&df.filter) as Arc<dyn PhysicalExpr>;
+                ctx.encode_expr(&df_expr)
+            })
             .transpose()?;
 
         Ok(Some(protobuf::PhysicalPlanNode {
@@ -1899,14 +2151,14 @@ impl ExecutionPlan for HashJoinExec {
                         // single-element sentinel `[u32::MAX]` (never a valid column
                         // index); every other state is sent as-is. See
                         // `try_from_proto` for the matching decoder.
-                        projection: match self.projection.as_ref() {
+                        projection: match projection.as_ref() {
                             None => Vec::new(),
                             Some(v) if v.is_empty() => vec![u32::MAX],
                             Some(v) => v.iter().map(|x| *x as u32).collect(),
                         },
-                        null_aware: self.null_aware,
+                        null_aware: *null_aware,
                         dynamic_filter,
-                        fetch: self.fetch.map(|f| f as u64),
+                        fetch: fetch.map(|f| f as u64),
                     },
                 )),
             ),
@@ -1921,7 +2173,7 @@ impl HashJoinExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        use datafusion_common::{internal_datafusion_err, plan_datafusion_err};
+        use datafusion_common::{internal_datafusion_err, utils::usize_from_wire};
         use datafusion_proto_models::protobuf;
         use std::any::Any;
 
@@ -1931,18 +2183,29 @@ impl HashJoinExec {
             "HashJoinExec",
         );
 
-        let left =
-            ctx.decode_required_child(hashjoin.left.as_deref(), "HashJoinExec", "left")?;
-        let right = ctx.decode_required_child(
-            hashjoin.right.as_deref(),
-            "HashJoinExec",
-            "right",
-        )?;
+        // Destructure exhaustively (no `..`) so that a newly added proto field
+        // is a compile error here instead of being silently ignored.
+        let protobuf::HashJoinExecNode {
+            left,
+            right,
+            on,
+            join_type,
+            partition_mode,
+            null_equality,
+            filter,
+            projection,
+            null_aware,
+            dynamic_filter,
+            fetch,
+        } = &**hashjoin;
+
+        let left = ctx.decode_required_child(left.as_deref(), "HashJoinExec", "left")?;
+        let right =
+            ctx.decode_required_child(right.as_deref(), "HashJoinExec", "right")?;
         let left_schema = left.schema();
         let right_schema = right.schema();
 
-        let on: Vec<(PhysicalExprRef, PhysicalExprRef)> = hashjoin
-            .on
+        let on: Vec<(PhysicalExprRef, PhysicalExprRef)> = on
             .iter()
             .map(|col| {
                 let l = ctx.decode_required_expr(
@@ -1961,38 +2224,32 @@ impl HashJoinExec {
             })
             .collect::<Result<_>>()?;
 
-        let join_type = crate::joins::proto::join_type_from_proto(
-            hashjoin.join_type,
-            "HashJoinExec",
-        )?;
+        let join_type =
+            crate::joins::proto::join_type_from_proto(*join_type, "HashJoinExec")?;
         let null_equality = crate::joins::proto::null_equality_from_proto(
-            hashjoin.null_equality,
+            *null_equality,
             "HashJoinExec",
         )?;
         // `PartitionMode` is specific to `HashJoinExec`, so its conversion stays
         // inline (by-name on purpose: the enums are numbered differently).
-        let partition_mode = match protobuf::PartitionMode::try_from(
-            hashjoin.partition_mode,
-        )
-        .map_err(|_| {
-            internal_datafusion_err!(
-                "HashJoinExec: unknown PartitionMode {}",
-                hashjoin.partition_mode
-            )
-        })? {
+        let partition_mode = match protobuf::PartitionMode::try_from(*partition_mode)
+            .map_err(|_| {
+                internal_datafusion_err!(
+                    "HashJoinExec: unknown PartitionMode {partition_mode}"
+                )
+            })? {
             protobuf::PartitionMode::CollectLeft => PartitionMode::CollectLeft,
             protobuf::PartitionMode::Partitioned => PartitionMode::Partitioned,
             protobuf::PartitionMode::Auto => PartitionMode::Auto,
         };
 
-        let filter = hashjoin
-            .filter
+        let filter = filter
             .as_ref()
             .map(|f| crate::joins::proto::join_filter_from_proto(f, ctx, "HashJoinExec"))
             .transpose()?;
 
         // Preserve the empty-projection sentinel written by `try_to_proto`.
-        let projection = match hashjoin.projection.as_slice() {
+        let projection = match projection.as_slice() {
             [] => None,
             [u32::MAX] => Some(Vec::new()),
             indices => Some(indices.iter().map(|i| *i as usize).collect()),
@@ -2001,22 +2258,8 @@ impl HashJoinExec {
         // Restore the row limit that `limit_pushdown` may have pushed into the
         // join. The field is presence-tracked, so a message written before it
         // existed decodes to `None` (no limit) rather than to `Some(0)`.
-        //
-        // The conversion is checked, not `as usize`: `fetch` is a `u64` on the
-        // wire but a `usize` in the plan, and on a 32-bit target `as usize`
-        // truncates. A fetch of `1 << 32` would become `0` -- not merely a
-        // wrong limit but the worst one, silently turning the query into an
-        // empty result. Report the out-of-range value instead. Please do not
-        // "simplify" this back to `as usize`.
-        let fetch = hashjoin
-            .fetch
-            .map(|f| {
-                usize::try_from(f).map_err(|_| {
-                    plan_datafusion_err!(
-                        "HashJoinExec: fetch value {f} cannot be represented as usize on this target"
-                    )
-                })
-            })
+        let fetch = fetch
+            .map(|fetch| usize_from_wire(fetch, "HashJoinExec", "fetch"))
             .transpose()?;
 
         let mut hash_join = HashJoinExecBuilder::new(left, right, on, join_type)
@@ -2024,11 +2267,11 @@ impl HashJoinExec {
             .with_projection(projection)
             .with_partition_mode(partition_mode)
             .with_null_equality(null_equality)
-            .with_null_aware(hashjoin.null_aware)
+            .with_null_aware(*null_aware)
             .with_fetch(fetch)
             .build()?;
 
-        if let Some(dynamic_filter_proto) = &hashjoin.dynamic_filter {
+        if let Some(dynamic_filter_proto) = dynamic_filter {
             // The dynamic filter is a `DynamicFilterPhysicalExpr` over the probe
             // (right) side; decode against the right schema then downcast.
             let dynamic_filter_expr =
@@ -2040,11 +2283,369 @@ impl HashJoinExec {
                         "HashJoinExec dynamic_filter did not decode to a DynamicFilterPhysicalExpr"
                     )
                 })?;
-            hash_join = hash_join.with_dynamic_filter_expr(df)?;
+            hash_join = hash_join.set_dynamic_filter(df)?;
         }
 
         Ok(Arc::new(hash_join))
     }
+}
+
+/// Field-level tests for the `try_to_proto` / `try_from_proto` hooks.
+///
+/// These cover the three states of `projection` that proto3 cannot express
+/// directly (the `[u32::MAX]` sentinel), `fetch` presence semantics — the field
+/// dropped in #24165, which the central `Debug`-comparing round-trip tests
+/// could not see — and the by-name `PartitionMode` mapping, whose discriminants
+/// deliberately differ between the plan and the wire.
+#[cfg(all(test, feature = "proto"))]
+mod proto_tests {
+    use super::*;
+    use crate::proto::{ExecutionPlanDecodeCtx, ExecutionPlanEncodeCtx};
+    use crate::proto_test_util::{
+        StubPlanDecoder, StubPlanEncoder, UnreachablePlanDecoder, column_node,
+        encoded_child_node, stub_child,
+    };
+    use datafusion_physical_expr::expressions::Column;
+    use datafusion_proto_models::protobuf;
+
+    /// An inner hash join on `a = a` between two stub children.
+    fn join_builder() -> HashJoinExecBuilder {
+        let on: Vec<(PhysicalExprRef, PhysicalExprRef)> =
+            vec![(Arc::new(Column::new("a", 0)), Arc::new(Column::new("a", 0)))];
+        HashJoinExecBuilder::new(stub_child(), stub_child(), on, JoinType::Inner)
+    }
+
+    /// Encode `plan` with a stub encoder, returning the `HashJoinExecNode`.
+    fn encode(
+        plan: &HashJoinExec,
+        encoder: &StubPlanEncoder,
+    ) -> protobuf::HashJoinExecNode {
+        let ctx = ExecutionPlanEncodeCtx::new(encoder);
+        let node = plan
+            .try_to_proto(&ctx)
+            .unwrap()
+            .expect("HashJoinExec should encode to Some(node)");
+        match node.physical_plan_type {
+            Some(protobuf::physical_plan_node::PhysicalPlanType::HashJoin(join)) => *join,
+            other => panic!("expected a HashJoin node, got {other:?}"),
+        }
+    }
+
+    /// Encode a join whose only non-default state is its projection.
+    fn encode_projection(projection: Option<Vec<usize>>) -> Vec<u32> {
+        let plan = join_builder().with_projection(projection).build().unwrap();
+        encode(&plan, &StubPlanEncoder::ok()).projection
+    }
+
+    /// A hand-built `HashJoinExecNode` wrapped in its `PhysicalPlanNode`.
+    fn join_node(node: protobuf::HashJoinExecNode) -> protobuf::PhysicalPlanNode {
+        protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(
+                protobuf::physical_plan_node::PhysicalPlanType::HashJoin(Box::new(node)),
+            ),
+        }
+    }
+
+    /// A decodable `HashJoinExecNode`: two children, one join key, no filter.
+    fn decodable_node() -> protobuf::HashJoinExecNode {
+        protobuf::HashJoinExecNode {
+            left: Some(Box::new(encoded_child_node())),
+            right: Some(Box::new(encoded_child_node())),
+            on: vec![protobuf::JoinOn {
+                left: Some(column_node("a", 0)),
+                right: Some(column_node("a", 0)),
+            }],
+            join_type: protobuf::JoinType::Inner.into(),
+            partition_mode: protobuf::PartitionMode::Partitioned.into(),
+            null_equality: protobuf::NullEquality::NullEqualsNothing.into(),
+            filter: None,
+            projection: vec![],
+            null_aware: false,
+            dynamic_filter: None,
+            fetch: None,
+        }
+    }
+
+    /// Decode `node` with a stub decoder.
+    fn decode(node: protobuf::HashJoinExecNode) -> Arc<dyn ExecutionPlan> {
+        let decoder = StubPlanDecoder::ok();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        HashJoinExec::try_from_proto(&join_node(node), &ctx).unwrap()
+    }
+
+    /// View a decoded plan as the `HashJoinExec` it must be.
+    fn as_join(plan: &Arc<dyn ExecutionPlan>) -> &HashJoinExec {
+        plan.downcast_ref::<HashJoinExec>()
+            .expect("decoded plan should be a HashJoinExec")
+    }
+
+    /// "No projection" is the empty repeated field.
+    #[test]
+    fn try_to_proto_encodes_an_absent_projection_as_empty() {
+        assert_eq!(encode_projection(None), Vec::<u32>::new());
+    }
+
+    /// An *empty* projection changes the output schema, so it cannot share the
+    /// "absent" encoding: it goes out as the `[u32::MAX]` sentinel.
+    #[test]
+    fn try_to_proto_encodes_an_empty_projection_as_the_sentinel() {
+        assert_eq!(encode_projection(Some(vec![])), vec![u32::MAX]);
+    }
+
+    #[test]
+    fn try_to_proto_encodes_a_non_empty_projection_as_is() {
+        assert_eq!(encode_projection(Some(vec![0, 2])), vec![0, 2]);
+    }
+
+    #[test]
+    fn try_from_proto_decodes_an_empty_projection_field_as_absent() {
+        let plan = decode(decodable_node());
+
+        assert!(as_join(&plan).projection.is_none());
+    }
+
+    #[test]
+    fn try_from_proto_decodes_the_sentinel_as_an_empty_projection() {
+        let mut node = decodable_node();
+        node.projection = vec![u32::MAX];
+
+        let plan = decode(node);
+        let projection = as_join(&plan)
+            .projection
+            .as_ref()
+            .expect("the sentinel decodes to Some(empty)");
+        assert!(projection.is_empty());
+    }
+
+    #[test]
+    fn try_from_proto_decodes_a_non_empty_projection_as_is() {
+        let mut node = decodable_node();
+        node.projection = vec![0, 2];
+
+        let plan = decode(node);
+        assert_eq!(
+            as_join(&plan).projection.as_deref(),
+            Some([0, 2].as_slice())
+        );
+    }
+
+    /// The regression guard for #24165: an unlimited join must not encode as
+    /// `Some(0)`, and a limited one must keep its limit.
+    #[test]
+    fn try_to_proto_encodes_fetch_by_presence() {
+        let unlimited = join_builder().build().unwrap();
+        assert_eq!(encode(&unlimited, &StubPlanEncoder::ok()).fetch, None);
+
+        let limited = join_builder().with_fetch(Some(10)).build().unwrap();
+        assert_eq!(encode(&limited, &StubPlanEncoder::ok()).fetch, Some(10));
+
+        let empty = join_builder().with_fetch(Some(0)).build().unwrap();
+        assert_eq!(encode(&empty, &StubPlanEncoder::ok()).fetch, Some(0));
+    }
+
+    /// A message written before `fetch` existed has no value on the wire, and
+    /// must decode to "no limit" rather than to `Some(0)` ("no rows").
+    #[test]
+    fn try_from_proto_decodes_an_absent_fetch_as_no_limit() {
+        assert_eq!(as_join(&decode(decodable_node())).fetch, None);
+    }
+
+    #[test]
+    fn try_from_proto_decodes_a_present_fetch() {
+        let mut node = decodable_node();
+        node.fetch = Some(10);
+        assert_eq!(as_join(&decode(node)).fetch, Some(10));
+
+        let mut node = decodable_node();
+        node.fetch = Some(0);
+        assert_eq!(as_join(&decode(node)).fetch, Some(0));
+    }
+
+    /// `fetch` is a `u64` on the wire and a `usize` in the plan. The conversion
+    /// is checked rather than `as usize`, so a value too large for the target
+    /// is reported instead of truncated — on a 64-bit target every `u64` fits,
+    /// and the largest one must come back intact rather than wrapping.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn try_from_proto_decodes_the_largest_fetch_without_truncating() {
+        let plan = decode({
+            let mut node = decodable_node();
+            node.fetch = Some(u64::MAX);
+            node
+        });
+
+        assert_eq!(as_join(&plan).fetch, Some(usize::MAX));
+    }
+
+    /// The plan-side and wire-side `PartitionMode` discriminants differ, so the
+    /// mapping has to be by name in both directions.
+    #[test]
+    fn partition_mode_round_trips_by_name() {
+        for (mode, wire) in [
+            (
+                PartitionMode::CollectLeft,
+                protobuf::PartitionMode::CollectLeft,
+            ),
+            (
+                PartitionMode::Partitioned,
+                protobuf::PartitionMode::Partitioned,
+            ),
+            (PartitionMode::Auto, protobuf::PartitionMode::Auto),
+        ] {
+            let plan = join_builder().with_partition_mode(mode).build().unwrap();
+            let node = encode(&plan, &StubPlanEncoder::ok());
+            assert_eq!(node.partition_mode, i32::from(wire), "encoding {mode:?}");
+
+            let mut decodable = decodable_node();
+            decodable.partition_mode = node.partition_mode;
+            assert_eq!(*as_join(&decode(decodable)).partition_mode(), mode);
+        }
+    }
+
+    #[test]
+    fn try_from_proto_rejects_an_unknown_partition_mode() {
+        let decoder = StubPlanDecoder::ok();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        let mut node = decodable_node();
+        node.partition_mode = 42;
+
+        let err = HashJoinExec::try_from_proto(&join_node(node), &ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("HashJoinExec: unknown PartitionMode 42")
+        );
+    }
+
+    /// `null_aware` is only legal on a `LeftAnti` join, so the round trip has
+    /// to carry the join type with it.
+    #[test]
+    fn null_aware_round_trips() {
+        let plan = join_builder()
+            .with_type(JoinType::LeftAnti)
+            .with_null_aware(true)
+            .build()
+            .unwrap();
+        assert!(encode(&plan, &StubPlanEncoder::ok()).null_aware);
+
+        let mut node = decodable_node();
+        node.join_type = protobuf::JoinType::Leftanti.into();
+        node.null_aware = true;
+        assert!(as_join(&decode(node)).null_aware);
+    }
+
+    #[test]
+    fn try_to_proto_encodes_both_children_and_both_key_sides() {
+        let encoder = StubPlanEncoder::ok();
+        let node = encode(&join_builder().build().unwrap(), &encoder);
+
+        assert_eq!(encoder.plan_calls(), 2);
+        assert_eq!(encoder.expr_calls(), 2);
+        assert_eq!(node.left, Some(Box::new(encoded_child_node())));
+        assert_eq!(node.right, Some(Box::new(encoded_child_node())));
+    }
+
+    #[test]
+    fn try_to_proto_propagates_child_encode_error() {
+        let plan = join_builder().build().unwrap();
+        let encoder = StubPlanEncoder::failing_on_plan(2);
+        let ctx = ExecutionPlanEncodeCtx::new(&encoder);
+
+        let err = plan.try_to_proto(&ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("stub plan encode failure on call 2")
+        );
+    }
+
+    #[test]
+    fn try_from_proto_rejects_a_different_plan_variant() {
+        let decoder = UnreachablePlanDecoder::new();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+
+        let err = HashJoinExec::try_from_proto(&encoded_child_node(), &ctx).unwrap_err();
+        assert!(err.to_string().contains("not a HashJoinExec"));
+    }
+
+    #[test]
+    fn try_from_proto_rejects_a_missing_child() {
+        let decoder = UnreachablePlanDecoder::new();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        let mut node = decodable_node();
+        node.left = None;
+
+        let err = HashJoinExec::try_from_proto(&join_node(node), &ctx).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("HashJoinExec is missing required field 'left'")
+        );
+    }
+}
+
+/// Output column index of a join, mapped to the equivalent join-key expression
+/// on the other side of the join (in that side's input schema).
+type KeyTransferMap = HashMap<usize, PhysicalExprRef>;
+
+fn is_column_at(expr: &PhysicalExprRef, index: usize) -> bool {
+    expr.downcast_ref::<Column>()
+        .is_some_and(|column| column.index() == index)
+}
+
+/// Marks every parent filter whose columns are all join keys in `key_map` as
+/// supported for `child`, rewritten over the other side's key expressions.
+///
+/// `key_map` only holds columns of the other side, so a filter it rewrites is
+/// one the plain column analysis marked unsupported for `child`. A filter that
+/// references any other column is left as that analysis routed it. A filter
+/// with no columns comes back unchanged and was already accepted, so
+/// rewriting it is a no-op.
+fn transfer_key_filters(
+    parent_filters: &[Arc<dyn PhysicalExpr>],
+    key_map: &KeyTransferMap,
+    child: &mut ChildFilterDescription,
+) -> Result<()> {
+    if key_map.is_empty() {
+        return Ok(());
+    }
+    for (filter, pushed) in parent_filters.iter().zip(child.parent_filters.iter_mut()) {
+        if let Some(transferred) = transfer_filter_across_keys(filter, key_map)? {
+            *pushed = PushedDownPredicate::supported(transferred);
+        }
+    }
+    Ok(())
+}
+
+/// Rewrites `filter` over the other side's join keys, or returns `None` when
+/// it references a column that is not a transferable key.
+///
+/// A [`DynamicFilterPhysicalExpr`] comes out as a view sharing the original's
+/// state with its key columns remapped, so it keeps tracking the build side.
+fn transfer_filter_across_keys(
+    filter: &Arc<dyn PhysicalExpr>,
+    key_map: &KeyTransferMap,
+) -> Result<Option<Arc<dyn PhysicalExpr>>> {
+    let mut all_keys = true;
+    let transformed = Arc::clone(filter).transform_down(|expr| {
+        let Some(column) = expr.downcast_ref::<Column>() else {
+            return Ok(Transformed::no(expr));
+        };
+        match key_map.get(&column.index()) {
+            // The replacement is in the other side's input schema, so its
+            // columns are not output indices of this join: `Jump` over it.
+            // Descending would substitute again whenever the key column's
+            // index is also an output index, e.g. `CAST(k@0 AS Int64)` for
+            // output column 0, and never terminate.
+            Some(other_key) => Ok(Transformed::new(
+                Arc::clone(other_key),
+                true,
+                TreeNodeRecursion::Jump,
+            )),
+            None => {
+                all_keys = false;
+                Ok(Transformed::new(expr, false, TreeNodeRecursion::Stop))
+            }
+        }
+    })?;
+    Ok(all_keys.then_some(transformed.data))
 }
 
 /// Determines which sides of a join are "preserved" for filter pushdown.
@@ -2058,7 +2659,11 @@ fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
         JoinType::Left => (true, false),
         JoinType::Right => (false, true),
         JoinType::Full => (false, false),
-        // Callers restrict the non-output side of semi joins to join-key columns.
+        // A semi join emits only matched rows, so pruning either input by a
+        // filter its output satisfies is exact. The non-output side has no
+        // output columns, so the column routing sends it nothing but
+        // column-free filters; key filters reach it through the transfer in
+        // `HashJoinExec::gather_filters_for_pushdown`.
         JoinType::LeftSemi | JoinType::RightSemi => (true, true),
         JoinType::LeftAnti | JoinType::LeftMark => (true, false),
         JoinType::RightAnti | JoinType::RightMark => (false, true),
@@ -2185,7 +2790,12 @@ impl BuildSideState {
     }
 }
 
-fn should_collect_min_max_for_perfect_hash(
+/// Returns whether the build side could be joined with an [`ArrayMap`]
+/// (perfect hash join): a single join key of a supported integer type.
+///
+/// Only a candidate: the final decision also depends on the observed key
+/// range and density, see [`array_map_key_range`].
+fn is_perfect_hash_join_candidate(
     on_left: &[PhysicalExprRef],
     schema: &SchemaRef,
 ) -> Result<bool> {
@@ -2196,6 +2806,112 @@ fn should_collect_min_max_for_perfect_hash(
     let expr = &on_left[0];
     let data_type = expr.data_type(schema)?;
     Ok(ArrayMap::is_supported_type(&data_type))
+}
+
+fn new_join_hashmap(
+    num_rows: usize,
+    reservation: &mut MemoryReservation,
+    metrics: &BuildProbeJoinMetrics,
+) -> Result<Box<dyn JoinHashMapType>> {
+    let fixed_size_u32 = size_of::<JoinHashMapU32>();
+    let fixed_size_u64 = size_of::<JoinHashMapU64>();
+
+    if num_rows > u32::MAX as usize {
+        let estimated_hashtable_size =
+            estimate_memory_size::<(u64, u64)>(num_rows, fixed_size_u64)?
+                // Each build row also owns an index in the duplicate-key chain.
+                .checked_add(num_rows * size_of::<u64>())
+                .ok_or_else(|| {
+                    datafusion_common::exec_datafusion_err!(
+                        "Hash join table size overflow"
+                    )
+                })?;
+        reservation.try_grow(estimated_hashtable_size)?;
+        metrics.build_mem_used.add(estimated_hashtable_size);
+        Ok(Box::new(JoinHashMapU64::with_capacity(num_rows)))
+    } else {
+        let estimated_hashtable_size =
+            estimate_memory_size::<(u32, u64)>(num_rows, fixed_size_u32)?
+                // Each build row also owns an index in the duplicate-key chain.
+                .checked_add(num_rows * size_of::<u32>())
+                .ok_or_else(|| {
+                    datafusion_common::exec_datafusion_err!(
+                        "Hash join table size overflow"
+                    )
+                })?;
+        reservation.try_grow(estimated_hashtable_size)?;
+        metrics.build_mem_used.add(estimated_hashtable_size);
+        Ok(Box::new(JoinHashMapU32::with_capacity(num_rows)))
+    }
+}
+
+/// Estimates the memory newly allocated for `array`'s share of a concatenated
+/// array.
+///
+/// Concatenating view arrays copies only the views and keeps sharing the data
+/// buffers of the inputs, which are already accounted for.
+fn estimate_concat_allocation(array: &dyn Array) -> Result<usize> {
+    match array.data_type() {
+        DataType::Utf8View | DataType::BinaryView => {
+            let nulls = array
+                .nulls()
+                .map(|_| bit_util::ceil(array.len(), 8))
+                .unwrap_or_default();
+            Ok(array.len() * size_of::<u128>() + nulls)
+        }
+        _ => Ok(array.to_data().get_slice_memory_size()?),
+    }
+}
+
+/// Concatenates the build side `batches` into a single batch, in reverse order
+/// if `reverse` is set, keeping `reservation` ahead of the actual memory usage.
+///
+/// `inputs_reserved` is the memory `reservation` already holds for `batches`.
+/// The copy is reserved before it is made, and once `batches` are dropped the
+/// reservation is trimmed to the memory retained by the returned batch.
+fn concat_build_batches(
+    schema: &SchemaRef,
+    batches: Vec<RecordBatch>,
+    reverse: bool,
+    inputs_reserved: usize,
+    reservation: &mut MemoryReservation,
+    metrics: &BuildProbeJoinMetrics,
+) -> Result<RecordBatch> {
+    // Concatenating a single batch is zero-copy
+    let copy_size = if batches.len() > 1 {
+        let mut copy_size = 0;
+        for batch in &batches {
+            for array in batch.columns() {
+                copy_size += estimate_concat_allocation(array.as_ref())?;
+            }
+        }
+        copy_size
+    } else {
+        0
+    };
+    reservation.try_grow(copy_size)?;
+    metrics.build_mem_used.add(copy_size);
+
+    let batch = if reverse {
+        concat_batches(schema, batches.iter().rev())?
+    } else {
+        concat_batches(schema, batches.iter())?
+    };
+    drop(batches);
+
+    // The inputs are gone: only hold on to what the concatenated batch retains,
+    // which includes any buffers it still shares with the inputs.
+    let held = inputs_reserved + copy_size;
+    let retained = get_record_batch_memory_size(&batch);
+    if retained > held {
+        reservation.try_grow(retained - held)?;
+        metrics.build_mem_used.add(retained - held);
+    } else {
+        reservation.shrink(held - retained);
+        metrics.build_mem_used.sub(held - retained);
+    }
+
+    Ok(batch)
 }
 
 /// Collects all batches from the left (build) side stream and creates a hash map for joining.
@@ -2215,6 +2931,15 @@ fn should_collect_min_max_for_perfect_hash(
 /// * `with_visited_indices_bitmap` - Whether to track visited indices (for outer joins)
 /// * `probe_threads_count` - Number of threads that will probe this hash table
 /// * `should_compute_dynamic_filters` - Whether to compute min/max bounds for dynamic filtering
+/// * `with_null_aware_mark_state` - Whether to build the per-build-row null-indices bitmap
+///   and correlation-scope maps used by correlated null-aware `LeftMark` joins
+///
+/// # Memory Accounting
+/// Build batches are added to `reservation` as they arrive. They are then copied
+/// into a single batch, see [`concat_build_batches`]: the copy is reserved
+/// before it is made, and the reservation is trimmed to what the single batch
+/// retains once the input batches are dropped. Join key arrays that do not
+/// share the buffers of that batch are reserved as well.
 ///
 /// # Dynamic Filter Coordination
 /// When `should_compute_dynamic_filters` is true, this function computes the min/max bounds
@@ -2238,19 +2963,23 @@ async fn collect_left_input(
     should_compute_dynamic_filters: bool,
     config: Arc<ConfigOptions>,
     null_equality: NullEquality,
+    null_aware: Option<NullAwareMode>,
     array_map_created_count: Count,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
 
-    let should_collect_min_max_for_phj =
-        should_collect_min_max_for_perfect_hash(&on_left, &schema)?;
+    // The extra scope maps + null bitmap are only built for correlated
+    // null-aware joins (see `NullAwareMode`).
+    let with_null_aware_row_state = null_aware.is_some_and(NullAwareMode::is_correlated);
+
+    let is_phj_candidate = is_perfect_hash_join_candidate(&on_left, &schema)?;
 
     let initial = BuildSideState::try_new(
         metrics,
         reservation,
         on_left.clone(),
         &schema,
-        should_compute_dynamic_filters || should_collect_min_max_for_phj,
+        should_compute_dynamic_filters || is_phj_candidate,
     )?;
 
     let state = left_stream
@@ -2285,8 +3014,9 @@ async fn collect_left_input(
         metrics,
         mut reservation,
         bounds_accumulators,
-        memory_counter: _,
+        memory_counter,
     } = state;
+    let inputs_reserved = memory_counter.memory_usage();
 
     // Compute bounds
     let mut bounds = match bounds_accumulators {
@@ -2300,9 +3030,9 @@ async fn collect_left_input(
         _ => None,
     };
 
-    let (join_hash_map, batch, left_values) =
-        if let Some((array_map, batch, left_value)) = try_create_array_map(
-            &bounds,
+    let (join_hash_map, batch, left_values) = if let Some((min_val, max_val)) =
+        array_map_key_range(
+            bounds.as_ref(),
             &schema,
             &batches,
             &on_left,
@@ -2311,75 +3041,172 @@ async fn collect_left_input(
             config.execution.perfect_hash_join_min_key_density,
             null_equality,
         )? {
-            array_map_created_count.add(1);
-            metrics.build_mem_used.add(array_map.size());
+        let batch = concat_build_batches(
+            &schema,
+            batches,
+            false,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )?;
+        let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
+        let array_map = ArrayMap::try_new(&left_values[0], min_val, max_val)?;
 
-            (Map::ArrayMap(array_map), batch, left_value)
-        } else {
-            // Estimation of memory size, required for hashtable, prior to allocation.
-            // Final result can be verified using `RawTable.allocation_info()`
-            let fixed_size_u32 = size_of::<JoinHashMapU32>();
-            let fixed_size_u64 = size_of::<JoinHashMapU64>();
+        array_map_created_count.add(1);
+        metrics.build_mem_used.add(array_map.size());
 
-            // Use `u32` indices for the JoinHashMap when num_rows ≤ u32::MAX, otherwise use the
-            // `u64` indice variant
-            // Arc is used instead of Box to allow sharing with SharedBuildAccumulator for hash map pushdown
-            let mut hashmap: Box<dyn JoinHashMapType> = if num_rows > u32::MAX as usize {
-                let estimated_hashtable_size =
-                    estimate_memory_size::<(u64, u64)>(num_rows, fixed_size_u64)?;
-                reservation.try_grow(estimated_hashtable_size)?;
-                metrics.build_mem_used.add(estimated_hashtable_size);
-                Box::new(JoinHashMapU64::with_capacity(num_rows))
-            } else {
-                let estimated_hashtable_size =
-                    estimate_memory_size::<(u32, u64)>(num_rows, fixed_size_u32)?;
-                reservation.try_grow(estimated_hashtable_size)?;
-                metrics.build_mem_used.add(estimated_hashtable_size);
-                Box::new(JoinHashMapU32::with_capacity(num_rows))
-            };
+        (Map::ArrayMap(array_map), batch, left_values)
+    } else {
+        // Estimation of memory size, required for hashtable, prior to allocation.
+        // Final result can be verified using `RawTable.allocation_info()`
+        // Use `u32` indices for the JoinHashMap when num_rows ≤ u32::MAX, otherwise use the
+        // `u64` indice variant
+        // Arc is used instead of Box to allow sharing with SharedBuildAccumulator for hash map pushdown
+        let mut hashmap = new_join_hashmap(num_rows, &mut reservation, &metrics)?;
 
-            let mut hashes_buffer = Vec::new();
-            let mut offset = 0;
+        let mut hashes_buffer = Vec::new();
+        let mut offset = 0;
 
-            let batches_iter = batches.iter().rev();
+        // Updating hashmap starting from the last batch
+        for batch in batches.iter().rev() {
+            hashes_buffer.clear();
+            hashes_buffer.resize(batch.num_rows(), 0);
+            update_hash(
+                &on_left,
+                batch,
+                &mut *hashmap,
+                offset,
+                &random_state,
+                &mut hashes_buffer,
+                0,
+                true,
+                null_equality,
+            )?;
+            offset += batch.num_rows();
+        }
 
-            // Updating hashmap starting from the last batch
-            for batch in batches_iter.clone() {
-                hashes_buffer.clear();
-                hashes_buffer.resize(batch.num_rows(), 0);
-                update_hash(
-                    &on_left,
-                    batch,
-                    &mut *hashmap,
-                    offset,
-                    &random_state,
-                    &mut hashes_buffer,
-                    0,
-                    true,
-                    null_equality,
-                )?;
-                offset += batch.num_rows();
-            }
+        // Merge all batches into a single batch, so we can directly index into the arrays
+        let batch = concat_build_batches(
+            &schema,
+            batches,
+            true,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )?;
 
-            // Merge all batches into a single batch, so we can directly index into the arrays
-            let batch = concat_batches(&schema, batches_iter.clone())?;
+        let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
 
-            let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
+        (Map::HashMap(hashmap), batch, left_values)
+    };
 
-            (Map::HashMap(hashmap), batch, left_values)
-        };
+    // Join keys that are plain columns share the buffers of `batch`, any other
+    // expression evaluates to new arrays that are kept for the whole join.
+    let mut key_counter = RecordBatchMemoryCounter::new();
+    key_counter.count_batch(&batch);
+    let keys_size = left_values
+        .iter()
+        .map(|values| key_counter.count_array(values.as_ref()))
+        .sum::<usize>();
+    reservation.try_grow(keys_size)?;
+    metrics.build_mem_used.add(keys_size);
 
-    // Reserve additional memory for visited indices bitmap and create shared builder
-    let visited_indices_bitmap = if with_visited_indices_bitmap {
+    let allocate_bitmap = || -> Result<BooleanBufferBuilder> {
         let bitmap_size = bit_util::ceil(batch.num_rows(), 8);
         reservation.try_grow(bitmap_size)?;
         metrics.build_mem_used.add(bitmap_size);
 
-        let mut bitmap_buffer = BooleanBufferBuilder::new(batch.num_rows());
-        bitmap_buffer.append_n(num_rows, false);
-        bitmap_buffer
+        let mut bitmap = BooleanBufferBuilder::new(batch.num_rows());
+        bitmap.append_n(num_rows, false);
+        Ok(bitmap)
+    };
+
+    // Reserve additional memory for visited indices bitmap and create shared builder
+    let visited_indices_bitmap = if with_visited_indices_bitmap {
+        allocate_bitmap()?
     } else {
         BooleanBufferBuilder::new(0)
+    };
+
+    let null_indices_bitmap = if with_null_aware_row_state {
+        allocate_bitmap()?
+    } else {
+        BooleanBufferBuilder::new(0)
+    };
+
+    let (null_aware_scope_map, null_value_build_rows) = if with_null_aware_row_state {
+        // Null-aware convention: `on_left[0]` is the value key and
+        // `on_left[1..]` the (possibly empty) correlation scope keys.
+        let scope_keys = &on_left[1..];
+        let scope_map = if scope_keys.is_empty() {
+            None
+        } else {
+            // Scope-only NULL marking uses a HashMap (the primary join map may
+            // use ArrayMap for full-key matches, but scope keys have arbitrary
+            // shape).
+            let mut scope_map = new_join_hashmap(num_rows, &mut reservation, &metrics)?;
+
+            let mut hashes_buffer = vec![0; batch.num_rows()];
+            update_hash(
+                scope_keys,
+                &batch,
+                &mut *scope_map,
+                0,
+                &random_state,
+                &mut hashes_buffer,
+                0,
+                true,
+                NullEquality::NullEqualsNothing,
+            )?;
+            Some(scope_map)
+        };
+
+        // Collect the NULL-valued build rows (see `NullValueBuildRows`).
+        let value_key = &left_values[0];
+        let null_value_build_rows = if value_key.logical_null_count() > 0 {
+            let null_mask = arrow::compute::is_null(value_key.as_ref())?;
+            let build_indices = UInt64Array::from_iter_values(
+                null_mask.values().set_indices().map(|i| i as u64),
+            );
+            let scope_values = left_values[1..]
+                .iter()
+                .map(|values| Ok(arrow::compute::filter(values.as_ref(), &null_mask)?))
+                .collect::<Result<Vec<_>>>()?;
+
+            // `scope_values` and `build_indices` are retained for the lifetime
+            // of the join, so charge them to the reservation like the maps and
+            // bitmaps above.
+            let retained_size = build_indices.get_array_memory_size()
+                + scope_values
+                    .iter()
+                    .map(|values| values.get_array_memory_size())
+                    .sum::<usize>();
+            reservation.try_grow(retained_size)?;
+            metrics.build_mem_used.add(retained_size);
+
+            let scope_map = if scope_values.is_empty() {
+                None
+            } else {
+                let null_rows = build_indices.len();
+                let mut map = new_join_hashmap(null_rows, &mut reservation, &metrics)?;
+                let mut hashes_buffer = vec![0; null_rows];
+                create_hashes(&scope_values, &random_state, &mut hashes_buffer)?;
+                map.update_from_iter(Box::new(hashes_buffer.iter().enumerate().rev()), 0);
+                Some(map)
+            };
+
+            Some(NullValueBuildRows {
+                scope_map,
+                scope_values,
+                build_indices,
+            })
+        } else {
+            None
+        };
+
+        (scope_map, null_value_build_rows)
+    } else {
+        (None, None)
     };
 
     let map = Arc::new(join_hash_map);
@@ -2410,21 +3237,27 @@ async fn collect_left_input(
         }
     };
 
-    if should_collect_min_max_for_phj && !should_compute_dynamic_filters {
+    if is_phj_candidate && !should_compute_dynamic_filters {
         bounds = None;
     }
 
+    let build_has_null = null_aware == Some(NullAwareMode::RightAnti)
+        && !left_values.is_empty()
+        && left_values[0].logical_null_count() > 0;
+
     let data = JoinLeftData {
         map,
+        null_aware_scope_map,
+        null_value_build_rows,
         batch,
         values: left_values,
         visited_indices_bitmap: Mutex::new(visited_indices_bitmap),
-        probe_threads_counter: AtomicUsize::new(probe_threads_count),
+        null_indices_bitmap: Mutex::new(null_indices_bitmap),
+        probe_completion: ProbeCompletion::new(probe_threads_count),
         _reservation: reservation,
         bounds,
         membership,
-        probe_side_non_empty: AtomicBool::new(false),
-        probe_side_has_null: AtomicBool::new(false),
+        build_side_has_null: build_has_null,
     };
 
     Ok(data)
@@ -2452,6 +3285,25 @@ mod tests {
                 0
             )
         }
+    }
+
+    #[track_caller]
+    fn assert_ratio_metric(
+        metrics: &MetricsSet,
+        metric_name: &str,
+        expected_part: usize,
+        expected_total: usize,
+    ) {
+        let Some(MetricValue::Ratio { ratio_metrics, .. }) =
+            metrics.sum_by_name(metric_name)
+        else {
+            panic!("should have {metric_name} metrics")
+        };
+        assert_eq!(
+            (ratio_metrics.part(), ratio_metrics.total()),
+            (expected_part, expected_total),
+            "{metric_name} (part, total) mismatch",
+        );
     }
 
     fn build_schema_and_on() -> Result<(SchemaRef, SchemaRef, JoinOn)> {
@@ -2482,10 +3334,12 @@ mod tests {
     };
 
     use arrow::array::{
-        Date32Array, Int32Array, Int64Array, StructArray, UInt32Array, UInt64Array,
+        Array, ArrayRef, AsArray, BinaryViewArray, Date32Array, DictionaryArray,
+        Int32Array, Int64Array, StringArray, StringViewArray, StructArray, UInt32Array,
+        UInt64Array,
     };
     use arrow::buffer::NullBuffer;
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, Int32Type};
     use datafusion_common::hash_utils::create_hashes;
     use datafusion_common::test_util::{batches_to_sort_string, batches_to_string};
     use datafusion_common::{
@@ -2493,16 +3347,53 @@ mod tests {
         exec_err, internal_err,
     };
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::memory_pool::{
+        GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
+    };
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{
         EquivalenceProperties, PhysicalSortExpr, RangePartitioning, SplitPoint,
     };
+    use datafusion_physical_expr_common::metrics::MetricValue;
+    use futures::StreamExt;
     use hashbrown::HashTable;
     use insta::{allow_duplicates, assert_snapshot};
     use rstest::*;
     use rstest_reuse::*;
+
+    #[test]
+    fn hash_map_admits_row_indices_before_allocation() -> Result<()> {
+        use datafusion_execution::memory_pool::{GreedyMemoryPool, MemoryPool};
+
+        let rows = 1024;
+        let buckets =
+            estimate_memory_size::<(u32, u64)>(rows, size_of::<JoinHashMapU32>())?;
+        let bytes = buckets + rows * size_of::<u32>();
+        for (limit, succeeds) in [(bytes - 1, false), (bytes, true)] {
+            let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(limit));
+            let mut reservation = MemoryConsumer::new("row indices").register(&pool);
+            let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+            let result = new_join_hashmap(rows, &mut reservation, &metrics);
+            if succeeds {
+                let map = result?;
+                assert_eq!(reservation.size(), bytes);
+                assert_eq!(metrics.build_mem_used.value(), bytes);
+                drop(map);
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(datafusion_common::DataFusionError::ResourcesExhausted(_))
+                ));
+                assert_eq!(reservation.size(), 0);
+                assert_eq!(metrics.build_mem_used.value(), 0);
+            }
+            drop(reservation);
+            assert_eq!(pool.reserved(), 0);
+        }
+        Ok(())
+    }
 
     #[derive(Debug)]
     struct PartitionedTestExec {
@@ -2593,25 +3484,16 @@ mod tests {
     ) -> Arc<TaskContext> {
         let mut session_config = SessionConfig::default().with_batch_size(batch_size);
 
-        if use_perfect_hash_join_as_possible {
-            session_config
-                .options_mut()
-                .execution
-                .perfect_hash_join_small_build_threshold = 819200;
-            session_config
-                .options_mut()
-                .execution
-                .perfect_hash_join_min_key_density = 0.0;
-        } else {
-            session_config
-                .options_mut()
-                .execution
-                .perfect_hash_join_small_build_threshold = 0;
-            session_config
-                .options_mut()
-                .execution
-                .perfect_hash_join_min_key_density = f64::INFINITY;
-        }
+        // Either always take the perfect hash join path, or never take it.
+        let (small_build_threshold, min_key_density) =
+            if use_perfect_hash_join_as_possible {
+                (819200, 0.0)
+            } else {
+                (0, f64::INFINITY)
+            };
+        let execution = &mut session_config.options_mut().execution;
+        execution.perfect_hash_join_small_build_threshold = small_build_threshold;
+        execution.perfect_hash_join_min_key_density = min_key_density;
         Arc::new(TaskContext::default().with_session_config(session_config))
     }
 
@@ -2640,6 +3522,36 @@ mod tests {
                 Arc::new(Int32Array::from(a.1.clone())),
                 Arc::new(Int32Array::from(b.1.clone())),
             ],
+        )
+        .unwrap();
+        TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
+    }
+
+    /// Build a two-column table whose join key is a dictionary.
+    ///
+    /// `dict_values` are the dictionary entries; `keys` are all physically
+    /// valid indices into that dictionary. When `dict_values` contains NULL,
+    /// the resulting array can have `null_count() == 0` but
+    /// `logical_null_count() > 0`.
+    fn build_table_dict_key(
+        key_name: &str,
+        dict_values: Vec<Option<i32>>,
+        keys: Vec<i32>,
+        dummy_name: &str,
+        dummy: Vec<Option<i32>>,
+    ) -> Arc<dyn ExecutionPlan> {
+        let dict_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int32));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(key_name, dict_type, true),
+            Field::new(dummy_name, DataType::Int32, true),
+        ]));
+        let values = Int32Array::from(dict_values);
+        let key_array = Int32Array::from(keys);
+        let dict: ArrayRef = Arc::new(DictionaryArray::new(key_array, Arc::new(values)));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![dict, Arc::new(Int32Array::from(dummy))],
         )
         .unwrap();
         TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
@@ -3483,6 +4395,128 @@ mod tests {
         TestMemoryExec::try_new_exec(&[vec![batch.clone(), batch]], schema, None).unwrap()
     }
 
+    /// `probe_hit_rate` and `avg_fanout` must count each probe row once, even
+    /// when a probe batch is processed in several chunks. Every probe row matches
+    /// all 3 build rows, so any `batch_size` below 9 splits the probe batch into
+    /// chunks, and some splits cut a single row's matches across chunks.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn join_probe_metrics_count_each_probe_row_once(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![2, 2, 2]),
+            ("c1", &vec![3, 4, 5]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![2, 2, 2]),
+            ("c2", &vec![30, 40, 50]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        let (columns, batches, metrics) = join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 2  | 3  | 10 | 2  | 30 |
+            | 2  | 2  | 4  | 10 | 2  | 30 |
+            | 3  | 2  | 5  | 10 | 2  | 30 |
+            | 1  | 2  | 3  | 20 | 2  | 40 |
+            | 2  | 2  | 4  | 20 | 2  | 40 |
+            | 3  | 2  | 5  | 20 | 2  | 40 |
+            | 1  | 2  | 3  | 30 | 2  | 50 |
+            | 2  | 2  | 4  | 30 | 2  | 50 |
+            | 3  | 2  | 5  | 30 | 2  | 50 |
+            +----+----+----+----+----+----+
+            ");
+        }
+
+        assert_join_metrics!(metrics, 9);
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
+        assert_ratio_metric(&metrics, "probe_hit_rate", 3, 3);
+        assert_ratio_metric(&metrics, "avg_fanout", 9, 3);
+
+        Ok(())
+    }
+
+    /// Complements `join_probe_metrics_count_each_probe_row_once`: with unique
+    /// build keys each probe row has at most one match, so chunks always split
+    /// between probe rows. A probe row that starts a new chunk must still be
+    /// counted, even though the lookup offset already points at it.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn join_probe_metrics_count_probe_row_starting_new_chunk(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![4, 5, 6]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 25, 30]),
+            ("b1", &vec![4, 4, 4, 40]),
+            ("c2", &vec![70, 80, 85, 90]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        )];
+
+        let (columns, batches, metrics) = join_collect(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on.clone(),
+            &JoinType::Inner,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
+        allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @"
+            +----+----+----+----+----+----+
+            | a1 | b1 | c1 | a2 | b1 | c2 |
+            +----+----+----+----+----+----+
+            | 1  | 4  | 7  | 10 | 4  | 70 |
+            | 1  | 4  | 7  | 20 | 4  | 80 |
+            | 1  | 4  | 7  | 25 | 4  | 85 |
+            +----+----+----+----+----+----+
+            ");
+        }
+
+        assert_join_metrics!(metrics, 3);
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
+        assert_ratio_metric(&metrics, "probe_hit_rate", 3, 4);
+        assert_ratio_metric(&metrics, "avg_fanout", 3, 3);
+
+        Ok(())
+    }
+
     #[apply(hash_join_exec_configs)]
     #[tokio::test]
     async fn join_left_multi_batch(
@@ -3543,6 +4577,164 @@ mod tests {
 
         assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
         return Ok(());
+    }
+
+    /// Build side keyed `0..num_build_rows`, probe side holding only
+    /// `matched_keys`, joined on the key column.
+    fn final_build_rows_inputs(
+        num_build_rows: i32,
+        matched_keys: &[i32],
+    ) -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>, JoinOn) {
+        let build_keys: Vec<i32> = (0..num_build_rows).collect();
+        let probe_keys = matched_keys.to_vec();
+        let left = build_table(
+            ("a1", &build_keys),
+            ("b1", &build_keys),
+            ("c1", &build_keys),
+        );
+        let right = build_table(
+            ("a2", &probe_keys),
+            ("b2", &probe_keys),
+            ("c2", &probe_keys),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
+        )];
+        (left, right, on)
+    }
+
+    /// Returns the sorted `(a1, matched)` pairs of the joined output, where
+    /// `matched` is read from the mark column for `LeftMark`, from the
+    /// presence of probe-side data for `Left`/`Full`, and is `None` for
+    /// existence joins whose output carries no match information.
+    fn build_rows_with_match_flag(batches: &[RecordBatch]) -> Vec<(i32, Option<bool>)> {
+        let mut rows = vec![];
+        for batch in batches {
+            let a1 = batch
+                .column_by_name("a1")
+                .unwrap()
+                .as_primitive::<Int32Type>();
+            let matched: Vec<Option<bool>> = match batch.column_by_name("mark") {
+                Some(mark) => mark.as_boolean().iter().collect(),
+                None => match batch.column_by_name("a2") {
+                    Some(a2) => (0..a2.len()).map(|i| Some(a2.is_valid(i))).collect(),
+                    None => vec![None; batch.num_rows()],
+                },
+            };
+            rows.extend(a1.values().iter().copied().zip(matched));
+        }
+        rows.sort_unstable();
+        rows
+    }
+
+    /// The `(a1, matched)` pairs a join of [`final_build_rows_inputs`] must
+    /// produce, in the format of [`build_rows_with_match_flag`].
+    fn expected_final_build_rows(
+        join_type: JoinType,
+        num_build_rows: i32,
+        matched_keys: &[i32],
+    ) -> Vec<(i32, Option<bool>)> {
+        (0..num_build_rows)
+            .filter_map(|key| {
+                let matched = matched_keys.contains(&key);
+                match join_type {
+                    JoinType::LeftSemi => matched.then_some((key, None)),
+                    JoinType::LeftAnti => (!matched).then_some((key, None)),
+                    _ => Some((key, Some(matched))),
+                }
+            })
+            .collect()
+    }
+
+    /// The final build-side rows (unmatched rows, or matched rows for
+    /// `LeftSemi`) must be emitted in chunks bounded by `batch_size` instead
+    /// of one batch over the whole build side.
+    #[rstest]
+    #[tokio::test]
+    async fn join_emits_final_build_rows_in_batch_size_chunks(
+        #[values(
+            JoinType::Left,
+            JoinType::Full,
+            JoinType::LeftAnti,
+            JoinType::LeftSemi,
+            JoinType::LeftMark
+        )]
+        join_type: JoinType,
+        #[values(1, 7, 8192)] batch_size: usize,
+        #[values(true, false)] use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
+        let num_build_rows = 100;
+        let matched_keys = [3, 50, 97];
+        let (left, right, on) = final_build_rows_inputs(num_build_rows, &matched_keys);
+
+        let (_, batches, metrics) = join_collect(
+            left,
+            right,
+            on,
+            &join_type,
+            NullEquality::NullEqualsNothing,
+            task_ctx,
+        )
+        .await?;
+        assert_phj_used(&metrics, use_perfect_hash_join_as_possible);
+
+        let expected =
+            expected_final_build_rows(join_type, num_build_rows, &matched_keys);
+        assert_eq!(build_rows_with_match_flag(&batches), expected);
+
+        for batch in &batches {
+            assert!(
+                batch.num_rows() <= batch_size,
+                "{join_type} join emitted a batch of {} rows with batch_size {batch_size}",
+                batch.num_rows()
+            );
+        }
+        assert!(
+            batches.len() >= expected.len().div_ceil(batch_size),
+            "{join_type} join emitted {} batches for {} rows with batch_size {batch_size}",
+            batches.len(),
+            expected.len()
+        );
+
+        Ok(())
+    }
+
+    /// A `fetch` limit that is reached in the middle of the final build-side
+    /// rows stops the emission at exactly `fetch` rows.
+    #[rstest]
+    #[tokio::test]
+    async fn join_fetch_stops_final_build_rows_mid_chunk(
+        #[values(JoinType::Left, JoinType::LeftAnti, JoinType::LeftMark)]
+        join_type: JoinType,
+    ) -> Result<()> {
+        let batch_size = 7;
+        let fetch = 20;
+        let num_build_rows = 100;
+        let matched_keys = [3, 50, 97];
+        let task_ctx = prepare_task_ctx(batch_size, false);
+        let (left, right, on) = final_build_rows_inputs(num_build_rows, &matched_keys);
+
+        let join = HashJoinExecBuilder::new(left, right, on, join_type)
+            .with_partition_mode(PartitionMode::CollectLeft)
+            .with_fetch(Some(fetch))
+            .build()?;
+        let batches = common::collect(join.execute(0, task_ctx)?).await?;
+
+        let num_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(num_rows, fetch);
+        for batch in &batches {
+            assert!(batch.num_rows() <= batch_size);
+        }
+        // Every emitted row is a genuine join result row.
+        let expected =
+            expected_final_build_rows(join_type, num_build_rows, &matched_keys);
+        for row in build_rows_with_match_flag(&batches) {
+            assert!(expected.contains(&row), "unexpected output row {row:?}");
+        }
+
+        Ok(())
     }
 
     #[apply(hash_join_exec_configs)]
@@ -3990,6 +5182,31 @@ mod tests {
             ("b2", &vec![8, 10, 6, 2, 10, 4]),
             ("c2", &vec![20, 40, 60, 80, 100, 120]),
         )
+    }
+
+    #[tokio::test]
+    async fn test_semi_left_join_reports_final_emission() -> Result<()> {
+        let (left_schema, right_schema, on) = build_schema_and_on()?;
+
+        let left = TestMemoryExec::try_new_exec(&[vec![]], left_schema, None)?;
+
+        let right = TestMemoryExec::try_new_exec(&[vec![]], right_schema, None)?;
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftSemi,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+
+        assert_eq!(join.properties().emission_type, EmissionType::Final);
+
+        Ok(())
     }
 
     #[apply(hash_join_exec_configs)]
@@ -6099,6 +7316,344 @@ mod tests {
         Ok(())
     }
 
+    /// Build side batches of `num_batches` x `num_rows` rows with distinct
+    /// buffers: an Int32 key, a Utf8, a Utf8View and a BinaryView payload.
+    fn concat_test_batches(num_batches: usize, num_rows: usize) -> Vec<RecordBatch> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int32, false),
+            Field::new("s", DataType::Utf8, true),
+            Field::new("v", DataType::Utf8View, true),
+            Field::new("bv", DataType::BinaryView, true),
+        ]));
+        (0..num_batches)
+            .map(|b| {
+                let start = (b * num_rows) as i32;
+                let keys = Int32Array::from_iter_values(start..start + num_rows as i32);
+                let strings = (0..num_rows)
+                    .map(|i| (i % 7 != 0).then(|| format!("string-{b}-{i}")))
+                    .collect::<StringArray>();
+                let views = (0..num_rows)
+                    .map(|i| {
+                        (i % 5 != 0).then(|| format!("a long string view value {b}-{i}"))
+                    })
+                    .collect::<StringViewArray>();
+                let binary_views = (0..num_rows)
+                    .map(|i| {
+                        (i % 3 != 0).then(|| format!("a long binary view value {b}-{i}"))
+                    })
+                    .collect::<BinaryViewArray>();
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(keys),
+                        Arc::new(strings),
+                        Arc::new(views),
+                        Arc::new(binary_views),
+                    ],
+                )
+                .unwrap()
+            })
+            .collect()
+    }
+
+    /// Reserves `batches` the way `collect_left_input` does.
+    fn reserve_inputs(
+        batches: &[RecordBatch],
+        pool: &Arc<dyn MemoryPool>,
+    ) -> Result<(MemoryReservation, usize)> {
+        let reservation = MemoryConsumer::new("HashJoinInput").register(pool);
+        let mut counter = RecordBatchMemoryCounter::new();
+        for batch in batches {
+            reservation.try_grow(counter.count_batch(batch))?;
+        }
+        Ok((reservation, counter.memory_usage()))
+    }
+
+    #[test]
+    fn concat_build_batches_matches_concat_batches() -> Result<()> {
+        let batches = concat_test_batches(4, 100);
+        let schema = batches[0].schema();
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+
+        for reverse in [false, true] {
+            let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+            let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+            let expected = if reverse {
+                concat_batches(&schema, batches.iter().rev())?
+            } else {
+                concat_batches(&schema, batches.iter())?
+            };
+            let batch = concat_build_batches(
+                &schema,
+                batches.clone(),
+                reverse,
+                inputs_reserved,
+                &mut reservation,
+                &metrics,
+            )?;
+            assert_eq!(batch, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn concat_build_batches_reserves_copy() -> Result<()> {
+        let batches = concat_test_batches(4, 1000);
+        let schema = batches[0].schema();
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+        let inputs: usize = batches.iter().map(get_record_batch_memory_size).sum();
+
+        // The inputs fit, but not together with their concatenated copy
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(inputs * 5 / 4));
+        let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+        assert_eq!(inputs_reserved, inputs);
+        let err = concat_build_batches(
+            &schema,
+            batches.clone(),
+            false,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )
+        .unwrap_err();
+        assert_contains!(err.to_string(), "Resources exhausted");
+        drop(reservation);
+
+        // With room for the copy, the reservation ends up at what is retained
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(inputs * 2));
+        let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+        let batch = concat_build_batches(
+            &schema,
+            batches,
+            false,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )?;
+        assert_eq!(reservation.size(), get_record_batch_memory_size(&batch));
+        assert_eq!(pool.reserved(), reservation.size());
+        Ok(())
+    }
+
+    /// Concatenating a single batch is zero-copy, so nothing more is reserved.
+    #[test]
+    fn concat_build_batches_single_batch_not_reserved_twice() -> Result<()> {
+        let batches = concat_test_batches(1, 1000);
+        let schema = batches[0].schema();
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+        let inputs = get_record_batch_memory_size(&batches[0]);
+
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(inputs));
+        let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+        let batch = concat_build_batches(
+            &schema,
+            batches,
+            true,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )?;
+        assert_eq!(batch.num_rows(), 1000);
+        assert_eq!(reservation.size(), inputs);
+        Ok(())
+    }
+
+    /// Only the views of a view array are copied, its data buffers stay shared.
+    #[rstest]
+    fn concat_build_batches_view_data_not_reserved_twice(
+        #[values("v", "bv")] column: &str,
+    ) -> Result<()> {
+        let batches = concat_test_batches(4, 1000);
+        let column = batches[0].schema().index_of(column)?;
+        let batches = batches
+            .into_iter()
+            .map(|batch| batch.project(&[column]))
+            .collect::<Result<Vec<_>, _>>()?;
+        let schema = batches[0].schema();
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+        let inputs: usize = batches.iter().map(get_record_batch_memory_size).sum();
+        let views = 4 * 1000 * size_of::<u128>();
+        assert!(inputs > 2 * views);
+
+        let pool: Arc<dyn MemoryPool> =
+            Arc::new(GreedyMemoryPool::new(inputs + views * 5 / 4));
+        let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+        let batch = concat_build_batches(
+            &schema,
+            batches,
+            false,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )?;
+        assert_eq!(reservation.size(), get_record_batch_memory_size(&batch));
+        Ok(())
+    }
+
+    /// The build side is concatenated into a single batch, and that copy must
+    /// be visible to the memory pool while the input batches are still alive.
+    #[rstest]
+    #[tokio::test]
+    async fn join_build_concat_is_reserved(
+        #[values(PartitionMode::CollectLeft, PartitionMode::Partitioned)]
+        mode: PartitionMode,
+        #[values(false, true)] use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let num_rows = 4000;
+        let values = (0..num_rows).collect::<Vec<i32>>();
+        let batches = (0..4)
+            .map(|_| build_table_i32(("a1", &values), ("b1", &values), ("c1", &values)))
+            .collect::<Vec<_>>();
+        let inputs: usize = batches.iter().map(get_record_batch_memory_size).sum();
+        let left_schema = batches[0].schema();
+        let right = build_table(
+            ("a2", &vec![10, 11]),
+            ("b2", &vec![12, 13]),
+            ("c2", &vec![14, 15]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("a1", &left_schema)?) as _,
+            Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+        )];
+
+        // Reserved on top of the inputs and their copy
+        let build_rows = batches.len() * num_rows as usize;
+        let map = if use_perfect_hash_join_as_possible {
+            ArrayMap::estimate_memory_size(0, num_rows as u64 - 1, build_rows)
+        } else {
+            estimate_memory_size::<(u32, u64)>(build_rows, size_of::<JoinHashMapU32>())?
+                + build_rows * size_of::<u32>()
+        };
+
+        for (limit, fits) in [(map + inputs * 3 / 2, false), (map + inputs * 3, true)] {
+            let left = TestMemoryExec::try_new_exec(
+                std::slice::from_ref(&batches),
+                Arc::clone(&left_schema),
+                None,
+            )?;
+            let join = HashJoinExec::try_new(
+                left,
+                Arc::clone(&right),
+                on.clone(),
+                None,
+                &JoinType::Inner,
+                None,
+                mode,
+                NullEquality::NullEqualsNothing,
+                false,
+            )?;
+
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(limit, 1.0)
+                .build_arc()?;
+            let task_ctx = prepare_task_ctx(8192, use_perfect_hash_join_as_possible);
+            let task_ctx = Arc::new(
+                TaskContext::default()
+                    .with_session_config(task_ctx.session_config().clone())
+                    .with_runtime(runtime),
+            );
+
+            let result = common::collect(join.execute(0, task_ctx)?).await;
+            if fits {
+                result?;
+            } else {
+                assert_contains!(
+                    result.unwrap_err().to_string(),
+                    "Resources exhausted: Additional allocation failed for HashJoinInput"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Join keys that are not plain columns evaluate to new arrays, which are
+    /// kept for the whole join and must be reserved.
+    #[rstest]
+    #[tokio::test]
+    async fn join_build_key_arrays_are_reserved(
+        #[values(false, true)] use_perfect_hash_join_as_possible: bool,
+    ) -> Result<()> {
+        let num_rows = 16000;
+        let values = (0..num_rows).collect::<Vec<i32>>();
+        // A single build batch, so that there is no concatenated copy
+        let batch = build_table_i32(("a1", &values), ("b1", &values), ("c1", &values));
+        let inputs = get_record_batch_memory_size(&batch);
+        let keys = inputs / 3;
+        let left_schema = batch.schema();
+        let right = build_table(
+            ("a2", &vec![10, 11]),
+            ("b2", &vec![12, 13]),
+            ("c2", &vec![14, 15]),
+        );
+
+        let map = if use_perfect_hash_join_as_possible {
+            ArrayMap::estimate_memory_size(1, num_rows as u64, num_rows as usize)
+        } else {
+            estimate_memory_size::<(u32, u64)>(
+                num_rows as usize,
+                size_of::<JoinHashMapU32>(),
+            )? + num_rows as usize * size_of::<u32>()
+        };
+
+        for (computed_key, limit, fits) in [
+            (false, inputs + map + keys / 2, true),
+            (true, inputs + map + keys / 2, false),
+            (true, inputs + map + keys * 2, true),
+        ] {
+            let column = Arc::new(Column::new_with_schema("a1", &left_schema)?) as _;
+            let left_key: PhysicalExprRef = if computed_key {
+                Arc::new(BinaryExpr::new(
+                    column,
+                    Operator::Plus,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                ))
+            } else {
+                column
+            };
+            let on = vec![(
+                left_key,
+                Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+            )];
+            let left = TestMemoryExec::try_new_exec(
+                &[vec![batch.clone()]],
+                Arc::clone(&left_schema),
+                None,
+            )?;
+            let join = HashJoinExec::try_new(
+                left,
+                Arc::clone(&right),
+                on,
+                None,
+                &JoinType::Inner,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                false,
+            )?;
+
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(limit, 1.0)
+                .build_arc()?;
+            let task_ctx = prepare_task_ctx(8192, use_perfect_hash_join_as_possible);
+            let task_ctx = Arc::new(
+                TaskContext::default()
+                    .with_session_config(task_ctx.session_config().clone())
+                    .with_runtime(runtime),
+            );
+
+            let result = common::collect(join.execute(0, task_ctx)?).await;
+            if fits {
+                result?;
+            } else {
+                assert_contains!(
+                    result.unwrap_err().to_string(),
+                    "Resources exhausted: Additional allocation failed for HashJoinInput"
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn build_table_struct(
         struct_name: &str,
         field_name_and_values: (&str, &Vec<Option<i32>>),
@@ -6126,6 +7681,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::literal_string_with_formatting_args,
+        reason = "The braces are part of the expected struct output, not format args"
+    )]
     async fn join_on_struct() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let left =
@@ -6765,6 +8324,278 @@ mod tests {
         Ok(())
     }
 
+    /// Builds a two-partition probe side for the cross-partition null-aware
+    /// tests: partition 0 holds the only NULL key, partition 1 holds none.
+    fn build_two_partition_probe_with_null_in_partition_0() -> Arc<dyn ExecutionPlan> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c2", DataType::Int32, true),
+            Field::new("dummy", DataType::Int32, true),
+        ]));
+        let partition_0 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), None])),
+                Arc::new(Int32Array::from(vec![Some(100), Some(400)])),
+            ],
+        )
+        .unwrap();
+        let partition_1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(2)])),
+                Arc::new(Int32Array::from(vec![Some(200)])),
+            ],
+        )
+        .unwrap();
+        TestMemoryExec::try_new_exec(
+            &[vec![partition_0], vec![partition_1]],
+            schema,
+            None,
+        )
+        .unwrap()
+    }
+
+    /// Builds the dictionary-encoded twin of
+    /// [`build_two_partition_probe_with_null_in_partition_0`]: the same two
+    /// probe partitions, but the join key is a dictionary and partition 0's
+    /// NULL exists only logically.
+    ///
+    /// Every dictionary key is a physically valid index; one of them points at
+    /// a NULL dictionary value. The array therefore reports
+    /// `null_count() == 0` while `logical_null_count() > 0`, which is the case
+    /// that a physical-NULL check silently misses.
+    fn build_two_partition_dict_probe_with_logical_null_in_partition_0()
+    -> Arc<dyn ExecutionPlan> {
+        let dict_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int32));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c2", dict_type, true),
+            Field::new("dummy", DataType::Int32, true),
+        ]));
+
+        // Dictionary values: [1, NULL]; keys: [0, 1] => logical [1, NULL].
+        let with_logical_null: ArrayRef = Arc::new(DictionaryArray::new(
+            Int32Array::from(vec![0, 1]),
+            Arc::new(Int32Array::from(vec![Some(1), None])),
+        ));
+        assert_eq!(
+            with_logical_null.null_count(),
+            0,
+            "the probe NULL must be logical only, or this test stops covering \
+             the logical_null_count path"
+        );
+        assert!(
+            with_logical_null.logical_null_count() > 0,
+            "the probe key must carry a logical NULL"
+        );
+
+        let partition_0 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                with_logical_null,
+                Arc::new(Int32Array::from(vec![Some(100), Some(400)])),
+            ],
+        )
+        .unwrap();
+
+        // Dictionary values: [2]; keys: [0] => logical [2], no NULL anywhere.
+        let partition_1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(DictionaryArray::new(
+                    Int32Array::from(vec![0]),
+                    Arc::new(Int32Array::from(vec![Some(2)])),
+                )),
+                Arc::new(Int32Array::from(vec![Some(200)])),
+            ],
+        )
+        .unwrap();
+
+        TestMemoryExec::try_new_exec(
+            &[vec![partition_0], vec![partition_1]],
+            schema,
+            None,
+        )
+        .unwrap()
+    }
+
+    /// Drains the probe partitions of `join` one after another in the given
+    /// order and returns everything they emitted.
+    async fn collect_partitions_in_order(
+        join: &HashJoinExec,
+        order: &[usize],
+        task_ctx: &Arc<TaskContext>,
+    ) -> Result<Vec<RecordBatch>> {
+        let mut batches = vec![];
+        for &partition in order {
+            let stream = join.execute(partition, Arc::clone(task_ctx))?;
+            batches.extend(common::collect(stream).await?);
+        }
+        Ok(batches)
+    }
+
+    /// A NULL probe key silences a null-aware anti join even when the
+    /// partition that saw it is not the one emitting the final build rows.
+    ///
+    /// `CollectLeft` with several probe partitions is what the planner
+    /// produces for `NOT IN`, and only the last partition to finish emits the
+    /// build rows, reading what its siblings recorded. Both finishing orders
+    /// must produce no rows.
+    ///
+    /// These partitions are drained sequentially, so this covers the
+    /// cross-partition plumbing, not the concurrent race that motivated
+    /// [`ProbeCompletion`]. The interleavings are model-checked in
+    /// `probe_completion::loom_tests` instead.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_anti_join_probe_null_in_other_partition(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        for order in [[0, 1], [1, 0]] {
+            let left = build_table_two_cols(
+                ("c1", &vec![Some(1), Some(2), Some(3), Some(4)]),
+                ("dummy", &vec![Some(10), Some(20), Some(30), Some(40)]),
+            );
+            let right = build_two_partition_probe_with_null_in_partition_0();
+
+            let on = vec![(
+                Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+            )];
+
+            let join = HashJoinExec::try_new(
+                left,
+                right,
+                on,
+                None,
+                &JoinType::LeftAnti,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                true, // null_aware = true
+            )?;
+
+            let batches = collect_partitions_in_order(&join, &order, &task_ctx).await?;
+            let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+            assert_eq!(
+                rows, 0,
+                "probe order {order:?} emitted rows although a probe partition saw NULL"
+            );
+        }
+        Ok(())
+    }
+
+    /// The dictionary counterpart of
+    /// [`test_null_aware_anti_join_probe_null_in_other_partition`], where the
+    /// silencing probe NULL exists only logically.
+    ///
+    /// A dictionary key that points at a NULL dictionary value has
+    /// `null_count() == 0`, so only the `logical_null_count()` check in
+    /// `null_aware_skip_probe_batch` records it. This pins that check to the
+    /// cross-partition summary: the partition holding the logical NULL is not
+    /// the one that emits the build rows, in either drain order.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_anti_join_probe_logical_null_in_other_partition(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        for order in [[0, 1], [1, 0]] {
+            // Build keys are dictionary-encoded too, and NULL-free.
+            let left = build_table_dict_key(
+                "c1",
+                vec![Some(1), Some(2), Some(3), Some(4)],
+                vec![0, 1, 2, 3],
+                "dummy",
+                vec![Some(10), Some(20), Some(30), Some(40)],
+            );
+            let right = build_two_partition_dict_probe_with_logical_null_in_partition_0();
+
+            let on = vec![(
+                Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+            )];
+
+            let join = HashJoinExec::try_new(
+                left,
+                right,
+                on,
+                None,
+                &JoinType::LeftAnti,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                true, // null_aware = true
+            )?;
+
+            let batches = collect_partitions_in_order(&join, &order, &task_ctx).await?;
+            let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+            assert_eq!(
+                rows, 0,
+                "probe order {order:?} emitted rows although a probe partition saw a logical NULL"
+            );
+        }
+        Ok(())
+    }
+
+    /// The null-aware mark join counterpart of
+    /// [`test_null_aware_anti_join_probe_null_in_other_partition`]: an
+    /// unmatched build row must get an UNKNOWN (NULL) mark when the NULL probe
+    /// key was seen by a sibling partition, whichever partition finishes last.
+    ///
+    /// Sequentially drained, with the same caveat as that test.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_left_mark_probe_null_in_other_partition(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        for order in [[0, 1], [1, 0]] {
+            let left = build_table_two_cols(
+                ("c1", &vec![Some(1), Some(4)]),
+                ("dummy", &vec![Some(10), Some(40)]),
+            );
+            let right = build_two_partition_probe_with_null_in_partition_0();
+
+            let on = vec![(
+                Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+            )];
+
+            let join = HashJoinExec::try_new(
+                left,
+                right,
+                on,
+                None,
+                &JoinType::LeftMark,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                true, // null_aware = true
+            )?;
+
+            let batches = collect_partitions_in_order(&join, &order, &task_ctx).await?;
+
+            // c1=1 matches probe row 1 (mark true); c1=4 is unmatched and the
+            // probe side had a NULL, so its mark is UNKNOWN.
+            allow_duplicates! {
+                assert_snapshot!(batches_to_sort_string(&batches), @r"
+                +----+-------+------+
+                | c1 | dummy | mark |
+                +----+-------+------+
+                | 1  | 10    | true |
+                | 4  | 40    |      |
+                +----+-------+------+
+                ");
+            }
+        }
+        Ok(())
+    }
+
     /// Test null-aware anti join when build side (left) contains NULL keys
     /// Expected: rows with NULL keys should not be output
     #[apply(hash_join_exec_configs)]
@@ -6871,6 +8702,563 @@ mod tests {
         Ok(())
     }
 
+    /// Test null-aware RightAnti when build side (subquery) contains NULL
+    /// Expected: no rows should be output
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_right_anti_build_null(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        // Build left table (subquery with NULL)
+        let left = build_table_two_cols(
+            ("c1", &vec![Some(1), Some(2), Some(3), None]),
+            ("dummy", &vec![Some(100), Some(200), Some(300), Some(400)]),
+        );
+
+        // Build right table (outer rows to potentially output)
+        let right = build_table_two_cols(
+            ("c2", &vec![Some(1), Some(2), Some(3), Some(4)]),
+            ("dummy", &vec![Some(10), Some(20), Some(30), Some(40)]),
+        );
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+        )];
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::RightAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            ++
+            ++
+            ");
+        }
+        Ok(())
+    }
+
+    /// Test null-aware RightAnti when probe side (outer) contains NULL keys
+    /// Expected: rows with NULL keys should not be output
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_right_anti_probe_null(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        // Build left table (subquery, no NULL)
+        let left = build_table_two_cols(
+            ("c1", &vec![Some(1), Some(2), Some(3)]),
+            ("dummy", &vec![Some(100), Some(200), Some(300)]),
+        );
+
+        // Build right table with NULL key (this row should not be output)
+        let right = build_table_two_cols(
+            ("c2", &vec![Some(1), Some(4), None]),
+            ("dummy", &vec![Some(10), Some(40), Some(0)]),
+        );
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+        )];
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::RightAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // Expected: only c2=4 (not c2=1 which matches, not c2=NULL)
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+-------+
+            | c2 | dummy |
+            +----+-------+
+            | 4  | 40    |
+            +----+-------+
+            ");
+        }
+        Ok(())
+    }
+
+    /// Test null-aware RightAnti with no NULLs (should work like regular RightAnti)
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_right_anti_no_nulls(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        // Build left table (subquery, no NULLs)
+        let left = build_table_two_cols(
+            ("c1", &vec![Some(1), Some(2), Some(3)]),
+            ("dummy", &vec![Some(100), Some(200), Some(300)]),
+        );
+
+        // Build right table (outer, no NULLs)
+        let right = build_table_two_cols(
+            ("c2", &vec![Some(1), Some(2), Some(4), Some(5)]),
+            ("dummy", &vec![Some(10), Some(20), Some(40), Some(50)]),
+        );
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+        )];
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::RightAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // Expected: c2=4 and c2=5 (they don't match anything in left)
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+-------+
+            | c2 | dummy |
+            +----+-------+
+            | 4  | 40    |
+            | 5  | 50    |
+            +----+-------+
+            ");
+        }
+        Ok(())
+    }
+
+    /// Test null-aware RightAnti when build side (subquery) is empty
+    /// Expected: all outer rows should be output, including NULL keys
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_right_anti_empty_build(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        // Build left table (empty subquery)
+        let left = build_table_two_cols(("c1", &vec![]), ("dummy", &vec![]));
+
+        // Build right table (outer)
+        let right = build_table_two_cols(
+            ("c2", &vec![Some(1), None, Some(4)]),
+            ("dummy", &vec![Some(10), Some(0), Some(40)]),
+        );
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+        )];
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::RightAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+-------+
+            | c2 | dummy |
+            +----+-------+
+            |    | 0     |
+            | 1  | 10    |
+            | 4  | 40    |
+            +----+-------+
+            ");
+        }
+        Ok(())
+    }
+
+    /// Null-aware RightAnti must treat dictionary keys that point at a null
+    /// dictionary value as build-side NULLs, even when the key bitmap has no
+    /// physical nulls (`null_count() == 0` but `logical_null_count() > 0`).
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_right_anti_build_logical_null(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        // Dictionary values: [1, NULL, 2]; keys: [0, 1, 2] => logical [1, NULL, 2]
+        let left = build_table_dict_key(
+            "c1",
+            vec![Some(1), None, Some(2)],
+            vec![0, 1, 2],
+            "dummy",
+            vec![Some(100), Some(200), Some(300)],
+        );
+        let left_key = left
+            .execute(0, Arc::clone(&task_ctx))?
+            .next()
+            .await
+            .unwrap()?;
+        assert_eq!(left_key.column(0).null_count(), 0);
+        assert_eq!(left_key.column(0).logical_null_count(), 1);
+
+        let right = build_table_dict_key(
+            "c2",
+            vec![Some(1), Some(2), Some(3), Some(4)],
+            vec![0, 1, 2, 3],
+            "dummy",
+            vec![Some(10), Some(20), Some(30), Some(40)],
+        );
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+        )];
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::RightAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            ++
+            ++
+            ");
+        }
+        Ok(())
+    }
+
+    /// Regression test for a `NullEqualsNull` join whose build-side join key is
+    /// a dictionary with NULL stored in the dictionary *values*.
+    ///
+    /// Such a key is only logically NULL: `null_count() == 0` because the key
+    /// bitmap has no physical nulls, but `logical_null_count() > 0`. The hash
+    /// join must still treat it as a NULL key in two places:
+    ///
+    /// 1. The build side must not be turned into an `ArrayMap` (perfect hash
+    ///    join), which only supports plain integer keys. Bounds are collected
+    ///    for the dynamic filter regardless of key type, so the `ArrayMap`
+    ///    path must check the key type itself instead of inferring it from
+    ///    the presence of bounds; otherwise the build fails with
+    ///    `Unsupported type for ArrayMap`.
+    /// 2. The dynamic filter pushed to the probe side must be widened with
+    ///    `c2 IS NULL OR ...`, so the probe row with a NULL key still reaches
+    ///    the join and null-matches the build NULL. Without it the filter
+    ///    `c2 >= 1 AND c2 <= 2 AND c2 IN (...)` evaluates to NULL for that
+    ///    row and silently drops it.
+    ///
+    /// Setup: build keys `[1, NULL, 2]`, probe keys `[1, NULL, 4]`, inner join
+    /// with a `FilterExec` consuming the join's dynamic filter on the probe side.
+    /// Expected output: the `1 = 1` row and the `NULL = NULL` row.
+    #[tokio::test]
+    async fn test_null_equal_dynamic_filter_keeps_probe_nulls_for_build_logical_null()
+    -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+
+        // Dictionary values: [1, NULL, 2]; keys: [0, 1, 2] => logical [1, NULL, 2]
+        let left = build_table_dict_key(
+            "c1",
+            vec![Some(1), None, Some(2)],
+            vec![0, 1, 2],
+            "d1",
+            vec![Some(100), Some(200), Some(300)],
+        );
+        let left_key = left
+            .execute(0, Arc::clone(&task_ctx))?
+            .next()
+            .await
+            .unwrap()?;
+        assert_eq!(left_key.column(0).null_count(), 0);
+        assert_eq!(left_key.column(0).logical_null_count(), 1);
+
+        // Dictionary values: [1, NULL, 4]; keys: [0, 1, 2] => logical [1, NULL, 4]
+        let right = build_table_dict_key(
+            "c2",
+            vec![Some(1), None, Some(4)],
+            vec![0, 1, 2],
+            "d2",
+            vec![Some(10), Some(20), Some(40)],
+        );
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+        )];
+
+        // Wire the join's dynamic filter into a FilterExec over the probe side so
+        // that the filter is actually built (bounds are only collected when the
+        // probe subtree contains a consumer) and applied to the probe rows.
+        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
+        let consumer: Arc<dyn PhysicalExpr> = Arc::clone(&dynamic_filter) as _;
+        let right = Arc::new(FilterExecBuilder::new(consumer, right).build()?);
+        let mut join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNull,
+            false,
+        )?;
+        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
+            filter: Arc::clone(&dynamic_filter),
+            build_accumulator: OnceLock::new(),
+        });
+
+        // (1) Building the hash table must not fail on the dictionary key.
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // (2) The build-side logical NULL must widen the pushed filter with
+        // `IS NULL`, because the join is NullEqualsNull.
+        dynamic_filter.wait_complete().await;
+        let filter = dynamic_filter.current()?.to_string();
+        assert!(
+            filter.contains("c2@0 IS NULL OR"),
+            "expected an IS NULL disjunct in the pushed filter, got: {filter}"
+        );
+
+        // The NULL-NULL row (d1 = 200, d2 = 20) is only produced if the probe
+        // NULL survived the pushed filter.
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+-----+----+----+
+            | c1 | d1  | c2 | d2 |
+            +----+-----+----+----+
+            |    | 200 |    | 20 |
+            | 1  | 100 | 1  | 10 |
+            +----+-----+----+----+
+            ");
+        }
+        Ok(())
+    }
+
+    /// The [`PartitionMode::Partitioned`] counterpart of
+    /// [`test_null_equal_dynamic_filter_keeps_probe_nulls_for_build_logical_null`].
+    ///
+    /// Here the build-side logical NULL lives in exactly one build partition, so
+    /// the `keys_have_null` flag has to survive the per-partition aggregation in
+    /// `build_partitioned_filter` and widen the *routed* filter as a whole: the
+    /// probe NULL is routed to a single `CASE` branch, and OR-ing `IS NULL` into
+    /// that one branch would still drop it for every other route.
+    #[tokio::test]
+    async fn test_partitioned_null_equal_dynamic_filter_keeps_probe_nulls_for_build_logical_null()
+    -> Result<()> {
+        let mut session_config = SessionConfig::default();
+        session_config
+            .options_mut()
+            .optimizer
+            .enable_dynamic_filter_pushdown = true;
+        let task_ctx =
+            Arc::new(TaskContext::default().with_session_config(session_config));
+
+        let partition_count = 4;
+
+        // Dictionary values: [1, NULL, 2]; keys: [0, 1, 2] => logical [1, NULL, 2]
+        let left = build_table_dict_key(
+            "c1",
+            vec![Some(1), None, Some(2)],
+            vec![0, 1, 2],
+            "d1",
+            vec![Some(100), Some(200), Some(300)],
+        );
+        // Dictionary values: [1, NULL, 4]; keys: [0, 1, 2] => logical [1, NULL, 4]
+        let right = build_table_dict_key(
+            "c2",
+            vec![Some(1), None, Some(4)],
+            vec![0, 1, 2],
+            "d2",
+            vec![Some(10), Some(20), Some(40)],
+        );
+
+        let left_key =
+            Arc::new(Column::new_with_schema("c1", &left.schema())?) as PhysicalExprRef;
+        let right_key =
+            Arc::new(Column::new_with_schema("c2", &right.schema())?) as PhysicalExprRef;
+        let on = vec![(Arc::clone(&left_key), Arc::clone(&right_key))];
+
+        // Hash-repartition both sides so the join runs with real partition routing:
+        // the build NULL and the probe NULL land in the same partition, and every
+        // other partition reports a NULL-free build.
+        let left_repartitioned: Arc<dyn ExecutionPlan> =
+            Arc::new(RepartitionExec::try_new(
+                left,
+                Partitioning::Hash(vec![left_key], partition_count),
+            )?);
+        let right_repartitioned: Arc<dyn ExecutionPlan> =
+            Arc::new(RepartitionExec::try_new(
+                right,
+                Partitioning::Hash(vec![Arc::clone(&right_key)], partition_count),
+            )?);
+
+        // The FilterExec sits above the repartition so each probe partition is only
+        // read after the join has waited for every partition's build report, which
+        // makes the finalized (routed and widened) filter the one actually applied.
+        let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
+        let consumer: Arc<dyn PhysicalExpr> = Arc::clone(&dynamic_filter) as _;
+        let right_filtered: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExecBuilder::new(consumer, right_repartitioned).build()?);
+
+        let mut join = HashJoinExec::try_new(
+            left_repartitioned,
+            right_filtered,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNull,
+            false,
+        )?;
+        join.dynamic_filter = Some(HashJoinExecDynamicFilter {
+            filter: Arc::clone(&dynamic_filter),
+            build_accumulator: OnceLock::new(),
+        });
+
+        let batches = crate::execution_plan::collect(Arc::new(join), task_ctx).await?;
+
+        dynamic_filter.wait_complete().await;
+        let filter = dynamic_filter.current()?.to_string();
+        // The aggregated build-side NULL must widen the routed filter once, at the
+        // top: `c2 IS NULL OR CASE hash(c2) % 4 WHEN ... END`.
+        //
+        // Under `force_hash_collisions` every key hashes to the same value, so the
+        // repartition routes all build rows to a single partition and
+        // `build_partitioned_filter` collapses to that partition's filter with no
+        // routing `CASE`. The NULL widening this test guards is asserted either way.
+        if cfg!(not(feature = "force_hash_collisions")) {
+            assert!(
+                filter.contains("CASE"),
+                "expected a routed partitioned filter, got: {filter}"
+            );
+        }
+        assert!(
+            filter.starts_with("c2@0 IS NULL OR"),
+            "expected the IS NULL disjunct to wrap the whole routed filter, got: {filter}"
+        );
+
+        // The NULL-NULL row (d1 = 200, d2 = 20) is only produced if the probe
+        // NULL survived the pushed filter on its route.
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+-----+----+----+
+            | c1 | d1  | c2 | d2 |
+            +----+-----+----+----+
+            |    | 200 |    | 20 |
+            | 1  | 100 | 1  | 10 |
+            +----+-----+----+----+
+            ");
+        }
+        Ok(())
+    }
+
+    /// Null-aware RightAnti must drop outer rows whose dictionary key is only
+    /// logically NULL (key points at a null dictionary value).
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_right_anti_probe_logical_null(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        let left = build_table_dict_key(
+            "c1",
+            vec![Some(1), Some(2), Some(3)],
+            vec![0, 1, 2],
+            "dummy",
+            vec![Some(100), Some(200), Some(300)],
+        );
+
+        // Dictionary values: [1, NULL, 4]; keys: [0, 1, 2] => logical [1, NULL, 4]
+        let right = build_table_dict_key(
+            "c2",
+            vec![Some(1), None, Some(4)],
+            vec![0, 1, 2],
+            "dummy",
+            vec![Some(10), Some(0), Some(40)],
+        );
+        let right_key = right
+            .execute(0, Arc::clone(&task_ctx))?
+            .next()
+            .await
+            .unwrap()?;
+        assert_eq!(right_key.column(0).null_count(), 0);
+        assert_eq!(right_key.column(0).logical_null_count(), 1);
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+        )];
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::RightAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // Expected: only c2=4 (not c2=1 which matches, not logically NULL c2)
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+-------+
+            | c2 | dummy |
+            +----+-------+
+            | 4  | 40    |
+            +----+-------+
+            ");
+        }
+        Ok(())
+    }
+
     /// Test that null_aware validation rejects non-LeftAnti join types
     #[tokio::test]
     async fn test_null_aware_validation_wrong_join_type() {
@@ -6898,12 +9286,40 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("null_aware can only be true for LeftAnti joins")
+        assert!(result.unwrap_err().to_string().contains(
+            "null_aware can only be true for LeftAnti joins and RightAnti joins"
+        ));
+    }
+
+    /// Test that null_aware RightAnti rejects Partitioned mode
+    #[tokio::test]
+    async fn test_null_aware_validation_right_anti_partitioned() {
+        let left =
+            build_table_two_cols(("c1", &vec![Some(1)]), ("dummy", &vec![Some(10)]));
+        let right =
+            build_table_two_cols(("c2", &vec![Some(1)]), ("dummy", &vec![Some(100)]));
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("c1", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("c2", &right.schema()).unwrap()) as _,
+        )];
+
+        let result = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::RightAnti,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            true,
         );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains(
+            "null_aware can only be true for LeftAnti joins and RightAnti joins"
+        ));
     }
 
     /// Test that null_aware validation rejects multi-column joins
@@ -6924,13 +9340,14 @@ mod tests {
             ),
         ];
 
-        // Try to create null-aware anti join with 2 columns (should fail)
+        // Try to create null-aware right anti join with 2 columns (should fail).
+        // A multi-column `LeftAnti` is a correlated `NOT IN` and is accepted.
         let result = HashJoinExec::try_new(
             left,
             right,
             on,
             None,
-            &JoinType::LeftAnti,
+            &JoinType::RightAnti,
             None,
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
@@ -6939,11 +9356,446 @@ mod tests {
 
         assert!(result.is_err());
         assert!(
+            result.unwrap_err().to_string().contains(
+                "null_aware RightAnti joins only support single column join key"
+            )
+        );
+    }
+
+    /// Test that null_aware validation rejects PartitionMode::Partitioned (must be CollectLeft).
+    #[tokio::test]
+    async fn test_null_aware_validation_partitioned() {
+        let left = build_table(("a", &vec![1]), ("b", &vec![2]), ("c", &vec![3]));
+        let right = build_table(("x", &vec![1]), ("y", &vec![2]), ("z", &vec![3]));
+
+        let on = vec![
+            (
+                Arc::new(Column::new_with_schema("a", &left.schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("x", &right.schema()).unwrap()) as _,
+            ),
+            (
+                Arc::new(Column::new_with_schema("b", &left.schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("y", &right.schema()).unwrap()) as _,
+            ),
+        ];
+
+        // LeftMark (not LeftAnti) so the single-key check is skipped and the partition-mode check is reached.
+        let result = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftMark,
+            None,
+            PartitionMode::Partitioned,
+            NullEquality::NullEqualsNothing,
+            true, // null_aware = true (invalid with Partitioned)
+        );
+
+        assert!(result.is_err());
+        assert!(
             result
                 .unwrap_err()
                 .to_string()
-                .contains("null_aware anti join only supports single column join key")
+                .contains("null_aware joins require PartitionMode::CollectLeft")
         );
+    }
+
+    /// A null-aware `RightAnti` short-circuits on the build-side NULL before any
+    /// filter runs, so the combination must be rejected at construction (and thus
+    /// via protobuf decoding, which routes through the same builder). A filtered
+    /// null-aware `LeftAnti`, by contrast, is a valid decorrelated correlated
+    /// `NOT IN` plan and must still be accepted.
+    #[tokio::test]
+    async fn test_null_aware_filter_rejected_only_for_right_anti() {
+        let make_inputs = || {
+            let left =
+                build_table_two_cols(("c1", &vec![Some(1)]), ("dummy", &vec![Some(10)]));
+            let right =
+                build_table_two_cols(("c2", &vec![Some(1)]), ("dummy", &vec![Some(100)]));
+            let on = vec![(
+                Arc::new(Column::new_with_schema("c1", &left.schema()).unwrap()) as _,
+                Arc::new(Column::new_with_schema("c2", &right.schema()).unwrap()) as _,
+            )];
+            (left, right, on)
+        };
+
+        // RightAnti + filter is rejected.
+        let (left, right, on) = make_inputs();
+        let result = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            Some(prepare_join_filter()),
+            &JoinType::RightAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("null_aware RightAnti join does not support a join filter")
+        );
+
+        // LeftAnti + filter is accepted (correlated NOT IN decorrelates to this).
+        let (left, right, on) = make_inputs();
+        let result = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            Some(prepare_join_filter()),
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_left_anti_probe_logical_null(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        let left = build_table_dict_key(
+            "c1",
+            vec![Some(1), Some(2), Some(3)],
+            vec![0, 1, 2],
+            "dummy",
+            vec![Some(100), Some(200), Some(300)],
+        );
+
+        let right = build_table_dict_key(
+            "c2",
+            vec![Some(1), None, Some(4)],
+            vec![0, 1, 2],
+            "dummy",
+            vec![Some(10), Some(0), Some(40)],
+        );
+        let right_key = right
+            .execute(0, Arc::clone(&task_ctx))?
+            .next()
+            .await
+            .unwrap()?;
+        assert_eq!(right_key.column(0).null_count(), 0);
+        assert_eq!(right_key.column(0).logical_null_count(), 1);
+
+        let on = vec![(
+            Arc::new(Column::new_with_schema("c1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("c2", &right.schema())?) as _,
+        )];
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            ++
+            ++
+            ");
+        }
+        Ok(())
+    }
+
+    /// Scalar correlated null-aware left mark join where only the build side's
+    /// value key contains NULL.
+    ///
+    /// This isolates the NULL-value scope map direction of
+    /// `mark_null_candidates_for_probe_batch`: NULL-valued build rows become
+    /// UNKNOWN as soon as any probe row shares their correlation scope, while
+    /// non-null build rows stay `true`/`false`.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_left_mark_correlated_build_null_only(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        let left = build_table_two_cols(
+            ("id", &vec![Some(1), None, None, Some(3)]),
+            ("grp", &vec![Some(1), Some(1), Some(2), Some(3)]),
+        );
+
+        let right = build_table_two_cols(
+            ("id", &vec![Some(2), Some(1)]),
+            ("grp", &vec![Some(1), Some(2)]),
+        );
+
+        let on = vec![
+            (
+                Arc::new(Column::new_with_schema("id", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("id", &right.schema())?) as _,
+            ),
+            (
+                Arc::new(Column::new_with_schema("grp", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("grp", &right.schema())?) as _,
+            ),
+        ];
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftMark,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // `(NULL, 1)` and `(NULL, 2)` have non-empty correlated scopes, so
+        // their marks are UNKNOWN. `(1, 1)` finds no equal value and no NULL in
+        // its scope (false); `(3, 3)` has an empty correlated scope (false).
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+-----+-------+
+            | id | grp | mark  |
+            +----+-----+-------+
+            |    | 1   |       |
+            |    | 2   |       |
+            | 1  | 1   | false |
+            | 3  | 3   | false |
+            +----+-----+-------+
+            ");
+        }
+
+        Ok(())
+    }
+
+    /// Scalar correlated null-aware left mark join where only the probe side's
+    /// value key contains NULL.
+    ///
+    /// This isolates the NULL-valued-probe-row direction of
+    /// `mark_null_candidates_for_probe_batch`: every unmatched build row whose
+    /// correlation scope contains a NULL-valued probe row becomes UNKNOWN.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_left_mark_correlated_probe_null_only(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+
+        let left = build_table_two_cols(
+            ("id", &vec![Some(1), Some(2), Some(5), Some(7)]),
+            ("grp", &vec![Some(1), Some(1), Some(2), Some(3)]),
+        );
+
+        let right = build_table_two_cols(
+            ("id", &vec![Some(2), None, Some(4)]),
+            ("grp", &vec![Some(1), Some(1), Some(2)]),
+        );
+
+        let on = vec![
+            (
+                Arc::new(Column::new_with_schema("id", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("id", &right.schema())?) as _,
+            ),
+            (
+                Arc::new(Column::new_with_schema("grp", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("grp", &right.schema())?) as _,
+            ),
+        ];
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftMark,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // `(1, 1)` is unmatched and its scope contains a NULL value (UNKNOWN);
+        // `(2, 1)` matches (true); `(5, 2)`'s scope holds only `4` (false);
+        // `(7, 3)` has an empty correlated scope (false).
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+-----+-------+
+            | id | grp | mark  |
+            +----+-----+-------+
+            | 1  | 1   |       |
+            | 2  | 1   | true  |
+            | 5  | 2   | false |
+            | 7  | 3   | false |
+            +----+-----+-------+
+            ");
+        }
+
+        Ok(())
+    }
+
+    /// `left.z > right.z` over the second column of two-column tables: the
+    /// non-equality correlation of
+    /// `id NOT IN (SELECT r.id FROM r WHERE r.z < l.z)`.
+    fn prepare_second_column_gt_filter() -> JoinFilter {
+        let column_indices = vec![
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Left,
+            },
+            ColumnIndex {
+                index: 1,
+                side: JoinSide::Right,
+            },
+        ];
+        let intermediate_schema = Schema::new(vec![
+            Field::new("z", DataType::Int32, true),
+            Field::new("z", DataType::Int32, true),
+        ]);
+        let filter_expression = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("z", 0)),
+            Operator::Gt,
+            Arc::new(Column::new("z", 1)),
+        )) as Arc<dyn PhysicalExpr>;
+
+        JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        )
+    }
+
+    /// Build and probe sides of a null-aware join whose only correlation is
+    /// the non-equality filter from [`prepare_second_column_gt_filter`].
+    ///
+    /// For each build row, the probe rows with a smaller `z` form its
+    /// subquery result:
+    /// - `(1, 10)` and `(2, 20)`: `{1, NULL}`
+    /// - `(NULL, 30)`: `{1, NULL}`
+    /// - `(4, 40)`: `{1, 4, NULL}`
+    /// - `(NULL, 1)` and `(5, 1)`: empty
+    ///
+    /// The probe row `(NULL, 50)` never passes the filter.
+    fn build_null_aware_filter_only_inputs()
+    -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>, JoinOn) {
+        let left = build_table_two_cols(
+            ("id", &vec![Some(1), Some(2), None, Some(4), None, Some(5)]),
+            (
+                "z",
+                &vec![Some(10), Some(20), Some(30), Some(40), Some(1), Some(1)],
+            ),
+        );
+        let right = build_table_two_cols(
+            ("id", &vec![Some(1), None, Some(4), None]),
+            ("z", &vec![Some(5), Some(50), Some(35), Some(2)]),
+        );
+        let on = vec![(
+            Arc::new(Column::new_with_schema("id", &left.schema()).unwrap()) as _,
+            Arc::new(Column::new_with_schema("id", &right.schema()).unwrap()) as _,
+        )];
+        (left, right, on)
+    }
+
+    /// Null-aware `LeftAnti` with a join filter and no correlation scope keys.
+    ///
+    /// A NULL on either side only makes `NOT IN` UNKNOWN for the build rows
+    /// where the filter keeps the NULL, so the NULLs must not remove every row.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_left_anti_filter_only(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+        let (left, right, on) = build_null_aware_filter_only_inputs();
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            Some(prepare_second_column_gt_filter()),
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // Only the rows with an empty subquery result are TRUE.
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+---+
+            | id | z |
+            +----+---+
+            |    | 1 |
+            | 5  | 1 |
+            +----+---+
+            ");
+        }
+
+        Ok(())
+    }
+
+    /// Null-aware `LeftMark` with a join filter and no correlation scope keys.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_left_mark_filter_only(batch_size: usize) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+        let (left, right, on) = build_null_aware_filter_only_inputs();
+
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            Some(prepare_second_column_gt_filter()),
+            &JoinType::LeftMark,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+
+        let stream = join.execute(0, task_ctx)?;
+        let batches = common::collect(stream).await?;
+
+        // `(1, 10)` and `(4, 40)` match (true); `(2, 20)` and `(NULL, 30)`
+        // keep the NULL probe row (UNKNOWN); `(NULL, 1)` and `(5, 1)` have an
+        // empty subquery result (false).
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+----+-------+
+            | id | z  | mark  |
+            +----+----+-------+
+            |    | 1  | false |
+            |    | 30 |       |
+            | 1  | 10 | true  |
+            | 2  | 20 |       |
+            | 4  | 40 | true  |
+            | 5  | 1  | false |
+            +----+----+-------+
+            ");
+        }
+
+        Ok(())
     }
 
     #[test]
@@ -6983,7 +9835,7 @@ mod tests {
             vec![Arc::new(Column::new("b1", 1)) as _],
             lit(true),
         ));
-        let join = join.with_dynamic_filter_expr(Arc::clone(&df))?;
+        let join = join.set_dynamic_filter(Arc::clone(&df))?;
 
         let produced = join.dynamic_expressions_produced();
         assert_eq!(produced.len(), 1);
@@ -7026,7 +9878,7 @@ mod tests {
             NullEquality::NullEqualsNothing,
             false,
         )?
-        .with_dynamic_filter_expr(dynamic_filter)?;
+        .set_dynamic_filter(dynamic_filter)?;
 
         let err = join.swap_inputs(PartitionMode::CollectLeft).unwrap_err();
         assert_contains!(
@@ -7275,7 +10127,7 @@ mod tests {
             vec![Arc::new(Column::new("bad", 99)) as _],
             lit(true),
         ));
-        assert!(join.with_dynamic_filter_expr(df).is_err());
+        assert!(join.set_dynamic_filter(df).is_err());
         Ok(())
     }
 }

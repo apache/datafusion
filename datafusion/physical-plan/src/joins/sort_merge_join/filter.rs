@@ -32,7 +32,7 @@ use arrow::array::{
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{self, filter_record_batch};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{JoinSide, JoinType, Result};
+use datafusion_common::{JoinSide, JoinType, Result, internal_err};
 
 use crate::joins::utils::JoinFilter;
 
@@ -138,7 +138,7 @@ impl Default for FilterMetadata {
 /// - A filter exists AND
 /// - The join type requires ensuring each input row produces at least one output
 pub fn needs_deferred_filtering(
-    filter: &Option<JoinFilter>,
+    filter: Option<&JoinFilter>,
     join_type: JoinType,
 ) -> bool {
     filter.is_some()
@@ -148,32 +148,36 @@ pub fn needs_deferred_filtering(
 /// Gets the arrays which join filters are applied on
 ///
 /// Extracts the columns needed for filter evaluation from left and right batch columns
+///
+/// `left_columns` and `right_columns` are relative to the join's inputs (the
+/// [`JoinSide`] recorded in the filter's `column_indices`), not to the
+/// streamed/buffered sides. The two differ for `JoinType::Right`, where the
+/// streamed side is the join's right input, so callers holding
+/// streamed/buffered arrays must swap them; see the `JoinType::Right` call
+/// site in `materializing_stream.rs`.
 pub fn get_filter_columns(
-    join_filter: &Option<JoinFilter>,
+    join_filter: Option<&JoinFilter>,
     left_columns: &[ArrayRef],
     right_columns: &[ArrayRef],
-) -> Vec<ArrayRef> {
-    let mut filter_columns = vec![];
+) -> Result<Vec<ArrayRef>> {
+    let Some(f) = join_filter else {
+        return Ok(vec![]);
+    };
 
-    if let Some(f) = join_filter {
-        let left_columns: Vec<ArrayRef> = f
-            .column_indices()
-            .iter()
-            .filter(|col_index| col_index.side == JoinSide::Left)
-            .map(|i| Arc::clone(&left_columns[i.index]))
-            .collect();
-        let right_columns: Vec<ArrayRef> = f
-            .column_indices()
-            .iter()
-            .filter(|col_index| col_index.side == JoinSide::Right)
-            .map(|i| Arc::clone(&right_columns[i.index]))
-            .collect();
-
-        filter_columns.extend(left_columns);
-        filter_columns.extend(right_columns);
-    }
-
-    filter_columns
+    // The returned arrays are zipped positionally against the filter's
+    // intermediate schema, which lists its columns in `column_indices` order.
+    // That order need not put every left column before every right one (a
+    // filter swapped along with the join's inputs does the opposite), so
+    // emitting all left arrays and then all right arrays would silently put
+    // the wrong array in each slot.
+    f.column_indices()
+        .iter()
+        .map(|col_index| match col_index.side {
+            JoinSide::Left => Ok(Arc::clone(&left_columns[col_index.index])),
+            JoinSide::Right => Ok(Arc::clone(&right_columns[col_index.index])),
+            JoinSide::None => internal_err!("Unexpected JoinSide::None in filter"),
+        })
+        .collect()
 }
 
 /// Determines if current index is the last occurrence of a row

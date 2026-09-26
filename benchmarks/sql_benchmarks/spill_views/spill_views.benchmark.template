@@ -1,0 +1,63 @@
+# Shared template for the spill_views suite. Each qNN.benchmark sets its
+# `subgroup` directive and includes this template with parameters:
+#   QPAD          zero-padded query id / query file stem   (e.g. 01)
+#   DATASET       load script stem under load/             (e.g. low_card_1)
+#   NAME          criterion display name
+#   SPILL_LIMIT   memory limit for the measured query      (e.g. 40M)
+#   VIEW_TYPE     expected Arrow type of column `s`        (Utf8View, BinaryView)
+#   DISTINCT_S    expected number of distinct values of `s`
+#
+# Each qNN.benchmark takes SPILL_LIMIT from the subgroup's environment
+# variable, SPILL_VIEWS_LIMIT_REPEATED or SPILL_VIEWS_LIMIT_DISTINCT, and
+# falls back to the value the suite metadata declares as the default.
+#
+# The load script COPYs a 1M-row Parquet file into scratch/ and registers it
+# as table `t` (id BIGINT in shuffled order, s = a 64-byte payload). Reading
+# the data back from Parquet is load-bearing: the Parquet reader makes the
+# views of a dictionary-encoded column point into one shared buffer, which is
+# the case that spill compaction targets.
+#
+# init/settings.sql sets the memory limit and pins target_partitions = 4. The
+# limits were sized for 4 partitions so that each query spills on main
+# without running out of memory. Do not remove the pin: with more partitions
+# the per-partition sort reservations can exceed the limit.
+#
+# The assert below reads the limit back from information_schema, so it also
+# shows which limit an overridden run used. The memory pool reports the
+# limit in whole K, M or G units, so give an overridden limit in the same
+# form: 128M passes the assert, 1024M and 1.5G do not, because the pool
+# reports both as 1G.
+
+load sql_benchmarks/spill_views/load/${DATASET}.sql
+
+init sql_benchmarks/spill_views/init/settings.sql
+
+name ${NAME}
+group spill_views
+
+assert I
+SELECT count(*) = 1000000 FROM t;
+----
+true
+
+assert I
+SELECT count(DISTINCT s) = ${DISTINCT_S} FROM t;
+----
+true
+
+# The column must be read as a view type, else the suite measures nothing.
+assert I
+SELECT arrow_typeof(s) = '${VIEW_TYPE}' FROM t LIMIT 1;
+----
+true
+
+# Guard against silent config no-ops: the query must run under the limit.
+assert II
+SELECT name, value FROM information_schema.df_settings WHERE name IN ('datafusion.runtime.memory_limit', 'datafusion.execution.target_partitions') ORDER BY name;
+----
+datafusion.execution.target_partitions|4
+datafusion.runtime.memory_limit|${SPILL_LIMIT}
+
+run sql_benchmarks/spill_views/queries/q${QPAD}.sql
+
+cleanup sql_benchmarks/spill_views/init/cleanup.sql

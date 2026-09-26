@@ -186,20 +186,20 @@ mod tests {
             .unwrap();
 
         // Extract nanoseconds from results
-        let nanos_plus_5 = match result_plus_5 {
-            ExprSimplifyResult::Simplified(Expr::Literal(
-                ScalarValue::Time64Nanosecond(Some(n)),
-                _,
-            )) => n,
-            _ => panic!("Expected Time64Nanosecond literal"),
+        let ExprSimplifyResult::Simplified(Expr::Literal(
+            ScalarValue::Time64Nanosecond(Some(nanos_plus_5)),
+            _,
+        )) = result_plus_5
+        else {
+            panic!("Expected Time64Nanosecond literal")
         };
 
-        let nanos_minus_5 = match result_minus_5 {
-            ExprSimplifyResult::Simplified(Expr::Literal(
-                ScalarValue::Time64Nanosecond(Some(n)),
-                _,
-            )) => n,
-            _ => panic!("Expected Time64Nanosecond literal"),
+        let ExprSimplifyResult::Simplified(Expr::Literal(
+            ScalarValue::Time64Nanosecond(Some(nanos_minus_5)),
+            _,
+        )) = result_minus_5
+        else {
+            panic!("Expected Time64Nanosecond literal")
         };
 
         // Calculate the difference: UTC+05:00 should be 10 hours ahead of UTC-05:00

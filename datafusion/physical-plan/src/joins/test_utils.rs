@@ -607,7 +607,7 @@ fn generate_ordered_array(size: i32, duplicate_ratio: f32) -> Arc<Int32Array> {
     }
 
     // Sort the values to ensure they are ordered
-    values.sort();
+    values.sort_unstable();
 
     Arc::new(Int32Array::from_iter(values))
 }

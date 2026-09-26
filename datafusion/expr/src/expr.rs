@@ -32,7 +32,7 @@ use crate::type_coercion::functions::value_fields_with_higher_order_udf;
 use crate::{AggregateUDF, LambdaParametersProgress, ValueOrLambda, Volatility};
 use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Metadata};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::metadata::format_type_and_metadata;
@@ -622,7 +622,7 @@ impl<'a> TreeNodeContainer<'a, Self> for Expr {
 /// See the [default_column_values.rs] example implementation.
 ///
 /// [default_column_values.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs
-pub type SchemaFieldMetadata = std::collections::HashMap<String, String>;
+pub type SchemaFieldMetadata = Metadata;
 
 /// Intersects multiple metadata instances for UNION operations.
 ///
@@ -2514,7 +2514,7 @@ impl NormalizeEq for Expr {
                     args: other_args,
                 }),
             ) => {
-                self_func.name() == other_func.name()
+                self_func == other_func
                     && self_args.len() == other_args.len()
                     && self_args
                         .iter()
@@ -2545,7 +2545,7 @@ impl NormalizeEq for Expr {
                         },
                 }),
             ) => {
-                self_func.name() == other_func.name()
+                self_func == other_func
                     && self_distinct == other_distinct
                     && self_null_treatment == other_null_treatment
                     && self_args.len() == other_args.len()
@@ -2598,7 +2598,7 @@ impl NormalizeEq for Expr {
                         },
                 } = other.as_ref();
 
-                self_fun.name() == other_fun.name()
+                self_fun == other_fun
                     && self_window_frame == other_window_frame
                     && match (self_filter, other_filter) {
                         (Some(a), Some(b)) => a.normalize_eq(b),
@@ -2611,10 +2611,12 @@ impl NormalizeEq for Expr {
                         .iter()
                         .zip(other_args.iter())
                         .all(|(a, b)| a.normalize_eq(b))
+                    && self_partition_by.len() == other_partition_by.len()
                     && self_partition_by
                         .iter()
                         .zip(other_partition_by.iter())
                         .all(|(a, b)| a.normalize_eq(b))
+                    && self_order_by.len() == other_order_by.len()
                     && self_order_by
                         .iter()
                         .zip(other_order_by.iter())
@@ -2929,7 +2931,7 @@ impl HashNode for Expr {
                 name.hash(state);
                 field.hash(state);
             }
-        };
+        }
     }
 }
 
@@ -2952,7 +2954,7 @@ fn rewrite_placeholder(expr: &mut Expr, other: &Expr, schema: &DFSchema) -> Resu
                 *field = Some(other_field.as_ref().clone().with_nullable(true).into());
             }
         }
-    };
+    }
     Ok(())
 }
 
@@ -3023,26 +3025,17 @@ impl Display for SchemaDisplay<'_> {
                 low,
                 high,
             }) => {
-                if *negated {
-                    write!(
-                        f,
-                        "{} NOT BETWEEN {} AND {}",
-                        SchemaDisplay(expr),
-                        SchemaDisplay(low),
-                        SchemaDisplay(high),
-                    )
-                } else {
-                    write!(
-                        f,
-                        "{} BETWEEN {} AND {}",
-                        SchemaDisplay(expr),
-                        SchemaDisplay(low),
-                        SchemaDisplay(high),
-                    )
-                }
+                let not = if *negated { "NOT " } else { "" };
+                write!(
+                    f,
+                    "{} {not}BETWEEN {} AND {}",
+                    SchemaDisplay(expr),
+                    SchemaDisplay(low),
+                    SchemaDisplay(high),
+                )
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{} {op} {}", SchemaDisplay(left), SchemaDisplay(right),)
+                write!(f, "{} {op} {}", SchemaDisplay(left), SchemaDisplay(right))
             }
             Expr::Case(Case {
                 expr,
@@ -3262,7 +3255,7 @@ impl Display for SchemaDisplay<'_> {
                                 " ORDER BY [{}]",
                                 schema_name_from_sorts(order_by)?
                             )?;
-                        };
+                        }
 
                         write!(f, " {window_frame}")
                     }
@@ -3305,26 +3298,17 @@ impl Display for SqlDisplay<'_> {
                 low,
                 high,
             }) => {
-                if *negated {
-                    write!(
-                        f,
-                        "{} NOT BETWEEN {} AND {}",
-                        SqlDisplay(expr),
-                        SqlDisplay(low),
-                        SqlDisplay(high),
-                    )
-                } else {
-                    write!(
-                        f,
-                        "{} BETWEEN {} AND {}",
-                        SqlDisplay(expr),
-                        SqlDisplay(low),
-                        SqlDisplay(high),
-                    )
-                }
+                let not = if *negated { "NOT " } else { "" };
+                write!(
+                    f,
+                    "{} {not}BETWEEN {} AND {}",
+                    SqlDisplay(expr),
+                    SqlDisplay(low),
+                    SqlDisplay(high),
+                )
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                write!(f, "{} {op} {}", SqlDisplay(left), SqlDisplay(right),)
+                write!(f, "{} {op} {}", SqlDisplay(left), SqlDisplay(right))
             }
             Expr::Case(Case {
                 expr,
@@ -3338,7 +3322,7 @@ impl Display for SqlDisplay<'_> {
                 }
 
                 for (when, then) in when_then_expr {
-                    write!(f, "WHEN {} THEN {} ", SqlDisplay(when), SqlDisplay(then),)?;
+                    write!(f, "WHEN {} THEN {} ", SqlDisplay(when), SqlDisplay(then))?;
                 }
 
                 if let Some(e) = else_expr {
@@ -3831,6 +3815,7 @@ pub fn physical_name(expr: &Expr) -> Result<String> {
 #[cfg(test)]
 mod test {
     use crate::expr_fn::col;
+    use crate::test::function_stub::max_udaf;
     use crate::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility, case,
         lit, placeholder, qualified_wildcard, wildcard, wildcard_with_options,
@@ -3901,7 +3886,7 @@ mod test {
         let subquery_schema = Arc::new(
             DFSchema::from_unqualified_fields(
                 vec![subquery_field].into(),
-                Default::default(),
+                Metadata::new(),
             )
             .unwrap(),
         );
@@ -3949,7 +3934,7 @@ mod test {
         let subquery_schema = Arc::new(
             DFSchema::from_unqualified_fields(
                 vec![subquery_field].into(),
-                Default::default(),
+                Metadata::new(),
             )
             .unwrap(),
         );
@@ -4003,7 +3988,7 @@ mod test {
         let subquery_schema = Arc::new(
             DFSchema::from_unqualified_fields(
                 vec![subquery_field].into(),
-                Default::default(),
+                Metadata::new(),
             )
             .unwrap(),
         );
@@ -4056,7 +4041,7 @@ mod test {
         let subquery_schema = Arc::new(
             DFSchema::from_unqualified_fields(
                 vec![subquery_field].into(),
-                Default::default(),
+                Metadata::new(),
             )
             .unwrap(),
         );
@@ -4157,9 +4142,8 @@ mod test {
     fn infer_placeholder_with_metadata() {
         // name == $1, where name is a non-nullable string
         let schema = Arc::new(Schema::new(vec![
-            Field::new("name", DataType::Utf8, false).with_metadata(
-                [("some_key".to_string(), "some_value".to_string())].into(),
-            ),
+            Field::new("name", DataType::Utf8, false)
+                .with_metadata(Metadata::new().with("some_key", "some_value")),
         ]));
         let df_schema = DFSchema::try_from(schema).unwrap();
 
@@ -4344,6 +4328,32 @@ mod test {
 
     use super::*;
     use crate::logical_plan::{EmptyRelation, LogicalPlan};
+
+    #[test]
+    fn normalize_eq_window_function_over_clause_lengths() {
+        let window = |partition_by: Vec<Expr>, order_by: Vec<Sort>| {
+            let mut window = WindowFunction::new(max_udaf(), vec![col("value")]);
+            window.params.partition_by = partition_by;
+            window.params.order_by = order_by;
+            Expr::from(window)
+        };
+        let base = window(vec![col("a")], vec![Sort::new(col("a"), true, true)]);
+
+        let extra_partition = window(
+            vec![col("a"), col("b")],
+            vec![Sort::new(col("a"), true, true)],
+        );
+        assert!(!base.normalize_eq(&extra_partition));
+
+        let extra_order = window(
+            vec![col("a")],
+            vec![
+                Sort::new(col("a"), true, true),
+                Sort::new(col("b"), true, true),
+            ],
+        );
+        assert!(!base.normalize_eq(&extra_order));
+    }
 
     #[test]
     fn test_display_wildcard() {
@@ -4593,53 +4603,53 @@ mod test {
 
     mod intersect_metadata_tests {
         use super::super::intersect_metadata_for_union;
-        use std::collections::HashMap;
+        use arrow::datatypes::Metadata;
 
         #[test]
         fn all_branches_same_metadata() {
-            let m1 = HashMap::from([("key".into(), "val".into())]);
-            let m2 = HashMap::from([("key".into(), "val".into())]);
+            let m1 = Metadata::new().with("key", "val");
+            let m2 = Metadata::new().with("key", "val");
             let result = intersect_metadata_for_union([&m1, &m2]);
-            assert_eq!(result, HashMap::from([("key".into(), "val".into())]));
+            assert_eq!(result, Metadata::new().with("key", "val"));
         }
 
         #[test]
         fn conflicting_metadata_dropped() {
-            let m1 = HashMap::from([("key".into(), "a".into())]);
-            let m2 = HashMap::from([("key".into(), "b".into())]);
+            let m1 = Metadata::new().with("key", "a");
+            let m2 = Metadata::new().with("key", "b");
             let result = intersect_metadata_for_union([&m1, &m2]);
             assert!(result.is_empty());
         }
 
         #[test]
         fn empty_metadata_branch_skipped() {
-            let m1 = HashMap::from([("key".into(), "val".into())]);
-            let m2 = HashMap::new(); // e.g. NULL literal
+            let m1 = Metadata::new().with("key", "val");
+            let m2 = Metadata::new(); // e.g. NULL literal
             let result = intersect_metadata_for_union([&m1, &m2]);
-            assert_eq!(result, HashMap::from([("key".into(), "val".into())]));
+            assert_eq!(result, Metadata::new().with("key", "val"));
         }
 
         #[test]
         fn empty_metadata_first_branch_skipped() {
-            let m1 = HashMap::new();
-            let m2 = HashMap::from([("key".into(), "val".into())]);
+            let m1 = Metadata::new();
+            let m2 = Metadata::new().with("key", "val");
             let result = intersect_metadata_for_union([&m1, &m2]);
-            assert_eq!(result, HashMap::from([("key".into(), "val".into())]));
+            assert_eq!(result, Metadata::new().with("key", "val"));
         }
 
         #[test]
         fn all_branches_empty_metadata() {
-            let m1: HashMap<String, String> = HashMap::new();
-            let m2: HashMap<String, String> = HashMap::new();
+            let m1 = Metadata::new();
+            let m2 = Metadata::new();
             let result = intersect_metadata_for_union([&m1, &m2]);
             assert!(result.is_empty());
         }
 
         #[test]
         fn mixed_empty_and_conflicting() {
-            let m1 = HashMap::from([("key".into(), "a".into())]);
-            let m2 = HashMap::new();
-            let m3 = HashMap::from([("key".into(), "b".into())]);
+            let m1 = Metadata::new().with("key", "a");
+            let m2 = Metadata::new();
+            let m3 = Metadata::new().with("key", "b");
             let result = intersect_metadata_for_union([&m1, &m2, &m3]);
             // m2 is skipped; m1 and m3 conflict → dropped
             assert!(result.is_empty());
@@ -4647,9 +4657,7 @@ mod test {
 
         #[test]
         fn no_inputs() {
-            let result = intersect_metadata_for_union(std::iter::empty::<
-                &HashMap<String, String>,
-            >());
+            let result = intersect_metadata_for_union(std::iter::empty::<&Metadata>());
             assert!(result.is_empty());
         }
     }

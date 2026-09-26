@@ -39,23 +39,39 @@ override DataFusion functions with the same name.
 [apache datafusion]: https://datafusion.apache.org/
 [apache spark]: https://spark.apache.org/
 
-## Testing Guide
+## Implementation Guidelines
 
-When testing functions by directly invoking them (e.g., `test_scalar_function!()`), input coercion (from the `signature`
-or `coerce_types`) is not applied.
+When implementing these functions, you can check if there are existing implementations
+in the [Sail] or [Comet] projects first. If you do port functionality from these
+sources, make sure to port over the corresponding tests too, to ensure correctness
+and compatibility.
 
-Therefore, direct invocation tests should only be used to verify that the function is correctly implemented.
+### `simplify()`
 
-Please be sure to add additional tests beyond direct invocation.
-For more detailed testing guidelines, refer to the [Spark SQLLogicTest README].
+DataFusion functions allow you to implement `simplify()` which can let you rewrite
+the function call during logical optimization, theoretically allowing you to avoid
+implementing physical execution via `invoke_with_args()` if the rewrite is unconditional
+(e.g. rewrite to an arithmetic operation).
 
-## Implementation References
+**However, `invoke_with_args()` must always be implemented for functions in this
+crate.** This is because downstream users such as Comet rely on DataFusion for physical
+execution, and not logical planning/optimization. That means if a function doesn't
+have a physical implementation (`invoke_with_args()`) it is not usable by Comet.
 
-When implementing Spark-compatible functions, you can check if there are existing implementations in
-the [Sail] or [Comet] projects first.
-If you do port functionality from these sources, make sure to port over the corresponding tests too, to ensure
-correctness and compatibility.
+### Supported types
 
-[spark sqllogictest readme]: ../sqllogictest/test_files/spark/README.md
+The functions in this crate need only support input types available to Spark; that
+is, they do not need to handle unsigned types or types such as `Float16` or `Decimal64`.
+
 [sail]: https://github.com/lakehq/sail
 [comet]: https://github.com/apache/datafusion-comet
+
+## Testing Guidelines
+
+Prefer adding tests via SQLLogicTests where possible, see the [Spark SQLLogicTest README].
+Resort to adding tests as Rust unit tests where it is impossible or difficult to
+test via SLT. This is because direct invocation via Rust skips steps such as input
+coercion, and is usually more verbose in the setup needed to pass data in (and
+assert output data).
+
+[spark sqllogictest readme]: ../sqllogictest/test_files/spark/README.md

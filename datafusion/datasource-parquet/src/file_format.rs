@@ -17,6 +17,7 @@
 
 //! [`ParquetFormat`]: Parquet [`FileFormat`] abstractions
 
+use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Debug;
 use std::ops::Range;
@@ -32,12 +33,14 @@ pub use crate::schema_coercion::{
 
 pub use crate::sink::ParquetSink;
 
-use arrow::datatypes::{Fields, Schema, SchemaRef};
+use arrow::datatypes::{Fields, Metadata, Schema, SchemaRef};
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::FileSinkConfig;
 
-use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
+use datafusion_datasource::file_format::{
+    FileFormat, FileFormatFactory, ensure_unique_field_names,
+};
 
 use datafusion_common::Statistics;
 use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
@@ -64,14 +67,12 @@ use crate::source::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_datasource::source::DataSourceExec;
-use datafusion_execution::cache::cache_manager::FileMetadataCache;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 use parquet::arrow::async_reader::MetadataFetch;
 use parquet::errors::ParquetError;
-use parquet::file::metadata::ParquetMetaData;
 
 #[derive(Default)]
 /// Factory struct used to create [ParquetFormat]
@@ -152,46 +153,47 @@ impl ParquetFormat {
         Self::default()
     }
 
-    /// Activate statistics based row group level pruning
-    /// - If `None`, defaults to value on `config_options`
+    /// Set [`pruning`]
+    ///
+    /// [`pruning`]: datafusion_common::config::ParquetOptions::pruning
     pub fn with_enable_pruning(mut self, enable: bool) -> Self {
         self.options.global.pruning = enable;
         self
     }
 
-    /// Return `true` if pruning is enabled
+    /// Get [`pruning`]
+    ///
+    /// [`pruning`]: datafusion_common::config::ParquetOptions::pruning
     pub fn enable_pruning(&self) -> bool {
         self.options.global.pruning
     }
 
-    /// Provide a hint to the size of the file metadata. If a hint is provided
-    /// the reader will try and fetch the last `size_hint` bytes of the parquet file optimistically.
-    /// Without a hint, two read are required. One read to fetch the 8-byte parquet footer and then
-    /// another read to fetch the metadata length encoded in the footer.
+    /// Set [`metadata_size_hint`]
     ///
-    /// - If `None`, defaults to value on `config_options`
+    /// [`metadata_size_hint`]: datafusion_common::config::ParquetOptions::metadata_size_hint
     pub fn with_metadata_size_hint(mut self, size_hint: Option<usize>) -> Self {
         self.options.global.metadata_size_hint = size_hint;
         self
     }
 
-    /// Return the metadata size hint if set
+    /// Get [`metadata_size_hint`]
+    ///
+    /// [`metadata_size_hint`]: datafusion_common::config::ParquetOptions::metadata_size_hint
     pub fn metadata_size_hint(&self) -> Option<usize> {
         self.options.global.metadata_size_hint
     }
 
-    /// Tell the parquet reader to skip any metadata that may be in
-    /// the file Schema. This can help avoid schema conflicts due to
-    /// metadata.
+    /// Set [`skip_metadata`]
     ///
-    /// - If `None`, defaults to value on `config_options`
+    /// [`skip_metadata`]: datafusion_common::config::ParquetOptions::skip_metadata
     pub fn with_skip_metadata(mut self, skip_metadata: bool) -> Self {
         self.options.global.skip_metadata = skip_metadata;
         self
     }
 
-    /// Returns `true` if schema metadata will be cleared prior to
-    /// schema merging.
+    /// Get [`skip_metadata`]
+    ///
+    /// [`skip_metadata`]: datafusion_common::config::ParquetOptions::skip_metadata
     pub fn skip_metadata(&self) -> bool {
         self.options.global.skip_metadata
     }
@@ -207,49 +209,46 @@ impl ParquetFormat {
         &self.options
     }
 
-    /// Return `true` if should use view types.
+    /// Get [`schema_force_view_types`]
     ///
-    /// If this returns true, DataFusion will instruct the parquet reader
-    /// to read string / binary columns using view `StringView` or `BinaryView`
-    /// if the table schema specifies those types, regardless of any embedded metadata
-    /// that may specify an alternate Arrow type. The parquet reader is optimized
-    /// for reading `StringView` and `BinaryView` and such queries are significantly faster.
-    ///
-    /// If this returns false, the parquet reader will read the columns according to the
-    /// defaults or any embedded Arrow type information. This may result in reading
-    /// `StringArrays` and then casting to `StringViewArray` which is less efficient.
+    /// [`schema_force_view_types`]: datafusion_common::config::ParquetOptions::schema_force_view_types
     pub fn force_view_types(&self) -> bool {
         self.options.global.schema_force_view_types
     }
 
-    /// If true, will use view types. See [`Self::force_view_types`] for details
+    /// Set [`schema_force_view_types`]
+    ///
+    /// [`schema_force_view_types`]: datafusion_common::config::ParquetOptions::schema_force_view_types
     pub fn with_force_view_types(mut self, use_views: bool) -> Self {
         self.options.global.schema_force_view_types = use_views;
         self
     }
 
-    /// Return `true` if binary types will be read as strings.
+    /// Get [`binary_as_string`]
     ///
-    /// If this returns true, DataFusion will instruct the parquet reader
-    /// to read binary columns such as `Binary` or `BinaryView` as the
-    /// corresponding string type such as `Utf8` or `LargeUtf8`.
-    /// The parquet reader has special optimizations for `Utf8` and `LargeUtf8`
-    /// validation, and such queries are significantly faster than reading
-    /// binary columns and then casting to string columns.
+    /// [`binary_as_string`]: datafusion_common::config::ParquetOptions::binary_as_string
     pub fn binary_as_string(&self) -> bool {
         self.options.global.binary_as_string
     }
 
-    /// If true, will read binary types as strings. See [`Self::binary_as_string`] for details
+    /// Set [`binary_as_string`]
+    ///
+    /// [`binary_as_string`]: datafusion_common::config::ParquetOptions::binary_as_string
     pub fn with_binary_as_string(mut self, binary_as_string: bool) -> Self {
         self.options.global.binary_as_string = binary_as_string;
         self
     }
 
+    /// Get [`coerce_int96`]
+    ///
+    /// [`coerce_int96`]: datafusion_common::config::ParquetOptions::coerce_int96
     pub fn coerce_int96(&self) -> Option<String> {
         self.options.global.coerce_int96.clone()
     }
 
+    /// Set [`coerce_int96`]
+    ///
+    /// [`coerce_int96`]: datafusion_common::config::ParquetOptions::coerce_int96
     pub fn with_coerce_int96(mut self, time_unit: Option<String>) -> Self {
         self.options.global.coerce_int96 = time_unit;
         self
@@ -266,7 +265,7 @@ fn clear_metadata(
             .fields()
             .iter()
             .map(|field| {
-                field.as_ref().clone().with_metadata(Default::default()) // clear meta
+                field.as_ref().clone().with_metadata(Metadata::new()) // clear meta
             })
             .collect::<Fields>();
         Schema::new(fields)
@@ -387,6 +386,17 @@ impl FileFormat for ParquetFormat {
         // https://github.com/apache/datafusion/pull/6629
         schemas
             .sort_unstable_by(|(location1, _), (location2, _)| location1.cmp(location2));
+
+        let mut seen = HashSet::new();
+        for (location, schema) in &schemas {
+            ensure_unique_field_names(schema, &mut seen).map_err(|err| {
+                DataFusionError::Context(
+                    format!("Error when processing Parquet file {location}"),
+                    Box::new(err),
+                )
+            })?;
+        }
+        drop(seen);
 
         let schemas = schemas.into_iter().map(|(_, schema)| schema);
 
@@ -627,68 +637,6 @@ impl MetadataFetch for ObjectStoreFetch<'_> {
     }
 }
 
-/// Fetches parquet metadata from ObjectStore for given object
-///
-/// This component is a subject to **change** in near future and is exposed for low level integrations
-/// through [`ParquetFileReaderFactory`].
-///
-/// [`ParquetFileReaderFactory`]: crate::ParquetFileReaderFactory
-#[deprecated(
-    since = "50.0.0",
-    note = "Use `DFParquetMetadata::fetch_metadata` instead"
-)]
-pub async fn fetch_parquet_metadata(
-    store: &dyn ObjectStore,
-    object_meta: &ObjectMeta,
-    size_hint: Option<usize>,
-    decryption_properties: Option<&FileDecryptionProperties>,
-    file_metadata_cache: Option<Arc<FileMetadataCache>>,
-) -> Result<Arc<ParquetMetaData>> {
-    let decryption_properties = decryption_properties.cloned().map(Arc::new);
-    DFParquetMetadata::new(store, object_meta)
-        .with_metadata_size_hint(size_hint)
-        .with_decryption_properties(decryption_properties)
-        .with_file_metadata_cache(file_metadata_cache)
-        .fetch_metadata()
-        .await
-}
-
-/// Read and parse the statistics of the Parquet file at location `path`
-///
-/// See [`statistics_from_parquet_meta_calc`] for more details
-#[deprecated(
-    since = "50.0.0",
-    note = "Use `DFParquetMetadata::fetch_statistics` instead"
-)]
-pub async fn fetch_statistics(
-    store: &dyn ObjectStore,
-    table_schema: SchemaRef,
-    file: &ObjectMeta,
-    metadata_size_hint: Option<usize>,
-    decryption_properties: Option<&FileDecryptionProperties>,
-    file_metadata_cache: Option<Arc<FileMetadataCache>>,
-) -> Result<Statistics> {
-    let decryption_properties = decryption_properties.cloned().map(Arc::new);
-    DFParquetMetadata::new(store, file)
-        .with_metadata_size_hint(metadata_size_hint)
-        .with_decryption_properties(decryption_properties)
-        .with_file_metadata_cache(file_metadata_cache)
-        .fetch_statistics(&table_schema)
-        .await
-}
-
-#[deprecated(
-    since = "50.0.0",
-    note = "Use `DFParquetMetadata::statistics_from_parquet_metadata` instead"
-)]
-#[expect(clippy::needless_pass_by_value)]
-pub fn statistics_from_parquet_meta_calc(
-    metadata: &ParquetMetaData,
-    table_schema: SchemaRef,
-) -> Result<Statistics> {
-    DFParquetMetadata::statistics_from_parquet_metadata(metadata, &table_schema)
-}
-
 #[cfg(feature = "proto")]
 use datafusion_proto_models::protobuf::{self, parquet_column_options, parquet_options};
 
@@ -722,14 +670,14 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             write_batch_size: global_options.global.write_batch_size as u64,
             writer_version: global_options.global.writer_version.to_string(),
             compression_opt: global_options.global.compression.map(|compression| {
-                parquet_options::CompressionOpt::Compression(compression)
+                parquet_options::CompressionOpt::Compression(compression.to_string())
             }),
             dictionary_enabled_opt: global_options.global.dictionary_enabled.map(|enabled| {
                 parquet_options::DictionaryEnabledOpt::DictionaryEnabled(enabled)
             }),
             dictionary_page_size_limit: global_options.global.dictionary_page_size_limit as u64,
             statistics_enabled_opt: global_options.global.statistics_enabled.map(|enabled| {
-                parquet_options::StatisticsEnabledOpt::StatisticsEnabled(enabled)
+                parquet_options::StatisticsEnabledOpt::StatisticsEnabled(enabled.to_string())
             }),
             max_row_group_size: global_options.global.max_row_group_size as u64,
             max_in_list_size: global_options.global.max_in_list_size as u64,

@@ -17,8 +17,6 @@
 
 //! Math function: `log()`.
 
-use super::power::PowerFunc;
-
 use crate::utils::calculate_binary_math;
 use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{
@@ -28,15 +26,12 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use arrow_buffer::i256;
 use datafusion_common::types::NativeType;
-use datafusion_common::{
-    Result, ScalarValue, exec_err, internal_err, plan_datafusion_err, plan_err,
-};
-use datafusion_expr::expr::ScalarFunction;
+use datafusion_common::{Result, ScalarValue, exec_err, plan_datafusion_err, plan_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    Coercion, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF,
-    TypeSignature, TypeSignatureClass, lit,
+    Coercion, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, TypeSignature,
+    TypeSignatureClass, lit,
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
@@ -312,16 +307,12 @@ impl ScalarUDFImpl for LogFunc {
         self.doc()
     }
 
-    /// Simplify the `log` function by the relevant rules:
-    /// 1. Log(a, 1) ===> 0
-    /// 2. Log(a, Power(a, b)) ===> b
-    /// 3. Log(a, a) ===> 1
     fn simplify(
         &self,
-        mut args: Vec<Expr>,
+        args: Vec<Expr>,
         info: &SimplifyContext,
     ) -> Result<ExprSimplifyResult> {
-        let mut arg_types = args
+        let arg_types = args
             .iter()
             .map(|arg| info.get_data_type(arg))
             .collect::<Result<Vec<_>>>()?;
@@ -352,60 +343,10 @@ impl ScalarUDFImpl for LogFunc {
                 return Ok(ExprSimplifyResult::Original(args));
             }
             _ => (),
-        };
-
-        let number = args.pop().unwrap();
-        let number_datatype = arg_types.pop().unwrap();
-        // default to base 10
-        let base = if let Some(base) = args.pop() {
-            base
-        } else {
-            lit(ScalarValue::new_ten(&number_datatype)?)
-        };
-        let base_nullable = info.nullable(&base)?;
-
-        match number {
-            Expr::Literal(value, _)
-                if value == ScalarValue::new_one(&number_datatype)? && !base_nullable =>
-            {
-                Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_zero(
-                    &info.get_data_type(&base)?,
-                )?)))
-            }
-            Expr::ScalarFunction(ScalarFunction { func, mut args })
-                if is_pow(&func)
-                    && args.len() == 2
-                    && base == args[0]
-                    && !base_nullable =>
-            {
-                let b = args.pop().unwrap(); // length checked above
-                Ok(ExprSimplifyResult::Simplified(b))
-            }
-            number => {
-                if number == base && !base_nullable {
-                    Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_one(
-                        &number_datatype,
-                    )?)))
-                } else {
-                    let args = match num_args {
-                        1 => vec![number],
-                        2 => vec![base, number],
-                        _ => {
-                            return internal_err!(
-                                "Unexpected number of arguments in log::simplify"
-                            );
-                        }
-                    };
-                    Ok(ExprSimplifyResult::Original(args))
-                }
-            }
         }
-    }
-}
 
-/// Returns true if the function is `PowerFunc`
-fn is_pow(func: &ScalarUDF) -> bool {
-    func.inner().is::<PowerFunc>()
+        Ok(ExprSimplifyResult::Original(args))
+    }
 }
 
 #[cfg(test)]
@@ -766,26 +707,20 @@ mod tests {
     }
 
     #[test]
-    // Test that non-simplifiable log() expressions are unchanged after simplification
     fn test_log_simplify_original() {
         let context = SimplifyContext::default();
-        // One argument with no simplifications
-        let result = LogFunc::new().simplify(vec![lit(2)], &context).unwrap();
-        let ExprSimplifyResult::Original(args) = result else {
-            panic!("Expected ExprSimplifyResult::Original")
-        };
-        assert_eq!(args.len(), 1);
-        assert_eq!(args[0], lit(2));
-        // Two arguments with no simplifications
-        let result = LogFunc::new()
-            .simplify(vec![lit(2), lit(3)], &context)
-            .unwrap();
-        let ExprSimplifyResult::Original(args) = result else {
-            panic!("Expected ExprSimplifyResult::Original")
-        };
-        assert_eq!(args.len(), 2);
-        assert_eq!(args[0], lit(2));
-        assert_eq!(args[1], lit(3));
+        for args in [
+            vec![lit(2)],
+            vec![lit(2), lit(3)],
+            vec![lit(2.0), lit(1.0)],
+            vec![lit(2.0), lit(2.0)],
+        ] {
+            let result = LogFunc::new().simplify(args.clone(), &context).unwrap();
+            let ExprSimplifyResult::Original(actual) = result else {
+                panic!("Expected ExprSimplifyResult::Original")
+            };
+            assert_eq!(actual, args);
+        }
     }
 
     #[test]

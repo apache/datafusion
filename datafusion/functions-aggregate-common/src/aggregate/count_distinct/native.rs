@@ -72,7 +72,7 @@ where
 {
     fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
         let arr = Arc::new(
-            PrimitiveArray::<T>::from_iter_values(self.values.iter().cloned())
+            PrimitiveArray::<T>::from_iter_values(self.values.iter().copied())
                 .with_data_type(self.data_type.clone()),
         );
         Ok(vec![
@@ -115,7 +115,7 @@ where
             if let Some(list) = maybe_list {
                 let list = as_primitive_array::<T>(&list)?;
                 self.values.extend(list.values())
-            };
+            }
             Ok(())
         })
     }
@@ -224,7 +224,7 @@ impl Accumulator for BoolArray256DistinctCountAccumulator {
                 for value in list.values().iter() {
                     self.seen[*value as usize] = true;
                 }
-            };
+            }
             Ok(())
         })
     }
@@ -304,7 +304,7 @@ impl Accumulator for BoolArray256DistinctCountAccumulatorI8 {
                 for value in list.values().iter() {
                     self.seen[*value as u8 as usize] = true;
                 }
-            };
+            }
             Ok(())
         })
     }
@@ -397,7 +397,7 @@ impl Accumulator for Bitmap65536DistinctCountAccumulator {
                 for value in list.values().iter() {
                     self.set_bit(*value);
                 }
-            };
+            }
             Ok(())
         })
     }
@@ -491,7 +491,7 @@ impl Accumulator for Bitmap65536DistinctCountAccumulatorI16 {
                 for value in list.values().iter() {
                     self.set_bit(*value);
                 }
-            };
+            }
             Ok(())
         })
     }
@@ -594,7 +594,7 @@ impl Accumulator for BooleanDistinctCountAccumulator {
             }
             if let Some(list) = maybe_list {
                 self.observe(as_boolean_array(&list)?);
-            };
+            }
             Ok(())
         })
     }

@@ -23,7 +23,7 @@ use itertools::{Itertools as _, izip};
 use std::sync::{Arc, LazyLock};
 
 use crate::analyzer::AnalyzerRule;
-use crate::utils::NamePreserver;
+use crate::utils::{NamePreserver, merge_into_schema};
 
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use arrow::temporal_conversions::SECONDS_IN_DAY;
@@ -57,10 +57,10 @@ use datafusion_expr::type_coercion::{
 };
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
-    Cast, DmlStatement, Expr, ExprSchemable, Join, Limit, LogicalPlan, Operator,
-    Projection, Union, ValueOrLambda, WindowFrame, WindowFrameBound, WindowFrameUnits,
-    WriteOp, is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown,
-    lit, not,
+    AsOfJoin, AsOfMatch, Cast, DmlStatement, Expr, ExprSchemable, Join, Limit,
+    LogicalPlan, Operator, Projection, Union, ValueOrLambda, WindowFrame,
+    WindowFrameBound, WindowFrameUnits, WriteOp, is_false, is_not_false, is_not_true,
+    is_not_unknown, is_true, is_unknown, lit, not,
 };
 
 /// Performs type coercion by determining the schema
@@ -130,18 +130,10 @@ fn analyze_internal(
     }
 
     // MERGE expressions (ON / WHEN clauses) reference the target table, which
-    // is not one of `plan.inputs()`. Rebuild the target schema from the DML's
-    // `table_name` and `target` so those columns resolve during coercion.
-    if let LogicalPlan::Dml(DmlStatement {
-        op: WriteOp::MergeInto(_),
-        table_name,
-        target,
-        ..
-    }) = &plan
-    {
-        let target_schema =
-            DFSchema::try_from_qualified_schema(table_name.clone(), &target.schema())?;
-        schema.merge(&target_schema);
+    // is not one of `plan.inputs()`. Use the operation's visible qualifier
+    // when adding its target schema.
+    if let Some(merge_schema) = merge_into_schema(&plan)? {
+        schema = merge_schema;
     }
 
     // merge the outer schema for correlated subqueries
@@ -163,6 +155,16 @@ fn analyze_internal(
     // apply coercion rewrite all expressions in the plan individually
     plan.map_expressions(|expr| {
         let original_name = name_preserver.save(&expr);
+
+        // A lambda variable carries the field recorded when the plan was built, which
+        // need not be the one its function derives from the arguments. Resolve them
+        // before coercing, so lambda bodies are coerced against the types they receive.
+        let expr = if expr.exists(|e| Ok(matches!(e, Expr::HigherOrderFunction(_))))? {
+            expr.resolve_lambda_variables(&schema)?.data
+        } else {
+            expr
+        };
+
         expr.rewrite(&mut expr_rewrite)
             .map(|transformed| transformed.update_data(|e| original_name.restore(e)))
     })?
@@ -191,6 +193,7 @@ impl<'a> TypeCoercionRewriter<'a> {
     pub fn coerce_plan(&mut self, plan: LogicalPlan) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::Join(join) => self.coerce_join(join),
+            LogicalPlan::AsOfJoin(join) => self.coerce_asof_join(join),
             LogicalPlan::Union(union) => Self::coerce_union(union),
             LogicalPlan::Limit(limit) => Self::coerce_limit(limit),
             LogicalPlan::Dml(dml) => self.coerce_dml(dml),
@@ -282,6 +285,36 @@ impl<'a> TypeCoercionRewriter<'a> {
             .transpose()?;
 
         Ok(LogicalPlan::Join(join))
+    }
+
+    /// Coerce ASOF equality and ordered match expressions across input schemas.
+    pub fn coerce_asof_join(&mut self, mut join: AsOfJoin) -> Result<LogicalPlan> {
+        join.on = join
+            .on
+            .into_iter()
+            .map(|(left, right)| {
+                self.coerce_binary_op(
+                    left,
+                    join.left.schema(),
+                    Operator::Eq,
+                    right,
+                    join.right.schema(),
+                )
+            })
+            .collect::<Result<_>>()?;
+        let (left, right) = self.coerce_binary_op(
+            join.match_condition.left,
+            join.left.schema(),
+            join.match_condition.op,
+            join.match_condition.right,
+            join.right.schema(),
+        )?;
+        join.match_condition = Box::new(AsOfMatch {
+            left,
+            op: join.match_condition.op,
+            right,
+        });
+        Ok(LogicalPlan::AsOfJoin(join))
     }
 
     /// Coerce the union’s inputs to a common schema compatible with all inputs.
@@ -813,8 +846,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 Ok(Transformed::yes(Expr::Case(case)))
             }
             Expr::ScalarFunction(ScalarFunction { func, args }) => {
-                let new_expr =
-                    coerce_arguments_for_signature(args, self.schema, func.as_ref())?;
+                let new_expr = coerce_scalar_function_arguments_for_signature(
+                    args,
+                    self.schema,
+                    func.as_ref(),
+                )?;
                 Ok(Transformed::yes(Expr::ScalarFunction(
                     ScalarFunction::new_udf(func, new_expr),
                 )))
@@ -1065,9 +1101,14 @@ fn coerce_frame_bound(
     }
 }
 
-fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
+/// The type that RANGE frame offsets are coerced to for an ORDER BY column of
+/// `col_type`, or `None` if there is no offset type to coerce to (the column
+/// type has no arithmetic). `None` does not mean the type is unusable in a
+/// RANGE frame: a free frame has no offsets, see `supports_free_range_frame`.
+fn extract_window_frame_target_type(col_type: &DataType) -> Option<DataType> {
     if col_type.is_numeric()
         || col_type.is_string()
+        || col_type.is_binary()
         || col_type.is_null()
         || matches!(
             col_type,
@@ -1075,16 +1116,82 @@ fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
                 | DataType::LargeList(_)
                 | DataType::FixedSizeList(_, _)
                 | DataType::Boolean
+                | DataType::Time32(_)
+                | DataType::Time64(_)
         )
     {
-        Ok(col_type.clone())
+        Some(col_type.clone())
     } else if is_datetime(col_type) {
-        Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+        Some(DataType::Interval(IntervalUnit::MonthDayNano))
     } else if let DataType::Dictionary(_, value_type) = col_type {
         extract_window_frame_target_type(value_type)
+    } else if let DataType::RunEndEncoded(_, value_type) = col_type {
+        extract_window_frame_target_type(value_type.data_type())
     } else {
-        internal_err!("Cannot run range queries on datatype: {col_type}")
+        None
     }
+}
+
+/// Whether a free RANGE frame (all bounds `UNBOUNDED` or `CURRENT ROW`) can
+/// run over an ORDER BY column of `col_type` even though the type has no
+/// arithmetic for finite offsets.
+///
+/// Such a frame only compares rows to find peers, so the type must compare
+/// the same way in the RANGE peer check (`ScalarValue::partial_cmp`) as in
+/// the sort that produced the input order. That holds for durations and
+/// intervals; it does not for structs and maps, whose `ScalarValue`
+/// comparison differs from the sorter's, so they stay unsupported.
+fn supports_free_range_frame(col_type: &DataType) -> bool {
+    match col_type {
+        DataType::Duration(_) | DataType::Interval(_) => true,
+        DataType::Dictionary(_, value_type) => supports_free_range_frame(value_type),
+        DataType::RunEndEncoded(_, value_type) => {
+            supports_free_range_frame(value_type.data_type())
+        }
+        _ => false,
+    }
+}
+
+/// Whether `col_type` is a list, possibly behind dictionary or run-end
+/// encoding.
+///
+/// Lists are kept out of the free-range fallback because their peer
+/// comparison and the sort do not agree on element NULLs: `compare_rows`
+/// applies the NULLS FIRST / NULLS LAST option to the top-level value only and
+/// then calls `ScalarValue::partial_cmp`, whose `partial_cmp_list` always
+/// orders a NULL element after a non-NULL one (Postgres semantics), while the
+/// sorter's `make_comparator` applies the option to the elements as well. Under
+/// `ORDER BY d, l NULLS FIRST` with tied `d`, the sort puts `[NULL]` before
+/// `[1]` and the peer check orders them the other way round.
+fn is_list_type(col_type: &DataType) -> bool {
+    match col_type {
+        DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _) => {
+            true
+        }
+        DataType::Dictionary(_, value_type) => is_list_type(value_type),
+        DataType::RunEndEncoded(_, value_type) => is_list_type(value_type.data_type()),
+        _ => false,
+    }
+}
+
+/// Errors if any ORDER BY expression has a type not supported in a free RANGE
+/// frame: a type with neither an offset target nor a sound peer comparison, or
+/// a list (see `is_list_type`).
+fn check_free_range_order_by_types(
+    expressions: &[Sort],
+    schema: &DFSchema,
+) -> Result<()> {
+    for sort in expressions {
+        let t = sort.expr.get_type(schema)?;
+        let supported = supports_free_range_frame(&t)
+            || (extract_window_frame_target_type(&t).is_some() && !is_list_type(&t));
+        if !supported {
+            return plan_err!(
+                "RANGE window frames are not supported for ORDER BY type {t}"
+            );
+        }
+    }
+    Ok(())
 }
 
 // Coerces the given `window_frame` to use appropriate natural types.
@@ -1102,7 +1209,43 @@ fn coerce_window_frame(
                 .map(|s| s.expr.get_type(schema))
                 .transpose()?;
             if let Some(col_type) = current_types {
-                extract_window_frame_target_type(&col_type)?
+                let target_type = match extract_window_frame_target_type(&col_type) {
+                    Some(target_type) => {
+                        if window_frame.free_range() {
+                            // The first key established the target type above, but
+                            // every later key also participates in peer comparison.
+                            check_free_range_order_by_types(&expressions[1..], schema)?;
+                        }
+                        target_type
+                    }
+                    // A free range frame has no offsets to coerce, so ORDER BY
+                    // types without arithmetic are fine as long as their peer
+                    // comparison is sound (see `supports_free_range_frame`).
+                    None if window_frame.free_range() => {
+                        check_free_range_order_by_types(expressions, schema)?;
+                        return Ok(window_frame);
+                    }
+                    None => {
+                        return plan_err!(
+                            "RANGE window frames are not supported for ORDER BY type {col_type}"
+                        );
+                    }
+                };
+                // A finite offset bound (e.g. `5 PRECEDING`) is computed as
+                // `current_value ± offset`, so it is only meaningful for target
+                // types that support arithmetic. Other orderable target types can
+                // still use free range frames, whose bounds require comparison only.
+                // REE arrays are not supported by arrow's numeric kernesl.
+                // Tracked at https://github.com/apache/arrow-rs/issues/10891).
+                let supports_offset_arithmetic =
+                    !matches!(col_type, DataType::RunEndEncoded(_, _))
+                        && (target_type.is_numeric() || is_interval(&target_type));
+                if !supports_offset_arithmetic && !window_frame.free_range() {
+                    return plan_err!(
+                        "RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type {target_type}"
+                    );
+                }
+                target_type
             } else {
                 return internal_err!("ORDER BY column cannot be empty");
             }
@@ -1133,21 +1276,78 @@ fn coerce_arguments_for_signature<F: UDFCoercionExt>(
     schema: &DFSchema,
     func: &F,
 ) -> Result<Vec<Expr>> {
+    let coerced_types = coerced_argument_types(&expressions, schema, func)?;
+
+    expressions
+        .into_iter()
+        .zip(coerced_types)
+        .map(|(expr, data_type)| expr.cast_to(&data_type, schema))
+        .collect()
+}
+
+/// Coerces scalar function arguments while materializing successful implicit
+/// casts of literals. This preserves the literal for subsequent calls to
+/// `return_field_from_args` without treating user-written `Cast` or `TryCast`
+/// expressions as scalar arguments.
+fn coerce_scalar_function_arguments_for_signature<F: UDFCoercionExt>(
+    expressions: Vec<Expr>,
+    schema: &DFSchema,
+    func: &F,
+) -> Result<Vec<Expr>> {
+    let coerced_types = coerced_argument_types(&expressions, schema, func)?;
+
+    expressions
+        .into_iter()
+        .zip(coerced_types)
+        .map(|(expr, data_type)| {
+            coerce_scalar_function_argument(expr, &data_type, schema)
+        })
+        .collect()
+}
+
+fn coerced_argument_types<F: UDFCoercionExt>(
+    expressions: &[Expr],
+    schema: &DFSchema,
+    func: &F,
+) -> Result<Vec<DataType>> {
     let current_fields = expressions
         .iter()
         .map(|e| e.to_field(schema).map(|(_, f)| f))
         .collect::<Result<Vec<_>>>()?;
 
-    let coerced_types = fields_with_udf(&current_fields, func)?
-        .into_iter()
-        .map(|f| f.data_type().clone())
-        .collect::<Vec<_>>();
+    fields_with_udf(&current_fields, func).map(|fields| {
+        fields
+            .into_iter()
+            .map(|field| field.data_type().clone())
+            .collect()
+    })
+}
 
-    expressions
-        .into_iter()
-        .enumerate()
-        .map(|(i, expr)| expr.cast_to(&coerced_types[i], schema))
-        .collect()
+fn coerce_scalar_function_argument(
+    expr: Expr,
+    data_type: &DataType,
+    schema: &DFSchema,
+) -> Result<Expr> {
+    if matches!(&expr, Expr::Cast(_) | Expr::TryCast(_))
+        && expr.get_type(schema)? == *data_type
+    {
+        return Ok(expr);
+    }
+
+    let Expr::Literal(value, metadata) = expr else {
+        return expr.cast_to(data_type, schema);
+    };
+
+    if value.data_type() != *data_type
+        && let Ok(value) = value.cast_to(data_type)
+    {
+        return Ok(Expr::Literal(value, metadata));
+    }
+
+    // A failed value cast remains an expression cast so execution produces the
+    // same error as before. Since it is no longer a literal at the coerced type,
+    // it is reported as `None` in `ReturnFieldArgs::scalar_arguments`.
+    Expr::Literal(value, metadata).cast_to(data_type, schema)
 }
 
 fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
@@ -1634,9 +1834,10 @@ mod test {
         // target schema to be visible to the analyzer, which only sees
         // `plan.inputs()` (the source plan) by default.
         let on = col("target.id").eq(col("source.id"));
-        let merge_op = MergeIntoOp {
+        let merge_op = MergeIntoOp::new(
+            "target",
             on,
-            clauses: vec![
+            vec![
                 MergeIntoClause {
                     kind: MergeIntoClauseKind::Matched,
                     predicate: None,
@@ -1654,7 +1855,7 @@ mod test {
                     },
                 },
             ],
-        };
+        );
         let plan = LogicalPlan::Dml(DmlStatement::new(
             target_table_name,
             target_source,
@@ -2020,7 +2221,7 @@ mod test {
         assert_analyzed_plan_eq!(
             plan,
             @r"
-        Projection: TestScalarUDF(CAST(Int32(123) AS Float32))
+        Projection: TestScalarUDF(Float32(123)) AS TestScalarUDF(Int32(123))
           EmptyRelation: rows=0
         "
         )
@@ -2057,7 +2258,7 @@ mod test {
         assert_analyzed_plan_eq!(
             plan,
             @r"
-        Projection: TestScalarUDF(CAST(Int64(10) AS Float32))
+        Projection: TestScalarUDF(Float32(10)) AS TestScalarUDF(Int64(10))
           EmptyRelation: rows=0
         "
         )
@@ -2597,7 +2798,7 @@ mod test {
         assert_analyzed_plan_eq!(
             plan,
             @r#"
-        Projection: TestScalarUDF(a, Utf8("b"), CAST(Boolean(true) AS Utf8), CAST(Boolean(false) AS Utf8), CAST(Int32(13) AS Utf8))
+        Projection: TestScalarUDF(a, Utf8("b"), Utf8("true"), Utf8("false"), Utf8("13")) AS TestScalarUDF(a,Utf8("b"),Boolean(true),Boolean(false),Int32(13))
           EmptyRelation: rows=0
         "#
         )
@@ -2660,6 +2861,10 @@ mod test {
         )
     }
 
+    #[expect(
+        clippy::unnecessary_box_returns,
+        reason = "`Case` stores boxed expressions, so returning the box reuses the allocation"
+    )]
     fn cast_if_not_same_type(
         expr: Box<Expr>,
         data_type: &DataType,

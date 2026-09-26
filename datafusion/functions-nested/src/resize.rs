@@ -24,14 +24,17 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
-use arrow::datatypes::{ArrowNativeType, Field};
+use arrow::datatypes::Field;
 use arrow::datatypes::{
     DataType::{LargeList, List},
     FieldRef,
 };
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::utils::ListCoercion;
-use datafusion_common::{Result, ScalarValue, exec_err, internal_datafusion_err};
+use datafusion_common::{
+    Result, ScalarValue, assert_or_internal_err, exec_datafusion_err, exec_err,
+    internal_datafusion_err,
+};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
     ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
@@ -186,6 +189,13 @@ fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+fn resize_count(count_array: &Int64Array, idx: usize) -> Result<usize> {
+    let c = count_array.value(idx);
+    usize::try_from(c).map_err(|_| {
+        exec_datafusion_err!("array_resize: size must not be negative, got {c}")
+    })
+}
+
 /// array_resize keep the original array and append the default element to the end
 fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
     array: &GenericListArray<O>,
@@ -206,9 +216,7 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
         if array.is_null(row_index) || count_array.is_null(row_index) {
             continue;
         }
-        let target_count = count_array.value(row_index).to_usize().ok_or_else(|| {
-            internal_datafusion_err!("array_resize: failed to convert size to usize")
-        })?;
+        let target_count = resize_count(count_array, row_index)?;
         output_values_len =
             output_values_len.checked_add(target_count).ok_or_else(|| {
                 internal_datafusion_err!("array_resize: output size overflow")
@@ -262,27 +270,26 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
             count_array,
             field,
             &original_data,
-            &default_value_data,
+            Some(&default_value_data),
             output_values_len,
             |mutable, _, extra_count| Ok(mutable.try_extend(1, 0, extra_count)?),
         )
     } else {
-        // Slow path: rows may need different fill values, so append from the
-        // corresponding slot in the input fill array for each grown element.
-        let fill_values = match default_element {
-            Some(fill_values) => fill_values,
-            None => {
-                let null_scalar = ScalarValue::try_from(&data_type)?;
-                null_scalar.to_array_of_size(original_data.len())?
-            }
+        // Handle batches with no growth or with different fill values per row.
+        // Growing rows repeat the fill value from their corresponding input slot.
+        // Growth without a fill argument always takes the bulk path above, so
+        // `default_element` is present whenever a row grows here.
+        let default_value_data = if max_extra > 0 {
+            default_element.map(|fill_values| fill_values.to_data())
+        } else {
+            None
         };
-        let default_value_data = fill_values.to_data();
         build_resized_list(
             array,
             count_array,
             field,
             &original_data,
-            &default_value_data,
+            default_value_data.as_ref(),
             output_values_len,
             |mutable, row_index, extra_count| {
                 for _ in 0..extra_count {
@@ -294,12 +301,16 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
     }
 }
 
+/// Copies the retained prefix of each row from `original_data` (source 0) and
+/// calls `append_fill_values(mutable, row_index, extra_count)` for each row
+/// that grows. `default_value_data` is registered as source 1 for that
+/// callback to read; it may be `None` only when no row grows.
 fn build_resized_list<O, F>(
     array: &GenericListArray<O>,
     count_array: &Int64Array,
     field: &FieldRef,
     original_data: &arrow::array::ArrayData,
-    default_value_data: &arrow::array::ArrayData,
+    default_value_data: Option<&arrow::array::ArrayData>,
     output_values_len: usize,
     mut append_fill_values: F,
 ) -> Result<ArrayRef>
@@ -309,11 +320,11 @@ where
 {
     let capacity = Capacities::Array(output_values_len);
     let mut offsets = vec![O::usize_as(0)];
-    let mut mutable = MutableArrayData::with_capacities(
-        vec![original_data, default_value_data],
-        false,
-        capacity,
-    );
+    let sources = match default_value_data {
+        Some(default_value_data) => vec![original_data, default_value_data],
+        None => vec![original_data],
+    };
+    let mut mutable = MutableArrayData::with_capacities(sources, false, capacity);
     let mut null_builder = NullBufferBuilder::new(array.len());
 
     for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
@@ -324,12 +335,14 @@ where
         }
         null_builder.append_non_null();
 
-        let count = count_array.value(row_index).to_usize().ok_or_else(|| {
-            internal_datafusion_err!("array_resize: failed to convert size to usize")
-        })?;
+        let count = resize_count(count_array, row_index)?;
         let count = O::usize_as(count);
         let start = offset_window[0];
         if start + count > offset_window[1] {
+            assert_or_internal_err!(
+                default_value_data.is_some(),
+                "fill values are required when growing a list"
+            );
             let extra_count = (start + count - offset_window[1]).to_usize().unwrap();
             let end = offset_window[1];
             mutable.try_extend(0, start.to_usize().unwrap(), end.to_usize().unwrap())?;
@@ -337,7 +350,7 @@ where
         } else {
             let end = start + count;
             mutable.try_extend(0, start.to_usize().unwrap(), end.to_usize().unwrap())?;
-        };
+        }
         offsets.push(offsets[row_index] + count);
     }
 
@@ -367,12 +380,66 @@ fn max_resize_values(value_type: &DataType) -> usize {
 mod tests {
     use super::array_resize_inner;
     use arrow::array::{
-        ArrayRef, AsArray, FixedSizeBinaryArray, Int64Array, LargeListArray, ListArray,
+        ArrayRef, AsArray, FixedSizeBinaryArray, GenericListArray, Int32Array,
+        Int64Array, LargeListArray, ListArray, OffsetSizeTrait,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{DataType, Field, Int32Type, Int64Type};
     use datafusion_common::Result;
     use std::sync::Arc;
+
+    #[test]
+    fn test_array_resize_sliced_no_growth() -> Result<()> {
+        fn check<O: OffsetSizeTrait>() -> Result<()> {
+            let array =
+                GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>(vec![
+                    Some(vec![Some(90), Some(91), Some(92)]),
+                    Some(vec![Some(1), None, Some(3)]),
+                    Some(vec![Some(4), Some(5)]),
+                    Some(vec![Some(6)]),
+                    Some(vec![]),
+                    None,
+                    Some(vec![Some(7), Some(8)]),
+                    Some(vec![Some(93), Some(94), Some(95)]),
+                ]);
+            // Retain the full child array, with unused values before and after
+            // the visible rows. None of the valid rows needs a fill value.
+            let array: ArrayRef = Arc::new(array.slice(1, 6));
+            let size: ArrayRef = Arc::new(Int64Array::from(vec![
+                Some(2),
+                Some(2),
+                Some(0),
+                Some(0),
+                // The list in this row is NULL, so the size is ignored.
+                Some(20),
+                None,
+            ]));
+
+            let expected =
+                GenericListArray::<O>::from_iter_primitive::<Int32Type, _, _>(vec![
+                    Some(vec![Some(1), None]),
+                    Some(vec![Some(4), Some(5)]),
+                    Some(vec![]),
+                    Some(vec![]),
+                    None,
+                    None,
+                ]);
+            // The result is the same with or without a fill argument, because
+            // no row reads a fill value.
+            let fill: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60]));
+            for args in [
+                vec![Arc::clone(&array), Arc::clone(&size)],
+                vec![array, size, fill],
+            ] {
+                let result = array_resize_inner(&args)?;
+                assert_eq!(result.as_list::<O>(), &expected);
+            }
+
+            Ok(())
+        }
+        check::<i32>()?;
+        check::<i64>()
+    }
 
     #[test]
     fn test_array_resize_null_size_returns_null() -> Result<()> {

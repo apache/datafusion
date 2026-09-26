@@ -30,15 +30,189 @@
 //! because batch-arrival timing affects how soon the TopK heap fills,
 //! and we don't want this test to become flaky.
 
+use std::io::Write;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 
-use datafusion::prelude::SessionConfig;
+use datafusion::physical_plan::collect;
+use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
+use datafusion_common::ScalarValue;
+use parquet::arrow::ArrowWriter;
+use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataWriter};
+use parquet::file::properties::{EnabledStatistics, WriterProperties};
+use parquet::file::statistics::Statistics;
+use parquet::file::writer::TrackedWrite;
+use tempfile::NamedTempFile;
 
 use crate::parquet::Unit::RowGroup;
+use crate::parquet::utils::MetricsFinder;
 use crate::parquet::{ContextWithParquet, Scenario};
+
+/// Keep min/max but omit the middle row group's null count. Negate the
+/// values for DESC so the first group always establishes the winning bound.
+fn file_with_missing_null_count(descending: bool, has_null: bool) -> NamedTempFile {
+    let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, true)]));
+    let props = WriterProperties::builder()
+        .set_statistics_enabled(EnabledStatistics::Chunk)
+        .build();
+    let mut bytes = Vec::new();
+    let mut writer =
+        ArrowWriter::try_new(&mut bytes, schema.clone(), Some(props)).unwrap();
+    for values in [
+        vec![Some(0), Some(1), Some(2)],
+        vec![
+            if has_null { None } else { Some(100) },
+            Some(100),
+            Some(101),
+        ],
+        vec![Some(200), Some(201), Some(202)],
+    ] {
+        let values: Int64Array = values
+            .into_iter()
+            .map(|v| v.map(|v| if descending { -v } else { v }))
+            .collect();
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(values)]).unwrap();
+        writer.write(&batch).unwrap();
+        writer.flush().unwrap();
+    }
+    let metadata = writer.close().unwrap();
+    let mut groups = metadata.row_groups().to_vec();
+    if has_null {
+        let column = groups[1].column(0).clone();
+        let Statistics::Int64(stats) = column.statistics().unwrap() else {
+            panic!("expected Int64 statistics");
+        };
+        let stats = Statistics::int64(
+            stats.min_opt().copied(),
+            stats.max_opt().copied(),
+            None,
+            None,
+            false,
+        );
+        let column = column.into_builder().set_statistics(stats).build().unwrap();
+        groups[1] = groups[1]
+            .clone()
+            .into_builder()
+            .set_column_metadata(vec![column])
+            .build()
+            .unwrap();
+    }
+    let metadata = ParquetMetaData::new(metadata.file_metadata().clone(), groups);
+
+    // Replace the footer, leaving the encoded rows and their offsets intact.
+    let footer_len =
+        u32::from_le_bytes(bytes[bytes.len() - 8..bytes.len() - 4].try_into().unwrap());
+    bytes.truncate(bytes.len() - 8 - footer_len as usize);
+    let mut file = tempfile::Builder::new()
+        .suffix(".parquet")
+        .tempfile()
+        .unwrap();
+    let mut output = TrackedWrite::new(file.as_file_mut());
+    output.write_all(&bytes).unwrap();
+    ParquetMetaDataWriter::new_with_tracked(output, &metadata)
+        .finish()
+        .unwrap();
+    file
+}
+
+#[tokio::test]
+async fn missing_null_count_preserves_null_filter_and_count() {
+    let file = file_with_missing_null_count(false, true);
+    let ctx = SessionContext::new();
+    ctx.register_parquet(
+        "t",
+        file.path().to_str().unwrap(),
+        ParquetReadOptions::default(),
+    )
+    .await
+    .unwrap();
+    for (sql, expected) in [
+        ("SELECT COUNT(v) FROM t", 8),
+        ("SELECT COUNT(*) FROM t WHERE v IS NULL", 1),
+    ] {
+        let batches = ctx.sql(sql).await.unwrap().collect().await.unwrap();
+        assert_eq!(
+            ScalarValue::try_from_array(batches[0].column(0), 0).unwrap(),
+            ScalarValue::Int64(Some(expected)),
+            "{sql}",
+        );
+    }
+}
+
+#[tokio::test]
+async fn dynamic_rg_pruning_preserves_missing_null_count() {
+    for descending in [false, true] {
+        for has_null in [false, true] {
+            let file = file_with_missing_null_count(descending, has_null);
+            for nulls_first in [false, true] {
+                for pushdown in [false, true] {
+                    let mut config = SessionConfig::new()
+                        .with_target_partitions(1)
+                        .with_batch_size(1)
+                        .with_parquet_page_index_pruning(false);
+                    // Keep the live filter on the row-group path: file-level
+                    // statistics can otherwise prune the entire remaining file.
+                    config.options_mut().execution.collect_statistics = false;
+                    config.options_mut().optimizer.enable_sort_pushdown = false;
+                    config
+                        .options_mut()
+                        .optimizer
+                        .enable_topk_dynamic_filter_pushdown = pushdown;
+                    config.options_mut().execution.parquet.pushdown_filters = false;
+                    let ctx = SessionContext::new_with_config(config);
+                    ctx.register_parquet(
+                        "t",
+                        file.path().to_str().unwrap(),
+                        ParquetReadOptions::default(),
+                    )
+                    .await
+                    .unwrap();
+                    let order = if descending { "DESC" } else { "ASC" };
+                    let null_order = if nulls_first { "FIRST" } else { "LAST" };
+                    let sql = format!(
+                        "SELECT v FROM t ORDER BY v {order} NULLS {null_order} LIMIT 1"
+                    );
+                    let plan = ctx
+                        .sql(&sql)
+                        .await
+                        .unwrap()
+                        .create_physical_plan()
+                        .await
+                        .unwrap();
+                    let batches = collect(plan.clone(), ctx.task_ctx()).await.unwrap();
+                    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+                    let expected = if has_null && nulls_first {
+                        None
+                    } else {
+                        Some(0)
+                    };
+                    assert_eq!(
+                        ScalarValue::try_from_array(batches[0].column(0), 0).unwrap(),
+                        ScalarValue::Int64(expected),
+                        "{sql}, has_null={has_null}, pushdown={pushdown}",
+                    );
+                    let metrics = MetricsFinder::find_metrics(plan.as_ref()).unwrap();
+                    let pruned = metrics
+                        .sum_by_name("row_groups_pruned_dynamic_filter")
+                        .unwrap()
+                        .as_usize();
+                    if pushdown {
+                        assert!(
+                            pruned > 0,
+                            "runtime pruning must run: {sql}, has_null={has_null}\n{metrics}\n{}",
+                            datafusion::physical_plan::displayable(plan.as_ref())
+                                .indent(true),
+                        );
+                    } else {
+                        assert_eq!(pruned, 0);
+                    }
+                }
+            }
+        }
+    }
+}
 
 /// Build five `RecordBatch`es whose `v` column ranges are disjoint:
 /// batch `i` carries `v` values `[i*100, (i+1)*100)`. When written with
@@ -91,7 +265,7 @@ async fn dynamic_rg_pruning_metric_fires_for_topk_descending_limit() {
 
     let output = ctx.query("SELECT v FROM t ORDER BY v DESC LIMIT 5").await;
 
-    assert_eq!(output.result_rows, 5, "query must return LIMIT rows",);
+    assert_eq!(output.result_rows, 5, "query must return LIMIT rows");
 
     let pruned = output
         .row_groups_pruned_dynamic_filter()
@@ -639,6 +813,94 @@ fn build_q26_batches(schema: &Arc<Schema>) -> Vec<RecordBatch> {
             .unwrap()
         })
         .collect()
+}
+
+/// Per-RG `fully_matched` `RowFilter` skip optimization.
+///
+/// Stats prove that every row of a fully-matched row group satisfies the
+/// pushdown predicate, so the parquet decoder can skip the per-row
+/// `RowFilter` for that RG entirely. The stream rebuilds the decoder at
+/// the boundary with an empty `RowFilter` and toggles back to the real
+/// one at the next non-fully-matched RG.
+///
+/// Layout: 4 RGs of 3 values each. Predicate `v >= 3 AND v <= 10` makes
+/// RG 0 a straddler (1, 2 fail the lower bound), RGs 1..=2 fully matched
+/// (every value in [3, 10] by stats), and RG 3 a straddler again (11, 12
+/// fail the upper bound). This exercises the full toggle lifecycle:
+/// filter ON (RG 0) → OFF across the fully-matched run (RGs 1..=2) → back
+/// ON (RG 3), covering both the fully-matched → non-fully-matched and the
+/// reverse transition.
+///
+/// Expected behavior:
+/// - the static prune marks RGs 1..=2 as fully_matched at file open;
+/// - the stream installs the real `RowFilter` initially (RG 0 not fm);
+/// - at the RG 0 → RG 1 boundary the toggle rebuilds with an empty filter
+///   and bumps `row_filter_skipped_fully_matched`;
+/// - at the RG 2 → RG 3 boundary the toggle reinstalls the real filter, so
+///   11 and 12 are correctly excluded;
+/// - the query result is identical to running with the filter on.
+#[tokio::test]
+async fn fully_matched_rgs_skip_row_filter() {
+    let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+    // 4 RGs of 3 rows each. Predicate `v >= 3 AND v <= 10`:
+    //   RG 0: 1, 2, 3   ← keeps {3}; min=1,max=3 → straddler, filter ON
+    //   RG 1: 4, 5, 6   ← all in [3,10] → fully matched, filter OFF
+    //   RG 2: 7, 8, 9   ← fully matched, filter OFF
+    //   RG 3: 10,11,12  ← keeps {10}; 11,12 fail v<=10 → straddler, filter back ON
+    let groups: [[i64; 3]; 4] = [[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]];
+    let batches: Vec<RecordBatch> = groups
+        .iter()
+        .map(|vals| {
+            let col: ArrayRef = Arc::new(Int64Array::from(vals.to_vec()));
+            RecordBatch::try_new(Arc::clone(&schema), vec![col]).unwrap()
+        })
+        .collect();
+
+    let mut ctx = ContextWithParquet::with_custom_data(
+        Scenario::Int,
+        RowGroup(3),
+        Arc::clone(&schema),
+        batches,
+    )
+    .await;
+
+    let output = ctx
+        .query("SELECT v FROM t WHERE v >= 3 AND v <= 10 ORDER BY v ASC")
+        .await;
+
+    // Correctness: every value in [3, 10], ascending.
+    let expected_rows: Vec<i64> = (3..=10).collect();
+    assert_eq!(output.result_rows, expected_rows.len());
+    let formatted = output.pretty_results();
+    for v in expected_rows {
+        assert!(
+            formatted.contains(&format!("| {v} ")),
+            "output must contain {v}; got:\n{formatted}",
+        );
+    }
+    // The RG 2 → RG 3 transition (fully-matched → non-fully-matched) must
+    // reinstall the real filter, so 11 and 12 are filtered out. If the
+    // toggle failed to restore the filter they would leak through.
+    for v in [11i64, 12] {
+        assert!(
+            !formatted.contains(&format!("| {v} ")),
+            "value {v} must be filtered out by the reinstalled RowFilter; \
+             got:\n{formatted}",
+        );
+    }
+
+    // Behavior: the per-RG `RowFilter` toggle must have fired at least
+    // once when transitioning from RG 0 (not fm) into the fully-matched
+    // run RGs 1..=2.
+    let skipped = output
+        .metric_value("row_filter_skipped_fully_matched")
+        .unwrap_or(0);
+    assert!(
+        skipped >= 1,
+        "row_filter_skipped_fully_matched must fire at least once; \
+         skipped={skipped}\n{}",
+        output.description(),
+    );
 }
 
 /// Regression for #24352: with `pushdown_filters` + TopK dynamic filter, a row

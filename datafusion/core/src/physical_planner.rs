@@ -41,7 +41,8 @@ use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::filter::FilterExecBuilder;
 use crate::physical_plan::joins::utils as join_utils;
 use crate::physical_plan::joins::{
-    CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
+    AsOfJoinExec, AsOfMatchExpr, CrossJoinExec, HashJoinExec, NestedLoopJoinExec,
+    PartitionMode, SortMergeJoinExec,
 };
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::{ProjectionExec, ProjectionExpr};
@@ -56,7 +57,7 @@ use crate::physical_plan::{
 };
 use crate::schema_equivalence::schema_satisfied_by;
 
-use arrow::array::{RecordBatch, builder::StringBuilder};
+use arrow::array::{ArrayRef, RecordBatch, UInt64Array, builder::StringBuilder};
 use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
 use arrow_schema::Field;
@@ -620,14 +621,11 @@ impl DefaultPhysicalPlanner {
                             .await?;
                     }
 
-                    let plan = match maybe_plan {
-                        Some(plan) => plan,
-                        None => {
-                            return plan_err!(
-                                "No installed planner was able to plan TableScan for custom TableSource: {:?}",
-                                scan.table_name
-                            );
-                        }
+                    let Some(plan) = maybe_plan else {
+                        return plan_err!(
+                            "No installed planner was able to plan TableScan for custom TableSource: {:?}",
+                            scan.table_name
+                        );
                     };
 
                     self.ensure_schema_matches(projected_schema, &plan, || {
@@ -796,17 +794,29 @@ impl DefaultPhysicalPlanner {
                 target,
                 op: WriteOp::Delete,
                 input,
-                ..
+                output_schema,
             }) => {
                 if let Some(provider) = target.downcast_ref::<DefaultTableSource>() {
-                    let filters = extract_dml_filters(input, table_name)?;
-                    provider
-                        .table_provider
-                        .delete_from(session_state, filters)
-                        .await
-                        .map_err(|e| {
-                            e.context(format!("DELETE operation on table '{table_name}'"))
-                        })?
+                    let allowed_refs = collect_dml_target_refs(input, table_name)?;
+                    match classify_dml_input(input, table_name, &allowed_refs, "DELETE")?
+                    {
+                        DmlInput::NoRows => {
+                            zero_rows_affected_exec(Arc::clone(output_schema.inner()))?
+                        }
+                        DmlInput::Filters => {
+                            let filters =
+                                extract_dml_filters(input, table_name, &allowed_refs)?;
+                            provider
+                                .table_provider
+                                .delete_from(session_state, filters)
+                                .await
+                                .map_err(|e| {
+                                    e.context(format!(
+                                        "DELETE operation on table '{table_name}'"
+                                    ))
+                                })?
+                        }
+                    }
                 } else {
                     return exec_err!(
                         "Table source can't be downcasted to DefaultTableSource"
@@ -818,21 +828,33 @@ impl DefaultPhysicalPlanner {
                 target,
                 op: WriteOp::Update,
                 input,
-                ..
+                output_schema,
             }) => {
                 if let Some(provider) = target.downcast_ref::<DefaultTableSource>() {
-                    // For UPDATE, the assignments are encoded in the projection of input
-                    // We pass the filters and let the provider handle the projection
-                    let filters = extract_dml_filters(input, table_name)?;
-                    // Extract assignments from the projection in input plan
-                    let assignments = extract_update_assignments(input)?;
-                    provider
-                        .table_provider
-                        .update(session_state, assignments, filters)
-                        .await
-                        .map_err(|e| {
-                            e.context(format!("UPDATE operation on table '{table_name}'"))
-                        })?
+                    let allowed_refs = collect_dml_target_refs(input, table_name)?;
+                    match classify_dml_input(input, table_name, &allowed_refs, "UPDATE")?
+                    {
+                        DmlInput::NoRows => {
+                            zero_rows_affected_exec(Arc::clone(output_schema.inner()))?
+                        }
+                        DmlInput::Filters => {
+                            // For UPDATE, the assignments are encoded in the projection of input
+                            // We pass the filters and let the provider handle the projection
+                            let filters =
+                                extract_dml_filters(input, table_name, &allowed_refs)?;
+                            // Extract assignments from the projection in input plan
+                            let assignments = extract_update_assignments(input)?;
+                            provider
+                                .table_provider
+                                .update(session_state, assignments, filters)
+                                .await
+                                .map_err(|e| {
+                                    e.context(format!(
+                                        "UPDATE operation on table '{table_name}'"
+                                    ))
+                                })?
+                        }
+                    }
                 } else {
                     return exec_err!(
                         "Table source can't be downcasted to DefaultTableSource"
@@ -872,11 +894,9 @@ impl DefaultPhysicalPlanner {
                     e.context(format!("MERGE INTO operation on table '{table_name}'"))
                 })?;
                 let input_exec = children.one()?;
-                let target_schema = DFSchema::try_from_qualified_schema(
-                    table_name.clone(),
-                    &target.schema(),
-                )?;
-                let merge_schema = Arc::new(target_schema.join(input.schema())?);
+                let merge_schema = Arc::new(
+                    merge_op.expression_schema(&target.schema(), input.schema())?,
+                );
                 provider
                     .merge_into(
                         session_state,
@@ -1221,7 +1241,8 @@ impl DefaultPhysicalPlanner {
                     .config()
                     .options()
                     .optimizer
-                    .default_filter_selectivity;
+                    .default_filter_selectivity
+                    .get();
                 let filter_exec: Arc<dyn ExecutionPlan> =
                     Arc::new(filter.with_default_selectivity(selectivity)?);
                 filter_exec
@@ -1243,9 +1264,7 @@ impl DefaultPhysicalPlanner {
                     physical_partitioning,
                 )?)
             }
-            LogicalPlan::Sort(Sort {
-                expr, input, fetch, ..
-            }) => {
+            LogicalPlan::Sort(Sort { expr, input, fetch }) => {
                 let physical_input = children.one()?;
                 let input_dfschema = input.as_ref().schema();
                 let sort_exprs = create_physical_sort_exprs(
@@ -1273,16 +1292,20 @@ impl DefaultPhysicalPlanner {
             LogicalPlan::SubqueryAlias(_) => children.one()?,
             LogicalPlan::Limit(limit) => {
                 let input = children.one()?;
+                // `get_skip_type` / `get_fetch_type` only return a non literal
+                // type for an expression that is present
                 let SkipType::Literal(skip) = limit.get_skip_type()? else {
+                    let skip = limit.skip.as_deref().map(ToString::to_string);
                     return not_impl_err!(
-                        "Unsupported OFFSET expression: {:?}",
-                        limit.skip
+                        "Unsupported OFFSET expression: {}",
+                        skip.unwrap_or_default()
                     );
                 };
                 let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
+                    let fetch = limit.fetch.as_deref().map(ToString::to_string);
                     return not_impl_err!(
-                        "Unsupported LIMIT expression: {:?}",
-                        limit.fetch
+                        "Unsupported LIMIT expression: {}",
+                        fetch.unwrap_or_default()
                     );
                 };
 
@@ -1596,6 +1619,23 @@ impl DefaultPhysicalPlanner {
 
                 let prefer_hash_join =
                     session_state.config_options().optimizer.prefer_hash_join;
+                // Null-aware joins are pinned to CollectLeft hash joins (see
+                // `HashJoinExec::null_aware`): never repartition them, and
+                // never route them to the sort-merge path below.
+                let can_repartition_join = session_state.config().target_partitions() > 1
+                    && session_state.config().repartition_joins()
+                    && !*null_aware;
+
+                // Only `HashJoinExec` implements null-aware semantics, and it
+                // needs equi-join keys to do so. Without them the join would be
+                // planned as a nested loop (or piecewise merge) join, which
+                // silently ignores the flag and returns wrong results for
+                // `NOT IN` over a nullable subquery. Fail loudly instead.
+                if *null_aware && join_on.is_empty() {
+                    return plan_err!(
+                        "null_aware {join_type} join requires equi-join keys, but the join has none"
+                    );
+                }
 
                 // TODO: Allow PWMJ to deal with residual equijoin conditions
                 let join: Arc<dyn ExecutionPlan> = if join_on.is_empty() {
@@ -1604,17 +1644,6 @@ impl DefaultPhysicalPlanner {
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
                     } else if num_range_filters == 1
                         && total_filters == 1
-                        // PWMJ supports classic joins and Left Semi/Anti existence joins.
-                        // Right Semi/Anti and Mark joins are not implemented yet (they
-                        // would require swapping the inputs so the marked side is buffered),
-                        // so exclude them here and let them fall back to NestedLoopJoin.
-                        && !matches!(
-                            join_type,
-                            JoinType::RightSemi
-                                | JoinType::RightAnti
-                                | JoinType::LeftMark
-                                | JoinType::RightMark
-                        )
                         && session_state
                             .config_options()
                             .optimizer
@@ -1647,14 +1676,20 @@ impl DefaultPhysicalPlanner {
                             }
                         }
 
+                        // `Neither` covers an operand that references no column from
+                        // either side (e.g. a literal), and `Both` an operand that
+                        // references columns from both. PWMJ needs one operand pinned
+                        // to each side, so both fall back to NestedLoopJoin below rather
+                        // than erroring or (for `Neither`) panicking.
                         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
                         enum Side {
                             Left,
                             Right,
                             Both,
+                            Neither,
                         }
 
-                        let side_of = |e: &Expr| -> Result<Side> {
+                        let side_of = |e: &Expr| -> Side {
                             let cols = e.column_refs();
                             let any_left = cols
                                 .iter()
@@ -1663,20 +1698,29 @@ impl DefaultPhysicalPlanner {
                                 .iter()
                                 .any(|c| right_df_schema.index_of_column(c).is_ok());
 
-                            Ok(match (any_left, any_right) {
+                            match (any_left, any_right) {
                                 (true, false) => Side::Left,
                                 (false, true) => Side::Right,
                                 (true, true) => Side::Both,
-                                _ => unreachable!(),
-                            })
+                                (false, false) => Side::Neither,
+                            }
                         };
 
                         let mut lhs_logical = &be.left;
                         let mut rhs_logical = &be.right;
 
-                        let left_side = side_of(lhs_logical)?;
-                        let right_side = side_of(rhs_logical)?;
-                        if left_side == Side::Both || right_side == Side::Both {
+                        let left_side = side_of(lhs_logical);
+                        let right_side = side_of(rhs_logical);
+
+                        if left_side == Side::Right && right_side == Side::Left {
+                            std::mem::swap(&mut lhs_logical, &mut rhs_logical);
+                            op = reverse_ineq(op);
+                        } else if !(left_side == Side::Left && right_side == Side::Right)
+                        {
+                            // Anything other than a clean left/right split -- both
+                            // operands on one side, one referencing neither side, or
+                            // either referencing both -- isn't a range predicate PWMJ
+                            // can plan, so let NestedLoopJoin evaluate it instead.
                             return Ok(Arc::new(NestedLoopJoinExec::try_new(
                                 physical_left,
                                 physical_right,
@@ -1684,17 +1728,6 @@ impl DefaultPhysicalPlanner {
                                 join_type,
                                 None,
                             )?));
-                        }
-
-                        if left_side == Side::Right && right_side == Side::Left {
-                            std::mem::swap(&mut lhs_logical, &mut rhs_logical);
-                            op = reverse_ineq(op);
-                        } else if !(left_side == Side::Left && right_side == Side::Right)
-                        {
-                            return plan_err!(
-                                "Unsupported operator for PWMJ: {:?}. Expected one of <, <=, >, >=",
-                                op
-                            );
                         }
 
                         let on_left = create_physical_expr(
@@ -1748,24 +1781,15 @@ impl DefaultPhysicalPlanner {
                         vec![SortOptions::default(); join_on_len],
                         *null_equality,
                     )?)
-                } else if session_state.config().target_partitions() > 1
-                    && session_state.config().repartition_joins()
-                    && prefer_hash_join
-                    && !*null_aware
-                // Null-aware joins must use CollectLeft
-                {
-                    Arc::new(HashJoinExec::try_new(
-                        physical_left,
-                        physical_right,
-                        join_on,
-                        join_filter,
-                        join_type,
-                        None,
-                        PartitionMode::Auto,
-                        *null_equality,
-                        *null_aware,
-                    )?)
                 } else {
+                    // Null-aware joins need global probe-side state, so keep
+                    // them in CollectLeft mode.
+                    let partition_mode = if can_repartition_join {
+                        PartitionMode::Auto
+                    } else {
+                        PartitionMode::CollectLeft
+                    };
+
                     Arc::new(HashJoinExec::try_new(
                         physical_left,
                         physical_right,
@@ -1773,7 +1797,7 @@ impl DefaultPhysicalPlanner {
                         join_filter,
                         join_type,
                         None,
-                        PartitionMode::CollectLeft,
+                        partition_mode,
                         *null_equality,
                         *null_aware,
                     )?)
@@ -1793,6 +1817,51 @@ impl DefaultPhysicalPlanner {
                 } else {
                     join
                 }
+            }
+            LogicalPlan::AsOfJoin(join) => {
+                let [physical_left, physical_right] = children.two()?;
+                let join_on = join
+                    .on
+                    .iter()
+                    .map(|(left, right)| {
+                        Ok((
+                            create_physical_expr(
+                                left,
+                                join.left.schema(),
+                                execution_props,
+                                planning_ctx,
+                            )?,
+                            create_physical_expr(
+                                right,
+                                join.right.schema(),
+                                execution_props,
+                                planning_ctx,
+                            )?,
+                        ))
+                    })
+                    .collect::<Result<join_utils::JoinOn>>()?;
+                let match_condition = AsOfMatchExpr::new(
+                    create_physical_expr(
+                        &join.match_condition.left,
+                        join.left.schema(),
+                        execution_props,
+                        planning_ctx,
+                    )?,
+                    join.match_condition.op,
+                    create_physical_expr(
+                        &join.match_condition.right,
+                        join.right.schema(),
+                        execution_props,
+                        planning_ctx,
+                    )?,
+                );
+                Arc::new(AsOfJoinExec::try_new(
+                    physical_left,
+                    physical_right,
+                    join_on,
+                    match_condition,
+                    None,
+                )?)
             }
             LogicalPlan::RecursiveQuery(RecursiveQuery {
                 name,
@@ -2058,7 +2127,9 @@ fn create_cube_physical_expr(
     for null_count in 1..=num_of_exprs {
         for null_idx in (0..num_of_exprs).combinations(null_count) {
             let mut next_group: Vec<bool> = vec![false; num_of_exprs];
-            null_idx.into_iter().for_each(|i| next_group[i] = true);
+            for i in null_idx {
+                next_group[i] = true;
+            }
             groups.push(next_group);
         }
     }
@@ -2205,6 +2276,149 @@ fn get_physical_expr_pair(
     Ok((physical_expr, physical_name))
 }
 
+/// How a DELETE or an UPDATE reaches its target table.
+///
+/// The `filters` argument of [`TableProvider::delete_from`] and
+/// [`TableProvider::update`] is the only channel that carries the `WHERE` clause
+/// to the provider, and an empty vector means "no `WHERE` clause, so every row".
+/// A plan whose row restriction cannot travel through that channel must
+/// therefore never reach the provider.
+///
+/// [`TableProvider::delete_from`]: datafusion_catalog::TableProvider::delete_from
+/// [`TableProvider::update`]: datafusion_catalog::TableProvider::update
+enum DmlInput {
+    /// Every row restriction of the statement reaches the provider as a filter.
+    Filters,
+    /// No row matches, so the statement affects no rows and the provider is not
+    /// called at all.
+    NoRows,
+}
+
+/// Collect the table references that a predicate of a DELETE or an UPDATE may
+/// name: the target table itself, and the alias of every scan of the target
+/// table in the input plan.
+///
+/// Both [`classify_dml_input`] and [`extract_dml_filters`] need this set, so the
+/// caller collects it once and passes it to each of them.
+fn collect_dml_target_refs(
+    input: &Arc<LogicalPlan>,
+    target: &TableReference,
+) -> Result<Vec<TableReference>> {
+    let mut allowed_refs = vec![target.clone()];
+    input.apply(|node| {
+        if let LogicalPlan::SubqueryAlias(alias) = node
+            // Check if this alias points to the target table
+            && let LogicalPlan::TableScan(scan) = alias.input.as_ref()
+            && scan.table_name.resolved_eq(target)
+        {
+            allowed_refs.push(TableReference::bare(alias.alias.to_string()));
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(allowed_refs)
+}
+
+/// Check that the input plan of a DELETE or an UPDATE can reach the table
+/// provider without losing part of its `WHERE` clause.
+///
+/// The optimizer rewrites an `IN` or an `EXISTS` subquery into a semi join, and
+/// it folds an always-false predicate into an empty relation. In both cases the
+/// condition leaves the `Filter` nodes that [`extract_dml_filters`] reads, and
+/// the provider would see an empty filter list and change every row.
+///
+/// # Parameters
+/// - `input`: the input plan of the DELETE or the UPDATE
+/// - `target`: the target table of the statement
+/// - `allowed_refs`: the target table and its aliases, from [`collect_dml_target_refs`]
+/// - `op`: `"DELETE"` or `"UPDATE"`, used in the error message
+///
+/// # Returns
+/// * [`DmlInput::Filters`] when the provider may be called
+/// * [`DmlInput::NoRows`] when the statement matches no row
+/// * a "not implemented" error when part of the `WHERE` clause cannot reach the provider.
+fn classify_dml_input(
+    input: &Arc<LogicalPlan>,
+    target: &TableReference,
+    allowed_refs: &[TableReference],
+    op: &str,
+) -> Result<DmlInput> {
+    let mut result = DmlInput::Filters;
+    input.apply(|node| {
+        match node {
+            // An empty relation means the optimizer proved that no row matches,
+            // so the statement affects no rows.
+            LogicalPlan::EmptyRelation(empty) if !empty.produce_one_row => {
+                result = DmlInput::NoRows;
+                return Ok(TreeNodeRecursion::Stop);
+            }
+            // A join carries the condition in its `on` clause, where
+            // `extract_dml_filters` cannot read it. The optimizer builds one for
+            // an `IN` or an `EXISTS` subquery.
+            LogicalPlan::Join(join) => {
+                return not_impl_err!(
+                    "{op} on table '{target}' with an IN or an EXISTS subquery in its \
+                     WHERE clause is not supported: the optimizer rewrites the subquery \
+                     into a {} join, and the condition does not reach the table provider",
+                    join.join_type
+                );
+            }
+            LogicalPlan::Filter(filter) => {
+                // A predicate on another table restricts the rows of the target
+                // table, and the provider cannot evaluate it.
+                for predicate in split_conjunction(&filter.predicate) {
+                    if !predicate_is_on_target_multi(predicate, allowed_refs)? {
+                        return not_impl_err!(
+                            "{op} on table '{target}' with a WHERE clause that \
+                             references another table is not supported"
+                        );
+                    }
+                }
+            }
+            // Plans that pass every row of the target table through, or that
+            // hold no row restriction of their own.
+            LogicalPlan::TableScan(_)
+            | LogicalPlan::Projection(_)
+            | LogicalPlan::SubqueryAlias(_)
+            | LogicalPlan::Sort(_)
+            | LogicalPlan::Repartition(_)
+            // A `Limit` carries no predicate, so it reaches the provider as no
+            // filter at all and `DELETE FROM t LIMIT n` deletes every matching
+            // row. `UPDATE ... LIMIT` is already rejected by the SQL planner.
+            // That gap is separate from this one, and it is tracked separately.
+            | LogicalPlan::Limit(_)
+            // A subquery expression that survives to this point fails later,
+            // when the provider compiles the filter it belongs to.
+            | LogicalPlan::Subquery(_) => {}
+            // Everything else either restricts or multiplies the rows of the
+            // target table in a way that no filter list can express.
+            other => {
+                return not_impl_err!(
+                    "{op} on table '{target}' is not supported: the statement plan \
+                     contains \"{}\", and its effect on the rows cannot reach the table \
+                     provider as a filter",
+                    other.display()
+                );
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+
+    Ok(result)
+}
+
+/// Build a plan that reports no rows affected, for a DELETE or an UPDATE that
+/// matches no row. `schema` is the output schema of the statement, one `count`
+/// column of type `UInt64`.
+fn zero_rows_affected_exec(schema: Arc<Schema>) -> Result<Arc<dyn ExecutionPlan>> {
+    let count = Arc::new(UInt64Array::from(vec![0_u64])) as ArrayRef;
+    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![count])?;
+    Ok(MemorySourceConfig::try_new_exec(
+        &[vec![batch]],
+        schema,
+        None,
+    )?)
+}
+
 /// Extract filter predicates from a DML input plan (DELETE/UPDATE).
 ///
 /// Walks the logical plan tree and collects Filter predicates and any filters
@@ -2221,6 +2435,7 @@ fn get_physical_expr_pair(
 /// # Parameters
 /// - `input`: The logical plan tree to extract filters from (typically a DELETE or UPDATE plan)
 /// - `target`: The target table reference to scope filter extraction (prevents multi-table filter leakage)
+/// - `allowed_refs`: The target table and its aliases, from [`collect_dml_target_refs`]
 ///
 /// # Returns
 /// A vector of unqualified filter expressions that can be passed to the TableProvider for execution.
@@ -2230,28 +2445,16 @@ fn get_physical_expr_pair(
 fn extract_dml_filters(
     input: &Arc<LogicalPlan>,
     target: &TableReference,
+    allowed_refs: &[TableReference],
 ) -> Result<Vec<Expr>> {
     let mut filters = Vec::new();
-    let mut allowed_refs = vec![target.clone()];
-
-    // First pass: collect any alias references to the target table
-    input.apply(|node| {
-        if let LogicalPlan::SubqueryAlias(alias) = node
-            // Check if this alias points to the target table
-            && let LogicalPlan::TableScan(scan) = alias.input.as_ref()
-            && scan.table_name.resolved_eq(target)
-        {
-            allowed_refs.push(TableReference::bare(alias.alias.to_string()));
-        }
-        Ok(TreeNodeRecursion::Continue)
-    })?;
 
     input.apply(|node| {
         match node {
             LogicalPlan::Filter(filter) => {
                 // Split AND predicates into individual expressions
                 for predicate in split_conjunction(&filter.predicate) {
-                    if predicate_is_on_target_multi(predicate, &allowed_refs)? {
+                    if predicate_is_on_target_multi(predicate, allowed_refs)? {
                         filters.push(predicate.clone());
                     }
                 }
@@ -2293,6 +2496,7 @@ fn extract_dml_filters(
             | LogicalPlan::Sort(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::Join(_)
+            | LogicalPlan::AsOfJoin(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Aggregate(_)
             | LogicalPlan::Window(_)
@@ -2562,7 +2766,7 @@ type AggregateExprWithOptionalArgs = (
 );
 
 /// Create an aggregate expression with a name from a logical expression
-#[deprecated(note = "use LoweredAggregateBuilder")]
+#[deprecated(since = "54.0.0", note = "use LoweredAggregateBuilder")]
 pub fn create_aggregate_expr_with_name_and_maybe_filter(
     e: &Expr,
     name: Option<String>,
@@ -2589,7 +2793,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
 }
 
 /// Create an aggregate expression from a logical expression or an alias
-#[deprecated(note = "use LoweredAggregateBuilder")]
+#[deprecated(since = "54.0.0", note = "use LoweredAggregateBuilder")]
 pub fn create_aggregate_expr_and_maybe_filter(
     e: &Expr,
     logical_input_schema: &DFSchema,
@@ -2667,6 +2871,10 @@ impl DefaultPhysicalPlanner {
         let explain_format = &e.explain_format;
         // Statement-level override wins over session config for show_statistics.
         let show_statistics = e.show_statistics.unwrap_or(config.show_statistics);
+        let statistics_registry = session_state
+            .statistics_registry()
+            .cloned()
+            .unwrap_or_default();
 
         if !e.logical_optimization_succeeded {
             return Ok(Arc::new(ExplainExec::new(
@@ -2710,7 +2918,7 @@ impl DefaultPhysicalPlanner {
                     e.plan.display_graphviz().to_string(),
                 ));
             }
-        };
+        }
 
         if !stringified_plans.is_empty() {
             return Ok(Arc::new(ExplainExec::new(
@@ -2730,6 +2938,15 @@ impl DefaultPhysicalPlanner {
         }
 
         if !config.logical_plan_only && e.logical_optimization_succeeded {
+            let render_indent =
+                |plan: &dyn ExecutionPlan, show_statistics: bool, show_schema: bool| {
+                    displayable(plan)
+                        .set_show_statistics(show_statistics)
+                        .set_statistics_registry(statistics_registry.clone())
+                        .set_show_schema(show_schema)
+                        .indent(e.verbose)
+                        .to_string()
+                };
             match self
                 .create_initial_plan(e.plan.as_ref(), session_state)
                 .await
@@ -2738,11 +2955,11 @@ impl DefaultPhysicalPlanner {
                     // Include statistics / schema if enabled
                     stringified_plans.push(StringifiedPlan::new(
                         InitialPhysicalPlan,
-                        displayable(input.as_ref())
-                            .set_show_statistics(show_statistics)
-                            .set_show_schema(config.show_schema)
-                            .indent(e.verbose)
-                            .to_string(),
+                        render_indent(
+                            input.as_ref(),
+                            show_statistics,
+                            config.show_schema,
+                        ),
                     ));
 
                     // Show statistics + schema in verbose output even if not
@@ -2751,15 +2968,14 @@ impl DefaultPhysicalPlanner {
                         if !show_statistics {
                             stringified_plans.push(StringifiedPlan::new(
                                 InitialPhysicalPlanWithStats,
-                                displayable(input.as_ref())
-                                    .set_show_statistics(true)
-                                    .indent(e.verbose)
-                                    .to_string(),
+                                render_indent(input.as_ref(), true, false),
                             ));
                         }
                         if !config.show_schema {
                             stringified_plans.push(StringifiedPlan::new(
                                 InitialPhysicalPlanWithSchema,
+                                // Schema only: statistics are off, so this
+                                // renders without the registry.
                                 displayable(input.as_ref())
                                     .set_show_schema(true)
                                     .indent(e.verbose)
@@ -2776,11 +2992,7 @@ impl DefaultPhysicalPlanner {
                             let plan_type = OptimizedPhysicalPlan { optimizer_name };
                             stringified_plans.push(StringifiedPlan::new(
                                 plan_type,
-                                displayable(plan)
-                                    .set_show_statistics(show_statistics)
-                                    .set_show_schema(config.show_schema)
-                                    .indent(e.verbose)
-                                    .to_string(),
+                                render_indent(plan, show_statistics, config.show_schema),
                             ));
                         },
                     );
@@ -2789,11 +3001,11 @@ impl DefaultPhysicalPlanner {
                             // This plan will includes statistics if show_statistics is on
                             stringified_plans.push(StringifiedPlan::new(
                                 FinalPhysicalPlan,
-                                displayable(input.as_ref())
-                                    .set_show_statistics(show_statistics)
-                                    .set_show_schema(config.show_schema)
-                                    .indent(e.verbose)
-                                    .to_string(),
+                                render_indent(
+                                    input.as_ref(),
+                                    show_statistics,
+                                    config.show_schema,
+                                ),
                             ));
 
                             // Show statistics + schema in verbose output even if not
@@ -2802,10 +3014,7 @@ impl DefaultPhysicalPlanner {
                                 if !show_statistics {
                                     stringified_plans.push(StringifiedPlan::new(
                                         FinalPhysicalPlanWithStats,
-                                        displayable(input.as_ref())
-                                            .set_show_statistics(true)
-                                            .indent(e.verbose)
-                                            .to_string(),
+                                        render_indent(input.as_ref(), true, false),
                                     ));
                                 }
                                 if !config.show_schema {
@@ -2869,11 +3078,16 @@ impl DefaultPhysicalPlanner {
             ExplainAnalyzeCategories::All => None,
             ExplainAnalyzeCategories::Only(cats) => Some(cats),
         };
+        let statistics_registry = session_state
+            .statistics_registry()
+            .cloned()
+            .unwrap_or_default();
         Ok(Arc::new(
             AnalyzeExec::builder(a.verbose, show_statistics, input, schema)
                 .with_metric_types(metric_types)
                 .with_metric_categories(metric_categories)
                 .with_format(a.format.clone())
+                .with_statistics_registry(statistics_registry)
                 .build(),
         ))
     }
@@ -3574,8 +3788,8 @@ mod tests {
         ctx.register_table("source", source)?;
 
         ctx.sql(
-            "MERGE INTO target AS t USING source AS s ON t.id = s.id \
-             WHEN MATCHED AND t.id > s.id THEN DELETE",
+            "MERGE INTO target AS t USING source AS target ON t.id = target.id \
+             WHEN MATCHED AND t.id > target.id THEN DELETE",
         )
         .await?
         .create_physical_plan()
@@ -3586,11 +3800,11 @@ mod tests {
             captured.as_ref().expect("merge_into should be called");
         assert_eq!(*clause_count, 1);
         assert_eq!(
-            merge_schema.index_of_column(&Column::new(Some("target"), "id"))?,
+            merge_schema.index_of_column(&Column::new(Some("t"), "id"))?,
             0
         );
         assert_eq!(
-            merge_schema.index_of_column(&Column::new(Some("s"), "id"))?,
+            merge_schema.index_of_column(&Column::new(Some("target"), "id"))?,
             1
         );
         assert_contains!(physical_on, "index: 0");
@@ -3984,6 +4198,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn correlated_not_in_is_null_uses_null_aware_hash_mark_join() -> Result<()> {
+        let query = "
+            SELECT value
+            FROM (
+              VALUES
+                (1, 1, 'a'),
+                (3, 1, 'b'),
+                (1, 2, 'c'),
+                (NULL, 1, 'd'),
+                (5, 3, 'e'),
+                (2, 1, 'f'),
+                (NULL, 2, 'g')
+            ) AS outer_corr_table(id, grp, value)
+            WHERE (id NOT IN (
+              SELECT id
+              FROM (
+                VALUES
+                  (2, 1),
+                  (NULL, 1),
+                  (1, 2)
+              ) AS inner_corr_table(id, grp)
+              WHERE inner_corr_table.grp = outer_corr_table.grp
+            )) IS NULL
+            ORDER BY value";
+
+        let config = SessionConfig::new()
+            .with_target_partitions(4)
+            .set_bool("datafusion.optimizer.prefer_hash_join", false);
+        let ctx = SessionContext::new_with_config(config);
+
+        let plan = ctx.sql(query).await?.create_physical_plan().await?;
+        let formatted = displayable(plan.as_ref()).indent(true).to_string();
+        assert_contains!(
+            &formatted,
+            "HashJoinExec: mode=CollectLeft, join_type=LeftMark"
+        );
+        assert!(!formatted.contains("SortMergeJoinExec"), "{formatted}");
+
+        let batches = ctx.sql(query).await?.collect().await?;
+        assert_batches_eq!(
+            &[
+                "+-------+",
+                "| value |",
+                "+-------+",
+                "| a     |",
+                "| b     |",
+                "| d     |",
+                "| g     |",
+                "+-------+",
+            ],
+            &batches
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn scalar_subquery_in_projection_and_filter_plans() -> Result<()> {
         let plan = plan_sql(
             "SELECT x + (SELECT max(y) FROM (VALUES (10), (20)) AS u(y)) \
@@ -4272,9 +4543,6 @@ mod tests {
 
         let plan = plan(&logical_plan).await?;
 
-        // c12 is f64, c7 is u8 -> cast c7 to f64
-        // the cast here is implicit so has CastOptions with safe=true
-        let _expected = "predicate: BinaryExpr { left: TryCastExpr { expr: Column { name: \"c7\", index: 6 }, cast_type: Float64 }, op: Lt, right: Column { name: \"c12\", index: 11 } }";
         let plan_debug_str = format!("{plan:?}");
         assert!(plan_debug_str.contains("GlobalLimitExec"));
         assert!(plan_debug_str.contains("skip: 3"));

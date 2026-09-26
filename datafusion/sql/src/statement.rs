@@ -21,19 +21,18 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::parser::{
-    CopyToSource, CopyToStatement, CreateExternalTable, DFParser, ExplainStatement,
-    LexOrdering, ResetStatement, Statement as DFStatement,
+    CopyToSource, CopyToStatement, CreateExternalCatalog, CreateExternalTable, DFParser,
+    ExplainStatement, LexOrdering, ResetStatement, Statement as DFStatement,
 };
 use crate::planner::{
     ContextProvider, PlannerContext, SqlToRel, object_name_to_qualifier,
 };
 use crate::utils::normalize_ident;
 
-use arrow::datatypes::{Field, FieldRef, Fields};
+use arrow::datatypes::{Field, FieldRef, Fields, Metadata};
 use datafusion_common::error::_plan_err;
 use datafusion_common::format::ExplainStatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     Column, Constraint, Constraints, DFSchema, DFSchemaRef, DataFusionError, Result,
     ScalarValue, SchemaError, SchemaReference, TableReference, ToDFSchema, exec_err,
@@ -48,7 +47,8 @@ use datafusion_expr::logical_plan::DdlStatement;
 use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
-    Analyze, CreateCatalog, CreateCatalogSchema,
+    Analyze, Cast, CreateCatalog, CreateCatalogSchema,
+    CreateExternalCatalog as PlanCreateExternalCatalog,
     CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
     CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, Deallocate,
     DescribeTable, DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView,
@@ -118,6 +118,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                     index_type_display: _index_type_display,
                     index_type: _index_type,
                     columns: _column,
+                    include: _include,
                     index_options: _index_options,
                     nulls_distinct: _nulls_distinct,
                 }) => constraints.push(TableConstraint::Unique(UniqueConstraint {
@@ -129,13 +130,14 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                         column: OrderByExpr {
                             expr: SQLExpr::Identifier(column.name.clone()),
                             options: OrderByOptions {
-                                asc: None,
+                                sort: None,
                                 nulls_first: None,
                             },
                             with_fill: None,
                         },
                         operator_class: None,
                     }],
+                    include: vec![],
                     index_options: vec![],
                     characteristics: *characteristics,
                     nulls_distinct: NullsDistinctOption::None,
@@ -146,6 +148,7 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                     index_name: _index_name,
                     index_type: _index_type,
                     columns: _columns,
+                    include: _include,
                     index_options: _index_options,
                 }) => {
                     constraints.push(TableConstraint::PrimaryKey(PrimaryKeyConstraint {
@@ -156,13 +159,14 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                             column: OrderByExpr {
                                 expr: SQLExpr::Identifier(column.name.clone()),
                                 options: OrderByOptions {
-                                    asc: None,
+                                    sort: None,
                                     nulls_first: None,
                                 },
                                 with_fill: None,
                             },
                             operator_class: None,
                         }],
+                        include: vec![],
                         index_options: vec![],
                         characteristics: *characteristics,
                     }))
@@ -193,10 +197,12 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                 ast::ColumnOption::Check(CheckConstraint {
                     name,
                     expr,
+                    no_inherit: _no_inherit,
                     enforced: _enforced,
                 }) => constraints.push(TableConstraint::Check(CheckConstraint {
                     name: name.clone(),
                     expr: expr.clone(),
+                    no_inherit: false,
                     enforced: None,
                 })),
                 ast::ColumnOption::Default(_)
@@ -227,23 +233,23 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logical plan from an DataFusion SQL statement
     pub fn statement_to_plan(&self, statement: DFStatement) -> Result<LogicalPlan> {
-        match statement {
-            DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
-            DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
-            DFStatement::CopyTo(s) => self.copy_to_plan(s),
+        let plan = match statement {
+            DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s)?,
+            DFStatement::CreateExternalCatalog(s) => self.external_catalog_to_plan(s)?,
+            DFStatement::Statement(s) => self.sql_statement_to_plan(*s)?,
+            DFStatement::CopyTo(s) => self.copy_to_plan(s)?,
             DFStatement::Explain(ExplainStatement { options, statement }) => {
-                self.explain_to_plan(options, *statement)
+                self.explain_to_plan(options, *statement)?
             }
-            DFStatement::Reset(statement) => self.reset_statement_to_plan(statement),
-        }
+            DFStatement::Reset(statement) => self.reset_statement_to_plan(statement)?,
+        };
+        check_plan(&plan)?;
+        Ok(plan)
     }
 
     /// Generate a logical plan from an SQL statement
     pub fn sql_statement_to_plan(&self, statement: Statement) -> Result<LogicalPlan> {
-        self.sql_statement_to_plan_with_context_impl(
-            statement,
-            &mut PlannerContext::new(),
-        )
+        self.sql_statement_to_plan_with_context(statement, &mut PlannerContext::new())
     }
 
     /// Generate a logical plan from an SQL statement
@@ -252,7 +258,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         statement: Statement,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        self.sql_statement_to_plan_with_context_impl(statement, planner_context)
+        let plan =
+            self.sql_statement_to_plan_with_context_impl(statement, planner_context)?;
+        check_plan(&plan)?;
+        Ok(plan)
     }
 
     fn sql_statement_to_plan_with_context_impl(
@@ -360,6 +369,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 distkey,
                 sortkey,
                 backup,
+                unlogged,
+                with_connection,
+                multiset,
+                fallback,
+                with_data,
             }) => {
                 if temporary {
                     return not_impl_err!("Temporary tables not supported");
@@ -530,6 +544,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 if backup.is_some() {
                     return not_impl_err!("BACKUP not supported");
+                }
+                if unlogged {
+                    return not_impl_err!("UNLOGGED tables not supported");
+                }
+                if with_connection.is_some() {
+                    return not_impl_err!("WITH CONNECTION not supported");
+                }
+                if multiset.is_some() {
+                    return not_impl_err!("MULTISET tables not supported");
+                }
+                if fallback.is_some() {
+                    return not_impl_err!("FALLBACK not supported");
+                }
+                if with_data.is_some() {
+                    return not_impl_err!("WITH [NO] DATA not supported");
                 }
                 // Merge inline constraints and existing constraints
                 let mut all_constraints = constraints;
@@ -761,31 +790,32 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // We don't support cascade and purge for now.
                 // nor do we support multiple object names
                 let name = match names.len() {
-                    0 => Err(ParserError("Missing table name.".to_string()).into()),
-                    1 => self.object_name_to_table_reference(names.pop().unwrap()),
-                    _ => {
-                        Err(ParserError("Multiple objects not supported".to_string())
-                            .into())
-                    }
+                    0 => Err::<_, DataFusionError>(
+                        ParserError("Missing table name.".to_string()).into(),
+                    ),
+                    1 => Ok(names.pop().unwrap()),
+                    _ => Err::<_, DataFusionError>(
+                        ParserError("Multiple objects not supported".to_string()).into(),
+                    ),
                 }?;
 
                 match object_type {
                     ObjectType::Table => {
                         Ok(LogicalPlan::Ddl(DdlStatement::DropTable(DropTable {
-                            name,
+                            name: self.object_name_to_table_reference(name)?,
                             if_exists,
                             schema: DFSchemaRef::new(DFSchema::empty()),
                         })))
                     }
                     ObjectType::View => {
                         Ok(LogicalPlan::Ddl(DdlStatement::DropView(DropView {
-                            name,
+                            name: self.object_name_to_table_reference(name)?,
                             if_exists,
                             schema: DFSchemaRef::new(DFSchema::empty()),
                         })))
                     }
                     ObjectType::Schema => {
-                        let name = match name {
+                        let name = match self.object_name_to_table_reference(name)? {
                             TableReference::Bare { table } => {
                                 Ok(SchemaReference::Bare { schema: table })
                             }
@@ -812,8 +842,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             },
                         )))
                     }
+                    ObjectType::Database => Ok(LogicalPlan::Ddl(
+                        DdlStatement::DropCatalog(datafusion_expr::DropCatalog {
+                            name: object_name_to_string(&name),
+                            if_exists,
+                            cascade,
+                            schema: DFSchemaRef::new(DFSchema::empty()),
+                        }),
+                    )),
                     _ => not_impl_err!(
-                        "Only `DROP TABLE/VIEW/SCHEMA  ...` statement is supported currently"
+                        "Only `DROP TABLE/VIEW/SCHEMA/CATALOG/DATABASE  ...` statement is supported currently"
                     ),
                 }
             }
@@ -1091,12 +1129,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     plan_err!(
                         "Inserts with a table alias not supported: {table_alias:?}"
                     )?
-                };
+                }
                 if let Some(priority) = priority {
                     plan_err!(
                         "Inserts with a `PRIORITY` clause not supported: {priority:?}"
                     )?
-                };
+                }
                 if insert_alias.is_some() {
                     plan_err!("Inserts with an alias not supported")?;
                 }
@@ -1305,10 +1343,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } => {
                 if end {
                     return not_impl_err!("COMMIT AND END not supported");
-                };
+                }
                 if let Some(modifier) = modifier {
                     return not_impl_err!("COMMIT {modifier} not supported");
-                };
+                }
                 let statement = PlanStatement::TransactionEnd(TransactionEnd {
                     conclusion: TransactionConclusion::Commit,
                     chain,
@@ -1763,7 +1801,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 schema,
                                 planner_context,
                             )?;
-                            let asc = order_by_expr.options.asc.unwrap_or(true);
+                            let asc = match &order_by_expr.options.sort {
+                                Some(ast::OrderBySort::Asc) | None => true,
+                                Some(ast::OrderBySort::Desc) => false,
+                                Some(ast::OrderBySort::Using(op)) => {
+                                    return not_impl_err!(
+                                        "ORDER BY USING is not supported: {op}"
+                                    );
+                                }
+                            };
                             let nulls_first =
                                 order_by_expr.options.nulls_first.unwrap_or_else(|| {
                                     self.options.default_null_ordering.nulls_first(asc)
@@ -1884,6 +1930,43 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         )))
     }
 
+    fn external_catalog_to_plan(
+        &self,
+        statement: CreateExternalCatalog,
+    ) -> Result<LogicalPlan> {
+        let CreateExternalCatalog {
+            catalog_name,
+            catalog_type,
+            location,
+            if_not_exists,
+            or_replace,
+            options,
+        } = statement;
+
+        let mut options_map = HashMap::with_capacity(options.len());
+        for (key, value) in options {
+            if options_map.contains_key(&key) {
+                return plan_err!("Option {key} is specified multiple times");
+            }
+            let Some(value_string) = crate::utils::value_to_string(&value) else {
+                return plan_err!("Unsupported Value {}", value);
+            };
+            options_map.insert(key, value_string);
+        }
+
+        Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalCatalog(
+            Box::new(PlanCreateExternalCatalog {
+                catalog_name: object_name_to_string(&catalog_name),
+                catalog_type,
+                location,
+                if_not_exists,
+                or_replace,
+                options: options_map,
+                schema: Arc::new(DFSchema::empty()),
+            }),
+        )))
+    }
+
     /// Get the indices of the constraint columns in the schema.
     /// If any column is not found, return an error.
     fn get_constraint_column_indices(
@@ -1897,9 +1980,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .iter()
             .map(|index_column| {
                 let expr = &index_column.column.expr;
-                let ident = if let SQLExpr::Identifier(ident) = expr {
-                    ident
-                } else {
+                let SQLExpr::Identifier(ident) = expr else {
                     return Err(plan_datafusion_err!(
                         "Column name for {constraint_name} must be an identifier: {expr}"
                     ));
@@ -1932,6 +2013,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     index_type_display: _,
                     index_type: _,
                     columns,
+                    include: _,
                     index_options: _,
                     characteristics: _,
                     nulls_distinct: _,
@@ -1953,6 +2035,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     index_name: _,
                     index_type: _,
                     columns,
+                    include: _,
                     index_options: _,
                     characteristics: _,
                 }) => {
@@ -1966,6 +2049,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 TableConstraint::ForeignKey { .. } => {
                     _plan_err!("Foreign key constraints are not currently supported")
+                }
+                TableConstraint::Exclude(_) => {
+                    _plan_err!("Exclude constraints are not currently supported")
                 }
                 TableConstraint::Check { .. } => {
                     _plan_err!("Check constraints are not currently supported")
@@ -2509,8 +2595,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             self.plan_from_tables(vec![source_table_with_joins], &mut planner_context)?;
 
         // 3. Build a combined schema for resolving expressions in ON and WHEN clauses
-        let combined_schema =
-            Arc::new(target_schema.as_ref().join(source_plan.schema())?);
+        let combined_schema = Arc::new(MergeIntoOp::expression_schema_for(
+            &target_qualifier,
+            &target_table_source.schema(),
+            source_plan.schema(),
+        )?);
 
         // 4. Convert the ON condition from sqlparser Expr to datafusion Expr
         let on_expr = self.sql_to_expr(*on, &combined_schema, &mut planner_context)?;
@@ -2529,61 +2618,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        // 6. Build the MERGE operation. Column references to the target may be
-        // qualified with the SQL alias (`MERGE INTO target AS t ... t.col`).
-        // Canonicalize those to the real target table qualifier so the stored
-        // plan is independent of the alias: this lets the analyzer passes and
-        // proto deserialization rebuild the target schema from `table_name`
-        // alone, without carrying the alias as extra state.
-        let mut merge_op = MergeIntoOp {
-            on: on_expr,
-            clauses: df_clauses,
-        };
-        if target_qualifier != target_table_ref {
-            // Target references in correlated subqueries are represented as
-            // `OuterReferenceColumn`s inside the embedded logical plan. The
-            // alias canonicalization below only rewrites top-level expression
-            // columns, so accepting such a subquery would leave the target
-            // alias in the public MERGE representation. Reject this case until
-            // the alias can be rewritten scope-safely inside subquery plans.
-            for expr in merge_op.exprs() {
-                if Self::has_outer_reference_to_qualifier(expr, &target_qualifier)? {
-                    return not_impl_err!(
-                        "MERGE subqueries correlated to target alias \
-                         '{target_qualifier}' are not supported"
-                    );
-                }
-            }
-
-            // Canonicalizing target columns to `target_table_ref` is only safe
-            // when the source does not already use that qualifier. If it does
-            // (e.g. `MERGE INTO target AS t USING source AS target`), the two
-            // namespaces would collapse and later resolution could silently
-            // pick the source column for a target reference. Reject that
-            // collision rather than change the meaning of the condition.
-            if source_plan.schema().iter().any(|(qualifier, _)| {
-                qualifier.is_some_and(|q| q.resolved_eq(&target_table_ref))
-            }) {
-                return plan_err!(
-                    "MERGE source may not use the target table name '{target_table_ref}' \
-                     as a qualifier while the target is aliased as '{target_qualifier}'; \
-                     use a different source alias"
-                );
-            }
-            let canonical = merge_op
-                .exprs()
-                .into_iter()
-                .cloned()
-                .map(|expr| {
-                    Self::canonicalize_target_qualifier(
-                        expr,
-                        &target_qualifier,
-                        &target_table_ref,
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?;
-            merge_op = merge_op.with_new_exprs(canonical)?;
-        }
+        // 6. Preserve the target's visible qualifier in the public MERGE
+        // representation. It is a scope-local SQL name, distinct from the
+        // provider identity stored in `DmlStatement::table_name`.
+        let merge_op = MergeIntoOp::new(target_qualifier, on_expr, df_clauses);
 
         Ok(LogicalPlan::Dml(DmlStatement::new(
             target_table_ref,
@@ -2591,70 +2629,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             WriteOp::MergeInto(Box::new(merge_op)),
             Arc::new(source_plan),
         )))
-    }
-
-    /// Rewrite every [`Expr::Column`] qualified with `from` to instead use
-    /// `to`, leaving all other columns untouched. Used to canonicalize MERGE
-    /// target-alias references to the real target table qualifier.
-    fn canonicalize_target_qualifier(
-        expr: Expr,
-        from: &TableReference,
-        to: &TableReference,
-    ) -> Result<Expr> {
-        expr.transform(|expr| match expr {
-            Expr::Column(col) if col.relation.as_ref() == Some(from) => Ok(
-                Transformed::yes(Expr::Column(Column::new(Some(to.clone()), col.name))),
-            ),
-            other => Ok(Transformed::no(other)),
-        })
-        .map(|transformed| transformed.data)
-    }
-
-    /// Return true if an expression contains a subquery whose embedded plan
-    /// has an outer reference qualified by `qualifier`.
-    fn has_outer_reference_to_qualifier(
-        expr: &Expr,
-        qualifier: &TableReference,
-    ) -> Result<bool> {
-        let mut found = false;
-        expr.apply(|expr| {
-            let subquery = match expr {
-                Expr::Exists(exists) => Some(&exists.subquery),
-                Expr::InSubquery(in_subquery) => Some(&in_subquery.subquery),
-                Expr::SetComparison(set_comparison) => Some(&set_comparison.subquery),
-                Expr::ScalarSubquery(subquery) => Some(subquery),
-                _ => None,
-            };
-
-            if let Some(subquery) = subquery {
-                subquery.subquery.apply_with_subqueries(|plan| {
-                    plan.apply_expressions(|expr| {
-                        expr.apply(|expr| {
-                            if let Expr::OuterReferenceColumn(_, column) = expr
-                                && column.relation.as_ref() == Some(qualifier)
-                            {
-                                found = true;
-                                Ok(TreeNodeRecursion::Stop)
-                            } else {
-                                Ok(TreeNodeRecursion::Continue)
-                            }
-                        })
-                    })?;
-                    Ok(if found {
-                        TreeNodeRecursion::Stop
-                    } else {
-                        TreeNodeRecursion::Continue
-                    })
-                })?;
-            }
-
-            Ok(if found {
-                TreeNodeRecursion::Stop
-            } else {
-                TreeNodeRecursion::Continue
-            })
-        })?;
-        Ok(found)
     }
 
     fn merge_target_column_name(
@@ -2723,8 +2697,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         "MERGE UPDATE DELETE WHERE predicates are not supported"
                     );
                 }
-                let assignments = update_expr
-                    .assignments
+                let sql_assignments = match update_expr.kind {
+                    ast::MergeUpdateKind::Set(assignments) => assignments,
+                    ast::MergeUpdateKind::Wildcard => {
+                        return not_impl_err!("MERGE UPDATE SET * is not supported");
+                    }
+                };
+                let assignments = sql_assignments
                     .into_iter()
                     .map(|assign| {
                         let col_name = match &assign.target {
@@ -2802,11 +2781,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     ast::MergeInsertKind::Row => {
                         return not_impl_err!("MERGE INSERT ROW is not supported");
                     }
+                    ast::MergeInsertKind::Wildcard => {
+                        return not_impl_err!("MERGE INSERT * is not supported");
+                    }
                 };
 
                 MergeIntoAction::Insert { columns, values }
             }
             ast::MergeAction::Delete { .. } => MergeIntoAction::Delete,
+            ast::MergeAction::DoNothing { .. } => {
+                return not_impl_err!(
+                    "MERGE WHEN ... THEN DO NOTHING action is not supported"
+                );
+            }
         };
 
         Ok(MergeIntoClause {
@@ -2928,7 +2915,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut planner_context =
             PlannerContext::new().with_prepare_param_data_types(prepare_param_data_types);
         planner_context.set_table_schema(Some(DFSchemaRef::new(
-            DFSchema::from_unqualified_fields(fields.clone(), Default::default())?,
+            DFSchema::from_unqualified_fields(fields.clone(), Metadata::new())?,
         )));
         let source = self.query_to_plan(*source, &mut planner_context)?;
         if fields.len() != source.schema().fields().len() {
@@ -2954,6 +2941,25 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             Expr::Literal(ScalarValue::Null, None)
                         })
                         .cast_to(target_field.data_type(), &DFSchema::empty())?,
+                };
+                let (_, expr_field) = expr.to_field(source.schema())?;
+                // A storage-type cast alone does not apply extension metadata from the
+                // table schema when the source and target storage types are identical.
+                let expr = if target_field.extension_type_name().is_none()
+                    || expr_field.metadata() == target_field.metadata()
+                {
+                    expr
+                } else {
+                    match expr {
+                        Expr::Cast(cast) => Expr::Cast(Cast::new_from_field(
+                            cast.expr,
+                            Arc::clone(target_field),
+                        )),
+                        expr => Expr::Cast(Cast::new_from_field(
+                            Box::new(expr),
+                            Arc::clone(target_field),
+                        )),
+                    }
                 };
                 Ok(expr.alias(target_field.name()))
             })
@@ -3187,4 +3193,21 @@ FROM (
             }
         }
     }
+}
+
+fn check_plan(plan: &LogicalPlan) -> Result<()> {
+    use datafusion_common::plan_err;
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+    plan.apply(|node| {
+        for field in node.schema().fields() {
+            if field.name().starts_with("__common_expr") {
+                return plan_err!(
+                    "{} is a reserved DataFusion column name, please use another name",
+                    field.name()
+                );
+            }
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })
+    .map(|_| ())
 }

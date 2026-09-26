@@ -28,7 +28,8 @@ use crate::execution::session_state::SessionStateBuilder;
 use crate::{
     catalog::listing_schema::ListingSchemaProvider,
     catalog::{
-        CatalogProvider, CatalogProviderList, TableProvider, TableProviderFactory,
+        CatalogProvider, CatalogProviderFactory, CatalogProviderList, TableProvider,
+        TableProviderFactory,
     },
     dataframe::DataFrame,
     datasource::listing::{
@@ -44,10 +45,10 @@ use crate::{
     logical_expr::AggregateUDF,
     logical_expr::ScalarUDF,
     logical_expr::{
-        CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateFunction,
-        CreateMemoryTable, CreateView, DropCatalogSchema, DropFunction, DropTable,
-        DropView, Execute, LogicalPlan, LogicalPlanBuilder, Prepare, ResetVariable,
-        SetVariable, TableType, UNNAMED_TABLE,
+        CreateCatalog, CreateCatalogSchema, CreateExternalCatalog, CreateExternalTable,
+        CreateFunction, CreateMemoryTable, CreateView, DropCatalog, DropCatalogSchema,
+        DropFunction, DropTable, DropView, Execute, LogicalPlan, LogicalPlanBuilder,
+        Prepare, ResetVariable, SetVariable, TableType, UNNAMED_TABLE,
     },
     physical_expr::PhysicalExpr,
     physical_plan::ExecutionPlan,
@@ -561,6 +562,19 @@ impl SessionContext {
         self.state.read().table_factories().get(file_type).cloned()
     }
 
+    /// Return the [`CatalogProviderFactory`] that is registered for the
+    /// specified catalog type, if any.
+    pub fn catalog_factory(
+        &self,
+        catalog_type: &str,
+    ) -> Option<Arc<dyn CatalogProviderFactory>> {
+        self.state
+            .read()
+            .catalog_factories()
+            .get(catalog_type)
+            .cloned()
+    }
+
     /// Return the `enable_ident_normalization` of this Session
     pub fn enable_ident_normalization(&self) -> bool {
         self.state
@@ -705,9 +719,15 @@ impl SessionContext {
                         self.create_catalog_schema(cmd)
                     }
                     DdlStatement::CreateCatalog(cmd) => self.create_catalog(cmd),
+                    DdlStatement::CreateExternalCatalog(cmd) => {
+                        (Box::pin(async move { self.create_external_catalog(&cmd).await })
+                            as std::pin::Pin<Box<dyn Future<Output = _> + Send>>)
+                            .await
+                    }
                     DdlStatement::DropTable(cmd) => Box::pin(self.drop_table(cmd)).await,
                     DdlStatement::DropView(cmd) => Box::pin(self.drop_view(cmd)).await,
                     DdlStatement::DropCatalogSchema(cmd) => self.drop_schema(cmd),
+                    DdlStatement::DropCatalog(cmd) => self.drop_catalog(cmd),
                     DdlStatement::CreateFunction(cmd) => {
                         Box::pin(self.create_function(*cmd)).await
                     }
@@ -1043,6 +1063,49 @@ impl SessionContext {
         }
     }
 
+    async fn create_external_catalog(
+        &self,
+        cmd: &CreateExternalCatalog,
+    ) -> Result<DataFrame> {
+        let exists = self.catalog(cmd.catalog_name.as_str()).is_some();
+
+        match (cmd.if_not_exists, cmd.or_replace, exists) {
+            (true, false, true) => self.return_empty_dataframe(),
+            (true, true, true) => {
+                exec_err!("'IF NOT EXISTS' cannot coexist with 'REPLACE'")
+            }
+            (false, false, true) => {
+                exec_err!("External catalog '{}' already exists", cmd.catalog_name)
+            }
+            (_, _, _) => {
+                let new_catalog = self.create_custom_catalog(cmd).await?;
+                self.state
+                    .write()
+                    .catalog_list()
+                    .register_catalog(cmd.catalog_name.clone(), new_catalog);
+                self.return_empty_dataframe()
+            }
+        }
+    }
+
+    async fn create_custom_catalog(
+        &self,
+        cmd: &CreateExternalCatalog,
+    ) -> Result<Arc<dyn CatalogProvider>> {
+        let state = self.state.read().clone();
+        let catalog_type = cmd.catalog_type.to_uppercase();
+        let factory = state
+            .catalog_factories()
+            .get(catalog_type.as_str())
+            .ok_or_else(|| {
+                exec_datafusion_err!(
+                    "Unable to find catalog factory for {}",
+                    cmd.catalog_type
+                )
+            })?;
+        factory.create(&state, cmd).await
+    }
+
     async fn drop_table(&self, cmd: DropTable) -> Result<DataFrame> {
         let DropTable {
             name, if_exists, ..
@@ -1106,10 +1169,27 @@ impl SessionContext {
         exec_err!("Schema '{schema_ref}' doesn't exist.")
     }
 
+    fn drop_catalog(&self, cmd: DropCatalog) -> Result<DataFrame> {
+        let DropCatalog {
+            name,
+            if_exists,
+            cascade,
+            ..
+        } = cmd;
+        let dereg = self
+            .state
+            .write()
+            .catalog_list()
+            .deregister_catalog(&name, cascade)?;
+        match (dereg, if_exists) {
+            (Some(_), _) => self.return_empty_dataframe(),
+            (None, true) => self.return_empty_dataframe(),
+            (None, false) => exec_err!("Catalog '{name}' doesn't exist."),
+        }
+    }
+
     fn set_variable(&self, stmt: SetVariable) -> Result<()> {
-        let SetVariable {
-            variable, value, ..
-        } = stmt;
+        let SetVariable { variable, value } = stmt;
 
         // Check if this is a runtime configuration
         if variable.starts_with("datafusion.runtime.") {
@@ -1258,7 +1338,7 @@ impl SessionContext {
                     builder.with_max_spill_merge_fan_in(DEFAULT_MAX_SPILL_MERGE_FAN_IN);
             }
             _ => return plan_err!("Unknown runtime configuration: {variable}"),
-        };
+        }
         *state = SessionStateBuilder::from(state.clone())
             .with_runtime_env(Arc::new(builder.build()?))
             .build();
@@ -1519,7 +1599,7 @@ impl SessionContext {
                 self.state.write().register_higher_order_function(f)?;
             }
             RegisterFunction::Table(name, f) => self.register_udtf(&name, f),
-        };
+        }
 
         self.return_empty_dataframe()
     }
@@ -1551,9 +1631,7 @@ impl SessionContext {
     }
 
     fn execute_prepared(&self, execute: Execute) -> Result<DataFrame> {
-        let Execute {
-            name, parameters, ..
-        } = execute;
+        let Execute { name, parameters } = execute;
         let prepared = self.state.read().get_prepared(&name).ok_or_else(|| {
             exec_datafusion_err!("Prepared statement '{}' does not exist", name)
         })?;
@@ -2772,7 +2850,7 @@ mod tests {
         );
 
         // Create catalog
-        ctx.sql("CREATE DATABASE test").await?.collect().await?;
+        ctx.sql("CREATE CATALOG test").await?.collect().await?;
 
         // Create schema
         ctx.sql("CREATE SCHEMA test.abc").await?.collect().await?;
@@ -2959,8 +3037,8 @@ mod tests {
         // Valid durations
         for (duration, want) in [
             ("1s", Duration::from_secs(1)),
-            ("1m", Duration::from_secs(60)),
-            ("1m0s", Duration::from_secs(60)),
+            ("1m", Duration::from_mins(1)),
+            ("1m0s", Duration::from_mins(1)),
             ("1m1s", Duration::from_secs(61)),
         ] {
             let have =
@@ -2985,6 +3063,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::duration_suboptimal_units,
+        reason = "Each `Duration` deliberately uses the same unit as the suffix in the string it is parsed from"
+    )]
     fn test_parse_duration_with_overflow_check() {
         const LIST_FILES_CACHE_TTL: &str = "datafusion.runtime.list_files_cache_ttl";
 
@@ -2996,7 +3078,7 @@ mod tests {
             ),
             (
                 "307445734561825860m",
-                Duration::from_secs(307445734561825860 * 60),
+                Duration::from_mins(307445734561825860),
             ),
             (
                 "307445734561825860m10s",

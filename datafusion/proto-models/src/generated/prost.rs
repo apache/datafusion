@@ -5,7 +5,7 @@
 pub struct LogicalPlanNode {
     #[prost(
         oneof = "logical_plan_node::LogicalPlanType",
-        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34"
+        tags = "1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
     )]
     pub logical_plan_type: ::core::option::Option<logical_plan_node::LogicalPlanType>,
 }
@@ -79,6 +79,8 @@ pub mod logical_plan_node {
         Dml(::prost::alloc::boxed::Box<super::DmlNode>),
         #[prost(message, tag = "34")]
         EmptyTableScan(super::EmptyTableScanNode),
+        #[prost(message, tag = "35")]
+        AsOfJoin(::prost::alloc::boxed::Box<super::AsOfJoinNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -421,6 +423,29 @@ pub struct JoinNode {
     pub null_aware: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AsOfJoinNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub left: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub right: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
+    #[prost(message, repeated, tag = "3")]
+    pub left_join_key: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    #[prost(message, repeated, tag = "4")]
+    pub right_join_key: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    #[prost(message, optional, boxed, tag = "5")]
+    pub left_match_expr: ::core::option::Option<
+        ::prost::alloc::boxed::Box<LogicalExprNode>,
+    >,
+    #[prost(message, optional, boxed, tag = "6")]
+    pub right_match_expr: ::core::option::Option<
+        ::prost::alloc::boxed::Box<LogicalExprNode>,
+    >,
+    #[prost(enumeration = "AsOfMatchOperator", tag = "7")]
+    pub match_operator: i32,
+    #[prost(enumeration = "super::datafusion_common::JoinConstraint", tag = "8")]
+    pub join_constraint: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DistinctNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
@@ -527,13 +552,17 @@ pub mod dml_node {
         }
     }
 }
-/// Carries the ON condition and WHEN clauses of a MERGE INTO operation.
+/// Carries the target qualifier, ON condition, and WHEN clauses of a MERGE INTO operation.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MergeIntoOpNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub on: ::core::option::Option<::prost::alloc::boxed::Box<LogicalExprNode>>,
     #[prost(message, repeated, tag = "2")]
     pub clauses: ::prost::alloc::vec::Vec<MergeIntoClauseNode>,
+    /// SQL-visible target qualifier. Absent in payloads written before this field
+    /// was introduced; readers then fall back to DmlNode.table_name.
+    #[prost(message, optional, tag = "3")]
+    pub target_qualifier: ::core::option::Option<TableReference>,
 }
 /// A single WHEN clause within a MERGE INTO statement.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1342,7 +1371,7 @@ pub mod table_reference {
 pub struct PhysicalPlanNode {
     #[prost(
         oneof = "physical_plan_node::PhysicalPlanType",
-        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39"
+        tags = "1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41"
     )]
     pub physical_plan_type: ::core::option::Option<physical_plan_node::PhysicalPlanType>,
 }
@@ -1428,6 +1457,12 @@ pub mod physical_plan_node {
         ArrowScan(super::ArrowScanExecNode),
         #[prost(message, tag = "39")]
         ScalarSubquery(::prost::alloc::boxed::Box<super::ScalarSubqueryExecNode>),
+        #[prost(message, tag = "40")]
+        PiecewiseMergeJoin(
+            ::prost::alloc::boxed::Box<super::PiecewiseMergeJoinExecNode>,
+        ),
+        #[prost(message, tag = "41")]
+        AsOfJoin(::prost::alloc::boxed::Box<super::AsOfJoinExecNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1499,6 +1534,24 @@ pub struct CsvSinkExecNode {
     #[prost(message, optional, tag = "4")]
     pub sort_order: ::core::option::Option<PhysicalSortExprNodeCollection>,
 }
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ParquetSortingColumn {
+    /// Zero-based ordinal of the leaf column in the Parquet schema.
+    #[prost(int32, tag = "1")]
+    pub column_idx: i32,
+    /// Whether the column is sorted in descending order.
+    #[prost(bool, tag = "2")]
+    pub descending: bool,
+    /// Whether nulls sort before non-null values.
+    #[prost(bool, tag = "3")]
+    pub nulls_first: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ParquetSortingColumns {
+    /// The wrapper preserves the distinction between no sorting metadata and an empty list.
+    #[prost(message, repeated, tag = "1")]
+    pub columns: ::prost::alloc::vec::Vec<ParquetSortingColumn>,
+}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetSink {
     #[prost(message, optional, tag = "1")]
@@ -1507,6 +1560,9 @@ pub struct ParquetSink {
     pub parquet_options: ::core::option::Option<
         super::datafusion_common::TableParquetOptions,
     >,
+    /// Sorting-column metadata to write to each Parquet row group.
+    #[prost(message, optional, tag = "3")]
+    pub sorting_columns: ::core::option::Option<ParquetSortingColumns>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetSinkExecNode {
@@ -1557,7 +1613,7 @@ pub struct PhysicalExprNode {
     pub expr_id: ::core::option::Option<u64>,
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1622,6 +1678,10 @@ pub mod physical_expr_node {
         LambdaVariable(super::PhysicalLambdaVariableExprNode),
         #[prost(message, tag = "27")]
         RangeExpr(super::PhysicalRangeExprNode),
+        #[prost(message, tag = "28")]
+        SqlSimilarToPattern(
+            ::prost::alloc::boxed::Box<super::PhysicalSqlSimilarToPatternNode>,
+        ),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1636,6 +1696,11 @@ pub struct PhysicalDynamicFilterNode {
     pub inner_expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(bool, tag = "5")]
     pub is_complete: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalSqlSimilarToPatternNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalScalarUdfNode {
@@ -1768,10 +1833,12 @@ pub struct PhysicalBinaryExprNode {
     pub r: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(string, tag = "3")]
     pub op: ::prost::alloc::string::String,
-    /// Linearized operands for chains of the same operator (e.g. a AND b AND c).
+    /// Linearized operands for chains of the same operator and overflow policy.
     /// When present, `l` and `r` are ignored and `operands` holds the flattened list.
     #[prost(message, repeated, tag = "4")]
     pub operands: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(bool, tag = "5")]
+    pub fail_on_overflow: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalDateTimeIntervalExprNode {
@@ -1938,6 +2005,18 @@ pub struct FileScanExecConf {
     pub projection_exprs: ::core::option::Option<ProjectionExprs>,
     #[prost(message, optional, tag = "15")]
     pub output_partitioning: ::core::option::Option<Partitioning>,
+    /// Compression used by formats such as CSV and JSON. Absent means uncompressed
+    /// for compatibility with payloads written before this field existed.
+    #[prost(
+        enumeration = "super::datafusion_common::CompressionTypeVariant",
+        optional,
+        tag = "16"
+    )]
+    pub file_compression_type: ::core::option::Option<i32>,
+    /// Whether file processing order must be preserved. Absent payloads retain the
+    /// legacy behavior of deriving this from output_ordering.
+    #[prost(bool, optional, tag = "17")]
+    pub preserve_order: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ParquetScanExecNode {
@@ -1949,6 +2028,13 @@ pub struct ParquetScanExecNode {
     pub parquet_options: ::core::option::Option<
         super::datafusion_common::TableParquetOptions,
     >,
+    #[prost(message, optional, tag = "5")]
+    pub sort_order_for_reorder: ::core::option::Option<PhysicalSortExprNodeCollection>,
+    #[prost(bool, tag = "6")]
+    pub reverse_row_groups: bool,
+    /// Source-specific footer prefetch size. Absent means no hint.
+    #[prost(uint64, optional, tag = "7")]
+    pub metadata_size_hint: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CsvScanExecNode {
@@ -1964,6 +2050,9 @@ pub struct CsvScanExecNode {
     pub newlines_in_values: bool,
     #[prost(bool, tag = "8")]
     pub truncate_rows: bool,
+    /// Custom one-byte line terminator. Absent means the default newline terminator.
+    #[prost(bytes = "vec", optional, tag = "9")]
+    pub terminator: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(oneof = "csv_scan_exec_node::OptionalEscape", tags = "5")]
     pub optional_escape: ::core::option::Option<csv_scan_exec_node::OptionalEscape>,
     #[prost(oneof = "csv_scan_exec_node::OptionalComment", tags = "6")]
@@ -1986,6 +2075,9 @@ pub mod csv_scan_exec_node {
 pub struct JsonScanExecNode {
     #[prost(message, optional, tag = "1")]
     pub base_conf: ::core::option::Option<FileScanExecConf>,
+    /// Absent means newline-delimited JSON for compatibility with older payloads.
+    #[prost(bool, optional, tag = "2")]
+    pub newline_delimited: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AvroScanExecNode {
@@ -2110,6 +2202,12 @@ pub struct AnalyzeExecNode {
     pub metric_categories: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(enumeration = "super::datafusion_common::ExplainFormat", tag = "7")]
     pub format: i32,
+    /// Whether metric_types is present. False means use SUMMARY and DEV.
+    #[prost(bool, tag = "8")]
+    pub has_metric_types: bool,
+    /// Types of metrics to display.
+    #[prost(enumeration = "super::datafusion_common::MetricType", repeated, tag = "9")]
+    pub metric_types: ::prost::alloc::vec::Vec<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CrossJoinExecNode {
@@ -2550,6 +2648,44 @@ pub struct SortMergeJoinExecNode {
     pub sort_options: ::prost::alloc::vec::Vec<SortExprNode>,
     #[prost(enumeration = "super::datafusion_common::NullEquality", tag = "7")]
     pub null_equality: i32,
+    #[prost(uint32, repeated, tag = "8")]
+    pub projection: ::prost::alloc::vec::Vec<u32>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PiecewiseMergeJoinExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub buffered: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub streamed: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    /// The buffered-side and streamed-side halves of the single range predicate.
+    #[prost(message, optional, tag = "3")]
+    pub on_buffered: ::core::option::Option<PhysicalExprNode>,
+    #[prost(message, optional, tag = "4")]
+    pub on_streamed: ::core::option::Option<PhysicalExprNode>,
+    /// `Operator` variant name, e.g. "Lt". Must be one of Lt/LtEq/Gt/GtEq.
+    #[prost(string, tag = "5")]
+    pub operator: ::prost::alloc::string::String,
+    #[prost(enumeration = "super::datafusion_common::JoinType", tag = "6")]
+    pub join_type: i32,
+    #[prost(uint64, tag = "7")]
+    pub num_partitions: u64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AsOfJoinExecNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub left: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, optional, boxed, tag = "2")]
+    pub right: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
+    #[prost(message, repeated, tag = "3")]
+    pub on: ::prost::alloc::vec::Vec<JoinOn>,
+    #[prost(message, optional, tag = "4")]
+    pub left_match_expr: ::core::option::Option<PhysicalExprNode>,
+    #[prost(message, optional, tag = "5")]
+    pub right_match_expr: ::core::option::Option<PhysicalExprNode>,
+    #[prost(enumeration = "AsOfMatchOperator", tag = "6")]
+    pub match_operator: i32,
+    #[prost(uint32, repeated, tag = "7")]
+    pub projection: ::prost::alloc::vec::Vec<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AsyncFuncExecNode {
@@ -2582,6 +2718,47 @@ pub struct PhysicalScalarSubqueryExprNode {
     pub nullable: bool,
     #[prost(uint32, tag = "3")]
     pub index: u32,
+    /// Serialized separately from data_type to keep older wire formats valid.
+    #[prost(map = "string, string", tag = "4")]
+    pub metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum AsOfMatchOperator {
+    Unspecified = 0,
+    Lt = 1,
+    LtEq = 2,
+    Gt = 3,
+    GtEq = 4,
+}
+impl AsOfMatchOperator {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "AS_OF_MATCH_OPERATOR_UNSPECIFIED",
+            Self::Lt => "AS_OF_MATCH_OPERATOR_LT",
+            Self::LtEq => "AS_OF_MATCH_OPERATOR_LT_EQ",
+            Self::Gt => "AS_OF_MATCH_OPERATOR_GT",
+            Self::GtEq => "AS_OF_MATCH_OPERATOR_GT_EQ",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "AS_OF_MATCH_OPERATOR_UNSPECIFIED" => Some(Self::Unspecified),
+            "AS_OF_MATCH_OPERATOR_LT" => Some(Self::Lt),
+            "AS_OF_MATCH_OPERATOR_LT_EQ" => Some(Self::LtEq),
+            "AS_OF_MATCH_OPERATOR_GT" => Some(Self::Gt),
+            "AS_OF_MATCH_OPERATOR_GT_EQ" => Some(Self::GtEq),
+            _ => None,
+        }
+    }
 }
 /// Identifies a built-in file format supported by DataFusion.
 /// Used by DefaultLogicalExtensionCodec to serialize/deserialize

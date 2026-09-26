@@ -20,10 +20,10 @@ use crate::helpers::{
     expr_applicable_for_cols, filter_partitioned_file, pruned_partition_list,
 };
 use crate::{ListingOptions, ListingTableConfig};
-use arrow::datatypes::{Field, Schema, SchemaBuilder, SchemaRef};
+use arrow::datatypes::{Field, Metadata, Schema, SchemaBuilder, SchemaRef};
 use async_trait::async_trait;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
-use datafusion_common::stats::Precision;
+use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_common::{
     Constraints, DFSchema, SchemaExt, Statistics, internal_datafusion_err, plan_err,
     project_schema,
@@ -225,6 +225,32 @@ impl ListingTable {
             .options
             .ok_or_else(|| internal_datafusion_err!("No ListingOptions provided"))?;
 
+        // Files may physically contain the partition columns, for example when
+        // they were written with `keep_partition_by_columns = true`. Partition
+        // column values are always taken from the path, so drop such columns
+        // from the file schema to avoid duplicated fields in the table schema.
+        let file_schema = if options
+            .table_partition_cols
+            .iter()
+            .any(|(name, _)| file_schema.field_with_name(name).is_ok())
+        {
+            let indices: Vec<usize> = file_schema
+                .fields()
+                .iter()
+                .enumerate()
+                .filter(|(_, field)| {
+                    !options
+                        .table_partition_cols
+                        .iter()
+                        .any(|(name, _)| name == field.name())
+                })
+                .map(|(idx, _)| idx)
+                .collect();
+            Arc::new(file_schema.project(&indices)?)
+        } else {
+            file_schema
+        };
+
         // Add the partition columns to the file schema
         let mut builder = SchemaBuilder::from(file_schema.as_ref().to_owned());
         for (part_col_name, part_col_type) in &options.table_partition_cols {
@@ -400,6 +426,9 @@ fn derive_common_ordering_from_files(file_groups: &[FileGroup]) -> Option<LexOrd
     // Collect file orderings and track counts
     for group in file_groups {
         for file in group.iter() {
+            if file.statistics.as_deref().is_some_and(is_known_empty) {
+                continue;
+            }
             state = match (&state, &file.ordering) {
                 // If this is the first file with ordering, set it as current
                 (CurrentOrderingState::FirstFile, Some(ordering)) => {
@@ -583,10 +612,10 @@ impl ListingTable {
         Box::pin(self.scan_with_args_inner(state, args))
     }
 
-    async fn scan_with_args_inner<'a>(
+    async fn scan_with_args_inner(
         &self,
         state: &dyn Session,
-        args: ScanArgs<'a>,
+        args: ScanArgs<'_>,
     ) -> datafusion_common::Result<ScanResult> {
         let projection = args.projection().map(|p| p.to_vec());
         let filters = args.filters().map(|f| f.to_vec()).unwrap_or_default();
@@ -673,7 +702,7 @@ impl ListingTable {
                 }
             }
             None => {} // no ordering required
-        };
+        }
 
         let output_partitioning = if let Some(output_partitioning) =
             declared_output_partitioning
@@ -820,11 +849,23 @@ impl ListingTable {
 
         // Invalidate cache entries for this table if they exist
         if let Some(lfc) = state.runtime_env().cache_manager.get_list_files_cache() {
-            let key = TableScopedPath {
-                table: table_path.get_table_ref().clone(),
-                path: table_path.prefix().clone(),
-            };
-            let _ = lfc.remove(&key);
+            if let Some(table_ref) = table_path.get_table_ref() {
+                lfc.drop_table_entries(table_ref)?;
+            } else {
+                let table_prefix = table_path.prefix();
+                let keys: Vec<_> = lfc
+                    .list_entries()
+                    .into_keys()
+                    .filter(|key| {
+                        key.table.is_none()
+                            && (key.path.prefix_matches(table_prefix)
+                                || table_prefix.prefix_matches(&key.path))
+                    })
+                    .collect();
+                for key in keys {
+                    let _ = lfc.remove(&key);
+                }
+            }
         }
 
         // Sink related option, apart from format
@@ -1041,7 +1082,7 @@ impl ListingTable {
                 .iter()
                 .map(|(name, data_type)| Field::new(name, data_type.clone(), true))
                 .collect(),
-            Default::default(),
+            Metadata::new(),
         )?;
 
         file_groups
@@ -1237,6 +1278,14 @@ mod tests {
         PartitionedFile::new(name.to_string(), 1024).with_ordering(ordering)
     }
 
+    /// Helper to create an exact zero-row file with optional ordering
+    fn create_empty_file(name: &str, ordering: Option<LexOrdering>) -> PartitionedFile {
+        create_file(name, ordering).with_statistics(Arc::new(Statistics {
+            num_rows: Precision::Exact(0),
+            ..Default::default()
+        }))
+    }
+
     #[test]
     fn test_derive_common_ordering_all_files_same_ordering() {
         // All files have the same ordering -> returns that ordering
@@ -1306,6 +1355,19 @@ mod tests {
 
         let result = derive_common_ordering_from_files(&file_groups);
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_derive_common_ordering_ignores_empty_files() {
+        let ordering = lex_ordering(vec![sort_expr("a", 0, false, true)]);
+
+        let file_groups = vec![FileGroup::new(vec![
+            create_empty_file("empty.parquet", None),
+            create_file("data.parquet", Some(ordering.clone())),
+        ])];
+
+        let result = derive_common_ordering_from_files(&file_groups);
+        assert_eq!(result, Some(ordering));
     }
 
     #[test]

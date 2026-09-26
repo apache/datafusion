@@ -153,7 +153,7 @@ macro_rules! downcast_sum {
     sql_example = r#"```sql
 > SELECT sum(column_name) FROM table_name;
 +-----------------------+
-| sum(column_name)       |
+| sum(column_name)      |
 +-----------------------+
 | 12345                 |
 +-----------------------+
@@ -261,21 +261,18 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        if args.is_distinct {
-            macro_rules! helper {
-                ($t:ty, $dt:expr) => {
-                    Ok(Box::new(DistinctSumAccumulator::<$t>::new($dt)))
-                };
-            }
-            downcast_sum!(args, helper)
-        } else {
-            macro_rules! helper {
-                ($t:ty, $dt:expr) => {
-                    Ok(Box::new(SumAccumulator::<$t>::new($dt)))
-                };
-            }
-            downcast_sum!(args, helper)
+        let is_distinct = args.is_distinct;
+        macro_rules! helper {
+            ($t:ty, $dt:expr) => {
+                if is_distinct {
+                    Ok(Box::new(DistinctSumAccumulator::<$t>::new($dt))
+                        as Box<dyn Accumulator>)
+                } else {
+                    Ok(Box::new(SumAccumulator::<$t>::new($dt)) as Box<dyn Accumulator>)
+                }
+            };
         }
+        downcast_sum!(args, helper)
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
@@ -680,7 +677,7 @@ impl Accumulator for SlidingDistinctSumAccumulator {
         let keys = self
             .counts
             .keys()
-            .cloned()
+            .copied()
             .map(Some)
             .map(ScalarValue::Int64)
             .collect::<Vec<_>>();
@@ -772,7 +769,7 @@ mod tests {
 
         let initial_capacity = acc.counts.capacity();
         let additional_values: ArrayRef =
-            Arc::new(Int64Array::from_iter(4..4 + initial_capacity as i64 + 1));
+            Arc::new(Int64Array::from_iter(4..=(4 + initial_capacity as i64)));
         acc.update_batch(&[Arc::clone(&additional_values)])?;
 
         let grown_size = expected_sliding_distinct_sum_size(&acc);

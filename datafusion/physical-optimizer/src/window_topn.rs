@@ -26,7 +26,7 @@
 //! ) WHERE rn <= K;
 //! ```
 //!
-//! or with `RANK()` in place of `ROW_NUMBER()`:
+//! or with `RANK()` / `DENSE_RANK()` in place of `ROW_NUMBER()`:
 //!
 //! ```sql
 //! SELECT * FROM (
@@ -40,8 +40,8 @@
 //! `FilterExec` and inserting `PartitionedTopKExec` under the window.
 //!
 //! The appropriate [`WindowFnKind`] is forwarded to `PartitionedTopKExec`.
-//! RANK requires a non-empty `ORDER BY` clause (otherwise all rows tie at
-//! rank 1 and the optimization is degenerate).
+//! `RANK` and `DENSE_RANK` require a non-empty `ORDER BY` clause (otherwise
+//! all rows tie at rank 1 and the optimization is degenerate).
 //!
 //! See [`PartitionedTopKExec`] for details on the replacement operator.
 //!
@@ -69,9 +69,9 @@ use datafusion_physical_plan::sorts::partitioned_topk::{
 };
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 
-/// Physical optimizer rule that converts per-partition `ROW_NUMBER` and
-/// `RANK` top-K queries into a more efficient plan using
-/// [`PartitionedTopKExec`].
+/// Physical optimizer rule that converts per-partition `ROW_NUMBER`,
+/// `RANK`, and `DENSE_RANK` top-K queries into a more efficient plan
+/// using [`PartitionedTopKExec`].
 ///
 /// # Pattern Detected
 ///
@@ -86,12 +86,14 @@ use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 /// ```text
 /// [optional ProjectionExec]
 ///   BoundedWindowAggExec(<ranking fn> PARTITION BY ... ORDER BY ...)
-///     PartitionedTopKExec(fn=<row_number|rank>, partition_keys, order_keys, fetch=K)
+///     PartitionedTopKExec(fn=<row_number|rank|dense_rank>, partition_keys, order_keys, fetch=K)
 /// ```
 ///
 /// The `FilterExec` is removed entirely. The child of `BoundedWindowAggExec` is now
-/// `PartitionedTopKExec`, which maintains a per-partition top-K heap (and,
-/// for `RANK`, a sibling ties `Vec`) instead of sorting the whole dataset.
+/// `PartitionedTopKExec`, which maintains per-partition top-K state (a
+/// heap for `ROW_NUMBER`, a heap plus boundary ties for `RANK`, a
+/// K-bounded distinct-ob map for `DENSE_RANK`) instead of sorting the
+/// whole dataset.
 ///
 /// # Supported Predicates
 ///
@@ -105,12 +107,19 @@ use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 /// All of the following must be true:
 /// - Config flag `enable_window_topn` is `true`
 /// - The plan matches `FilterExec → [ProjectionExec] → BoundedWindowAggExec`
-/// - The window function is `ROW_NUMBER` or `RANK` (not `DENSE_RANK`)
+/// - The window function is `ROW_NUMBER`, `RANK`, or `DENSE_RANK`
+/// - Every window expression in the `BoundedWindowAggExec` is `ROW_NUMBER`,
+///   `RANK`, or `DENSE_RANK` over the same `PARTITION BY` / `ORDER BY`. A
+///   sibling that reads pruned rows (e.g. `LEAD`, or an aggregate whose
+///   frame is not strictly backward-looking) would be computed over the
+///   pruned input and give wrong results.
 /// - The window function has a `PARTITION BY` clause (global top-K is
 ///   already handled by `SortExec` with `fetch`)
-/// - For `RANK`: a non-empty `ORDER BY` clause (otherwise all rows tie
-///   at rank 1 — the optimization is useless and the boundary-tie storage
-///   would be unbounded)
+/// - At least one `ORDER BY` key survives past the `PARTITION BY` prefix
+///   (so the operator has a non-empty ORDER BY). This rejects both a
+///   missing `ORDER BY` and one fully covered by the partition prefix
+///   such as `PARTITION BY pk ORDER BY pk`; for `RANK` / `DENSE_RANK`
+///   such orderings also make every row tie at rank 1 (degenerate).
 /// - The filter predicate compares the window output column to an integer
 ///   literal using `<=`, `<`, `>=`, or `>`
 ///
@@ -142,10 +151,10 @@ impl WindowTopN {
         let (col_idx, limit_n) = extract_window_limit(filter.predicate())?;
 
         // A predicate such as `rn < 1` (or the flipped `1 > rn`) yields a fetch of
-        // 0. `ROW_NUMBER`/`RANK` are always >= 1, so no row can satisfy it and the
-        // correct result is empty. `PartitionedTopKExec` requires `k > 0` and would
-        // panic on `k = 0`, so bail out here and let the regular `FilterExec` produce
-        // the (empty) result instead of rewriting.
+        // 0. `ROW_NUMBER`/`RANK`/`DENSE_RANK` are always >= 1, so no row can satisfy
+        // it and the correct result is empty. `PartitionedTopKExec` requires `k > 0`
+        // and would panic on `k = 0`, so bail out here and let the regular
+        // `FilterExec` produce the (empty) result instead of rewriting.
         if limit_n == 0 {
             return None;
         }
@@ -167,6 +176,28 @@ impl WindowTopN {
         }
         let fn_kind = supported_window_fn(&window_exprs[window_expr_idx])?;
 
+        // Tail-pruning drops the rows that rank after the retained top-K,
+        // and every window expression in this `BoundedWindowAggExec` is
+        // then evaluated over the *pruned* input. The rewrite is only valid
+        // if each expression's value for a *retained* row is unaffected by
+        // the dropped rows. ROW_NUMBER / RANK / DENSE_RANK over the same
+        // PARTITION BY / ORDER BY satisfy this — each depends only on rows
+        // at or before the current row in that order, all of which are
+        // retained. A sibling like `LEAD(x)` reads following (pruned) rows,
+        // so at the retained boundary it would resolve to a dropped row and
+        // give a wrong result. Bail out unless every window expression is a
+        // supported ranking function sharing the matched expression's
+        // partition/order keys.
+        let matched_expr = &window_exprs[window_expr_idx];
+        let all_prune_safe = window_exprs.iter().all(|e| {
+            supported_window_fn(e).is_some()
+                && e.partition_by() == matched_expr.partition_by()
+                && e.order_by() == matched_expr.order_by()
+        });
+        if !all_prune_safe {
+            return None;
+        }
+
         // Step 5: Validate PARTITION BY / ORDER BY and collect sort keys from the window expr
         let partition_by = window_exprs[window_expr_idx].partition_by();
         let partition_prefix_len = partition_by.len();
@@ -177,20 +208,30 @@ impl WindowTopN {
             return None;
         }
 
-        // For RANK: an empty ORDER BY makes every row tie at rank 1 —
-        // the optimization is degenerate (we'd retain the entire input)
-        // and tie storage would be unbounded.
-        let order_by = window_exprs[window_expr_idx].order_by();
-        if matches!(fn_kind, WindowFnKind::Rank) && order_by.is_empty() {
-            return None;
-        }
-
         // Step 6: Build PartitionedTopKExec from the window's partition/order keys
+        let order_by = window_exprs[window_expr_idx].order_by();
         let expr_iterator = partition_by
             .iter()
             .map(|e| PhysicalSortExpr::new_default(Arc::clone(e)))
             .chain(order_by.iter().cloned());
         let expr = LexOrdering::new(expr_iterator)?;
+
+        // `PartitionedTopKExec` derives its ORDER BY keys from the ordering
+        // *beyond* the partition prefix (`expr[partition_prefix_len..]`).
+        // That slice is empty in two cases:
+        //   * no ORDER BY at all (e.g. `ROW_NUMBER() OVER (PARTITION BY pk)`);
+        //   * ORDER BY keys fully covered by the partition prefix (e.g.
+        //     `DENSE_RANK() OVER (PARTITION BY pk ORDER BY pk)`, whose
+        //     deduplicated ordering is just `[pk]`).
+        // With zero order keys the operator panics on execution (it
+        // requires at least one), and for RANK / DENSE_RANK every row
+        // would tie at rank 1 (a degenerate, unbounded retained set).
+        // `order_by()` alone does not catch the second case — it reports
+        // `[pk]` even though no order key survives past the partition
+        // prefix — so guard on the effective order-key count instead.
+        if expr.len() <= partition_prefix_len {
+            return None;
+        }
 
         let partitioned_topk = PartitionedTopKExec::try_new(
             Arc::clone(window_exec_typed.input()),
@@ -325,7 +366,8 @@ fn scalar_to_usize(value: &ScalarValue) -> Option<usize> {
 /// the UDF name. Returns:
 /// - `Some(WindowFnKind::RowNumber)` for `"row_number"`
 /// - `Some(WindowFnKind::Rank)` for `"rank"`
-/// - `None` for everything else (e.g. `dense_rank`)
+/// - `Some(WindowFnKind::DenseRank)` for `"dense_rank"`
+/// - `None` for everything else
 fn supported_window_fn(
     expr: &Arc<dyn datafusion_physical_expr::window::WindowExpr>,
 ) -> Option<WindowFnKind> {
@@ -335,6 +377,7 @@ fn supported_window_fn(
     match udf.fun().name() {
         "row_number" => Some(WindowFnKind::RowNumber),
         "rank" => Some(WindowFnKind::Rank),
+        "dense_rank" => Some(WindowFnKind::DenseRank),
         _ => None,
     }
 }

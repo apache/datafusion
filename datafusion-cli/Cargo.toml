@@ -57,7 +57,7 @@ datafusion = { workspace = true, features = [
 ] }
 datafusion-common = { workspace = true }
 datafusion-spark = { workspace = true, features = ["core"] }
-dirs = "6.0.0"
+dirs = "7.0.0"
 env_logger = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
@@ -78,7 +78,7 @@ ctor = { workspace = true }
 insta = { workspace = true }
 insta-cmd = "0.7.0"
 rstest = { workspace = true }
-testcontainers-modules = { workspace = true, features = ["minio"] }
+testcontainers-modules = { workspace = true }
 # Makes sure `test_display_pg_json` behaves in a consistent way regardless of
 # feature unification with dependencies
 serde_json = { workspace = true, features = ["preserve_order"] }

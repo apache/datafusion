@@ -21,6 +21,8 @@
 use std::sync::Arc;
 
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+#[cfg(target_arch = "wasm32")]
+use super::stream::RecordBatchStreamAdapter;
 use super::stream::{ObservedStream, RecordBatchReceiverStream};
 use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, SendableRecordBatchStream,
@@ -229,6 +231,26 @@ impl ExecutionPlan for CoalescePartitionsExec {
             }
             _ => {
                 let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+
+                // wasm has no tokio reactor, so avoid `JoinSet::spawn`; poll
+                // input partitions cooperatively via `select_all` instead.
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let elapsed_compute = baseline_metrics.elapsed_compute().clone();
+                    let _timer = elapsed_compute.timer();
+
+                    let mut streams = Vec::with_capacity(input_partitions);
+                    for i in 0..input_partitions {
+                        streams.push(self.input.execute(i, Arc::clone(&context))?);
+                    }
+                    let merged = futures::stream::select_all(streams);
+                    return Ok(Box::pin(ObservedStream::new(
+                        Box::pin(RecordBatchStreamAdapter::new(self.schema(), merged)),
+                        baseline_metrics,
+                        self.fetch,
+                    )));
+                }
+
                 // record the (very) minimal work done so that
                 // elapsed_compute is not reported as 0
                 let elapsed_compute = baseline_metrics.elapsed_compute().clone();
@@ -383,14 +405,29 @@ impl ExecutionPlan for CoalescePartitionsExec {
         &self,
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `CoalescePartitionsExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            input,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+            fetch,
+        } = self;
+        let input = ctx.encode_child(input)?;
+        let fetch = fetch
+            .map(|fetch| usize_to_wire(fetch, "CoalescePartitionsExec", "fetch"))
+            .transpose()?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Merge(Box::new(
                     protobuf::CoalescePartitionsExecNode {
                         input: Some(Box::new(input)),
-                        fetch: self.fetch().map(|f| f as u32),
+                        fetch,
                     },
                 )),
             ),
@@ -411,20 +448,27 @@ impl CoalescePartitionsExec {
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &crate::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_proto_models::protobuf;
         let merge = crate::expect_plan_variant!(
             node,
             protobuf::physical_plan_node::PhysicalPlanType::Merge,
             "CoalescePartitionsExec",
         );
+        // Destructure exhaustively so that a new field on
+        // `CoalescePartitionsExecNode` is a compile error here rather than a
+        // silently dropped field.
+        let protobuf::CoalescePartitionsExecNode { input, fetch } = &**merge;
         let input = ctx.decode_required_child(
-            merge.input.as_deref(),
+            input.as_deref(),
             "CoalescePartitionsExec",
             "input",
         )?;
+        let fetch = fetch
+            .map(|f| usize_from_wire(f, "CoalescePartitionsExec", "fetch"))
+            .transpose()?;
         Ok(Arc::new(
-            CoalescePartitionsExec::new(input)
-                .with_fetch(merge.fetch.map(|f| f as usize)),
+            CoalescePartitionsExec::new(input).with_fetch(fetch),
         ))
     }
 }

@@ -495,7 +495,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Binary(Some(
                     "Café".as_bytes().into()
                 ))),
-                ColumnarValue::Scalar(ScalarValue::Binary(Some("cc".as_bytes().into()))),
+                ColumnarValue::Scalar(ScalarValue::Binary(Some(b"cc".into()))),
             ],
             Ok(Some("Cafécc".as_bytes())),
             &[u8],
@@ -508,9 +508,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Binary(Some(
                     "Café".as_bytes().into()
                 ))),
-                ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(
-                    "cc".as_bytes().into()
-                ))),
+                ColumnarValue::Scalar(ScalarValue::LargeBinary(Some(b"cc".into()))),
             ],
             Ok(Some("Cafécc".as_bytes())),
             &[u8],
@@ -523,9 +521,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Binary(Some(
                     "Café".as_bytes().into()
                 ))),
-                ColumnarValue::Scalar(ScalarValue::BinaryView(Some(
-                    "cc".as_bytes().into()
-                ))),
+                ColumnarValue::Scalar(ScalarValue::BinaryView(Some(b"cc".into()))),
             ],
             Ok(Some("Cafécc".as_bytes())),
             &[u8],
@@ -538,9 +534,7 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::BinaryView(Some(
                     "Café".as_bytes().into()
                 ))),
-                ColumnarValue::Scalar(ScalarValue::BinaryView(Some(
-                    "cc".as_bytes().into()
-                ))),
+                ColumnarValue::Scalar(ScalarValue::BinaryView(Some(b"cc".into()))),
             ],
             Ok(Some("Cafécc".as_bytes())),
             &[u8],

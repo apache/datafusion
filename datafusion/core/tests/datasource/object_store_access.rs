@@ -25,15 +25,18 @@
 //! [`ListingTable`]: datafusion::datasource::listing::ListingTable
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch};
+use arrow::datatypes::{DataType, Field, Schema};
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::prelude::{
     CsvReadOptions, JsonReadOptions, ParquetReadOptions, SessionContext,
 };
 use datafusion_catalog_listing::{ListingOptions, ListingTable, ListingTableConfig};
+use datafusion_common::assert_batches_eq;
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource_csv::CsvFormat;
 use datafusion_datasource_json::JsonFormat;
+use datafusion_execution::cache::TableScopedPath;
 use futures::stream::BoxStream;
 use insta::assert_snapshot;
 use object_store::memory::InMemory;
@@ -201,6 +204,102 @@ async fn multi_query_multi_file_csv_file() {
     - GET  (opts) path=data/file_1.csv
     - GET  (opts) path=data/file_2.csv
     "
+    );
+}
+
+#[tokio::test]
+async fn insert_invalidates_overlapping_unscoped_listings() {
+    let store = Arc::new(InMemory::new());
+    for (path, data) in [
+        ("table/region=US/q1/data.csv", "1\n"),
+        ("table/region=EU/data.csv", "2\n"),
+    ] {
+        store.put(&Path::from(path), data.into()).await.unwrap();
+    }
+    let ctx = SessionContext::new();
+    ctx.runtime_env()
+        .register_object_store(&Url::parse("mem://").unwrap(), store);
+    ctx.sql("SET datafusion.execution.listing_table_ignore_subdirectory = false")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int32,
+        false,
+    )]));
+    let cache = ctx
+        .runtime_env()
+        .cache_manager
+        .get_list_files_cache()
+        .unwrap();
+    let tables = [
+        ("root_table", "table"),
+        ("child_table", "table/region=US"),
+        ("descendant_table", "table/region=US/q1"),
+        ("sibling_table", "table/region=EU"),
+    ];
+
+    for (name, path) in tables {
+        // Keep the URLs unscoped so overlapping tables share path-based cache entries.
+        let url = ListingTableUrl::parse(format!("mem:///{path}/")).unwrap();
+        let options =
+            ListingOptions::new(Arc::new(CsvFormat::default().with_has_header(false)))
+                .with_file_extension(".csv");
+        let config = ListingTableConfig::new(url)
+            .with_listing_options(options)
+            .with_schema(Arc::clone(&schema));
+        ctx.register_table(name, Arc::new(ListingTable::try_new(config).unwrap()))
+            .unwrap();
+        ctx.sql(&format!("SELECT * FROM {name}"))
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let key = TableScopedPath {
+            table: None,
+            path: Path::from(path),
+        };
+        assert!(cache.get(&key).is_some());
+    }
+
+    ctx.sql("INSERT INTO child_table VALUES (3)")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    for (name, path) in tables {
+        let key = TableScopedPath {
+            table: None,
+            path: Path::from(path),
+        };
+        let cached = cache.get(&key);
+        assert_eq!(cached.is_some(), name == "sibling_table", "{name}");
+    }
+
+    let batches = ctx
+        .sql("SELECT * FROM root_table ORDER BY value")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_batches_eq!(
+        [
+            "+-------+",
+            "| value |",
+            "+-------+",
+            "| 1     |",
+            "| 2     |",
+            "| 3     |",
+            "+-------+"
+        ],
+        &batches
     );
 }
 
@@ -929,6 +1028,10 @@ struct Test {
     /// * `None`: uses the default (does not set a size_hint)
     /// * `Some(None)`L: set prefetch hint to None (prefetching)
     /// * `Some(Some(size))`: set prefetch hint to size
+    #[expect(
+        clippy::option_option,
+        reason = "The nesting is meaningful, see the doc comment above"
+    )]
     parquet_metadata_size_hint: Option<Option<usize>>,
 }
 
@@ -1065,7 +1168,7 @@ impl Test {
             );
             self = self
                 .with_bytes(
-                    &format!("/data/a={i}/b={}/c={}/file_{i}.csv", i * 10, i * 100,),
+                    &format!("/data/a={i}/b={}/c={}/file_{i}.csv", i * 10, i * 100),
                     csv_data1,
                 )
                 .await;

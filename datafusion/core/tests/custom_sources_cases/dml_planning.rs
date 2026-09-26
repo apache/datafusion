@@ -19,17 +19,21 @@
 
 use std::sync::{Arc, Mutex};
 
+use arrow::array::{Int32Array, RecordBatch, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion::datasource::{TableProvider, TableType};
+use datafusion::datasource::{MemTable, TableProvider, TableType, provider_as_source};
 use datafusion::error::Result;
 use datafusion::execution::context::{SessionConfig, SessionContext};
+use datafusion::logical_expr::dml::{DmlStatement, WriteOp};
 use datafusion::logical_expr::{
-    Expr, LogicalPlan, TableProviderFilterPushDown, TableScan,
+    Expr, LogicalPlan, LogicalPlanBuilder, TableProviderFilterPushDown, TableScan, col,
+    lit,
 };
+use datafusion::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use datafusion_catalog::Session;
-use datafusion_common::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
 
@@ -704,7 +708,7 @@ async fn test_delete_target_table_scoping() -> Result<()> {
         "Filter should be for id column"
     );
     assert!(
-        filters[0].to_string().contains("5"),
+        filters[0].to_string().contains('5'),
         "Filter should contain the value 5"
     );
     Ok(())
@@ -784,7 +788,7 @@ async fn test_delete_qualifier_stripping_and_validation() -> Result<()> {
         "Filter should not contain qualified column reference, got: {filter_str}"
     );
     assert!(
-        filter_str.contains("id") || filter_str.contains("1"),
+        filter_str.contains("id") || filter_str.contains('1'),
         "Filter should reference id column or the value 1, got: {filter_str}"
     );
     Ok(())
@@ -802,5 +806,297 @@ async fn test_unsupported_table_truncate() -> Result<()> {
 
     assert!(result.is_err() || result.unwrap().collect().await.is_err());
 
+    Ok(())
+}
+
+/// Register a source table named `src` with one row, for the subquery of a
+/// DELETE or an UPDATE. The table holds a row so that the optimizer keeps the
+/// semi join instead of folding it into an empty relation.
+fn register_source_table(ctx: &SessionContext) -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from(vec![1]))],
+    )?;
+    let source = MemTable::try_new(schema, vec![vec![batch]])?;
+    ctx.register_table("src", Arc::new(source))?;
+    Ok(())
+}
+
+/// Read the single `count` value of a DML result.
+fn rows_affected(batches: &[RecordBatch]) -> u64 {
+    assert_eq!(batches.len(), 1, "a DML statement returns one batch");
+    let counts = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .expect("the count column is UInt64");
+    assert_eq!(counts.len(), 1, "a DML statement returns one row");
+    counts.value(0)
+}
+
+/// A DELETE whose WHERE clause holds an IN subquery must fail, and it must not
+/// call the provider. The optimizer rewrites the subquery into a LeftSemi join,
+/// so no filter reaches the provider, and a provider that reads an empty filter
+/// list as "no WHERE clause" would delete every row.
+#[tokio::test]
+async fn test_delete_in_subquery_is_rejected() -> Result<()> {
+    let provider = Arc::new(CaptureDeleteProvider::new(test_schema()));
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+    register_source_table(&ctx)?;
+
+    let result = ctx
+        .sql("DELETE FROM t WHERE id IN (SELECT id FROM src)")
+        .await?
+        .collect()
+        .await;
+
+    let err = result.expect_err("DELETE with an IN subquery should fail");
+    assert!(
+        err.to_string().contains("IN or an EXISTS subquery"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        provider.captured_filters().is_none(),
+        "delete_from() must not be called, or the provider deletes every row"
+    );
+    Ok(())
+}
+
+/// A DELETE whose WHERE clause holds a correlated EXISTS subquery must fail,
+/// for the same reason as the IN subquery.
+#[tokio::test]
+async fn test_delete_exists_subquery_is_rejected() -> Result<()> {
+    let provider = Arc::new(CaptureDeleteProvider::new(test_schema()));
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+    register_source_table(&ctx)?;
+
+    let result = ctx
+        .sql("DELETE FROM t WHERE EXISTS (SELECT 1 FROM src WHERE src.id = t.id)")
+        .await?
+        .collect()
+        .await;
+
+    let err = result.expect_err("DELETE with an EXISTS subquery should fail");
+    assert!(
+        err.to_string().contains("IN or an EXISTS subquery"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        provider.captured_filters().is_none(),
+        "delete_from() must not be called, or the provider deletes every row"
+    );
+    Ok(())
+}
+
+/// A negated subquery becomes a LeftAnti join, and must fail as well.
+#[tokio::test]
+async fn test_delete_not_in_subquery_is_rejected() -> Result<()> {
+    let provider = Arc::new(CaptureDeleteProvider::new(test_schema()));
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+    register_source_table(&ctx)?;
+
+    let result = ctx
+        .sql("DELETE FROM t WHERE id NOT IN (SELECT id FROM src)")
+        .await?
+        .collect()
+        .await;
+
+    let err = result.expect_err("DELETE with a NOT IN subquery should fail");
+    assert!(
+        err.to_string().contains("LeftAnti join"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        provider.captured_filters().is_none(),
+        "delete_from() must not be called, or the provider deletes every row"
+    );
+    Ok(())
+}
+
+/// An UPDATE whose WHERE clause holds an IN subquery must fail, and it must not
+/// call the provider.
+#[tokio::test]
+async fn test_update_in_subquery_is_rejected() -> Result<()> {
+    let provider = Arc::new(CaptureUpdateProvider::new(test_schema()));
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+    register_source_table(&ctx)?;
+
+    let result = ctx
+        .sql("UPDATE t SET value = 1 WHERE id IN (SELECT id FROM src)")
+        .await?
+        .collect()
+        .await;
+
+    let err = result.expect_err("UPDATE with an IN subquery should fail");
+    assert!(
+        err.to_string().contains("IN or an EXISTS subquery"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        provider.captured_filters().is_none(),
+        "update() must not be called, or the provider changes every row"
+    );
+    assert!(provider.captured_assignments().is_none());
+    Ok(())
+}
+
+/// A DELETE whose WHERE clause is always false affects no rows. The optimizer
+/// folds the predicate into an empty relation, so no filter reaches the
+/// provider, and the provider must not be called at all.
+#[tokio::test]
+async fn test_delete_always_false_predicate_affects_no_rows() -> Result<()> {
+    let provider = Arc::new(CaptureDeleteProvider::new(test_schema()));
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+
+    let batches = ctx
+        .sql("DELETE FROM t WHERE 1 = 2")
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(rows_affected(&batches), 0);
+    assert!(
+        provider.captured_filters().is_none(),
+        "delete_from() must not be called, or the provider deletes every row"
+    );
+    Ok(())
+}
+
+/// An UPDATE whose WHERE clause is always false affects no rows.
+#[tokio::test]
+async fn test_update_always_false_predicate_affects_no_rows() -> Result<()> {
+    let provider = Arc::new(CaptureUpdateProvider::new(test_schema()));
+    let ctx = SessionContext::new();
+    ctx.register_table("t", Arc::clone(&provider) as Arc<dyn TableProvider>)?;
+
+    let batches = ctx
+        .sql("UPDATE t SET value = 1 WHERE false")
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(rows_affected(&batches), 0);
+    assert!(
+        provider.captured_filters().is_none(),
+        "update() must not be called, or the provider changes every row"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dml_partial_predicate_is_rejected() -> Result<()> {
+    for sql in [
+        "DELETE FROM t WHERE value > 10 AND id IN (SELECT id FROM src)",
+        "UPDATE t SET value = 1 WHERE value > 10 AND id IN (SELECT id FROM src)",
+    ] {
+        let delete_provider = Arc::new(CaptureDeleteProvider::new(test_schema()));
+        let update_provider = Arc::new(CaptureUpdateProvider::new(test_schema()));
+        let provider: Arc<dyn TableProvider> = if sql.starts_with("DELETE") {
+            delete_provider.clone()
+        } else {
+            update_provider.clone()
+        };
+        let ctx = SessionContext::new();
+        ctx.register_table("t", provider)?;
+        register_source_table(&ctx)?;
+
+        let result = ctx.sql(sql).await?.collect().await;
+        assert!(
+            delete_provider.captured_filters().is_none()
+                && update_provider.captured_filters().is_none()
+                && update_provider.captured_assignments().is_none(),
+            "a partial WHERE clause must not reach a provider: {sql}"
+        );
+        let err = result.expect_err("the subquery restriction must not be lost");
+        assert!(
+            err.to_string().contains("IN or an EXISTS subquery"),
+            "{err}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_delete_alias_scoping() -> Result<()> {
+    // Bypass optimization so the alias remains in the input to the physical planner.
+    for scan_name in ["t", "src"] {
+        let provider = Arc::new(CaptureDeleteProvider::new(test_schema()));
+        let target = provider_as_source(provider.clone());
+        let source = if scan_name == "t" {
+            Arc::clone(&target)
+        } else {
+            provider_as_source(Arc::new(MemTable::try_new(test_schema(), vec![vec![]])?))
+        };
+        let input = LogicalPlanBuilder::scan(scan_name, source, None)?
+            .alias("a")?
+            .filter(col("a.id").eq(lit(1)))?
+            .build()?;
+        let plan = LogicalPlan::Dml(DmlStatement::new(
+            "t".into(),
+            target,
+            WriteOp::Delete,
+            Arc::new(input),
+        ));
+        let result = DefaultPhysicalPlanner::default()
+            .create_physical_plan(&plan, &SessionContext::new().state())
+            .await;
+
+        if scan_name == "t" {
+            result?;
+            assert_eq!(
+                provider.captured_filters(),
+                Some(vec![col("id").eq(lit(1))]),
+                "the target alias must be accepted and its qualifier stripped"
+            );
+        } else {
+            assert!(
+                provider.captured_filters().is_none(),
+                "a foreign predicate must not be dropped before calling delete_from()"
+            );
+            let err =
+                result.expect_err("an alias of another table is not a target alias");
+            assert!(matches!(err, DataFusionError::NotImplemented(_)), "{err}");
+            assert!(
+                err.to_string().contains("references another table"),
+                "{err}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_delete_aggregate_input_is_rejected() -> Result<()> {
+    let provider = Arc::new(CaptureDeleteProvider::new(test_schema()));
+    let target = provider_as_source(provider.clone());
+    let input = LogicalPlanBuilder::scan("t", Arc::clone(&target), None)?
+        .aggregate(
+            vec![col("id"), col("status"), col("value")],
+            Vec::<Expr>::new(),
+        )?
+        .build()?;
+    let plan = LogicalPlan::Dml(DmlStatement::new(
+        "t".into(),
+        target,
+        WriteOp::Delete,
+        Arc::new(input),
+    ));
+    let result = DefaultPhysicalPlanner::default()
+        .create_physical_plan(&plan, &SessionContext::new().state())
+        .await;
+
+    assert!(
+        provider.captured_filters().is_none(),
+        "aggregation must not become an unrestricted delete_from() call"
+    );
+    let err = result.expect_err("aggregation cannot be represented by provider filters");
+    assert!(matches!(err, DataFusionError::NotImplemented(_)), "{err}");
+    assert!(err.to_string().contains("Aggregate"), "{err}");
     Ok(())
 }
