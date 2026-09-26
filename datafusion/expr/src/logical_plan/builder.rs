@@ -24,7 +24,10 @@ use std::iter::once;
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
-use crate::expr::{Alias, PlannedReplaceSelectItem, Sort as SortExpr};
+use crate::expr::{
+    AggregateFunction, Alias, Cast, PlannedReplaceSelectItem, ScalarFunction,
+    Sort as SortExpr,
+};
 use crate::expr_rewriter::{
     ColumnNormalizer, coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
@@ -38,15 +41,15 @@ use crate::logical_plan::{
 };
 use crate::select_expr::SelectExpr;
 use crate::utils::{
-    can_hash, check_all_columns_from_schema, columnize_expr, compare_sort_expr,
-    expand_qualified_wildcard, expand_wildcard, expr_to_columns,
+    COUNT_STAR_EXPANSION, can_hash, check_all_columns_from_schema, columnize_expr,
+    compare_sort_expr, expand_qualified_wildcard, expand_wildcard, expr_to_columns,
     find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
     split_conjunction_owned,
 };
 use crate::{
-    BinaryExpr, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
-    RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource, WriteOp, and,
-    binary_expr, lit,
+    AggregateUDF, BinaryExpr, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
+    RecursiveQuery, ScalarUDF, Statement, TableProviderFilterPushDown, TableSource,
+    WriteOp, and, binary_expr, lit, when,
 };
 
 use super::dml::InsertOp;
@@ -1472,6 +1475,11 @@ impl LogicalPlanBuilder {
     }
 
     /// Process intersect set operator
+    ///
+    /// With `is_all = true` this builds a left semi join, which keeps every
+    /// matching left row and so does not preserve row multiplicities: a row
+    /// appearing twice on the left and once on the right is returned twice.
+    /// Use [`Self::intersect_all`] for `INTERSECT ALL` semantics.
     pub fn intersect(
         left_plan: LogicalPlan,
         right_plan: LogicalPlan,
@@ -1486,6 +1494,11 @@ impl LogicalPlanBuilder {
     }
 
     /// Process except set operator
+    ///
+    /// With `is_all = true` this builds a left anti join, which removes every
+    /// left row that has any match and so does not preserve row
+    /// multiplicities: a row appearing twice on the left and once on the right
+    /// is removed entirely. Use [`Self::except_all`] for `EXCEPT ALL` semantics.
     pub fn except(
         left_plan: LogicalPlan,
         right_plan: LogicalPlan,
@@ -1497,6 +1510,184 @@ impl LogicalPlanBuilder {
             JoinType::LeftAnti,
             is_all,
         )
+    }
+
+    /// Build an `INTERSECT ALL` plan, preserving the multiplicity of each row.
+    ///
+    /// Each distinct row is returned `min(m, n)` times, where `m` and `n` are
+    /// its counts on the left and right. `count` must be the `count` aggregate
+    /// function and `range` the `range` scalar function: rows are counted on
+    /// each side and then expanded back with `unnest(range(..))`.
+    pub fn intersect_all(
+        left_plan: LogicalPlan,
+        right_plan: LogicalPlan,
+        count: &Arc<AggregateUDF>,
+        range: &Arc<ScalarUDF>,
+    ) -> Result<LogicalPlan> {
+        Self::multiset_set_operation(left_plan, right_plan, count, range, JoinType::Inner)
+    }
+
+    /// Build an `EXCEPT ALL` plan, subtracting matching row multiplicities.
+    ///
+    /// Each distinct row is returned `m - n` times when `m > n`. `count` and
+    /// `range` are as for [`Self::intersect_all`].
+    pub fn except_all(
+        left_plan: LogicalPlan,
+        right_plan: LogicalPlan,
+        count: &Arc<AggregateUDF>,
+        range: &Arc<ScalarUDF>,
+    ) -> Result<LogicalPlan> {
+        Self::multiset_set_operation(left_plan, right_plan, count, range, JoinType::Left)
+    }
+
+    fn multiset_set_operation(
+        left_plan: LogicalPlan,
+        right_plan: LogicalPlan,
+        count: &Arc<AggregateUDF>,
+        range: &Arc<ScalarUDF>,
+        join_type: JoinType,
+    ) -> Result<LogicalPlan> {
+        let left_columns = left_plan.schema().columns();
+        let right_columns = right_plan.schema().columns();
+        if left_columns.len() != right_columns.len() {
+            return plan_err!(
+                "INTERSECT/EXCEPT query must have the same number of columns. Left is {} and right is {}.",
+                left_columns.len(),
+                right_columns.len()
+            );
+        }
+        let from_right = left_plan
+            .schema()
+            .fields()
+            .iter()
+            .zip(right_plan.schema().fields())
+            .map(|(left, right)| {
+                join_type == JoinType::Inner
+                    && left.is_nullable()
+                    && !right.is_nullable()
+                    && left.data_type() == right.data_type()
+            })
+            .collect::<Vec<_>>();
+        // The synthetic columns get names that differ from each other and from
+        // every input column, so the sides are only requalified when the
+        // user's own columns conflict.
+        let mut base = "__datafusion_set_operation".to_string();
+        let name_in_use = |name: &str| {
+            [left_plan.schema(), right_plan.schema()]
+                .iter()
+                .any(|schema| schema.fields().iter().any(|field| field.name() == name))
+        };
+        let suffixes = ["_left_count", "_right_count", "_copies"];
+        while suffixes
+            .iter()
+            .any(|suffix| name_in_use(&format!("{base}{suffix}")))
+        {
+            base.push('_');
+        }
+        let [left_count, right_count, copies] =
+            suffixes.map(|suffix| format!("{base}{suffix}"));
+        // Count each distinct row on both sides. Grouping treats NULLs, and
+        // 0.0 and -0.0, as equal, like the rest of the set operations.
+        let count_rows = |plan: LogicalPlan, columns: &[Column], name: &str| {
+            let count_star = Expr::AggregateFunction(AggregateFunction::new_udf(
+                Arc::clone(count),
+                vec![lit(COUNT_STAR_EXPANSION)],
+                false,
+                None,
+                vec![],
+                None,
+            ));
+            LogicalPlanBuilder::from(plan)
+                .aggregate(
+                    columns.iter().cloned().map(Expr::Column),
+                    vec![count_star.alias(name)],
+                )?
+                .build()
+        };
+        let left_plan = count_rows(left_plan, &left_columns, &left_count)?;
+        let right_plan = count_rows(right_plan, &right_columns, &right_count)?;
+        let (left_builder, right_builder, requalified) = requalify_sides_if_needed(
+            LogicalPlanBuilder::from(left_plan),
+            LogicalPlanBuilder::from(right_plan),
+        )?;
+        let left_plan = left_builder.build()?;
+        let right_plan = right_builder.build()?;
+        // Requalifying can also rename columns (`x` becomes `x:1` when two
+        // relations on one side both have an `x`), so read the join keys from
+        // the schemas the join actually sees.
+        let mut left_join_columns = left_plan.schema().columns();
+        let mut right_join_columns = right_plan.schema().columns();
+        let left_count = Expr::Column(left_join_columns.pop().unwrap());
+        let right_count = Expr::Column(right_join_columns.pop().unwrap());
+        let join_keys = left_join_columns
+            .iter()
+            .cloned()
+            .zip(right_join_columns.iter().cloned())
+            .collect();
+        // The output keeps the left input's qualifiers and names, so a query
+        // can keep referring to them after the set operation.
+        let mut projection = left_columns
+            .iter()
+            .cloned()
+            .zip(left_join_columns)
+            .zip(right_join_columns)
+            .zip(from_right)
+            .zip(left_plan.schema().fields())
+            .map(
+                |((((column, left_column), right_column), from_right), field)| {
+                    let expr = if from_right {
+                        let target_field = Arc::new(
+                            Field::new(&column.name, field.data_type().clone(), false)
+                                .with_metadata(field.metadata().clone()),
+                        );
+                        Expr::Cast(Cast::new_from_field(
+                            Box::new(Expr::Column(right_column)),
+                            target_field,
+                        ))
+                    } else if requalified {
+                        Expr::Column(left_column)
+                    } else {
+                        return Expr::Column(column);
+                    };
+                    expr.alias_qualified(column.relation, column.name)
+                },
+            )
+            .collect::<Vec<_>>();
+        let joined = LogicalPlanBuilder::from(left_plan).join_detailed(
+            right_plan,
+            join_type,
+            join_keys,
+            None,
+            NullEquality::NullEqualsNull,
+        )?;
+        let (joined, repeat) = if join_type == JoinType::Inner {
+            let repeat = when(left_count.clone().lt(right_count.clone()), left_count)
+                .otherwise(right_count)?;
+            (joined, repeat)
+        } else {
+            let unmatched = right_count.clone().is_null();
+            let joined = joined.filter(
+                unmatched
+                    .clone()
+                    .or(left_count.clone().gt(right_count.clone())),
+            )?;
+            let repeat = when(unmatched, left_count.clone())
+                .otherwise(left_count - right_count)?;
+            (joined, repeat)
+        };
+        // Emit each distinct row `repeat` times.
+        projection.push(
+            Expr::ScalarFunction(ScalarFunction::new_udf(
+                Arc::clone(range),
+                vec![repeat],
+            ))
+            .alias(&copies),
+        );
+        joined
+            .project(projection)?
+            .unnest_column(Column::from_name(copies))?
+            .project(left_columns.into_iter().map(Expr::Column))?
+            .build()
     }
 
     /// Process intersect or except
