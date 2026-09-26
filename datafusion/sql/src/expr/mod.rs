@@ -24,8 +24,8 @@ use datafusion_expr::planner::{
 use sqlparser::ast::{
     AccessExpr, BinaryOperator, CastFormat, CastKind, CeilFloorKind,
     DataType as SQLDataType, DateTimeField, DictionaryField, Expr as SQLExpr,
-    ExprWithAlias as SQLExprWithAlias, JsonPath, MapEntry, Spanned, StructField,
-    Subscript, TrimWhereField, TypedString, Value, ValueWithSpan,
+    ExprWithAlias as SQLExprWithAlias, JsonPath, JsonPathElem, MapEntry, Spanned,
+    StructField, Subscript, TrimWhereField, TypedString, Value, ValueWithSpan,
 };
 use sqlparser::ast::{Query, Visit, Visitor};
 
@@ -313,21 +313,31 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         right: Expr,
         schema: &DFSchema,
     ) -> Result<Expr> {
-        // try extension planers
-        let mut binary_expr = RawBinaryExpr { op, left, right };
+        let binary_expr = RawBinaryExpr { op, left, right };
+        match self.try_plan_binary_op(binary_expr, schema)? {
+            PlannerResult::Planned(expr) => Ok(expr),
+            PlannerResult::Original(RawBinaryExpr { op, left, right }) => {
+                self.build_binary_expr(&op, left, right)
+            }
+        }
+    }
+
+    fn try_plan_binary_op(
+        &self,
+        mut binary_expr: RawBinaryExpr,
+        schema: &DFSchema,
+    ) -> Result<PlannerResult<RawBinaryExpr>> {
         for planner in self.context_provider.get_expr_planners() {
             match planner.plan_binary_op(binary_expr, schema)? {
                 PlannerResult::Planned(expr) => {
-                    return Ok(expr);
+                    return Ok(PlannerResult::Planned(expr));
                 }
                 PlannerResult::Original(expr) => {
                     binary_expr = expr;
                 }
             }
         }
-
-        let RawBinaryExpr { op, left, right } = binary_expr;
-        self.build_binary_expr(&op, left, right)
+        Ok(PlannerResult::Original(binary_expr))
     }
 
     pub fn sql_to_expr_with_alias(
@@ -840,20 +850,72 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         value: Box<SQLExpr>,
         path: &JsonPath,
     ) -> Result<Expr> {
+        let value = self.sql_to_expr(*value, schema, planner_context)?;
         let json_path = path.to_string();
-        let json_path = if let Some(json_path) = json_path.strip_prefix(":") {
-            // sqlparser's JsonPath display adds an extra `:` at the beginning.
-            json_path.to_owned()
-        } else {
-            json_path
+        let json_path = json_path.strip_prefix(":").unwrap_or(&json_path);
+        let binary_expr = RawBinaryExpr {
+            op: BinaryOperator::Custom(":".to_owned()),
+            left: value,
+            right: Expr::Literal(ScalarValue::Utf8(Some(json_path.to_owned())), None),
         };
-        self.build_logical_expr(
-            BinaryOperator::Custom(":".to_owned()),
-            self.sql_to_expr(*value, schema, planner_context)?,
-            // pass json path as a string literal, let the impl parse it when needed.
-            Expr::Literal(ScalarValue::Utf8(Some(json_path)), None),
-            schema,
-        )
+        let binary_expr = match self.try_plan_binary_op(binary_expr, schema)? {
+            PlannerResult::Planned(expr) => return Ok(expr),
+            PlannerResult::Original(expr) => expr,
+        };
+
+        if !path.path.is_empty()
+            && matches!(&binary_expr.op, BinaryOperator::Custom(op) if op == ":")
+            && is_struct_like(&binary_expr.left.get_type(schema)?)
+            && path
+                .path
+                .iter()
+                .all(|element| struct_field_name_from_json_path_elem(element).is_some())
+        {
+            let mut planned = binary_expr.left.clone();
+            let mut all_fields_planned = true;
+
+            for element in &path.path {
+                let field_name = struct_field_name_from_json_path_elem(element)
+                    .expect("all path elements were checked above");
+                let field_access = RawFieldAccessExpr {
+                    expr: planned,
+                    field_access: GetFieldAccess::NamedStructField {
+                        name: ScalarValue::from(field_name),
+                    },
+                };
+                match self.try_plan_field_access(field_access, schema)? {
+                    PlannerResult::Planned(expr) => planned = expr,
+                    PlannerResult::Original(field_access) => {
+                        planned = field_access.expr;
+                        all_fields_planned = false;
+                        break;
+                    }
+                }
+            }
+
+            if all_fields_planned {
+                return Ok(planned);
+            }
+        }
+
+        let RawBinaryExpr { op, left, right } = binary_expr;
+        self.build_binary_expr(&op, left, right)
+    }
+
+    fn try_plan_field_access(
+        &self,
+        mut field_access_expr: RawFieldAccessExpr,
+        schema: &DFSchema,
+    ) -> Result<PlannerResult<RawFieldAccessExpr>> {
+        for planner in self.context_provider.get_expr_planners() {
+            match planner.plan_field_access(field_access_expr, schema)? {
+                PlannerResult::Planned(expr) => {
+                    return Ok(PlannerResult::Planned(expr));
+                }
+                PlannerResult::Original(expr) => field_access_expr = expr,
+            }
+        }
+        Ok(PlannerResult::Original(field_access_expr))
     }
 
     /// Parses a struct(..) expression and plans it creation
@@ -1403,19 +1465,44 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .into_iter()
             .flatten()
             .try_fold(root, |expr, field_access| {
-                let mut field_access_expr = RawFieldAccessExpr { expr, field_access };
-                for planner in self.context_provider.get_expr_planners() {
-                    match planner.plan_field_access(field_access_expr, schema)? {
-                        PlannerResult::Planned(expr) => return Ok(expr),
-                        PlannerResult::Original(expr) => {
-                            field_access_expr = expr;
-                        }
-                    }
+                let field_access_expr = RawFieldAccessExpr { expr, field_access };
+                match self.try_plan_field_access(field_access_expr, schema)? {
+                    PlannerResult::Planned(expr) => Ok(expr),
+                    PlannerResult::Original(field_access_expr) => not_impl_err!(
+                        "GetFieldAccess not supported by ExprPlanner: {field_access_expr:?}"
+                    ),
                 }
-                not_impl_err!(
-                    "GetFieldAccess not supported by ExprPlanner: {field_access_expr:?}"
-                )
             })
+    }
+}
+
+fn is_struct_like(data_type: &DataType) -> bool {
+    matches!(data_type, DataType::Struct(_))
+        || matches!(
+            data_type,
+            DataType::Dictionary(_, value_type)
+                if matches!(value_type.as_ref(), DataType::Struct(_))
+        )
+}
+
+fn struct_field_name_from_json_path_elem(element: &JsonPathElem) -> Option<&str> {
+    match element {
+        JsonPathElem::Dot { key, .. } => Some(key),
+        JsonPathElem::Bracket {
+            key:
+                SQLExpr::Value(ValueWithSpan {
+                    value: Value::SingleQuotedString(key) | Value::DoubleQuotedString(key),
+                    span: _,
+                }),
+        }
+        | JsonPathElem::ColonBracket {
+            key:
+                SQLExpr::Value(ValueWithSpan {
+                    value: Value::SingleQuotedString(key) | Value::DoubleQuotedString(key),
+                    span: _,
+                }),
+        } => Some(key),
+        JsonPathElem::Bracket { .. } | JsonPathElem::ColonBracket { .. } => None,
     }
 }
 
