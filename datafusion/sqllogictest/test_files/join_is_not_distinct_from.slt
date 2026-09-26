@@ -321,6 +321,36 @@ JOIN t4 ON (t3.id = t4.id) AND (t3.val1 IS NOT DISTINCT FROM t4.val1) AND (t3.va
 2 2 NULL NULL 200 200
 3 3 30 30 NULL NULL
 
+# An IS NOT DISTINCT FROM join nested under an inner join on other keys keeps
+# matching NULL keys (EliminateCrossJoin used to rebuild it with the outer
+# join's null equality)
+statement ok
+CREATE TABLE nd1(a INT, b INT) AS VALUES (NULL, 1), (5, 2)
+
+statement ok
+CREATE TABLE nd2(a INT) AS VALUES (NULL), (5)
+
+statement ok
+CREATE TABLE nd3(b INT) AS VALUES (1), (2)
+
+query IIII
+SELECT nd1.a, nd1.b, nd2.a, nd3.b
+FROM nd1 JOIN nd2 ON nd1.a IS NOT DISTINCT FROM nd2.a
+         JOIN nd3 ON nd1.b = nd3.b
+ORDER BY nd1.b
+----
+NULL 1 NULL 1
+5 2 5 2
+
+statement ok
+drop table nd1;
+
+statement ok
+drop table nd2;
+
+statement ok
+drop table nd3;
+
 statement ok
 drop table t0;
 

@@ -129,6 +129,7 @@ impl OptimizerRule for EliminateCrossJoin {
 
             flatten_join_inputs(
                 Arc::unwrap_or_clone(input),
+                null_equality,
                 &mut possible_join_keys,
                 &mut all_inputs,
                 &mut all_filters,
@@ -143,13 +144,14 @@ impl OptimizerRule for EliminateCrossJoin {
                     null_equality: original_null_equality,
                     ..
                 }) => {
+                    null_equality = original_null_equality;
                     flatten_join_inputs(
                         plan,
+                        null_equality,
                         &mut possible_join_keys,
                         &mut all_inputs,
                         &mut all_filters,
                     );
-                    null_equality = original_null_equality;
                     None
                 }
                 _ => {
@@ -262,26 +264,36 @@ fn rewrite_children(
 /// Recursively collect inputs, join keys, and filters from inner joins
 /// (including cross joins). Other nodes are retained as inputs without
 /// flattening them.
+///
+/// The joins are rebuilt with `null_equality`, so an inner join whose keys
+/// compare NULLs differently is kept as an input: flattening it would change
+/// whether its NULL keys match.
 fn flatten_join_inputs(
     plan: LogicalPlan,
+    null_equality: NullEquality,
     possible_join_keys: &mut JoinKeySet,
     all_inputs: &mut Vec<LogicalPlan>,
     all_filters: &mut Vec<Expr>,
 ) {
     match plan {
-        LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
+        LogicalPlan::Join(join)
+            if join.join_type == JoinType::Inner
+                && (join.on.is_empty() || join.null_equality == null_equality) =>
+        {
             if let Some(filter) = join.filter {
                 all_filters.push(filter);
             }
             possible_join_keys.insert_all_owned(join.on);
             flatten_join_inputs(
                 Arc::unwrap_or_clone(join.left),
+                null_equality,
                 possible_join_keys,
                 all_inputs,
                 all_filters,
             );
             flatten_join_inputs(
                 Arc::unwrap_or_clone(join.right),
+                null_equality,
                 possible_join_keys,
                 all_inputs,
                 all_filters,
@@ -1448,6 +1460,60 @@ mod tests {
         assert!(
             check_null_equality_preserved(&optimized_plan),
             "null_equality setting should be preserved after optimization"
+        );
+
+        Ok(())
+    }
+
+    /// A nested inner join that compares NULL keys differently from the
+    /// join above it must keep its own `null_equality`.
+    #[test]
+    fn keep_nested_join_with_other_null_equality() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+        let t3 = test_table_scan_with_name("t3")?;
+
+        // t1 JOIN t2 ON t1.a IS NOT DISTINCT FROM t2.a JOIN t3 ON t1.b = t3.b
+        let plan = LogicalPlanBuilder::from(t1)
+            .join_detailed(
+                t2,
+                JoinType::Inner,
+                (vec!["t1.a"], vec!["t2.a"]),
+                None,
+                NullEquality::NullEqualsNull,
+            )?
+            .join_detailed(
+                t3,
+                JoinType::Inner,
+                (vec!["t1.b"], vec!["t3.b"]),
+                None,
+                NullEquality::NullEqualsNothing,
+            )?
+            .build()?;
+
+        let optimized_plan = EliminateCrossJoin::new()
+            .rewrite(plan, &OptimizerContext::new())?
+            .data;
+
+        let mut keys_by_null_equality = vec![];
+        optimized_plan.apply(|node| {
+            if let LogicalPlan::Join(join) = node {
+                keys_by_null_equality.push((join.on.clone(), join.null_equality));
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        assert_eq!(
+            keys_by_null_equality,
+            vec![
+                (
+                    vec![(col("t1.b"), col("t3.b"))],
+                    NullEquality::NullEqualsNothing
+                ),
+                (
+                    vec![(col("t1.a"), col("t2.a"))],
+                    NullEquality::NullEqualsNull
+                ),
+            ]
         );
 
         Ok(())
