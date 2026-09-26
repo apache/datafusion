@@ -309,7 +309,7 @@ const ESTIMATED_BYTES_PER_ROW: usize = 20;
 
 /// Owned data of a row that was just evicted from a [`TopKHeap`].
 ///
-/// Returned by [`TopKHeap::add`] so that callers (e.g. rank-aware
+/// Returned by [`TopKHeap::add_with_eviction`] so that callers (e.g. rank-aware
 /// wrappers that retain boundary ties) can decide whether to retain
 /// the evicted row externally. The underlying batch is captured
 /// before the heap's internal `RecordBatchStore` decrements the
@@ -912,13 +912,35 @@ impl TopKHeap {
     }
 
     /// Adds `row` to this heap. If inserting this new item would
-    /// increase the size past `k`, removes the previously smallest
-    /// item.
+    /// increase the size past `k`, removes the previously largest
+    /// item without capturing its data.
+    fn add(
+        &mut self,
+        batch_entry: &mut RecordBatchEntry,
+        row: impl AsRef<[u8]>,
+        index: usize,
+    ) {
+        self.add_internal::<false>(batch_entry, row, index);
+    }
+
+    /// Adds `row` to this heap, capturing the evicted row for callers
+    /// that need to retain boundary ties.
     ///
     /// Returns `Some(EvictedRow)` if an existing row was evicted to
     /// make room for `row`, or `None` if the row was inserted into a
     /// non-full heap.
-    fn add(
+    fn add_with_eviction(
+        &mut self,
+        batch_entry: &mut RecordBatchEntry,
+        row: impl AsRef<[u8]>,
+        index: usize,
+    ) -> Option<EvictedRow> {
+        self.add_internal::<true>(batch_entry, row, index)
+    }
+
+    /// Share heap maintenance while compiling out eviction capture for
+    /// callers that do not use the evicted row.
+    fn add_internal<const CAPTURE_EVICTED: bool>(
         &mut self,
         batch_entry: &mut RecordBatchEntry,
         row: impl AsRef<[u8]>,
@@ -940,19 +962,21 @@ impl TopKHeap {
             // cross-batch evictions, or directly from `batch_entry` when
             // a row evicts another row from the same in-flight batch
             // (entry not yet registered in the store).
-            let evicted_batch = if prev_min.batch_id == batch_entry.id {
-                batch_entry.batch.clone()
-            } else {
-                self.store
-                    .get(prev_min.batch_id)
-                    .map(|entry| entry.batch.clone())
-                    .expect("evicted row's batch must be present in the store")
-            };
-            let evicted = EvictedRow {
-                batch: evicted_batch,
-                index: prev_min.index,
-                row_bytes: prev_min.row.clone(),
-            };
+            let evicted = CAPTURE_EVICTED.then(|| {
+                let evicted_batch = if prev_min.batch_id == batch_entry.id {
+                    batch_entry.batch.clone()
+                } else {
+                    self.store
+                        .get(prev_min.batch_id)
+                        .map(|entry| entry.batch.clone())
+                        .expect("evicted row's batch must be present in the store")
+                };
+                EvictedRow {
+                    batch: evicted_batch,
+                    index: prev_min.index,
+                    row_bytes: prev_min.row.clone(),
+                }
+            });
 
             // Update batch use
             if prev_min.batch_id == batch_entry.id {
@@ -968,7 +992,7 @@ impl TopKHeap {
 
             self.owned_bytes += prev_min.owned_size();
 
-            Some(evicted)
+            evicted
         } else {
             let new_row = TopKRow::new(row, batch_id, index);
             self.owned_bytes += new_row.owned_size();
@@ -1771,7 +1795,7 @@ impl PartitionedTopKRank {
                             batch: evicted_batch,
                             index: evicted_index,
                             row_bytes: evicted_bytes,
-                        }) = state.heap.add(entry_ref, row, sub_idx)
+                        }) = state.heap.add_with_eviction(entry_ref, row, sub_idx)
                         {
                             // Compare the new boundary (post-eviction heap
                             // top) against the evicted row's bytes — both
@@ -2390,6 +2414,51 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_physical_expr::{DynamicFilterTracking, expressions::col};
     use futures::TryStreamExt;
+
+    #[rstest::rstest]
+    #[case::discard(false)]
+    #[case::capture(true)]
+    fn test_topk_heap_same_and_cross_batch_eviction(
+        #[case] capture_evicted: bool,
+    ) -> Result<()> {
+        use arrow::array::record_batch;
+        use arrow::datatypes::Int32Type;
+
+        let converter = RowConverter::new(vec![SortField::new(DataType::Int32)])?;
+        let mut heap = TopKHeap::new(1);
+        let mut previous = None;
+
+        // 20 replaces 30 in the same batch; 10 replaces 20 across batches.
+        for values in [[30, 20], [10, 5]] {
+            let batch = record_batch!(("a", Int32, values.to_vec()))?;
+            let rows = converter.convert_columns(batch.columns())?;
+            let mut entry = heap.register_batch(batch);
+            for (index, row) in rows.iter().enumerate() {
+                if capture_evicted {
+                    let evicted =
+                        heap.add_with_eviction(&mut entry, row, index)
+                            .map(|evicted| {
+                                let values =
+                                    evicted.batch.column(0).as_primitive::<Int32Type>();
+                                (values.value(evicted.index), evicted.row_bytes)
+                            });
+                    assert_eq!(evicted, previous);
+                } else {
+                    heap.add(&mut entry, row, index);
+                }
+                previous = Some((values[index], row.as_ref().to_vec()));
+                assert_eq!(entry.uses, 1);
+                // During cross-batch eviction, the old batch's last use is
+                // released before the new entry is inserted into the store.
+                assert!(heap.store.is_empty());
+            }
+            heap.insert_batch_entry(entry);
+            assert_eq!(heap.store.len(), 1);
+        }
+
+        assert_eq!(heap.emit()?.unwrap(), record_batch!(("a", Int32, vec![5]))?);
+        Ok(())
+    }
 
     /// This test ensures the size calculation is correct for RecordBatches with multiple columns.
     #[test]

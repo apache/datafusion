@@ -135,6 +135,11 @@ required-features = ["test_utils"]
 
 [[bench]]
 harness = false
+name = "topk"
+required-features = ["test_utils"]
+
+[[bench]]
+harness = false
 name = "invariant_check"
 
 [[bench]]
