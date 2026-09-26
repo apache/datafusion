@@ -242,3 +242,25 @@ According to Runs-On, spot instance termination is extremely rare for instances 
 #### GitHub Runners
 
 We also use standard GitHub runners for some actions in the main repository; these are also runnable in forks.
+
+#### Pull Requests from Forks
+
+A pull request from a fork to `main` runs the Rust workflow on your fork, with
+your own GitHub Actions runners. The main repository runs only the fast lint jobs for
+such a pull request and adds a `Rust (fork)` check that links to the run on
+your fork. The merge queue runs the full workflow on the merged result before
+a pull request merges, so a green fork run does not replace it.
+
+To make this work:
+
+1. Enable workflows on your fork. Open the **Actions** tab of your fork and
+   confirm the prompt. If the `Rust (fork)` check reports no fork run for a
+   commit that changed code, this step is missing; enable workflows and push
+   again. A push that changes only documentation or Markdown does not start
+   the Rust workflow; the check then reports that no fork run exists for the
+   commit, and the merge queue still runs the full workflow.
+2. Keep the `main` branch of your fork in sync with upstream. Runs on your
+   branches restore the build caches that a run on your `main` saves, so a
+   synced fork builds much faster.
+3. Rebase your branch before you push. The fork run tests your branch as it
+   is, while the merge queue tests it merged with `main`.

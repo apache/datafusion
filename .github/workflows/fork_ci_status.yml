@@ -1,0 +1,320 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# # Fork CI status
+#
+# A pull request from a fork to `main` runs `rust.yml` on the fork. This
+# workflow mirrors that run as one `Rust (fork)` check on the pull request, so
+# reviewers see the result without opening the fork. It never checks out or
+# runs code from the pull request: on `pull_request_target` it reads the fork's
+# public run list and creates the check, and on a schedule it updates the
+# checks of recently updated pull requests plus a slice of the older ones. The
+# check is informational. The merge queue runs the full workflow on the merged
+# result and stays the gate.
+#
+# See docs/source/contributor-guide/index.md, "Pull Requests from Forks".
+name: Fork CI status
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: "Update every pull request updated within this many hours"
+        type: number
+        default: 6
+
+permissions:
+  actions: read
+  checks: write
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'update' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+
+jobs:
+  bridge:
+    name: Mirror the fork run
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Create or update the check
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        env:
+          UPDATE_HOURS: ${{ inputs.hours || 6 }}
+        with:
+          script: |
+            const CHECK = 'Rust (fork)';
+            const WORKFLOW = 'rust.yml';
+            const upstream = { owner: context.repo.owner, repo: context.repo.repo };
+            const GUIDE = 'https://datafusion.apache.org/contributor-guide/#pull-requests-from-forks';
+            // Older pull requests are revisited this many at a time, so a rerun
+            // or a late run on a quiet pull request is mirrored within hours.
+            const SWEEP_SIZE = 25;
+
+            // A check run accepts a fixed set of conclusions; a workflow run can
+            // report others, such as startup_failure.
+            const CONCLUSIONS = new Set([
+              'action_required', 'cancelled', 'failure', 'neutral',
+              'skipped', 'stale', 'success', 'timed_out',
+            ]);
+            const conclusionOf = (run) =>
+              CONCLUSIONS.has(run.conclusion) ? run.conclusion : 'failure';
+            const statusOf = (run) => {
+              if (run.status === 'completed') return 'completed';
+              return run.status === 'in_progress' ? 'in_progress' : 'queued';
+            };
+            const isForkPrToMain = (pr) =>
+              Boolean(pr.head.repo) && pr.head.repo.fork === true && pr.base.ref === 'main';
+
+            const HOW_UPDATED =
+              'This check updates within 15 minutes for a pull request updated in the last six hours, ' +
+              'and within a few hours otherwise. The merge queue runs the full workflow on the merged ' +
+              'result before this pull request merges.';
+
+            // The check for a run. `text` is read back by the scheduled update.
+            const runPayload = (fork, sha, run) => {
+              const status = statusOf(run);
+              return {
+                status,
+                ...(status === 'completed' ? { conclusion: conclusionOf(run) } : {}),
+                details_url: run.html_url,
+                output: {
+                  title: `Fork run ${status === 'completed' ? run.conclusion : status}`,
+                  summary: [
+                    `[Rust workflow run on ${fork.owner}/${fork.repo}](${run.html_url}) for this commit.`,
+                    '',
+                    'If the fork run failed for reasons unrelated to this pull request, rerun it on the fork.',
+                    HOW_UPDATED,
+                  ].join('\n'),
+                  text: JSON.stringify({
+                    owner: fork.owner,
+                    repo: fork.repo,
+                    head_sha: sha,
+                    run_id: run.id,
+                    run_attempt: run.run_attempt,
+                  }),
+                },
+              };
+            };
+
+            // The check when the fork has no run for the commit. The workflow's
+            // state on the fork says whether workflows are enabled there; a
+            // push that changes only documentation or Markdown does not start
+            // rust.yml even when they are. The scheduled update keeps looking
+            // for a run in every case.
+            const missingPayload = (fork, sha, state) => {
+              const disabled = typeof state === 'string' && state.startsWith('disabled');
+              const active = state === 'active';
+              const advice = disabled
+                ? [
+                    '1. Enable workflows on your fork: open its **Actions** tab and confirm the prompt.',
+                    '2. Push again. A push that changes only documentation or Markdown does not start',
+                    '   the Rust workflow.',
+                  ]
+                : active
+                  ? [
+                      'A push that changes only documentation or Markdown does not start the Rust',
+                      'workflow, and a run can take a moment to appear. This check keeps looking for one.',
+                    ]
+                  : [
+                      'GitHub reports no Rust workflow on the fork, which usually means workflows are not',
+                      'enabled there. Enable them on the fork\'s **Actions** tab and push again. A push that',
+                      'changes only documentation or Markdown does not start the Rust workflow.',
+                    ];
+              return {
+                status: 'completed',
+                conclusion: disabled ? 'action_required' : active ? 'skipped' : 'neutral',
+                output: {
+                  title: disabled ? 'Workflows are disabled on the fork' : 'No fork run for this commit',
+                  summary: [
+                    `No Rust workflow run was found on ${fork.owner}/${fork.repo} for ${sha}.`,
+                    '',
+                    ...advice,
+                    '',
+                    HOW_UPDATED,
+                    '',
+                    `See ${GUIDE}`,
+                  ].join('\n'),
+                  text: JSON.stringify({ owner: fork.owner, repo: fork.repo, head_sha: sha, run_id: null }),
+                },
+              };
+            };
+
+            // The fork creates its run a few seconds after the push.
+            async function findRun(fork, sha, attempts) {
+              for (let attempt = 0; attempt < attempts; attempt++) {
+                try {
+                  const { data } = await github.rest.actions.listWorkflowRuns({
+                    owner: fork.owner,
+                    repo: fork.repo,
+                    workflow_id: WORKFLOW,
+                    head_sha: sha,
+                    per_page: 10,
+                  });
+                  const run =
+                    data.workflow_runs.find((r) => r.event === 'push') || data.workflow_runs[0];
+                  if (run) return run;
+                } catch (error) {
+                  // 404 when the fork has Actions disabled or lacks the workflow.
+                  core.info(`No run list for ${fork.owner}/${fork.repo}: ${error.message}`);
+                }
+                if (attempt + 1 < attempts) {
+                  await new Promise((resolve) => setTimeout(resolve, 5000));
+                }
+              }
+              return null;
+            }
+
+            // `active`, or `disabled_fork` until the owner enables workflows;
+            // null when the workflow cannot be read.
+            async function workflowState(fork) {
+              try {
+                const { data } = await github.rest.actions.getWorkflow({
+                  owner: fork.owner,
+                  repo: fork.repo,
+                  workflow_id: WORKFLOW,
+                });
+                return data.state || null;
+              } catch (error) {
+                core.info(`No workflow state for ${fork.owner}/${fork.repo}: ${error.message}`);
+                return null;
+              }
+            }
+
+            async function notify() {
+              const pr = context.payload.pull_request;
+              // Only fork PRs to main skip jobs upstream; release branches have
+              // no merge queue and keep the full run.
+              if (!isForkPrToMain(pr)) {
+                core.info('Not a fork pull request to main; nothing to mirror.');
+                return;
+              }
+              const fork = { owner: pr.head.repo.owner.login, repo: pr.head.repo.name };
+              const sha = pr.head.sha;
+              const run = await findRun(fork, sha, 12);
+              const payload = run
+                ? runPayload(fork, sha, run)
+                : missingPayload(fork, sha, await workflowState(fork));
+              await github.rest.checks.create({ ...upstream, name: CHECK, head_sha: sha, ...payload });
+              core.info(`Created ${CHECK} for ${sha}: ${payload.conclusion || payload.status}`);
+            }
+
+            // Bring one pull request's check in line with its fork run. A check
+            // without a run keeps looking for one; a check with a run picks up
+            // progress and reruns.
+            async function syncCheck(pr) {
+              const { data } = await github.rest.checks.listForRef({
+                ...upstream,
+                ref: pr.head.sha,
+                check_name: CHECK,
+                per_page: 5,
+              });
+              const check = data.check_runs[0];
+              if (!check || !check.output || !check.output.text) return;
+              let params;
+              try {
+                params = JSON.parse(check.output.text);
+              } catch {
+                return;
+              }
+              const fork = { owner: params.owner, repo: params.repo };
+              const sha = params.head_sha || pr.head.sha;
+              let run = null;
+              if (params.run_id) {
+                try {
+                  ({ data: run } = await github.rest.actions.getWorkflowRun({
+                    owner: fork.owner,
+                    repo: fork.repo,
+                    run_id: params.run_id,
+                  }));
+                } catch (error) {
+                  // The fork deleted the run or disabled Actions.
+                  core.info(`Run for #${pr.number} unavailable: ${error.message}`);
+                  return;
+                }
+              } else {
+                run = await findRun(fork, sha, 1);
+                if (!run) return;
+              }
+              const payload = runPayload(fork, sha, run);
+              if (
+                payload.status === check.status &&
+                (payload.conclusion || null) === check.conclusion &&
+                run.id === params.run_id &&
+                run.run_attempt === params.run_attempt
+              ) {
+                return;
+              }
+              await github.rest.checks.update({ ...upstream, check_run_id: check.id, ...payload });
+              core.info(`#${pr.number}: ${check.status}/${check.conclusion} -> ${payload.status}/${payload.conclusion || ''}`);
+            }
+
+            const listing = { ...upstream, state: 'open', sort: 'updated', direction: 'desc' };
+
+            // The number of open pull requests, from the last-page link of a
+            // one-item page: one request, whatever the count.
+            async function openPullRequestCount() {
+              const response = await github.rest.pulls.list({ ...listing, per_page: 1 });
+              const last = /[?&]page=(\d+)>;\s*rel="last"/.exec(response.headers.link || '');
+              return last ? Number(last[1]) : response.data.length;
+            }
+
+            async function update() {
+              const hours = Number(process.env.UPDATE_HOURS) || 6;
+              const cutoff = Date.now() - hours * 3600 * 1000;
+              const seen = new Set();
+
+              // Pull requests updated within the window, newest first. Stop at
+              // the window: GITHUB_TOKEN allows 1,000 requests per hour per
+              // repository.
+              const pages = github.paginate.iterator(github.rest.pulls.list, { ...listing, per_page: 100 });
+              for await (const page of pages) {
+                let stale = false;
+                for (const pr of page.data) {
+                  if (new Date(pr.updated_at).getTime() < cutoff) {
+                    stale = true;
+                    break;
+                  }
+                  seen.add(pr.number);
+                  if (isForkPrToMain(pr)) await syncCheck(pr);
+                }
+                if (stale) break;
+              }
+
+              // One slice of the older pull requests per run, cycling through
+              // all of them. A fork rerun does not update the upstream pull
+              // request, so the window alone would miss it.
+              const slices = Math.max(1, Math.ceil((await openPullRequestCount()) / SWEEP_SIZE));
+              const slot = Math.floor(Date.now() / (15 * 60 * 1000));
+              const page = (slot % slices) + 1;
+              const { data: slice } = await github.rest.pulls.list({ ...listing, per_page: SWEEP_SIZE, page });
+              for (const pr of slice) {
+                if (seen.has(pr.number) || !isForkPrToMain(pr)) continue;
+                await syncCheck(pr);
+              }
+            }
+
+            if (context.eventName === 'pull_request_target') {
+              await notify();
+            } else {
+              await update();
+            }
