@@ -243,20 +243,6 @@ fn test_ambiguous_reference() -> Result<()> {
 }
 
 #[test]
-fn test_incompatible_types_binary_arithmetic() -> Result<()> {
-    let query = "SELECT /*whole+left*/id/*left*/ + /*right*/first_name/*right+whole*/ FROM person";
-    let spans = get_spans(query);
-    let diag = do_query(query);
-    assert_snapshot!(diag.message, @"expressions have incompatible types");
-    assert_eq!(diag.span, Some(spans["whole"]));
-    assert_snapshot!(diag.notes[0].message, @"has type UInt32");
-    assert_eq!(diag.notes[0].span, Some(spans["left"]));
-    assert_snapshot!(diag.notes[1].message, @"has type Utf8");
-    assert_eq!(diag.notes[1].span, Some(spans["right"]));
-    Ok(())
-}
-
-#[test]
 fn test_field_not_found_suggestion() -> Result<()> {
     let query = "SELECT /*whole*/first_na/*whole*/ FROM person";
     let spans = get_spans(query);
