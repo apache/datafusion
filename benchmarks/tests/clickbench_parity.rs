@@ -167,8 +167,9 @@ fn read_queries(
 fn read_slt_queries(path: &Path) -> BTreeSet<String> {
     let contents = fs::read_to_string(path).unwrap();
     contents
-        .split("\nquery ")
-        .skip(1)
+        .strip_prefix("query ")
+        .into_iter()
+        .chain(contents.split("\nquery ").skip(1))
         .map(|query| {
             let (_, sql) = query
                 .split_once('\n')
@@ -300,7 +301,29 @@ fn dollar_quote_delimiter(sql: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_sql;
+    use std::collections::BTreeSet;
+    use std::fs;
+
+    use super::{normalize_sql, read_slt_queries};
+
+    #[test]
+    fn reads_interleaved_and_multiline_slt_queries() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queries.slt");
+        fs::write(
+            &path,
+            "query I\nSELECT unrelated;\n----\n1\n\nquery I\nSELECT\n    \"ClickBenchColumn\"\nFROM hits;\n----\n1\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_slt_queries(&path),
+            BTreeSet::from([
+                "SELECT unrelated;".to_string(),
+                "SELECT \"ClickBenchColumn\" FROM hits;".to_string(),
+            ])
+        );
+    }
 
     #[test]
     fn normalizes_comments_and_whitespace_only() {
