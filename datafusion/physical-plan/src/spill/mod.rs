@@ -29,6 +29,10 @@ pub use datafusion_common::utils::memory::get_record_batch_memory_size;
 pub use spill_manager::SpillManager;
 
 use std::collections::VecDeque;
+
+use hashbrown::DefaultHashBuilder;
+use hashbrown::hash_table::HashTable;
+use std::hash::BuildHasher;
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
@@ -37,7 +41,7 @@ use arrow::array::{
     Array, ArrayRef, BinaryViewArray, BufferSpec, GenericByteViewArray, StringViewArray,
     layout, make_array,
 };
-use arrow::buffer::Buffer;
+use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use arrow::datatypes::{ByteViewType, Schema, SchemaRef};
 use arrow::ipc::{
@@ -46,7 +50,7 @@ use arrow::ipc::{
     writer::{IpcWriteOptions, StreamEncoder},
 };
 use arrow::record_batch::RecordBatch;
-use arrow_data::ArrayDataBuilder;
+use arrow_data::{ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN};
 #[cfg(test)]
 use arrow_ipc::writer::StreamWriter;
 use arrow_ipc::{CompressionType, root_as_message};
@@ -800,6 +804,112 @@ pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
     }
 }
 
+/// Compacts the data buffers of a view array, or returns `None` when the
+/// array is too small for compaction to be worth it.
+///
+/// Arrow's `gc()` copies the bytes of every view separately, so repeated
+/// values each get their own copy. For a dictionary-encoded Parquet column
+/// this inflates the spilled data by the average repeat count: 1M rows of
+/// 1000 distinct 64 byte values spill as 64 MB
+/// (<https://github.com/apache/datafusion/issues/23564>).
+/// [`gc_dedup_view_array`] copies each distinct value once instead, and falls
+/// back to `gc()` when the values turn out to be distinct.
+fn gc_view_array<T: ByteViewType>(
+    array: &GenericByteViewArray<T>,
+) -> Option<GenericByteViewArray<T>> {
+    if !should_gc_view_array(array) {
+        return None;
+    }
+    Some(gc_dedup_view_array(array).unwrap_or_else(|| array.gc()))
+}
+
+/// Number of non-inline values [`gc_dedup_view_array`] deduplicates before
+/// it checks whether the array has enough repeats to be worth it.
+const DEDUP_SAMPLE_VALUES: usize = 256;
+
+/// Like `gc()`, but copies each distinct value once, and zeroes null views.
+///
+/// Returns `None` if the first [`DEDUP_SAMPLE_VALUES`] non-inline values
+/// hold almost no repeats, since hashing every value then costs more than
+/// deduplication saves.
+fn gc_dedup_view_array<T: ByteViewType>(
+    array: &GenericByteViewArray<T>,
+) -> Option<GenericByteViewArray<T>> {
+    let buffers = array.data_buffers();
+    let bytes_of = |view: &ByteView| {
+        let start = view.offset as usize;
+        &buffers[view.buffer_index as usize][start..start + view.length as usize]
+    };
+    let hasher = DefaultHashBuilder::default();
+
+    // (input view, output view) of the first occurrence of each distinct value
+    let mut distinct: HashTable<(u128, u128)> = HashTable::new();
+    let mut completed: Vec<Buffer> = vec![];
+    let mut data: Vec<u8> = vec![];
+    let mut non_inline = 0;
+    let mut views = Vec::with_capacity(array.len());
+
+    for (i, &raw) in array.views().iter().enumerate() {
+        if array.is_null(i) {
+            views.push(0);
+            continue;
+        }
+        if (raw as u32) <= MAX_INLINE_VIEW_LEN {
+            views.push(raw);
+            continue;
+        }
+
+        let view = ByteView::from(raw);
+        let bytes = bytes_of(&view);
+        let hash = hasher.hash_one(bytes);
+        let found = distinct.find(hash, |(first, _)| {
+            *first == raw || bytes_of(&ByteView::from(*first)) == bytes
+        });
+        let new_view = match found {
+            Some((_, new_view)) => *new_view,
+            None => {
+                // A view offset is a `u32`, and a buffer may not exceed `i32::MAX`
+                if data.len() + bytes.len() > i32::MAX as usize {
+                    completed.push(Buffer::from_vec(std::mem::take(&mut data)));
+                }
+                let new_view = ByteView {
+                    buffer_index: completed.len() as u32,
+                    offset: data.len() as u32,
+                    ..view
+                }
+                .as_u128();
+                data.extend_from_slice(bytes);
+                distinct.insert_unique(hash, (raw, new_view), |(first, _)| {
+                    hasher.hash_one(bytes_of(&ByteView::from(*first)))
+                });
+                new_view
+            }
+        };
+        views.push(new_view);
+
+        non_inline += 1;
+        if non_inline == DEDUP_SAMPLE_VALUES
+            && non_inline - distinct.len() < DEDUP_SAMPLE_VALUES / 64
+        {
+            return None;
+        }
+    }
+    if !data.is_empty() {
+        completed.push(Buffer::from_vec(data));
+    }
+
+    // SAFETY: every non-null, non-inline view points at a copy of the bytes
+    // it referenced in `array`, which are valid for `T`, and inline views are
+    // unchanged.
+    Some(unsafe {
+        GenericByteViewArray::new_unchecked(
+            ScalarBuffer::from(views),
+            completed.into(),
+            array.nulls().cloned(),
+        )
+    })
+}
+
 fn gc_array(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
     match array.data_type() {
         DataType::Utf8View => {
@@ -807,22 +917,20 @@ fn gc_array(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
                 .as_any()
                 .downcast_ref::<StringViewArray>()
                 .expect("Utf8View array should downcast to StringViewArray");
-            if should_gc_view_array(string_view) {
-                Ok((Arc::new(string_view.gc()) as ArrayRef, true))
-            } else {
-                Ok((Arc::clone(array), false))
-            }
+            Ok(match gc_view_array(string_view) {
+                Some(gc) => (Arc::new(gc) as ArrayRef, true),
+                None => (Arc::clone(array), false),
+            })
         }
         DataType::BinaryView => {
             let binary_view = array
                 .as_any()
                 .downcast_ref::<BinaryViewArray>()
                 .expect("BinaryView array should downcast to BinaryViewArray");
-            if should_gc_view_array(binary_view) {
-                Ok((Arc::new(binary_view.gc()) as ArrayRef, true))
-            } else {
-                Ok((Arc::clone(array), false))
-            }
+            Ok(match gc_view_array(binary_view) {
+                Some(gc) => (Arc::new(gc) as ArrayRef, true),
+                None => (Arc::clone(array), false),
+            })
         }
         _ => gc_array_children(array),
     }
@@ -2403,6 +2511,61 @@ mod tests {
             reduction_percent > 85.0,
             "Expected >85% reduction for 10% slice, got {reduction_percent:.1}%"
         );
+
+        Ok(())
+    }
+
+    /// Repeated values are copied once, whether their views share bytes, as
+    /// the views of a Parquet dictionary-encoded column do, or reference
+    /// separate copies (<https://github.com/apache/datafusion/issues/23564>).
+    #[test]
+    fn test_gc_copies_repeated_values_once() -> Result<()> {
+        use arrow::array::{AsArray, UInt32Array};
+        use arrow::compute::take;
+
+        let value = |i: u32| format!("repeated-{i:0>55}");
+        let data_bytes = |array: &StringViewArray| -> usize {
+            array.data_buffers().iter().map(|b| b.len()).sum()
+        };
+
+        // 256 distinct non-inline values: 16 KB, above the GC threshold
+        let distinct = StringViewArray::from_iter_values((0..256).map(value));
+        assert_eq!(data_bytes(&distinct), 256 * 64);
+
+        // 10,000 views into the same buffer, some of them null
+        let indices = UInt32Array::from_iter(
+            (0..10_000u32).map(|i| (i % 7 != 0).then_some((i * 31) % 256)),
+        );
+        let shared = take(&distinct, &indices, None)?;
+        let shared = shared.as_string_view();
+        let gc = gc_view_array(shared).expect("array is above the GC threshold");
+        assert_eq!(data_bytes(&gc), 256 * 64);
+        assert_eq!(&gc, shared);
+
+        // 1,000 separate copies of 256 distinct values, in shuffled order. A
+        // run of DEDUP_SAMPLE_VALUES distinct values would fall back to `gc()`.
+        let copies = StringViewArray::from_iter_values(
+            (0..1_000u32).map(|i| value((i * 7919) % 1_000 % 256)),
+        );
+        let gc = gc_view_array(&copies).expect("array is above the GC threshold");
+        assert_eq!(data_bytes(&gc), 256 * 64);
+        assert_eq!(gc, copies);
+
+        Ok(())
+    }
+
+    /// Distinct values fall back to `gc()`, which copies every value once
+    #[test]
+    fn test_gc_distinct_values() -> Result<()> {
+        let array = StringViewArray::from_iter_values(
+            (0..1_000).map(|i| format!("distinct-{i:0>55}")),
+        );
+        let sliced = array.slice(100, 500);
+        let gc = gc_view_array(&sliced).expect("array is above the GC threshold");
+        let gc_bytes: usize = gc.data_buffers().iter().map(|b| b.len()).sum();
+        assert_eq!(gc_bytes, 500 * 64);
+        assert_eq!(gc, sliced);
+        assert!(gc_dedup_view_array(&sliced).is_none());
 
         Ok(())
     }
