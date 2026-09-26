@@ -17,7 +17,7 @@
 
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_expr::expr::{
-    AggregateFunctionParams, HigherOrderFunction, WindowFunctionParams,
+    AggregateFunctionParams, HigherOrderFunction, NullTreatment, WindowFunctionParams,
 };
 use datafusion_expr::expr::{Lambda, Unnest};
 use sqlparser::ast::Value::SingleQuotedString;
@@ -91,6 +91,13 @@ const LOWEST: &BinaryOperator = &BinaryOperator::Or;
 // Closest precedence we have to IS operator is BitwiseAnd (any other) in PG docs
 // (https://www.postgresql.org/docs/7.2/sql-precedence.html)
 const IS: &BinaryOperator = &BinaryOperator::BitwiseAnd;
+
+fn null_treatment_to_sql(null_treatment: NullTreatment) -> ast::NullTreatment {
+    match null_treatment {
+        NullTreatment::IgnoreNulls => ast::NullTreatment::IgnoreNulls,
+        NullTreatment::RespectNulls => ast::NullTreatment::RespectNulls,
+    }
+}
 
 impl Unparser<'_> {
     pub fn expr_to_sql(&self, expr: &Expr) -> Result<ast::Expr> {
@@ -276,7 +283,7 @@ impl Unparser<'_> {
                             window_frame,
                             filter,
                             distinct,
-                            ..
+                            null_treatment,
                         },
                 } = window_fun.as_ref();
                 let func_name = fun.name();
@@ -343,7 +350,7 @@ impl Unparser<'_> {
                         .as_ref()
                         .map(|f| self.expr_to_sql_inner(f).map(Box::new))
                         .transpose()?,
-                    null_treatment: None,
+                    null_treatment: null_treatment.map(null_treatment_to_sql),
                     over,
                     within_group: vec![],
                     parameters: ast::FunctionArguments::None,
@@ -405,7 +412,7 @@ impl Unparser<'_> {
                     args,
                     filter,
                     order_by,
-                    ..
+                    null_treatment,
                 } = &agg.params;
 
                 // if this is a WITHIN GROUP aggregate, skip the prepended arg
@@ -438,7 +445,7 @@ impl Unparser<'_> {
                         clauses: vec![],
                     }),
                     filter,
-                    null_treatment: None,
+                    null_treatment: null_treatment.map(null_treatment_to_sql),
                     over: None,
                     within_group,
                     parameters: ast::FunctionArguments::None,
@@ -3954,5 +3961,112 @@ mod tests {
                 .to_string(),
             "NULL"
         );
+    }
+
+    #[test]
+    fn test_unparse_null_treatment_window_and_aggregate() -> Result<()> {
+        use datafusion_expr::expr::NullTreatment;
+        use datafusion_functions_aggregate::first_last::first_value_udaf;
+        use datafusion_functions_window::nth_value::first_value_udwf;
+
+        // Window function with IgnoreNulls
+        let window_ignore = Expr::from(WindowFunction {
+            fun: WindowFunctionDefinition::WindowUDF(first_value_udwf()),
+            params: WindowFunctionParams {
+                args: vec![col("a")],
+                partition_by: vec![],
+                order_by: vec![Sort::new(col("b"), true, true)],
+                window_frame: WindowFrame::new(None),
+                null_treatment: Some(NullTreatment::IgnoreNulls),
+                distinct: false,
+                filter: None,
+            },
+        });
+
+        // Window function with RespectNulls
+        let window_respect = Expr::from(WindowFunction {
+            fun: WindowFunctionDefinition::WindowUDF(first_value_udwf()),
+            params: WindowFunctionParams {
+                args: vec![col("a")],
+                partition_by: vec![],
+                order_by: vec![Sort::new(col("b"), true, true)],
+                window_frame: WindowFrame::new(None),
+                null_treatment: Some(NullTreatment::RespectNulls),
+                distinct: false,
+                filter: None,
+            },
+        });
+
+        // Window function with None (Control)
+        let window_none = Expr::from(WindowFunction {
+            fun: WindowFunctionDefinition::WindowUDF(first_value_udwf()),
+            params: WindowFunctionParams {
+                args: vec![col("a")],
+                partition_by: vec![],
+                order_by: vec![Sort::new(col("b"), true, true)],
+                window_frame: WindowFrame::new(None),
+                null_treatment: None,
+                distinct: false,
+                filter: None,
+            },
+        });
+
+        // Aggregate function with IgnoreNulls
+        let agg_ignore =
+            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+                first_value_udaf(),
+                vec![col("a")],
+                false,
+                None,
+                vec![],
+                Some(NullTreatment::IgnoreNulls),
+            ));
+
+        // Aggregate function with RespectNulls
+        let agg_respect =
+            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+                first_value_udaf(),
+                vec![col("a")],
+                false,
+                None,
+                vec![],
+                Some(NullTreatment::RespectNulls),
+            ));
+
+        // Aggregate function with None (Control)
+        let agg_none =
+            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+                first_value_udaf(),
+                vec![col("a")],
+                false,
+                None,
+                vec![],
+                None,
+            ));
+
+        let actual_window_ignore = expr_to_sql(&window_ignore)?.to_string();
+        let actual_window_respect = expr_to_sql(&window_respect)?.to_string();
+        let actual_window_none = expr_to_sql(&window_none)?.to_string();
+        let actual_agg_ignore = expr_to_sql(&agg_ignore)?.to_string();
+        let actual_agg_respect = expr_to_sql(&agg_respect)?.to_string();
+        let actual_agg_none = expr_to_sql(&agg_none)?.to_string();
+
+        assert_eq!(
+            actual_window_ignore,
+            "first_value(a) IGNORE NULLS OVER (ORDER BY b ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"
+        );
+        assert_eq!(
+            actual_window_respect,
+            "first_value(a) RESPECT NULLS OVER (ORDER BY b ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"
+        );
+        assert_eq!(
+            actual_window_none,
+            "first_value(a) OVER (ORDER BY b ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"
+        );
+        assert_eq!(actual_agg_ignore, "first_value(a) IGNORE NULLS");
+        assert_eq!(actual_agg_respect, "first_value(a) RESPECT NULLS");
+        assert_eq!(actual_agg_none, "first_value(a)");
+
+        Ok(())
     }
 }
