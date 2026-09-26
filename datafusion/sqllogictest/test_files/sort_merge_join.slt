@@ -971,6 +971,47 @@ WHERE t1_sorted.data < 0
 ----
 100
 
+statement ok
+SET datafusion.execution.enable_sort_merge_join_existence_summary = true;
+
+# OR clauses can have different witnesses. A null component is not itself
+# a conflict, and a missing inner group must survive an anti join.
+statement ok
+CREATE TABLE identities(id BIGINT, k BIGINT, user_id VARCHAR, org_id VARCHAR) AS VALUES
+  (1, 1, 'alice', 'x'), (2, 2, 'alice', 'x'),
+  (3, 3, NULL, 'x'), (4, 4, 'alice', NULL), (5, 5, 'carol', 'x');
+
+statement ok
+CREATE TABLE observations(k BIGINT, user_id VARCHAR, org_id VARCHAR, active BOOLEAN) AS VALUES
+  (1, 'alice', 'x', true), (1, 'alice', 'x', true),
+  (1, 'bob', 'y', false), (2, 'alice', 'y', true),
+  (2, 'bob', 'x', true), (3, 'bob', NULL, true), (4, 'bob', NULL, true);
+
+query I rowsort
+SELECT l.id FROM identities l LEFT ANTI JOIN observations r
+ON l.k = r.k AND r.active AND (l.user_id <> r.user_id OR l.org_id <> r.org_id);
+----
+1
+3
+5
+
+query I rowsort
+SELECT l.id FROM identities l LEFT SEMI JOIN observations r
+ON l.k = r.k AND r.active AND (l.user_id <> r.user_id OR l.org_id <> r.org_id);
+----
+2
+4
+
+# Independent summaries cannot prove that the same observation has both
+# differences: group 2 has different user and organization on separate rows.
+query I rowsort
+SELECT l.id FROM identities l LEFT SEMI JOIN observations r
+ON l.k = r.k AND r.active AND l.user_id <> r.user_id AND l.org_id <> r.org_id;
+----
+
+statement ok
+RESET datafusion.execution.enable_sort_merge_join_existence_summary;
+
 # Config reset
 statement ok
 RESET datafusion.optimizer.prefer_hash_join;

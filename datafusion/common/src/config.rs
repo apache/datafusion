@@ -924,6 +924,14 @@ config_namespace! {
         /// Support for build_side.num_rows() >= u32::MAX will be added in the future.
         pub perfect_hash_join_min_key_density: f64, default = 0.15
 
+        /// Summarize eligible residual predicates in semi/anti sort-merge joins.
+        /// Uses one representative or an extremum per equality-key group instead
+        /// of repeatedly searching the group's rows. Supports inequality and
+        /// ordered comparisons, side-local filters, and OR combinations. Other
+        /// predicates retain the general join implementation. This option does
+        /// not change join selection or apply to hash joins.
+        pub enable_sort_merge_join_existence_summary: bool, default = false
+
         /// When set to true, record batches will be examined between each operator and
         /// small batches will be coalesced into larger batches. This is helpful when there
         /// are highly selective filters or joins that could produce tiny output batches. The
