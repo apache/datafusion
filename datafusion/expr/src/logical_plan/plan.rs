@@ -4357,7 +4357,29 @@ fn calc_func_dependencies_for_project(
     // Sentinel for projection outputs that do not map back to any input field.
     const COMPUTED_EXPR_INDEX: usize = usize::MAX;
 
+    let input_func_dependencies = input.schema().functional_dependencies();
+    // Projecting an empty set of dependencies always yields an empty set, so
+    // skip resolving projection expressions against the input fields. This is
+    // the common case because table sources carry no constraints by default.
+    if input_func_dependencies.is_empty() {
+        return Ok(FunctionalDependencies::empty());
+    }
+
+    // Map each input field name to its first index so that projection
+    // expressions resolve with a hash lookup instead of a linear scan.
     let input_fields = input.schema().field_names();
+    let mut input_index_by_name: HashMap<&str, usize> =
+        HashMap::with_capacity(input_fields.len());
+    for (index, name) in input_fields.iter().enumerate() {
+        input_index_by_name.entry(name.as_str()).or_insert(index);
+    }
+    let input_index = |name: &str| {
+        input_index_by_name
+            .get(name)
+            .copied()
+            .unwrap_or(COMPUTED_EXPR_INDEX)
+    };
+
     // Map each projection output position to its input column index.
     // A projection expression can produce multiple output columns, such as `*`.
     let proj_indices = exprs
@@ -4379,39 +4401,20 @@ fn calc_func_dependencies_for_project(
                             let flat_name = qualifier
                                 .map(|t| format!("{}.{}", t, f.name()))
                                 .unwrap_or_else(|| f.name().clone());
-                            input_fields
-                                .iter()
-                                .position(|item| *item == flat_name)
-                                .unwrap_or(COMPUTED_EXPR_INDEX)
+                            input_index(&flat_name)
                         })
                         .collect::<Vec<_>>(),
                 )
             }
-            Expr::Alias(alias) => {
-                let name = format!("{}", alias.expr);
-                let input_index = input_fields
-                    .iter()
-                    .position(|item| *item == name)
-                    .unwrap_or(COMPUTED_EXPR_INDEX);
-                Ok(vec![input_index])
-            }
-            _ => {
-                let name = format!("{expr}");
-                let input_index = input_fields
-                    .iter()
-                    .position(|item| *item == name)
-                    .unwrap_or(COMPUTED_EXPR_INDEX);
-                Ok(vec![input_index])
-            }
+            Expr::Alias(alias) => Ok(vec![input_index(&format!("{}", alias.expr))]),
+            _ => Ok(vec![input_index(&format!("{expr}"))]),
         })
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
 
-    Ok(input
-        .schema()
-        .functional_dependencies()
+    Ok(input_func_dependencies
         .project_functional_dependencies(&proj_indices, exprs.len()))
 }
 
@@ -5449,6 +5452,127 @@ mod tests {
         let deps = projection.schema.functional_dependencies();
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].source_indices, vec![1]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn projection_with_alias_preserves_pk() -> Result<()> {
+        let constraints =
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
+        let source = Arc::new(
+            LogicalTableSource::new(Arc::new(employee_schema()))
+                .with_constraints(constraints),
+        );
+        let plan = LogicalPlanBuilder::scan("employee_csv", source, None)?
+            .project(vec![col("id").alias("emp_id"), col("first_name")])?
+            .build()?;
+
+        let deps = plan.schema().functional_dependencies();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].source_indices, vec![0]);
+        assert_eq!(deps[0].target_indices, vec![0, 1]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn projection_over_unconstrained_table_has_no_dependencies() -> Result<()> {
+        let source = Arc::new(LogicalTableSource::new(Arc::new(employee_schema())));
+        let plan = LogicalPlanBuilder::scan("employee_csv", source, None)?
+            .project(vec![col("id"), col("first_name")])?
+            .build()?;
+
+        let deps = plan.schema().functional_dependencies();
+        assert!(deps.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn projection_duplicate_flattened_name_uses_first_input_index() -> Result<()> {
+        // Build an input schema where a qualified field (`orders`.`id`) and an
+        // unqualified field that is literally named `"orders.id"` flatten to
+        // the exact same lookup key that `calc_func_dependencies_for_project`
+        // uses to resolve projection expressions against input fields. This is
+        // the only way two entries of `DFSchema::field_names()` can collide
+        // (`DFSchema::check_names` otherwise forbids duplicate names), and it
+        // pins that the hash-map based lookup resolves such a collision to the
+        // *first* matching index, exactly like the linear `position()` scan it
+        // replaces.
+        let schema = DFSchema::new_with_metadata(
+            vec![
+                (
+                    Some(TableReference::bare("orders")),
+                    Arc::new(Field::new("id", DataType::Int32, false)),
+                ),
+                (
+                    None,
+                    Arc::new(Field::new("orders.id", DataType::Int32, false)),
+                ),
+            ],
+            Metadata::default(),
+        )?
+        .with_functional_dependencies(FunctionalDependencies::new(vec![
+            FunctionalDependence::new(vec![0], vec![0, 1], false)
+                .with_mode(Dependency::Single),
+        ]))?;
+        let input = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: true,
+            schema: Arc::new(schema),
+        });
+
+        // References the *unqualified* second field, whose flattened name
+        // ("orders.id") collides with the first (qualified) field's.
+        let exprs = vec![Expr::Column(Column::new_unqualified("orders.id"))];
+        let deps = calc_func_dependencies_for_project(&exprs, &input)?;
+
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].source_indices, vec![0]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_group_by_on_primary_key_reports_single_dependency() -> Result<()> {
+        let constraints =
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
+        let source = Arc::new(
+            LogicalTableSource::new(Arc::new(employee_schema()))
+                .with_constraints(constraints),
+        );
+        let plan = LogicalPlanBuilder::scan("employee_csv", source, None)?
+            .aggregate(vec![col("id")], vec![count(lit(true))])?
+            .build()?;
+
+        let deps = plan.schema().functional_dependencies();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].source_indices, vec![0]);
+        assert_eq!(deps[0].mode, Dependency::Single);
+
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_group_by_without_constraints_still_reports_single_dependency()
+    -> Result<()> {
+        // Grouping guarantees uniqueness of the GROUP BY key regardless of
+        // whether the input table carries any PRIMARY KEY / UNIQUE
+        // constraints, so `aggregate_functional_dependencies` must still
+        // report a `Single` dependency spanning the whole aggregate output.
+        // This pins that behavior so the early return added for the (far
+        // more common) case of an input with no functional dependencies at
+        // all cannot be mistakenly widened to also skip this GROUP BY-only
+        // dependency.
+        let source = Arc::new(LogicalTableSource::new(Arc::new(employee_schema())));
+        let plan = LogicalPlanBuilder::scan("employee_csv", source, None)?
+            .aggregate(vec![col("id")], vec![count(lit(true))])?
+            .build()?;
+
+        let deps = plan.schema().functional_dependencies();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].source_indices, vec![0]);
+        assert_eq!(deps[0].mode, Dependency::Single);
 
         Ok(())
     }
