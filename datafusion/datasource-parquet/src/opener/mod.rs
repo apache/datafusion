@@ -26,11 +26,13 @@ use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
+use crate::optional_filter::OptionalFilterOptions;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
     DecoderBuilderConfig, InitialDecoderState, PushDecoderStreamState, RgPlanEntry,
     RowFilterContext, RowGroupPruner,
 };
+use crate::row_filter::OptionalFilterRowFilterContext;
 use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
 use crate::{
     BloomFilterStatistics, Int96Coercer, ParquetAccessPlan, ParquetFileMetrics,
@@ -305,6 +307,9 @@ pub(super) struct ParquetMorselizer {
     /// Per-scan virtual-column state (validation already performed). `None`
     /// when no virtual columns are requested — the common path.
     pub(crate) virtual_state: Option<Arc<VirtualColumnsState>>,
+    /// How the row filter handles optional conjuncts of the predicate, when
+    /// `pushdown_filters` is true.
+    pub(crate) optional_filters: OptionalFilterOptions,
 }
 
 impl fmt::Debug for ParquetMorselizer {
@@ -496,6 +501,7 @@ struct PreparedParquetOpen {
     reverse_row_groups: bool,
     sort_order_for_reorder: Option<LexOrdering>,
     preserve_order: bool,
+    optional_filters: OptionalFilterOptions,
     #[cfg(feature = "parquet_encryption")]
     file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
 }
@@ -569,6 +575,13 @@ impl DecoderReadPlans {
                 prepared.reorder_predicates,
                 prepared.file_metrics.clone(),
                 prepared.max_predicate_cache_size,
+                Some(OptionalFilterRowFilterContext {
+                    options: &prepared.optional_filters,
+                    metrics: &prepared.metrics,
+                    partition: prepared.partition_index,
+                    filename: &prepared.file_name,
+                    output_projection: Some(projection.projection_mask()),
+                }),
             )
         });
         Ok(Self {
@@ -997,6 +1010,7 @@ impl ParquetMorselizer {
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             preserve_order: self.preserve_order,
+            optional_filters: self.optional_filters.clone(),
             #[cfg(feature = "parquet_encryption")]
             file_decryption_properties: None,
         })
@@ -2189,6 +2203,7 @@ mod test {
         max_in_list_size: usize,
         reverse_row_groups: bool,
         preserve_order: bool,
+        optional_filters: OptionalFilterOptions,
     }
 
     #[test]
@@ -2412,6 +2427,7 @@ mod test {
                 max_in_list_size: MAX_IN_LIST_SIZE,
                 reverse_row_groups: false,
                 preserve_order: false,
+                optional_filters: OptionalFilterOptions::default(),
             }
         }
 
@@ -2511,6 +2527,11 @@ mod test {
         }
 
         /// Set whether the scan must preserve file order.
+        fn with_optional_filters(mut self, options: OptionalFilterOptions) -> Self {
+            self.optional_filters = options;
+            self
+        }
+
         fn with_preserve_order(mut self, enable: bool) -> Self {
             self.preserve_order = enable;
             self
@@ -2598,6 +2619,7 @@ mod test {
                 reverse_row_groups: self.reverse_row_groups,
                 sort_order_for_reorder: None,
                 virtual_state,
+                optional_filters: self.optional_filters,
             })
         }
     }
@@ -5227,6 +5249,88 @@ mod test {
 
         let values = collect_int32_values(open_file(&opener, file).await.unwrap()).await;
         assert_eq!(values, vec![7, 4, 5, 6, 3]);
+    }
+
+    /// The decode speed for the saving of optional filters is measured only
+    /// on the row groups where the row filter removed no rows: a row filter
+    /// that removes rows spread over the row group makes each output row
+    /// more expensive to decode.
+    #[tokio::test]
+    async fn decode_speed_is_measured_without_row_filter_selection() {
+        use arrow::array::{Int32Array, Int64Array};
+        use datafusion_common::config::OptionalFilterMode;
+        use datafusion_physical_expr::expressions::OptionalFilterPhysicalExpr;
+        use datafusion_physical_expr::optional_filter_gate::OptionalFilterGateConfig;
+
+        const ROWS_PER_ROW_GROUP: usize = 8192;
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("v", DataType::Int64, false),
+        ]));
+        // Four row groups. `a = 0` removes every second row of the first
+        // three row groups, and no row of the last one.
+        let rows = 4 * ROWS_PER_ROW_GROUP;
+        let a = |i: usize| {
+            if i < 3 * ROWS_PER_ROW_GROUP {
+                (i % 2) as i32
+            } else {
+                0
+            }
+        };
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from_iter_values((0..rows).map(a))),
+                Arc::new(Int64Array::from_iter_values(0..rows as i64)),
+            ],
+        )
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(ROWS_PER_ROW_GROUP))
+            .build();
+        let size = write_parquet_batches(
+            Arc::clone(&store),
+            "decode.parquet",
+            vec![batch],
+            Some(props),
+        )
+        .await;
+        let file = PartitionedFile::new("decode.parquet".to_string(), size as u64);
+
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(OptionalFilterPhysicalExpr::new(
+            logical2physical(&col("a").eq(lit(0)), &schema),
+        ));
+        let options = OptionalFilterOptions {
+            mode: OptionalFilterMode::Adaptive,
+            // The gate never pauses the filter.
+            gate_config: OptionalFilterGateConfig {
+                min_saving_ns_per_row: 1e9,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_optional_filters(options.clone())
+            .build();
+        let stream = open_file(&morselizer, file).await.unwrap();
+        let (_, output_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(output_rows, 3 * ROWS_PER_ROW_GROUP / 2 + ROWS_PER_ROW_GROUP);
+
+        // Only the last row group is measured: its rows times the average
+        // compressed bytes for each row of the output columns.
+        let measured = options.decode_cost.measured_bytes() as f64;
+        let file_bytes_per_row = size as f64 / rows as f64;
+        let row_group_bytes = ROWS_PER_ROW_GROUP as f64 * file_bytes_per_row;
+        assert!(measured > 0.0);
+        assert!(
+            measured < 2.0 * row_group_bytes,
+            "measured {measured} bytes, one row group has about {row_group_bytes}"
+        );
     }
 
     /// Helpers for tests that exercise parquet virtual columns
