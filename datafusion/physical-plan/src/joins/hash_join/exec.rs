@@ -1031,20 +1031,50 @@ impl HashJoinExec {
         Arc::new(DynamicFilterPhysicalExpr::new(right_keys, lit(true)))
     }
 
-    /// Join types whose output rows all carry a matching key on both sides.
+    /// How this join may transfer a parent filter over one side's join keys to
+    /// the other side's input, see [`KeyTransfer`].
     ///
-    /// For these a parent filter over one side's join keys can be transferred
-    /// to the other side's input: an input row that fails the transferred
-    /// filter can only pair with rows that fail the original, so pruning it
-    /// changes nothing, and once the transferred filter is applied exactly on
-    /// one side every output row satisfies the original. Outer, anti and mark
-    /// joins also emit unmatched rows, whose key on the other side is absent,
-    /// so the transferred filter is not exact for them.
-    fn supports_key_transfer(join_type: JoinType) -> bool {
-        matches!(
-            join_type,
-            JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi
-        )
+    /// The common ground: an input row that fails the transferred filter can
+    /// only pair with rows that fail the original (their keys are equal, also
+    /// under [`NullEquality::NullEqualsNull`], and a join filter only removes
+    /// pairs), so every row that passes the original keeps the same matches.
+    fn key_transfer(&self) -> KeyTransfer {
+        match self.join_type {
+            // Every output row carries a matching key on both sides, so once
+            // the transferred filter is applied exactly on one side every
+            // output row satisfies the original.
+            JoinType::Inner | JoinType::LeftSemi | JoinType::RightSemi => {
+                KeyTransfer::Exact
+            }
+            // A NULL probe key decides a null-aware join's whole result, and a
+            // transferred filter is not true for NULL, so it would prune it.
+            _ if self.null_aware => KeyTransfer::None,
+            // The preserved side also emits unmatched rows. Pruning the other
+            // side can turn a row that fails the filter from matched into
+            // unmatched (NULL-extended, or mark = false), but every row
+            // derived from it still fails the filter, which stays above the
+            // join.
+            //
+            // An outer join also emits fewer rows for it: several matches
+            // collapse into one NULL-extended row. With a `fetch` on this
+            // join, that frees room for later rows that pass the filter and
+            // changes the result. A mark join emits one row per preserved row
+            // either way, and only the mark changes.
+            JoinType::Left | JoinType::Right if self.fetch.is_some() => KeyTransfer::None,
+            JoinType::Left | JoinType::LeftMark => {
+                KeyTransfer::PruneOnly { preserved_child: 0 }
+            }
+            JoinType::Right | JoinType::RightMark => {
+                KeyTransfer::PruneOnly { preserved_child: 1 }
+            }
+            // Neither side of a full join is preserved. An anti join would
+            // emit *more* rows: every preserved row whose matches were pruned
+            // fails the filter, yet it can fill a `fetch` between this join
+            // and the filter and displace rows that pass.
+            JoinType::Full | JoinType::LeftAnti | JoinType::RightAnti => {
+                KeyTransfer::None
+            }
+        }
     }
 
     /// Maps each output column that is a plain `Column` join key on one side
@@ -1086,9 +1116,7 @@ impl HashJoinExec {
                         .find(|(_, right_key)| is_column_at(right_key, ci.index))
                         .map(|(left_key, _)| left_key),
                 ),
-                // Only mark joins produce mark columns, and
-                // `supports_key_transfer` excludes them; this arm is here for
-                // exhaustiveness.
+                // A mark column is not a key of either side.
                 JoinSide::None => continue,
             };
             if let Some(other_key) = other_key {
@@ -2003,26 +2031,37 @@ impl ExecutionPlan for HashJoinExec {
         // side too, so it is also pushed there, rewritten over that side's key
         // expressions. This is how a dynamic filter from a join above reaches
         // the scans on both sides of this join, and how a semi join prunes its
-        // non-output side. Like the plain column routing, a transfer only
-        // targets a side that `lr_is_preserved` permits.
-        let (to_right, to_left) = if Self::supports_key_transfer(self.join_type) {
-            self.key_transfer_maps(&column_indices)
-        } else {
-            Default::default()
+        // non-output side. A side that `lr_is_preserved` does not permit
+        // receives nothing but such transferred filters, and only from the
+        // preserved side: a filter over the non-preserved side's key also
+        // sees the NULLs of unmatched rows (`r.k IS NULL` above a left join),
+        // which the preserved side's key does not have.
+        let (to_right, to_left) = match self.key_transfer() {
+            KeyTransfer::Exact => self.key_transfer_maps(&column_indices),
+            KeyTransfer::PruneOnly { preserved_child } => {
+                let (to_right, to_left) = self.key_transfer_maps(&column_indices);
+                if preserved_child == 0 {
+                    (to_right, HashMap::new())
+                } else {
+                    (HashMap::new(), to_left)
+                }
+            }
+            KeyTransfer::None => Default::default(),
         };
         let describe_child = |preserved: bool,
                               column_mapping: HashMap<usize, usize>,
                               key_map: &KeyTransferMap,
                               child: &Arc<dyn ExecutionPlan>|
          -> Result<ChildFilterDescription> {
-            if !preserved {
-                return Ok(ChildFilterDescription::all_unsupported(&parent_filters));
-            }
-            let mut description = ChildFilterDescription::from_child_with_column_mapping(
-                &parent_filters,
-                column_mapping,
-                child,
-            )?;
+            let mut description = if preserved {
+                ChildFilterDescription::from_child_with_column_mapping(
+                    &parent_filters,
+                    column_mapping,
+                    child,
+                )?
+            } else {
+                ChildFilterDescription::all_unsupported(&parent_filters)
+            };
             transfer_key_filters(&parent_filters, key_map, &mut description)?;
             Ok(description)
         };
@@ -2058,7 +2097,23 @@ impl ExecutionPlan for HashJoinExec {
         child_pushdown_result: ChildPushdownResult,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        let mut result = FilterPushdownPropagation::if_any(child_pushdown_result.clone());
+        let mut result = match self.key_transfer() {
+            // A copy transferred to the non-preserved side only prunes that
+            // side's input. It never makes the filter hold for this join's
+            // output, so only the preserved child's answer counts.
+            KeyTransfer::PruneOnly { preserved_child } => {
+                FilterPushdownPropagation::with_parent_pushdown_result(
+                    child_pushdown_result
+                        .parent_filters
+                        .iter()
+                        .map(|filter| filter.child_results[preserved_child])
+                        .collect(),
+                )
+            }
+            KeyTransfer::Exact | KeyTransfer::None => {
+                FilterPushdownPropagation::if_any(child_pushdown_result.clone())
+            }
+        };
         assert_eq!(child_pushdown_result.self_filters.len(), 2); // Should always be 2, we have 2 children
         let right_child_self_filters = &child_pushdown_result.self_filters[1]; // We only push down filters to the right child
         // We expect 0 or 1 self filters
@@ -2647,6 +2702,21 @@ mod proto_tests {
     }
 }
 
+/// How a [`HashJoinExec`] may transfer a parent filter over one side's join
+/// keys to the other side, see [`HashJoinExec::key_transfer`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyTransfer {
+    /// The transferred filter is as good as the original: if either child
+    /// applies its copy exactly, the filter holds for every output row.
+    Exact,
+    /// Only from the preserved child to the other one, and only to prune that
+    /// child's input: whether the filter holds for the output is the preserved
+    /// child's answer alone.
+    PruneOnly { preserved_child: usize },
+    /// No transfer.
+    None,
+}
+
 /// Output column index of a join, mapped to the equivalent join-key expression
 /// on the other side of the join (in that side's input schema).
 type KeyTransferMap = HashMap<usize, PhysicalExprRef>;
@@ -2661,9 +2731,8 @@ fn is_column_at(expr: &PhysicalExprRef, index: usize) -> bool {
 ///
 /// `key_map` only holds columns of the other side, so a filter it rewrites is
 /// one the plain column analysis marked unsupported for `child`. A filter that
-/// references any other column is left as that analysis routed it. A filter
-/// with no columns comes back unchanged and was already accepted, so
-/// rewriting it is a no-op.
+/// references any other column, or no column at all, is left as that analysis
+/// routed it.
 fn transfer_key_filters(
     parent_filters: &[Arc<dyn PhysicalExpr>],
     key_map: &KeyTransferMap,
@@ -2681,7 +2750,7 @@ fn transfer_key_filters(
 }
 
 /// Rewrites `filter` over the other side's join keys, or returns `None` when
-/// it references a column that is not a transferable key.
+/// it references a column that is not a transferable key, or no column.
 ///
 /// A [`DynamicFilterPhysicalExpr`] comes out as a view sharing the original's
 /// state with its key columns remapped, so it keeps tracking the build side.
@@ -2690,10 +2759,12 @@ fn transfer_filter_across_keys(
     key_map: &KeyTransferMap,
 ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
     let mut all_keys = true;
+    let mut any_key = false;
     let transformed = Arc::clone(filter).transform_down(|expr| {
         let Some(column) = expr.downcast_ref::<Column>() else {
             return Ok(Transformed::no(expr));
         };
+        any_key = true;
         match key_map.get(&column.index()) {
             // The replacement is in the other side's input schema, so its
             // columns are not output indices of this join: `Jump` over it.
@@ -2711,14 +2782,16 @@ fn transfer_filter_across_keys(
             }
         }
     })?;
-    Ok(all_keys.then_some(transformed.data))
+    Ok((all_keys && any_key).then_some(transformed.data))
 }
 
 /// Determines which sides of a join are "preserved" for filter pushdown.
 ///
 /// A preserved side means filters on that side's columns can be safely pushed
 /// below the join. This mostly mirrors the logical optimizer's `lr_is_preserved`;
-/// semi joins additionally allow join-key filters on the non-output side.
+/// semi joins additionally allow join-key filters on the non-output side. A
+/// side that is not preserved can still receive a filter transferred from the
+/// preserved side's join keys, see [`HashJoinExec::key_transfer`].
 fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
     match join_type {
         JoinType::Inner => (true, true),
