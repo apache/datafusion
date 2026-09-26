@@ -26,9 +26,7 @@ use itertools::Itertools;
 use log::{Level, debug, log_enabled};
 
 use datafusion_common::instant::Instant;
-use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
-};
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     Column, DFSchema, Result, assert_eq_or_internal_err, internal_err, plan_err,
     qualified_name,
@@ -229,22 +227,18 @@ impl<'a> ColumnChecker<'a> {
 
 /// Determine whether the predicate can evaluate as the join conditions
 fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
-    let mut is_evaluate = true;
-    predicate.apply(|expr| match expr {
-        Expr::Column(_)
-        | Expr::Literal(_, _)
-        | Expr::Placeholder(_)
-        | Expr::ScalarVariable(_, _) => Ok(TreeNodeRecursion::Jump),
+    Ok(!predicate.exists(|expr| match expr {
         Expr::Exists { .. }
         | Expr::InSubquery(_)
         | Expr::SetComparison(_)
         | Expr::ScalarSubquery(_)
         | Expr::OuterReferenceColumn(_, _)
-        | Expr::Unnest(_) => {
-            is_evaluate = false;
-            Ok(TreeNodeRecursion::Stop)
-        }
-        Expr::Alias(_)
+        | Expr::Unnest(_) => Ok(true),
+        Expr::Column(_)
+        | Expr::Literal(_, _)
+        | Expr::Placeholder(_)
+        | Expr::ScalarVariable(_, _)
+        | Expr::Alias(_)
         | Expr::BinaryExpr(_)
         | Expr::Like(_)
         | Expr::SimilarTo(_)
@@ -266,15 +260,14 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::ScalarFunction(_)
         | Expr::HigherOrderFunction(_)
         | Expr::Lambda(_)
-        | Expr::LambdaVariable(_) => Ok(TreeNodeRecursion::Continue),
+        | Expr::LambdaVariable(_) => Ok(false),
         // TODO: remove the next line after `Expr::Wildcard` is removed
         #[expect(deprecated)]
         Expr::AggregateFunction(_)
         | Expr::WindowFunction(_)
         | Expr::Wildcard { .. }
         | Expr::GroupingSet(_) => internal_err!("Unsupported predicate type"),
-    })?;
-    Ok(is_evaluate)
+    })?)
 }
 
 /// examine OR clause to see if any useful clauses can be extracted and push down.
