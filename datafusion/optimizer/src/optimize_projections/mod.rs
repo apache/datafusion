@@ -24,7 +24,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use std::sync::Arc;
 
 use datafusion_common::{
-    Column, DFSchema, HashMap, JoinType, Result, assert_eq_or_internal_err,
+    DFSchema, JoinType, Result, assert_eq_or_internal_err,
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err,
 };
 use datafusion_expr::expr::Alias;
@@ -34,6 +34,7 @@ use datafusion_expr::{
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
+use crate::projection_inliner::{DuplicationCost, ProjectionInliner};
 use crate::utils::NamePreserver;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeContainer};
 
@@ -576,21 +577,16 @@ fn merge_consecutive_projections_one_level(
         return Projection::try_new_with_schema(expr, input, schema).map(Transformed::no);
     };
 
-    // Count usages (referrals) of each projection expression in its input fields:
-    let mut column_referral_map = HashMap::<&Column, usize>::new();
-    for expr in &expr {
-        expr.add_column_ref_counts(&mut column_referral_map);
-    }
-
-    // If an expression is non-trivial (KeepInPlace) and appears more than once, do not merge
-    // them as consecutive projections will benefit from a compute-once approach.
+    // The merged projection replaces `prev_projection`, so each definition is
+    // evaluated one time for each reference. If a non-trivial definition is
+    // referenced more than one time, do not merge: consecutive projections
+    // compute it one time only.
     // For details, see: https://github.com/apache/datafusion/issues/8296
-    if column_referral_map.into_iter().any(|(col, usage)| {
-        usage > 1
-            && !prev_projection.expr[prev_projection.schema.index_of_column(col).unwrap()]
-                .placement()
-                .should_push_to_leaves()
-    }) {
+    let no_other_consumers: [&Expr; 0] = [];
+    if !ProjectionInliner::new(prev_projection)
+        .pinned(&expr, no_other_consumers, DuplicationCost::Free)
+        .is_empty()
+    {
         // no change
         return Projection::try_new_with_schema(expr, input, schema).map(Transformed::no);
     }
