@@ -1950,6 +1950,9 @@ pub struct FilterExecNode {
     pub batch_size: u32,
     #[prost(uint32, optional, tag = "11")]
     pub fetch: ::core::option::Option<u32>,
+    /// Query-derived one-time early output threshold; zero keeps ordinary batching.
+    #[prost(uint64, tag = "12")]
+    pub startup_rows: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FileGroup {
