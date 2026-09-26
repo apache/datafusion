@@ -33,7 +33,7 @@ on:
 
 jobs:
   label:
-    #if: github.event.pull_request.merged == true
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-slim
     permissions:
       pull-requests: write
