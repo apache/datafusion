@@ -905,7 +905,7 @@ jobs:
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-      - run: ./ci/scripts/check_examples_datafusion_crates.py
+      - run: python3 ci/scripts/check_examples_datafusion_crates.py
 
   # Verify MSRV for the crates which are directly used by other projects:
   # - datafusion
