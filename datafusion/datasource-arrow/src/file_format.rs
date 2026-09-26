@@ -274,7 +274,7 @@ impl FileSink for ArrowFileSink {
         let ipc_options =
             IpcWriteOptions::try_new(64, false, arrow_ipc::MetadataVersion::V5)?
                 .try_with_compression(Some(CompressionType::LZ4_FRAME))?;
-        while let Some((path, mut rx)) = file_stream_rx.recv().await {
+        while let Some((file_metadata, mut rx)) = file_stream_rx.recv().await {
             let shared_buffer = SharedBuffer::new(INITIAL_BUFFER_BYTES);
             let mut arrow_writer = arrow_ipc::writer::FileWriter::try_new_with_options(
                 shared_buffer.clone(),
@@ -283,7 +283,7 @@ impl FileSink for ArrowFileSink {
             )?;
             let mut object_store_writer = ObjectWriterBuilder::new(
                 FileCompressionType::UNCOMPRESSED,
-                &path,
+                &file_metadata.path,
                 Arc::clone(&object_store),
             )
             .with_buffer_size(Some(
@@ -293,6 +293,7 @@ impl FileSink for ArrowFileSink {
                     .execution
                     .objectstore_writer_buffer_size,
             ))
+            .with_bytes_written_counter(file_metadata.size)
             .build()?;
             file_write_tasks.spawn(async move {
                 let mut row_count = 0;
