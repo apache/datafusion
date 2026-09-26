@@ -73,9 +73,15 @@ async fn explain_analyze_baseline_metrics() {
     );
 
     {
-        let expected_batch_count_after_repartition =
+        let expected_repartition_batch_count =
             if cfg!(not(feature = "force_hash_collisions")) {
                 "output_batches=3"
+            } else {
+                "output_batches=1"
+            };
+        let expected_final_aggregate_batch_count =
+            if cfg!(not(feature = "force_hash_collisions")) {
+                "output_batches=4"
             } else {
                 "output_batches=1"
             };
@@ -85,7 +91,7 @@ async fn explain_analyze_baseline_metrics() {
             "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1]",
             "metrics=[output_rows=5, elapsed_compute=",
             "output_bytes=",
-            expected_batch_count_after_repartition
+            expected_final_aggregate_batch_count
         );
 
         assert_metrics!(
@@ -93,7 +99,7 @@ async fn explain_analyze_baseline_metrics() {
             "RepartitionExec: partitioning=Hash([c1@0], 3), input_partitions=3",
             "metrics=[output_rows=5, elapsed_compute=",
             "output_bytes=",
-            expected_batch_count_after_repartition
+            expected_repartition_batch_count
         );
 
         assert_metrics!(
@@ -101,7 +107,7 @@ async fn explain_analyze_baseline_metrics() {
             "ProjectionExec: expr=[]",
             "metrics=[output_rows=5, elapsed_compute=",
             "output_bytes=",
-            expected_batch_count_after_repartition
+            expected_final_aggregate_batch_count
         );
     }
 
@@ -772,12 +778,12 @@ async fn test_physical_plan_display_indent() {
 
     assert_snapshot!(
         actual,
-        @r"
+        @"
     SortPreservingMergeExec: [the_min@2 DESC], fetch=10
       ProjectionExec: expr=[c1@0 as c1, max(aggregate_test_100.c12)@1 as max(aggregate_test_100.c12), min(aggregate_test_100.c12)@2 as the_min]
         SortExec: TopK(fetch=10), expr=[min(aggregate_test_100.c12)@2 DESC], preserve_partitioning=[true]
           AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)]
-            RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000
+            RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000, max_aggr_partition_factor=16
               AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[max(aggregate_test_100.c12), min(aggregate_test_100.c12)]
                 FilterExec: c12@1 < 10
                   RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1

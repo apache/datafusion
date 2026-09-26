@@ -77,9 +77,9 @@ SELECT "WatchID", MIN("ResolutionWidth") as wmin, MAX("ResolutionWidth") as wmax
 query III??
 SELECT "RegionID", "UserAgent", "OS", AVG(to_timestamp("ResponseEndTiming")-to_timestamp("ResponseStartTiming")) as avg_response_time, AVG(to_timestamp("ResponseEndTiming")-to_timestamp("ConnectTiming")) as avg_latency FROM hits GROUP BY "RegionID", "UserAgent", "OS" ORDER BY avg_latency DESC limit 10;
 ----
-229 3 44 0 days 0 hours 0 mins 0.000000000 secs 0 days 0 hours 0 mins 0.000000000 secs
-197 7 39 0 days 0 hours 0 mins 0.000000000 secs 0 days 0 hours 0 mins 0.000000000 secs
 839 3 2 0 days 0 hours 0 mins 0.000000000 secs 0 days 0 hours 0 mins 0.000000000 secs
+197 7 39 0 days 0 hours 0 mins 0.000000000 secs 0 days 0 hours 0 mins 0.000000000 secs
+229 3 44 0 days 0 hours 0 mins 0.000000000 secs 0 days 0 hours 0 mins 0.000000000 secs
 839 0 0 0 days 0 hours 0 mins 0.000000000 secs 0 days 0 hours 0 mins 0.000000000 secs
 39 7 2 0 days 0 hours 0 mins 0.000000000 secs 0 days 0 hours 0 mins 0.000000000 secs
 

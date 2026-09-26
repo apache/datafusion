@@ -20,11 +20,15 @@
 //! See comments in [`PartialHashAggregateStream`] and [`FinalHashAggregateStream`]
 //! for details.
 
+use std::collections::BTreeMap;
 use std::mem::size_of;
 use std::sync::Arc;
 
+use arrow::array::{Array, ArrayData, ArrayRef, MutableArrayData, make_array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::cast::as_uint32_array;
+use datafusion_common::utils::memory::get_record_batch_memory_size;
 use datafusion_common::{
     DataFusionError, Result, assert_ne_or_internal_err, internal_datafusion_err,
 };
@@ -32,13 +36,13 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::{Stream, StreamExt};
 
-use super::AggregateExec;
 use super::aggregate_hash_table::{
     AggregateHashTable, FinalMarker, OrderedAggregateTableMetrics, PartialMarker,
     PartialSkipMarker,
 };
 use super::skip_partial::SkipAggregationProbe;
 use super::spill::AggregateSpill;
+use super::{AggregateExec, strip_subpartition_column, subpartition_column_index};
 use crate::metrics::{
     BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput, SpillMetrics,
 };
@@ -197,8 +201,250 @@ pub(crate) struct FinalHashAggregateStream {
     ///
     /// This will be None when creating the stream
     hash_table: Option<AggregateHashTable<FinalMarker>>,
+    /// Buffered input for `FinalPartitioned`, replayed one subpartition at a time.
+    partition_runs: Option<FinalPartitionRunState>,
     /// `None` if spilling is not supported by the configured `DiskManager`.
     spill_context: Option<Box<AggregateSpill>>,
+}
+
+const PARTITION_MATERIALIZE_WINDOW_SIZE: usize = 16;
+const PARTITION_MATERIALIZE_GROUP_SIZE: usize = 4;
+
+#[derive(Debug, Clone, Copy)]
+struct RowRun {
+    relative_partition: usize,
+    start: usize,
+    len: usize,
+}
+
+struct BufferedPartitionBatch {
+    batch: RecordBatch,
+    runs: Vec<RowRun>,
+}
+
+#[derive(Clone, Copy)]
+struct MaterializeRun {
+    batch_idx: usize,
+    start: usize,
+    end: usize,
+}
+
+struct MaterializeGroup {
+    partitions: Vec<usize>,
+    total_rows: usize,
+}
+
+struct FinalPartitionRunState {
+    buffered_batches: Vec<BufferedPartitionBatch>,
+    staged_batches: BTreeMap<usize, Vec<RecordBatch>>,
+    staged_sizes: BTreeMap<usize, usize>,
+    total_staged_size: usize,
+    total_buffered_size: usize,
+    replaying_size: usize,
+    schema: Option<SchemaRef>,
+}
+
+impl FinalPartitionRunState {
+    fn new() -> Self {
+        Self {
+            buffered_batches: Vec::with_capacity(PARTITION_MATERIALIZE_WINDOW_SIZE),
+            staged_batches: BTreeMap::new(),
+            staged_sizes: BTreeMap::new(),
+            total_staged_size: 0,
+            total_buffered_size: 0,
+            replaying_size: 0,
+            schema: None,
+        }
+    }
+
+    fn total_size(&self) -> usize {
+        self.total_staged_size + self.total_buffered_size + self.replaying_size
+    }
+
+    fn stage_batch(&mut self, batch: RecordBatch, runs: Vec<RowRun>) -> Result<()> {
+        match &self.schema {
+            Some(schema) if schema != &batch.schema() => {
+                return Err(internal_datafusion_err!(
+                    "Final partitioned aggregation received inconsistent schemas"
+                ));
+            }
+            None => self.schema = Some(batch.schema()),
+            Some(_) => {}
+        }
+        self.total_buffered_size += get_record_batch_memory_size(&batch);
+        self.buffered_batches
+            .push(BufferedPartitionBatch { batch, runs });
+        if self.buffered_batches.len() >= PARTITION_MATERIALIZE_WINDOW_SIZE {
+            self.flush_buffered_batches()?;
+        }
+        Ok(())
+    }
+
+    fn flush_buffered_batches(&mut self) -> Result<()> {
+        if self.buffered_batches.is_empty() {
+            return Ok(());
+        }
+        let schema = self.schema.as_ref().ok_or_else(|| {
+            internal_datafusion_err!("Missing final aggregate partition schema")
+        })?;
+        let Some(max_partition) = self
+            .buffered_batches
+            .iter()
+            .flat_map(|batch| batch.runs.iter().map(|run| run.relative_partition))
+            .max()
+        else {
+            self.buffered_batches.clear();
+            self.total_buffered_size = 0;
+            return Ok(());
+        };
+
+        let mut partition_lengths = vec![0; max_partition + 1];
+        for run in self.buffered_batches.iter().flat_map(|batch| &batch.runs) {
+            partition_lengths[run.relative_partition] += run.len;
+        }
+        let partition_runs =
+            build_partition_runs(&self.buffered_batches, &partition_lengths);
+        let groups = build_materialize_groups(&partition_lengths);
+        let mut group_columns = groups
+            .iter()
+            .map(|_| Vec::with_capacity(schema.fields().len()))
+            .collect::<Vec<Vec<ArrayRef>>>();
+
+        for column_idx in 0..schema.fields().len() {
+            let source_data = self
+                .buffered_batches
+                .iter()
+                .map(|batch| batch.batch.column(column_idx).to_data())
+                .collect::<Vec<_>>();
+            let source_refs = source_data.iter().collect::<Vec<&ArrayData>>();
+            for (group_idx, group) in groups.iter().enumerate() {
+                let mut mutable =
+                    MutableArrayData::new(source_refs.clone(), false, group.total_rows);
+                for partition_id in &group.partitions {
+                    for run in &partition_runs[*partition_id] {
+                        mutable.try_extend(run.batch_idx, run.start, run.end)?;
+                    }
+                }
+                group_columns[group_idx].push(make_array(mutable.freeze()));
+            }
+        }
+
+        for (group_idx, group) in groups.iter().enumerate() {
+            let columns = std::mem::take(&mut group_columns[group_idx]);
+            let group_batch = RecordBatch::try_new(Arc::clone(schema), columns)?;
+            let group_batch_size = get_record_batch_memory_size(&group_batch);
+            let mut offset = 0;
+            let mut accounted_size = 0;
+            for (partition_idx, partition_id) in
+                group.partitions.iter().copied().enumerate()
+            {
+                let len = partition_lengths[partition_id];
+                let batch = group_batch.slice(offset, len);
+                offset += len;
+                let batch_size = if partition_idx + 1 == group.partitions.len() {
+                    group_batch_size - accounted_size
+                } else {
+                    group_batch_size
+                        .saturating_mul(len)
+                        .checked_div(group.total_rows)
+                        .unwrap_or(0)
+                };
+                accounted_size += batch_size;
+                self.staged_batches
+                    .entry(partition_id)
+                    .or_default()
+                    .push(batch);
+                *self.staged_sizes.entry(partition_id).or_default() += batch_size;
+                self.total_staged_size += batch_size;
+            }
+        }
+        self.buffered_batches.clear();
+        self.total_buffered_size = 0;
+        Ok(())
+    }
+
+    fn begin_replay(&mut self) -> Result<()> {
+        self.flush_buffered_batches()
+    }
+
+    fn take_next(&mut self) -> Result<Option<Vec<RecordBatch>>> {
+        let Some(partition_id) = self.staged_batches.first_key_value().map(|(id, _)| *id)
+        else {
+            return Ok(None);
+        };
+        let batches = self.staged_batches.remove(&partition_id).ok_or_else(|| {
+            internal_datafusion_err!("Missing final aggregate partition {partition_id}")
+        })?;
+        self.replaying_size =
+            self.staged_sizes.remove(&partition_id).ok_or_else(|| {
+                internal_datafusion_err!(
+                    "Missing final aggregate partition size {partition_id}"
+                )
+            })?;
+        self.total_staged_size -= self.replaying_size;
+        Ok(Some(batches))
+    }
+
+    fn finish_replay(&mut self) {
+        self.replaying_size = 0;
+    }
+
+    fn take_all_uncompacted(&mut self) -> Vec<RecordBatch> {
+        let mut batches = std::mem::take(&mut self.staged_batches)
+            .into_values()
+            .flatten()
+            .collect::<Vec<_>>();
+        batches.extend(
+            std::mem::take(&mut self.buffered_batches)
+                .into_iter()
+                .map(|batch| batch.batch),
+        );
+        self.staged_sizes.clear();
+        self.total_staged_size = 0;
+        self.total_buffered_size = 0;
+        self.replaying_size = 0;
+        batches
+    }
+}
+
+fn build_materialize_groups(partition_lengths: &[usize]) -> Vec<MaterializeGroup> {
+    (0..partition_lengths.len())
+        .step_by(PARTITION_MATERIALIZE_GROUP_SIZE)
+        .filter_map(|group_start| {
+            let group_end = (group_start + PARTITION_MATERIALIZE_GROUP_SIZE)
+                .min(partition_lengths.len());
+            let partitions = (group_start..group_end)
+                .filter(|partition_id| partition_lengths[*partition_id] != 0)
+                .collect::<Vec<_>>();
+            (!partitions.is_empty()).then(|| MaterializeGroup {
+                total_rows: partitions
+                    .iter()
+                    .map(|partition_id| partition_lengths[*partition_id])
+                    .sum(),
+                partitions,
+            })
+        })
+        .collect()
+}
+
+fn build_partition_runs(
+    buffered_batches: &[BufferedPartitionBatch],
+    partition_lengths: &[usize],
+) -> Vec<Vec<MaterializeRun>> {
+    let mut partition_runs = partition_lengths
+        .iter()
+        .map(|_| Vec::new())
+        .collect::<Vec<_>>();
+    for (batch_idx, batch) in buffered_batches.iter().enumerate() {
+        for run in &batch.runs {
+            partition_runs[run.relative_partition].push(MaterializeRun {
+                batch_idx,
+                start: run.start,
+                end: run.start + run.len,
+            });
+        }
+    }
+    partition_runs
 }
 
 #[derive(PartialEq)]
@@ -624,6 +870,8 @@ impl FinalHashAggregateStream {
             reservation,
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
             hash_table: Some(hash_table),
+            partition_runs: (agg.mode == super::AggregateMode::FinalPartitioned)
+                .then(FinalPartitionRunState::new),
             spill_context,
         })
     }
@@ -638,13 +886,48 @@ impl FinalHashAggregateStream {
     ///
     /// See comments in [`FinalHashAggregateStream`] for high-level ideas.
     fn create_stream(mut self) -> impl Stream<Item = Result<RecordBatch>> {
-        async_try_stream(|emitter| async move {
+        async_try_stream(|mut emitter| async move {
             let mut hash_table = self
                 .hash_table
                 .take()
                 .expect("hash_table should not be None");
 
             let mut spill_context = self.spill_context.take();
+
+            if self.partition_runs.is_some() && self.consume_partitioned_input().await? {
+                self.close_input();
+                self.partition_runs
+                    .as_mut()
+                    .expect("partition run state should exist")
+                    .begin_replay()?;
+                while let Some(batches) = self
+                    .partition_runs
+                    .as_mut()
+                    .expect("partition run state should exist")
+                    .take_next()?
+                {
+                    let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+                    for batch in batches {
+                        let _timer = elapsed_compute.timer();
+                        hash_table.aggregate_batch(&batch)?;
+                        let buffered_size = self
+                            .partition_runs
+                            .as_ref()
+                            .map(FinalPartitionRunState::total_size)
+                            .unwrap_or(0);
+                        self.reservation
+                            .try_resize(buffered_size + hash_table.memory_size())?;
+                    }
+                    self.partition_runs
+                        .as_mut()
+                        .expect("partition run state should exist")
+                        .finish_replay();
+                    self.produce_partition_output(&mut hash_table, &mut emitter)
+                        .await?;
+                }
+                self.reservation.try_resize(0)?;
+                return Ok(());
+            }
 
             self.consume_input(&mut hash_table, &mut spill_context)
                 .await?;
@@ -667,6 +950,137 @@ impl FinalHashAggregateStream {
     fn close_input(&mut self) {
         let input_schema = self.input.schema();
         self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
+    }
+
+    async fn consume_partitioned_input(&mut self) -> Result<bool> {
+        while let Some(batch) = self.input.next().await.transpose()? {
+            if subpartition_column_index(batch.schema_ref()).is_none() {
+                self.partition_runs = None;
+                let schema = self.input.schema();
+                let remaining = std::mem::replace(
+                    &mut self.input,
+                    Box::pin(EmptyRecordBatchStream::new(Arc::clone(&schema))),
+                );
+                let input =
+                    futures::stream::once(async move { Ok(batch) }).chain(remaining);
+                self.input = Box::pin(RecordBatchStreamAdapter::new(schema, input));
+                return Ok(false);
+            }
+            let subpartition_idx = subpartition_column_index(batch.schema_ref())
+                .expect("subpartition column was checked above");
+            let subpartitions = as_uint32_array(batch.column(subpartition_idx).as_ref())?;
+            if subpartitions.null_count() != 0 {
+                return Err(internal_datafusion_err!(
+                    "Hash aggregate subpartition column must not contain nulls"
+                ));
+            }
+            let output_batch = strip_subpartition_column(&batch, subpartition_idx)?;
+            let mut runs = Vec::new();
+            let mut values = subpartitions.values().iter().copied().enumerate();
+            if let Some((start, first_partition)) = values.next() {
+                let mut partition = first_partition as usize;
+                let mut run_start = start;
+                let mut len = 1;
+                for (row, value) in values {
+                    let value = value as usize;
+                    if value == partition {
+                        len += 1;
+                    } else {
+                        runs.push(RowRun {
+                            relative_partition: partition,
+                            start: run_start,
+                            len,
+                        });
+                        partition = value;
+                        run_start = row;
+                        len = 1;
+                    }
+                }
+                runs.push(RowRun {
+                    relative_partition: partition,
+                    start: run_start,
+                    len,
+                });
+            }
+            self.partition_runs
+                .as_mut()
+                .expect("partition run state should exist")
+                .stage_batch(output_batch, runs)?;
+            let buffered_size = self
+                .partition_runs
+                .as_ref()
+                .map(FinalPartitionRunState::total_size)
+                .unwrap_or(0);
+            if self.reservation.try_resize(buffered_size).is_err() {
+                // Subpartition buffering is an optimization. Under a tight
+                // memory limit, fall back to the normal spill-capable final
+                // aggregation path. The visible output partition still uses
+                // the standard hash partition mapping, so combining these
+                // subpartitions in one table remains correct.
+                let staged = self
+                    .partition_runs
+                    .as_mut()
+                    .expect("partition run state should exist")
+                    .take_all_uncompacted();
+                self.partition_runs = None;
+                self.reservation.try_resize(0)?;
+
+                let schema =
+                    staged.first().map(RecordBatch::schema).ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "aggregate subpartition fallback has no staged input"
+                        )
+                    })?;
+                let remaining = std::mem::replace(
+                    &mut self.input,
+                    Box::pin(EmptyRecordBatchStream::new(Arc::clone(&schema))),
+                );
+                let staged = futures::stream::iter(staged.into_iter().map(Ok));
+                let remaining = remaining.map(|result| {
+                    result.and_then(|batch| {
+                        if let Some(idx) = subpartition_column_index(batch.schema_ref()) {
+                            strip_subpartition_column(&batch, idx)
+                        } else {
+                            Ok(batch)
+                        }
+                    })
+                });
+                self.input = Box::pin(RecordBatchStreamAdapter::new(
+                    schema,
+                    staged.chain(remaining),
+                ));
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    async fn produce_partition_output(
+        &mut self,
+        hash_table: &mut AggregateHashTable<FinalMarker>,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+    ) -> Result<()> {
+        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+        let mut timer = elapsed_compute.timer();
+        hash_table.start_output()?;
+        while !hash_table.is_building() {
+            let Some(batch) = hash_table.next_output_batch()? else {
+                break;
+            };
+            let buffered_size = self
+                .partition_runs
+                .as_ref()
+                .map(FinalPartitionRunState::total_size)
+                .unwrap_or(0);
+            self.reservation
+                .try_resize(buffered_size + hash_table.memory_size())?;
+            timer.done();
+            emitter
+                .emit(batch.record_output(&self.baseline_metrics))
+                .await;
+            timer = elapsed_compute.timer();
+        }
+        Ok(())
     }
 
     /// See comments in [`Self::group_values_soft_limit`] for details.
@@ -844,7 +1258,7 @@ impl FinalHashAggregateStream {
         let mut timer = elapsed_compute.timer();
         hash_table.start_output()?;
 
-        loop {
+        while !hash_table.is_building() {
             let Some(batch) = hash_table.next_output_batch()? else {
                 // Only reachable when the table held no groups at all: a
                 // non-empty table always reports its last batch together with
@@ -864,6 +1278,8 @@ impl FinalHashAggregateStream {
                 .await;
             timer = elapsed_compute.timer();
         }
+        self.reservation.try_resize(0)?;
+        Ok(())
     }
 }
 
@@ -873,14 +1289,17 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::aggregates::{AggregateMode, PhysicalGroupBy};
+    use crate::aggregates::{
+        AggregateMode, PartitionRun, PhysicalGroupBy, append_subpartition_column,
+        subpartition_schema,
+    };
     use crate::common::collect;
     use crate::execution_plan::ExecutionPlan;
     use crate::test::TestMemoryExec;
     use crate::test::exec::BarrierExec;
 
-    use arrow::array::{AsArray, Int32Array, Int64Array, StringViewArray};
-    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
+    use arrow::array::{ArrayRef, AsArray, Int32Array, Int64Array, StringViewArray};
+    use arrow::datatypes::{DataType, Field, Int32Type, Int64Type, Schema};
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::{GreedyMemoryPool, MemoryPool};
@@ -892,6 +1311,73 @@ mod tests {
     use futures::channel::mpsc;
     use futures::{FutureExt, StreamExt};
     use std::collections::BTreeMap;
+
+    #[tokio::test]
+    async fn test_final_hash_stream_replays_partition_runs() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("group_col", DataType::Int32, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+        let make_batch = |groups: Vec<i32>, values: Vec<i64>| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(groups)) as ArrayRef,
+                    Arc::new(Int64Array::from(values)) as ArrayRef,
+                ],
+            )
+        };
+        let input_batches = vec![
+            append_subpartition_column(
+                &make_batch(vec![1, 2, 1], vec![2, 5, 11])?,
+                &[PartitionRun::new(0, 2)?, PartitionRun::new(1, 1)?],
+            )?,
+            append_subpartition_column(
+                &make_batch(vec![1, 3, 1, 3], vec![3, 7, 1, 9])?,
+                &[PartitionRun::new(0, 2)?, PartitionRun::new(1, 2)?],
+            )?,
+        ];
+        let input = TestMemoryExec::try_new_exec(
+            &[input_batches],
+            subpartition_schema(&schema),
+            None,
+        )?;
+        let input =
+            Arc::new(TestMemoryExec::update_cache(&input)) as Arc<dyn ExecutionPlan>;
+        let group_by = PhysicalGroupBy::new_single(vec![(
+            col("group_col", &schema)?,
+            "group_col".to_string(),
+        )]);
+        let aggr_expr = vec![Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("SUM(value)")
+                .build()?,
+        )];
+        let aggregate_exec = AggregateExec::try_new(
+            AggregateMode::FinalPartitioned,
+            group_by,
+            aggr_expr,
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?;
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let mut stream =
+            FinalHashAggregateStream::new(&aggregate_exec, &task_ctx, 0)?.into_stream();
+        let mut actual = Vec::new();
+        while let Some(batch) = stream.next().await.transpose()? {
+            let groups = batch.column(0).as_primitive::<Int32Type>();
+            let sums = batch.column(1).as_primitive::<Int64Type>();
+            for row in 0..batch.num_rows() {
+                actual.push((groups.value(row), sums.value(row)));
+            }
+        }
+        actual.sort_unstable();
+        assert_eq!(actual, vec![(1, 5), (1, 12), (2, 5), (3, 7), (3, 9)]);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_partial_hash_stream_double_emission_race_condition_bug() -> Result<()> {

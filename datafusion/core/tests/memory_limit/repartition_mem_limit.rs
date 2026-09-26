@@ -177,7 +177,11 @@ mod spill_pool_deadlock {
             // Small batches so many small batches reach the repartition spill
             // path while the spill file stays far below
             // `max_spill_file_size_bytes` and so never rotates.
-            .with_batch_size(64);
+            .with_batch_size(64)
+            // This test targets RepartitionExec's ordinary spilling path. The
+            // aggregate-specific subpartitioner intentionally changes that path,
+            // so disable its fan-out for this regression test.
+            .set_usize("datafusion.execution.hash_aggregate_partition_factor", 1);
 
         let state = SessionStateBuilder::new()
             .with_config(config)

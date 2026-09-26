@@ -25299,6 +25299,9 @@ impl serde::Serialize for RepartitionExecNode {
         if self.preserve_order {
             len += 1;
         }
+        if self.max_aggr_partition_factor != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.RepartitionExecNode", len)?;
         if let Some(v) = self.input.as_ref() {
             struct_ser.serialize_field("input", v)?;
@@ -25308,6 +25311,11 @@ impl serde::Serialize for RepartitionExecNode {
         }
         if self.preserve_order {
             struct_ser.serialize_field("preserveOrder", &self.preserve_order)?;
+        }
+        if self.max_aggr_partition_factor != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("maxAggrPartitionFactor", ToString::to_string(&self.max_aggr_partition_factor).as_str())?;
         }
         struct_ser.end()
     }
@@ -25323,6 +25331,8 @@ impl<'de> serde::Deserialize<'de> for RepartitionExecNode {
             "partitioning",
             "preserve_order",
             "preserveOrder",
+            "max_aggr_partition_factor",
+            "maxAggrPartitionFactor",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -25330,6 +25340,7 @@ impl<'de> serde::Deserialize<'de> for RepartitionExecNode {
             Input,
             Partitioning,
             PreserveOrder,
+            MaxAggrPartitionFactor,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -25354,6 +25365,7 @@ impl<'de> serde::Deserialize<'de> for RepartitionExecNode {
                             "input" => Ok(GeneratedField::Input),
                             "partitioning" => Ok(GeneratedField::Partitioning),
                             "preserveOrder" | "preserve_order" => Ok(GeneratedField::PreserveOrder),
+                            "maxAggrPartitionFactor" | "max_aggr_partition_factor" => Ok(GeneratedField::MaxAggrPartitionFactor),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -25376,6 +25388,7 @@ impl<'de> serde::Deserialize<'de> for RepartitionExecNode {
                 let mut input__ = None;
                 let mut partitioning__ = None;
                 let mut preserve_order__ = None;
+                let mut max_aggr_partition_factor__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -25396,12 +25409,21 @@ impl<'de> serde::Deserialize<'de> for RepartitionExecNode {
                             }
                             preserve_order__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::MaxAggrPartitionFactor => {
+                            if max_aggr_partition_factor__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("maxAggrPartitionFactor"));
+                            }
+                            max_aggr_partition_factor__ =
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(RepartitionExecNode {
                     input: input__,
                     partitioning: partitioning__,
                     preserve_order: preserve_order__.unwrap_or_default(),
+                    max_aggr_partition_factor: max_aggr_partition_factor__.unwrap_or_default(),
                 })
             }
         }

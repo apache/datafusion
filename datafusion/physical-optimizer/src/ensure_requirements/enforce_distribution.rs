@@ -1380,6 +1380,8 @@ pub fn ensure_distribution_with_stats(
         .execution
         .use_row_number_estimates_to_optimize_partitioning;
     let subset_satisfaction_threshold = config.optimizer.subset_repartition_threshold;
+    let hash_aggregate_partition_factor =
+        config.execution.hash_aggregate_partition_factor.get();
     let unbounded_and_pipeline_friendly = dist_context.plan.boundedness().is_unbounded()
         && matches!(
             dist_context.plan.pipeline_behavior(),
@@ -1602,11 +1604,17 @@ pub fn ensure_distribution_with_stats(
                         //   `config.optimizer.prefer_existing_sort`).
                         let partitioning = Distribution::KeyPartitioned(exprs.to_vec())
                             .create_partitioning(target_partitions);
-                        let repartition = RepartitionExec::try_new(
-                            Arc::clone(&child.plan),
-                            partitioning,
-                        )?
-                        .with_preserve_order();
+                        let max_aggr_partition_factor = aggregate_partition_factor(
+                            &child.plan,
+                            hash_aggregate_partition_factor,
+                        );
+                        let repartition =
+                            RepartitionExec::try_new_with_max_aggr_partition_factor(
+                                Arc::clone(&child.plan),
+                                partitioning,
+                                max_aggr_partition_factor,
+                            )?
+                            .with_preserve_order();
                         let plan = Arc::new(repartition) as _;
                         child = DistributionContext::new(plan, true, vec![child]);
                     }
@@ -1770,6 +1778,17 @@ pub fn ensure_distribution_with_stats(
     Ok(Transformed::yes(DistributionContext::new(
         plan, data, children,
     )))
+}
+
+fn aggregate_partition_factor(
+    input: &Arc<dyn ExecutionPlan>,
+    configured_factor: usize,
+) -> usize {
+    input
+        .downcast_ref::<AggregateExec>()
+        .filter(|aggregate| aggregate.mode() == &AggregateMode::Partial)
+        .map(|_| configured_factor)
+        .unwrap_or(1)
 }
 
 /// Keeps track of distribution changing operators (like `RepartitionExec`,

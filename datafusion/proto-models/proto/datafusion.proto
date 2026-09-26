@@ -1637,6 +1637,8 @@ message RepartitionExecNode{
   // New partitioning variants are stored in `partitioning`.
   Partitioning partitioning = 5;
   bool preserve_order = 6;
+  // Zero means the legacy behavior (a factor of one).
+  uint64 max_aggr_partition_factor = 7;
 }
 
 message Partitioning {

@@ -2455,6 +2455,9 @@ pub struct RepartitionExecNode {
     pub partitioning: ::core::option::Option<Partitioning>,
     #[prost(bool, tag = "6")]
     pub preserve_order: bool,
+    /// Zero means the legacy behavior (a factor of one).
+    #[prost(uint64, tag = "7")]
+    pub max_aggr_partition_factor: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Partitioning {

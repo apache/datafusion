@@ -206,6 +206,10 @@ use datafusion_physical_expr_common::sort_expr::{
 use datafusion_expr::utils::AggregateOrderSensitivity;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use itertools::Itertools;
+pub(crate) use partition_runs::{
+    PartitionRun, append_subpartition_column, strip_subpartition_column,
+    subpartition_column_index, subpartition_schema,
+};
 use topk::hash_table::is_supported_hash_key_type;
 use topk::heap::is_supported_heap_type;
 
@@ -220,6 +224,7 @@ mod ordered_final_stream;
 mod ordered_partial_stream;
 mod ordered_single_stream;
 mod partial_reduce_stream;
+mod partition_runs;
 mod single_stream;
 mod skip_partial;
 mod spill;
