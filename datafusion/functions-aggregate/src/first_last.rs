@@ -973,6 +973,9 @@ impl Accumulator for TrivialFirstValueAccumulator {
         // FIRST_VALUE(first1, first2, first3, ...)
         // Second index contains is_set flag.
         if !self.is_set {
+            if states.len() < 2 {
+                return Ok(());
+            }
             let flags = states[1].as_boolean();
             validate_is_set_flags(flags, "first_value")?;
 
@@ -1117,9 +1120,12 @@ impl Accumulator for FirstValueAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if states.is_empty() {
+            return Ok(());
+        }
         // FIRST_VALUE(first1, first2, first3, ...)
         // last index contains is_set flag.
-        let is_set_idx = states.len() - 1;
+        let is_set_idx = states.len().saturating_sub(1);
         let flags = states[is_set_idx].as_boolean();
         validate_is_set_flags(flags, "first_value")?;
 
@@ -1366,6 +1372,9 @@ impl Accumulator for TrivialLastValueAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if states.len() < 2 {
+            return Ok(());
+        }
         // LAST_VALUE(last1, last2, last3, ...)
         // Second index contains is_set flag.
         let flags = states[1].as_boolean();
@@ -1511,9 +1520,12 @@ impl Accumulator for LastValueAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if states.is_empty() {
+            return Ok(());
+        }
         // LAST_VALUE(last1, last2, last3, ...)
         // last index contains is_set flag.
-        let is_set_idx = states.len() - 1;
+        let is_set_idx = states.len().saturating_sub(1);
         let flags = states[is_set_idx].as_boolean();
         validate_is_set_flags(flags, "last_value")?;
 

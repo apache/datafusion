@@ -410,7 +410,8 @@ impl Accumulator for ArrayAggAccumulator {
             .enumerate()
             .map(|(i, a)| {
                 if i == 0 && self.front_offset > 0 {
-                    a.slice(self.front_offset, a.len() - self.front_offset)
+                    let offset = self.front_offset.min(a.len());
+                    a.slice(offset, a.len() - offset)
                 } else {
                     Arc::clone(a)
                 }
@@ -447,7 +448,7 @@ impl Accumulator for ArrayAggAccumulator {
             let Some(front) = self.values.front() else {
                 break;
             };
-            let available = front.len() - self.front_offset;
+            let available = front.len().saturating_sub(self.front_offset);
             if to_retract >= available {
                 self.values.pop_front();
                 to_retract -= available;
@@ -1183,7 +1184,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
                         // Compact via swap-remove: move the last slot into the
                         // dead slot so group_rows / counts / row_hashes stay
                         // dense with no dead entries.
-                        let last_idx = group_rows.len() - 1;
+                        let last_idx = group_rows.len().saturating_sub(1);
                         if dead_idx != last_idx {
                             // Patch the map entry that points to last_idx so
                             // it points to dead_idx instead.
@@ -1385,7 +1386,7 @@ impl OrderSensitiveArrayAggAccumulator {
         }
 
         let sorted_len = self.sorted_runs.iter().map(|run| run.len()).sum::<usize>();
-        let mut unsorted_indices = Vec::with_capacity(self.entries.len() - sorted_len);
+        let mut unsorted_indices = Vec::with_capacity(self.entries.len().saturating_sub(sorted_len));
         let mut next_unsorted = 0;
         for run in &self.sorted_runs {
             debug_assert!(run.start >= next_unsorted);
