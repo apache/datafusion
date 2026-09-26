@@ -1964,7 +1964,9 @@ impl DataFrame {
         let right_plan = dataframe.plan;
         let Some(row_number) = self.session_state.window_functions().get("row_number")
         else {
-            return plan_err!("row_number window function is not registered");
+            return plan_err!(
+                "DataFrame::intersect requires the row_number window function, which is not registered"
+            );
         };
         let plan = LogicalPlanBuilder::intersect_all(left_plan, right_plan, row_number)?;
         Ok(DataFrame {
@@ -2046,7 +2048,9 @@ impl DataFrame {
         let right_plan = dataframe.plan;
         let Some(row_number) = self.session_state.window_functions().get("row_number")
         else {
-            return plan_err!("row_number window function is not registered");
+            return plan_err!(
+                "DataFrame::except requires the row_number window function, which is not registered"
+            );
         };
         let plan = LogicalPlanBuilder::except_all(left_plan, right_plan, row_number)?;
         Ok(DataFrame {

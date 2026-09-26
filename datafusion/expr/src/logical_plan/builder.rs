@@ -1472,6 +1472,11 @@ impl LogicalPlanBuilder {
     }
 
     /// Process intersect set operator
+    ///
+    /// With `is_all = true` this builds a left semi join, which keeps every
+    /// matching left row and so does not preserve row multiplicities: a row
+    /// appearing twice on the left and once on the right is returned twice.
+    /// Use [`Self::intersect_all`] for `INTERSECT ALL` semantics.
     pub fn intersect(
         left_plan: LogicalPlan,
         right_plan: LogicalPlan,
@@ -1486,6 +1491,11 @@ impl LogicalPlanBuilder {
     }
 
     /// Process except set operator
+    ///
+    /// With `is_all = true` this builds a left anti join, which removes every
+    /// left row that has any match and so does not preserve row
+    /// multiplicities: a row appearing twice on the left and once on the right
+    /// is removed entirely. Use [`Self::except_all`] for `EXCEPT ALL` semantics.
     pub fn except(
         left_plan: LogicalPlan,
         right_plan: LogicalPlan,
@@ -1500,6 +1510,10 @@ impl LogicalPlanBuilder {
     }
 
     /// Build an `INTERSECT ALL` plan, preserving the multiplicity of each row.
+    ///
+    /// `row_number` must be the `row_number` window function. It numbers the
+    /// copies of each distinct row on both sides so that they can be matched
+    /// one to one.
     pub fn intersect_all(
         left_plan: LogicalPlan,
         right_plan: LogicalPlan,
@@ -1509,6 +1523,9 @@ impl LogicalPlanBuilder {
     }
 
     /// Build an `EXCEPT ALL` plan, subtracting matching row multiplicities.
+    ///
+    /// `row_number` must be the `row_number` window function, as for
+    /// [`Self::intersect_all`].
     pub fn except_all(
         left_plan: LogicalPlan,
         right_plan: LogicalPlan,

@@ -169,3 +169,32 @@ async fn set_operation_all_with_same_name_from_two_relations() -> Result<()> {
     assert!(result.iter().all(|batch| batch.num_rows() == 0));
     Ok(())
 }
+
+#[tokio::test]
+async fn set_operation_all_without_row_number_is_a_plan_error() -> Result<()> {
+    let state = datafusion::execution::SessionStateBuilder::new().build();
+    let ctx = SessionContext::new_with_state(state);
+    for operation in ["INTERSECT ALL", "EXCEPT ALL"] {
+        let err = ctx
+            .sql(&format!("SELECT 1 {operation} SELECT 1"))
+            .await
+            .unwrap_err();
+        assert_contains!(
+            err.strip_backtrace(),
+            "Error during planning: INTERSECT ALL and EXCEPT ALL require the row_number window function, which is not registered"
+        );
+    }
+
+    let df = ctx.sql("SELECT 1").await?;
+    let err = df.clone().intersect(df.clone()).unwrap_err();
+    assert_contains!(
+        err.strip_backtrace(),
+        "DataFrame::intersect requires the row_number window function"
+    );
+    let err = df.clone().except(df).unwrap_err();
+    assert_contains!(
+        err.strip_backtrace(),
+        "DataFrame::except requires the row_number window function"
+    );
+    Ok(())
+}
