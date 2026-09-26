@@ -1185,6 +1185,17 @@ config_namespace! {
         ///
         /// Disabled by default, set to a number greater than 0 for enabling it.
         pub hash_join_buffering_capacity: usize, default = 0
+
+        /// The assumed work, in nanoseconds, that each row removed by an
+        /// optional filter saves downstream. Optional filters are filters that
+        /// are not needed for correctness, such as the dynamic filters that
+        /// hash joins and TopK push down into scans. When an operator evaluates
+        /// optional filters adaptively, it pauses an optional filter whose
+        /// evaluation costs more than the work that it saves. Consumers that can
+        /// measure the saving (the Parquet scan) add their measured decode cost.
+        /// The default is about the cost of a hash table probe for one row. The
+        /// best value depends on the hardware.
+        pub optional_filter_min_saving_ns_per_row: f64, default = 20.0
     }
 }
 
