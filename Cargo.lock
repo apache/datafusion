@@ -2376,6 +2376,8 @@ dependencies = [
  "datafusion-expr",
  "datafusion-physical-expr",
  "datafusion-physical-plan",
+ "datafusion-proto-common",
+ "datafusion-proto-models",
  "parking_lot",
 ]
 
@@ -2596,6 +2598,7 @@ dependencies = [
  "doc-comment",
  "flate2",
  "object_store",
+ "parking_lot",
  "pretty_assertions",
  "prost",
  "recursive",

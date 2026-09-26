@@ -21,12 +21,10 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use arrow::datatypes::{IntervalMonthDayNanoType, Schema, SchemaRef};
+use arrow::datatypes::Schema;
 use datafusion_catalog::memory::MemorySourceConfig;
-use datafusion_common::utils::{usize_from_wire, usize_to_wire};
 use datafusion_common::{
     DataFusionError, Result, internal_datafusion_err, internal_err, not_impl_err,
-    plan_err,
 };
 use datafusion_datasource_arrow::source::ArrowSource;
 #[cfg(feature = "avro")]
@@ -42,9 +40,7 @@ use datafusion_datasource_parquet::source::ParquetSource;
 use datafusion_execution::{FunctionRegistry, TaskContext};
 use datafusion_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
-use datafusion_functions_table::generate_series::{
-    Empty, GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, TimestampValue,
-};
+use datafusion_functions_table::generate_series;
 use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
 use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
 use datafusion_physical_plan::aggregates::AggregateExec;
@@ -66,7 +62,6 @@ use datafusion_physical_plan::joins::{
     PiecewiseMergeJoinExec, SortMergeJoinExec, SymmetricHashJoinExec,
 };
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion_physical_plan::memory::LazyMemoryExec;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::proto::{
@@ -84,7 +79,6 @@ use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
 use prost::Message;
 use prost::bytes::BufMut;
 
-use crate::convert_required;
 use crate::physical_plan::from_proto::parse_physical_expr_with_converter;
 use crate::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use crate::protobuf::physical_plan_node::PhysicalPlanType;
@@ -1301,7 +1295,7 @@ pub trait PhysicalPlanNodeExt: Sized {
                 CooperativeExec::try_from_proto(self.node(), &decode_ctx)
             }
             PhysicalPlanType::GenerateSeries(generate_series) => {
-                self.try_into_generate_series_physical_plan(generate_series)
+                generate_series::proto::try_from_proto(generate_series)
             }
             PhysicalPlanType::SortMergeJoin(_) => {
                 SortMergeJoinExec::try_from_proto(self.node(), &decode_ctx)
@@ -1331,31 +1325,19 @@ pub trait PhysicalPlanNodeExt: Sized {
     ) -> Result<protobuf::PhysicalPlanNode> {
         let plan_clone = Arc::clone(&plan);
         let mut plan = plan.as_ref();
-        // Resolve the downcast identity first so wrapper plans serialize as
-        // their delegate, matching how the `downcast_ref` chain below sees
-        // them. Without this a wrapper around a migrated plan would hit the
-        // wrapper's default `try_to_proto` (`Ok(None)`) and find no fallback
-        // arm for the delegate.
+        // Resolve wrapper plans to their delegate before calling its hook.
         while let Some(delegate) = plan.downcast_delegate() {
             plan = delegate;
         }
 
-        // Self-serializing plans handle themselves via the `try_to_proto` hook
-        // (#22419). `Ok(None)` means "not migrated" and falls through to the
-        // central downcast chain below.
+        // Built-in plans serialize through their `try_to_proto` hook.
+        // `Ok(None)` falls through to the extension codec.
         let encoder = ConverterPlanEncoder {
             codec,
             proto_converter,
         };
         let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
         if let Some(node) = plan.try_to_proto(&encode_ctx)? {
-            return Ok(node);
-        }
-
-        if let Some(exec) = plan.downcast_ref::<LazyMemoryExec>()
-            && let Some(node) =
-                protobuf::PhysicalPlanNode::try_from_lazy_memory_exec(exec)?
-        {
             return Ok(node);
         }
 
@@ -1407,221 +1389,6 @@ pub trait PhysicalPlanNodeExt: Sized {
         )?;
 
         Ok(extension_node)
-    }
-
-    fn generate_series_name_to_str(name: protobuf::GenerateSeriesName) -> &'static str {
-        match name {
-            protobuf::GenerateSeriesName::GsGenerateSeries => "generate_series",
-            protobuf::GenerateSeriesName::GsRange => "range",
-        }
-    }
-
-    fn try_into_generate_series_physical_plan(
-        &self,
-        generate_series: &protobuf::GenerateSeriesNode,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let schema: SchemaRef = Arc::new(convert_required!(generate_series.schema)?);
-
-        let args = match &generate_series.args {
-            Some(protobuf::generate_series_node::Args::ContainsNull(args)) => {
-                GenSeriesArgs::ContainsNull {
-                    name: protobuf::PhysicalPlanNode::generate_series_name_to_str(
-                        args.name(),
-                    ),
-                }
-            }
-            Some(protobuf::generate_series_node::Args::Int64Args(args)) => {
-                GenSeriesArgs::Int64Args {
-                    start: args.start,
-                    end: args.end,
-                    step: args.step,
-                    include_end: args.include_end,
-                    name: protobuf::PhysicalPlanNode::generate_series_name_to_str(
-                        args.name(),
-                    ),
-                }
-            }
-            Some(protobuf::generate_series_node::Args::TimestampArgs(args)) => {
-                let step_proto = args.step.as_ref().ok_or_else(|| {
-                    internal_datafusion_err!("Missing step in TimestampArgs")
-                })?;
-                let step = IntervalMonthDayNanoType::make_value(
-                    step_proto.months,
-                    step_proto.days,
-                    step_proto.nanos,
-                );
-                GenSeriesArgs::TimestampArgs {
-                    start: args.start,
-                    end: args.end,
-                    step,
-                    tz: args.tz.as_ref().map(|s| Arc::from(s.as_str())),
-                    include_end: args.include_end,
-                    name: protobuf::PhysicalPlanNode::generate_series_name_to_str(
-                        args.name(),
-                    ),
-                }
-            }
-            Some(protobuf::generate_series_node::Args::DateArgs(args)) => {
-                let step_proto = args.step.as_ref().ok_or_else(|| {
-                    internal_datafusion_err!("Missing step in DateArgs")
-                })?;
-                let step = IntervalMonthDayNanoType::make_value(
-                    step_proto.months,
-                    step_proto.days,
-                    step_proto.nanos,
-                );
-                GenSeriesArgs::DateArgs {
-                    start: args.start,
-                    end: args.end,
-                    step,
-                    include_end: args.include_end,
-                    name: protobuf::PhysicalPlanNode::generate_series_name_to_str(
-                        args.name(),
-                    ),
-                }
-            }
-            None => return internal_err!("Missing args in GenerateSeriesNode"),
-        };
-
-        let table = GenerateSeriesTable::new(Arc::clone(&schema), args);
-        let target_batch_size = usize_from_wire(
-            generate_series.target_batch_size,
-            "GenerateSeriesNode",
-            "target_batch_size",
-        )?;
-        if target_batch_size == 0 {
-            return plan_err!(
-                "GenerateSeriesNode: target_batch_size must be greater than 0"
-            );
-        }
-        let generator = table.as_generator(target_batch_size)?;
-
-        Ok(Arc::new(LazyMemoryExec::try_new(schema, vec![generator])?))
-    }
-
-    fn str_to_generate_series_name(name: &str) -> Result<protobuf::GenerateSeriesName> {
-        match name {
-            "generate_series" => Ok(protobuf::GenerateSeriesName::GsGenerateSeries),
-            "range" => Ok(protobuf::GenerateSeriesName::GsRange),
-            _ => internal_err!("unknown name: {name}"),
-        }
-    }
-
-    fn try_from_lazy_memory_exec(
-        exec: &LazyMemoryExec,
-    ) -> Result<Option<protobuf::PhysicalPlanNode>> {
-        let generators = exec.generators();
-
-        // ensure we only have one generator
-        let [generator] = generators.as_slice() else {
-            return Ok(None);
-        };
-
-        let generator_guard = generator.read();
-
-        // Try to downcast to different generate_series types
-        if let Some(empty_gen) = generator_guard.as_any().downcast_ref::<Empty>() {
-            let schema = exec.schema();
-            let node = protobuf::GenerateSeriesNode {
-                schema: Some(schema.as_ref().try_into()?),
-                target_batch_size: 8192, // Default batch size
-                args: Some(protobuf::generate_series_node::Args::ContainsNull(
-                    protobuf::GenerateSeriesArgsContainsNull {
-                        name: protobuf::PhysicalPlanNode::str_to_generate_series_name(
-                            empty_gen.name(),
-                        )? as i32,
-                    },
-                )),
-            };
-
-            return Ok(Some(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::GenerateSeries(node)),
-            }));
-        }
-
-        let encode_target_batch_size =
-            |size| usize_to_wire::<u32>(size, "GenerateSeriesNode", "target_batch_size");
-        if let Some(int_64) = generator_guard
-            .as_any()
-            .downcast_ref::<GenericSeriesState<i64>>()
-        {
-            let schema = exec.schema();
-            let node = protobuf::GenerateSeriesNode {
-                schema: Some(schema.as_ref().try_into()?),
-                target_batch_size: encode_target_batch_size(int_64.batch_size())?,
-                args: Some(protobuf::generate_series_node::Args::Int64Args(
-                    protobuf::GenerateSeriesArgsInt64 {
-                        start: *int_64.start(),
-                        end: *int_64.end(),
-                        step: *int_64.step(),
-                        include_end: int_64.include_end(),
-                        name: protobuf::PhysicalPlanNode::str_to_generate_series_name(
-                            int_64.name(),
-                        )? as i32,
-                    },
-                )),
-            };
-
-            return Ok(Some(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::GenerateSeries(node)),
-            }));
-        }
-
-        if let Some(timestamp_args) = generator_guard
-            .as_any()
-            .downcast_ref::<GenericSeriesState<TimestampValue>>()
-        {
-            let schema = exec.schema();
-
-            let start = timestamp_args.start().value();
-            let end = timestamp_args.end().value();
-
-            let step_value = timestamp_args.step();
-
-            let step = Some(datafusion_proto_common::IntervalMonthDayNanoValue {
-                months: step_value.months,
-                days: step_value.days,
-                nanos: step_value.nanoseconds,
-            });
-            let include_end = timestamp_args.include_end();
-            let name = protobuf::PhysicalPlanNode::str_to_generate_series_name(
-                timestamp_args.name(),
-            )? as i32;
-
-            let args = match timestamp_args.current().tz_str() {
-                Some(tz) => protobuf::generate_series_node::Args::TimestampArgs(
-                    protobuf::GenerateSeriesArgsTimestamp {
-                        start,
-                        end,
-                        step,
-                        include_end,
-                        name,
-                        tz: Some(tz.to_string()),
-                    },
-                ),
-                None => protobuf::generate_series_node::Args::DateArgs(
-                    protobuf::GenerateSeriesArgsDate {
-                        start,
-                        end,
-                        step,
-                        include_end,
-                        name,
-                    },
-                ),
-            };
-
-            let node = protobuf::GenerateSeriesNode {
-                schema: Some(schema.as_ref().try_into()?),
-                target_batch_size: encode_target_batch_size(timestamp_args.batch_size())?,
-                args: Some(args),
-            };
-
-            return Ok(Some(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::GenerateSeries(node)),
-            }));
-        }
-
-        Ok(None)
     }
 }
 
