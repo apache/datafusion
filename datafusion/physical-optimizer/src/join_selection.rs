@@ -223,7 +223,7 @@ pub(crate) fn try_collect_left(
             if can_swap_hash_join(hash_join)
                 && should_swap_join_order(&**left, &**right, context)?
             {
-                Ok(Some(hash_join.swap_inputs(PartitionMode::CollectLeft)?))
+                swap_to_collect_left(hash_join).map(Some)
             } else {
                 Ok(Some(Arc::new(
                     hash_join
@@ -241,12 +241,25 @@ pub(crate) fn try_collect_left(
         ))),
         (false, true) => {
             if optimizer_config.join_reordering && can_swap_hash_join(hash_join) {
-                hash_join.swap_inputs(PartitionMode::CollectLeft).map(Some)
+                swap_to_collect_left(hash_join).map(Some)
             } else {
                 Ok(None)
             }
         }
         (false, false) => Ok(None),
+    }
+}
+
+/// Swaps `hash_join` into [`PartitionMode::CollectLeft`], letting the input moving
+/// to the probe side replace itself via [`ExecutionPlan::as_probe_side`].
+fn swap_to_collect_left(hash_join: &HashJoinExec) -> Result<Arc<dyn ExecutionPlan>> {
+    match hash_join.left().as_probe_side()? {
+        Some(probe) => hash_join
+            .builder()
+            .with_new_children(vec![probe, Arc::clone(hash_join.right())])?
+            .build()?
+            .swap_inputs(PartitionMode::CollectLeft),
+        None => hash_join.swap_inputs(PartitionMode::CollectLeft),
     }
 }
 
@@ -319,12 +332,13 @@ fn statistical_join_selection_subrule(
                     && should_swap_join_order(&**left, &**right, context)?
                 {
                     // Null-aware RightAnti only supports CollectLeft
-                    let partition_mode = if hash_join.null_aware {
-                        PartitionMode::CollectLeft
+                    if hash_join.null_aware {
+                        swap_to_collect_left(hash_join).map(Some)?
                     } else {
-                        PartitionMode::Partitioned
-                    };
-                    hash_join.swap_inputs(partition_mode).map(Some)?
+                        hash_join
+                            .swap_inputs(PartitionMode::Partitioned)
+                            .map(Some)?
+                    }
                 } else {
                     None
                 }

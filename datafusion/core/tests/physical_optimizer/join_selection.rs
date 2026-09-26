@@ -43,7 +43,9 @@ use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::utils::JoinFilter;
-use datafusion_physical_plan::joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode};
+use datafusion_physical_plan::joins::{
+    HashJoinExec, HashJoinExecBuilder, NestedLoopJoinExec, PartitionMode,
+};
 use datafusion_physical_plan::operator_statistics::{
     ClosureStatisticsProvider, StatisticsRegistry, StatisticsResult,
 };
@@ -1426,6 +1428,7 @@ pub struct StatisticsExec {
     stats: Statistics,
     schema: Arc<Schema>,
     cache: Arc<PlanProperties>,
+    probe_side: Option<Arc<dyn ExecutionPlan>>,
 }
 
 impl StatisticsExec {
@@ -1440,7 +1443,14 @@ impl StatisticsExec {
             stats,
             schema: Arc::new(schema),
             cache: Arc::new(cache),
+            probe_side: None,
         }
+    }
+
+    /// Makes [`ExecutionPlan::as_probe_side`] return `probe_side`.
+    fn with_probe_side(mut self, probe_side: Arc<dyn ExecutionPlan>) -> Self {
+        self.probe_side = Some(probe_side);
+        self
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -1515,6 +1525,10 @@ impl ExecutionPlan for StatisticsExec {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         unimplemented!("This plan only serves for testing statistics")
+    }
+
+    fn as_probe_side(&self) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(self.probe_side.clone())
     }
 
     fn statistics_from_inputs(
@@ -1967,5 +1981,35 @@ fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
             )
         );
     }
+    Ok(())
+}
+
+#[rstest]
+#[case(PartitionMode::CollectLeft, false)]
+#[case(PartitionMode::Auto, false)]
+#[case(PartitionMode::Partitioned, true)]
+fn test_collect_left_swap_uses_as_probe_side(
+    #[case] mode: PartitionMode,
+    #[case] null_aware: bool,
+) -> Result<()> {
+    let (_, small) = create_big_and_small();
+    let schema = Schema::new(vec![Field::new("big_col", DataType::Int32, false)]);
+    let probe: Arc<dyn ExecutionPlan> =
+        Arc::new(StatisticsExec::new(big_statistics(), schema.clone()));
+    let big: Arc<dyn ExecutionPlan> = Arc::new(
+        StatisticsExec::new(big_statistics(), schema).with_probe_side(Arc::clone(&probe)),
+    );
+    let on = vec![(
+        col("big_col", &big.schema())?,
+        col("small_col", &small.schema())?,
+    )];
+    let join = HashJoinExecBuilder::new(big, small, on, JoinType::LeftAnti)
+        .with_partition_mode(mode)
+        .with_null_aware(null_aware)
+        .build_exec()?;
+
+    let optimized = JoinSelection::new().optimize(join, &ConfigOptions::new())?;
+    let swapped = optimized.downcast_ref::<HashJoinExec>().unwrap();
+    assert!(Arc::ptr_eq(swapped.right(), &probe));
     Ok(())
 }

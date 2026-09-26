@@ -503,6 +503,13 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
         Ok(None)
     }
 
+    /// Called when a `CollectLeft` hash join swap moves this plan to the probe side.
+    /// Returns a replacement, e.g. restoring partitioning collapsed for the build
+    /// side, or `None` (the default) to keep this plan.
+    fn as_probe_side(&self) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(None)
+    }
+
     /// Begin execution of `partition`, returning a [`Stream`] of
     /// [`RecordBatch`]es.
     ///
