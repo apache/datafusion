@@ -42,6 +42,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::instant::Instant;
 use datafusion_common::{Result, internal_err};
+use datafusion_physical_expr::expressions::PRE_SELECTION_THRESHOLD;
 use datafusion_physical_expr::filter_stats::{FilterCost, duration_nanos};
 use datafusion_physical_expr::optional_filter_gate::GateDecision;
 use datafusion_physical_expr::projection::{ProjectionExprs, Projector};
@@ -89,13 +90,15 @@ fn projector_input_indices(
 /// repaid by the (smaller) saving on the conjuncts that follow, so the masks are
 /// just combined with a cheap bitwise `AND` instead.
 ///
-/// The threshold is higher than the equivalent constant in `FilterExec`'s
-/// adaptive evaluator because the post-scan filter's conjunct mix is skewed:
-/// the conjuncts that land here at `pushdown_filters = false` are typically a
-/// cheap static range predicate followed by a *much* more expensive dynamic
-/// filter (a `CASE` over per-partition hash-table probes), so even a modest
-/// reduction in the row count reaching the later conjunct pays for the copy.
-const COMPACTION_SELECTIVITY_THRESHOLD: f64 = 0.8;
+/// This is the pre-selection threshold of `AND` in `BinaryExpr`, which a
+/// `FilterExec` uses: the post-scan filter makes the same copy decision as
+/// the `FilterExec` that it replaces. The copy is of all the columns of the
+/// working batch (the output columns and the filter columns), and the caller
+/// copies the surviving rows again when it applies the final mask. With a
+/// higher threshold, a cheap range predicate that keeps half of the rows
+/// (TPC-DS Q82 on `inventory`) made the post-scan filter cost 6x the
+/// predicate evaluation, and 2x the `FilterExec` of main.
+const COMPACTION_SELECTIVITY_THRESHOLD: f64 = PRE_SELECTION_THRESHOLD as f64;
 
 /// Outcome of running the post-scan predicate over one decoded batch.
 ///
@@ -188,10 +191,15 @@ impl PostScanFilter {
                 gate,
             } = &self.conjuncts[index];
             let rows_in = working.num_rows();
+            // The rows of the working batch that the conjuncts before this one
+            // let pass. Without a compaction, the working batch also has the
+            // rows that they removed: the measurements of this conjunct do
+            // not count those rows.
+            let live_in = acc.as_ref().map_or(rows_in, |live| live.true_count());
             // An optional conjunct that its gate skips lets all rows pass.
             let mut gate = gate.as_ref().map(|gate| gate.lock());
             if let Some(gate) = gate.as_mut()
-                && gate.begin_batch(rows_in) == GateDecision::Skip
+                && gate.begin_batch(live_in) == GateDecision::Skip
             {
                 continue;
             }
@@ -209,14 +217,30 @@ impl PostScanFilter {
                 Some(_) => prep_null_mask_filter(mask),
                 None => mask.clone(),
             };
-            if let (Some(stages), Some(stats), Some(measure_start)) =
-                (stages.as_ref(), stats, measure_start)
+            let nanos = measure_start.map(|start| duration_nanos(start.elapsed()));
+            let gate_nanos = gate
+                .as_ref()
+                .zip(start)
+                .map(|(gate, start)| gate.now_nanos().saturating_sub(start));
+            // For the measurements, the rows that the conjuncts before this
+            // one removed pass: this conjunct did not remove them.
+            let measured =
+                (nanos.is_some() || gate_nanos.is_some()).then(|| match &acc {
+                    Some(live) => {
+                        BooleanArray::new(mask.values() | &!live.values(), None)
+                    }
+                    None => mask.clone(),
+                });
+            if let (Some(stages), Some(stats), Some(nanos), Some(measured)) =
+                (stages.as_ref(), stats, nanos, measured.as_ref())
             {
-                stages.record(stats, &mask, duration_nanos(measure_start.elapsed()));
+                stages.record(stats, measured, nanos);
             }
-            if let (Some(gate), Some(start)) = (gate.as_mut(), start) {
-                let elapsed = gate.now_nanos().saturating_sub(start);
-                gate.record(rows_in, mask.true_count(), Duration::from_nanos(elapsed));
+            if let (Some(gate), Some(gate_nanos), Some(measured)) =
+                (gate.as_mut(), gate_nanos, measured.as_ref())
+            {
+                let live_out = measured.true_count() - (rows_in - live_in);
+                gate.record(live_in, live_out, Duration::from_nanos(gate_nanos));
             }
             drop(gate);
             // An all-true conjunct leaves the accumulated selection untouched.
@@ -708,27 +732,27 @@ mod tests {
     /// removed count as passing.
     #[test]
     fn measures_skippable_rows_on_input_positions() {
-        // (a % 4) = 0: keeps every fourth row, no empty window. The loop then
-        // compacts the batch to 64 rows.
-        let every_fourth: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        // (a % 8) = 0: keeps every eighth row, no empty window. The loop then
+        // compacts the batch to 32 rows.
+        let every_eighth: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
             Arc::new(BinaryExpr::new(
                 Arc::new(Column::new("a", 0)),
                 Operator::Modulo,
-                Arc::new(Literal::new(ScalarValue::Int32(Some(4)))),
+                Arc::new(Literal::new(ScalarValue::Int32(Some(8)))),
             )),
             Operator::Eq,
             Arc::new(Literal::new(ScalarValue::Int32(Some(0)))),
         ));
-        // b > 127: removes the first 32 rows of the compacted batch, that is
+        // b > 127: removes the first 16 rows of the compacted batch, that is
         // the live rows of the input rows 0..128. In the compacted batch this
-        // is half of one window of 64 rows.
+        // is part of one window of 64 rows.
         let upper_half = gt("b", 1, 127);
         let first = Arc::new(ConjunctStats::default());
         let second = Arc::new(ConjunctStats::default());
         let filter = PostScanFilter {
             conjuncts: vec![
                 PostScanConjunct {
-                    expr: every_fourth,
+                    expr: every_eighth,
                     stats: Some(Arc::clone(&first)),
                     gate: None,
                 },
@@ -743,14 +767,14 @@ mod tests {
             eval_time: Time::new(),
         };
         let rows = survivors(&filter, batch((0..256).map(Some).collect()));
-        assert_eq!(rows, (128..256).step_by(4).map(Some).collect::<Vec<_>>());
+        assert_eq!(rows, (128..256).step_by(8).map(Some).collect::<Vec<_>>());
 
         let first = first.observation();
         assert_eq!(
             (first.rows_in, first.rows_out, first.skippable_rows),
-            (256, 64, 0)
+            (256, 32, 0)
         );
-        // The first conjunct keeps 25% of the rows: the loop copies the
+        // The first conjunct keeps 12.5% of the rows: the loop copies the
         // working batch after it, and measures the copy for it.
         assert_eq!(first.post_scan_rows, 256);
         assert!(first.copy_nanos > 0);
@@ -758,7 +782,49 @@ mod tests {
         let second = second.observation();
         assert_eq!(
             (second.rows_in, second.rows_out, second.skippable_rows),
-            (256, 256 - 32, 0)
+            (256, 256 - 16, 0)
+        );
+    }
+
+    /// Without a compaction, the working batch still has the rows that an
+    /// earlier conjunct removed. A later conjunct does not get the credit
+    /// for these rows: they count as passing in its measurements.
+    #[test]
+    fn measures_only_live_rows_without_compaction() {
+        // a > 127 keeps half of the rows: no compaction.
+        let first = Arc::new(ConjunctStats::default());
+        // b > 63 removes the rows 0..64, which the first conjunct removed.
+        let second = Arc::new(ConjunctStats::default());
+        let filter = PostScanFilter {
+            conjuncts: vec![
+                PostScanConjunct {
+                    expr: gt("a", 0, 127),
+                    stats: Some(Arc::clone(&first)),
+                    gate: None,
+                },
+                PostScanConjunct {
+                    expr: gt("b", 1, 63),
+                    stats: Some(Arc::clone(&second)),
+                    gate: None,
+                },
+            ],
+            rows_pruned: Count::new(),
+            rows_matched: Count::new(),
+            eval_time: Time::new(),
+        };
+        let rows = survivors(&filter, batch((0..256).map(Some).collect()));
+        assert_eq!(rows, (128..256).map(Some).collect::<Vec<_>>());
+
+        let first = first.observation();
+        assert_eq!(
+            (first.rows_in, first.rows_out, first.skippable_rows),
+            (256, 128, 128)
+        );
+        assert_eq!(first.copy_nanos, 0);
+        let second = second.observation();
+        assert_eq!(
+            (second.rows_in, second.rows_out, second.skippable_rows),
+            (256, 256, 0)
         );
     }
 
