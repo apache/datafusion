@@ -213,6 +213,73 @@ impl StatisticsContext {
     /// Computes the [`ExtendedStatistics`] for `plan`: the core statistics plus
     /// any extensions a provider attached to this node (see the type-level docs
     /// for how extensions propagate up the tree).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{DataType, Field, Schema};
+    /// # use datafusion_common::{ColumnStatistics, Result, Statistics};
+    /// # use datafusion_common::stats::Precision;
+    /// # use datafusion_physical_plan::ExecutionPlan;
+    /// # use datafusion_physical_plan::operator_statistics::{
+    /// #     ExtendedStatistics, StatisticsProvider, StatisticsRegistry, StatisticsResult,
+    /// # };
+    /// # use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+    /// # use datafusion_physical_plan::test::exec::StatisticsExec;
+    ///
+    /// // Pearson correlation between two columns, identified by schema index.
+    /// #[derive(Debug, Clone)]
+    /// struct ColumnCorrelation {
+    ///     columns: (usize, usize),
+    ///     coefficient: f64,
+    /// }
+    ///
+    /// #[derive(Debug)]
+    /// struct CorrelationProvider;
+    ///
+    /// impl StatisticsProvider for CorrelationProvider {
+    ///     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
+    ///         plan.downcast_ref::<StatisticsExec>().is_some()
+    ///     }
+    ///
+    ///     fn compute_statistics(
+    ///         &self,
+    ///         plan: &dyn ExecutionPlan,
+    ///         _child_stats: &[ExtendedStatistics],
+    ///     ) -> Result<StatisticsResult> {
+    ///         let base = plan.statistics_from_inputs(&[], &StatisticsArgs::new())?;
+    ///         let mut extended = ExtendedStatistics::new_arc(base);
+    ///         extended.set_extension(ColumnCorrelation {
+    ///             columns: (0, 1),
+    ///             coefficient: 0.92,
+    ///         });
+    ///         Ok(StatisticsResult::Computed(extended))
+    ///     }
+    /// }
+    ///
+    /// let schema = Schema::new(vec![
+    ///     Field::new("city", DataType::Utf8, false),
+    ///     Field::new("zip_code", DataType::Utf8, false),
+    /// ]);
+    /// let stats = Statistics {
+    ///     num_rows: Precision::Exact(1000),
+    ///     total_byte_size: Precision::Absent,
+    ///     column_statistics: vec![ColumnStatistics::new_unknown(); 2],
+    /// };
+    /// let plan = StatisticsExec::new(stats, schema);
+    ///
+    /// let mut registry = StatisticsRegistry::new();
+    /// registry.register(Arc::new(CorrelationProvider));
+    /// let context = StatisticsContext::new_with_registry(registry);
+    ///
+    /// let extended = context.compute_extended(&plan, &StatisticsArgs::new())?;
+    /// assert_eq!(extended.base().num_rows, Precision::Exact(1000));
+    ///
+    /// let correlation = extended.get_extension::<ColumnCorrelation>().unwrap();
+    /// assert_eq!(correlation.columns, (0, 1));
+    /// # Ok::<(), datafusion_common::DataFusionError>(())
+    /// ```
     pub fn compute_extended(
         &self,
         plan: &dyn ExecutionPlan,
