@@ -86,7 +86,7 @@ use datafusion_common::{Result, Statistics};
 use crate::ExecutionPlan;
 use crate::aggregates::{AggregateExec, AggregateMode};
 use crate::execution_plan::CardinalityEffect;
-use crate::filter::FilterExec;
+use crate::filter::{FilterExec, null_check_column};
 use crate::joins::{CrossJoinExec, HashJoinExec, JoinOnRef, SortMergeJoinExec};
 use crate::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::projection::ProjectionExec;
@@ -562,9 +562,34 @@ fn rescale_byte_size(stats: &mut Statistics, new_num_rows: Precision<usize>) {
     };
 }
 
+/// Rescale column null counts to `new_num_rows`, keeping each null fraction
+/// from the original estimate. A count stays exact only when the row count
+/// does not change, or when it is zero, and never exceeds the new row count.
+fn rescale_null_counts(stats: &mut Statistics, new_num_rows: Precision<usize>) {
+    let old_rows = stats.num_rows;
+    if old_rows == new_num_rows {
+        return;
+    }
+    for column_stats in &mut stats.column_statistics {
+        column_stats.null_count = match (
+            column_stats.null_count,
+            old_rows.get_value(),
+            new_num_rows.get_value(),
+        ) {
+            (Precision::Exact(0), _, _) => Precision::Exact(0),
+            (null_count, Some(&old), Some(&new)) if old > 0 => null_count
+                .map(|nulls| (nulls as f64 * new as f64 / old as f64).round() as usize)
+                .to_inexact()
+                .min(&new_num_rows),
+            (null_count, _, _) => null_count.to_inexact(),
+        };
+    }
+}
+
 /// Overrides the operator's built-in output statistics (computed from the
 /// pre-resolved `child_stats`) with `num_rows`, rescaling `total_byte_size`
-/// proportionally. Used by providers that refine only the row count.
+/// and null counts proportionally. Used by providers that refine only the row
+/// count.
 fn computed_with_row_count(
     plan: &dyn ExecutionPlan,
     num_rows: Precision<usize>,
@@ -577,6 +602,7 @@ fn computed_with_row_count(
     let mut base = Arc::unwrap_or_clone(
         plan.statistics_from_inputs(&child_base, &StatisticsArgs::new())?,
     );
+    rescale_null_counts(&mut base, num_rows);
     rescale_byte_size(&mut base, num_rows);
     Ok(StatisticsResult::Computed(ExtendedStatistics::new(base)))
 }
@@ -620,6 +646,13 @@ impl StatisticsProvider for FilterStatisticsProvider {
             // TODO: pass filter.expression_analyzer_registry() once #21122 lands
         )?;
 
+        // `IS NOT NULL` keeps every non-null value of its column, so the
+        // helper's distinct count for that column stands.
+        let all_values_kept = match null_check_column(filter.predicate()) {
+            Some((column, false)) => Some(column),
+            _ => None,
+        };
+
         // Adjust distinct_count for each column using the selectivity ratio
         // via the probabilistic survival model from
         // ndv_after_selectivity to account for rows removed by the filter.
@@ -629,7 +662,14 @@ impl StatisticsProvider for FilterStatisticsProvider {
             && filtered_rows < orig_rows
         {
             let selectivity = filtered_rows as f64 / orig_rows as f64;
-            for col_stat in &mut stats.column_statistics {
+            for (idx, col_stat) in stats.column_statistics.iter_mut().enumerate() {
+                // Skip the `IS NOT NULL` column, whose values all survive, and
+                // an exact zero, which cannot shrink.
+                if all_values_kept == Some(idx)
+                    || col_stat.distinct_count == Precision::Exact(0)
+                {
+                    continue;
+                }
                 if let Some(&ndv) = col_stat.distinct_count.get_value() {
                     let adjusted = ndv_after_selectivity(ndv, orig_rows, selectivity);
                     col_stat.distinct_count = Precision::Inexact(adjusted);
@@ -637,6 +677,7 @@ impl StatisticsProvider for FilterStatisticsProvider {
             }
         }
 
+        let stats = filter.statistics_with_fetch(stats, None)?;
         let stats = stats.project(filter.projection().as_ref());
         Ok(StatisticsResult::Computed(ExtendedStatistics::new(stats)))
     }
@@ -1795,6 +1836,50 @@ mod tests {
     }
 
     #[test]
+    fn test_filter_is_null_column_stats_with_missing_counts() -> Result<()> {
+        use crate::filter::FilterExecBuilder;
+        use Precision::{Absent, Exact};
+        use datafusion_physical_expr::expressions::is_null;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(FilterStatisticsProvider)]);
+        for num_rows in [Exact(100), Absent] {
+            for null_count in [Exact(30), Absent] {
+                let source: Arc<dyn ExecutionPlan> =
+                    Arc::new(MockSourceExec::with_column_stats(
+                        Arc::clone(&schema),
+                        num_rows,
+                        vec![ColumnStatistics {
+                            null_count,
+                            distinct_count: Exact(50),
+                            min_value: Exact(ScalarValue::Int32(Some(1))),
+                            max_value: Exact(ScalarValue::Int32(Some(50))),
+                            sum_value: Exact(ScalarValue::Int64(Some(1000))),
+                            ..Default::default()
+                        }],
+                    ));
+                for fetch in [None, Some(10)] {
+                    let filter = FilterExecBuilder::new(
+                        is_null(col("a", &schema)?)?,
+                        Arc::clone(&source),
+                    )
+                    .with_fetch(fetch)
+                    .build()?;
+                    let stats = compute(&registry, &filter)?;
+                    let column = &stats.base.column_statistics[0];
+                    assert_eq!(column.distinct_count, Exact(0));
+                    assert_eq!(column.null_count, stats.base.num_rows);
+                    assert_eq!(column.min_value, Absent);
+                    assert_eq!(column.max_value, Absent);
+                    assert_eq!(column.sum_value, Absent);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_filter_adjusts_ndv_by_selectivity() -> Result<()> {
         use datafusion_common::ScalarValue;
         use datafusion_expr::Operator;
@@ -2304,6 +2389,137 @@ mod tests {
         let stats = compute(&registry, join.as_ref())?;
         assert_eq!(stats.base.num_rows, Precision::Inexact(10_000));
         Ok(())
+    }
+
+    #[test]
+    fn test_join_null_counts_follow_projection_and_swap() -> Result<()> {
+        // Left: 1000 rows, NDV 100, NULLs: 20 in `a`, 50 in `b`.
+        // Right: 10 rows, NDV 10, NULLs: 1 in `a`, 2 in `b`.
+        // The inner join estimates 100 pairs. The semi join estimates 98
+        // matching left rows, so the left join pads 902 right-side rows.
+        let schema = make_schema();
+        let source = |num_rows: usize, ndv: usize, null_counts: [usize; 2]| {
+            let col_stats = null_counts
+                .iter()
+                .map(|&null_count| ColumnStatistics {
+                    null_count: Precision::Exact(null_count),
+                    distinct_count: Precision::Exact(ndv),
+                    ..ColumnStatistics::new_unknown()
+                })
+                .collect();
+            Arc::new(MockSourceExec::with_column_stats(
+                Arc::clone(&schema),
+                Precision::Exact(num_rows),
+                col_stats,
+            )) as Arc<dyn ExecutionPlan>
+        };
+        let on: JoinOn = vec![(
+            Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+        )];
+        // The projection outputs right `b`, left `a`, then right `a`.
+        let join = HashJoinExec::try_new(
+            source(1000, 100, [20, 50]),
+            source(10, 10, [1, 2]),
+            on,
+            None,
+            &JoinType::Left,
+            Some(vec![3, 0, 2]),
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?;
+        // Swapping the inputs turns the join into a right join with the same
+        // output columns.
+        let swapped = join.swap_inputs(PartitionMode::CollectLeft)?;
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(JoinStatisticsProvider)]);
+        // The preserved key keeps its 20 NULLs only as an estimate, since
+        // per-partition statistics cannot place the unmatched rows.
+        let expected = vec![
+            Precision::Inexact(922),
+            Precision::Inexact(20),
+            Precision::Inexact(902),
+        ];
+        for plan in [Arc::new(join) as Arc<dyn ExecutionPlan>, swapped] {
+            let built_in = StatisticsContext::new()
+                .compute(plan.as_ref(), &StatisticsArgs::new())?;
+            let per_partition = StatisticsContext::new().compute(
+                plan.as_ref(),
+                &StatisticsArgs::new().with_partition(Some(0)),
+            )?;
+            let provided = compute(&registry, plan.as_ref())?;
+            for stats in [built_in.as_ref(), per_partition.as_ref()] {
+                let null_counts: Vec<_> = stats
+                    .column_statistics
+                    .iter()
+                    .map(|column_stats| column_stats.null_count)
+                    .collect();
+                assert_eq!(null_counts, expected, "{}", plan.name());
+            }
+            // The provider uses 1000 output rows instead of 1002 and rescales
+            // the counts to that estimate after applying the same projection.
+            let null_counts: Vec<_> = provided
+                .base
+                .column_statistics
+                .iter()
+                .map(|column| column.null_count)
+                .collect();
+            assert_eq!(
+                null_counts,
+                vec![
+                    Precision::Inexact(920),
+                    Precision::Inexact(20),
+                    Precision::Inexact(900)
+                ]
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_rescale_null_counts() {
+        let null_counts = |stats: &Statistics| -> Vec<_> {
+            stats
+                .column_statistics
+                .iter()
+                .map(|column_stats| column_stats.null_count)
+                .collect()
+        };
+        let mut stats = Statistics {
+            num_rows: Precision::Inexact(5000),
+            total_byte_size: Precision::Absent,
+            column_statistics: [
+                Precision::Exact(0),
+                Precision::Exact(100),
+                Precision::Inexact(4000),
+                Precision::Inexact(6000),
+                Precision::Absent,
+            ]
+            .into_iter()
+            .map(|null_count| ColumnStatistics {
+                null_count,
+                ..ColumnStatistics::new_unknown()
+            })
+            .collect(),
+        };
+        let unchanged = null_counts(&stats);
+        rescale_null_counts(&mut stats, Precision::Inexact(5000));
+        assert_eq!(null_counts(&stats), unchanged);
+
+        // A provider that lowers the row count keeps each null fraction, and
+        // an inconsistent count cannot exceed the new row count.
+        rescale_null_counts(&mut stats, Precision::Inexact(1000));
+        assert_eq!(
+            null_counts(&stats),
+            vec![
+                Precision::Exact(0),
+                Precision::Inexact(20),
+                Precision::Inexact(800),
+                Precision::Inexact(1000),
+                Precision::Absent,
+            ]
+        );
     }
 
     #[test]

@@ -294,6 +294,61 @@ physical_plan
 01)ProjectionExec: expr=[CAST(a@0 AS Int64) as cast_statistics.a], statistics=[Rows=Exact(2), Bytes=Exact(16), [(Col[0]: Null=Exact(1))]]
 02)--DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(2), Bytes=Exact(176), [(Col[0]: Null=Exact(1))]]
 
+# Null checks use the input null count instead of the default selectivity.
+statement ok
+CREATE TABLE null_check_statistics(a INT) AS VALUES (1), (NULL), (2), (3), (NULL);
+
+query TT
+EXPLAIN SELECT a FROM null_check_statistics WHERE a IS NULL;
+----
+physical_plan
+01)FilterExec: a@0 IS NULL, statistics=[Rows=Exact(2), Bytes=Inexact(77), [(Col[0]: Null=Exact(2) Distinct=Exact(0))]]
+02)--DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(5), Bytes=Exact(192), [(Col[0]: Null=Exact(2))]]
+
+query TT
+EXPLAIN SELECT a FROM null_check_statistics WHERE a IS NOT NULL;
+----
+physical_plan
+01)FilterExec: a@0 IS NOT NULL, statistics=[Rows=Exact(3), Bytes=Inexact(116), [(Col[0]: Null=Exact(0))]]
+02)--DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(5), Bytes=Exact(192), [(Col[0]: Null=Exact(2))]]
+
+query II
+SELECT COUNT(*), COUNT(a) FROM null_check_statistics WHERE a IS NULL;
+----
+2 0
+
+query II
+SELECT COUNT(*), COUNT(a) FROM null_check_statistics WHERE a IS NOT NULL;
+----
+3 3
+
+# An outer join adds NULLs that the input null counts do not include, so a null
+# check above it must not give an exact row count.
+statement ok
+CREATE TABLE null_check_join(a INT) AS VALUES (1);
+
+query I
+SELECT COUNT(*) FROM null_check_statistics t LEFT JOIN null_check_join j ON t.a = j.a WHERE j.a IS NULL;
+----
+4
+
+query I
+SELECT COUNT(*) FROM null_check_statistics t FULL JOIN null_check_join j ON t.a = j.a WHERE j.a IS NULL;
+----
+4
+
+# The padded column's null count includes the estimated unmatched rows, so the
+# filter does not estimate zero rows. The preserved key keeps its NULLs.
+query TT
+EXPLAIN SELECT t.a FROM null_check_statistics t LEFT JOIN null_check_join j ON t.a = j.a WHERE j.a IS NULL;
+----
+physical_plan
+01)FilterExec: a@1 IS NULL, projection=[a@0], statistics=[Rows=Inexact(4), Bytes=Absent, [(Col[0]: Null=Inexact(2))]]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, statistics=[Rows=Inexact(5), Bytes=Absent, [(Col[0]: Null=Inexact(2)),(Col[1]: Null=Inexact(4))]]
+03)----HashJoinExec: mode=CollectLeft, join_type=Right, on=[(a@0, a@0)], projection=[a@1, a@0], statistics=[Rows=Inexact(5), Bytes=Absent, [(Col[0]: Null=Inexact(2)),(Col[1]: Null=Inexact(4))]]
+04)------DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(1), Bytes=Exact(112), [(Col[0]: Null=Exact(0))]]
+05)------DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(5), Bytes=Exact(192), [(Col[0]: Null=Exact(2))]]
+
 # CSV scan with empty statistics
 query TT
 EXPLAIN SELECT a, b, c FROM simple_explain_test limit 10;
