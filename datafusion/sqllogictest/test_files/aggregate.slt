@@ -1190,6 +1190,17 @@ FROM distinct_pct_nulls ORDER BY id;
 statement ok
 DROP TABLE distinct_pct_nulls;
 
+# Regression test for https://github.com/apache/datafusion/issues/25267
+# The finite endpoints have an overflowing difference, but their median is finite.
+query R
+SELECT percentile_cont(x, 0.5)
+FROM (VALUES
+  (CAST(-1.7976931348623157e308 AS DOUBLE)),
+  (CAST( 1.7976931348623157e308 AS DOUBLE))
+) AS t(x);
+----
+0
+
 # percentile_cont for shorter floats
 
 query RT
