@@ -279,6 +279,24 @@ async fn run_examples(ctx: &SessionContext) -> Result<()> {
     +---------+---------+---------+---------+
     ");
 
+    // Verify that relation and column aliases wrap the sampled relation once.
+    let plan = ctx
+        .sql(
+            "SELECT * FROM sample_data AS sampled(first, second) \
+             TABLESAMPLE (3 ROWS)",
+        )
+        .await?
+        .logical_plan()
+        .display_indent()
+        .to_string();
+    assert_snapshot!(plan, @r"
+    Projection: sampled.first, sampled.second
+      SubqueryAlias: sampled
+        Projection: sample_data.column1 AS first, sample_data.column2 AS second
+          Limit: skip=0, fetch=3
+            TableScan: sample_data
+    ");
+
     Ok(())
 }
 
@@ -373,10 +391,13 @@ impl RelationPlanner for TableSamplePlanner {
             })
             .transpose()?;
 
-        // Plan the underlying table without the sample clause
+        // Plan the underlying table without the sample clause or alias. The
+        // alias belongs to the complete TABLESAMPLE relation, so we return it
+        // with `PlannedRelation` below and let DataFusion apply it once, after
+        // the sampling node has been added.
         let base_relation = TableFactor::Table {
             sample: None,
-            alias: alias.clone(),
+            alias: None,
             name,
             args,
             with_hints,
