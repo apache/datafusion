@@ -3669,8 +3669,9 @@ mod tests {
         }
     }
 
-    /// The default session state wires `EnforceDistribution` as the physical
-    /// analyzer; ordering/optimization run in the optimizer phase.
+    /// The default session state wires `EnforceDistribution` as the sole physical
+    /// analyzer (enforcement runs first, and parallelizes top-level scans itself);
+    /// ordering/optimization run in the optimizer phase.
     #[test]
     fn default_session_wires_enforce_distribution_as_analyzer() {
         let state = make_session_state();
@@ -4954,7 +4955,22 @@ mod tests {
         .aggregate(vec![col("d1")], vec![sum(col("d2"))])?
         .build()?;
 
-        let execution_plan = plan(&logical_plan).await?;
+        // Force the tiny input to be partitioned (a `batch_size` of 1 makes the
+        // 6-row scan exceed a batch, so it is parallelized) so this test still
+        // exercises the partitioned-aggregation path. Distribution enforcement
+        // now parallelizes purely on estimated row count, so a table smaller
+        // than one batch would otherwise run single-partition (`Final`).
+        let config = SessionConfig::new()
+            .with_target_partitions(4)
+            .with_batch_size(1);
+        let session_state = SessionStateBuilder::new()
+            .with_config(config)
+            .with_default_features()
+            .build();
+        let logical_plan = session_state.optimize(&logical_plan)?;
+        let execution_plan = DefaultPhysicalPlanner::default()
+            .create_physical_plan(&logical_plan, &session_state)
+            .await?;
         let formatted = format!("{execution_plan:?}");
 
         // Make sure the plan contains a FinalPartitioned, which means it will not use the Final

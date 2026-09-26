@@ -47,21 +47,17 @@ impl Default for PhysicalAnalyzer {
 impl PhysicalAnalyzer {
     /// Create a new analyzer using the recommended list of rules
     pub fn new() -> Self {
-        let rules: Vec<Arc<dyn PhysicalAnalyzerRule + Send + Sync>> = vec![
-            // Enforces the distribution requirements declared by
-            // `ExecutionPlan::required_input_distribution` (inserting the
-            // repartition / coalesce operators needed for a valid, parallel
-            // plan). It runs first so the optimizer rules see a
-            // distribution-valid plan; the optimizer phase re-runs it after any
-            // rule that changes distribution (e.g. `JoinSelection`).
-            //
-            // Ordering enforcement (`EnforceSorting`) and the sort optimizations
-            // (`OptimizeSorts`) run later in the optimizer phase, not here,
-            // because ordering enforcement is not idempotent and depends on
-            // rules like `JoinSelection` / `WindowTopN` having run first.
-            Arc::new(EnforceDistribution::new()),
-        ];
-
+        // Enforcement runs first, as an analyzer, making the plan
+        // distribution-valid before any optimizer rule sees it. `EnforceDistribution`
+        // is self-contained: it parallelizes top-level scans itself, so no
+        // `OutputRequirements` boundary rule is needed here. The only optimizer
+        // rules that change the required distribution (`JoinSelection`,
+        // `WindowTopN`) re-establish it themselves, so it is enforced exactly once
+        // here. Ordering enforcement (`EnforceSorting`) and the sort optimizations
+        // (`OptimizeSorts`) still run in the optimizer phase (ordering enforcement
+        // is not idempotent and reads the settled partitioning).
+        let rules: Vec<Arc<dyn PhysicalAnalyzerRule + Send + Sync>> =
+            vec![Arc::new(EnforceDistribution::new())];
         Self::with_rules(rules)
     }
 
@@ -76,9 +72,12 @@ mod tests {
     use super::*;
     use crate::optimizer::PhysicalOptimizer;
 
-    /// The default analyzer enforces distribution via `EnforceDistribution`.
+    /// Enforcement runs first, as the analyzer: distribution is enforced before
+    /// any optimizer rule runs. `EnforceDistribution` is the sole analyzer rule
+    /// (it parallelizes top-level scans itself, so no `OutputRequirements`
+    /// boundary rule is needed here).
     #[test]
-    fn default_analyzer_enforces_distribution() {
+    fn default_analyzer_enforces_distribution_first() {
         let analyzer = PhysicalAnalyzer::new();
         let names: Vec<&str> = analyzer.rules.iter().map(|r| r.name()).collect();
         assert_eq!(names, vec!["EnforceDistribution"]);
@@ -99,32 +98,41 @@ mod tests {
         assert!(!analyzer_has && !optimizer_has);
     }
 
-    /// The default optimizer runs the decomposed enforcement/optimization rules
-    /// in the required relative order: `EnforceDistribution` → `EnforceSorting`
-    /// → `OptimizeSorts`.
+    /// Distribution is enforced once, in the analyzer; the optimizer keeps only
+    /// ordering enforcement and the sort optimizations, in order
+    /// `EnforceSorting` → `OptimizeSorts`. `EnforceDistribution` is not a
+    /// standalone optimizer rule any more (`JoinSelection` / `WindowTopN`
+    /// re-establish distribution themselves).
     #[test]
-    fn default_optimizer_has_decomposed_rules_in_order() {
+    fn default_optimizer_has_sorting_rules_in_order_without_enforce_distribution() {
         let names: Vec<String> = PhysicalOptimizer::new()
             .rules
             .iter()
             .map(|r| r.name().to_string())
             .collect();
+        assert!(
+            !names.iter().any(|n| n == "EnforceDistribution"),
+            "EnforceDistribution should not be a standalone optimizer rule, got {names:?}"
+        );
         let pos = |name: &str| names.iter().position(|n| n == name);
-        let (d, s, o) = (
-            pos("EnforceDistribution").expect("EnforceDistribution present"),
+        let (s, o) = (
             pos("EnforceSorting").expect("EnforceSorting present"),
             pos("OptimizeSorts").expect("OptimizeSorts present"),
         );
         assert!(
-            d < s && s < o,
-            "expected EnforceDistribution < EnforceSorting < OptimizeSorts, got {names:?}"
+            s < o,
+            "expected EnforceSorting < OptimizeSorts, got {names:?}"
         );
     }
 
-    /// The analyzer rule keeps its schema-check contract on.
+    /// `EnforceDistribution` keeps its schema-check contract on in the analyzer.
     #[test]
     fn enforce_distribution_schema_check_is_on() {
-        let analyzer = PhysicalAnalyzer::new();
-        assert!(analyzer.rules[0].schema_check());
+        let rule = PhysicalAnalyzer::new()
+            .rules
+            .into_iter()
+            .find(|r| r.name() == "EnforceDistribution")
+            .expect("EnforceDistribution present in analyzer");
+        assert!(rule.schema_check());
     }
 }

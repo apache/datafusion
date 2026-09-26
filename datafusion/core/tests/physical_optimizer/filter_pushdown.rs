@@ -134,7 +134,8 @@ fn test_pushdown_volatile_functions_not_allowed() {
       output:
         Ok:
           - FilterExec: a@0 = random()
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+          -   RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     ",
     );
 }
@@ -286,8 +287,10 @@ async fn test_static_filter_pushdown_through_hash_join() {
         Ok:
           - FilterExec: a@0 = d@3
           -   HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, d@0)]
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = aa
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true, predicate=d@0 = aa AND e@1 = ba
+          -     RepartitionExec: partitioning=Hash([a@0], 12), input_partitions=1
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = aa
+          -     RepartitionExec: partitioning=Hash([d@0], 12), input_partitions=1
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true, predicate=d@0 = aa AND e@1 = ba
     "
     );
 
@@ -339,8 +342,10 @@ async fn test_static_filter_pushdown_through_hash_join() {
         Ok:
           - FilterExec: e@4 = ba
           -   HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, d@0)]
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = aa
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true
+          -     RepartitionExec: partitioning=Hash([a@0], 12), input_partitions=1
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = aa
+          -     RepartitionExec: partitioning=Hash([d@0], 12), input_partitions=1
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[d, e, f], file_type=test, pushdown_supported=true
     "
     );
 }
@@ -447,7 +452,8 @@ fn test_filter_collapse_outer_fetch_preserved() {
       output:
         Ok:
           - FilterExec: b@1 = bar AND a@0 = foo, fetch=10
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -   RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     "
     );
 }
@@ -477,7 +483,8 @@ fn test_filter_collapse_inner_fetch_preserved() {
       output:
         Ok:
           - FilterExec: b@1 = bar AND a@0 = foo, fetch=5
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -   RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     "
     );
 }
@@ -513,7 +520,8 @@ fn test_filter_collapse_both_fetch_uses_minimum() {
       output:
         Ok:
           - FilterExec: b@1 = bar AND a@0 = foo, fetch=5
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -   RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     "
     );
 }
@@ -623,7 +631,8 @@ fn test_filter_with_fetch_partially_pushed_to_scan() {
       output:
         Ok:
           - FilterExec: a@0 = random(), fetch=7
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+          -   RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
     "
     );
 }
@@ -680,8 +689,7 @@ fn test_push_down_through_transparent_nodes() {
         -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - RepartitionExec: partitioning=RoundRobinBatch(1), input_partitions=1
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo AND b@1 = bar
+          - DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo AND b@1 = bar
     "
     );
 }
@@ -804,8 +812,9 @@ fn test_pushdown_through_aggregates_preserves_parent_filter_order() {
       output:
         Ok:
           - FilterExec: cnt@2 = 1
-          -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt]
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=b@1 = bar
+          -   RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1
+          -     AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt]
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=b@1 = bar
     "
     );
 }
@@ -829,7 +838,8 @@ fn test_node_handles_child_pushdown_result() {
       output:
         Ok:
           - TestInsertExec { inject_filter: true }
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
+          -   RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
     ",
     );
 
@@ -849,7 +859,8 @@ fn test_node_handles_child_pushdown_result() {
         Ok:
           - TestInsertExec { inject_filter: false }
           -   FilterExec: a@0 = foo
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -     RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     ",
     );
 
@@ -1595,8 +1606,10 @@ fn test_hashjoin_parent_filter_pushdown_same_column_names() {
       output:
         Ok:
           - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(id@0, id@0)]
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, build_val], file_type=test, pushdown_supported=true, predicate=id@0 = aa
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, probe_val], file_type=test, pushdown_supported=true, predicate=id@0 = aa AND probe_val@1 = x
+          -   RepartitionExec: partitioning=Hash([id@0], 12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, build_val], file_type=test, pushdown_supported=true, predicate=id@0 = aa
+          -   RepartitionExec: partitioning=Hash([id@0], 12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, probe_val], file_type=test, pushdown_supported=true, predicate=id@0 = aa AND probe_val@1 = x
     "
     );
 }
@@ -2075,8 +2088,10 @@ fn test_hashjoin_parent_filter_pushdown_mark_join() {
         Ok:
           - FilterExec: mark@2 = true
           -   HashJoinExec: mode=Partitioned, join_type=LeftMark, on=[(id@0, id@0)]
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, val], file_type=test, pushdown_supported=true, predicate=val@1 = x
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id], file_type=test, pushdown_supported=true
+          -     RepartitionExec: partitioning=Hash([id@0], 12), input_partitions=1
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, val], file_type=test, pushdown_supported=true, predicate=val@1 = x
+          -     RepartitionExec: partitioning=Hash([id@0], 12), input_partitions=1
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id], file_type=test, pushdown_supported=true
     "
     );
 }
@@ -2145,8 +2160,10 @@ fn test_hashjoin_parent_filter_pushdown_semi_anti_join() {
       output:
         Ok:
           - HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(k@0, k@0)]
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[k, v], file_type=test, pushdown_supported=true, predicate=k@0 = x AND v@1 = y
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[k, w], file_type=test, pushdown_supported=true, predicate=k@0 = x
+          -   RepartitionExec: partitioning=Hash([k@0], 12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[k, v], file_type=test, pushdown_supported=true, predicate=k@0 = x AND v@1 = y
+          -   RepartitionExec: partitioning=Hash([k@0], 12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[k, w], file_type=test, pushdown_supported=true, predicate=k@0 = x
     "
     );
 
@@ -2250,7 +2267,8 @@ async fn test_hashjoin_parent_filter_transfer_null_equals_null_inner_join() {
         Ok:
           - HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, pid@0)], NullsEqual: true
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, build_val], file_type=test, pushdown_supported=true, predicate=id@0 = aa OR id@0 IS NULL
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[pid, probe_val], file_type=test, pushdown_supported=true, predicate=pid@0 = aa OR pid@0 IS NULL
+          -   RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[pid, probe_val], file_type=test, pushdown_supported=true, predicate=pid@0 = aa OR pid@0 IS NULL
     "
     );
 
@@ -2344,8 +2362,10 @@ fn test_hashjoin_parent_filter_transferred_across_join_keys() {
       output:
         Ok:
           - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(id@0, pid@0)]
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, build_val], file_type=test, pushdown_supported=true, predicate=id@0 = aa AND id@0 = ab AND build_val@1 = x
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[pid, probe_val], file_type=test, pushdown_supported=true, predicate=pid@0 = aa AND pid@0 = ab
+          -   RepartitionExec: partitioning=Hash([id@0], 12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[id, build_val], file_type=test, pushdown_supported=true, predicate=id@0 = aa AND id@0 = ab AND build_val@1 = x
+          -   RepartitionExec: partitioning=Hash([pid@0], 12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[pid, probe_val], file_type=test, pushdown_supported=true, predicate=pid@0 = aa AND pid@0 = ab
     "
     );
 }
@@ -2406,8 +2426,10 @@ fn test_hashjoin_parent_filter_transfer_semi_join_different_key_names() {
       output:
         Ok:
           - HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(k@0, rk@1)]
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[k, v], file_type=test, pushdown_supported=true, predicate=k@0 = x
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[w, rk], file_type=test, pushdown_supported=true, predicate=rk@1 = x
+          -   RepartitionExec: partitioning=Hash([k@0], 12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[k, v], file_type=test, pushdown_supported=true, predicate=k@0 = x
+          -   RepartitionExec: partitioning=Hash([rk@1], 12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[w, rk], file_type=test, pushdown_supported=true, predicate=rk@1 = x
     "
     );
 }
@@ -2468,8 +2490,10 @@ fn test_hashjoin_parent_filter_transfer_right_semi_join_different_key_names() {
       output:
         Ok:
           - HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(k@0, rk@1)]
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[k, v], file_type=test, pushdown_supported=true, predicate=k@0 = x
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[w, rk], file_type=test, pushdown_supported=true, predicate=rk@1 = x
+          -   RepartitionExec: partitioning=Hash([k@0], 12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[k, v], file_type=test, pushdown_supported=true, predicate=k@0 = x
+          -   RepartitionExec: partitioning=Hash([rk@1], 12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[w, rk], file_type=test, pushdown_supported=true, predicate=rk@1 = x
     "
     );
 }
@@ -2529,8 +2553,10 @@ fn test_hashjoin_parent_filter_transfer_semi_join_key_name_shadowed_by_non_key()
       output:
         Ok:
           - HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(k@0, j@0)]
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[k, v], file_type=test, pushdown_supported=true, predicate=k@0 = x
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[j, w, k], file_type=test, pushdown_supported=true, predicate=j@0 = x
+          -   RepartitionExec: partitioning=Hash([k@0], 12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[k, v], file_type=test, pushdown_supported=true, predicate=k@0 = x
+          -   RepartitionExec: partitioning=Hash([j@0], 12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[j, w, k], file_type=test, pushdown_supported=true, predicate=j@0 = x
     "
     );
 
@@ -2573,8 +2599,10 @@ fn test_hashjoin_parent_filter_transfer_semi_join_key_name_shadowed_by_non_key()
       output:
         Ok:
           - HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(j@0, k@0)]
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[j, w, k], file_type=test, pushdown_supported=true, predicate=j@0 = x
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[k, v], file_type=test, pushdown_supported=true, predicate=k@0 = x
+          -   RepartitionExec: partitioning=Hash([j@0], 12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[j, w, k], file_type=test, pushdown_supported=true, predicate=j@0 = x
+          -   RepartitionExec: partitioning=Hash([k@0], 12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[k, v], file_type=test, pushdown_supported=true, predicate=k@0 = x
     "
     );
 }
@@ -2637,8 +2665,10 @@ fn test_hashjoin_parent_filter_transfer_uses_first_on_pair() {
       output:
         Ok:
           - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(k@0, x@0), (k@0, y@1)]
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[k, v], file_type=test, pushdown_supported=true, predicate=k@0 = a
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[x, y], file_type=test, pushdown_supported=true, predicate=x@0 = a
+          -   RepartitionExec: partitioning=Hash([k@0, k@0], 12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[k, v], file_type=test, pushdown_supported=true, predicate=k@0 = a
+          -   RepartitionExec: partitioning=Hash([x@0, y@1], 12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[x, y], file_type=test, pushdown_supported=true, predicate=x@0 = a
     "
     );
 }
@@ -2702,8 +2732,10 @@ fn test_hashjoin_parent_filter_transfer_cast_key_with_projection() {
       output:
         Ok:
           - HashJoinExec: mode=Partitioned, join_type=Inner, on=[(CAST(k@0 AS Int64), j@0)], projection=[j@2]
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[k, v], file_type=test, pushdown_supported=true, predicate=CAST(k@0 AS Int64) = 5
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[j, w], file_type=test, pushdown_supported=true, predicate=j@0 = 5
+          -   RepartitionExec: partitioning=Hash([CAST(k@0 AS Int64)], 12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[k, v], file_type=test, pushdown_supported=true, predicate=CAST(k@0 AS Int64) = 5
+          -   RepartitionExec: partitioning=Hash([j@0], 12), input_partitions=1
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[j, w], file_type=test, pushdown_supported=true, predicate=j@0 = 5
     "
     );
 }
@@ -2914,7 +2946,8 @@ fn test_filter_pushdown_through_union_mixed_support() {
           - UnionExec
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo
           -   FilterExec: a@0 = foo
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -     RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     "
     );
 }
@@ -2932,7 +2965,7 @@ fn test_filter_pushdown_through_union_does_not_support() {
 
     insta::assert_snapshot!(
         OptimizationTest::new(plan, FilterPushdown::new(), true),
-        @"
+        @r"
     OptimizationTest:
       input:
         - FilterExec: a@0 = foo
@@ -2943,9 +2976,11 @@ fn test_filter_pushdown_through_union_does_not_support() {
         Ok:
           - UnionExec
           -   FilterExec: a@0 = foo
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -     RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
           -   FilterExec: a@0 = foo
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -     RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     "
     );
 }
@@ -3041,7 +3076,7 @@ fn test_filter_with_fetch_not_fully_pushed_through_union() {
 
     insta::assert_snapshot!(
         OptimizationTest::new(plan, FilterPushdown::new(), true),
-        @"
+        @r"
     OptimizationTest:
       input:
         - FilterExec: a@0 = foo, fetch=8
@@ -3053,9 +3088,11 @@ fn test_filter_with_fetch_not_fully_pushed_through_union() {
           - LocalLimitExec: fetch=8
           -   UnionExec
           -     FilterExec: a@0 = foo
-          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -       RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1
+          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
           -     FilterExec: a@0 = foo
-          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -       RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1
+          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     "
     );
 }
@@ -3276,8 +3313,9 @@ fn test_no_pushdown_grouping_sets_filter_on_missing_column() {
       output:
         Ok:
           - FilterExec: a@0 = foo
-          -   AggregateExec: mode=Final, gby=[(a@0 as a, b@1 as b), (NULL as a, b@1 as b)], aggr=[cnt]
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+          -   RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1
+          -     AggregateExec: mode=Final, gby=[(a@0 as a, b@1 as b), (NULL as a, b@1 as b)], aggr=[cnt]
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     "
     );
 }
@@ -3653,9 +3691,10 @@ fn test_pushdown_through_aggregate_grouping_sets_with_reordered_input() {
       output:
         Ok:
           - FilterExec: a@0 = foo
-          -   AggregateExec: mode=Final, gby=[(a@1 as a, b@2 as b), (NULL as a, b@2 as b)], aggr=[cnt]
-          -     ProjectionExec: expr=[c@2 as c, a@0 as a, b@1 as b]
-          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
+          -   RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1
+          -     AggregateExec: mode=Final, gby=[(a@1 as a, b@2 as b), (NULL as a, b@2 as b)], aggr=[cnt]
+          -       ProjectionExec: expr=[c@2 as c, a@0 as a, b@1 as b]
+          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     "
     );
 }
@@ -4843,8 +4882,10 @@ fn test_filter_pushdown_through_sort_no_scan_support() {
       output:
         Ok:
           - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-          -   FilterExec: a@0 = foo
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -   CoalescePartitionsExec
+          -     FilterExec: a@0 = foo
+          -       RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1
+          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     "
     );
 }
@@ -4880,8 +4921,10 @@ fn test_multiple_filters_pushdown_through_sort() {
       output:
         Ok:
           - SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-          -   FilterExec: a@0 = foo AND b@1 = bar
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -   CoalescePartitionsExec
+          -     FilterExec: a@0 = foo AND b@1 = bar
+          -       RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1
+          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     "
     );
 }
@@ -4993,8 +5036,10 @@ fn test_filter_with_projection_pushdown_through_sort() {
         Ok:
           - ProjectionExec: expr=[a@0 as a]
           -   SortExec: expr=[a@0 ASC], preserve_partitioning=[false]
-          -     FilterExec: b@1 = bar
-          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -     CoalescePartitionsExec
+          -       FilterExec: b@1 = bar
+          -         RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1
+          -           DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     "
     );
 }
@@ -5029,7 +5074,8 @@ fn test_filter_pushdown_through_sort_preserves_partitioning() {
         Ok:
           - SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
           -   FilterExec: a@0 = foo
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -     RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1
+          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     "
     );
 }
@@ -5066,8 +5112,10 @@ fn test_filter_with_fetch_pushdown_through_sort() {
       output:
         Ok:
           - SortExec: TopK(fetch=10), expr=[a@0 ASC], preserve_partitioning=[false]
-          -   FilterExec: a@0 = foo
-          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -   CoalescePartitionsExec
+          -     FilterExec: a@0 = foo
+          -       RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1
+          -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     "
     );
 }
@@ -5105,8 +5153,10 @@ fn test_filter_pushdown_through_sort_with_projection() {
         Ok:
           - ProjectionExec: expr=[a@0 as a]
           -   SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]
-          -     FilterExec: b@1 = bar
-          -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          -     CoalescePartitionsExec
+          -       FilterExec: b@1 = bar
+          -         RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1
+          -           DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     "
     );
 }

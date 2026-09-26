@@ -51,9 +51,11 @@
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
+use crate::ensure_requirements::enforce_distribution_requirements;
+use crate::optimizer::{ConfigOnlyContext, PhysicalOptimizerContext};
 use arrow::datatypes::DataType;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
@@ -262,11 +264,19 @@ impl PhysicalOptimizerRule for WindowTopN {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if !config.optimizer.enable_window_topn {
+        self.optimize_with_context(plan, &ConfigOnlyContext::new(config))
+    }
+
+    fn optimize_with_context(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        context: &dyn PhysicalOptimizerContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if !context.config_options().optimizer.enable_window_topn {
             return Ok(plan);
         }
 
-        plan.transform_down(|node| {
+        let result = plan.transform_down(|node| {
             Ok(
                 if let Some(transformed) = WindowTopN::try_transform(&node) {
                     Transformed::yes(transformed)
@@ -274,8 +284,19 @@ impl PhysicalOptimizerRule for WindowTopN {
                     Transformed::no(node)
                 },
             )
-        })
-        .data()
+        })?;
+
+        // Only re-enforce when we actually rewrote something: replacing
+        // `Filter -> Window` with `Window -> PartitionedTopKExec` drops the
+        // exchange that satisfied the window's hash-partition requirement, so
+        // the rule that breaks the invariant restores it. If nothing changed,
+        // the plan is already valid and re-enforcing would be a gratuitous
+        // remove-then-rederive pass that can perturb an otherwise stable plan.
+        if result.transformed {
+            enforce_distribution_requirements(result.data, context)
+        } else {
+            Ok(result.data)
+        }
     }
 
     fn name(&self) -> &str {

@@ -237,7 +237,21 @@ pub fn enforce_distribution_requirements(
             Ok(result)
         })
         .data()?;
-    Ok(dist_ctx.plan)
+    let plan = dist_ctx.plan;
+
+    // The bottom-up pass parallelizes a file scan through its parent's per-child
+    // loop. A scan sitting at the very root of the plan (e.g. `SELECT * FROM t`)
+    // has no parent to drive that, so let the source parallelize itself here.
+    // The source decides by its own scan size, and `repartitioned` is a no-op
+    // (returns `None`) for anything that is not a repartitionable source, so this
+    // only ever splits a root scan.
+    if config.optimizer.repartition_file_scans
+        && let Some(split) =
+            plan.repartitioned(config.execution.target_partitions, config)?
+    {
+        return Ok(split);
+    }
+    Ok(plan)
 }
 
 /// Phase 2b: enforce **ordering** requirements by inserting `SortExec`s on a

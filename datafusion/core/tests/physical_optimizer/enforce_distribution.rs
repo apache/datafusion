@@ -2975,25 +2975,15 @@ fn issue_21826_join_selection_after_distribution_pass() -> Result<()> {
     let pass1 = EnsureRequirements::new().optimize(union, &config)?;
     assert!(pass1.is::<InterleaveExec>());
 
-    // Rebuilding the interleave over the swapped join used to fail here with
-    // "Can not create InterleaveExec: new children can not be interleaved".
+    // `JoinSelection` swaps one join's sides, which changes that child's output
+    // partitioning and used to leave the rebuilt interleave invalid until a
+    // second distribution pass repaired it (issue #21826). `JoinSelection` now
+    // re-establishes distribution itself, so its output is already valid: the two
+    // joins no longer share a partitioning, so it becomes a plain union that
+    // passes the sanity checker directly, no follow-up enforcement pass needed.
     let reordered = JoinSelection::new().optimize(pass1, &config)?;
-    assert!(matches!(
-        reordered.output_partitioning(),
-        Partitioning::UnknownPartitioning(10)
-    ));
-    // Without a repair, the plan is rejected rather than executed.
-    assert!(
-        SanityCheckPlan::new()
-            .optimize(Arc::clone(&reordered), &config)
-            .is_err()
-    );
-
-    // The second distribution pass repairs it. The two joins no longer share
-    // a partitioning, so the result is a plain union.
-    let pass2 = EnsureRequirements::new().optimize(reordered, &config)?;
-    SanityCheckPlan::new().optimize(Arc::clone(&pass2), &config)?;
-    assert_plan!(pass2,
+    SanityCheckPlan::new().optimize(Arc::clone(&reordered), &config)?;
+    assert_plan!(reordered,
         @r"
     UnionExec
       ProjectionExec: expr=[a@5 as a, b@6 as b, c@7 as c, d@8 as d, e@9 as e, a@0 as a, b@1 as b, c@2 as c, d@3 as d, e@4 as e]
@@ -3008,6 +2998,10 @@ fn issue_21826_join_selection_after_distribution_pass() -> Result<()> {
         RepartitionExec: partitioning=Hash([a@0], 10), input_partitions=1
           DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet
     ");
+
+    // A further distribution pass is a no-op (idempotent).
+    let pass2 = EnsureRequirements::new().optimize(Arc::clone(&reordered), &config)?;
+    assert_plan!(pass2, reordered);
 
     Ok(())
 }

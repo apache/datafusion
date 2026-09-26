@@ -68,9 +68,13 @@ Rule order matters. The default pipeline may change between releases.
 
 Analyzer rules run before the physical optimizer rules and make the plan
 _valid_. `EnforceDistribution` enforces the distribution requirements every
-operator declares; ordering enforcement (`EnforceSorting`) and the sort
-optimizations (`OptimizeSorts`) run later in the optimizer phase, because
-ordering enforcement is not idempotent and depends on earlier optimizer rules.
+operator declares (and parallelizes top-level scans itself, so no
+`OutputRequirements` boundary rule is needed here). The only optimizer rules that
+later change the required distribution (`join_selection`, `WindowTopN`)
+re-establish it themselves, so distribution is enforced exactly once. Ordering
+enforcement (`EnforceSorting`) and the sort optimizations (`OptimizeSorts`) still
+run in the optimizer phase, because ordering enforcement is not idempotent and
+depends on the settled partitioning.
 
 | order | rule                  | summary                                                                                 |
 | ----- | --------------------- | --------------------------------------------------------------------------------------- |
@@ -81,28 +85,31 @@ ordering enforcement is not idempotent and depends on earlier optimizer rules.
 The same rule name may appear more than once when the default pipeline runs it
 in multiple phases.
 
+Distribution enforcement (`EnforceDistribution`) runs first, in the analyzer
+phase (see above), so it does not appear in this list; the rules that change
+distribution (`join_selection`, `WindowTopN`) re-establish it themselves.
+
 | order | rule                           | phase                   | summary                                                                                                                 |
 | ----- | ------------------------------ | ----------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | 1     | `OutputRequirements`           | add phase               | Adds helper nodes so output requirements survive later physical rewrites.                                               |
 | 2     | `aggregate_statistics`         | -                       | Uses exact source statistics to answer some aggregates without scanning data.                                           |
-| 3     | `join_selection`               | -                       | Chooses join implementation, build side, and partition mode from statistics and stream properties.                      |
+| 3     | `join_selection`               | -                       | Chooses join implementation, build side, and partition mode; re-establishes distribution validity for joins it changes. |
 | 4     | `LimitedDistinctAggregation`   | -                       | Pushes limit hints into grouped distinct-style aggregations when only a small result is needed.                         |
 | 5     | `FilterPushdown`               | pre-optimization phase  | Pushes supported physical filters down toward data sources before distribution and sorting are enforced.                |
-| 6     | `WindowTopN`                   | -                       | Replaces eligible row-number window and filter patterns with per-partition TopK execution.                              |
-| 7     | `EnforceDistribution`          | -                       | Re-enforces distribution after `JoinSelection` / `WindowTopN` change it (the analyzer ran it once already; idempotent). |
-| 8     | `EnforceSorting`               | -                       | Enforces ordering requirements (inserts SortExecs) on the distribution-fixed plan; runs once (not idempotent).          |
-| 9     | `OptimizeSorts`                | -                       | Sort optimizations: parallelize sorts, order-preserving variants, sort pushdown, partial sort.                          |
-| 10    | `CombinePartialFinalAggregate` | -                       | Collapses adjacent partial and final aggregates when the distributed shape makes them redundant.                        |
-| 11    | `OptimizeAggregateOrder`       | -                       | Updates aggregate expressions to use the best ordering once sort requirements are known.                                |
-| 12    | `ProjectionPushdown`           | early pass              | Pushes projections toward inputs before later physical rewrites add more limit and TopK structure.                      |
-| 13    | `OutputRequirements`           | remove phase            | Removes the temporary output-requirement helper nodes after requirement-sensitive planning is done.                     |
-| 14    | `LimitAggregation`             | -                       | Passes a limit hint into eligible aggregations so they can keep fewer accumulator buckets.                              |
-| 15    | `LimitPushPastWindows`         | -                       | Pushes fetch limits through bounded window operators when doing so keeps the result correct.                            |
-| 16    | `HashJoinBuffering`            | -                       | Adds buffering on the probe side of hash joins so probing can start before build completion.                            |
-| 17    | `LimitPushdown`                | -                       | Moves physical limits into child operators or fetch-enabled variants to cut data early.                                 |
-| 18    | `TopKRepartition`              | -                       | Pushes TopK below hash repartition when the partition key is a prefix of the sort key.                                  |
-| 19    | `ProjectionPushdown`           | late pass               | Runs projection pushdown again after limit and TopK rewrites expose new pruning opportunities.                          |
-| 20    | `PushdownSort`                 | -                       | Pushes sort requirements into data sources that can already return sorted output.                                       |
-| 21    | `EnsureCooperative`            | -                       | Wraps non-cooperative plan parts so long-running tasks yield fairly.                                                    |
-| 22    | `FilterPushdown(Post)`         | post-optimization phase | Pushes dynamic filters at the end of optimization, after plan references stop moving.                                   |
-| 23    | `SanityCheckPlan`              | -                       | Validates that the final physical plan meets ordering, distribution, and infinite-input safety requirements.            |
+| 6     | `WindowTopN`                   | -                       | Replaces eligible row-number window and filter patterns with per-partition TopK execution; re-enforces distribution.    |
+| 7     | `EnforceSorting`               | -                       | Enforces ordering requirements (inserts SortExecs) on the distribution-fixed plan; runs once (not idempotent).          |
+| 8     | `OptimizeSorts`                | -                       | Sort optimizations: parallelize sorts, order-preserving variants, sort pushdown, partial sort.                          |
+| 9     | `CombinePartialFinalAggregate` | -                       | Collapses adjacent partial and final aggregates when the distributed shape makes them redundant.                        |
+| 10    | `OptimizeAggregateOrder`       | -                       | Updates aggregate expressions to use the best ordering once sort requirements are known.                                |
+| 11    | `ProjectionPushdown`           | early pass              | Pushes projections toward inputs before later physical rewrites add more limit and TopK structure.                      |
+| 12    | `OutputRequirements`           | remove phase            | Removes the temporary output-requirement helper nodes after requirement-sensitive planning is done.                     |
+| 13    | `LimitAggregation`             | -                       | Passes a limit hint into eligible aggregations so they can keep fewer accumulator buckets.                              |
+| 14    | `LimitPushPastWindows`         | -                       | Pushes fetch limits through bounded window operators when doing so keeps the result correct.                            |
+| 15    | `HashJoinBuffering`            | -                       | Adds buffering on the probe side of hash joins so probing can start before build completion.                            |
+| 16    | `LimitPushdown`                | -                       | Moves physical limits into child operators or fetch-enabled variants to cut data early.                                 |
+| 17    | `TopKRepartition`              | -                       | Pushes TopK below hash repartition when the partition key is a prefix of the sort key.                                  |
+| 18    | `ProjectionPushdown`           | late pass               | Runs projection pushdown again after limit and TopK rewrites expose new pruning opportunities.                          |
+| 19    | `PushdownSort`                 | -                       | Pushes sort requirements into data sources that can already return sorted output.                                       |
+| 20    | `EnsureCooperative`            | -                       | Wraps non-cooperative plan parts so long-running tasks yield fairly.                                                    |
+| 21    | `FilterPushdown(Post)`         | post-optimization phase | Pushes dynamic filters at the end of optimization, after plan references stop moving.                                   |
+| 22    | `SanityCheckPlan`              | -                       | Validates that the final physical plan meets ordering, distribution, and infinite-input safety requirements.            |
