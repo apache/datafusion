@@ -159,14 +159,10 @@ SELECT 0.0 AS a INTERSECT ALL SELECT -0.0;
 ----
 0
 
-# INTERSECT ALL with multiplicities min(2,1) should return 1 row.
-# Known issue: it returns 2, because `row_number() OVER (PARTITION BY a)`
-# puts +0.0 and -0.0 in separate partitions.
-# https://github.com/apache/datafusion/issues/25766
+# INTERSECT ALL counts +0.0 and -0.0 as the same value: min(2, 1) = 1 row.
 query R rowsort
 SELECT a FROM (VALUES (0.0), (-0.0)) t(a) INTERSECT ALL SELECT a FROM (VALUES (0.0)) s(a);
 ----
-0
 0
 
 # INTERSECT for Float32: same matching behavior.
@@ -203,12 +199,11 @@ query R rowsort
 SELECT 0.0 AS a EXCEPT ALL SELECT -0.0;
 ----
 
-# EXCEPT ALL with multiplicities 2 - 1 should return 1 row.
-# Known issue: it returns none, for the same reason as INTERSECT ALL above.
-# https://github.com/apache/datafusion/issues/25766
+# EXCEPT ALL counts them the same way: 2 - 1 = 1 row.
 query R rowsort
 SELECT a FROM (VALUES (0.0), (-0.0)) t(a) EXCEPT ALL SELECT a FROM (VALUES (0.0)) s(a);
 ----
+0
 
 #####
 ## INNER JOIN ON equality with +0.0 / -0.0

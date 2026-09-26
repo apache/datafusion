@@ -81,22 +81,22 @@ async fn except_all_preserves_duplicate_counts_and_nulls() -> Result<()> {
 }
 
 #[tokio::test]
-async fn set_operation_all_preserves_synthetic_column_name() -> Result<()> {
+async fn set_operation_all_preserves_synthetic_column_names() -> Result<()> {
     let ctx = SessionContext::new();
+    let select = "SELECT column1 AS __datafusion_set_operation_left_count,
+                         column1 AS __datafusion_set_operation_right_count,
+                         column1 AS __datafusion_set_operation_copies";
     for operation in ["INTERSECT ALL", "EXCEPT ALL"] {
-        let sql = format!(
-            "SELECT column1 AS __datafusion_set_operation_row_number FROM VALUES (1), (1)
-             {operation}
-             SELECT column1 AS __datafusion_set_operation_row_number FROM VALUES (1)"
-        );
+        let sql =
+            format!("{select} FROM VALUES (1), (1) {operation} {select} FROM VALUES (1)");
         let result = ctx.sql(&sql).await?.collect().await?;
         assert_batches_sorted_eq!(
             [
-                "+---------------------------------------+",
-                "| __datafusion_set_operation_row_number |",
-                "+---------------------------------------+",
-                "| 1                                     |",
-                "+---------------------------------------+",
+                "+---------------------------------------+----------------------------------------+-----------------------------------+",
+                "| __datafusion_set_operation_left_count | __datafusion_set_operation_right_count | __datafusion_set_operation_copies |",
+                "+---------------------------------------+----------------------------------------+-----------------------------------+",
+                "| 1                                     | 1                                      | 1                                 |",
+                "+---------------------------------------+----------------------------------------+-----------------------------------+",
             ],
             &result
         );
@@ -171,7 +171,7 @@ async fn set_operation_all_with_same_name_from_two_relations() -> Result<()> {
 }
 
 #[tokio::test]
-async fn set_operation_all_without_row_number_is_a_plan_error() -> Result<()> {
+async fn set_operation_all_without_count_or_range_is_a_plan_error() -> Result<()> {
     let state = datafusion::execution::SessionStateBuilder::new().build();
     let ctx = SessionContext::new_with_state(state);
     for operation in ["INTERSECT ALL", "EXCEPT ALL"] {
@@ -181,7 +181,7 @@ async fn set_operation_all_without_row_number_is_a_plan_error() -> Result<()> {
             .unwrap_err();
         assert_contains!(
             err.strip_backtrace(),
-            "Error during planning: INTERSECT ALL and EXCEPT ALL require the row_number window function, which is not registered"
+            "Error during planning: INTERSECT ALL and EXCEPT ALL require the count aggregate function and the range scalar function to be registered"
         );
     }
 
@@ -189,12 +189,12 @@ async fn set_operation_all_without_row_number_is_a_plan_error() -> Result<()> {
     let err = df.clone().intersect(df.clone()).unwrap_err();
     assert_contains!(
         err.strip_backtrace(),
-        "DataFrame::intersect requires the row_number window function"
+        "DataFrame::intersect requires the count aggregate function"
     );
     let err = df.clone().except(df).unwrap_err();
     assert_contains!(
         err.strip_backtrace(),
-        "DataFrame::except requires the row_number window function"
+        "DataFrame::except requires the count aggregate function"
     );
     Ok(())
 }

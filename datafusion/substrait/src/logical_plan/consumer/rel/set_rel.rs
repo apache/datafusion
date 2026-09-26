@@ -86,7 +86,8 @@ async fn intersect_rels(
             LogicalPlanBuilder::intersect_all(
                 rel,
                 right,
-                &consumer.get_function_registry().udwf("row_number")?,
+                &consumer.get_function_registry().udaf("count")?,
+                &consumer.get_function_registry().udf("range")?,
             )?
         } else {
             intersect_rel(rel, right)?
@@ -233,7 +234,8 @@ async fn except_rels(
             LogicalPlanBuilder::except_all(
                 rel,
                 right,
-                &consumer.get_function_registry().udwf("row_number")?,
+                &consumer.get_function_registry().udaf("count")?,
+                &consumer.get_function_registry().udf("range")?,
             )?
         } else {
             LogicalPlanBuilder::except(rel, right, false)?
