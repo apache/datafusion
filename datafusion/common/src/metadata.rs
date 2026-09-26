@@ -117,6 +117,36 @@ pub fn check_metadata_with_storage_equal(
     Ok(())
 }
 
+/// Compute the field metadata to propagate for an expression whose result
+/// may come from any one of several inputs coerced to a common type, such as
+/// `COALESCE`, `NVL2`, or `CASE WHEN`.
+///
+/// Returns the first non-empty metadata among the fields whose data type is
+/// not `Null` (an untyped NULL literal carries no metadata and cannot
+/// contribute a typed value), or empty metadata if there is none.
+///
+/// The inputs are deliberately not required to agree on their metadata:
+/// byte-wise comparison is too strict for extension types whose parameters
+/// are JSON-encoded, and unrelated metadata that arrived with the data (e.g.
+/// from an Arrow file or an embedded Arrow schema in a Parquet file) must not
+/// cause an extension type to be silently dropped from the result. Engines
+/// that want stricter behavior (e.g. rejecting conflicting extension types)
+/// can enforce it with an analyzer or optimizer rule, which can only observe
+/// the conflict if planning preserves the metadata in the first place.
+pub fn coerced_fields_metadata<'a>(
+    mut fields: impl Iterator<Item = &'a Field>,
+) -> FieldMetadata {
+    fields
+        .find_map(|f| {
+            if f.data_type().is_null() {
+                return None;
+            }
+            let metadata = FieldMetadata::new_from_field(f);
+            (!metadata.is_empty()).then_some(metadata)
+        })
+        .unwrap_or_default()
+}
+
 /// Given a data type represented by storage and optional metadata, generate
 /// a user-facing string
 ///
@@ -390,5 +420,43 @@ impl From<&HashMap<String, String>> for FieldMetadata {
         Self {
             inner: map.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn field_with(name: &str, dt: DataType, pairs: &[(&str, &str)]) -> Field {
+        let metadata: std::collections::HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        Field::new(name, dt, true).with_metadata(metadata)
+    }
+
+    #[test]
+    fn coerced_fields_metadata_returns_first_non_empty() {
+        let a = field_with("a", DataType::Binary, &[]);
+        let b = field_with("b", DataType::Binary, &[("k", "v1")]);
+        let c = field_with("c", DataType::Binary, &[("k", "v2")]);
+        let result = coerced_fields_metadata([&a, &b, &c].into_iter());
+        assert_eq!(result.inner().get("k").map(String::as_str), Some("v1"));
+    }
+
+    #[test]
+    fn coerced_fields_metadata_skips_null_typed_fields() {
+        let null = field_with("null", DataType::Null, &[]);
+        let b = field_with("b", DataType::Binary, &[("k", "v")]);
+        let result = coerced_fields_metadata([&null, &b].into_iter());
+        assert_eq!(result.inner().get("k").map(String::as_str), Some("v"));
+    }
+
+    #[test]
+    fn coerced_fields_metadata_empty_when_no_field_has_any() {
+        let a = field_with("a", DataType::Binary, &[]);
+        let null = field_with("null", DataType::Null, &[]);
+        let result = coerced_fields_metadata([&a, &null].into_iter());
+        assert!(result.is_empty());
     }
 }
