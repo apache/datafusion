@@ -204,6 +204,13 @@ impl AggregateSpill {
         })
     }
 
+    /// The spill manager of this stream, so that other parts of it — such as
+    /// the hash buckets of a final aggregation — spill through the same
+    /// manager and report to the same metrics.
+    pub(super) fn spill_manager(&self) -> &SpillManager {
+        &self.spill_manager
+    }
+
     pub(super) fn has_spills(&self) -> bool {
         !self.spills.is_empty()
     }
