@@ -24,7 +24,10 @@ use std::iter::once;
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
-use crate::expr::{Alias, Cast, PlannedReplaceSelectItem, Sort as SortExpr};
+use crate::expr::{
+    AggregateFunction, Alias, Cast, PlannedReplaceSelectItem, ScalarFunction,
+    Sort as SortExpr,
+};
 use crate::expr_rewriter::{
     ColumnNormalizer, coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
@@ -38,15 +41,15 @@ use crate::logical_plan::{
 };
 use crate::select_expr::SelectExpr;
 use crate::utils::{
-    can_hash, check_all_columns_from_schema, columnize_expr, compare_sort_expr,
-    expand_qualified_wildcard, expand_wildcard, expr_to_columns,
+    COUNT_STAR_EXPANSION, can_hash, check_all_columns_from_schema, columnize_expr,
+    compare_sort_expr, expand_qualified_wildcard, expand_wildcard, expr_to_columns,
     find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
     split_conjunction_owned,
 };
 use crate::{
-    BinaryExpr, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
-    RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource, WindowUDF,
-    WriteOp, and, binary_expr, lit,
+    AggregateUDF, BinaryExpr, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
+    RecursiveQuery, ScalarUDF, Statement, TableProviderFilterPushDown, TableSource,
+    WriteOp, and, binary_expr, lit, when,
 };
 
 use super::dml::InsertOp;
@@ -1511,38 +1514,37 @@ impl LogicalPlanBuilder {
 
     /// Build an `INTERSECT ALL` plan, preserving the multiplicity of each row.
     ///
-    /// `row_number` must be the `row_number` window function. It numbers the
-    /// copies of each distinct row on both sides so that they can be matched
-    /// one to one.
+    /// Each distinct row is returned `min(m, n)` times, where `m` and `n` are
+    /// its counts on the left and right. `count` must be the `count` aggregate
+    /// function and `range` the `range` scalar function: rows are counted on
+    /// each side and then expanded back with `unnest(range(..))`.
     pub fn intersect_all(
         left_plan: LogicalPlan,
         right_plan: LogicalPlan,
-        row_number: &Arc<WindowUDF>,
+        count: &Arc<AggregateUDF>,
+        range: &Arc<ScalarUDF>,
     ) -> Result<LogicalPlan> {
-        Self::multiset_set_operation(left_plan, right_plan, row_number, JoinType::Inner)
+        Self::multiset_set_operation(left_plan, right_plan, count, range, JoinType::Inner)
     }
 
     /// Build an `EXCEPT ALL` plan, subtracting matching row multiplicities.
     ///
-    /// `row_number` must be the `row_number` window function, as for
-    /// [`Self::intersect_all`].
+    /// Each distinct row is returned `m - n` times when `m > n`. `count` and
+    /// `range` are as for [`Self::intersect_all`].
     pub fn except_all(
         left_plan: LogicalPlan,
         right_plan: LogicalPlan,
-        row_number: &Arc<WindowUDF>,
+        count: &Arc<AggregateUDF>,
+        range: &Arc<ScalarUDF>,
     ) -> Result<LogicalPlan> {
-        Self::multiset_set_operation(
-            left_plan,
-            right_plan,
-            row_number,
-            JoinType::LeftAnti,
-        )
+        Self::multiset_set_operation(left_plan, right_plan, count, range, JoinType::Left)
     }
 
     fn multiset_set_operation(
         left_plan: LogicalPlan,
         right_plan: LogicalPlan,
-        row_number: &Arc<WindowUDF>,
+        count: &Arc<AggregateUDF>,
+        range: &Arc<ScalarUDF>,
         join_type: JoinType,
     ) -> Result<LogicalPlan> {
         let left_columns = left_plan.schema().columns();
@@ -1566,35 +1568,44 @@ impl LogicalPlanBuilder {
                     && left.data_type() == right.data_type()
             })
             .collect::<Vec<_>>();
-        // Each side gets its own row number column name, so the two synthetic
-        // columns never collide with each other. The sides are then only
-        // requalified when the user's own columns conflict.
-        let mut row_number_name = "__datafusion_set_operation_row_number".to_string();
+        // The synthetic columns get names that differ from each other and from
+        // every input column, so the sides are only requalified when the
+        // user's own columns conflict.
+        let mut base = "__datafusion_set_operation".to_string();
         let name_in_use = |name: &str| {
             [left_plan.schema(), right_plan.schema()]
                 .iter()
                 .any(|schema| schema.fields().iter().any(|field| field.name() == name))
         };
-        while name_in_use(&row_number_name)
-            || name_in_use(&format!("{row_number_name}_right"))
+        let suffixes = ["_left_count", "_right_count", "_copies"];
+        while suffixes
+            .iter()
+            .any(|suffix| name_in_use(&format!("{base}{suffix}")))
         {
-            row_number_name.push('_');
+            base.push('_');
         }
-        let right_row_number_name = format!("{row_number_name}_right");
-        let with_row_number = |plan: LogicalPlan, columns: &[Column], name: &str| {
-            let mut window = crate::expr::WindowFunction::new(
-                crate::WindowFunctionDefinition::WindowUDF(Arc::clone(row_number)),
+        let [left_count, right_count, copies] =
+            suffixes.map(|suffix| format!("{base}{suffix}"));
+        // Count each distinct row on both sides. Grouping treats NULLs, and
+        // 0.0 and -0.0, as equal, like the rest of the set operations.
+        let count_rows = |plan: LogicalPlan, columns: &[Column], name: &str| {
+            let count_star = Expr::AggregateFunction(AggregateFunction::new_udf(
+                Arc::clone(count),
+                vec![lit(COUNT_STAR_EXPANSION)],
+                false,
+                None,
                 vec![],
-            );
-            window.params.partition_by =
-                columns.iter().cloned().map(Expr::Column).collect();
+                None,
+            ));
             LogicalPlanBuilder::from(plan)
-                .window(vec![Expr::WindowFunction(Box::new(window)).alias(name)])?
+                .aggregate(
+                    columns.iter().cloned().map(Expr::Column),
+                    vec![count_star.alias(name)],
+                )?
                 .build()
         };
-        let left_plan = with_row_number(left_plan, &left_columns, &row_number_name)?;
-        let right_plan =
-            with_row_number(right_plan, &right_columns, &right_row_number_name)?;
+        let left_plan = count_rows(left_plan, &left_columns, &left_count)?;
+        let right_plan = count_rows(right_plan, &right_columns, &right_count)?;
         let (left_builder, right_builder, requalified) = requalify_sides_if_needed(
             LogicalPlanBuilder::from(left_plan),
             LogicalPlanBuilder::from(right_plan),
@@ -1604,8 +1615,10 @@ impl LogicalPlanBuilder {
         // Requalifying can also rename columns (`x` becomes `x:1` when two
         // relations on one side both have an `x`), so read the join keys from
         // the schemas the join actually sees.
-        let left_join_columns = left_plan.schema().columns();
-        let right_join_columns = right_plan.schema().columns();
+        let mut left_join_columns = left_plan.schema().columns();
+        let mut right_join_columns = right_plan.schema().columns();
+        let left_count = Expr::Column(left_join_columns.pop().unwrap());
+        let right_count = Expr::Column(right_join_columns.pop().unwrap());
         let join_keys = left_join_columns
             .iter()
             .cloned()
@@ -1613,8 +1626,9 @@ impl LogicalPlanBuilder {
             .collect();
         // The output keeps the left input's qualifiers and names, so a query
         // can keep referring to them after the set operation.
-        let projection = left_columns
-            .into_iter()
+        let mut projection = left_columns
+            .iter()
+            .cloned()
             .zip(left_join_columns)
             .zip(right_join_columns)
             .zip(from_right)
@@ -1646,7 +1660,34 @@ impl LogicalPlanBuilder {
             None,
             NullEquality::NullEqualsNull,
         )?;
-        joined.project(projection)?.build()
+        let (joined, repeat) = if join_type == JoinType::Inner {
+            let repeat = when(left_count.clone().lt(right_count.clone()), left_count)
+                .otherwise(right_count)?;
+            (joined, repeat)
+        } else {
+            let unmatched = right_count.clone().is_null();
+            let joined = joined.filter(
+                unmatched
+                    .clone()
+                    .or(left_count.clone().gt(right_count.clone())),
+            )?;
+            let repeat = when(unmatched, left_count.clone())
+                .otherwise(left_count - right_count)?;
+            (joined, repeat)
+        };
+        // Emit each distinct row `repeat` times.
+        projection.push(
+            Expr::ScalarFunction(ScalarFunction::new_udf(
+                Arc::clone(range),
+                vec![repeat],
+            ))
+            .alias(&copies),
+        );
+        joined
+            .project(projection)?
+            .unnest_column(Column::from_name(copies))?
+            .project(left_columns.into_iter().map(Expr::Column))?
+            .build()
     }
 
     /// Process intersect or except

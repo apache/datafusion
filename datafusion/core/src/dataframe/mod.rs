@@ -1962,13 +1962,16 @@ impl DataFrame {
     pub fn intersect(self, dataframe: DataFrame) -> Result<DataFrame> {
         let left_plan = self.plan;
         let right_plan = dataframe.plan;
-        let Some(row_number) = self.session_state.window_functions().get("row_number")
-        else {
+        let (Some(count), Some(range)) = (
+            self.session_state.aggregate_functions().get("count"),
+            self.session_state.scalar_functions().get("range"),
+        ) else {
             return plan_err!(
-                "DataFrame::intersect requires the row_number window function, which is not registered"
+                "DataFrame::intersect requires the count aggregate function and the range scalar function to be registered"
             );
         };
-        let plan = LogicalPlanBuilder::intersect_all(left_plan, right_plan, row_number)?;
+        let plan =
+            LogicalPlanBuilder::intersect_all(left_plan, right_plan, count, range)?;
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
@@ -2046,13 +2049,15 @@ impl DataFrame {
     pub fn except(self, dataframe: DataFrame) -> Result<DataFrame> {
         let left_plan = self.plan;
         let right_plan = dataframe.plan;
-        let Some(row_number) = self.session_state.window_functions().get("row_number")
-        else {
+        let (Some(count), Some(range)) = (
+            self.session_state.aggregate_functions().get("count"),
+            self.session_state.scalar_functions().get("range"),
+        ) else {
             return plan_err!(
-                "DataFrame::except requires the row_number window function, which is not registered"
+                "DataFrame::except requires the count aggregate function and the range scalar function to be registered"
             );
         };
-        let plan = LogicalPlanBuilder::except_all(left_plan, right_plan, row_number)?;
+        let plan = LogicalPlanBuilder::except_all(left_plan, right_plan, count, range)?;
         Ok(DataFrame {
             session_state: self.session_state,
             plan,

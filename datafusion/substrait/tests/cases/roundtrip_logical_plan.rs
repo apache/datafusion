@@ -1645,46 +1645,35 @@ async fn self_referential_except() -> Result<()> {
     .await
 }
 
+// `INTERSECT ALL` and `EXCEPT ALL` are planned with `unnest(range(..))` to
+// repeat each row, and the producer cannot serialize `Unnest` yet, so these
+// plans cannot be sent to Substrait. Consuming Substrait multiset set
+// operations still works (see `multiset_intersect_all_consume`).
 #[tokio::test]
 async fn self_referential_intersect_all() -> Result<()> {
-    assert_expected_plan(
+    assert_unnest_not_supported(
         "SELECT a FROM data WHERE a > 0 INTERSECT ALL SELECT a FROM data WHERE a < 5",
-        "Projection: left.a\
-        \n  Inner Join: left.a = right.a, left.row_number() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING = right.row_number() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
-        \n    SubqueryAlias: left\
-        \n      WindowAggr: windowExpr=[[row_number() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
-        \n        Filter: data.a > Int64(0)\
-        \n          TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
-        \n    SubqueryAlias: right\
-        \n      WindowAggr: windowExpr=[[row_number() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
-        \n        Filter: data.a < Int64(5)\
-        \n          TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
-        // The plan keeps the `data` qualifier on its output, but Substrait
-        // does not carry qualifiers, so the round trip comes back as `left.a`.
-        false,
     )
     .await
 }
 
 #[tokio::test]
 async fn self_referential_except_all() -> Result<()> {
-    assert_expected_plan(
+    assert_unnest_not_supported(
         "SELECT a FROM data WHERE a > 0 EXCEPT ALL SELECT a FROM data WHERE a < 5",
-        "Projection: left.a\
-        \n  LeftAnti Join: left.a = right.a, left.row_number() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING = right.row_number() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING\
-        \n    SubqueryAlias: left\
-        \n      WindowAggr: windowExpr=[[row_number() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
-        \n        Filter: data.a > Int64(0)\
-        \n          TableScan: data projection=[a], partial_filters=[data.a > Int64(0)]\
-        \n    SubqueryAlias: right\
-        \n      WindowAggr: windowExpr=[[row_number() PARTITION BY [data.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]\
-        \n        Filter: data.a < Int64(5)\
-        \n          TableScan: data projection=[a], partial_filters=[data.a < Int64(5)]",
-        // The plan keeps the `data` qualifier on its output, but Substrait
-        // does not carry qualifiers, so the round trip comes back as `left.a`.
-        false,
     )
     .await
+}
+
+async fn assert_unnest_not_supported(sql: &str) -> Result<()> {
+    let ctx = create_context().await?;
+    let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+    let err = to_substrait_plan(&plan, &ctx.state()).unwrap_err();
+    assert!(
+        err.to_string().contains("Unsupported plan type: Unnest"),
+        "{err}"
+    );
+    Ok(())
 }
 
 #[tokio::test]
