@@ -24,13 +24,20 @@ use self::early_stop::EarlyStoppingStream;
 #[cfg(feature = "parquet_encryption")]
 use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
-use crate::decoder_projection::DecoderProjection;
+use crate::decoder_projection::{
+    DecoderProjection, DecoderProjectionBuilder, PostScanConjunct,
+};
+#[cfg(test)]
+use crate::filter_placement::PlacementSites;
+use crate::filter_placement::{FilePlacement, PlacementOptions};
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
+use crate::optional_filter::OptionalFilterOptions;
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
     DecoderBuilderConfig, InitialDecoderState, PushDecoderStreamState, RgPlanEntry,
     RowFilterContext, RowGroupPruner,
 };
+use crate::row_filter::{OptionalFilterRowFilterContext, PrebuiltRowFilterCandidate};
 use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
 use crate::{
     BloomFilterStatistics, Int96Coercer, ParquetAccessPlan, ParquetFileMetrics,
@@ -38,6 +45,7 @@ use crate::{
     apply_file_schema_type_coercions,
 };
 use arrow::array::RecordBatch;
+use arrow::compute::BatchCoalescer;
 use arrow::datatypes::DataType;
 use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
 use datafusion_physical_expr::projection::ProjectionExprs;
@@ -60,7 +68,7 @@ use datafusion_common::{
 use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking, Literal};
 use datafusion_physical_expr::simplifier::PhysicalExprSimplifier;
-use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::utils::{collect_columns, split_optional};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -76,6 +84,7 @@ use datafusion_execution::parquet_encryption::EncryptionFactory;
 use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
 use log::debug;
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
+use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, MaskRunIter,
@@ -84,7 +93,9 @@ use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::parquet_column;
 use parquet::basic::Type;
 use parquet::bloom_filter::Sbbf;
-use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader, RowGroupMetaData};
+use parquet::file::metadata::{
+    PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData,
+};
 
 /// Morselizer-level state for virtual columns, precomputed once per scan
 /// partition so each file skips the validator walks, `null_replacements`
@@ -305,6 +316,12 @@ pub(super) struct ParquetMorselizer {
     /// Per-scan virtual-column state (validation already performed). `None`
     /// when no virtual columns are requested — the common path.
     pub(crate) virtual_state: Option<Arc<VirtualColumnsState>>,
+    /// How the row filter handles optional conjuncts of the predicate, when
+    /// `pushdown_filters` is true.
+    pub(crate) optional_filters: OptionalFilterOptions,
+    /// The adaptive filter placement settings, used when `pushdown_filters`
+    /// is true.
+    pub(crate) filter_placement: PlacementOptions,
 }
 
 impl fmt::Debug for ParquetMorselizer {
@@ -496,6 +513,8 @@ struct PreparedParquetOpen {
     reverse_row_groups: bool,
     sort_order_for_reorder: Option<LexOrdering>,
     preserve_order: bool,
+    optional_filters: OptionalFilterOptions,
+    filter_placement: PlacementOptions,
     #[cfg(feature = "parquet_encryption")]
     file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
 }
@@ -533,6 +552,9 @@ struct RowGroupsPrunedParquetOpen {
 struct DecoderReadPlans {
     projection: DecoderProjection,
     row_filter_context: Option<RowFilterContext>,
+    /// Builds a new projection when the adaptive filter placement changes.
+    /// `Some` exactly when the row filter context has a placement.
+    projection_builder: Option<DecoderProjectionBuilder>,
 }
 
 impl DecoderReadPlans {
@@ -540,41 +562,129 @@ impl DecoderReadPlans {
         prepared: &PreparedParquetOpen,
         metadata: &ArrowReaderMetadata,
     ) -> Result<Self> {
-        // Build the decoder projection (mask + per-batch transform) in a
-        // single call. Encapsulating it behind `DecoderProjection` keeps the
-        // opener's orchestration body focused on filter / decoder / stream
-        // wiring. The file-column projection excludes virtual columns and
-        // respects nested field projections.
-        let projection = DecoderProjection::try_new(
-            &prepared.projection,
-            &prepared.physical_file_schema,
-            metadata.parquet_schema(),
-            &prepared.output_schema,
-            prepared.virtual_state.as_deref(),
-        )?;
-        let pushdown_predicate = prepared
-            .pushdown_filters
-            .then_some(prepared.predicate.as_ref())
-            .flatten();
-        // Precompute the candidate list once per file. Both the initial
-        // `RowFilter` and any per-RG rebuilds (via
-        // `RowFilterContext::build_row_filter`) reuse it, so tree walks
-        // (`reassign_expr_columns`) and column resolution only run once —
-        // not once per row group.
-        let row_filter_context = pushdown_predicate.and_then(|predicate| {
-            RowFilterContext::try_new(
-                predicate,
-                &prepared.physical_file_schema,
-                metadata.metadata(),
-                prepared.reorder_predicates,
-                prepared.file_metrics.clone(),
-                prepared.max_predicate_cache_size,
-            )
-        });
-        Ok(Self {
-            projection,
-            row_filter_context,
-        })
+        // ---------------------------------------------------------------
+        // Filter placement
+        //
+        // The scan accepts every pushable filter (the parent `FilterExec`
+        // is gone), so the predicate must be applied here. Each conjunct is
+        // routed to one of two places:
+        //
+        // * the parquet `RowFilter` (during decode, only when
+        //   `pushdown_filters = true`), or
+        // * the in-scan post-scan filter (otherwise, plus any conjunct the
+        //   `RowFilter` machinery cannot evaluate on this file — the rejected
+        //   conjuncts returned by `RowFilterContext::try_new`).
+        //
+        // Either way every required conjunct is applied; nothing is silently
+        // dropped. Optional conjuncts (see `split_optional`) are not needed
+        // for correctness. They are row filter predicates (as
+        // `optional_filter_mode` says), or the adaptive filter placement
+        // places them like the required conjuncts, or they are used only for
+        // statistics pruning. A rejected optional conjunct is not used.
+        // ---------------------------------------------------------------
+        // Build the decoder projection (mask + per-batch transform +
+        // optional post-scan filter). Encapsulating it behind
+        // `DecoderProjection` keeps the opener's orchestration body focused
+        // on filter / decoder / stream wiring. The file-column projection
+        // excludes virtual columns and respects nested field projections.
+        let mut projection_builder = DecoderProjectionBuilder {
+            projection: prepared.projection.clone(),
+            fixed_post_scan: vec![],
+            physical_file_schema: Arc::clone(&prepared.physical_file_schema),
+            parquet_schema: metadata.metadata().file_metadata().schema_descr_ptr(),
+            output_schema: Arc::clone(&prepared.output_schema),
+            virtual_state: prepared.virtual_state.clone(),
+            file_metrics: prepared.file_metrics.clone(),
+        };
+        match (prepared.pushdown_filters, prepared.predicate.as_ref()) {
+            // Pushdown enabled: precompute the candidate list once per file.
+            // Both the initial `RowFilter` and any per-RG rebuilds (via
+            // `RowFilterContext::build_row_filter`) reuse it, so tree walks
+            // (`reassign_expr_columns`) and column resolution only run once —
+            // not once per row group. Only what the `RowFilter` could not
+            // place falls through to post-scan.
+            (true, Some(predicate)) => {
+                // The gates of optional filters and the adaptive filter
+                // placement estimate their saving from the output columns,
+                // thus build the projection without post-scan conjuncts
+                // first. It is used as-is when the `RowFilter` can place every
+                // conjunct (the usual case).
+                let output_projection = projection_builder.build(&[])?;
+                let (row_filter_context, rejected) = RowFilterContext::try_new(
+                    predicate,
+                    &prepared.physical_file_schema,
+                    metadata.metadata(),
+                    prepared.reorder_predicates,
+                    prepared.file_metrics.clone(),
+                    prepared.max_predicate_cache_size,
+                    Some(OptionalFilterRowFilterContext {
+                        options: &prepared.optional_filters,
+                        metrics: &prepared.metrics,
+                        partition: prepared.partition_index,
+                        filename: &prepared.file_name,
+                        output_projection: Some(output_projection.projection_mask()),
+                    }),
+                );
+                projection_builder.fixed_post_scan =
+                    rejected.into_iter().map(PostScanConjunct::from).collect();
+                let row_filter_context = row_filter_context.map(|ctx| {
+                    ctx.with_placement(|candidates| {
+                        new_file_placement(
+                            prepared,
+                            metadata.metadata(),
+                            predicate,
+                            output_projection.projection_mask(),
+                            candidates,
+                        )
+                    })
+                });
+                let placed = row_filter_context
+                    .as_ref()
+                    .and_then(|ctx| ctx.placement())
+                    .map(FilePlacement::post_scan_conjuncts)
+                    .unwrap_or_default();
+                let projection = if placed.is_empty()
+                    && projection_builder.fixed_post_scan.is_empty()
+                {
+                    output_projection
+                } else {
+                    projection_builder.build(&placed)?
+                };
+                let mut row_filter_context = row_filter_context;
+                let placement = row_filter_context
+                    .as_mut()
+                    .and_then(|ctx| ctx.placement.as_mut());
+                let projection_builder = placement.map(|placement| {
+                    placement.set_decoder_mask(projection.projection_mask());
+                    projection_builder
+                });
+                Ok(Self {
+                    projection,
+                    row_filter_context,
+                    projection_builder,
+                })
+            }
+            // Pushdown disabled: the required conjuncts run post-scan (in-scan
+            // equivalent of a `FilterExec`). Optional conjuncts (for example
+            // hash join dynamic filters) are not needed for correctness and
+            // are expensive to evaluate for each row, thus they are used only
+            // for statistics pruning, as before the scan accepted the filters.
+            (false, Some(predicate)) => {
+                let (required, _optional) = split_optional(predicate);
+                projection_builder.fixed_post_scan =
+                    required.into_iter().map(PostScanConjunct::from).collect();
+                Ok(Self {
+                    projection: projection_builder.build(&[])?,
+                    row_filter_context: None,
+                    projection_builder: None,
+                })
+            }
+            (_, None) => Ok(Self {
+                projection: projection_builder.build(&[])?,
+                row_filter_context: None,
+                projection_builder: None,
+            }),
+        }
     }
 
     fn reads_leaf(&self, leaf_idx: usize) -> bool {
@@ -584,6 +694,38 @@ impl DecoderReadPlans {
                 .as_ref()
                 .is_some_and(|context| context.reads_leaf(leaf_idx))
     }
+}
+
+/// The adaptive filter placement of a file (see [`crate::filter_placement`]),
+/// or `None` when it is disabled or when no conjunct needs a decision.
+fn new_file_placement(
+    prepared: &PreparedParquetOpen,
+    metadata: &Arc<ParquetMetaData>,
+    predicate: &Arc<dyn PhysicalExpr>,
+    output_projection: &ProjectionMask,
+    candidates: &mut [PrebuiltRowFilterCandidate],
+) -> Option<FilePlacement> {
+    if !prepared.filter_placement.enabled {
+        return None;
+    }
+    // The first decision is made before the scan knows its first row group.
+    let row_groups = metadata.num_row_groups().max(1);
+    let mean_row_group_rows =
+        usize::try_from(metadata.file_metadata().num_rows()).unwrap_or(0) / row_groups;
+    let changes = MetricBuilder::new(&prepared.metrics)
+        .with_new_label("filename", prepared.file_name.clone())
+        .with_type(datafusion_physical_plan::metrics::MetricType::Summary)
+        .counter("filter_placement_changes", prepared.partition_index);
+    FilePlacement::try_new(
+        candidates,
+        predicate,
+        &prepared.filter_placement,
+        output_projection,
+        metadata,
+        prepared.batch_size,
+        mean_row_group_rows,
+        changes,
+    )
 }
 
 /// State of [`ParquetOpenState`]
@@ -997,6 +1139,8 @@ impl ParquetMorselizer {
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             preserve_order: self.preserve_order,
+            optional_filters: self.optional_filters.clone(),
+            filter_placement: self.filter_placement.clone(),
             #[cfg(feature = "parquet_encryption")]
             file_decryption_properties: None,
         })
@@ -1697,6 +1841,7 @@ impl RowGroupsPrunedParquetOpen {
         let DecoderReadPlans {
             projection: decoder_projection,
             row_filter_context: precomputed_context,
+            projection_builder,
         } = match decoder_read_plans {
             Some(plans) => plans,
             None => DecoderReadPlans::try_new(&prepared, &reader_metadata)?,
@@ -1711,6 +1856,16 @@ impl RowGroupsPrunedParquetOpen {
                 prepared.partition_index,
                 &prepared.file_name,
             );
+        // Decoder-local LIMIT is only safe when no post-decode work can reject
+        // rows. A post-scan filter can — so when one is present the limit is
+        // enforced at the stream level via `remaining_limit` and kept out of
+        // the decoder; otherwise it is pushed into the decoder. With adaptive
+        // filter placement, a post-scan filter can start at any row group.
+        let has_post_scan_filter =
+            decoder_projection.has_post_scan_filter() || projection_builder.is_some();
+        let decoder_limit = prepared.limit.filter(|_| !has_post_scan_filter);
+        let remaining_limit = prepared.limit.filter(|_| has_post_scan_filter);
+
         let InitialDecoderState {
             decoder,
             rg_plan,
@@ -1730,7 +1885,7 @@ impl RowGroupsPrunedParquetOpen {
                 batch_size: prepared.batch_size,
                 arrow_reader_metrics: &arrow_reader_metrics,
                 force_filter_selections: prepared.force_filter_selections,
-                decoder_limit: prepared.limit,
+                decoder_limit,
             };
 
             let prepared_access_plan = prepare_access_plan(access_plan)?;
@@ -1764,6 +1919,10 @@ impl RowGroupsPrunedParquetOpen {
             // installed filter is owned by the decoder and is not
             // recoverable once replaced.
             let first_rg_fully_matched = rg_plan.front().is_some_and(|e| e.fully_matched);
+            // The adaptive filter placement can change at a row group
+            // boundary also when a row selection is live: the rebuild keeps
+            // the selections of the remaining row groups (see
+            // `PushDecoderStreamState::rebuild_decoder_at_boundary`).
             let row_filter_context = precomputed_context;
 
             let mut builder = decoder_config.build(selections, reader_metadata.clone());
@@ -1833,6 +1992,17 @@ impl RowGroupsPrunedParquetOpen {
         let files_ranges_pruned_statistics =
             prepared.file_metrics.files_ranges_pruned_statistics.clone();
 
+        // True if the predicate has a dynamic filter that can still change.
+        // Such a filter gets tighter only when its producer (for example a
+        // TopK) sees the rows of the scan.
+        let watches_dynamic_filter =
+            prepared.predicate.as_ref().is_some_and(|predicate| {
+                matches!(
+                    DynamicFilterTracking::classify(predicate),
+                    DynamicFilterTracking::Watching(_)
+                )
+            });
+
         // Build a dynamic row-group pruner only when all three conditions hold:
         //   1) the scan has a predicate (so there is something to evaluate),
         //   2) the predicate has at least one not-yet-complete dynamic filter
@@ -1849,12 +2019,7 @@ impl RowGroupsPrunedParquetOpen {
         // and is tracked in https://github.com/apache/datafusion/issues/24358.
         let row_group_pruner =
             match (&prepared.predicate, rg_plan.len() > 1, has_row_selection) {
-                (Some(predicate), true, false)
-                    if matches!(
-                        DynamicFilterTracking::classify(predicate),
-                        DynamicFilterTracking::Watching(_)
-                    ) =>
-                {
+                (Some(predicate), true, false) if watches_dynamic_filter => {
                     Some(RowGroupPruner::new(
                         Arc::clone(predicate),
                         Arc::clone(&prepared.physical_file_schema),
@@ -1870,6 +2035,10 @@ impl RowGroupsPrunedParquetOpen {
             .file_metrics
             .row_groups_pruned_dynamic_filter
             .clone();
+
+        // Captured before `decoder_projection` is moved into the stream state.
+        let filtered_schema = Arc::clone(decoder_projection.filtered_schema());
+
         let stream = PushDecoderStreamState {
             decoder: Some(decoder),
             active_reader: None,
@@ -1886,6 +2055,23 @@ impl RowGroupsPrunedParquetOpen {
             filter_installed,
             row_filter_skipped_fully_matched,
             byte_progress,
+            remaining_limit,
+            // A post-scan filter can leave only a few rows per decoded batch;
+            // reassemble them so the operator above sees full-size batches.
+            // Full-size batches (no post-scan filter for a row group, with
+            // adaptive filter placement) are not copied.
+            batch_coalescer: has_post_scan_filter.then(|| {
+                let biggest =
+                    projection_builder.as_ref().map(|_| prepared.batch_size / 2);
+                BatchCoalescer::new(filtered_schema, prepared.batch_size)
+                    .with_biggest_coalesce_batch_size(biggest)
+            }),
+            flushed: false,
+            // Hand the buffered rows downstream at each row group boundary
+            // when a dynamic filter can still change, so that its producer
+            // can tighten it before the scan prunes the next row groups.
+            flush_at_row_group_boundary: watches_dynamic_filter,
+            projection_builder,
         }
         .into_stream();
 
@@ -2189,6 +2375,9 @@ mod test {
         max_in_list_size: usize,
         reverse_row_groups: bool,
         preserve_order: bool,
+        optional_filters: OptionalFilterOptions,
+        filter_placement: bool,
+        placement_sites: Option<Arc<PlacementSites>>,
     }
 
     #[test]
@@ -2412,6 +2601,9 @@ mod test {
                 max_in_list_size: MAX_IN_LIST_SIZE,
                 reverse_row_groups: false,
                 preserve_order: false,
+                optional_filters: OptionalFilterOptions::default(),
+                filter_placement: false,
+                placement_sites: None,
             }
         }
 
@@ -2510,7 +2702,24 @@ mod test {
             self
         }
 
-        /// Set whether the scan must preserve file order.
+        /// Set whether the scan uses the adaptive filter placement.
+        fn with_filter_placement(mut self, enable: bool) -> Self {
+            self.filter_placement = enable;
+            self
+        }
+
+        /// Sets the pooled measurements of the adaptive filter placement,
+        /// for example [`PlacementSites::with_fixed_costs`].
+        fn with_placement_sites(mut self, sites: Arc<PlacementSites>) -> Self {
+            self.placement_sites = Some(sites);
+            self
+        }
+
+        fn with_optional_filters(mut self, options: OptionalFilterOptions) -> Self {
+            self.optional_filters = options;
+            self
+        }
+
         fn with_preserve_order(mut self, enable: bool) -> Self {
             self.preserve_order = enable;
             self
@@ -2561,6 +2770,11 @@ mod test {
                 self.pushdown_filters,
             )?;
 
+            let filter_placement = PlacementOptions::new(
+                self.filter_placement,
+                self.placement_sites.unwrap_or_default(),
+                self.predicate.as_ref(),
+            );
             Ok(ParquetMorselizer {
                 partition_index: self.partition_index,
                 projection,
@@ -2598,6 +2812,8 @@ mod test {
                 reverse_row_groups: self.reverse_row_groups,
                 sort_order_for_reorder: None,
                 virtual_state,
+                optional_filters: self.optional_filters,
+                filter_placement,
             })
         }
     }
@@ -3164,14 +3380,17 @@ mod test {
                 .build()
         };
 
-        // A filter on "a" should not exclude any rows even if it matches the data
+        // A filter on "a" cannot be excluded by file-level stats (no stats on
+        // column 0). The scan now accepts the filter and applies it post-scan
+        // (in-scan equivalent of `FilterExec`), so only the matching row
+        // survives.
         let expr = col("a").eq(lit(1));
         let predicate = logical2physical(&expr, &schema);
         let opener = make_opener(predicate);
         let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
-        assert_eq!(num_rows, 3);
+        assert_eq!(num_rows, 1);
 
         // A filter on `b = 5.0` should exclude all rows
         let expr = col("b").eq(lit(ScalarValue::Float32(Some(5.0))));
@@ -3292,14 +3511,16 @@ mod test {
                 .build()
         };
 
-        // Filter should match the partition value and file statistics
+        // Filter should match the partition value and file statistics (i.e. no
+        // file-level pruning). The scan now accepts the filter and applies it
+        // post-scan, leaving only the single row where `b = 1.0`.
         let expr = col("part").eq(lit(1)).and(col("b").eq(lit(1.0)));
         let predicate = logical2physical(&expr, &table_schema);
         let opener = make_opener(predicate);
         let stream = open_file(&opener, file.clone()).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
-        assert_eq!(num_rows, 3);
+        assert_eq!(num_rows, 1);
 
         // Should prune based on partition value but not file statistics
         let expr = col("part").eq(lit(2)).and(col("b").eq(lit(1.0)));
@@ -3414,7 +3635,9 @@ mod test {
         );
 
         // A predicate the statistics cannot disprove still reads the file,
-        // so the skip above is not simply "prune everything".
+        // so the skip above is not simply "prune everything". The scan
+        // accepts the filter and applies it post-scan, so only the matching
+        // row survives.
         let metrics = ExecutionPlanMetricsSet::new();
         let expr = col("a").eq(lit(2));
         let predicate = logical2physical(&expr, &table_schema);
@@ -3422,7 +3645,7 @@ mod test {
         let stream = open_file(&opener, file).await.unwrap();
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 1);
-        assert_eq!(num_rows, 3);
+        assert_eq!(num_rows, 1);
         assert_eq!(pruned_row_groups_statistics(&metrics), 0);
     }
 
@@ -3540,11 +3763,19 @@ mod test {
             .build();
         let stream = open_file(&opener, file).await.unwrap();
         let (_, num_rows) = count_batches_and_rows(stream).await;
-        // The row group is read and its rows handed up for the filter above
-        // to apply, which is the missing-column path this test protects.
+        // The row group is read (not pruned), which is the missing-column
+        // path this test protects. The scan then applies the predicate
+        // post-scan: `b` is NULL in every row of this file, so `b = 2` rejects
+        // them all.
         assert_eq!(
-            num_rows, 3,
-            "the file must be scanned, not pruned, on the missing-column path"
+            num_rows, 0,
+            "the file must be scanned and filtered, not pruned, on the \
+             missing-column path"
+        );
+        assert_eq!(
+            counter_metric_value(&metrics, "post_scan_rows_pruned"),
+            3,
+            "every row must be read and then rejected by the post-scan filter"
         );
         assert_eq!(
             pruned_row_groups_statistics(&metrics),
@@ -3816,10 +4047,12 @@ mod test {
             Ok(count_batches_and_rows(stream).await)
         };
 
+        // The scan accepts the `a = 1` filter and applies it (RowFilter or
+        // post-scan), so only the matching row survives (data is a=[1, 2, 2]).
         let (num_batches, num_rows) =
             query_file(schema.clone()).await.expect("query_file");
         assert_eq!(num_batches, 1);
-        assert_eq!(num_rows, 3);
+        assert_eq!(num_rows, 1);
 
         let mismatching_schema = Schema::new(vec![
             Field::new("a", DataType::Int32, true),
@@ -4560,13 +4793,17 @@ mod test {
         )
         .await;
 
+        // The scan now always applies the predicate (RowFilter or post-scan),
+        // so both paths return the same matching rows. The page index only
+        // affects IO — it decides whether the 90 non-matching rows are
+        // physically read before being rejected.
         assert_eq!(
             rows_with_page_index, 10,
             "page index should prune 9 of 10 pages"
         );
         assert_eq!(
-            rows_without_page_index, 100,
-            "without page index all rows are returned"
+            rows_without_page_index, 10,
+            "without page index the post-scan filter still rejects non-matching rows"
         );
     }
 
@@ -5229,6 +5466,752 @@ mod test {
         assert_eq!(values, vec![7, 4, 5, 6, 3]);
     }
 
+    /// A selective post-scan filter must not fragment the output stream.
+    ///
+    /// The decoder hands back one batch per `batch_size` rows; a predicate
+    /// matching a single row in each of them used to be emitted as one
+    /// sliver-sized batch per decoded batch, leaving every operator above the
+    /// scan to pay per-batch overhead on batches of one row. `FilterExec`
+    /// coalesces for exactly this reason, and the in-scan filter now does too.
+    #[tokio::test]
+    async fn selective_post_scan_filter_coalesces_output_batches() {
+        use arrow::array::Int32Array;
+
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        // 8 write batches of 1000 rows. The default test `batch_size` is 1024,
+        // so the decoder yields several batches regardless of how the writer
+        // chunked the data.
+        let batches: Vec<RecordBatch> = (0..8)
+            .map(|chunk: i32| {
+                let base = chunk * 1000;
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(Int32Array::from(
+                        (base..base + 1000).collect::<Vec<i32>>(),
+                    ))],
+                )
+                .unwrap()
+            })
+            .collect();
+
+        let data_size =
+            write_parquet_batches(Arc::clone(&store), "coalesce.parquet", batches, None)
+                .await;
+        let file = PartitionedFile::new("coalesce.parquet".to_string(), data_size as u64);
+
+        // One match per ~1024-row decoded batch, spread across the file, so an
+        // uncoalesced stream would emit one batch per match.
+        let matches = [0i32, 1500, 3000, 4500, 6000, 7500];
+        let predicate = logical2physical(
+            &matches
+                .iter()
+                .map(|v| col("id").eq(lit(*v)))
+                .reduce(|acc, e| acc.or(e))
+                .unwrap(),
+            &schema,
+        );
+
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_predicate(predicate)
+            // pushdown_filters=false routes the whole predicate to the
+            // post-scan filter — the path this test is about.
+            .with_pushdown_filters(false)
+            .build();
+
+        let stream = open_file(&morselizer, file).await.unwrap();
+        let (num_batches, num_rows) = count_batches_and_rows(stream).await;
+
+        assert_eq!(num_rows, matches.len(), "every match must survive");
+        // All survivors fit in one target-size batch. Without coalescing this
+        // was one batch per match.
+        assert_eq!(
+            num_batches, 1,
+            "expected the survivors to be coalesced into a single batch, got \
+             {num_batches} batches for {num_rows} rows"
+        );
+    }
+
+    /// End-to-end regression test for the "drop-on-floor" bug fixed by
+    /// `build_row_filter` now returning rejected conjuncts and the opener
+    /// routing them to the post-scan filter.
+    ///
+    /// Setup: a parquet file with a struct column where some rows have a NULL
+    /// struct. Predicate `s IS NOT NULL` is set on the source with
+    /// `pushdown_filters = true`. `ParquetSource::try_pushdown_filters` would
+    /// have already removed the parent `FilterExec` (the conjunct is pushable
+    /// at table schema level). Inside `build_row_filter`,
+    /// `FilterCandidateBuilder::build` rejects the whole-struct reference as
+    /// non-primitive.
+    ///
+    /// Before the fix the rejected conjunct was silently dropped, leaving the
+    /// scan with no `RowFilter` and no post-scan filter, so every row was
+    /// returned — i.e. the predicate was relaxed and the query returned wrong
+    /// results. After the fix the conjunct is surfaced and applied as a
+    /// post-scan filter, so only the rows with a non-null struct survive.
+    #[tokio::test]
+    async fn rejected_struct_conjunct_runs_post_scan_not_dropped() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let (schema, file) = write_struct_file(&store).await;
+
+        // `s IS NOT NULL` references a whole struct, which `PushdownChecker`
+        // flags as non-primitive — `FilterCandidateBuilder::build` returns
+        // `Ok(None)` and the conjunct lands in `rejected`.
+        let predicate = logical2physical(&col("s").is_not_null(), &schema);
+
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_predicate(predicate)
+            // The RowFilter path: emulates the post-`try_pushdown_filters`
+            // state where the parent `FilterExec` has already been removed
+            // and the scan owns the conjunct.
+            .with_pushdown_filters(true)
+            .build();
+
+        let stream = open_file(&morselizer, file).await.unwrap();
+        let (_, rows) = count_batches_and_rows(stream).await;
+
+        // 2 rows have a non-null struct. Before the fix this returned 3
+        // (the conjunct was silently dropped).
+        assert_eq!(
+            rows, 2,
+            "expected 2 rows with non-null struct; the rejected conjunct must \
+             be applied post-scan, not silently dropped"
+        );
+    }
+
+    /// An optional conjunct is not needed for correctness. The scan never
+    /// evaluates it after the decode: not when `pushdown_filters` is false,
+    /// and not when the `RowFilter` rejects it for the file. A required
+    /// conjunct in the same situations is evaluated after the decode.
+    #[tokio::test]
+    async fn optional_conjunct_is_never_evaluated_post_scan() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let (schema, file) = write_struct_file(&store).await;
+
+        // `s IS NOT NULL` is rejected by the `RowFilter` (whole struct).
+        // `id > 1` can be a `RowFilter` predicate.
+        let rejected = logical2physical(&col("s").is_not_null(), &schema);
+        let pushable = logical2physical(&col("id").gt(lit(1)), &schema);
+        let optional = |expr: &Arc<dyn PhysicalExpr>| -> Arc<dyn PhysicalExpr> {
+            Arc::new(
+                datafusion_physical_expr::expressions::OptionalFilterPhysicalExpr::new(
+                    Arc::clone(expr),
+                ),
+            )
+        };
+
+        // (predicate, pushdown_filters, expected rows, expected post-scan rows)
+        let cases: Vec<(Arc<dyn PhysicalExpr>, bool, usize, usize)> = vec![
+            // Required conjuncts: applied post-scan (#22384).
+            (Arc::clone(&rejected), false, 2, 3),
+            (Arc::clone(&rejected), true, 2, 3),
+            (Arc::clone(&pushable), false, 2, 3),
+            // Optional conjuncts: never evaluated post-scan.
+            (optional(&rejected), false, 3, 0),
+            (optional(&rejected), true, 3, 0),
+            (optional(&pushable), false, 3, 0),
+            // An optional conjunct that the `RowFilter` accepts is a row
+            // filter predicate.
+            (optional(&pushable), true, 2, 0),
+        ];
+        for (predicate, pushdown, expected_rows, expected_post_scan_rows) in cases {
+            let metrics = ExecutionPlanMetricsSet::new();
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_predicate(Arc::clone(&predicate))
+                .with_pushdown_filters(pushdown)
+                .with_metrics(metrics.clone())
+                .build();
+            let stream = open_file(&morselizer, file.clone()).await.unwrap();
+            let (_, rows) = count_batches_and_rows(stream).await;
+            let post_scan_rows = counter_metric_value(&metrics, "post_scan_rows_pruned")
+                + counter_metric_value(&metrics, "post_scan_rows_matched");
+            assert_eq!(
+                (rows, post_scan_rows),
+                (expected_rows, expected_post_scan_rows),
+                "predicate {predicate}, pushdown_filters {pushdown}"
+            );
+        }
+    }
+
+    /// The decode speed for the saving of optional filters is measured only
+    /// on the row groups where the row filter removed no rows: a row filter
+    /// that removes rows spread over the row group makes each output row
+    /// more expensive to decode.
+    #[tokio::test]
+    async fn decode_speed_is_measured_without_row_filter_selection() {
+        use arrow::array::{Int32Array, Int64Array};
+        use datafusion_common::config::OptionalFilterMode;
+        use datafusion_physical_expr::expressions::OptionalFilterPhysicalExpr;
+        use datafusion_physical_expr::optional_filter_gate::OptionalFilterGateConfig;
+
+        const ROWS_PER_ROW_GROUP: usize = 8192;
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("v", DataType::Int64, false),
+        ]));
+        // Four row groups. `a = 0` removes every second row of the first
+        // three row groups, and no row of the last one.
+        let rows = 4 * ROWS_PER_ROW_GROUP;
+        let a = |i: usize| {
+            if i < 3 * ROWS_PER_ROW_GROUP {
+                (i % 2) as i32
+            } else {
+                0
+            }
+        };
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from_iter_values((0..rows).map(a))),
+                Arc::new(Int64Array::from_iter_values(0..rows as i64)),
+            ],
+        )
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(ROWS_PER_ROW_GROUP))
+            .build();
+        let size = write_parquet_batches(
+            Arc::clone(&store),
+            "decode.parquet",
+            vec![batch],
+            Some(props),
+        )
+        .await;
+        let file = PartitionedFile::new("decode.parquet".to_string(), size as u64);
+
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(OptionalFilterPhysicalExpr::new(
+            logical2physical(&col("a").eq(lit(0)), &schema),
+        ));
+        let options = OptionalFilterOptions {
+            mode: OptionalFilterMode::Adaptive,
+            // The gate never pauses the filter.
+            gate_config: OptionalFilterGateConfig {
+                min_saving_ns_per_row: 1e9,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_optional_filters(options.clone())
+            .build();
+        let stream = open_file(&morselizer, file).await.unwrap();
+        let (_, output_rows) = count_batches_and_rows(stream).await;
+        assert_eq!(output_rows, 3 * ROWS_PER_ROW_GROUP / 2 + ROWS_PER_ROW_GROUP);
+
+        // Only the last row group is measured: its rows times the average
+        // compressed bytes for each row of the output columns.
+        let measured = options.decode_cost.measured_bytes() as f64;
+        let file_bytes_per_row = size as f64 / rows as f64;
+        let row_group_bytes = ROWS_PER_ROW_GROUP as f64 * file_bytes_per_row;
+        assert!(measured > 0.0);
+        assert!(
+            measured < 2.0 * row_group_bytes,
+            "measured {measured} bytes, one row group has about {row_group_bytes}"
+        );
+    }
+
+    /// Writes a file with the columns `id` (Int32: 1, 2, 3) and `s`
+    /// (Struct{value: Int32, label: Utf8}; row 1 is null).
+    async fn write_struct_file(
+        store: &Arc<dyn ObjectStore>,
+    ) -> (SchemaRef, PartitionedFile) {
+        use arrow::array::{Int32Array, StringArray, StructArray};
+        use arrow::buffer::NullBuffer;
+        use arrow::datatypes::Fields;
+
+        let struct_fields: Fields = vec![
+            Arc::new(Field::new("value", DataType::Int32, true)),
+            Arc::new(Field::new("label", DataType::Utf8, true)),
+        ]
+        .into();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("s", DataType::Struct(struct_fields.clone()), true),
+        ]));
+
+        // Data: rows 0 and 2 have a non-null struct, row 1 is null.
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StructArray::new(
+                    struct_fields,
+                    vec![
+                        Arc::new(Int32Array::from(vec![Some(10), None, Some(30)])) as _,
+                        Arc::new(StringArray::from(vec![Some("a"), None, Some("c")]))
+                            as _,
+                    ],
+                    Some(NullBuffer::from(vec![true, false, true])),
+                )),
+            ],
+        )
+        .unwrap();
+
+        let data_size = write_parquet_batches(
+            Arc::clone(store),
+            "rejected.parquet",
+            vec![batch],
+            None,
+        )
+        .await;
+
+        let file = PartitionedFile::new("rejected.parquet".to_string(), data_size as u64);
+        (schema, file)
+    }
+
+    /// End-to-end tests of the adaptive filter placement
+    /// (`crate::filter_placement`).
+    mod filter_placement {
+        use super::*;
+        use arrow::array::{Int32Array, Int64Array};
+        use datafusion_common::config::OptionalFilterMode;
+        use datafusion_physical_expr::expressions::OptionalFilterPhysicalExpr;
+        use datafusion_physical_expr::optional_filter_gate::OptionalFilterGateConfig;
+
+        const ROW_GROUPS: usize = 4;
+        const ROWS_PER_ROW_GROUP: usize = 16 * 1024;
+        const TOTAL_ROWS: usize = ROW_GROUPS * ROWS_PER_ROW_GROUP;
+
+        /// A file with `ROW_GROUPS` row groups and the columns `a` (Int32,
+        /// `a(i)` for row `i`) and `v` (Int64, the row number).
+        async fn write_file(
+            store: &Arc<dyn ObjectStore>,
+            a: impl Fn(usize) -> i32,
+        ) -> (SchemaRef, PartitionedFile) {
+            write_file_with_pages(store, a, None).await
+        }
+
+        /// Like [`write_file`], with at most `page_rows` rows in each data
+        /// page if it is `Some`.
+        async fn write_file_with_pages(
+            store: &Arc<dyn ObjectStore>,
+            a: impl Fn(usize) -> i32,
+            page_rows: Option<usize>,
+        ) -> (SchemaRef, PartitionedFile) {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("v", DataType::Int64, false),
+            ]));
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from_iter_values((0..TOTAL_ROWS).map(&a))),
+                    Arc::new(Int64Array::from_iter_values(0..TOTAL_ROWS as i64)),
+                ],
+            )
+            .unwrap();
+            let mut props = WriterProperties::builder()
+                .set_max_row_group_row_count(Some(ROWS_PER_ROW_GROUP));
+            if let Some(page_rows) = page_rows {
+                props = props
+                    .set_data_page_row_count_limit(page_rows)
+                    .set_write_batch_size(page_rows);
+            }
+            let props = props.build();
+            let size = write_parquet_batches(
+                Arc::clone(store),
+                "placement.parquet",
+                vec![batch],
+                Some(props),
+            )
+            .await;
+            let file = PartitionedFile::new("placement.parquet".to_string(), size as u64);
+            (schema, file)
+        }
+
+        /// Fixed costs for deterministic placement decisions: 10 ns to
+        /// decode each compressed byte and no fetch latency.
+        fn fixed_sites() -> Arc<PlacementSites> {
+            Arc::new(PlacementSites::with_fixed_costs(10.0, 0.0))
+        }
+
+        /// `a` makes runs of 1000 rows with the values 0 and 1.
+        fn runs_of_1000(i: usize) -> i32 {
+            ((i / 1000) % 2) as i32
+        }
+
+        struct Scan {
+            rows: usize,
+            metrics: ExecutionPlanMetricsSet,
+        }
+
+        impl Scan {
+            fn count(&self, name: &str) -> usize {
+                counter_metric_value(&self.metrics, name)
+            }
+
+            /// Rows that the `RowFilter` evaluated.
+            fn row_filter_rows(&self) -> usize {
+                self.count("pushdown_rows_matched") + self.count("pushdown_rows_pruned")
+            }
+
+            /// Rows that the post-scan filter evaluated.
+            fn post_scan_rows(&self) -> usize {
+                self.count("post_scan_rows_matched") + self.count("post_scan_rows_pruned")
+            }
+        }
+
+        async fn scan(
+            store: &Arc<dyn ObjectStore>,
+            schema: &SchemaRef,
+            file: &PartitionedFile,
+            predicate: &Arc<dyn PhysicalExpr>,
+            pushdown_filters: bool,
+            filter_placement: bool,
+            optional_filters: OptionalFilterOptions,
+        ) -> Scan {
+            let metrics = ExecutionPlanMetricsSet::new();
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(store))
+                .with_schema(Arc::clone(schema))
+                .with_predicate(Arc::clone(predicate))
+                .with_pushdown_filters(pushdown_filters)
+                .with_filter_placement(filter_placement)
+                .with_placement_sites(fixed_sites())
+                .with_optional_filters(optional_filters)
+                .with_metrics(metrics.clone())
+                .build();
+            let stream = open_file(&morselizer, file.clone()).await.unwrap();
+            let (_, rows) = count_batches_and_rows(stream).await;
+            Scan { rows, metrics }
+        }
+
+        /// A filter that removes every second row saves no decode time in a
+        /// row filter: the removed rows do not make runs that the decoder can
+        /// skip. The scan starts it in the post-scan filter and it stays
+        /// there. The result is the same in all placements.
+        #[tokio::test]
+        async fn scattered_filter_stays_post_scan() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (schema, file) = write_file(&store, |i| (i % 2) as i32).await;
+            let predicate = logical2physical(&col("a").eq(lit(0)), &schema);
+            let options = OptionalFilterOptions::default();
+
+            let adaptive = scan(
+                &store,
+                &schema,
+                &file,
+                &predicate,
+                true,
+                true,
+                options.clone(),
+            )
+            .await;
+            let row_filter = scan(
+                &store,
+                &schema,
+                &file,
+                &predicate,
+                true,
+                false,
+                options.clone(),
+            )
+            .await;
+            let post_scan =
+                scan(&store, &schema, &file, &predicate, false, false, options).await;
+
+            for scan in [&adaptive, &row_filter, &post_scan] {
+                assert_eq!(scan.rows, TOTAL_ROWS / 2);
+            }
+            assert_eq!(adaptive.count("filter_placement_changes"), 0);
+            assert_eq!(adaptive.row_filter_rows(), 0);
+            assert_eq!(adaptive.post_scan_rows(), TOTAL_ROWS);
+            assert_eq!(row_filter.row_filter_rows(), TOTAL_ROWS);
+            assert_eq!(post_scan.post_scan_rows(), TOTAL_ROWS);
+        }
+
+        /// The values of `v` that a scan with the page index returns, and
+        /// its metrics.
+        async fn scan_values_with_page_index(
+            store: &Arc<dyn ObjectStore>,
+            schema: &SchemaRef,
+            file: &PartitionedFile,
+            predicate: &Arc<dyn PhysicalExpr>,
+            pushdown_filters: bool,
+            filter_placement: bool,
+        ) -> (Vec<i64>, ExecutionPlanMetricsSet) {
+            let metrics = ExecutionPlanMetricsSet::new();
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(store))
+                .with_schema(Arc::clone(schema))
+                .with_predicate(Arc::clone(predicate))
+                .with_pushdown_filters(pushdown_filters)
+                .with_filter_placement(filter_placement)
+                .with_placement_sites(fixed_sites())
+                .with_enable_page_index(true)
+                .with_metrics(metrics.clone())
+                .build();
+            let stream = open_file(&morselizer, file.clone()).await.unwrap();
+            let batches = stream.try_collect::<Vec<_>>().await.unwrap();
+            let values = batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(1)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .values()
+                        .to_vec()
+                })
+                .collect();
+            (values, metrics)
+        }
+
+        /// The page index skips the first pages of the first row group
+        /// (`v >= 1000`) and pages of the second and third row groups
+        /// (`v < 20000 OR v >= 40000`), thus the scan has a live row
+        /// selection. `a = 0` passes the first row of each page of 100
+        /// rows: the page index cannot prune its pages, but it leaves empty
+        /// windows of 64 rows, thus it moves to the row filter. The placement
+        /// changes at a row group boundary, the rebuilt decoder keeps the
+        /// selections of the remaining row groups, and the result is the
+        /// same as with a row filter only and with a post-scan filter only.
+        #[tokio::test]
+        async fn placement_changes_with_page_index_selection() {
+            use datafusion_physical_plan::metrics::MetricValue;
+
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (schema, file) =
+                write_file_with_pages(&store, |i| i32::from(i % 100 != 0), Some(100))
+                    .await;
+            let predicate = logical2physical(
+                &col("a").eq(lit(0)).and(col("v").gt_eq(lit(1000_i64))).and(
+                    col("v")
+                        .lt(lit(20_000_i64))
+                        .or(col("v").gt_eq(lit(40_000_i64))),
+                ),
+                &schema,
+            );
+
+            let (adaptive, adaptive_metrics) = scan_values_with_page_index(
+                &store, &schema, &file, &predicate, true, true,
+            )
+            .await;
+            let (row_filter, row_filter_metrics) = scan_values_with_page_index(
+                &store, &schema, &file, &predicate, true, false,
+            )
+            .await;
+            let (post_scan, post_scan_metrics) = scan_values_with_page_index(
+                &store, &schema, &file, &predicate, false, false,
+            )
+            .await;
+
+            let expected: Vec<i64> = (1000..20_000)
+                .chain(40_000..TOTAL_ROWS as i64)
+                .filter(|v| v % 100 == 0)
+                .collect();
+            assert_eq!(adaptive, expected);
+            assert_eq!(row_filter, expected);
+            assert_eq!(post_scan, expected);
+
+            // The page index skipped rows: the selection is not select-all.
+            let MetricValue::PruningMetrics {
+                pruning_metrics, ..
+            } = adaptive_metrics
+                .clone_inner()
+                .sum_by_name("page_index_rows_pruned")
+                .unwrap()
+            else {
+                panic!("expected page pruning metrics");
+            };
+            // Whole pages only: a page that has a row in the result is kept.
+            assert!(pruning_metrics.pruned() > 20_000);
+            assert!(
+                counter_metric_value(&adaptive_metrics, "filter_placement_changes") > 0
+            );
+            // The rebuilt decoder fetches only the pages that the selections
+            // keep, as the scans that do not change the placement. A rebuild
+            // that dropped the selections of the remaining row groups fetches
+            // the pruned pages of the second and third row groups.
+            let bytes = |metrics: &ExecutionPlanMetricsSet| {
+                counter_metric_value(metrics, "bytes_scanned")
+            };
+            assert!(
+                bytes(&adaptive_metrics)
+                    <= bytes(&row_filter_metrics).max(bytes(&post_scan_metrics))
+            );
+        }
+
+        /// A filter that removes long runs of rows saves decode time in a row
+        /// filter. The scan starts it in the post-scan filter, measures it in
+        /// the first row group and moves it to the row filter at the first
+        /// row group boundary.
+        #[tokio::test]
+        async fn clustered_filter_moves_to_row_filter() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            // `a` increases by 1 every 1000 rows.
+            let (schema, file) = write_file(&store, |i| (i / 1000) as i32).await;
+            // 10000 rows in the first row group and 10000 rows in the third.
+            let predicate = logical2physical(
+                &col("a").lt(lit(10)).or(col("a").between(lit(40), lit(49))),
+                &schema,
+            );
+            let adaptive = scan(
+                &store,
+                &schema,
+                &file,
+                &predicate,
+                true,
+                true,
+                OptionalFilterOptions::default(),
+            )
+            .await;
+            assert_eq!(adaptive.rows, 20_000);
+            assert_eq!(adaptive.count("filter_placement_changes"), 1);
+            assert_eq!(adaptive.post_scan_rows(), ROWS_PER_ROW_GROUP);
+            assert_eq!(adaptive.row_filter_rows(), TOTAL_ROWS - ROWS_PER_ROW_GROUP);
+        }
+
+        /// A filter that reads all output columns cannot save decode time in
+        /// a row filter, thus it stays in the post-scan filter, also where it
+        /// removes long runs of rows.
+        #[tokio::test]
+        async fn filter_on_all_output_columns_stays_post_scan() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (schema, file) = write_file(&store, |i| (i / 1000) as i32).await;
+            let predicate = logical2physical(&col("a").lt(lit(10)), &schema);
+            let metrics = ExecutionPlanMetricsSet::new();
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[0])
+                .with_predicate(predicate)
+                .with_pushdown_filters(true)
+                .with_filter_placement(true)
+                .with_placement_sites(fixed_sites())
+                .with_metrics(metrics.clone())
+                .build();
+            let stream = open_file(&morselizer, file).await.unwrap();
+            let (_, rows) = count_batches_and_rows(stream).await;
+            let scan = Scan { rows, metrics };
+            assert_eq!(scan.rows, 10_000);
+            assert_eq!(scan.row_filter_rows(), 0);
+            assert_eq!(scan.post_scan_rows(), TOTAL_ROWS);
+            assert_eq!(scan.count("filter_placement_changes"), 0);
+        }
+
+        /// An optional filter that removes no rows is paused by its gate.
+        /// With adaptive placement, it starts in the post-scan filter (no
+        /// evidence for a row filter). While it is paused, the scan skips it
+        /// from the next row group boundary: it is not evaluated, and its
+        /// column is not decoded if it is not an output column. Without
+        /// adaptive placement, the paused filter stays a `RowFilter`
+        /// predicate that lets all rows pass.
+        #[tokio::test]
+        async fn paused_optional_filter_is_skipped() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (schema, file) = write_file(&store, |i| (i % 100) as i32).await;
+            let inner = logical2physical(&col("a").gt_eq(lit(0)), &schema);
+            let predicate: Arc<dyn PhysicalExpr> =
+                Arc::new(OptionalFilterPhysicalExpr::new(inner));
+            let options = || OptionalFilterOptions {
+                mode: OptionalFilterMode::Adaptive,
+                gate_config: OptionalFilterGateConfig::default(),
+                ..Default::default()
+            };
+
+            // The output columns are `a` and `v`.
+            let adaptive =
+                scan(&store, &schema, &file, &predicate, true, true, options()).await;
+            let gated =
+                scan(&store, &schema, &file, &predicate, true, false, options()).await;
+            // The output column is `v` only.
+            let metrics = ExecutionPlanMetricsSet::new();
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_projection_indices(&[1])
+                .with_predicate(Arc::clone(&predicate))
+                .with_pushdown_filters(true)
+                .with_filter_placement(true)
+                .with_placement_sites(fixed_sites())
+                .with_optional_filters(options())
+                .with_metrics(metrics.clone())
+                .build();
+            let stream = open_file(&morselizer, file.clone()).await.unwrap();
+            let (_, rows) = count_batches_and_rows(stream).await;
+            let not_output = Scan { rows, metrics };
+
+            for scan in [&adaptive, &gated, &not_output] {
+                assert_eq!(scan.rows, TOTAL_ROWS);
+                assert!(scan.count("optional_filter_rows_skipped") > 0);
+            }
+            // Without placement, every row goes through the row filter.
+            assert_eq!(gated.row_filter_rows(), TOTAL_ROWS);
+            assert_eq!(gated.count("filter_placement_changes"), 0);
+            // With placement, the filter is never a row filter, and the row
+            // groups where it is paused have no post-scan filter.
+            for scan in [&adaptive, &not_output] {
+                assert_eq!(scan.row_filter_rows(), 0);
+                assert!(scan.count("filter_placement_changes") > 0);
+                assert!(
+                    scan.post_scan_rows() < TOTAL_ROWS,
+                    "post-scan rows: {}",
+                    scan.post_scan_rows()
+                );
+            }
+        }
+
+        /// With a limit, the results are the same when the placement moves a
+        /// filter to the row filter in the middle of the file.
+        #[tokio::test]
+        async fn limit_is_applied_after_placement_change() {
+            let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+            let (schema, file) = write_file(&store, runs_of_1000).await;
+            let predicate = logical2physical(&col("a").eq(lit(0)), &schema);
+            // The first row group has 8384 rows with `a = 0`.
+            let limit = 9000;
+            let metrics = ExecutionPlanMetricsSet::new();
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_predicate(predicate)
+                .with_pushdown_filters(true)
+                .with_filter_placement(true)
+                .with_placement_sites(fixed_sites())
+                .with_limit(limit)
+                .with_metrics(metrics.clone())
+                .build();
+            let stream = open_file(&morselizer, file).await.unwrap();
+            let batches = stream.try_collect::<Vec<_>>().await.unwrap();
+            let values: Vec<i64> = batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column(1)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .values()
+                        .to_vec()
+                })
+                .collect();
+            let expected: Vec<i64> = (0..TOTAL_ROWS as i64)
+                .filter(|v| (v / 1000) % 2 == 0)
+                .take(limit)
+                .collect();
+            assert_eq!(values, expected);
+            assert_eq!(
+                counter_metric_value(&metrics, "filter_placement_changes"),
+                1
+            );
+        }
+    }
+
     /// Helpers for tests that exercise parquet virtual columns
     /// (e.g. `row_number`) plumbed through `TableSchema`/`ParquetOpener`.
     mod virtual_columns {
@@ -5694,9 +6677,12 @@ mod test {
 
         #[tokio::test]
         async fn test_row_index_predicate_allowed_when_pushdown_disabled() {
-            // Guards the `pushdown_filters=false` path: the predicate is only
-            // used for stats pruning (a no-op for row_number) and must not
-            // trip the virtual-column check.
+            // Guards the `pushdown_filters=false` path with a virtual-column
+            // predicate set directly on the opener: it must not trip the
+            // virtual-column check in the read-plan mask. With always-accept
+            // semantics the predicate runs as an in-scan post-scan filter
+            // (evaluated against the reader-appended `row_number` column), so
+            // only the single matching row survives.
             let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
             let expr = col("row_number").eq(lit(2i64));
             let (morselizer, file) =
@@ -5706,7 +6692,7 @@ mod test {
 
             let stream = open_file(&morselizer, file).await.unwrap();
             let (_batches, rows) = count_batches_and_rows(stream).await;
-            assert_eq!(rows, 5);
+            assert_eq!(rows, 1);
         }
     }
 }

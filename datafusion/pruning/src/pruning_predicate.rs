@@ -44,15 +44,21 @@ use datafusion_common::{
     _internal_datafusion_err, Column, DFSchema, assert_eq_or_internal_err,
 };
 use datafusion_common::{
-    ScalarValue, internal_datafusion_err, plan_datafusion_err, plan_err,
+    ScalarValue, internal_datafusion_err, internal_err, plan_datafusion_err, plan_err,
     tree_node::{Transformed, TreeNode},
 };
 use datafusion_expr_common::casts::try_cast_literal_to_type;
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr::utils::{Guarantee, LiteralGuarantee};
-use datafusion_physical_expr::{PhysicalExprRef, expressions as phys_expr};
+use datafusion_physical_expr::{
+    PhysicalExprRef, conjunction, expressions as phys_expr, split_conjunction,
+};
 use datafusion_physical_expr_common::physical_expr::snapshot_physical_expr_opt;
 use datafusion_physical_plan::{ColumnarValue, PhysicalExpr};
+
+mod conjunct_stats;
+pub use conjunct_stats::ConjunctPruningStats;
+use conjunct_stats::PruningConjuncts;
 
 /// Used to prove that arbitrary predicates (boolean expression) can not
 /// possibly evaluate to `true` given information about a column provided by
@@ -386,6 +392,9 @@ pub struct PruningPredicate {
     max_in_list_size: usize,
     /// Whether its logical inverse can safely prove every row matches.
     can_be_inverted_for_full_match: bool,
+    /// Per-conjunct pruning data. Only present when built with
+    /// [`PruningPredicateBuilder::with_conjunct_stats`].
+    conjuncts: Option<PruningConjuncts>,
 }
 
 #[derive(Default)]
@@ -429,6 +438,7 @@ pub struct PruningPredicateBuilder<'a> {
     file_schema: Option<SchemaRef>,
     error_counter: Option<&'a Count>,
     max_in_list_size: usize,
+    conjunct_stats: bool,
 }
 
 impl<'a> PruningPredicateBuilder<'a> {
@@ -438,6 +448,7 @@ impl<'a> PruningPredicateBuilder<'a> {
             file_schema: None,
             error_counter: None,
             max_in_list_size: MAX_IN_LIST_SIZE,
+            conjunct_stats: false,
         }
     }
 
@@ -487,6 +498,24 @@ impl<'a> PruningPredicateBuilder<'a> {
         self
     }
 
+    /// Also prepare per-conjunct pruning statistics, which
+    /// [`PruningPredicate::prune_with_conjunct_stats`] returns.
+    ///
+    /// The conjuncts are the terms that [`split_conjunction`] returns for the
+    /// predicate passed to [`Self::build`] or [`Self::try_build`]. Thus an `OR`,
+    /// a `NOT` or a dynamic filter is one conjunct, even if it contains an
+    /// `AND`. Dynamic filters are snapshotted once, and all conjuncts and the
+    /// whole predicate use that snapshot.
+    ///
+    /// This is disabled by default, because it rewrites each conjunct a second
+    /// time.
+    ///
+    /// [`split_conjunction`]: datafusion_physical_expr::split_conjunction
+    pub fn with_conjunct_stats(mut self, conjunct_stats: bool) -> Self {
+        self.conjunct_stats = conjunct_stats;
+        self
+    }
+
     /// Build a [`PruningPredicate`] wrapped in `Some(Arc<..>)` when it can
     /// prune, `None` when it is trivially true or when construction fails.
     /// If [`Self::with_error_counter`] was set, construction failures are
@@ -515,32 +544,24 @@ impl<'a> PruningPredicateBuilder<'a> {
     /// Build a [`PruningPredicate`], returning the construction error
     /// directly. Callers that want the always-true predicate elided or
     /// errors folded into a counter should use [`Self::build`] instead.
-    pub fn try_build(
-        self,
-        mut predicate: Arc<dyn PhysicalExpr>,
-    ) -> Result<PruningPredicate> {
+    pub fn try_build(self, predicate: Arc<dyn PhysicalExpr>) -> Result<PruningPredicate> {
         let file_schema = self.file_schema.ok_or_else(|| {
             _internal_datafusion_err!(
                 "PruningPredicateBuilder requires a file schema (call `with_file_schema`)"
             )
         })?;
 
-        // Get a (simpler) snapshot of the physical expr here to use with `PruningPredicate`.
-        // In particular this unravels any `DynamicFilterPhysicalExpr`s by snapshotting them
-        // so that PruningPredicate can work with a static expression.
-        let tf = snapshot_physical_expr_opt(predicate)?;
-        if tf.transformed {
-            // If we had an expression such as Dynamic(part_col < 5 and col < 10)
-            // (this could come from something like `select * from t order by part_col, col, limit 10`)
-            // after snapshotting and because `DynamicFilterPhysicalExpr` applies child replacements to its
-            // children after snapshotting and previously `replace_columns_with_literals` may have been called with partition values
-            // the expression we have now is `8 < 5 and col < 10`.
-            // Thus we need as simplifier pass to get `false and col < 10` => `false` here.
-            let simplifier = PhysicalExprSimplifier::new(&file_schema);
-            predicate = simplifier.simplify(tf.data)?;
+        // Snapshot each conjunct separately, so that a dynamic filter stays one
+        // conjunct. The whole predicate uses the same snapshots.
+        let (predicate, conjuncts) = if self.conjunct_stats {
+            let conjuncts = split_conjunction(&predicate)
+                .into_iter()
+                .map(|conjunct| snapshot_and_simplify(Arc::clone(conjunct), &file_schema))
+                .collect::<Result<Vec<_>>>()?;
+            (conjunction(conjuncts.iter().cloned()), Some(conjuncts))
         } else {
-            predicate = tf.data;
-        }
+            (snapshot_and_simplify(predicate, &file_schema)?, None)
+        };
         let unhandled_hook = Arc::new(ConstantUnhandledPredicateHook::default()) as _;
 
         // build predicate expression once
@@ -559,6 +580,17 @@ impl<'a> PruningPredicateBuilder<'a> {
         let predicate_expr =
             PhysicalExprSimplifier::new(&predicate_schema).simplify(predicate_expr)?;
         let literal_guarantees = LiteralGuarantee::analyze(&predicate);
+        let conjuncts = conjuncts
+            .map(|conjuncts| {
+                PruningConjuncts::try_new(
+                    &conjuncts,
+                    &file_schema,
+                    &required_columns,
+                    &unhandled_hook,
+                    self.max_in_list_size,
+                )
+            })
+            .transpose()?;
 
         Ok(PruningPredicate {
             schema: file_schema,
@@ -568,7 +600,31 @@ impl<'a> PruningPredicateBuilder<'a> {
             literal_guarantees,
             max_in_list_size: self.max_in_list_size,
             can_be_inverted_for_full_match: !properties.has_filter_semantics_only,
+            conjuncts,
         })
+    }
+}
+
+/// Returns a static snapshot of `predicate` for use by [`PruningPredicate`].
+///
+/// In particular this unravels any `DynamicFilterPhysicalExpr`s by snapshotting
+/// them so that [`PruningPredicate`] can work with a static expression.
+fn snapshot_and_simplify(
+    predicate: Arc<dyn PhysicalExpr>,
+    file_schema: &SchemaRef,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let tf = snapshot_physical_expr_opt(predicate)?;
+    if tf.transformed {
+        // If we had an expression such as Dynamic(part_col < 5 and col < 10)
+        // (this could come from something like `select * from t order by part_col, col, limit 10`)
+        // after snapshotting and because `DynamicFilterPhysicalExpr` applies child replacements to its
+        // children after snapshotting and previously `replace_columns_with_literals` may have been called with partition values
+        // the expression we have now is `8 < 5 and col < 10`.
+        // Thus we need as simplifier pass to get `false and col < 10` => `false` here.
+        let simplifier = PhysicalExprSimplifier::new(file_schema);
+        simplifier.simplify(tf.data)
+    } else {
+        Ok(tf.data)
     }
 }
 
@@ -661,35 +717,12 @@ impl PruningPredicate {
         let mut builder = BoolVecBuilder::new(statistics.num_containers());
 
         // Try to prove the predicate can't be true for the containers based on
-        // literal guarantees
-        for literal_guarantee in &self.literal_guarantees {
-            let LiteralGuarantee {
-                column,
-                guarantee,
-                literals,
-            } = literal_guarantee;
-            if let Some(results) = statistics.contained(column, literals) {
-                match guarantee {
-                    // `In` means the values in the column must be one of the
-                    // values in the set for the predicate to evaluate to true.
-                    // If `contained` returns false, that means the column is
-                    // not any of the values so we can prune the container
-                    Guarantee::In => builder.combine_array(&results),
-                    // `NotIn` means the values in the column must not be
-                    // any of the values in the set for the predicate to
-                    // evaluate to true. If `contained` returns true, it means the
-                    // column is only in the set of values so we can prune the
-                    // container
-                    Guarantee::NotIn => {
-                        builder.combine_array(&arrow::compute::not(&results)?)
-                    }
-                }
-                // if all containers are pruned (has rows that DEFINITELY DO NOT pass the predicate)
-                // can return early without evaluating the rest of predicates.
-                if builder.check_all_pruned() {
-                    return Ok(builder.build());
-                }
-            }
+        // literal guarantees.
+        // If all containers are pruned (has rows that DEFINITELY DO NOT pass
+        // the predicate) we can return early without evaluating the rest of
+        // predicates.
+        if builder.combine_literal_guarantees(&self.literal_guarantees, statistics)? {
+            return Ok(builder.build());
         }
 
         // Next, try to prove the predicate can't be true for the containers based
@@ -704,6 +737,36 @@ impl PruningPredicate {
         builder.combine_value(self.predicate_expr.evaluate(&statistics_batch)?);
 
         Ok(builder.build())
+    }
+
+    /// Same as [`Self::prune`], and also returns how many containers each
+    /// conjunct prunes when it is evaluated alone.
+    ///
+    /// The first returned value is the same as the result of [`Self::prune`].
+    /// The second returned value has one entry for each conjunct, in the
+    /// order of [`PruningPredicateBuilder::with_conjunct_stats`].
+    ///
+    /// Each conjunct is evaluated on all containers, also when other conjuncts
+    /// already prune them. Thus the statistics of a conjunct do not depend on
+    /// the other conjuncts or on their order. A conjunct that can not be
+    /// rewritten in terms of statistics keeps all containers.
+    ///
+    /// This builds the statistics batch one time for all conjuncts, but it
+    /// evaluates the literal guarantees and the predicate of each conjunct in
+    /// addition to those of the whole predicate.
+    ///
+    /// Returns an error if the predicate was not built with
+    /// [`PruningPredicateBuilder::with_conjunct_stats`].
+    pub fn prune_with_conjunct_stats<S: PruningStatistics + ?Sized>(
+        &self,
+        statistics: &S,
+    ) -> Result<(Vec<bool>, Vec<ConjunctPruningStats>)> {
+        let Some(conjuncts) = &self.conjuncts else {
+            return internal_err!(
+                "PruningPredicate was not built with conjunct stats (call `PruningPredicateBuilder::with_conjunct_stats`)"
+            );
+        };
+        conjuncts.prune(self, statistics)
     }
 
     /// Return a reference to the input schema
@@ -809,6 +872,46 @@ impl BoolVecBuilder {
                 *cur = false;
             }
         }
+    }
+
+    /// Combines the results of the `literal_guarantees` into the currently in
+    /// progress array.
+    ///
+    /// Stops early and returns `true` once a guarantee leaves all containers
+    /// pruned.
+    fn combine_literal_guarantees<S: PruningStatistics + ?Sized>(
+        &mut self,
+        literal_guarantees: &[LiteralGuarantee],
+        statistics: &S,
+    ) -> Result<bool> {
+        for literal_guarantee in literal_guarantees {
+            let LiteralGuarantee {
+                column,
+                guarantee,
+                literals,
+            } = literal_guarantee;
+            if let Some(results) = statistics.contained(column, literals) {
+                match guarantee {
+                    // `In` means the values in the column must be one of the
+                    // values in the set for the predicate to evaluate to true.
+                    // If `contained` returns false, that means the column is
+                    // not any of the values so we can prune the container
+                    Guarantee::In => self.combine_array(&results),
+                    // `NotIn` means the values in the column must not be
+                    // any of the values in the set for the predicate to
+                    // evaluate to true. If `contained` returns true, it means the
+                    // column is only in the set of values so we can prune the
+                    // container
+                    Guarantee::NotIn => {
+                        self.combine_array(&arrow::compute::not(&results)?)
+                    }
+                }
+                if self.check_all_pruned() {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
     }
 
     /// Combines the results in the [`ColumnarValue`] to the currently in
@@ -3446,6 +3549,47 @@ mod tests {
             .unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected);
+    }
+
+    /// Pruning sees through `OptionalFilterPhysicalExpr`: an optional filter
+    /// prunes the same as the inner filter.
+    #[test]
+    fn prune_optional_filter_same_as_inner() {
+        let (schema, statistics) = int32_setup();
+        let expected = &[true, true, false, true, true];
+
+        let required = logical2physical(&col("i").gt(lit(0)), &schema);
+        let optional = Arc::new(phys_expr::OptionalFilterPhysicalExpr::new(Arc::clone(
+            &required,
+        ))) as Arc<dyn PhysicalExpr>;
+        let dynamic = Arc::new(DynamicFilterPhysicalExpr::new(
+            collect_columns(&required)
+                .into_iter()
+                .map(|c| Arc::new(c) as Arc<dyn PhysicalExpr>)
+                .collect(),
+            Arc::clone(&required),
+        )) as Arc<dyn PhysicalExpr>;
+        let optional_dynamic =
+            Arc::new(phys_expr::OptionalFilterPhysicalExpr::new(dynamic))
+                as Arc<dyn PhysicalExpr>;
+
+        let build = |expr: Arc<dyn PhysicalExpr>| {
+            PruningPredicateBuilder::new()
+                .with_file_schema(Arc::clone(&schema))
+                .try_build(expr)
+                .unwrap()
+        };
+        let baseline = build(required);
+        assert_eq!(baseline.prune(&statistics).unwrap(), expected);
+
+        for expr in [optional, optional_dynamic] {
+            let p = build(expr);
+            assert_eq!(
+                p.predicate_expr().to_string(),
+                baseline.predicate_expr().to_string()
+            );
+            assert_eq!(p.prune(&statistics).unwrap(), expected);
+        }
     }
 
     #[test]
