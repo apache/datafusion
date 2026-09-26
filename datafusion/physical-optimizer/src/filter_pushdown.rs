@@ -431,11 +431,15 @@ impl PhysicalOptimizerRule for FilterPushdown {
             // distribution decisions read (a source's row count flips
             // Exact -> Inexact, which changes whether its scan is parallelized).
             // Enforcement runs first, in the analyzer phase, so re-establish
-            // distribution here after a pre-phase pushdown actually rewrote the
+            // *distribution* here after a pre-phase pushdown actually rewrote the
             // plan: the rule that changes enforcement's inputs restores validity
-            // itself, the same contract as JoinSelection / WindowTopN. The post
-            // phase runs after enforcement and only touches dynamic filters, so it
-            // does not re-enforce.
+            // itself, the same contract as JoinSelection / WindowTopN. Only
+            // distribution is re-enforced -- pushing a predicate down does not
+            // change any operator's ordering, so ordering stays valid and running
+            // sort enforcement here would be sort *optimization* (e.g. dropping a
+            // now-constant sort key), which is not this rule's job. The post phase
+            // runs after enforcement and only touches dynamic filters, so it does
+            // not re-enforce.
             (FilterPushdownPhase::Pre, Some(new_plan)) => {
                 enforce_distribution_requirements(
                     new_plan,

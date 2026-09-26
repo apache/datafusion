@@ -23,7 +23,7 @@ use std::sync::Arc;
 use crate::aggregate_statistics::AggregateStatistics;
 use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::ensure_coop::EnsureCooperative;
-use crate::ensure_requirements::{EnforceSorting, OptimizeSorts};
+use crate::ensure_requirements::OptimizeSorts;
 use crate::filter_pushdown::FilterPushdown;
 use crate::join_selection::JoinSelection;
 use crate::limit_pushdown::LimitPushdown;
@@ -89,13 +89,12 @@ impl PhysicalOptimizer {
         //   queries, and will likely increase the optimization time. Please extend
         //   existing rules when possible, rather than adding a new rule.
         let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
-            // If there is a output requirement of the query, make sure that
-            // this information is not lost across different rules during optimization.
-            Arc::new(OutputRequirements::new_add_mode()),
-            // Distribution enforcement runs first in the analyzer phase (see
-            // `PhysicalAnalyzer`); the rules that change distribution
-            // (`JoinSelection`, `WindowTopN`) re-establish it themselves, so there
-            // is no standalone distribution-enforcement pass here.
+            // The output-requirement boundary (`OutputRequirements` add mode) and
+            // all enforcement (`EnforceDistribution`, `EnforceSorting`) run first
+            // in the analyzer phase (see `PhysicalAnalyzer`); the rules that change
+            // those requirements (`JoinSelection`, `WindowTopN`, `FilterPushdown`)
+            // re-establish validity themselves, so there is no enforcement pass
+            // here. The matching `OutputRequirements` remove pass still runs below.
             Arc::new(AggregateStatistics::new()),
             // Statistics-based join selection will change the Auto mode to a real join implementation,
             // like collect left, or hash join, or future sort merge join, which will influence the
@@ -119,13 +118,11 @@ impl PhysicalOptimizer {
             // window's declared ordering without pattern-matching a SortExec)
             // and before ProjectionPushdown (which embeds projections into FilterExec).
             Arc::new(WindowTopN::new()),
-            // Distribution enforcement runs first as the `PhysicalAnalyzerRule`;
-            // the rules above that change the required distribution
-            // (`JoinSelection`, `WindowTopN`) re-establish it themselves, so
-            // there is no standalone distribution-enforcement pass here. Only
-            // ordering enforcement (not idempotent, once) and the sort
-            // optimizations remain.
-            Arc::new(EnforceSorting::new()),
+            // All enforcement (distribution and ordering) runs first in the
+            // analyzer phase; the rules above that change those requirements
+            // (`JoinSelection`, `WindowTopN`, `FilterPushdown`) re-establish
+            // validity themselves. So no enforcement pass runs here -- only the
+            // sort *optimizations*, which are not enforcement.
             Arc::new(OptimizeSorts::new()),
             // The CombinePartialFinalAggregate rule should be applied after distribution enforcement
             Arc::new(CombinePartialFinalAggregate::new()),

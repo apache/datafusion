@@ -3609,6 +3609,7 @@ mod tests {
     use datafusion_functions_aggregate::count::{count_all, count_udaf};
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_physical_expr::EquivalenceProperties;
+    use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
     use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
     use datafusion_physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
     use datafusion_session::QueryPlanner;
@@ -3669,11 +3670,11 @@ mod tests {
         }
     }
 
-    /// The default session state wires `EnforceDistribution` as the sole physical
-    /// analyzer (enforcement runs first, and parallelizes top-level scans itself);
-    /// ordering/optimization run in the optimizer phase.
+    /// The default session state wires all enforcement as the physical analyzer
+    /// phase (the output-requirement boundary, then distribution, then ordering);
+    /// only the sort *optimizations* run in the optimizer phase.
     #[test]
-    fn default_session_wires_enforce_distribution_as_analyzer() {
+    fn default_session_wires_enforcement_as_analyzer() {
         let state = make_session_state();
 
         let analyzer_names: Vec<&str> = state
@@ -3683,19 +3684,25 @@ mod tests {
             .collect();
         assert_eq!(
             analyzer_names,
-            vec!["EnforceDistribution"],
-            "analyzer phase should be distribution enforcement only, got {analyzer_names:?}"
+            vec![
+                "OutputRequirements",
+                "EnforceDistribution",
+                "EnforceSorting"
+            ],
+            "analyzer phase should be all enforcement, got {analyzer_names:?}"
         );
 
-        // The optimizer phase runs the decomposed enforcement + sort rules;
-        // the monolithic `EnsureRequirements` is not registered by default.
+        // The optimizer phase keeps only the sort *optimizations*; enforcement
+        // (`EnforceDistribution` / `EnforceSorting`) and the monolithic
+        // `EnsureRequirements` are not registered there.
         let optimizer_names: Vec<&str> = state
             .physical_optimizers()
             .iter()
             .map(|r| r.name())
             .collect();
-        assert!(optimizer_names.contains(&"EnforceSorting"));
         assert!(optimizer_names.contains(&"OptimizeSorts"));
+        assert!(!optimizer_names.contains(&"EnforceDistribution"));
+        assert!(!optimizer_names.contains(&"EnforceSorting"));
         assert!(!optimizer_names.contains(&"EnsureRequirements"));
     }
 
@@ -3984,7 +3991,16 @@ mod tests {
 
         let logical_plan = LogicalPlanBuilder::empty(false).build()?;
         let physical_plan = session.create_physical_plan(&logical_plan).await?;
-        assert!(physical_plan.is::<EmptyExec>());
+        // The default physical analyzer wraps the root in an
+        // `OutputRequirementExec` (add phase). This custom session replaces the
+        // optimizer rules, so the matching remove phase never runs and the
+        // marker survives; descend through it to reach the planned leaf.
+        let leaf = if physical_plan.is::<OutputRequirementExec>() {
+            Arc::clone(physical_plan.children()[0])
+        } else {
+            Arc::clone(&physical_plan)
+        };
+        assert!(leaf.is::<EmptyExec>());
         assert!(query_planner_invoked.load(AtomicOrdering::Relaxed));
         assert!(invoked.load(AtomicOrdering::Relaxed));
         Ok(())

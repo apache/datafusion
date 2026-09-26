@@ -179,10 +179,11 @@ impl EnsureRequirements {
 
 /// Phases 0-2a: make the plan valid with respect to **distribution**
 /// requirements only (normalize interleave, join-key reordering, distribution
-/// enforcement). This is the idempotent-enough half that runs in the analyzer
-/// phase: it establishes the partitioning `JoinSelection` and friends need,
-/// without the sort enforcement/optimization that is not idempotent and is
-/// therefore left to run exactly once in [`OptimizeSorts`].
+/// enforcement). Split from ordering enforcement so it can be used on its own:
+/// the [`EnforceDistribution`] analyzer rule runs it as the first enforcement
+/// step, and rules that change only distribution (`JoinSelection`,
+/// `FilterPushdown`) call it directly to re-establish the partitioning their
+/// rewrite disturbed, without touching ordering.
 pub fn enforce_distribution_requirements(
     plan: Arc<dyn ExecutionPlan>,
     context: &dyn PhysicalOptimizerContext,
@@ -237,28 +238,15 @@ pub fn enforce_distribution_requirements(
             Ok(result)
         })
         .data()?;
-    let plan = dist_ctx.plan;
-
-    // The bottom-up pass parallelizes a file scan through its parent's per-child
-    // loop. A scan sitting at the very root of the plan (e.g. `SELECT * FROM t`)
-    // has no parent to drive that, so let the source parallelize itself here.
-    // The source decides by its own scan size, and `repartitioned` is a no-op
-    // (returns `None`) for anything that is not a repartitionable source, so this
-    // only ever splits a root scan.
-    if config.optimizer.repartition_file_scans
-        && let Some(split) =
-            plan.repartitioned(config.execution.target_partitions, config)?
-    {
-        return Ok(split);
-    }
-    Ok(plan)
+    Ok(dist_ctx.plan)
 }
 
 /// Phase 2b: enforce **ordering** requirements by inserting `SortExec`s on a
 /// distribution-fixed plan (bottom-up). This is the enforcement half that is
-/// *not* idempotent, so it runs exactly once in the default pipeline via the
-/// [`EnforceSorting`] rule. Exposed as a free function so the [`EnsureRequirements`]
-/// compatibility shim can reuse it.
+/// *not* idempotent, so in the default pipeline it runs exactly once via the
+/// [`EnforceSorting`] analyzer rule. Exposed as a free function so the combined
+/// [`enforce_requirements`] (used by rules that disturb ordering, and by the
+/// [`EnsureRequirements`] compatibility shim) can reuse it.
 pub fn enforce_sorting_requirements(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -328,12 +316,13 @@ pub fn optimize_sorts(
 }
 
 /// Enforces **distribution** requirements (Phases 0-2a) via
-/// [`enforce_distribution_requirements`]. It is idempotent enough to run more
-/// than once, so it is used two ways in the default pipeline:
-/// - as the [`PhysicalAnalyzerRule`] that runs first (making the plan
-///   distribution-valid before the optimizers see it), and
-/// - as a [`PhysicalOptimizerRule`] placed after rules that change distribution
-///   (e.g. `JoinSelection`, `WindowTopN`) to re-enforce it.
+/// [`enforce_distribution_requirements`]. In the default pipeline it runs as the
+/// [`PhysicalAnalyzerRule`] that makes the plan distribution-valid before the
+/// optimizer rules see it. It is idempotent enough to run more than once, and
+/// still implements [`PhysicalOptimizerRule`] so downstream pipelines that splice
+/// it in by position keep working; the default optimizer rules that change
+/// distribution (`JoinSelection`, `FilterPushdown`) instead call
+/// [`enforce_distribution_requirements`] directly to re-establish it themselves.
 #[derive(Default, Debug)]
 pub struct EnforceDistribution {}
 
@@ -398,8 +387,10 @@ impl PhysicalAnalyzerRule for EnforceDistribution {
 
 /// Enforces **ordering** requirements (Phase 2b) via
 /// [`enforce_sorting_requirements`]. Not idempotent, so it runs exactly once in
-/// the default pipeline, after the rules that determine ordering requirements
-/// (`JoinSelection` → `SortMergeJoin`, `WindowTopN`).
+/// the default pipeline, as the ordering-enforcement [`PhysicalAnalyzerRule`]
+/// (after [`EnforceDistribution`], on the distribution-fixed plan). The later
+/// optimizer rules that disturb ordering (`WindowTopN`) re-establish it
+/// themselves via [`enforce_requirements`].
 #[derive(Default, Debug)]
 pub struct EnforceSorting {}
 
@@ -412,6 +403,24 @@ impl EnforceSorting {
 
 impl PhysicalOptimizerRule for EnforceSorting {
     fn optimize(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        _config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        enforce_sorting_requirements(plan)
+    }
+
+    fn name(&self) -> &str {
+        "EnforceSorting"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
+    }
+}
+
+impl PhysicalAnalyzerRule for EnforceSorting {
+    fn analyze(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,

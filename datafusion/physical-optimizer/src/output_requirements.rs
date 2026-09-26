@@ -380,6 +380,32 @@ impl PhysicalOptimizerRule for OutputRequirements {
     }
 }
 
+impl crate::PhysicalAnalyzerRule for OutputRequirements {
+    /// `Add` mode establishes the top-level output-requirement boundary that
+    /// enforcement relies on (so distribution enforcement parallelizes below it
+    /// and ordering enforcement preserves the query's final ordering). It runs
+    /// in the analyzer phase, ahead of `EnforceDistribution` / `EnforceSorting`.
+    /// `Remove` mode only runs as an optimizer rule, so it is a no-op here.
+    fn analyze(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        _config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        match self.mode {
+            RuleMode::Add => require_top_ordering(plan),
+            RuleMode::Remove => Ok(plan),
+        }
+    }
+
+    fn name(&self) -> &str {
+        "OutputRequirements"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
+    }
+}
+
 /// This functions adds ancillary `OutputRequirementExec` to the physical plan, so that
 /// global requirements are not lost during optimization.
 ///

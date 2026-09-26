@@ -51,7 +51,7 @@
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
-use crate::ensure_requirements::enforce_distribution_requirements;
+use crate::ensure_requirements::enforce_requirements;
 use crate::optimizer::{ConfigOnlyContext, PhysicalOptimizerContext};
 use arrow::datatypes::DataType;
 use datafusion_common::config::ConfigOptions;
@@ -287,13 +287,15 @@ impl PhysicalOptimizerRule for WindowTopN {
         })?;
 
         // Only re-enforce when we actually rewrote something: replacing
-        // `Filter -> Window` with `Window -> PartitionedTopKExec` drops the
-        // exchange that satisfied the window's hash-partition requirement, so
-        // the rule that breaks the invariant restores it. If nothing changed,
-        // the plan is already valid and re-enforcing would be a gratuitous
-        // remove-then-rederive pass that can perturb an otherwise stable plan.
+        // `Filter -> Window` with `Window -> PartitionedTopKExec` changes both
+        // the window's input distribution (the operator wants a hash exchange on
+        // the partition keys) and its input ordering (the exchange that fed the
+        // window is gone), so re-establish full validity -- distribution and
+        // ordering -- here: the rule that breaks the invariant restores it. If
+        // nothing changed, the plan is already valid and re-enforcing would be a
+        // gratuitous remove-then-rederive pass that can perturb a stable plan.
         if result.transformed {
-            enforce_distribution_requirements(result.data, context)
+            enforce_requirements(result.data, context)
         } else {
             Ok(result.data)
         }
