@@ -121,6 +121,21 @@ def update_docs(path: str, new_version: str):
         fd.write(content)
 
 
+def update_ci(new_version: str):
+    # release version script
+    print("updating .github/workflows/release_version_labeler.yaml")
+    with open(".github/workflows/release_version_labeler.yaml", 'r+') as fd:
+        new_major_version = int(new_version.split(".")[0])
+        next_version = f"v{new_major_version + 1}.0.0"
+        content = fd.read()
+        fd.seek(0)
+        content = re.sub(
+            r"const target_version = '.*?'", f"const target_version = '{next_version}'", content
+        )
+        fd.truncate()
+        fd.write(content)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=(
@@ -148,6 +163,8 @@ def main():
     update_docs("docs/source/download.md", new_version)
     update_docs("docs/source/user-guide/example-usage.md", new_version)
     update_docs("docs/source/user-guide/crate-configuration.md", new_version)
+    
+    update_ci(new_version)
 
 
 if __name__ == "__main__":
