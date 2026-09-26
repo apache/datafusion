@@ -181,6 +181,7 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 
 use arrow::array::{ArrayRef, UInt8Array, UInt16Array, UInt32Array, UInt64Array};
+use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
@@ -846,21 +847,39 @@ impl LimitOptions {
     }
 }
 
-/// Aggregation state, separating a DISTINCT soft limit from accumulators and filters.
+/// Mutually exclusive aggregation implementations and their configuration.
+///
+/// # Public Only for Internal Use:
+/// `datafusion-physical-optimizer` inspects and combines aggregate kinds.
+/// This enum is not part of the supported public API.
+#[doc(hidden)]
 #[derive(Debug, Clone)]
-enum AggregateKind {
-    /// Ordinary aggregation, including the existing Top-K configuration.
+pub enum AggregateKind {
+    /// Ordinary aggregation, with no limit on the groups retained.
     General {
         group_by: Arc<PhysicalGroupBy>,
         aggr_expr: Arc<[Arc<AggregateFunctionExpr>]>,
         filter_expr: Arc<[Option<Arc<dyn PhysicalExpr>>]>,
-        limit_options: Option<LimitOptions>,
     },
     /// `SELECT DISTINCT k FROM t LIMIT n`: eligible streams may stop after n groups.
     /// Other streams consume all input; the parent LIMIT enforces the row count.
     DistinctLimit {
         group_by: Arc<PhysicalGroupBy>,
         limit: usize,
+    },
+    /// See [`AggregateExec::try_optimize_topk`] for details.
+    TopKMinMax {
+        group_by: Arc<PhysicalGroupBy>,
+        aggr_expr: Arc<AggregateFunctionExpr>,
+        limit: usize,
+        descending: bool,
+        nulls_first: bool,
+    },
+    /// See [`AggregateExec::try_optimize_topk`] for details.
+    TopKDistinct {
+        group_by: Arc<PhysicalGroupBy>,
+        limit: usize,
+        descending: bool,
     },
 }
 
@@ -869,7 +888,14 @@ enum AggregateKind {
 pub struct AggregateExec {
     /// Aggregation mode (full, partial)
     mode: AggregateMode,
-    kind: AggregateKind,
+    /// Aggregation implementation and its configuration.
+    ///
+    /// # Public Only for Internal Use:
+    /// `datafusion-physical-optimizer` updates this when combining aggregates.
+    /// Changes must preserve the expressions, schema, and plan properties.
+    /// This field is not part of the supported public API.
+    #[doc(hidden)]
+    pub kind: AggregateKind,
     /// Input plan, could be a partial aggregate or the input to the aggregate
     pub input: Arc<dyn ExecutionPlan>,
     /// Schema after the aggregate is applied. Contains the group by columns followed by the
@@ -901,6 +927,202 @@ pub struct AggregateExec {
 }
 
 impl AggregateExec {
+    /// Try to use TopK (min/max heap) optimization in AggregateExec.
+    ///
+    /// If applicable, an inner `AggregateKind` will be set, and later [`ExecutionPlan::execute`]
+    /// will choose optimized path for it. The optimizer MUST keep the limit operator
+    /// above, since different partitions execute without coordination.
+    /// Returns `None` if not applicable.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not part of the supported public API, it's made public for internal
+    /// optimizer usage.
+    ///
+    /// # TopK Optimization Overview
+    ///
+    /// Retain candidate groups for a parent ORDER BY / LIMIT. There are two applicable
+    /// cases:
+    ///
+    /// ## TopK MIN/MAX
+    ///
+    /// ```txt
+    /// SELECT k, MAX(v) AS score FROM t GROUP BY k
+    /// ORDER BY score DESC NULLS LAST LIMIT 10;
+    ///
+    /// Before:
+    /// Sort: score DESC, fetch=10
+    ///   Aggregate: k, MAX(v)
+    ///     input
+    ///
+    /// After (Added info in `AggregateExec` to trigger heap optimization):
+    /// Sort: score DESC, fetch=10
+    ///   Aggregate: k, MAX(v), TopKMinMax(10)
+    ///     input
+    /// ```
+    ///
+    /// For an aggregate output named `score`, the example uses:
+    /// ```txt
+    /// try_optimize_topk(10, "score", SortOptions {
+    ///     descending: true,   // DESC
+    ///     nulls_first: false, // NULLS LAST
+    /// })
+    /// ```
+    ///
+    /// A min-heap keeps the 10 largest non-NULL scores.
+    /// MIN with ASC uses a max-heap.
+    ///
+    /// ## TopK DISTINCT
+    ///
+    /// ```txt
+    /// SELECT DISTINCT k FROM t ORDER BY k ASC NULLS LAST LIMIT 10;
+    ///
+    /// Before:
+    /// Sort: k ASC, fetch=10
+    ///   Aggregate: k, no aggregates
+    ///     input
+    ///
+    /// After (Added info in `AggregateExec` to trigger heap optimization):
+    /// Sort: k ASC, fetch=10
+    ///   Aggregate: k, TopKDistinct(10)
+    ///     input
+    /// ```
+    ///
+    /// Here the grouping key is the output used for ordering:
+    /// ```txt
+    /// try_optimize_topk(10, "k", SortOptions {
+    ///     descending: false,  // ASC
+    ///     nulls_first: false, // NULLS LAST
+    /// })
+    /// ```
+    ///
+    /// A max-heap keeps the 10 smallest non-NULL keys.
+    /// DESC uses a min-heap.
+    #[doc(hidden)]
+    pub fn try_optimize_topk(
+        mut self,
+        limit: usize,
+        order_by: &str,
+        options: SortOptions,
+    ) -> Option<Transformed<Self>> {
+        if limit == 0
+            || matches!(self.kind, AggregateKind::DistinctLimit { .. })
+            || self.group_by().has_grouping_set()
+            || self.filter_expr().iter().any(Option::is_some)
+        {
+            return None;
+        }
+        // The priority map needs one supported key and value type.
+        let (group_key, group_key_alias) =
+            self.group_expr().expr().iter().exactly_one().ok()?;
+        let input_schema = self.input.schema();
+        let key_type = group_key.data_type(&input_schema).ok()?;
+        let minmax = self.get_minmax_desc();
+        let value_type = minmax
+            .as_ref()
+            .map_or(&key_type, |(field, _)| field.data_type());
+        if !topk_types_supported(&key_type, value_type)
+            || self.schema.fields().len() != 1 + self.aggr_expr().len()
+        {
+            return None;
+        }
+
+        let kind = if let Some((field, descending)) = minmax {
+            let aggregate = self.aggr_expr().iter().exactly_one().ok()?;
+            if field.name() != order_by
+                || descending != options.descending
+                || !aggregate.order_bys().is_empty()
+            {
+                return None;
+            }
+            let argument = aggregate.expressions().into_iter().exactly_one().ok()?;
+            // NULLS FIRST can worsen a group's rank when its first value arrives.
+            if options.nulls_first && argument.nullable(&self.input_schema).ok()? {
+                return None;
+            }
+
+            // Raw input, partial state, and output must fit the same heap value.
+            let state_field = aggregate
+                .state_fields()
+                .ok()?
+                .into_iter()
+                .exactly_one()
+                .ok()?;
+            let input_argument = aggregate_expressions(self.aggr_expr(), &self.mode, 1)
+                .ok()?
+                .into_iter()
+                .flatten()
+                .exactly_one()
+                .ok()?;
+            let value_type = field.data_type();
+            if state_field.data_type() != value_type
+                || argument.data_type(&self.input_schema).ok()? != *value_type
+                || input_argument.data_type(&input_schema).ok()? != *value_type
+            {
+                return None;
+            }
+            AggregateKind::TopKMinMax {
+                group_by: Arc::clone(self.group_by()),
+                aggr_expr: Arc::clone(aggregate),
+                limit,
+                descending,
+                nulls_first: options.nulls_first,
+            }
+        } else if self.aggr_expr().is_empty() && group_key_alias == order_by {
+            AggregateKind::TopKDistinct {
+                group_by: Arc::clone(self.group_by()),
+                limit,
+                descending: options.descending,
+            }
+        } else {
+            return None;
+        };
+
+        // Preserve compatible tighter bounds; never switch an existing order.
+        match &self.kind {
+            AggregateKind::TopKMinMax { nulls_first, .. }
+                if *nulls_first != options.nulls_first =>
+            {
+                return None;
+            }
+            AggregateKind::TopKMinMax {
+                limit: existing,
+                descending,
+                ..
+            }
+            | AggregateKind::TopKDistinct {
+                limit: existing,
+                descending,
+                ..
+            } => {
+                if *descending != options.descending {
+                    return None;
+                }
+                if *existing <= limit {
+                    return Some(Transformed::no(self));
+                }
+            }
+            _ => {}
+        }
+
+        // Commit the kind and properties together: heap output is unordered and final.
+        self.kind = kind;
+        self.input_order_mode = InputOrderMode::Linear;
+        self.required_input_ordering = None;
+        // Keep unchanged properties so parent aggregates do not need rebuilding.
+        if !self.cache.eq_properties.oeq_class().is_empty()
+            || self.cache.emission_type != EmissionType::Final
+        {
+            let mut equivalence = self.cache.eq_properties.clone();
+            equivalence.clear_orderings();
+            let cache = Arc::make_mut(&mut self.cache);
+            cache.set_eq_properties(equivalence);
+            cache.emission_type = EmissionType::Final;
+        }
+        self.metrics = ExecutionPlanMetricsSet::new();
+        Some(Transformed::yes(self))
+    }
+
     /// Try to stop after enough distinct grouping keys have been accumulated.
     ///
     /// The caller must establish that discarding other groups is legal, for
@@ -941,9 +1163,10 @@ impl AggregateExec {
         Some(Transformed::yes(self))
     }
 
-    /// Function used in `OptimizeAggregateOrder` optimizer rule,
-    /// where we need parts of the new value, others cloned from the old one
-    /// Rewrites aggregate exec with new aggregate expressions.
+    /// Clone with replacement aggregate expressions.
+    ///
+    /// The caller must preserve the schema, filters, and ordering requirements.
+    /// Changing expressions in a TopK aggregate drops its specialization.
     pub fn with_new_aggr_exprs(
         &self,
         aggr_expr: impl Into<Arc<[Arc<AggregateFunctionExpr>]>>,
@@ -952,15 +1175,23 @@ impl AggregateExec {
         let mut new = self.clone();
         match &mut new.kind {
             AggregateKind::General { aggr_expr: old, .. } => *old = aggr_expr,
-            AggregateKind::DistinctLimit { .. } if aggr_expr.is_empty() => {}
-            AggregateKind::DistinctLimit { group_by, .. } => {
-                // An accumulator rewrite cannot inherit DISTINCT's early stop.
+            AggregateKind::DistinctLimit { .. } | AggregateKind::TopKDistinct { .. }
+                if aggr_expr.is_empty() => {}
+            // Ordering optimization can revisit an existing TopK with the
+            // same expressions. Preserve its specialization in that case.
+            AggregateKind::TopKMinMax {
+                aggr_expr: existing,
+                ..
+            } if matches!(aggr_expr.as_ref(), [new] if Arc::ptr_eq(existing, new)) => {}
+            AggregateKind::DistinctLimit { group_by, .. }
+            | AggregateKind::TopKMinMax { group_by, .. }
+            | AggregateKind::TopKDistinct { group_by, .. } => {
+                // A replacement expression cannot inherit a specialization
+                // validated for the previous aggregate.
                 new.kind = AggregateKind::General {
                     group_by: Arc::clone(group_by),
-                    // The previous `DistinctLimit` type doesn't include filter
                     filter_expr: vec![None; aggr_expr.len()].into(),
                     aggr_expr,
-                    limit_options: None,
                 };
             }
         }
@@ -968,9 +1199,18 @@ impl AggregateExec {
         new
     }
 
-    /// Clone this exec, overriding only the limit hint.
+    /// Clone with a validated legacy limit hint, falling back to ordinary
+    /// aggregation when the request is unsupported.
+    #[deprecated(
+        since = "56.0.0",
+        note = "This API is intended for internal use only and was inadvertently made public. Do not use this API."
+    )]
     pub fn with_new_limit_options(&self, limit_options: Option<LimitOptions>) -> Self {
-        let mut new = self.clone().with_limit_options(limit_options);
+        let mut new = self.clone().without_optimization();
+        new = new
+            .clone()
+            .restore_limit_options(limit_options)
+            .unwrap_or(new);
         new.metrics = ExecutionPlanMetricsSet::new();
         new
     }
@@ -1120,7 +1360,6 @@ impl AggregateExec {
                 group_by,
                 aggr_expr: aggr_expr.into(),
                 filter_expr,
-                limit_options: None,
             },
             input,
             schema,
@@ -1142,12 +1381,44 @@ impl AggregateExec {
         &self.mode
     }
 
-    /// Set the limit options for this AggExec
-    pub fn with_limit_options(mut self, limit_options: Option<LimitOptions>) -> Self {
-        // Restoring an existing hint must not depend on input ordering: a later
-        // optimizer may have sorted the child since the hint was introduced.
-        if let Some(options) = limit_options
-            && options.descending.is_none()
+    /// Set a legacy limit hint. Unsupported requests leave ordinary aggregation.
+    #[deprecated(
+        since = "56.0.0",
+        note = "This API is intended for internal use only and was inadvertently made public. Do not use this API."
+    )]
+    pub fn with_limit_options(self, limit_options: Option<LimitOptions>) -> Self {
+        let ordinary = self.without_optimization();
+        ordinary
+            .clone()
+            .restore_limit_options(limit_options)
+            .unwrap_or(ordinary)
+    }
+
+    /// Clear a specialization. Keeping conservative unordered properties is
+    /// valid for the ordinary hash implementation too.
+    fn without_optimization(mut self) -> Self {
+        self.kind = AggregateKind::General {
+            group_by: Arc::clone(self.group_by()),
+            aggr_expr: self.clone_aggr_exprs(),
+            filter_expr: self.clone_filter_exprs(),
+        };
+        self
+    }
+
+    /// Decode the legacy limit representation at the compatibility boundary.
+    /// Unlike optimizer eligibility, restoring DISTINCT does not require an
+    /// unordered input: a later rule may have sorted the child.
+    fn restore_limit_options(
+        mut self,
+        limit_options: Option<LimitOptions>,
+    ) -> Option<Self> {
+        let Some(options) = limit_options else {
+            return Some(self);
+        };
+        if options.limit == 0 {
+            return None;
+        }
+        if options.descending.is_none()
             && !self.group_by().is_true_no_grouping()
             && self.aggr_expr().is_empty()
             && self.filter_expr().is_empty()
@@ -1156,29 +1427,42 @@ impl AggregateExec {
                 group_by: Arc::clone(self.group_by()),
                 limit: options.limit,
             };
+            Some(self)
         } else {
-            match &mut self.kind {
-                AggregateKind::General {
-                    limit_options: old, ..
-                } => *old = limit_options,
-                AggregateKind::DistinctLimit { group_by, .. } => {
-                    self.kind = AggregateKind::General {
-                        group_by: Arc::clone(group_by),
-                        aggr_expr: Arc::from([]),
-                        filter_expr: Arc::from([]),
-                        limit_options,
-                    };
-                }
-            }
+            // The legacy representation has no NULL placement. NULLS LAST
+            // accepts every valid serialized MIN/MAX configuration; grouping
+            // only TopK retains a NULL candidate for either placement.
+            let descending = options
+                .descending
+                .or_else(|| self.get_minmax_desc().map(|(_, desc)| desc))?;
+            let order_by = match self.aggr_expr() {
+                [] => self.group_by().expr.first()?.1.clone(),
+                [aggregate] => aggregate.name().to_owned(),
+                _ => return None,
+            };
+            self.try_optimize_topk(
+                options.limit,
+                &order_by,
+                SortOptions {
+                    descending,
+                    nulls_first: false,
+                },
+            )
+            .map(|result| result.data)
         }
-        self
     }
 
     /// Get the limit options (if set)
     pub fn limit_options(&self) -> Option<LimitOptions> {
         match &self.kind {
-            AggregateKind::General { limit_options, .. } => *limit_options,
+            AggregateKind::General { .. } => None,
             AggregateKind::DistinctLimit { limit, .. } => Some(LimitOptions::new(*limit)),
+            AggregateKind::TopKMinMax {
+                limit, descending, ..
+            }
+            | AggregateKind::TopKDistinct {
+                limit, descending, ..
+            } => Some(LimitOptions::new_with_order(*limit, *descending)),
         }
     }
 
@@ -1191,7 +1475,9 @@ impl AggregateExec {
     fn group_by(&self) -> &Arc<PhysicalGroupBy> {
         match &self.kind {
             AggregateKind::General { group_by, .. }
-            | AggregateKind::DistinctLimit { group_by, .. } => group_by,
+            | AggregateKind::DistinctLimit { group_by, .. }
+            | AggregateKind::TopKMinMax { group_by, .. }
+            | AggregateKind::TopKDistinct { group_by, .. } => group_by,
         }
     }
 
@@ -1199,7 +1485,9 @@ impl AggregateExec {
     fn group_by_mut(&mut self) -> &mut Arc<PhysicalGroupBy> {
         match &mut self.kind {
             AggregateKind::General { group_by, .. }
-            | AggregateKind::DistinctLimit { group_by, .. } => group_by,
+            | AggregateKind::DistinctLimit { group_by, .. }
+            | AggregateKind::TopKMinMax { group_by, .. }
+            | AggregateKind::TopKDistinct { group_by, .. } => group_by,
         }
     }
 
@@ -1212,7 +1500,12 @@ impl AggregateExec {
     pub fn aggr_expr(&self) -> &[Arc<AggregateFunctionExpr>] {
         match &self.kind {
             AggregateKind::General { aggr_expr, .. } => aggr_expr,
-            AggregateKind::DistinctLimit { .. } => &[],
+            AggregateKind::DistinctLimit { .. } | AggregateKind::TopKDistinct { .. } => {
+                &[]
+            }
+            AggregateKind::TopKMinMax { aggr_expr, .. } => {
+                std::slice::from_ref(aggr_expr)
+            }
         }
     }
 
@@ -1220,21 +1513,32 @@ impl AggregateExec {
     pub fn filter_expr(&self) -> &[Option<Arc<dyn PhysicalExpr>>] {
         match &self.kind {
             AggregateKind::General { filter_expr, .. } => filter_expr,
-            AggregateKind::DistinctLimit { .. } => &[],
+            AggregateKind::DistinctLimit { .. } | AggregateKind::TopKDistinct { .. } => {
+                &[]
+            }
+            AggregateKind::TopKMinMax { .. } => &[None],
         }
     }
 
     fn clone_aggr_exprs(&self) -> Arc<[Arc<AggregateFunctionExpr>]> {
         match &self.kind {
             AggregateKind::General { aggr_expr, .. } => Arc::clone(aggr_expr),
-            AggregateKind::DistinctLimit { .. } => Arc::from([]),
+            AggregateKind::DistinctLimit { .. } | AggregateKind::TopKDistinct { .. } => {
+                Arc::from([])
+            }
+            AggregateKind::TopKMinMax { aggr_expr, .. } => {
+                Arc::from(std::slice::from_ref(aggr_expr))
+            }
         }
     }
 
     fn clone_filter_exprs(&self) -> Arc<[Option<Arc<dyn PhysicalExpr>>]> {
         match &self.kind {
             AggregateKind::General { filter_expr, .. } => Arc::clone(filter_expr),
-            AggregateKind::DistinctLimit { .. } => Arc::from([]),
+            AggregateKind::DistinctLimit { .. } | AggregateKind::TopKDistinct { .. } => {
+                Arc::from([])
+            }
+            AggregateKind::TopKMinMax { .. } => Arc::from([None]),
         }
     }
 
@@ -1322,29 +1626,21 @@ impl AggregateExec {
             )?));
         }
 
-        // Grouping by an expression that has a sort/limit upstream.
-        //
-        // `GroupedTopKAggregateStream` keeps a priority queue, so it only works
-        // when an ordering direction is available: either this is a MIN/MAX
-        // aggregate, whose direction is implied by the accumulator, or the
-        // optimizer pushed a direction down next to the limit.
-        //
-        // A direction-less limit is a soft hint pushed by
-        // `LimitedDistinctAggregation`, which only pushes it while
-        // `is_unordered_unfiltered_group_by_distinct()` holds. That predicate is
-        // not stable: a later rule such as `EnsureRequirements` can insert the
-        // sort a window function requires below this aggregate, which gives the
-        // rebuilt aggregate an output ordering and makes the predicate false
-        // without ever supplying a direction. Falling back to the regular
-        // grouped streams is correct in that case, because they treat the limit
-        // as a soft limit and the `LIMIT` above this aggregate still truncates
-        // the result.
-        if let Some(config) = self.limit_options()
-            && !self.is_unordered_unfiltered_group_by_distinct()
-            && (config.descending.is_some() || self.get_minmax_desc().is_some())
+        if let AggregateKind::TopKMinMax {
+            limit, descending, ..
+        }
+        | AggregateKind::TopKDistinct {
+            limit, descending, ..
+        } = &self.kind
         {
             return Ok(StreamType::GroupedPriorityQueue(
-                GroupedTopKAggregateStream::new(self, context, partition, config.limit)?,
+                GroupedTopKAggregateStream::new(
+                    self,
+                    context,
+                    partition,
+                    *limit,
+                    *descending,
+                )?,
             ));
         }
 
@@ -2212,7 +2508,13 @@ impl ExecutionPlan for AggregateExec {
                     Arc::clone(&self.input_schema),
                     Arc::clone(&self.schema),
                 )?;
-                me = me.with_limit_options(self.limit_options());
+                // Reapply a DISTINCT limit only if the new input remains eligible.
+                if let AggregateKind::DistinctLimit { limit, .. } = &self.kind
+                    && let Some(optimized) =
+                        me.clone().try_optimize_distinct_soft_limit(*limit)
+                {
+                    me = optimized.data;
+                }
                 me.dynamic_filter.clone_from(&self.dynamic_filter);
                 Ok(Arc::new(me))
             }
@@ -2797,7 +3099,13 @@ impl AggregateExec {
                 Some(descending) => LimitOptions::new_with_order(fetch, descending),
                 None => LimitOptions::new(fetch),
             };
-            aggregate.with_limit_options(Some(options))
+            aggregate
+                .restore_limit_options(Some(options))
+                .ok_or_else(|| {
+                    datafusion_common::internal_datafusion_err!(
+                        "Invalid DISTINCT or TopK aggregate limit configuration"
+                    )
+                })?
         } else {
             aggregate
         };
@@ -4934,7 +5242,9 @@ mod tests {
                 partial_input,
                 Arc::clone(&schema),
             )?
-            .with_limit_options(Some(LimitOptions::new(2))),
+            .try_optimize_distinct_soft_limit(2)
+            .unwrap()
+            .data,
         );
 
         let partial_stream = partial_aggregate.execute_typed(0, &task_ctx)?;
@@ -4975,7 +5285,9 @@ mod tests {
                 final_input,
                 Arc::clone(&schema),
             )?
-            .with_limit_options(Some(LimitOptions::new(2))),
+            .try_optimize_distinct_soft_limit(2)
+            .unwrap()
+            .data,
         );
 
         let final_stream = final_aggregate.execute_typed(0, &task_ctx)?;
@@ -7434,17 +7746,25 @@ mod tests {
         let input = Arc::new(StatisticsExec::new(stats, (**schema).clone()))
             as Arc<dyn ExecutionPlan>;
 
+        let (aggregates, filters) = if limit.is_some() {
+            (vec![], vec![])
+        } else {
+            (vec![count_a_aggregate(schema)?], vec![None])
+        };
         let mut agg = AggregateExec::try_new(
             mode,
             group_by,
-            vec![count_a_aggregate(schema)?],
-            vec![None],
+            aggregates,
+            filters,
             input,
             Arc::clone(schema),
         )?;
 
         if let Some(limit) = limit {
-            agg = agg.with_limit_options(Some(limit));
+            agg = agg
+                .try_optimize_topk(limit.limit, "a", SortOptions::new(false, false))
+                .unwrap()
+                .data;
         }
 
         Ok(agg)
