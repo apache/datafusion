@@ -223,29 +223,40 @@ const DB_NAMES: &[&str] = &[
 
 /// Low-cardinality: every row is drawn uniformly from `DB_NAMES` (~25 distinct
 /// values across 8 192 rows). Exercises the hot duplicate path.
-fn create_string_array_low_cardinality(size: usize) -> StringArray {
+/// `null_density` is the fraction of rows that are null instead.
+fn create_string_array_low_cardinality(size: usize, null_density: f32) -> StringArray {
     let mut rng = StdRng::seed_from_u64(42);
-    StringArray::from_iter_values(
-        (0..size).map(|_| DB_NAMES[rng.random_range(0..DB_NAMES.len())]),
-    )
+    StringArray::from_iter((0..size).map(|_| {
+        if null_density > 0.0 && rng.random::<f32>() < null_density {
+            return None;
+        }
+        Some(DB_NAMES[rng.random_range(0..DB_NAMES.len())])
+    }))
 }
 
 /// High-cardinality: `db_name_pct` fraction of rows are drawn from `DB_NAMES`;
 /// the rest are near-unique random hex strings ("id_XXXXXXXX").
 /// With 8 192 rows and a 32-bit space the collision probability among the
 /// random strings is < 1 %, giving ~7 800 distinct values in total.
-fn create_string_array_high_cardinality(size: usize, db_name_pct: f32) -> StringArray {
+/// `null_density` is the fraction of rows that are null instead.
+fn create_string_array_high_cardinality(
+    size: usize,
+    db_name_pct: f32,
+    null_density: f32,
+) -> StringArray {
     let mut rng = StdRng::seed_from_u64(42);
-    let strings: Vec<String> = (0..size)
+    let strings: Vec<Option<String>> = (0..size)
         .map(|_| {
-            if rng.random::<f32>() < db_name_pct {
-                DB_NAMES[rng.random_range(0..DB_NAMES.len())].to_string()
+            if null_density > 0.0 && rng.random::<f32>() < null_density {
+                None
+            } else if rng.random::<f32>() < db_name_pct {
+                Some(DB_NAMES[rng.random_range(0..DB_NAMES.len())].to_string())
             } else {
-                format!("id_{:08x}", rng.random::<u32>())
+                Some(format!("id_{:08x}", rng.random::<u32>()))
             }
         })
         .collect();
-    StringArray::from_iter_values(strings.iter().map(String::as_str))
+    StringArray::from_iter(strings.iter().map(Option::as_deref))
 }
 
 fn distinct_update_batch_bench(
@@ -268,7 +279,7 @@ fn distinct_array_agg_benchmark(c: &mut Criterion) {
     // --- Low cardinality: ~25 distinct DB names in 8 192 rows ---------------
     // Realistic production scenario: most rows are duplicates, the HashSet
     // saturates quickly and the rest of the batch is pure dedup overhead.
-    let values = Arc::new(create_string_array_low_cardinality(8192)) as ArrayRef;
+    let values = Arc::new(create_string_array_low_cardinality(8192, 0.0)) as ArrayRef;
     distinct_update_batch_bench(
         c,
         "distinct_array_agg utf8 low cardinality (~25 distinct)",
@@ -279,12 +290,32 @@ fn distinct_array_agg_benchmark(c: &mut Criterion) {
     // --- High cardinality: ~5 % DB names, ~95 % near-unique random strings --
     // Worst-case scenario: almost every row is a new distinct value, so the
     // accumulator pays the full insertion cost for nearly every row.
-    let values = Arc::new(create_string_array_high_cardinality(8192, 0.05)) as ArrayRef;
+    let values =
+        Arc::new(create_string_array_high_cardinality(8192, 0.05, 0.0)) as ArrayRef;
     distinct_update_batch_bench(
         c,
         "distinct_array_agg utf8 high cardinality (~7800 distinct, 5% db names)",
         &values,
         false,
+    );
+
+    // --- With nulls and IGNORE NULLS: the accumulator drops the null rows
+    // before deduplicating, so these cover that filtering step.
+    let values = Arc::new(create_string_array_low_cardinality(8192, 0.1)) as ArrayRef;
+    distinct_update_batch_bench(
+        c,
+        "distinct_array_agg utf8 low cardinality (~25 distinct), 10% nulls, ignore nulls",
+        &values,
+        true,
+    );
+
+    let values =
+        Arc::new(create_string_array_high_cardinality(8192, 0.05, 0.1)) as ArrayRef;
+    distinct_update_batch_bench(
+        c,
+        "distinct_array_agg utf8 high cardinality (~7800 distinct, 5% db names), 10% nulls, ignore nulls",
+        &values,
+        true,
     );
 }
 
