@@ -20,18 +20,160 @@
 //! ["on" values] to a list of indices with this key's value.
 
 use std::fmt::{self, Debug};
+use std::mem::{size_of, size_of_val};
 use std::ops::Sub;
 
 use arrow::array::BooleanArray;
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::ArrowNativeType;
+use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
+use datafusion_execution::memory_pool::MemoryReservation;
 use hashbrown::HashTable;
 use hashbrown::hash_table::Entry::{Occupied, Vacant};
 
+/// Initial capacity of the generic join lookup index.
+///
+/// The lookup index only stores one entry per distinct build hash, while the
+/// row-index chain stores one slot per build row. Sizing the lookup index from
+/// the total number of build rows therefore wastes bucket memory whenever many
+/// rows share the same join key (e.g. a low-cardinality state-code column), so
+/// the index starts this small and grows only as distinct hashes are inserted.
+const INITIAL_LOOKUP_CAPACITY: usize = 64;
+
+/// Maximum control-group width used by hashbrown 0.17 (SSE2 / wasm SIMD).
+/// Scalar and NEON groups are smaller, so this is also an upper bound there.
+const MAX_CONTROL_GROUP_WIDTH: usize = 16;
+
+/// Includes hashbrown's trailing control group, which the general-purpose
+/// `estimate_memory_size` helper does not account for. Join entries contain a
+/// u64 hash and a u32/u64 index, so their size is a multiple of every supported
+/// control-group alignment.
+fn lookup_allocation_size<T>(capacity: usize) -> Result<usize> {
+    if capacity == 0 {
+        return Ok(0);
+    }
+    let overflow =
+        || internal_datafusion_err!("overflow while estimating join hash map size");
+    let buckets = if capacity < 8 {
+        if capacity < 4 { 4 } else { 8 }
+    } else {
+        (capacity.checked_mul(8).ok_or_else(overflow)? / 7)
+            .checked_next_power_of_two()
+            .ok_or_else(overflow)?
+    };
+    buckets
+        .checked_mul(size_of::<(u64, T)>() + 1)
+        .and_then(|size| size.checked_add(MAX_CONTROL_GROUP_WIDTH))
+        .ok_or_else(overflow)
+}
+
+/// Charges `reservation` for the temporary peak reached while the lookup index
+/// grows.
+///
+/// `hashbrown` allocates the new, larger bucket array before releasing the old
+/// one, so both allocations are live at the same time. Reserving `old + new`
+/// before the growth keeps the pool accounting honest, allowing a bounded pool
+/// to reject the join before the allocation is made.
+fn reserve_growth_peak<T>(
+    map: &HashTable<(u64, T)>,
+    chain_bytes: usize,
+    reservation: &MemoryReservation,
+    capacity: usize,
+) -> Result<()> {
+    let old_table = map.allocation_size();
+    let new_table = lookup_allocation_size::<T>(capacity)?;
+    let peak = old_table
+        .checked_add(new_table)
+        .and_then(|peak| peak.checked_add(chain_bytes))
+        .ok_or_else(|| {
+            internal_datafusion_err!("overflow while estimating join hash map size")
+        })?;
+    reservation.try_resize(peak)
+}
+
+/// Avoid repeated rehashing for batches whose sample has no
+/// repeated hashes. Sampling uses bounded stack space and is spread across
+/// the batch, rather than trusting a potentially unrepresentative prefix.
+/// This is only a hint: if the pool rejects it, normal incremental growth
+/// remains available. Later batches may have a different distribution.
+fn reserve_from_batch<T>(
+    map: &mut HashTable<(u64, T)>,
+    num_rows: usize,
+    hashes: &[u64],
+    reservation: Option<&MemoryReservation>,
+) -> Result<()> {
+    const SAMPLE_SIZE: usize = 1024;
+    let Some(reservation) = reservation else {
+        return Ok(());
+    };
+    if hashes.len() < SAMPLE_SIZE || num_rows <= map.capacity() {
+        return Ok(());
+    }
+    let mut sample = [0; SAMPLE_SIZE];
+    // Choose one row from each disjoint stratum, using the hashes already
+    // computed to jitter the position. A fixed stride can miss repetitions
+    // in periodic inputs, while sampling with replacement repeats rows even
+    // when every key is unique. These products are bounded by hashes.len().
+    let width = hashes.len() / SAMPLE_SIZE;
+    let remainder = hashes.len() % SAMPLE_SIZE;
+    for (i, value) in sample.iter_mut().enumerate() {
+        let start = i * width + i.min(remainder);
+        let len = width + usize::from(i < remainder);
+        *value = hashes[start + hashes[start] as usize % len];
+        if map.find(*value, |&(hash, _)| hash == *value).is_some() {
+            return Ok(());
+        }
+    }
+    sample.sort_unstable();
+    if sample.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Ok(());
+    }
+    let chain_bytes = num_rows * size_of::<T>();
+    // The first batch only earns capacity for itself. A later batch with
+    // distinct, previously unseen samples can justify reserving the rest.
+    // Repeated batches therefore do not size the index from total row count.
+    let capacity = if map.is_empty() {
+        hashes.len().min(num_rows)
+    } else {
+        num_rows
+    };
+    if capacity <= map.capacity() {
+        return Ok(());
+    }
+    match reserve_growth_peak(map, chain_bytes, reservation, capacity) {
+        Ok(()) => {
+            map.reserve(capacity - map.len(), |&(hash, _)| hash);
+            settle_accounting(map, chain_bytes, reservation)
+        }
+        Err(DataFusionError::ResourcesExhausted(_)) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Charges `reservation` for the lookup index and row-index chain after a
+/// growth (or a no-op insertion). This releases the resize peak reserved by
+/// [`reserve_growth_peak`] once the old bucket array is freed.
+fn settle_accounting<T>(
+    map: &HashTable<(u64, T)>,
+    chain_bytes: usize,
+    reservation: &MemoryReservation,
+) -> Result<()> {
+    let size = map
+        .allocation_size()
+        .checked_add(chain_bytes)
+        .ok_or_else(|| {
+            internal_datafusion_err!("overflow while estimating join hash map size")
+        })?;
+    reservation.try_resize(size)
+}
+
 /// Maps a `u64` hash value based on the build side ["on" values] to a list of indices with this key's value.
 ///
-/// By allocating a `HashMap` with capacity for *at least* the number of rows for entries at the build side,
-/// we make sure that we don't have to re-hash the hashmap, which needs access to the key (the hash in this case) value.
+/// The row-index chain is sized for *every* build row so that join
+/// multiplicity is preserved, but the lookup index is only sized for the
+/// number of *distinct* hashes and therefore starts small and grows on demand.
+/// This avoids reserving a hash bucket for every build row when many rows
+/// share the same join key.
 ///
 /// E.g. 1 -> [3, 6, 8] indicates that the column values map to rows 3, 6 and 8 for hash value 1
 /// As the key is a hash value, we need to check possible hash collisions in the probe stage
@@ -105,11 +247,25 @@ use hashbrown::hash_table::Entry::{Occupied, Vacant};
 pub trait JoinHashMapType: Send + Sync {
     fn extend_zero(&mut self, len: usize);
 
+    /// Optionally reserve lookup capacity from a batch of matchable hashes.
+    fn reserve_from_batch(&mut self, _hashes: &[u64]) -> Result<()> {
+        Ok(())
+    }
+
+    /// Inserts or updates the entries yielded by `iter`.
+    ///
+    /// The lookup index grows on demand as distinct hashes are inserted; a
+    /// bounded memory pool may therefore reject the join here if the index
+    /// cannot be grown further.
     fn update_from_iter<'a>(
         &mut self,
         iter: Box<dyn Iterator<Item = (usize, &'a u64)> + Send + 'a>,
         deleted_offset: usize,
-    );
+    ) -> Result<()>;
+
+    /// Returns the number of bytes allocated by the map: the lookup index (the
+    /// hash table bucket array) plus the row-index chain.
+    fn size(&self) -> usize;
 
     fn get_matched_indices<'a>(
         &self,
@@ -146,19 +302,58 @@ pub struct JoinHashMapU32 {
     map: HashTable<(u64, u32)>,
     // Stores indices in chained list data structure
     next: Vec<u32>,
+    // Reservation owned by this map, grown as the lookup index expands. `None`
+    // for maps built without memory accounting (e.g. in tests).
+    reservation: Option<MemoryReservation>,
 }
 
 impl JoinHashMapU32 {
     #[cfg(test)]
     pub(crate) fn new(map: HashTable<(u64, u32)>, next: Vec<u32>) -> Self {
-        Self { map, next }
+        Self {
+            map,
+            next,
+            reservation: None,
+        }
     }
 
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             map: HashTable::with_capacity(cap),
             next: vec![0; cap],
+            reservation: None,
         }
+    }
+
+    /// Creates a map whose row-index chain is sized for every one of `num_rows`
+    /// build rows, but whose lookup index starts small and grows on demand.
+    ///
+    /// `reservation` is charged for the chain and the small initial index; a
+    /// private handle to that reservation is retained by the map and grown as
+    /// the index expands.
+    pub(crate) fn with_capacity_and_reservation(
+        num_rows: usize,
+        reservation: &mut MemoryReservation,
+    ) -> Result<Self> {
+        let capacity = num_rows.min(INITIAL_LOOKUP_CAPACITY);
+        let chain_bytes = num_rows.checked_mul(size_of::<u32>()).ok_or_else(|| {
+            internal_datafusion_err!("overflow while estimating join hash map size")
+        })?;
+        let initial = lookup_allocation_size::<u32>(capacity)?
+            .checked_add(chain_bytes)
+            .ok_or_else(|| {
+                internal_datafusion_err!("overflow while estimating join hash map size")
+            })?;
+        reservation.try_grow(initial)?;
+        let reservation = reservation.split(initial);
+        let map = HashTable::with_capacity(capacity);
+        let next = vec![0; num_rows];
+        settle_accounting(&map, chain_bytes, &reservation)?;
+        Ok(Self {
+            map,
+            next,
+            reservation: Some(reservation),
+        })
     }
 }
 
@@ -171,12 +366,31 @@ impl Debug for JoinHashMapU32 {
 impl JoinHashMapType for JoinHashMapU32 {
     fn extend_zero(&mut self, _: usize) {}
 
+    fn reserve_from_batch(&mut self, hashes: &[u64]) -> Result<()> {
+        reserve_from_batch(
+            &mut self.map,
+            self.next.len(),
+            hashes,
+            self.reservation.as_ref(),
+        )
+    }
+
     fn update_from_iter<'a>(
         &mut self,
         iter: Box<dyn Iterator<Item = (usize, &'a u64)> + Send + 'a>,
         deleted_offset: usize,
-    ) {
-        update_from_iter::<u32>(&mut self.map, &mut self.next, iter, deleted_offset);
+    ) -> Result<()> {
+        update_from_iter::<u32>(
+            &mut self.map,
+            &mut self.next,
+            iter,
+            deleted_offset,
+            self.reservation.as_ref(),
+        )
+    }
+
+    fn size(&self) -> usize {
+        self.map.allocation_size() + self.next.len() * size_of::<u32>()
     }
 
     fn get_matched_indices<'a>(
@@ -226,19 +440,58 @@ pub struct JoinHashMapU64 {
     map: HashTable<(u64, u64)>,
     // Stores indices in chained list data structure
     next: Vec<u64>,
+    // Reservation owned by this map, grown as the lookup index expands. `None`
+    // for maps built without memory accounting (e.g. in tests).
+    reservation: Option<MemoryReservation>,
 }
 
 impl JoinHashMapU64 {
     #[cfg(test)]
     pub(crate) fn new(map: HashTable<(u64, u64)>, next: Vec<u64>) -> Self {
-        Self { map, next }
+        Self {
+            map,
+            next,
+            reservation: None,
+        }
     }
 
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             map: HashTable::with_capacity(cap),
             next: vec![0; cap],
+            reservation: None,
         }
+    }
+
+    /// Creates a map whose row-index chain is sized for every one of `num_rows`
+    /// build rows, but whose lookup index starts small and grows on demand.
+    ///
+    /// `reservation` is charged for the chain and the small initial index; a
+    /// private handle to that reservation is retained by the map and grown as
+    /// the index expands.
+    pub(crate) fn with_capacity_and_reservation(
+        num_rows: usize,
+        reservation: &mut MemoryReservation,
+    ) -> Result<Self> {
+        let capacity = num_rows.min(INITIAL_LOOKUP_CAPACITY);
+        let chain_bytes = num_rows.checked_mul(size_of::<u64>()).ok_or_else(|| {
+            internal_datafusion_err!("overflow while estimating join hash map size")
+        })?;
+        let initial = lookup_allocation_size::<u64>(capacity)?
+            .checked_add(chain_bytes)
+            .ok_or_else(|| {
+                internal_datafusion_err!("overflow while estimating join hash map size")
+            })?;
+        reservation.try_grow(initial)?;
+        let reservation = reservation.split(initial);
+        let map = HashTable::with_capacity(capacity);
+        let next = vec![0; num_rows];
+        settle_accounting(&map, chain_bytes, &reservation)?;
+        Ok(Self {
+            map,
+            next,
+            reservation: Some(reservation),
+        })
     }
 }
 
@@ -251,12 +504,31 @@ impl Debug for JoinHashMapU64 {
 impl JoinHashMapType for JoinHashMapU64 {
     fn extend_zero(&mut self, _: usize) {}
 
+    fn reserve_from_batch(&mut self, hashes: &[u64]) -> Result<()> {
+        reserve_from_batch(
+            &mut self.map,
+            self.next.len(),
+            hashes,
+            self.reservation.as_ref(),
+        )
+    }
+
     fn update_from_iter<'a>(
         &mut self,
         iter: Box<dyn Iterator<Item = (usize, &'a u64)> + Send + 'a>,
         deleted_offset: usize,
-    ) {
-        update_from_iter::<u64>(&mut self.map, &mut self.next, iter, deleted_offset);
+    ) -> Result<()> {
+        update_from_iter::<u64>(
+            &mut self.map,
+            &mut self.next,
+            iter,
+            deleted_offset,
+            self.reservation.as_ref(),
+        )
+    }
+
+    fn size(&self) -> usize {
+        self.map.allocation_size() + self.next.len() * size_of::<u64>()
     }
 
     fn get_matched_indices<'a>(
@@ -309,11 +581,39 @@ pub fn update_from_iter<'a, T>(
     next: &mut [T],
     iter: Box<dyn Iterator<Item = (usize, &'a u64)> + Send + 'a>,
     deleted_offset: usize,
-) where
+    reservation: Option<&MemoryReservation>,
+) -> Result<()>
+where
     T: Copy + TryFrom<usize> + PartialOrd,
     <T as TryFrom<usize>>::Error: Debug,
 {
+    // The row-index chain is allocated once and never resized, so its size is
+    // constant and included in every accounting update below.
+    let chain_bytes = size_of_val(next);
+
+    let mut capacity = map.capacity();
+
     for (row, &hash_value) in iter {
+        // If the next insertion grows the lookup index, reserve the transient
+        // resize peak before allocating so a bounded pool fails fast.
+        if let Some(reservation) = reservation
+            && map.len() == capacity
+        {
+            // An existing hash only updates its chain, even when all buckets
+            // are occupied. Do not require any additional pool capacity.
+            if let Some((_, index)) =
+                map.find_mut(hash_value, |&(hash, _)| hash == hash_value)
+            {
+                next[row - deleted_offset] = *index;
+                *index = T::try_from(row + 1).unwrap();
+                continue;
+            }
+            reserve_growth_peak(map, chain_bytes, reservation, map.len() + 1)?;
+            map.reserve(1, |&(hash, _)| hash);
+            capacity = map.capacity();
+            settle_accounting(map, chain_bytes, reservation)?;
+        }
+
         let entry = map.entry(
             hash_value,
             |&(hash, _)| hash_value == hash,
@@ -335,6 +635,8 @@ pub fn update_from_iter<'a, T>(
             }
         }
     }
+
+    Ok(())
 }
 
 pub fn get_matched_indices<'a, T>(
@@ -495,10 +797,32 @@ pub fn contain_hashes<T>(map: &HashTable<(u64, T)>, hash_values: &[u64]) -> Bool
 mod tests {
     use super::*;
 
+    use datafusion_common::utils::memory::estimate_memory_size;
+
+    use datafusion_execution::memory_pool::{
+        GreedyMemoryPool, MemoryConsumer, MemoryPool, UnboundedMemoryPool,
+    };
+    use std::sync::Arc;
+
+    /// Builds a reservation-backed `JoinHashMapU32` and returns the pool, the
+    /// caller's reservation handle and the map.
+    fn reservation_backed_map(
+        num_rows: usize,
+    ) -> (Arc<dyn MemoryPool>, MemoryReservation, JoinHashMapU32) {
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let mut reservation = MemoryConsumer::new("join-hash-map-test").register(&pool);
+        let map =
+            JoinHashMapU32::with_capacity_and_reservation(num_rows, &mut reservation)
+                .unwrap();
+        (pool, reservation, map)
+    }
+
     #[test]
     fn test_contain_hashes() {
         let mut hash_map = JoinHashMapU32::with_capacity(10);
-        hash_map.update_from_iter(Box::new([10u64, 20u64, 30u64].iter().enumerate()), 0);
+        hash_map
+            .update_from_iter(Box::new([10u64, 20u64, 30u64].iter().enumerate()), 0)
+            .unwrap();
 
         let probe_hashes = vec![10, 11, 20, 21, 30, 31];
         let array = hash_map.contain_hashes(&probe_hashes);
@@ -517,7 +841,9 @@ mod tests {
     #[test]
     fn test_get_matched_indices_skips_invalid_keys() {
         let mut hash_map = JoinHashMapU32::with_capacity(3);
-        hash_map.update_from_iter(Box::new([10u64, 20u64, 30u64].iter().enumerate()), 0);
+        hash_map
+            .update_from_iter(Box::new([10u64, 20u64, 30u64].iter().enumerate()), 0)
+            .unwrap();
 
         let probe_hashes = vec![10, 20, 30];
         // The probe row for hash 20 has a NULL key and must not match.
@@ -543,10 +869,12 @@ mod tests {
     fn test_get_matched_indices_skips_invalid_keys_with_duplicates() {
         // Duplicate build keys chain multiple rows under one hash value.
         let mut hash_map = JoinHashMapU32::with_capacity(4);
-        hash_map.update_from_iter(
-            Box::new([10u64, 20u64, 10u64, 20u64].iter().enumerate()),
-            0,
-        );
+        hash_map
+            .update_from_iter(
+                Box::new([10u64, 20u64, 10u64, 20u64].iter().enumerate()),
+                0,
+            )
+            .unwrap();
 
         let probe_hashes = vec![10, 20];
         // The probe row for hash 10 has a NULL key: none of the build rows in
@@ -568,5 +896,314 @@ mod tests {
         assert_eq!(next_offset, None);
         assert_eq!(input_indices, vec![1, 1]);
         assert_eq!(match_indices, vec![3, 1]);
+    }
+
+    #[test]
+    fn test_low_cardinality_lookup_index_stays_small() {
+        let num_rows = 10_000;
+        let (pool, _reservation, mut hash_map) = reservation_backed_map(num_rows);
+
+        // Every build row shares the same hash value.
+        let hashes = vec![7u64; num_rows];
+        hash_map
+            .update_from_iter(Box::new(hashes.iter().enumerate()), 0)
+            .unwrap();
+
+        assert_eq!(hash_map.len(), 1);
+        // The row-index chain keeps a slot for every build row ...
+        assert_eq!(hash_map.next.len(), num_rows);
+        // ... but the lookup index is not sized for every build row.
+        assert!(
+            hash_map.map.capacity() < num_rows,
+            "lookup index capacity {} should stay below the row count {num_rows}",
+            hash_map.map.capacity()
+        );
+        // The reservation tracks the actual allocation.
+        assert_eq!(pool.reserved(), hash_map.size());
+    }
+
+    #[test]
+    fn test_reservation_tracks_lookup_index_growth() {
+        let num_rows = 5_000;
+        let (pool, _reservation, mut hash_map) = reservation_backed_map(num_rows);
+
+        // Mostly-unique hashes force the lookup index to grow past its small
+        // initial capacity.
+        let hashes: Vec<u64> = (0..num_rows as u64).collect();
+        hash_map
+            .update_from_iter(Box::new(hashes.iter().enumerate()), 0)
+            .unwrap();
+
+        assert_eq!(hash_map.len(), num_rows);
+        assert!(hash_map.map.capacity() >= num_rows);
+        assert_eq!(pool.reserved(), hash_map.size());
+    }
+
+    #[test]
+    fn test_low_cardinality_fits_bounded_pool() {
+        let num_rows = 100_000;
+        // Memory that sizing the lookup index from every build row would need.
+        let row_sized =
+            estimate_memory_size::<(u32, u64)>(num_rows, size_of::<JoinHashMapU32>())
+                .unwrap();
+        let limit = row_sized / 4;
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(limit));
+        let mut reservation = MemoryConsumer::new("bounded-join").register(&pool);
+
+        let mut hash_map =
+            JoinHashMapU32::with_capacity_and_reservation(num_rows, &mut reservation)
+                .unwrap();
+        let hashes = vec![123u64; num_rows];
+        hash_map
+            .update_from_iter(Box::new(hashes.iter().enumerate()), 0)
+            .unwrap();
+
+        assert_eq!(hash_map.len(), 1);
+        assert!(pool.reserved() <= limit);
+        assert!(
+            pool.reserved() < row_sized,
+            "reserved {} should be far below the row-sized estimate {row_sized}",
+            pool.reserved()
+        );
+    }
+
+    #[test]
+    fn test_unique_keys_use_full_lookup_index() {
+        let num_rows = 1_000;
+        let (_pool, _reservation, mut hash_map) = reservation_backed_map(num_rows);
+
+        let hashes: Vec<u64> = (0..num_rows as u64).map(|i| i * 2).collect();
+        hash_map
+            .update_from_iter(Box::new(hashes.iter().enumerate()), 0)
+            .unwrap();
+
+        // `map.len() == next.len()` selects the unique-key fast path.
+        let probe = hashes.clone();
+        let mut input_indices = vec![];
+        let mut match_indices = vec![];
+        let next = hash_map.get_matched_indices_with_limit_offset(
+            &probe,
+            None,
+            8192,
+            (0, None),
+            &mut input_indices,
+            &mut match_indices,
+        );
+
+        assert_eq!(next, None);
+        assert_eq!(input_indices, (0..num_rows as u32).collect::<Vec<_>>());
+        assert_eq!(match_indices, (0..num_rows as u64).collect::<Vec<_>>());
+    }
+
+    fn bounded_map(
+        rows: usize,
+        limit: usize,
+        wide: bool,
+    ) -> (Arc<dyn MemoryPool>, Box<dyn JoinHashMapType>) {
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(limit));
+        let mut reservation = MemoryConsumer::new("bounded-map").register(&pool);
+        let map: Box<dyn JoinHashMapType> = if wide {
+            Box::new(
+                JoinHashMapU64::with_capacity_and_reservation(rows, &mut reservation)
+                    .unwrap(),
+            )
+        } else {
+            Box::new(
+                JoinHashMapU32::with_capacity_and_reservation(rows, &mut reservation)
+                    .unwrap(),
+            )
+        };
+        (pool, map)
+    }
+
+    #[test]
+    fn test_full_lookup_accepts_duplicate_without_extra_memory() {
+        for wide in [false, true] {
+            let table = HashTable::<(u64, u64)>::with_capacity(INITIAL_LOOKUP_CAPACITY);
+            let capacity = table.capacity();
+            let rows = capacity + 1;
+            let chain_bytes = rows * if wide { 8 } else { 4 };
+            let limit = lookup_allocation_size::<u64>(INITIAL_LOOKUP_CAPACITY).unwrap()
+                + chain_bytes;
+            let (pool, mut map) = bounded_map(rows, limit, wide);
+            // The initial estimate is conservative on platforms with smaller
+            // control groups. Fill that slack so insertion has no spare budget.
+            let slack = MemoryConsumer::new("unused-control-group-space").register(&pool);
+            slack.try_grow(limit - map.size()).unwrap();
+            let hashes: Vec<_> = (0..capacity as u64).chain(std::iter::once(0)).collect();
+            map.update_from_iter(Box::new(hashes.iter().enumerate()), 0)
+                .unwrap();
+            assert_eq!(map.len(), capacity);
+            assert_eq!(pool.reserved(), limit);
+            let (input, matched) =
+                map.get_matched_indices(Box::new(std::iter::once(&0).enumerate()), None);
+            assert_eq!(input, vec![0, 0]);
+            assert_eq!(matched, vec![capacity as u64, 0]);
+            drop(map);
+            assert_eq!(pool.reserved(), slack.size());
+            drop(slack);
+            assert_eq!(pool.reserved(), 0);
+        }
+    }
+
+    #[test]
+    fn test_initial_reservation_precedes_chain_allocation() {
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(0));
+        let mut reservation =
+            MemoryConsumer::new("reject-before-allocation").register(&pool);
+        // These lengths exceed Vec's isize::MAX byte limit. Allocating first
+        // would panic; the pool must reject them without reaching Vec.
+        let rows = isize::MAX as usize / size_of::<u32>() + 1;
+        assert!(matches!(
+            JoinHashMapU32::with_capacity_and_reservation(rows, &mut reservation),
+            Err(DataFusionError::ResourcesExhausted(_))
+        ));
+        let rows = isize::MAX as usize / size_of::<u64>() + 1;
+        assert!(matches!(
+            JoinHashMapU64::with_capacity_and_reservation(rows, &mut reservation),
+            Err(DataFusionError::ResourcesExhausted(_))
+        ));
+        assert_eq!(pool.reserved(), 0);
+    }
+
+    #[test]
+    fn test_lookup_estimate_covers_hashbrown_allocations() {
+        for capacity in (0..130).chain([255, 256, 257, 1023, 1024, 8192, 65536]) {
+            assert!(
+                lookup_allocation_size::<u32>(capacity).unwrap()
+                    >= HashTable::<(u64, u32)>::with_capacity(capacity).allocation_size()
+            );
+            assert!(
+                lookup_allocation_size::<u64>(capacity).unwrap()
+                    >= HashTable::<(u64, u64)>::with_capacity(capacity).allocation_size()
+            );
+        }
+        assert!(lookup_allocation_size::<u64>(usize::MAX).is_err());
+    }
+
+    #[test]
+    fn test_growth_requires_old_and_new_allocations() {
+        for wide in [false, true] {
+            let table = HashTable::<(u64, u64)>::with_capacity(INITIAL_LOOKUP_CAPACITY);
+            let capacity = table.capacity();
+            let rows = capacity + 1;
+            let chain_bytes = rows * if wide { 8 } else { 4 };
+            let new_size = lookup_allocation_size::<u64>(rows).unwrap();
+            let peak = chain_bytes + table.allocation_size() + new_size;
+            let hashes: Vec<_> = (0..rows as u64).collect();
+            let (pool, mut map) = bounded_map(rows, peak - 1, wide);
+            let initial = map.size();
+            assert!(matches!(
+                map.update_from_iter(Box::new(hashes.iter().enumerate()), 0),
+                Err(DataFusionError::ResourcesExhausted(_))
+            ));
+            assert_eq!(map.len(), capacity);
+            assert_eq!(map.size(), initial);
+            assert_eq!(pool.reserved(), initial);
+            drop(map);
+            assert_eq!(pool.reserved(), 0);
+
+            let (pool, mut map) = bounded_map(rows, peak, wide);
+            map.update_from_iter(Box::new(hashes.iter().enumerate()), 0)
+                .unwrap();
+            assert_eq!(map.len(), rows);
+            assert_eq!(pool.reserved(), map.size());
+            assert!(pool.reserved() < peak);
+            drop(map);
+            assert_eq!(pool.reserved(), 0);
+        }
+    }
+
+    #[test]
+    fn test_unique_sample_presizes_index() {
+        let rows = 8192;
+        let (_, _, mut map) = reservation_backed_map(rows);
+        let hashes: Vec<_> = (0..rows as u64).collect();
+        map.reserve_from_batch(&hashes).unwrap();
+        assert!(map.map.capacity() >= rows);
+        let size = map.size();
+        map.update_from_iter(Box::new(hashes.iter().enumerate()), 0)
+            .unwrap();
+        assert_eq!(map.size(), size);
+    }
+
+    #[test]
+    fn test_repeated_sample_keeps_small_index() {
+        let rows = 8192;
+        let (_, _, mut map) = reservation_backed_map(rows);
+        let hashes: Vec<_> = (0..rows as u64).map(|i| i % 8).collect();
+        let size = map.size();
+        map.reserve_from_batch(&hashes).unwrap();
+        map.update_from_iter(Box::new(hashes.iter().enumerate()), 0)
+            .unwrap();
+        assert_eq!(map.size(), size);
+        assert_eq!(map.len(), 8);
+    }
+
+    #[test]
+    fn test_rejected_sample_hint_falls_back_to_incremental_growth() {
+        for wide in [false, true] {
+            let rows = 100_000;
+            let chain_bytes = rows * if wide { 8 } else { 4 };
+            let (pool, mut map) = bounded_map(rows, chain_bytes + 120_000, wide);
+            let hashes: Vec<_> = (0..rows as u64).map(|i| i % 2048).collect();
+            // Two distinct batches suggest high cardinality, but the rest
+            // repeat them. Rejecting the full-size hint must not fail the join.
+            for (batch, chunk) in hashes.chunks(1024).enumerate() {
+                map.reserve_from_batch(chunk).unwrap();
+                map.update_from_iter(
+                    Box::new(
+                        chunk
+                            .iter()
+                            .enumerate()
+                            .map(move |(row, hash)| (batch * 1024 + row, hash)),
+                    ),
+                    0,
+                )
+                .unwrap();
+            }
+            assert_eq!(map.len(), 2048);
+            assert_eq!(pool.reserved(), map.size());
+            drop(map);
+            assert_eq!(pool.reserved(), 0);
+        }
+    }
+
+    #[test]
+    fn test_repeated_batches_do_not_reserve_for_total_rows() {
+        let rows = 100_000;
+        let (_, _, mut map) = reservation_backed_map(rows);
+        let hashes: Vec<_> = (0..rows as u64).map(|i| i % 8192).collect();
+        for (batch, chunk) in hashes.chunks(8192).enumerate() {
+            map.reserve_from_batch(chunk).unwrap();
+            map.update_from_iter(
+                Box::new(
+                    chunk
+                        .iter()
+                        .enumerate()
+                        .map(move |(row, hash)| (batch * 8192 + row, hash)),
+                ),
+                0,
+            )
+            .unwrap();
+        }
+        assert_eq!(map.len(), 8192);
+        assert!(map.map.capacity() < rows / 2);
+    }
+
+    #[test]
+    fn test_periodic_batch_does_not_look_unique() {
+        use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
+        let rows = 200_000;
+        let (_, _, mut map) = reservation_backed_map(rows);
+        let state = BuildHasherDefault::<DefaultHasher>::default();
+        let hashes: Vec<_> = (0..rows).map(|i| state.hash_one(i % 8192)).collect();
+        let initial = map.size();
+        map.reserve_from_batch(&hashes).unwrap();
+        assert_eq!(map.size(), initial);
+        map.update_from_iter(Box::new(hashes.iter().enumerate()), 0)
+            .unwrap();
+        assert_eq!(map.len(), 8192);
+        assert!(map.map.capacity() < rows / 2);
     }
 }
