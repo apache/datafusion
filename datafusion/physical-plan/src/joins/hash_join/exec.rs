@@ -1121,13 +1121,9 @@ impl HashJoinExec {
             return false;
         }
 
-        // `preserve_file_partitions` can report Hive-style file groups as Hash
-        // partitioned even though their partition indexes do not follow the
-        // hash router used by partitioned dynamic filters. Reject Hash inputs
-        // because the metadata cannot distinguish those scans from a real hash
-        // repartition. Compatible Range inputs remain safe because matching
-        // ordering and split points align each build filter with its probe
-        // partition. Other unsupported layouts are rejected.
+        // Under `preserve_file_partitions`, file groups can report Hash without following
+        // the dynamic filter hash router and look like a real hash repartition, so reject
+        // Hash. Range inputs with matching split points are safe.
         // Follow-up work: enable dynamic filtering for preserve_file_partitioned scans (issue #20195).
         // https://github.com/apache/datafusion/issues/20195
         if config.optimizer.preserve_file_partitions > 0
