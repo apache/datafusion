@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::ffi::c_void;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -288,6 +289,9 @@ fn pass_runtime_to_children(
     runtime: &Handle,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     let mut updated_children = false;
+    // This intentionally uses the delegate-aware `is`: a transparent wrapper
+    // around a `ForeignExecutionPlan` typically forwards `replace_children` to
+    // it, so its children will still cross the FFI boundary and need the runtime.
     let plan_is_foreign = plan.is::<ForeignExecutionPlan>();
 
     let children = plan
@@ -306,8 +310,12 @@ fn pass_runtime_to_children(
             // we called `children()` above we will get something other than a
             // `ForeignExecutionPlan`. In this case wrap the plan in a `ForeignExecutionPlan`
             // because when we call `replace_children` below it will extract the
-            // FFI plan that does contain the runtime.
-            if plan_is_foreign && !child.is::<ForeignExecutionPlan>() {
+            // FFI plan that does contain the runtime. Check the concrete type rather
+            // than the delegate-aware `is` so that a local wrapper which delegates to
+            // a `ForeignExecutionPlan` still receives the runtime.
+            if plan_is_foreign
+                && !(child.as_ref() as &dyn Any).is::<ForeignExecutionPlan>()
+            {
                 updated_children = true;
                 let ffi_child = FFI_ExecutionPlan::new(child, Some(runtime.clone()));
                 let foreign_child = ForeignExecutionPlan::try_from(ffi_child);
@@ -334,7 +342,13 @@ impl FFI_ExecutionPlan {
     pub fn new(mut plan: Arc<dyn ExecutionPlan>, runtime: Option<Handle>) -> Self {
         // Note to developers: `pass_runtime_to_children` relies on the logic here to
         // get the underlying FFI plan during calls to `new_with_children`.
-        if let Some(plan) = plan.downcast_ref::<ForeignExecutionPlan>() {
+        //
+        // Check the concrete type rather than using the delegate-aware
+        // `downcast_ref`, otherwise a wrapper whose `downcast_delegate` is a
+        // `ForeignExecutionPlan` would be discarded here.
+        if let Some(plan) =
+            (plan.as_ref() as &dyn Any).downcast_ref::<ForeignExecutionPlan>()
+        {
             return plan.plan.clone();
         }
 
@@ -571,6 +585,7 @@ pub mod tests {
         dynamic_expressions: Vec<Arc<dyn PhysicalExpr>>,
         metrics: Option<MetricsSet>,
         statistics: Option<Statistics>,
+        downcast_delegate: bool,
     }
 
     impl EmptyExec {
@@ -587,6 +602,7 @@ pub mod tests {
                 dynamic_expressions: Vec::default(),
                 metrics: None,
                 statistics: None,
+                downcast_delegate: false,
             }
         }
 
@@ -597,6 +613,13 @@ pub mod tests {
 
         pub fn with_statistics(mut self, statistics: Statistics) -> Self {
             self.statistics = Some(statistics);
+            self
+        }
+
+        /// Act as a transparent wrapper around `child` via `downcast_delegate`.
+        pub fn with_downcast_delegate(mut self, child: Arc<dyn ExecutionPlan>) -> Self {
+            self.children = vec![child];
+            self.downcast_delegate = true;
             self
         }
 
@@ -652,6 +675,7 @@ pub mod tests {
                 dynamic_expressions: self.dynamic_expressions.clone(),
                 metrics: self.metrics.clone(),
                 statistics: self.statistics.clone(),
+                downcast_delegate: self.downcast_delegate,
             }))
         }
 
@@ -671,6 +695,12 @@ pub mod tests {
             _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             unimplemented!()
+        }
+
+        fn downcast_delegate(&self) -> Option<&dyn ExecutionPlan> {
+            self.downcast_delegate
+                .then(|| self.children.first().map(|c| c.as_ref()))
+                .flatten()
         }
 
         fn dynamic_expressions_produced(&self) -> Vec<Arc<dyn PhysicalExpr>> {
@@ -997,5 +1027,37 @@ pub mod tests {
         ffi_plan.library_marker_id = crate::mock_foreign_marker_id;
         let foreign_plan: Arc<dyn ExecutionPlan> = (&ffi_plan).try_into().unwrap();
         assert!(foreign_plan.is::<ForeignExecutionPlan>());
+    }
+
+    /// A wrapper whose `downcast_delegate` is a `ForeignExecutionPlan` must not be
+    /// mistaken for one: it must survive `FFI_ExecutionPlan::new` and still receive
+    /// the runtime when it is the local child of a foreign parent.
+    #[tokio::test]
+    async fn test_ffi_execution_plan_delegating_wrapper() -> Result<()> {
+        let schema = Arc::new(arrow::datatypes::Schema::empty());
+
+        let mut ffi_inner =
+            FFI_ExecutionPlan::new(Arc::new(EmptyExec::new(Arc::clone(&schema))), None);
+        ffi_inner.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_inner: Arc<dyn ExecutionPlan> =
+            Arc::new(ForeignExecutionPlan::try_from(ffi_inner)?);
+        let wrapper: Arc<dyn ExecutionPlan> = Arc::new(
+            EmptyExec::new(Arc::clone(&schema)).with_downcast_delegate(foreign_inner),
+        );
+        assert!(wrapper.is::<ForeignExecutionPlan>());
+
+        let ffi_wrapper = FFI_ExecutionPlan::new(Arc::clone(&wrapper), None);
+        assert!(ffi_wrapper.inner().downcast_delegate().is_some());
+
+        let parent = Arc::new(EmptyExec::new(schema)).replace_children(
+            vec![wrapper],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        let mut ffi_parent = FFI_ExecutionPlan::new(parent, None);
+        ffi_parent.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign_parent: Arc<dyn ExecutionPlan> = (&ffi_parent).try_into()?;
+        assert!(pass_runtime_to_children(&foreign_parent, &Handle::current())?.is_some());
+
+        Ok(())
     }
 }
