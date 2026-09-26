@@ -353,6 +353,7 @@ fn optimize_projections(
                     .zip(necessary_children_indices)
                     .map(|(child, necessary_indices)| {
                         RequiredIndices::new_from_indices(necessary_indices)
+                            .with_projection_beneficial()
                             .with_plan_exprs(&plan, child.schema())
                     })
                     .collect::<Result<Vec<_>>>()?
@@ -1719,6 +1720,119 @@ mod tests {
         Projection: l.a, l.c, r.a, Int32(0) AS d
           UserDefinedCrossJoin
             TableScan: l projection=[a, c]
+            TableScan: r projection=[a]
+        "
+        )
+    }
+
+    #[test]
+    fn test_user_defined_logical_plan_above_join() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let schema = Schema::new(vec![Field::new("c1", DataType::UInt32, false)]);
+        let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
+
+        // Join test(a, b, c) and test2(c1) on test.a = test2.c1
+        let join_plan = LogicalPlanBuilder::from(table_scan)
+            .join(table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
+            .build()?;
+
+        let custom_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoOpUserDefined::new(
+                Arc::clone(join_plan.schema()),
+                Arc::new(join_plan),
+            )),
+        });
+
+        // Parent only requires test.a and test.b; join key test2.c1 is not needed downstream.
+        let plan = LogicalPlanBuilder::from(custom_plan)
+            .project(vec![col("test.a"), col("test.b")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, test.b
+          NoOpUserDefined
+            Projection: test.a, test.b
+              Left Join: test.a = test2.c1
+                TableScan: test projection=[a, b]
+                TableScan: test2 projection=[c1]
+        "
+        )
+    }
+
+    #[test]
+    fn test_user_defined_logical_plan_above_join_with_sort() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let schema = Schema::new(vec![Field::new("c1", DataType::UInt32, false)]);
+        let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
+
+        // Join test(a, b, c) and test2(c1) on test.a = test2.c1
+        let join_plan = LogicalPlanBuilder::from(table_scan)
+            .join(table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
+            .build()?;
+
+        let custom_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoOpUserDefined::new(
+                Arc::clone(join_plan.schema()),
+                Arc::new(join_plan),
+            )),
+        });
+
+        // Sort -> Projection -> Extension -> Join
+        let plan = LogicalPlanBuilder::from(custom_plan)
+            .project(vec![col("test.a"), col("test.b")])?
+            .sort(vec![col("test.a").sort(true, false)])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: test.a ASC NULLS LAST
+          Projection: test.a, test.b
+            NoOpUserDefined
+              Projection: test.a, test.b
+                Left Join: test.a = test2.c1
+                  TableScan: test projection=[a, b]
+                  TableScan: test2 projection=[c1]
+        "
+        )
+    }
+
+    #[test]
+    fn test_user_defined_logical_plan_multi_input_above_join() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let schema = Schema::new(vec![Field::new("c1", DataType::UInt32, false)]);
+        let table2_scan = scan_empty(Some("test2"), &schema, None)?.build()?;
+
+        // Join test(a, b, c) and test2(c1) on test.a = test2.c1
+        let join_plan = LogicalPlanBuilder::from(table_scan)
+            .join(table2_scan, JoinType::Left, (vec!["a"], vec!["c1"]), None)?
+            .build()?;
+
+        let table_r = test_table_scan_with_name("r")?;
+
+        let custom_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(UserDefinedCrossJoin::new(
+                Arc::new(join_plan),
+                Arc::new(table_r),
+            )),
+        });
+
+        // Parent requires test.a, test.b from left input, and r.a from right input
+        let plan = LogicalPlanBuilder::from(custom_plan)
+            .project(vec![col("test.a"), col("test.b"), col("r.a")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, test.b, r.a
+          UserDefinedCrossJoin
+            Projection: test.a, test.b
+              Left Join: test.a = test2.c1
+                TableScan: test projection=[a, b]
+                TableScan: test2 projection=[c1]
             TableScan: r projection=[a]
         "
         )
