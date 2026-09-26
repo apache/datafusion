@@ -443,6 +443,55 @@ drop table agg_dyn_mixed;
 statement ok
 reset datafusion.execution.batch_size;
 
+# --- one aggregate has a bound before another sees its first non-NULL value ---
+# Both files establish MIN(a)=1 and MAX(a)=8 in their first row group. Until b
+# has a non-NULL bound, filtering only on a would prune every remaining row and
+# incorrectly leave MIN(b) and MAX(b) NULL, regardless of partition order.
+
+statement ok
+set datafusion.execution.batch_size = 2;
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES (1, NULL), (8, NULL), (2, 5), (3, 7)) AS v(a, b)
+) TO 'test_files/scratch/push_down_filter_regression/agg_dyn_late_bound/file_0.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '2');
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES (1, NULL), (8, NULL), (2, 5), (3, 7)) AS v(a, b)
+) TO 'test_files/scratch/push_down_filter_regression/agg_dyn_late_bound/file_1.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '2');
+
+statement ok
+CREATE EXTERNAL TABLE agg_dyn_late_bound (a INT, b INT)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_regression/agg_dyn_late_bound/';
+
+statement ok
+set datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown = false;
+
+query IIII
+SELECT MIN(a), MAX(a), MIN(b), MAX(b) FROM agg_dyn_late_bound;
+----
+1 8 5 7
+
+statement ok
+set datafusion.optimizer.enable_aggregate_dynamic_filter_pushdown = true;
+
+query IIII
+SELECT MIN(a), MAX(a), MIN(b), MAX(b) FROM agg_dyn_late_bound;
+----
+1 8 5 7
+
+statement ok
+drop table agg_dyn_late_bound;
+
+statement ok
+reset datafusion.execution.batch_size;
+
 # --- all-NULLs input: filter should stay `true` (no meaningful bound) ---
 
 statement ok
