@@ -71,7 +71,12 @@ pub use datafusion_datasource::memory::PartitionData;
 #[derive(Debug)]
 pub struct MemTable {
     schema: SchemaRef,
-    // batches used to be pub(crate), but it's needed to be public for the tests
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+    #[doc(hidden)]
     pub batches: Vec<PartitionData>,
     constraints: Constraints,
     column_defaults: HashMap<String, Expr>,
