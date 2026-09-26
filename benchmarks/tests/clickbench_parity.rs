@@ -166,20 +166,69 @@ fn read_queries(
 
 fn read_slt_queries(path: &Path) -> BTreeSet<String> {
     let contents = fs::read_to_string(path).unwrap();
+    let mut queries = BTreeSet::new();
+    let mut offset = 0;
+
+    while let Some(directive_offset) = find_query_directive(&contents[offset..]) {
+        let directive = offset + directive_offset;
+        let sql_offset = contents[directive..]
+            .find('\n')
+            .map(|offset| directive + offset + 1)
+            .expect("query directive must be followed by SQL");
+        let boundary_offset = find_slt_boundary(&contents[sql_offset..])
+            .expect("query SQL must be followed by expected output");
+        queries.insert(normalize_sql(
+            &contents[sql_offset..sql_offset + boundary_offset],
+        ));
+        offset = sql_offset + boundary_offset + "\n----".len();
+        offset += skip_expected_output(&contents[offset..]);
+    }
+
+    queries
+}
+
+fn skip_expected_output(contents: &str) -> usize {
+    contents
+        .find("\n\n")
+        .map(|offset| offset + 2)
+        .unwrap_or(contents.len())
+}
+
+fn find_query_directive(contents: &str) -> Option<usize> {
     contents
         .strip_prefix("query ")
-        .into_iter()
-        .chain(contents.split("\nquery ").skip(1))
-        .map(|query| {
-            let (_, sql) = query
-                .split_once('\n')
-                .expect("query directive must be followed by SQL");
-            let (sql, _) = sql
-                .split_once("\n----")
-                .expect("query SQL must be followed by expected output");
-            normalize_sql(sql)
-        })
-        .collect()
+        .map(|_| 0)
+        .or_else(|| contents.find("\nquery ").map(|offset| offset + 1))
+}
+
+fn find_slt_boundary(sql: &str) -> Option<usize> {
+    let mut index = 0;
+
+    while index < sql.len() {
+        let remaining = &sql[index..];
+        let character = remaining.chars().next().unwrap();
+
+        if remaining.starts_with("\n----") {
+            return Some(index);
+        }
+        if matches!(character, '\'' | '"') {
+            index += quoted_end(
+                remaining,
+                character,
+                character == '\'' && is_escaped_string_start(sql, index),
+            );
+        } else if let Some(delimiter) = dollar_quote_delimiter(remaining) {
+            let content = &remaining[delimiter.len()..];
+            index += content
+                .find(delimiter)
+                .map(|end| delimiter.len() + end + delimiter.len())
+                .unwrap_or(remaining.len());
+        } else {
+            index += character.len_utf8();
+        }
+    }
+
+    None
 }
 
 fn normalize_sql(sql: &str) -> String {
@@ -322,6 +371,40 @@ mod tests {
                 "SELECT unrelated;".to_string(),
                 "SELECT \"ClickBenchColumn\" FROM hits;".to_string(),
             ])
+        );
+    }
+
+    #[test]
+    fn ignores_slt_directives_and_boundaries_in_string_literals() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queries.slt");
+        fs::write(
+            &path,
+            "query T\nSELECT 'first line\nquery I\n----\nlast line';\n----\nfirst line\\nquery I\\n----\\nlast line\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_slt_queries(&path),
+            BTreeSet::from(
+                ["SELECT 'first line\nquery I\n----\nlast line';".to_string()]
+            )
+        );
+    }
+
+    #[test]
+    fn ignores_query_directives_in_expected_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("queries.slt");
+        fs::write(
+            &path,
+            "query I\nSELECT 1;\n----\nquery I\n\nquery I\nSELECT 2;\n----\n2\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_slt_queries(&path),
+            BTreeSet::from(["SELECT 1;".to_string(), "SELECT 2;".to_string()])
         );
     }
 
