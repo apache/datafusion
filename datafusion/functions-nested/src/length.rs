@@ -32,7 +32,8 @@ use datafusion_common::cast::{
 use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
-    ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ExpressionPlacement, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
+    Volatility,
 };
 use datafusion_functions::downcast_arg;
 use datafusion_macros::user_doc;
@@ -129,6 +130,14 @@ impl ScalarUDFImpl for ArrayLength {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
+        if args[0].should_push_to_leaves() {
+            ExpressionPlacement::MoveTowardsLeafNodes
+        } else {
+            ExpressionPlacement::KeepInPlace
+        }
     }
 }
 
