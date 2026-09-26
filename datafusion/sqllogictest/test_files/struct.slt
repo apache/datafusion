@@ -1803,3 +1803,72 @@ drop view struct_ctor_view;
 
 statement ok
 drop table struct_ctor_null;
+
+# Regression test for https://github.com/apache/datafusion/issues/25414.
+# `-a AS a` computes a new value under the same name as its input column.
+# Leaf expression pushdown moves `s['b']` below that projection. The projection
+# that computes `-a` must stay, or the query returns the input column `a`.
+
+statement ok
+create table leaf_same_name(a int, s struct<b varchar>) as values (1, {b: 'x'}), (2, {b: 'y'});
+
+# The computed column must survive the pushdown. Line 02 holds `(- t.a) AS a`.
+query TT
+explain select a, s['b'] from (select -a as a, s from leaf_same_name where a > 0);
+----
+logical_plan
+01)Projection: (- leaf_same_name.a) AS a, __datafusion_extracted_1 AS leaf_same_name.s[b]
+02)--Filter: leaf_same_name.a > Int32(0)
+03)----Projection: get_field(leaf_same_name.s, Utf8("b")) AS __datafusion_extracted_1, leaf_same_name.a
+04)------TableScan: leaf_same_name projection=[a, s]
+physical_plan
+01)ProjectionExec: expr=[(- a@1) as a, __datafusion_extracted_1@0 as leaf_same_name.s[b]]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----FilterExec: a@1 > 0
+04)------ProjectionExec: expr=[get_field(s@1, b) as __datafusion_extracted_1, a@0 as a]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Through a Filter
+query IT rowsort
+select a, s['b'] from (select -a as a, s from leaf_same_name where a > 0);
+----
+-1 x
+-2 y
+
+# Through a Limit
+query IT rowsort
+select a, s['b'] from (select -a as a, s from leaf_same_name limit 10);
+----
+-1 x
+-2 y
+
+# A computed column whose type differs from its input column
+query IT rowsort
+select a, s['b'] from (select a * 10 as a, s from leaf_same_name limit 10);
+----
+10 x
+20 y
+
+# The outer filter must see the computed value
+query IT rowsort
+select a, s['b'] from (select -a as a, s from leaf_same_name) where a < 0;
+----
+-1 x
+-2 y
+
+# The group key must be the computed value
+query II rowsort
+select a, count(s['b']) from (select -a as a, s from leaf_same_name where a > 0) group by a;
+----
+-1 1
+-2 1
+
+# Through a Sort
+query IT rowsort
+select a, s['b'] from (select -a as a, s from leaf_same_name order by a);
+----
+-1 x
+-2 y
+
+statement ok
+drop table leaf_same_name;
