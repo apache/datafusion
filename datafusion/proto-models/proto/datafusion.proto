@@ -1331,6 +1331,10 @@ message ParquetScanExecNode {
 
   // Source-specific footer prefetch size. Absent means no hint.
   optional uint64 metadata_size_hint = 7;
+
+  // If true, the scan uses `predicate` only to prune: a filter above the
+  // scan applies it.
+  bool pruning_only_predicate = 8;
 }
 
 message CsvScanExecNode {
