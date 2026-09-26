@@ -269,14 +269,22 @@ impl ScalarUDFImpl for DateBinFunc {
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
-        // The DATE_BIN function preserves the order of its second argument.
         let step = &input[0];
         let date_value = &input[1];
         let reference = input.get(2);
 
-        if step.sort_properties.eq(&SortProperties::Singleton)
+        // Scaling these representations to nanoseconds can overflow and turn
+        // otherwise valid input rows into NULL. The generated NULLs need not
+        // have the same placement as the source ordering.
+        let scale_can_overflow = matches!(
+            date_value.range.data_type(),
+            Timestamp(Second | Millisecond | Microsecond, _) | Time64(Microsecond)
+        );
+
+        if !scale_can_overflow
+            && step.sort_properties == SortProperties::Singleton
             && reference
-                .map(|r| r.sort_properties.eq(&SortProperties::Singleton))
+                .map(|r| r.sort_properties == SortProperties::Singleton)
                 .unwrap_or(true)
         {
             Ok(date_value.sort_properties)
