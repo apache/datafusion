@@ -40,6 +40,13 @@ workspace = true
 [lib]
 name = "datafusion_functions_table"
 
+[features]
+proto = [
+    "dep:datafusion-proto-common",
+    "dep:datafusion-proto-models",
+    "datafusion-physical-plan/proto",
+]
+
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
@@ -48,6 +55,8 @@ datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+datafusion-proto-common = { workspace = true, optional = true }
+datafusion-proto-models = { workspace = true, optional = true }
 parking_lot = { workspace = true }
 
 [dev-dependencies]
