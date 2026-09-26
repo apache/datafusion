@@ -159,6 +159,16 @@ impl ScanOutput {
             .as_usize()
     }
 
+    /// Rows the scan decoded after row-group and page pruning.
+    ///
+    /// The scan runs with `pushdown_filters = false`, so it applies the whole
+    /// predicate in its post-scan filter: every decoded row is either matched
+    /// or pruned there. The scan's `output_rows` only counts the matched rows,
+    /// so it cannot show how much pruning skipped.
+    fn rows_decoded(&self) -> usize {
+        self.counter("post_scan_rows_matched") + self.counter("post_scan_rows_pruned")
+    }
+
     fn pruned(&self, name: &str) -> usize {
         let value = self
             .metrics
@@ -372,7 +382,7 @@ async fn check_string_in_list_pruning(page_pruning: bool) {
         assert!(!unpruned.plan.contains("IN_SET_INTERSECTS"));
         assert_eq!(unpruned.pruned("row_groups_pruned_statistics"), 0);
         assert_eq!(unpruned.pruned("page_index_rows_pruned"), 0);
-        assert_eq!(unpruned.counter("output_rows"), TOTAL_ROWS);
+        assert_eq!(unpruned.rows_decoded(), TOTAL_ROWS);
 
         let output = scan(&file, list_size, Some(list_size), page_pruning, false).await;
         output.assert_results();
@@ -400,7 +410,7 @@ async fn check_string_in_list_pruning(page_pruning: bool) {
             "list_size={list_size}, metrics={}",
             output.metrics
         );
-        assert_eq!(output.counter("output_rows"), MATCHING_ROWS);
+        assert_eq!(output.rows_decoded(), MATCHING_ROWS);
     }
 
     // The default remains 20: enabling the compact representation must not
@@ -410,7 +420,7 @@ async fn check_string_in_list_pruning(page_pruning: bool) {
     assert!(!default.plan.contains("IN_SET_INTERSECTS"));
     assert_eq!(default.pruned("row_groups_pruned_statistics"), 0);
     assert_eq!(default.pruned("page_index_rows_pruned"), 0);
-    assert_eq!(default.counter("output_rows"), TOTAL_ROWS);
+    assert_eq!(default.rows_decoded(), TOTAL_ROWS);
 }
 
 /// The compact `NOT IN` form must prune exactly the units whose single repeated
@@ -424,7 +434,7 @@ async fn check_string_not_in_list_pruning(page_pruning: bool) {
         assert!(!unpruned.plan.contains("NOT_IN_SET_MAY_MATCH"));
         assert_eq!(unpruned.pruned("row_groups_pruned_statistics"), 0);
         assert_eq!(unpruned.pruned("page_index_rows_pruned"), 0);
-        assert_eq!(unpruned.counter("output_rows"), TOTAL_ROWS);
+        assert_eq!(unpruned.rows_decoded(), TOTAL_ROWS);
 
         let output = scan(&file, list_size, Some(list_size), page_pruning, true).await;
         output.assert_negated_results();
@@ -454,7 +464,7 @@ async fn check_string_not_in_list_pruning(page_pruning: bool) {
             "list_size={list_size}, metrics={}",
             output.metrics
         );
-        assert_eq!(output.counter("output_rows"), MATCHING_ROWS);
+        assert_eq!(output.rows_decoded(), MATCHING_ROWS);
     }
 
     let default = scan(&file, 21, None, page_pruning, true).await;
@@ -462,7 +472,7 @@ async fn check_string_not_in_list_pruning(page_pruning: bool) {
     assert!(!default.plan.contains("NOT_IN_SET_MAY_MATCH"));
     assert_eq!(default.pruned("row_groups_pruned_statistics"), 0);
     assert_eq!(default.pruned("page_index_rows_pruned"), 0);
-    assert_eq!(default.counter("output_rows"), TOTAL_ROWS);
+    assert_eq!(default.rows_decoded(), TOTAL_ROWS);
 
     // A mixed interval that overlaps a list member can still contain matching
     // rows. Only the adjacent single-valued unit can be excluded.
@@ -481,7 +491,7 @@ async fn check_string_not_in_list_pruning(page_pruning: bool) {
     unpruned.assert_no_filter_interference();
     assert_eq!(unpruned.pruned("row_groups_pruned_statistics"), 0);
     assert_eq!(unpruned.pruned("page_index_rows_pruned"), 0);
-    assert_eq!(unpruned.counter("output_rows"), ROWS_PER_UNIT * 2);
+    assert_eq!(unpruned.rows_decoded(), ROWS_PER_UNIT * 2);
 
     let output = scan(&mixed_file, 21, Some(21), page_pruning, true).await;
     assert_eq!(
@@ -500,7 +510,7 @@ async fn check_string_not_in_list_pruning(page_pruning: bool) {
         output.pruned("page_index_rows_pruned"),
         if page_pruning { ROWS_PER_UNIT } else { 0 }
     );
-    assert_eq!(output.counter("output_rows"), ROWS_PER_UNIT);
+    assert_eq!(output.rows_decoded(), ROWS_PER_UNIT);
 }
 
 async fn check_string_not_in_list_with_truncated_bounds(page_pruning: bool) {
@@ -515,7 +525,7 @@ async fn check_string_not_in_list_with_truncated_bounds(page_pruning: bool) {
     assert!(output.plan.contains("NOT_IN_SET_MAY_MATCH"));
     assert_eq!(output.pruned("row_groups_pruned_statistics"), 0);
     assert_eq!(output.pruned("page_index_rows_pruned"), 0);
-    assert_eq!(output.counter("output_rows"), ROWS_PER_UNIT);
+    assert_eq!(output.rows_decoded(), ROWS_PER_UNIT);
 }
 
 #[tokio::test]

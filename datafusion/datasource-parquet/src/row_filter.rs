@@ -78,7 +78,7 @@ use parquet::file::metadata::ParquetMetaData;
 use datafusion_common::Result;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::TreeNode;
-use datafusion_physical_expr::utils::reassign_expr_columns;
+use datafusion_physical_expr::utils::{is_optional_filter, reassign_expr_columns};
 use datafusion_physical_expr::{PhysicalExpr, split_conjunction};
 
 use datafusion_physical_plan::metrics;
@@ -412,36 +412,44 @@ fn size_of_columns(columns: &[usize], metadata: &ParquetMetaData) -> Result<usiz
 /// * `file_metrics` - Metrics for tracking filter performance
 ///
 /// # Returns
-/// * `Ok(Some(row_filter))` if the expression can be used as a RowFilter
-/// * `Ok(None)` if the expression cannot be used as a RowFilter
-/// * `Err(e)` if an error occurs while building the filter
 ///
-/// Note: The returned `RowFilter` may not contain all conjuncts from the original
-/// expression. Conjuncts that cannot be evaluated as an `ArrowPredicate` are ignored.
+/// `Ok((row_filter, rejected))` where:
+/// * `row_filter` is `Some` if at least one conjunct can be evaluated as an
+///   `ArrowPredicate`, `None` otherwise.
+/// * `rejected` holds the required conjuncts that *cannot* be evaluated as an
+///   `ArrowPredicate` (for example whole-struct references or columns missing
+///   from this file's physical schema). The caller MUST apply these elsewhere
+///   — e.g. as a post-scan filter — otherwise the predicate is relaxed and the
+///   query returns wrong results. Optional conjuncts (see
+///   [`split_optional`](datafusion_physical_expr::utils::split_optional))
+///   that cannot be evaluated are not used and are not in `rejected`: they
+///   are not needed for correctness.
+///
+/// `Err(e)` if an error occurs while building the filter.
 ///
 /// For example, if the expression is `a = 1 AND b = 2 AND c = 3` and `b = 2`
-/// cannot be evaluated for some reason, the returned `RowFilter` will contain
-/// only `a = 1` and `c = 3`.
+/// cannot be evaluated as an `ArrowPredicate`, the returned `RowFilter`
+/// contains `a = 1` and `c = 3` and `rejected` contains `b = 2`.
+// The tuple captures two related but distinct outputs; a type alias would
+// obscure rather than clarify the public signature.
+#[expect(clippy::type_complexity)]
 pub fn build_row_filter(
     expr: &Arc<dyn PhysicalExpr>,
     file_schema: &SchemaRef,
     metadata: &ParquetMetaData,
     reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
-) -> Result<Option<RowFilter>> {
+) -> Result<(Option<RowFilter>, Vec<Arc<dyn PhysicalExpr>>)> {
     // Implemented on top of the prebuild split so there is a single place
     // that splits conjuncts, orders candidates, and wires metrics — callers
     // that build once per file go through the same code as the per-row-group
     // rebuild path in `RowFilterContext`.
-    let Some(prebuilt) = prebuild_row_filter_candidates(expr, file_schema, metadata)?
-    else {
-        return Ok(None);
-    };
-    Ok(Some(row_filter_from_prebuilt(
-        &prebuilt,
-        reorder_predicates,
-        file_metrics,
-    )))
+    let (prebuilt, rejected) =
+        prebuild_row_filter_candidates(expr, file_schema, metadata)?;
+    let row_filter = prebuilt.map(|prebuilt| {
+        row_filter_from_prebuilt(&prebuilt, reorder_predicates, file_metrics)
+    });
+    Ok((row_filter, rejected))
 }
 
 /// A precomputed [`FilterCandidate`] with its expression column-reassigned to
@@ -483,29 +491,65 @@ impl PrebuiltRowFilterCandidate {
 /// walks and `Arc<PhysicalExpr>` allocations that showed up as top hot spots
 /// in TPCH profiles.
 ///
-/// Returns `Ok(None)` when the predicate has no push-downable conjuncts, in
-/// which case callers should skip installing a `RowFilter` entirely.
+/// The first element is `None` when the predicate has no push-downable
+/// conjuncts, in which case callers should skip installing a `RowFilter`
+/// entirely. The second element holds the conjuncts that cannot be evaluated
+/// as an `ArrowPredicate` on this file; see [`build_row_filter`] for why the
+/// caller must apply them elsewhere.
+///
+/// An optional conjunct (an `OptionalFilterPhysicalExpr` on the root `AND`
+/// chain) that cannot be evaluated as an `ArrowPredicate` for this file is
+/// not used. It is not in the rejected conjuncts either, thus the caller does
+/// not evaluate it after the scan. This is always safe.
+#[expect(clippy::type_complexity)]
 pub(crate) fn prebuild_row_filter_candidates(
     expr: &Arc<dyn PhysicalExpr>,
     file_schema: &SchemaRef,
     metadata: &ParquetMetaData,
-) -> Result<Option<Vec<PrebuiltRowFilterCandidate>>> {
+) -> Result<(
+    Option<Vec<PrebuiltRowFilterCandidate>>,
+    Vec<Arc<dyn PhysicalExpr>>,
+)> {
     // Split into conjuncts:
     // `a = 1 AND b = 2 AND c = 3` -> [`a = 1`, `b = 2`, `c = 3`]
     let predicates = split_conjunction(expr);
-    let candidates: Vec<FilterCandidate> = predicates
-        .into_iter()
-        .map(|expr| {
-            FilterCandidateBuilder::new(Arc::clone(expr), Arc::clone(file_schema))
-                .build(metadata)
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .collect();
+
+    // Partition conjuncts into those that can be evaluated as ArrowPredicates
+    // and those that cannot. Rejected conjuncts are returned to the caller so
+    // they are never silently dropped.
+    let mut candidates: Vec<FilterCandidate> = Vec::with_capacity(predicates.len());
+    let mut rejected: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
+    for predicate in predicates {
+        // An optional conjunct that cannot be pushed down for this file is not
+        // needed for correctness: do not use it, and do not send it to the
+        // post-scan filter.
+        if is_optional_filter(predicate) {
+            match FilterCandidateBuilder::new(
+                Arc::clone(predicate),
+                Arc::clone(file_schema),
+            )
+            .build(metadata)
+            {
+                Ok(Some(candidate)) => candidates.push(candidate),
+                Ok(None) => {}
+                Err(e) => {
+                    log::debug!(
+                        "Ignoring optional filter that cannot be pushed down: {e}"
+                    );
+                }
+            }
+            continue;
+        }
+        match FilterCandidateBuilder::new(Arc::clone(predicate), Arc::clone(file_schema))
+            .build(metadata)?
+        {
+            Some(candidate) => candidates.push(candidate),
+            None => rejected.push(Arc::clone(predicate)),
+        }
+    }
 
     if candidates.is_empty() {
-        return Ok(None);
+        return Ok((None, rejected));
     }
 
     let prebuilt: Vec<PrebuiltRowFilterCandidate> = candidates
@@ -523,7 +567,7 @@ pub(crate) fn prebuild_row_filter_candidates(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(Some(prebuilt))
+    Ok((Some(prebuilt), rejected))
 }
 
 /// Wrap a list of prebuilt candidates into a fresh [`RowFilter`], assigning
@@ -934,10 +978,14 @@ mod test {
         let file_metrics =
             ParquetFileMetrics::new(0, &format!("{func_name}.parquet"), &metrics);
 
-        let row_filter =
+        let (row_filter, rejected) =
             build_row_filter(&expr, &file_schema, &metadata, false, &file_metrics)
-                .expect("building row filter")
-                .expect("row filter should exist");
+                .expect("building row filter");
+        assert!(
+            rejected.is_empty(),
+            "expected no rejected conjuncts, got {rejected:?}"
+        );
+        let row_filter = row_filter.expect("row filter should exist");
 
         let reader = parquet_reader_builder
             .with_row_filter(row_filter)
@@ -1648,10 +1696,14 @@ mod test {
         let metrics = ExecutionPlanMetricsSet::new();
         let file_metrics = ParquetFileMetrics::new(0, "struct_e2e.parquet", &metrics);
 
-        let row_filter =
+        let (row_filter, rejected) =
             build_row_filter(&expr, &file_schema, &metadata, false, &file_metrics)
-                .expect("building row filter")
-                .expect("row filter should exist");
+                .expect("building row filter");
+        assert!(
+            rejected.is_empty(),
+            "expected no rejected conjuncts, got {rejected:?}"
+        );
+        let row_filter = row_filter.expect("row filter should exist");
 
         let reader = parquet_reader_builder
             .with_row_filter(row_filter)
@@ -2104,10 +2156,14 @@ mod test {
         let file_metrics =
             ParquetFileMetrics::new(0, "shared_prefix_e2e.parquet", &metrics);
 
-        let row_filter =
+        let (row_filter, rejected) =
             build_row_filter(&expr, &file_schema, &metadata, false, &file_metrics)
-                .expect("building row filter")
-                .expect("row filter should exist");
+                .expect("building row filter");
+        assert!(
+            rejected.is_empty(),
+            "expected no rejected conjuncts, got {rejected:?}"
+        );
+        let row_filter = row_filter.expect("row filter should exist");
 
         let reader = parquet_reader_builder
             .with_row_filter(row_filter)
@@ -2126,5 +2182,86 @@ mod test {
         );
         assert_eq!(file_metrics.pushdown_rows_pruned.value(), 2);
         assert_eq!(file_metrics.pushdown_rows_matched.value(), 2);
+    }
+
+    /// Regression test: a predicate `(s IS NOT NULL) AND (id = 1)` mixes a
+    /// conjunct that the `RowFilter` machinery cannot evaluate (whole-struct
+    /// reference — [`PushdownChecker`] flags it as non-primitive) with one
+    /// that it can. `build_row_filter` must return the rejected conjunct in
+    /// its second tuple element so the caller can re-route it to a post-scan
+    /// filter; before this was fixed the rejected conjunct was silently
+    /// dropped on the floor while the parent `FilterExec` had already been
+    /// removed, relaxing the predicate and returning wrong results.
+    #[test]
+    fn build_row_filter_surfaces_rejected_struct_conjunct() {
+        let struct_fields: Fields = vec![
+            Arc::new(Field::new("value", DataType::Int32, false)),
+            Arc::new(Field::new("label", DataType::Utf8, false)),
+        ]
+        .into();
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("s", DataType::Struct(struct_fields.clone()), false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StructArray::new(
+                    struct_fields,
+                    vec![
+                        Arc::new(Int32Array::from(vec![10, 20, 30])) as _,
+                        Arc::new(StringArray::from(vec!["a", "b", "c"])) as _,
+                    ],
+                    None,
+                )),
+            ],
+        )
+        .unwrap();
+
+        let file = NamedTempFile::new().expect("temp file");
+        let mut writer =
+            ArrowWriter::try_new(file.reopen().unwrap(), Arc::clone(&schema), None)
+                .expect("writer");
+        writer.write(&batch).expect("write batch");
+        writer.close().expect("close writer");
+
+        let reader_file = file.reopen().expect("reopen file");
+        let parquet_reader_builder =
+            ParquetRecordBatchReaderBuilder::try_new(reader_file)
+                .expect("reader builder");
+        let metadata = parquet_reader_builder.metadata().clone();
+        let file_schema = parquet_reader_builder.schema().clone();
+
+        // (s IS NOT NULL) AND (id = 1)
+        // The first conjunct references a whole struct -> RowFilter rejects.
+        // The second is a plain Int32 equality -> RowFilter accepts.
+        let predicate_expr = col("s")
+            .is_not_null()
+            .and(col("id").eq(Expr::Literal(ScalarValue::Int32(Some(1)), None)));
+        let expr = logical2physical(&predicate_expr, &file_schema);
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let file_metrics =
+            ParquetFileMetrics::new(0, "build_row_filter_rejected.parquet", &metrics);
+
+        let (row_filter, rejected) =
+            build_row_filter(&expr, &file_schema, &metadata, false, &file_metrics)
+                .expect("building row filter");
+
+        // The plain id = 1 conjunct produced a RowFilter…
+        assert!(
+            row_filter.is_some(),
+            "id = 1 should have produced a RowFilter"
+        );
+        // …and the struct IS NOT NULL conjunct must be surfaced as rejected,
+        // never silently dropped.
+        assert_eq!(
+            rejected.len(),
+            1,
+            "expected exactly one rejected conjunct (s IS NOT NULL), got {rejected:?}"
+        );
     }
 }
