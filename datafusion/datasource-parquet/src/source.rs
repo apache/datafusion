@@ -965,7 +965,9 @@ impl FileSource for ParquetSource {
         // enabled, or as the in-scan post-scan filter otherwise (and for any
         // conjunct the `RowFilter` cannot evaluate on a given file). The
         // `pushdown_filters` config is preserved because it still controls the
-        // `RowFilter` vs. post-scan placement downstream.
+        // `RowFilter` vs. post-scan placement downstream. (`FileScanConfig`
+        // keeps a filter above the scan, and gives it to this source as an
+        // optional filter, when a filter above runs in more partitions.)
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
             filters.iter().map(|f| f.discriminant).collect(),
         )
