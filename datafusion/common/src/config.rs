@@ -1399,6 +1399,16 @@ config_namespace! {
         /// parquet reader setting. 0 means no caching.
         pub max_predicate_cache_size: Option<usize>, default = None
 
+        /// (reading) If set, decode Parquet a batch at a time and read ahead up to
+        /// this many bytes per partition stream, in the order the decoder reads
+        /// them. If unset, the reader fetches one row group at a time.
+        pub read_ahead_bytes: Option<usize>, default = None
+
+        /// (reading) With `read_ahead_bytes` set, also read ahead byte ranges
+        /// that a pushed-down filter can make unnecessary. This reduces waits on
+        /// high-latency storage but can read bytes that the scan does not use.
+        pub read_ahead_conditional: bool, default = false
+
         /// Maximum number of input values in an `IN (...)` list eligible for
         /// min/max pruning. Lists above this cap, or a cap of 0, skip this
         /// rewrite; other predicates and Bloom-filter pruning remain available.

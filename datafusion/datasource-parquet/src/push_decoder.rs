@@ -35,13 +35,15 @@
 //! The opener constructs both halves and hands the state off to
 //! [`PushDecoderStreamState::into_stream`] for consumption.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
+use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
-use futures::StreamExt;
+use bytes::Bytes;
 use futures::stream::BoxStream;
+use futures::{FutureExt, StreamExt};
 use log::debug;
 use parquet::DecodeResult;
 use parquet::arrow::ProjectionMask;
@@ -51,11 +53,13 @@ use parquet::arrow::arrow_reader::{
 };
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::push_decoder::{
-    ParquetPushDecoder, ParquetPushDecoderBuilder, RowGroupSelection,
+    ParquetPushDecoder, ParquetPushDecoderBuilder, PlannedRange, RowGroupSelection,
+    ScanPlan,
 };
 use parquet::file::metadata::ParquetMetaData;
 
 use datafusion_common::{DataFusionError, Result, internal_err};
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_physical_expr::expressions::DynamicFilterTracking;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::{BaselineMetrics, Count, Gauge};
@@ -283,7 +287,8 @@ pub(crate) struct PushDecoderStreamState {
     pub(crate) decoder: Option<ParquetPushDecoder>,
     pub(crate) active_reader: Option<ParquetRecordBatchReader>,
     pub(crate) rg_plan: VecDeque<RgPlanEntry>,
-    pub(crate) reader: Box<dyn AsyncFileReader>,
+    /// The file reader. `None` while lent to a [`ReadAhead`] fetch.
+    pub(crate) reader: Option<Box<dyn AsyncFileReader>>,
     /// Per-file projection: the mask installed on every decoder and the
     /// per-batch transform applied by [`Self::project_batch`].
     pub(crate) decoder_projection: DecoderProjection,
@@ -320,6 +325,9 @@ pub(crate) struct PushDecoderStreamState {
     /// group at a time as they are decoded or skipped, and topped up to the
     /// full range when the stream is dropped.
     pub(crate) byte_progress: ByteProgress,
+    /// Read-ahead, set by `read_ahead_bytes`. See
+    /// [`Self::transition_streaming`].
+    pub(crate) read_ahead: Option<ReadAhead>,
 }
 
 /// A reusable, `Arc`-shared list of prebuilt row-filter candidates.
@@ -442,6 +450,9 @@ impl PushDecoderStreamState {
         // Cloning `Time` shares the underlying counter and keeps the guard
         // from borrowing `self`. The guard records on drop, which covers
         // every return.
+        if self.read_ahead.is_some() {
+            return self.transition_streaming().await;
+        }
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let mut timer = elapsed_compute.timer();
         loop {
@@ -464,48 +475,11 @@ impl PushDecoderStreamState {
                 }
             }
 
-            // Step 2: when the decoder is sitting on a row-group boundary,
-            // scan the entire `rg_plan` and drop every RG the pruner proves
-            // cannot contribute — head, interior, and tail alike. Evaluating
-            // per-RG stats against the cached `PruningPredicate` is cheap;
-            // the expensive part is the `into_builder` rebuild, so we do at
-            // most one rebuild per boundary regardless of how many RGs were
-            // dropped. Buffered bytes for already-fetched RGs carry across
-            // the rebuild.
-            //
-            // `into_builder` errors out mid-row-group, so we gate the prune
-            // pass on `is_at_row_group_boundary()`. When the decoder is
-            // mid-RG (e.g. byte ranges have been pushed but no reader has
-            // been handed back yet), step 3 drives it forward and we get
-            // another chance at the next boundary — the pruner is stateful
-            // and idempotent, so deferring loses nothing.
-            let at_boundary = self
-                .decoder
-                .as_ref()
-                .expect("decoder present")
-                .is_at_row_group_boundary();
-            // Keep `rg_plan.front()` aligned with the row group the decoder will
-            // actually emit next: arrow-rs silently finishes row groups whose
-            // post-predicate selection is empty without handing back a reader, so
-            // without this sync `rg_plan` trails the decoder by one and a rebuild
-            // either re-reads an already-delivered row group (#24352) or toggles
-            // the per-RG filter for the wrong row group. Both the runtime pruner
-            // and the per-RG `RowFilter` toggle consume `rg_plan`, so sync when
-            // either is active; gating avoids the O(remaining row groups) cost of
-            // `peek_next_row_group()` on ordinary scans that never rebuild.
-            if at_boundary
-                && (self.row_group_pruner.is_some() || self.row_filter_context.is_some())
-                && let Err(e) = self.sync_rg_plan_to_decoder_frontier()
-            {
-                return Some((Err(e), self));
-            }
-            if at_boundary && !self.rg_plan.is_empty() {
-                let pruned_count = self.prune_boundary_row_groups();
-                match self.rebuild_decoder_at_boundary(pruned_count) {
-                    Ok(true) => return None,
-                    Ok(false) => {}
-                    Err(e) => return Some((Err(e), self)),
-                }
+            // Step 2: row-group boundary work (pruning, filter toggle).
+            match self.handle_row_group_boundary() {
+                Ok(true) => return None,
+                Ok(false) => {}
+                Err(e) => return Some((Err(e), self)),
             }
 
             // Step 3: drive the decoder.
@@ -516,6 +490,8 @@ impl PushDecoderStreamState {
                     timer.stop();
                     let data = self
                         .reader
+                        .as_mut()
+                        .expect("reader is only lent out by the streaming policy")
                         .get_byte_ranges(ranges.clone())
                         .await
                         .map_err(DataFusionError::from);
@@ -555,6 +531,53 @@ impl PushDecoderStreamState {
                 }
             }
         }
+    }
+
+    /// Row-group boundary work, shared by both drivers. Returns `Ok(true)`
+    /// when the stream should finish.
+    ///
+    /// When the decoder is sitting on a row-group boundary, scan the entire
+    /// `rg_plan` and drop every RG the pruner proves cannot contribute —
+    /// head, interior, and tail alike. Evaluating per-RG stats against the
+    /// cached `PruningPredicate` is cheap; the expensive part is the
+    /// `into_builder` rebuild, so we do at most one rebuild per boundary
+    /// regardless of how many RGs were dropped. Buffered bytes for
+    /// already-fetched RGs carry across the rebuild.
+    ///
+    /// `into_builder` errors out mid-row-group, so we gate the prune pass on
+    /// `is_at_row_group_boundary()`. When the decoder is mid-RG (e.g. byte
+    /// ranges have been pushed but no reader has been handed back yet), the
+    /// driver moves it forward and we get another chance at the next
+    /// boundary — the pruner is stateful and idempotent, so deferring loses
+    /// nothing.
+    fn handle_row_group_boundary(&mut self) -> Result<bool> {
+        let at_boundary = self
+            .decoder
+            .as_ref()
+            .expect("decoder present")
+            .is_at_row_group_boundary();
+        // Keep `rg_plan.front()` aligned with the row group the decoder will
+        // actually emit next: arrow-rs silently finishes row groups whose
+        // post-predicate selection is empty without handing back a reader, so
+        // without this sync `rg_plan` trails the decoder by one and a rebuild
+        // either re-reads an already-delivered row group (#24352) or toggles
+        // the per-RG filter for the wrong row group. Both the runtime pruner
+        // and the per-RG `RowFilter` toggle consume `rg_plan`, so sync when
+        // either is active; gating avoids the O(remaining row groups) cost of
+        // `peek_next_row_group()` on ordinary scans that never rebuild. The
+        // streaming driver always syncs.
+        if at_boundary
+            && (self.row_group_pruner.is_some()
+                || self.row_filter_context.is_some()
+                || self.read_ahead.is_some())
+        {
+            self.sync_rg_plan_to_decoder_frontier()?;
+        }
+        if at_boundary && !self.rg_plan.is_empty() {
+            let pruned_count = self.prune_boundary_row_groups();
+            return self.rebuild_decoder_at_boundary(pruned_count);
+        }
+        Ok(false)
     }
 
     /// Keep `rg_plan.front()` aligned with the row group the decoder will emit
@@ -701,7 +724,12 @@ impl PushDecoderStreamState {
                 self.row_filter_skipped_fully_matched.add_one();
             }
         }
-        self.decoder = Some(builder.build().map_err(DataFusionError::from)?);
+        let decoder = builder.build().map_err(DataFusionError::from)?;
+        // The rebuilt decoder plans only the remaining row groups.
+        if let Some(read_ahead) = self.read_ahead.as_mut() {
+            read_ahead.reset_plan(decoder.scan_plan());
+        }
+        self.decoder = Some(decoder);
         Ok(false)
     }
 
@@ -718,6 +746,376 @@ impl PushDecoderStreamState {
 
     fn project_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
         self.decoder_projection.map(batch)
+    }
+}
+
+// `datafusion.execution.parquet.read_ahead_bytes`: a batch-granular push
+// decoder (`FetchGranularity::Batch`) plus [`ReadAhead`], which fetches
+// [`ParquetPushDecoder::scan_plan`] ranges within a byte window.
+
+/// A fetched range, with the row group it was planned for. `None` for a
+/// range the decoder asked for, which is always pushed.
+type TaggedRange = (Range<u64>, Option<usize>);
+
+/// What a background fetch returns: the lent file reader and the data.
+type FetchResult = (
+    Box<dyn AsyncFileReader>,
+    parquet::errors::Result<Vec<Bytes>>,
+);
+
+/// A background read-ahead fetch.
+struct InFlight {
+    task: SpawnedTask<FetchResult>,
+    ranges: Vec<TaggedRange>,
+}
+
+/// Background read-ahead for the streaming policy: the decoder's
+/// [`ScanPlan`] and at most one fetch in flight.
+pub(crate) struct ReadAhead {
+    /// Read-ahead limit: decoder-held bytes plus bytes in flight.
+    window: u64,
+    /// The rest of the decoder's plan. Pulled only as far as the window
+    /// reaches.
+    plan: ScanPlan,
+    /// Ranges pulled from `plan` but not fetched yet.
+    pending: VecDeque<PlannedRange>,
+    /// Ranges fetched (or in flight) so far, so the plan and `NeedsData`
+    /// never fetch a range twice.
+    fetched: HashSet<(u64, u64)>,
+    in_flight: Option<InFlight>,
+    /// The row group the decoder is reading. It is no longer in `rg_plan`.
+    current_row_group: Option<usize>,
+    /// No fetch has been made yet.
+    first_fetch: bool,
+    /// Also read ahead [`PlannedRange::conditional`] ranges
+    /// (`read_ahead_conditional`). Off by default, so a scan reads the same
+    /// bytes as without read-ahead.
+    conditional: bool,
+}
+
+impl ReadAhead {
+    pub(crate) fn new(window: u64, plan: ScanPlan, conditional: bool) -> Self {
+        Self {
+            window,
+            plan,
+            pending: VecDeque::new(),
+            fetched: HashSet::new(),
+            in_flight: None,
+            current_row_group: None,
+            first_fetch: true,
+            conditional,
+        }
+    }
+
+    /// Follow a rebuilt decoder: its plan covers only the row groups it
+    /// still reads.
+    fn reset_plan(&mut self, plan: ScanPlan) {
+        self.plan = plan;
+        self.pending.clear();
+    }
+
+    /// Whether read-ahead should skip this planned range.
+    fn skip(&self, range: &PlannedRange) -> bool {
+        (range.conditional && !self.conditional)
+            || self.fetched.contains(&(range.range.start, range.range.end))
+    }
+
+    /// The next planned range to read ahead, without taking it.
+    fn peek(&mut self) -> Option<&PlannedRange> {
+        loop {
+            if self.pending.is_empty() {
+                let next = self.plan.next()?;
+                self.pending.push_back(next);
+            }
+            let front = self.pending.front().expect("pending is not empty");
+            if self.skip(front) {
+                self.pending.pop_front();
+                continue;
+            }
+            return self.pending.front();
+        }
+    }
+
+    /// Take planned ranges, in order, while they fit in `free` bytes.
+    /// Ranges of row groups that `keep` rejects are skipped: the decoder asks
+    /// for them if it reads them after all.
+    fn take_ranges(
+        &mut self,
+        mut free: u64,
+        mut keep: impl FnMut(usize) -> bool,
+    ) -> Vec<TaggedRange> {
+        let mut ranges = vec![];
+        let mut kept: Option<(usize, bool)> = None;
+        while let Some(next) = self.peek() {
+            let row_group = next.row_group;
+            let keep_row_group = match kept {
+                Some((rg, keep)) if rg == row_group => keep,
+                _ => {
+                    let decision = keep(row_group);
+                    kept = Some((row_group, decision));
+                    decision
+                }
+            };
+            if !keep_row_group {
+                self.pending.pop_front();
+                continue;
+            }
+            if next.len() > free {
+                break;
+            }
+            free -= next.len();
+            let next = self.pending.pop_front().expect("peeked");
+            self.fetched.insert((next.range.start, next.range.end));
+            ranges.push((next.range, Some(next.row_group)));
+        }
+        ranges
+    }
+
+    /// Whether the rest of the plan fits in `limit` bytes. Pulls at most
+    /// `limit` bytes of plan.
+    fn rest_fits(&mut self, limit: u64) -> bool {
+        let mut bytes = 0u64;
+        let mut idx = 0;
+        loop {
+            while self.pending.len() <= idx {
+                match self.plan.next() {
+                    Some(next) => self.pending.push_back(next),
+                    None => return true,
+                }
+            }
+            if !self.skip(&self.pending[idx]) {
+                bytes += self.pending[idx].len();
+                if bytes > limit {
+                    return false;
+                }
+            }
+            idx += 1;
+        }
+    }
+}
+
+/// Whether read-ahead should fetch ranges of `row_group`: it is the row
+/// group being read, or it is still in the plan and the dynamic row-group
+/// pruner (whose predicate only tightens) does not already prune it.
+fn keep_row_group<'a>(
+    current_row_group: Option<usize>,
+    rg_plan: &'a VecDeque<RgPlanEntry>,
+    mut pruner: Option<&'a mut RowGroupPruner>,
+) -> impl FnMut(usize) -> bool + 'a {
+    move |row_group| {
+        current_row_group == Some(row_group)
+            || (rg_plan.iter().any(|entry| entry.rg_index == row_group)
+                && !pruner
+                    .as_deref_mut()
+                    .is_some_and(|pruner| pruner.should_prune(&[row_group])))
+    }
+}
+
+impl PushDecoderStreamState {
+    /// Driver for `read_ahead_bytes`: [`Self::transition`] with
+    /// `try_decode` and [`ReadAhead`].
+    async fn transition_streaming(mut self) -> Option<(Result<RecordBatch>, Self)> {
+        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+        let mut timer = elapsed_compute.timer();
+        loop {
+            // Step 1: push a read-ahead fetch that has landed. Does not wait.
+            if let Err(e) = self.land_read_ahead(false).await {
+                return Some((Err(e), self));
+            }
+
+            // Step 2: row-group boundary work, then read-ahead (after pruning).
+            match self.handle_row_group_boundary() {
+                Ok(true) => return None,
+                Ok(false) => {}
+                Err(e) => return Some((Err(e), self)),
+            }
+            self.start_read_ahead();
+
+            // Step 3: decode the next batch, or fetch what it needs.
+            let decoder = self.decoder.as_mut().expect("decoder present");
+            if decoder.is_at_row_group_boundary()
+                && let Some(entry) = self.rg_plan.pop_front()
+            {
+                // Pop the row group `try_decode` starts, as the default driver
+                // does when it gets the row group's reader.
+                self.byte_progress.credit(entry.bytes);
+                if let Some(read_ahead) = self.read_ahead.as_mut() {
+                    read_ahead.current_row_group = Some(entry.rg_index);
+                }
+            }
+            match decoder.try_decode() {
+                Ok(DecodeResult::Data(batch)) => {
+                    self.copy_arrow_reader_metrics();
+                    let result = self.project_batch(&batch);
+                    return Some((result, self));
+                }
+                Ok(DecodeResult::NeedsData(ranges)) => {
+                    // I/O, not compute.
+                    timer.stop();
+                    let result = self.fetch_needed(ranges).await;
+                    timer.restart();
+                    if let Err(e) = result {
+                        return Some((Err(e), self));
+                    }
+                }
+                Ok(DecodeResult::Finished) => return None,
+                Err(e) => return Some((Err(DataFusionError::from(e)), self)),
+            }
+        }
+    }
+
+    /// Push a landed read-ahead fetch into the decoder. With `wait`, wait for
+    /// the fetch in flight to land.
+    async fn land_read_ahead(&mut self, wait: bool) -> Result<()> {
+        let read_ahead = self.read_ahead.as_mut().expect("streaming policy");
+        let Some(mut in_flight) = read_ahead.in_flight.take() else {
+            return Ok(());
+        };
+        let joined = if wait {
+            (&mut in_flight.task).await
+        } else {
+            match (&mut in_flight.task).now_or_never() {
+                Some(joined) => joined,
+                None => {
+                    read_ahead.in_flight = Some(in_flight);
+                    return Ok(());
+                }
+            }
+        };
+        let (reader, data) =
+            joined.map_err(|e| DataFusionError::External(Box::new(e)))?;
+        self.reader = Some(reader);
+        self.push_fetched(in_flight.ranges, data?)
+    }
+
+    /// Start a read-ahead fetch if none is in flight and the window has room
+    /// for a fetch worth a round trip: half the window, or the rest of the
+    /// plan.
+    fn start_read_ahead(&mut self) {
+        let held = self
+            .decoder
+            .as_ref()
+            .expect("decoder present")
+            .buffered_bytes();
+        let Some(read_ahead) = self.read_ahead.as_mut() else {
+            return;
+        };
+        // The first fetch is made for `NeedsData`, see `fetch_needed`.
+        if read_ahead.first_fetch
+            || read_ahead.in_flight.is_some()
+            || self.reader.is_none()
+        {
+            return;
+        }
+        let free = read_ahead.window.saturating_sub(held);
+        if free < read_ahead.window / 2 && !read_ahead.rest_fits(free) {
+            return;
+        }
+        let current = read_ahead.current_row_group;
+        let mut ranges = read_ahead.take_ranges(
+            free,
+            keep_row_group(current, &self.rg_plan, self.row_group_pruner.as_mut()),
+        );
+        if ranges.is_empty() {
+            return;
+        }
+        ranges.sort_by_key(|(range, _)| range.start);
+        let fetch: Vec<Range<u64>> = ranges.iter().map(|(r, _)| r.clone()).collect();
+        let mut reader = self.reader.take().expect("reader is idle");
+        let task = SpawnedTask::spawn(async move {
+            let data = reader.get_byte_ranges(fetch).await;
+            (reader, data)
+        });
+        read_ahead.in_flight = Some(InFlight { task, ranges });
+    }
+
+    /// Fetch what the decoder asked for, filled with read-ahead up to the
+    /// window. A fetch in flight is awaited first. The first fetch of a plan
+    /// larger than the window stays minimal, for time to first batch.
+    async fn fetch_needed(&mut self, needed: Vec<Range<u64>>) -> Result<()> {
+        let in_flight = self
+            .read_ahead
+            .as_ref()
+            .expect("streaming policy")
+            .in_flight
+            .as_ref()
+            .map(|in_flight| {
+                needed
+                    .iter()
+                    .any(|range| in_flight.ranges.iter().any(|(r, _)| r == range))
+            });
+        if let Some(covers) = in_flight {
+            self.land_read_ahead(true).await?;
+            if covers {
+                return Ok(());
+            }
+        }
+
+        let held = self
+            .decoder
+            .as_ref()
+            .expect("decoder present")
+            .buffered_bytes();
+        let read_ahead = self.read_ahead.as_mut().expect("streaming policy");
+        let needed_bytes: u64 = needed.iter().map(|r| r.end - r.start).sum();
+        for range in &needed {
+            read_ahead.fetched.insert((range.start, range.end));
+        }
+        let required_only =
+            read_ahead.first_fetch && !read_ahead.rest_fits(read_ahead.window);
+        read_ahead.first_fetch = false;
+        let mut ranges: Vec<TaggedRange> =
+            needed.into_iter().map(|range| (range, None)).collect();
+        if !required_only {
+            let free = read_ahead
+                .window
+                .saturating_sub(held.saturating_add(needed_bytes));
+            let current = read_ahead.current_row_group;
+            ranges.extend(read_ahead.take_ranges(
+                free,
+                keep_row_group(current, &self.rg_plan, self.row_group_pruner.as_mut()),
+            ));
+        }
+        ranges.sort_by_key(|(range, _)| range.start);
+        let fetch: Vec<Range<u64>> = ranges.iter().map(|(r, _)| r.clone()).collect();
+        let data = self
+            .reader
+            .as_mut()
+            .expect("no fetch in flight")
+            .get_byte_ranges(fetch)
+            .await
+            .map_err(DataFusionError::from)?;
+        self.push_fetched(ranges, data)
+    }
+
+    /// Push fetched ranges into the decoder. Read-ahead ranges of row groups
+    /// that were pruned since the fetch started are dropped.
+    fn push_fetched(&mut self, ranges: Vec<TaggedRange>, data: Vec<Bytes>) -> Result<()> {
+        if ranges.len() != data.len() {
+            return internal_err!(
+                "fetched {} buffers for {} ranges",
+                data.len(),
+                ranges.len()
+            );
+        }
+        let live: HashSet<usize> = self
+            .rg_plan
+            .iter()
+            .map(|e| e.rg_index)
+            .chain(self.read_ahead.as_ref().and_then(|r| r.current_row_group))
+            .collect();
+        let (ranges, data): (Vec<_>, Vec<_>) = ranges
+            .into_iter()
+            .zip(data)
+            .filter(|((_, row_group), _)| row_group.is_none_or(|rg| live.contains(&rg)))
+            .map(|((range, _), data)| (range, data))
+            .unzip();
+        self.decoder
+            .as_mut()
+            .expect("decoder present")
+            .push_ranges(ranges, data)
+            .map_err(DataFusionError::from)?;
+        Ok(())
     }
 }
 

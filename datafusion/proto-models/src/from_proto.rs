@@ -487,6 +487,16 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                     ) => to_usize(*size, "max_predicate_cache_size"),
                 })
                 .transpose()?,
+            read_ahead_bytes: proto
+                .read_ahead_bytes_opt
+                .as_ref()
+                .map(|opt| match opt {
+                    parquet_options::ReadAheadBytesOpt::ReadAheadBytes(size) => {
+                        to_usize(*size, "read_ahead_bytes")
+                    }
+                })
+                .transpose()?,
+            read_ahead_conditional: proto.read_ahead_conditional,
             max_row_group_bytes: proto
                 .max_row_group_bytes_opt
                 .as_ref()

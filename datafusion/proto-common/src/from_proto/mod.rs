@@ -1283,6 +1283,12 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                     to_usize(v, "max_predicate_cache_size")
                 }
             }).transpose()?,
+            read_ahead_bytes: value.read_ahead_bytes_opt.map(|opt| match opt {
+                protobuf::parquet_options::ReadAheadBytesOpt::ReadAheadBytes(v) => {
+                    to_usize(v, "read_ahead_bytes")
+                }
+            }).transpose()?,
+            read_ahead_conditional: value.read_ahead_conditional,
             max_row_group_bytes: value.max_row_group_bytes_opt.map(|opt| match opt {
                 protobuf::parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(v) => {
                     MaxRowGroupBytes::try_new(to_usize(v, "max_row_group_bytes")?)
