@@ -1251,11 +1251,7 @@ fn null_aware_skip_probe_batch(
             // `on[0]` is the `NOT IN` value key for both modes.
             let probe_key_column = &state.values[0];
             let is_anti = matches!(mode, NullAwareMode::LeftAnti { .. });
-            let probe_has_null = if is_anti {
-                probe_key_column.logical_null_count() > 0
-            } else {
-                probe_key_column.null_count() > 0
-            };
+            let probe_has_null = probe_key_column.logical_null_count() > 0;
             // Only batches with rows count: `NULL NOT IN (empty)` is TRUE.
             left_data.record_probe_batch(state.batch.num_rows() > 0, probe_has_null);
             // Best-effort early exit; the final stage re-checks the flag

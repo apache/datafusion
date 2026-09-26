@@ -1391,12 +1391,19 @@ pub(crate) fn build_null_aware_left_mark_column(
     probe_side_has_null: bool,
     probe_side_non_empty: bool,
 ) -> ArrayRef {
+    let build_key_nulls = build_key_column.logical_nulls();
+
     // Whether an unmatched build row's mark is NULL (UNKNOWN) instead of FALSE:
     // correlated joins precomputed this per row in `null_indices_bitmap`; the
     // uncorrelated rules are cases 1-4 in the doc above.
     let unmatched_mark_is_null = |build_idx: usize| match null_indices_bitmap {
         Some(bitmap) => bitmap.get_bit(build_idx),
-        None if build_key_column.is_null(build_idx) => probe_side_non_empty,
+        None if build_key_nulls
+            .as_ref()
+            .is_some_and(|nulls| nulls.is_null(build_idx)) =>
+        {
+            probe_side_non_empty
+        }
         None => probe_side_has_null,
     };
 
