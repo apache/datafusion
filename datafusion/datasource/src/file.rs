@@ -208,6 +208,26 @@ pub trait FileSource: Any + Send + Sync {
         ))
     }
 
+    /// Try to push down filters that stay above the scan, for pruning only.
+    ///
+    /// A `FilterExec` above the scan applies `filters`, thus the source does
+    /// not need to apply them to the rows. It can use them to prune, for
+    /// example files, row groups and pages. `filters` are in terms of the
+    /// unprojected table schema, as for [`Self::try_pushdown_filters`].
+    ///
+    /// `FileScanConfig` calls this method instead of
+    /// [`Self::try_pushdown_filters`] when a `FilterExec` above the scan runs
+    /// in more partitions than the scan. Returns the new source, or `None`
+    /// (the default) if the source does not support it: then
+    /// `FileScanConfig` calls [`Self::try_pushdown_filters`].
+    fn try_pushdown_pruning_filters(
+        &self,
+        _filters: &[Arc<dyn PhysicalExpr>],
+        _config: &ConfigOptions,
+    ) -> Result<Option<Arc<dyn FileSource>>> {
+        Ok(None)
+    }
+
     /// Try to create a new FileSource that can produce data in the specified sort order.
     ///
     /// This method attempts to optimize data retrieval to match the requested ordering.

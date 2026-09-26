@@ -166,6 +166,49 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     Ok(())
 }
 
+/// A predicate that the scan uses only to prune stays pruning-only after a
+/// round trip: the decoded scan does not apply it.
+#[test]
+fn roundtrip_parquet_exec_with_pruning_only_predicate() -> Result<()> {
+    use datafusion::datasource::physical_plan::FileSource;
+
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+    let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("col", 0)),
+        Operator::Eq,
+        lit("1"),
+    ));
+    let file_source = ParquetSource::new(Arc::clone(&file_schema))
+        .try_pushdown_pruning_filters(&[predicate], &Default::default())?
+        .expect("the source takes filters for pruning only");
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.parquet".to_string(),
+                1024,
+            )])])
+            .build();
+
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let roundtripped = roundtrip_test_and_return(
+        DataSourceExec::from_data_source(scan_config),
+        &ctx,
+        &codec,
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let node = PhysicalPlanNode::try_from_physical_plan(roundtripped, &codec)?;
+    let Some(protobuf::physical_plan_node::PhysicalPlanType::ParquetScan(scan)) =
+        node.physical_plan_type
+    else {
+        return internal_err!("Expected ParquetScan node");
+    };
+    assert!(scan.predicate.is_some());
+    assert!(scan.pruning_only_predicate);
+    Ok(())
+}
+
 #[tokio::test]
 async fn roundtrip_parquet_exec_with_sort_pushdown() -> Result<()> {
     let ctx = all_types_context().await?;

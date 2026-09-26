@@ -304,6 +304,10 @@ pub struct ParquetSource {
     pub(crate) table_schema: TableSchema,
     /// Optional predicate for row filtering during parquet scan
     pub(crate) predicate: Option<Arc<dyn PhysicalExpr>>,
+    /// If true, the scan uses [`Self::predicate`] only to prune: a
+    /// `FilterExec` above the scan applies it (see
+    /// [`FileSource::try_pushdown_pruning_filters`]).
+    pub(crate) pruning_only_predicate: bool,
     /// Optional user defined parquet file reader factory
     pub(crate) parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
     /// Optional policy for deriving each file's Arrow schema after footer loading.
@@ -342,6 +346,7 @@ impl ParquetSource {
             table_parquet_options: TableParquetOptions::default(),
             metrics: ExecutionPlanMetricsSet::new(),
             predicate: None,
+            pruning_only_predicate: false,
             parquet_file_reader_factory: None,
             schema_provider: None,
             batch_size: None,
@@ -644,7 +649,7 @@ impl FileSource for ParquetSource {
             self.table_schema.virtual_columns(),
             self.table_schema.file_schema(),
             self.predicate.as_ref(),
-            self.pushdown_filters(),
+            self.pushdown_filters() && !self.pruning_only_predicate,
         )?;
 
         Ok(Box::new(ParquetMorselizer {
@@ -656,6 +661,7 @@ impl FileSource for ParquetSource {
             limit: base_config.limit,
             preserve_order: base_config.preserve_order,
             predicate: self.predicate.clone(),
+            pruning_only_predicate: self.pruning_only_predicate,
             table_schema: self.table_schema.clone(),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics().clone(),
@@ -894,6 +900,16 @@ impl FileSource for ParquetSource {
             None => conjunction(allowed_filters),
         };
         source.predicate = Some(predicate);
+        if self.pruning_only_predicate {
+            // The scan applies all conjuncts of its predicate or none of
+            // them. It uses its predicate only to prune (a `FilterExec`
+            // above the scan applies the filters that it got before), thus it
+            // uses the new filters only to prune too.
+            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                vec![PushedDown::No; filters.len()],
+            )
+            .with_updated_node(Arc::new(source) as _));
+        }
         source = source.with_pushdown_filters(pushdown_filters);
         let source = Arc::new(source);
         // The parquet scan always accepts pushable filters: report each
@@ -908,6 +924,36 @@ impl FileSource for ParquetSource {
             filters.iter().map(|f| f.discriminant).collect(),
         )
         .with_updated_node(source))
+    }
+
+    /// Takes the pushable `filters` for pruning only, as the scan does with
+    /// all filters when `pushdown_filters` is false on main. The scan applies
+    /// either all conjuncts of its predicate or none of them, thus it refuses
+    /// (`None`) when it already has a predicate that it applies.
+    fn try_pushdown_pruning_filters(
+        &self,
+        filters: &[Arc<dyn PhysicalExpr>],
+        _config: &ConfigOptions,
+    ) -> datafusion_common::Result<Option<Arc<dyn FileSource>>> {
+        if self.predicate.is_some() && !self.pruning_only_predicate {
+            return Ok(None);
+        }
+        let pushable_schema = self.table_schema.schema_without_virtual_columns();
+        let pushable = filters
+            .iter()
+            .filter(|filter| {
+                can_expr_be_pushed_down_with_schemas(filter, pushable_schema)
+            })
+            .cloned()
+            .collect_vec();
+        if pushable.is_empty() {
+            return Ok(None);
+        }
+        let mut source = self.clone();
+        source.predicate =
+            Some(conjunction(self.predicate.iter().cloned().chain(pushable)));
+        source.pruning_only_predicate = true;
+        Ok(Some(Arc::new(source)))
     }
 
     /// Try to optimize the scan to produce data in the requested sort order.
@@ -1112,6 +1158,7 @@ impl FileSource for ParquetSource {
             // Carried by `base`.
             table_schema: _,
             predicate,
+            pruning_only_predicate,
             // Rebuilt from the decode context.
             parquet_file_reader_factory: _,
             // Requires a custom codec for serialization.
@@ -1158,6 +1205,7 @@ impl FileSource for ParquetSource {
             sort_order_for_reorder,
             reverse_row_groups: *reverse_row_groups,
             metadata_size_hint,
+            pruning_only_predicate: *pruning_only_predicate,
         };
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::ParquetScan(node)),
@@ -1199,6 +1247,7 @@ impl ParquetSource {
             sort_order_for_reorder,
             reverse_row_groups,
             metadata_size_hint,
+            pruning_only_predicate,
         } = scan;
 
         let base_conf = base_conf.as_ref().ok_or_else(|| {
@@ -1283,6 +1332,7 @@ impl ParquetSource {
         if let Some(predicate) = predicate {
             source = source.with_predicate(predicate);
         }
+        source.pruning_only_predicate = *pruning_only_predicate;
         let base_config =
             FileScanConfig::try_from_proto(base_conf, ctx, Arc::new(source))?;
         Ok(DataSourceExec::from_data_source(base_config))
@@ -2106,6 +2156,69 @@ mod tests {
                 "{mode:?} display must surface sort_order_for_reorder, got: {out}",
             );
         }
+    }
+
+    /// Filters for pruning only stay above the scan. The scan applies all
+    /// conjuncts of its predicate or none of them.
+    #[test]
+    fn pruning_filters_stay_above_the_scan() {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::{col, lit as logical_lit};
+        use datafusion_physical_expr::planner::logical2physical;
+        use datafusion_physical_plan::filter_pushdown::PushedDown;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let filter = |v: i64| logical2physical(&col("value").gt(logical_lit(v)), &schema);
+        let config = ConfigOptions::default();
+        let downcast = |source: &Arc<dyn FileSource>| {
+            source.downcast_ref::<ParquetSource>().unwrap().clone()
+        };
+
+        // A source without a predicate takes filters for pruning only.
+        let source = ParquetSource::new(Arc::clone(&schema));
+        let pruning = downcast(
+            &source
+                .try_pushdown_pruning_filters(&[filter(1)], &config)
+                .unwrap()
+                .expect("the source takes filters for pruning only"),
+        );
+        assert!(pruning.pruning_only_predicate);
+        assert_eq!(
+            pruning.predicate.as_ref().unwrap().to_string(),
+            "value@0 > 1"
+        );
+
+        // It uses later filters only to prune too.
+        let prop = pruning
+            .try_pushdown_filters(vec![filter(2)], &config)
+            .unwrap();
+        assert!(matches!(prop.filters[..], [PushedDown::No]));
+        let later = downcast(&prop.updated_node.unwrap());
+        assert!(later.pruning_only_predicate);
+        assert_eq!(
+            later.predicate.as_ref().unwrap().to_string(),
+            "value@0 > 1 AND value@0 > 2"
+        );
+
+        // A source that applies its predicate does not take filters for
+        // pruning only.
+        let prop = source
+            .try_pushdown_filters(vec![filter(1)], &config)
+            .unwrap();
+        assert!(matches!(prop.filters[..], [PushedDown::Yes]));
+        let applied = downcast(&prop.updated_node.unwrap());
+        assert!(!applied.pruning_only_predicate);
+        assert!(
+            applied
+                .try_pushdown_pruning_filters(&[filter(2)], &config)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

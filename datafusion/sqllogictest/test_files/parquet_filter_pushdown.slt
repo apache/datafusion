@@ -1042,3 +1042,72 @@ set datafusion.execution.parquet.reorder_filters = false;
 
 statement ok
 DROP TABLE dict_filter_bug;
+
+
+###
+# A filter stays above a scan that cannot give the target partitions.
+#
+# The filter in a scan runs in the partitions of the scan. One small file
+# gives one partition. A `FilterExec` above a round-robin repartition runs in
+# `target_partitions` partitions, thus the filter stays above the scan. The
+# scan uses it only for pruning.
+###
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+COPY (SELECT value AS a, value % 7 AS b FROM generate_series(1, 20000))
+TO 'test_files/scratch/parquet_filter_pushdown/one_file/data.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE one_file STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/one_file/';
+
+query TT
+EXPLAIN SELECT a FROM one_file WHERE b = 3;
+----
+logical_plan
+01)Projection: one_file.a
+02)--Filter: one_file.b = Int64(3)
+03)----TableScan: one_file projection=[a, b], partial_filters=[one_file.b = Int64(3)]
+physical_plan
+01)FilterExec: b@1 = 3, projection=[a@0]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/one_file/data.parquet]]}, projection=[a, b], output_ordering=[a@0 ASC NULLS LAST], file_type=parquet, predicate=b@1 = 3, pruning_predicate=b_null_count@2 != row_count@3 AND b_min@0 <= 3 AND 3 <= b_max@1, required_guarantees=[b in (3)]
+
+query I
+SELECT count(*) FROM one_file WHERE b = 3;
+----
+2857
+
+# With one target partition, the filter above cannot run in more partitions:
+# the scan applies it.
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+query TT
+EXPLAIN SELECT a FROM one_file WHERE b = 3;
+----
+logical_plan
+01)Projection: one_file.a
+02)--Filter: one_file.b = Int64(3)
+03)----TableScan: one_file projection=[a, b], partial_filters=[one_file.b = Int64(3)]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/one_file/data.parquet]]}, projection=[a], output_ordering=[a@0 ASC NULLS LAST], file_type=parquet, predicate=b@1 = 3, pruning_predicate=b_null_count@2 != row_count@3 AND b_min@0 <= 3 AND 3 <= b_max@1, required_guarantees=[b in (3)]
+
+query I
+SELECT count(*) FROM one_file WHERE b = 3;
+----
+2857
+
+statement ok
+DROP TABLE one_file;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;

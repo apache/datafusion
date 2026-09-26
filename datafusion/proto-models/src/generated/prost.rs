@@ -2035,6 +2035,10 @@ pub struct ParquetScanExecNode {
     /// Source-specific footer prefetch size. Absent means no hint.
     #[prost(uint64, optional, tag = "7")]
     pub metadata_size_hint: ::core::option::Option<u64>,
+    /// If true, the scan uses `predicate` only to prune: a filter above the
+    /// scan applies it.
+    #[prost(bool, tag = "8")]
+    pub pruning_only_predicate: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CsvScanExecNode {
