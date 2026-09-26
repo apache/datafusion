@@ -271,7 +271,7 @@ impl PostScanFilter {
     /// The order to evaluate the conjuncts for the next batch, as indexes
     /// into `conjuncts`: by the pooled measurements of the conjuncts (rows
     /// removed for each nanosecond, see
-    /// [`evaluation_order`](crate::row_filter_cost::evaluation_order)), the
+    /// [`evaluation_order`]), the
     /// conjuncts without enough measurements first in their order. The
     /// post-scan filter can change its order at each batch for free, thus a
     /// file with few row groups does not keep the written order until its
