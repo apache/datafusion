@@ -50,7 +50,6 @@ async-trait = { workspace = true }
 base64 = "0.23.0"
 bytes = { workspace = true }
 dashmap = { workspace = true }
-datafusion-sql = { workspace = true }
 datafusion-proto = { workspace = true, features = ["parquet"] }
 env_logger = { workspace = true }
 futures = { workspace = true }

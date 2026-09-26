@@ -2139,7 +2139,6 @@ dependencies = [
  "dashmap",
  "datafusion",
  "datafusion-proto",
- "datafusion-sql",
  "env_logger",
  "futures",
  "insta",
