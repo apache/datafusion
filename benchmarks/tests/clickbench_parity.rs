@@ -182,46 +182,120 @@ fn read_slt_queries(path: &Path) -> BTreeSet<String> {
 }
 
 fn normalize_sql(sql: &str) -> String {
-    let mut without_comments = String::with_capacity(sql.len());
-    let mut in_single_quote = false;
-    let mut in_double_quote = false;
+    let mut normalized = String::with_capacity(sql.len());
+    let mut pending_whitespace = false;
+    let mut index = 0;
 
-    for line in sql.lines() {
-        let mut characters = line.chars().peekable();
-        while let Some(character) = characters.next() {
-            match character {
-                '\'' if !in_double_quote && characters.peek() == Some(&'\'') => {
-                    without_comments.push(character);
-                    without_comments.push(characters.next().unwrap());
-                }
-                '\'' if !in_double_quote => {
-                    in_single_quote = !in_single_quote;
-                    without_comments.push(character);
-                }
-                '"' if !in_single_quote && characters.peek() == Some(&'"') => {
-                    without_comments.push(character);
-                    without_comments.push(characters.next().unwrap());
-                }
-                '"' if !in_single_quote => {
-                    in_double_quote = !in_double_quote;
-                    without_comments.push(character);
-                }
-                '-' if !in_single_quote
-                    && !in_double_quote
-                    && characters.peek() == Some(&'-') =>
-                {
-                    break;
-                }
-                _ => without_comments.push(character),
-            }
+    while index < sql.len() {
+        let remaining = &sql[index..];
+        let character = remaining.chars().next().unwrap();
+
+        if character.is_whitespace() {
+            pending_whitespace = true;
+            index += character.len_utf8();
+        } else if remaining.starts_with("--") {
+            index += remaining.find('\n').unwrap_or(remaining.len());
+            pending_whitespace = true;
+        } else if matches!(character, '\'' | '"') {
+            push_pending_whitespace(&mut normalized, &mut pending_whitespace);
+            let end = quoted_end(
+                remaining,
+                character,
+                character == '\'' && is_escaped_string_start(sql, index),
+            );
+            normalized.push_str(&remaining[..end]);
+            index += end;
+        } else if let Some(delimiter) = dollar_quote_delimiter(remaining) {
+            push_pending_whitespace(&mut normalized, &mut pending_whitespace);
+            let content = &remaining[delimiter.len()..];
+            let end = content
+                .find(delimiter)
+                .map(|end| delimiter.len() + end + delimiter.len())
+                .unwrap_or(remaining.len());
+            normalized.push_str(&remaining[..end]);
+            index += end;
+        } else {
+            push_pending_whitespace(&mut normalized, &mut pending_whitespace);
+            normalized.push(character);
+            index += character.len_utf8();
         }
-        without_comments.push(' ');
     }
 
-    without_comments
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    normalized
+}
+
+fn push_pending_whitespace(output: &mut String, pending_whitespace: &mut bool) {
+    if *pending_whitespace && !output.is_empty() {
+        output.push(' ');
+    }
+    *pending_whitespace = false;
+}
+
+fn is_escaped_string_start(sql: &str, quote_index: usize) -> bool {
+    let Some(prefix) = quote_index
+        .checked_sub(1)
+        .and_then(|index| sql.as_bytes().get(index))
+    else {
+        return false;
+    };
+
+    matches!(prefix, b'e' | b'E')
+        && quote_index
+            .checked_sub(2)
+            .and_then(|index| sql.as_bytes().get(index))
+            .is_none_or(|character| {
+                !character.is_ascii_alphanumeric() && *character != b'_'
+            })
+}
+
+fn quoted_end(sql: &str, quote: char, backslash_escapes: bool) -> usize {
+    let mut index = quote.len_utf8();
+
+    while index < sql.len() {
+        let remaining = &sql[index..];
+        let character = remaining.chars().next().unwrap();
+        index += character.len_utf8();
+
+        if character == '\\' && backslash_escapes {
+            if let Some(escaped) = sql[index..].chars().next() {
+                index += escaped.len_utf8();
+            }
+        } else if character == quote {
+            if remaining[character.len_utf8()..].starts_with(quote) {
+                index += quote.len_utf8();
+            } else {
+                return index;
+            }
+        }
+    }
+
+    sql.len()
+}
+
+fn dollar_quote_delimiter(sql: &str) -> Option<&str> {
+    let mut characters = sql.char_indices();
+    if characters.next()?.1 != '$' {
+        return None;
+    }
+
+    let (first_index, first) = characters.next()?;
+    if first == '$' {
+        return Some(&sql[..first_index + first.len_utf8()]);
+    }
+    if !matches!(first, 'a'..='z' | 'A'..='Z' | '_') {
+        return None;
+    }
+
+    for (index, character) in characters {
+        if character == '$' {
+            return Some(&sql[..index + character.len_utf8()]);
+        }
+        if !matches!(character, 'a'..='z' | 'A'..='Z' | '0'..='9' | '_') {
+            return None;
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -241,6 +315,28 @@ mod tests {
         assert_eq!(
             normalize_sql("SELECT 'it''s -- a value' FROM \"a\"\"-- table\"; -- comment"),
             "SELECT 'it''s -- a value' FROM \"a\"\"-- table\";"
+        );
+    }
+
+    #[test]
+    fn preserves_quoted_content() {
+        assert_ne!(
+            normalize_sql("SELECT 'a  b';"),
+            normalize_sql("SELECT 'a b';")
+        );
+        assert_ne!(
+            normalize_sql("SELECT \"a  b\";"),
+            normalize_sql("SELECT \"a b\";")
+        );
+        assert_ne!(
+            normalize_sql("SELECT 'a\nb';"),
+            normalize_sql("SELECT 'a b';")
+        );
+        assert_eq!(
+            normalize_sql(
+                "SELECT E'a\\'  b -- value', $tag$c  d -- value$tag$; -- comment"
+            ),
+            "SELECT E'a\\'  b -- value', $tag$c  d -- value$tag$;"
         );
     }
 }
