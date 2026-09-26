@@ -42,7 +42,7 @@ pub(crate) struct Observation {
     /// Rows that passed the conjunct.
     pub(crate) rows_out: u64,
     /// Rows in windows where no row passed the conjunct, see
-    /// [`skippable_rows`](crate::row_filter_cost::skippable_rows) and [`StageSelection`].
+    /// [`skippable_rows`] and [`StageSelection`].
     pub(crate) skippable_rows: u64,
     /// Evaluation time of the conjunct, in nanoseconds.
     pub(crate) nanos: u64,
@@ -420,7 +420,7 @@ impl PlacementSites {
 
     /// The statistics of the conjunct at `position` in `conjuncts` (the
     /// conjuncts of the root `AND` chain of a file predicate). The scan
-    /// predicate has `scan_count` conjuncts. See [`ConjunctSiteKey`].
+    /// predicate has `scan_count` conjuncts. See [`ConjunctKey`].
     pub(crate) fn stats_for(
         &self,
         conjuncts: &[&Arc<dyn PhysicalExpr>],
