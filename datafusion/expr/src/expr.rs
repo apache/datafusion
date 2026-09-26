@@ -60,6 +60,7 @@ pub use crate::sql::{
 // Moved in 51.0.0 to datafusion_common
 pub use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::metadata::ScalarAndMetadata;
+use datafusion_expr_common::ExpressionPlacement::KeepInPlace;
 
 // This mirrors sqlparser::ast::NullTreatment but we need our own variant
 // for when the sql feature is disabled.
@@ -1654,13 +1655,35 @@ impl Expr {
         match self {
             Expr::Column(_) => ExpressionPlacement::Column,
             Expr::Literal(_, _) => ExpressionPlacement::Literal,
+            Expr::ScalarVariable(_, _) => ExpressionPlacement::Literal,
             Expr::Alias(inner) => inner.expr.placement(),
             Expr::ScalarFunction(func) => {
                 let arg_placements: Vec<_> =
                     func.args.iter().map(|arg| arg.placement()).collect();
                 func.func.placement(&arg_placements)
             }
-            _ => ExpressionPlacement::KeepInPlace,
+            Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
+                ExpressionPlacement::reduce(&[left.placement(), right.placement()])
+            }
+            Expr::Between(Between {
+                expr, low, high, ..
+            }) => ExpressionPlacement::reduce(&[
+                expr.placement(),
+                low.placement(),
+                high.placement(),
+            ]),
+            Expr::Not(e)
+            | Expr::IsNotNull(e)
+            | Expr::IsNull(e)
+            | Expr::IsTrue(e)
+            | Expr::IsFalse(e)
+            | Expr::IsUnknown(e)
+            | Expr::IsNotTrue(e)
+            | Expr::IsNotFalse(e)
+            | Expr::IsNotUnknown(e)
+            | Expr::Negative(e)
+            | Expr::Cast(Cast { expr: e, .. }) => e.placement(),
+            _ => KeepInPlace,
         }
     }
 
