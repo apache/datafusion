@@ -102,6 +102,39 @@ impl StatisticsArgs {
     }
 }
 
+/// Applies `fetch` to the `input` statistics of an operator that stops *each*
+/// of its `n_partitions` output partitions after `fetch` rows, such as
+/// `LocalLimitExec` or a `SortExec` with a fetch that preserves partitioning.
+///
+/// `input` must cover what `args` asks for: one partition's rows when `args`
+/// names a partition, and the rows of every partition otherwise.
+///
+/// For a single partition this is [`Statistics::with_fetch`]. Overall, though,
+/// every partition can emit up to `fetch` rows, so the output can reach
+/// `fetch * n_partitions` rows, and never more than the input. How the input
+/// rows are spread over the partitions is unknown, so the result is inexact
+/// unless `fetch` cannot drop any row.
+pub(crate) fn with_per_partition_fetch(
+    input: Statistics,
+    fetch: Option<usize>,
+    n_partitions: usize,
+    args: &StatisticsArgs,
+) -> Result<Statistics> {
+    let Some(fetch) = fetch else {
+        return Ok(input);
+    };
+    if args.partition().is_some() || n_partitions <= 1 {
+        return input.with_fetch(Some(fetch), 0, 1);
+    }
+    // No partition can hold more than `fetch` rows, so none is dropped.
+    if matches!(input.num_rows.get_value(), Some(&num_rows) if num_rows <= fetch) {
+        return Ok(input);
+    }
+    Ok(input
+        .with_fetch(Some(fetch.saturating_mul(n_partitions)), 0, 1)?
+        .to_inexact())
+}
+
 /// Directive returned by [`ExecutionPlan::child_stats_requests`] describing
 /// how the [`StatisticsContext`] should obtain each child's statistics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -694,5 +727,56 @@ mod tests {
 
         let overall = ctx.compute(union.as_ref(), &StatisticsArgs::new()).unwrap();
         assert_eq!(overall.num_rows, Precision::Exact(999));
+    }
+
+    /// Row counts under a fetch that applies to each of four partitions.
+    #[test]
+    fn per_partition_fetch_counts_every_partition() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let overall = StatisticsArgs::new();
+        let first_partition = StatisticsArgs::new().with_partition(Some(0));
+        let num_rows = |input_rows, fetch, n_partitions, args: &StatisticsArgs| {
+            let mut input = Statistics::new_unknown(&schema);
+            input.num_rows = input_rows;
+            with_per_partition_fetch(input, fetch, n_partitions, args)
+                .map(|stats| stats.num_rows)
+        };
+
+        // Every partition keeps up to 10 rows. How the 400 rows are spread over
+        // the partitions is unknown, so the count is an estimate.
+        assert_eq!(
+            num_rows(Precision::Exact(400), Some(10), 4, &overall)?,
+            Precision::Inexact(40)
+        );
+        // The output never has more rows than the input.
+        assert_eq!(
+            num_rows(Precision::Exact(25), Some(10), 4, &overall)?,
+            Precision::Inexact(25)
+        );
+        // A fetch that cannot drop any row leaves the input exact.
+        assert_eq!(
+            num_rows(Precision::Exact(8), Some(10), 4, &overall)?,
+            Precision::Exact(8)
+        );
+        // Without an input estimate, the fetch still bounds every partition.
+        assert_eq!(
+            num_rows(Precision::Absent, Some(10), 4, &overall)?,
+            Precision::Inexact(40)
+        );
+        // A single partition, or a single output partition, keeps `fetch` rows.
+        assert_eq!(
+            num_rows(Precision::Exact(100), Some(10), 4, &first_partition)?,
+            Precision::Exact(10)
+        );
+        assert_eq!(
+            num_rows(Precision::Exact(400), Some(10), 1, &overall)?,
+            Precision::Exact(10)
+        );
+        // Without a fetch, nothing changes.
+        assert_eq!(
+            num_rows(Precision::Exact(400), None, 4, &overall)?,
+            Precision::Exact(400)
+        );
+        Ok(())
     }
 }
