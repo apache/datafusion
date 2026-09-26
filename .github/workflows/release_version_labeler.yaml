@@ -27,12 +27,9 @@ concurrency:
 on:
   pull_request_target:
     types:
-      - opened
-      - edited
-      - synchronize
-#    types: [closed]
-#    branches:
-#      - main
+      - closed
+    branches:
+      - main
 
 jobs:
   label:
