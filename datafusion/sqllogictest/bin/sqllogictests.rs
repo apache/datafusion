@@ -19,9 +19,14 @@ use clap::{ColorChoice, Parser};
 use datafusion::common::instant::Instant;
 use datafusion::common::utils::get_available_parallelism;
 use datafusion::common::{DataFusionError, Result, exec_datafusion_err, exec_err};
+use datafusion::execution::memory_pool::DEFAULT_DRIFT_LOG_THRESHOLD;
 #[cfg(feature = "substrait")]
 use datafusion_sqllogictest::DataFusionSubstraitRoundTrip;
 use datafusion_sqllogictest::TestFile;
+use datafusion_sqllogictest::{
+    CountingAllocator, enable_memory_drift_logging, flush_thread_allocations,
+    memory_drift_tracker,
+};
 use datafusion_sqllogictest::{
     CurrentlyExecutingSqlTracker, DFColumnType, DataFusion, Filter, TestContext,
     df_value_validator, read_dir_recursive, run_each_configuration, setup_scratch_dir,
@@ -57,6 +62,9 @@ use std::time::Duration;
 #[cfg(feature = "postgres")]
 mod postgres_container;
 
+#[global_allocator]
+static ALLOC: CountingAllocator = CountingAllocator;
+
 const TEST_DIRECTORY: &str = "test_files/";
 const DATAFUSION_TESTING_TEST_DIRECTORY: &str = "../../datafusion-testing/data/";
 const PG_COMPAT_FILE_PREFIX: &str = "pg_compat_";
@@ -88,6 +96,7 @@ fn config_change_result(
 pub fn main() -> Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
+        .on_thread_stop(flush_thread_allocations)
         .build()?
         .block_on(run_tests())
 }
@@ -138,6 +147,10 @@ async fn run_tests() -> Result<()> {
     }
 
     options.warn_on_ignored();
+
+    if options.memory_drift {
+        enable_memory_drift_logging(options.memory_drift_log_threshold);
+    }
 
     // Print parallelism info for debugging CI performance
     eprintln!(
@@ -385,6 +398,16 @@ async fn run_tests() -> Result<()> {
         num_tests,
         HumanDuration(start.elapsed())
     ))?;
+
+    if let Some(peak) = memory_drift_tracker().and_then(|t| t.peak_drift()) {
+        eprintln!("Peak memory drift: {peak}");
+        if options.test_threads > 1 {
+            eprintln!(
+                "Test files ran concurrently, so the file and consumer above can be wrong. \
+                 Run with --test-threads 1 to attribute drift to one file."
+            );
+        }
+    }
 
     #[cfg(feature = "postgres")]
     terminate_postgres_container().await?;
@@ -1105,6 +1128,24 @@ struct Options {
         help = "Print deterministic per-file timing summary"
     )]
     timing_summary: bool,
+
+    #[clap(
+        long,
+        env = "SLT_MEMORY_DRIFT",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        help = "Log drift between MemoryPool reservations and allocated bytes (RUST_LOG=datafusion_execution::memory_pool=info to log each rise of --memory-drift-log-threshold bytes)"
+    )]
+    memory_drift: bool,
+
+    #[clap(
+        long,
+        env = "SLT_MEMORY_DRIFT_LOG_THRESHOLD",
+        value_name = "BYTES",
+        default_value_t = DEFAULT_DRIFT_LOG_THRESHOLD,
+        help = "Rise in memory drift, in bytes, needed before another line is logged"
+    )]
+    memory_drift_log_threshold: usize,
 
     #[clap(
         long,
