@@ -883,6 +883,61 @@ impl Display for MapKeyDedupPolicy {
     }
 }
 
+/// How DataFusion evaluates optional filters.
+///
+/// Optional filters are filters that are not needed for correctness, such as
+/// dynamic filters pushed down by hash joins and TopK. See
+/// [`ExecutionOptions::optional_filter_mode`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum OptionalFilterMode {
+    /// Evaluate optional filters like any other pushed-down filter.
+    #[default]
+    Always,
+    /// Pause optional filters that cost more than they save. Try them again
+    /// at intervals to find out if they became worth their cost.
+    Adaptive,
+    /// Use optional filters only for statistics pruning (for example of
+    /// files, row groups and pages). Never evaluate them row by row.
+    PruningOnly,
+}
+
+impl FromStr for OptionalFilterMode {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "always" => Ok(Self::Always),
+            "adaptive" => Ok(Self::Adaptive),
+            "pruning_only" => Ok(Self::PruningOnly),
+            other => Err(DataFusionError::Configuration(format!(
+                "Invalid optional filter mode: {other}. Expected one of: always, adaptive, pruning_only"
+            ))),
+        }
+    }
+}
+
+impl ConfigField for OptionalFilterMode {
+    fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
+        v.some(key, self, description)
+    }
+
+    fn set(&mut self, _: &str, value: &str) -> Result<()> {
+        *self = OptionalFilterMode::from_str(value)?;
+        Ok(())
+    }
+}
+
+impl Display for OptionalFilterMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = match self {
+            Self::Always => "always",
+            Self::Adaptive => "adaptive",
+            Self::PruningOnly => "pruning_only",
+        };
+        write!(f, "{str}")
+    }
+}
+
 impl From<SpillCompression> for Option<CompressionType> {
     fn from(c: SpillCompression) -> Self {
         match c {
@@ -1185,6 +1240,32 @@ config_namespace! {
         ///
         /// Disabled by default, set to a number greater than 0 for enabling it.
         pub hash_join_buffering_capacity: usize, default = 0
+
+        /// Controls how DataFusion evaluates filters that are not needed for
+        /// correctness, such as the dynamic filters that hash joins and TopK
+        /// push down into scans. `always` evaluates these filters like any
+        /// other pushed-down filter. `adaptive` pauses these filters when they
+        /// cost more than they save (see
+        /// `datafusion.execution.optional_filter_min_saving_ns_per_row`) or when
+        /// they remove no rows, and tries them again at intervals. `pruning_only`
+        /// uses these filters only to prune files, row groups and pages with
+        /// statistics, and never evaluates them row by row.
+        ///
+        /// This option is most important when
+        /// `datafusion.execution.parquet.pushdown_filters` is true, because then
+        /// the Parquet reader evaluates pushed-down filters row by row.
+        pub optional_filter_mode: OptionalFilterMode, default = OptionalFilterMode::Always
+
+        /// The assumed work, in nanoseconds, that each row removed by an
+        /// optional filter saves downstream. Optional filters are filters that
+        /// are not needed for correctness, such as the dynamic filters that
+        /// hash joins and TopK push down into scans. When an operator evaluates
+        /// optional filters adaptively, it pauses an optional filter whose
+        /// evaluation costs more than the work that it saves. Consumers that can
+        /// measure the saving (the Parquet scan) add their measured decode cost.
+        /// The default is about the cost of a hash table probe for one row. The
+        /// best value depends on the hardware.
+        pub optional_filter_min_saving_ns_per_row: f64, default = 20.0
     }
 }
 
