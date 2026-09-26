@@ -150,6 +150,10 @@ impl ScalarUDFImpl for PlacementUDF {
         datafusion_common::internal_err!("placement_udf is not meant to be invoked")
     }
 
+    fn is_strict(&self) -> bool {
+        true
+    }
+
     fn placement(&self, args: &[ExpressionPlacement]) -> ExpressionPlacement {
         // Push to the leaves only for a (Column, Literal) pairing, so the
         // test catches dropped, reordered, or truncated arguments.
