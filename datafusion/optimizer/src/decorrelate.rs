@@ -35,7 +35,7 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{
     BinaryExpr, Cast, EmptyRelation, Expr, ExprSchemable, FetchType, LogicalPlan,
-    LogicalPlanBuilder, Operator, expr, lit,
+    LogicalPlanBuilder, Operator, SkipType, expr, lit,
 };
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -117,6 +117,13 @@ impl PullUpCorrelatedExpr {
         self.exists_sub_query = exists_sub_query;
         self
     }
+
+    /// Mark the plan as one whose correlated expressions cannot be pulled up
+    /// and stop descending into it
+    fn unsupported(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+        self.can_pull_up = false;
+        Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+    }
 }
 
 /// Used to indicate the unmatched rows from the inner(subquery) table after the left out Join
@@ -145,28 +152,44 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             LogicalPlan::Union(_) | LogicalPlan::Sort(_) | LogicalPlan::Extension(_) => {
                 let plan_hold_outer = !plan.all_out_ref_exprs().is_empty();
                 if plan_hold_outer {
-                    // the unsupported case
-                    self.can_pull_up = false;
-                    Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+                    self.unsupported(plan)
                 } else {
                     Ok(Transformed::no(plan))
                 }
             }
-            LogicalPlan::Limit(_) => {
-                let plan_hold_outer = !plan.all_out_ref_exprs().is_empty();
-                match (self.exists_sub_query, plan_hold_outer) {
-                    (false, true) => {
-                        // the unsupported case
-                        self.can_pull_up = false;
-                        Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+            LogicalPlan::Limit(ref limit) => {
+                if plan.all_out_ref_exprs().is_empty() {
+                    return Ok(Transformed::no(plan));
+                }
+                if !self.exists_sub_query {
+                    return self.unsupported(plan);
+                }
+                // Only emptiness matters for EXISTS, so remove a limit that
+                // cannot make its input empty and replace one that always does
+                // with an empty relation.
+                let fetch = limit.get_fetch_type()?;
+                if matches!(fetch, FetchType::Literal(Some(0))) {
+                    return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
+                        EmptyRelation {
+                            produce_one_row: false,
+                            schema: Arc::clone(limit.input.schema()),
+                        },
+                    )));
+                }
+                match (limit.get_skip_type()?, fetch) {
+                    (SkipType::Literal(0), FetchType::Literal(_)) => {
+                        // The rewriter does not call `f_down` on the returned
+                        // node, so do it here
+                        let mut t = self.f_down((*limit.input).clone())?;
+                        t.transformed = true;
+                        Ok(t)
                     }
-                    _ => Ok(Transformed::no(plan)),
+                    _ => self.unsupported(plan),
                 }
             }
             _ if plan.contains_outer_reference() => {
                 // the unsupported cases, the plan expressions contain out reference columns(like window expressions)
-                self.can_pull_up = false;
-                Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+                self.unsupported(plan)
             }
             _ => Ok(Transformed::no(plan)),
         }
@@ -415,28 +438,13 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 }
             }
             LogicalPlan::Limit(limit) => {
-                let input_expr_map =
-                    self.collected_count_expr_map.get(&*limit.input).cloned();
-                // handling the limit clause in the subquery
-                let new_plan = match (self.exists_sub_query, self.join_filters.is_empty())
+                if let Some(input_map) =
+                    self.collected_count_expr_map.get(&*limit.input).cloned()
                 {
-                    // Correlated exist subquery, remove the limit(so that correlated expressions can pull up)
-                    (true, false) => Transformed::yes(match limit.get_fetch_type()? {
-                        FetchType::Literal(Some(0)) => {
-                            LogicalPlan::EmptyRelation(EmptyRelation {
-                                produce_one_row: false,
-                                schema: Arc::clone(limit.input.schema()),
-                            })
-                        }
-                        _ => LogicalPlanBuilder::from((*limit.input).clone()).build()?,
-                    }),
-                    _ => Transformed::no(plan),
-                };
-                if let Some(input_map) = input_expr_map {
                     self.collected_count_expr_map
-                        .insert(new_plan.data.clone(), input_map);
+                        .insert(plan.clone(), input_map);
                 }
-                Ok(new_plan)
+                Ok(Transformed::no(plan))
             }
             _ => Ok(Transformed::no(plan)),
         }

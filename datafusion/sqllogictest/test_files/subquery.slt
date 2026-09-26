@@ -656,6 +656,142 @@ SELECT t1_id, t1_name FROM t1 WHERE NOT EXISTS (SELECT * FROM t2 WHERE t2_id = t
 33 c
 44 d
 
+#exists_subquery_with_offset0
+#de-correlated, limit is removed
+query TT
+explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 1 offset 0)
+----
+logical_plan
+01)LeftSemi Join: t1.t1_id = __correlated_sq_1.t2_id
+02)--TableScan: t1 projection=[t1_id, t1_name]
+03)--SubqueryAlias: __correlated_sq_1
+04)----TableScan: t2 projection=[t2_id]
+
+query IT rowsort
+SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 1 offset 0)
+----
+11 a
+22 b
+44 d
+
+#exists_subquery_with_offset
+#not de-correlated, the offset could make the subquery empty
+query TT
+explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id offset 1)
+----
+logical_plan
+01)Filter: EXISTS (<subquery>)
+02)--Subquery:
+03)----Limit: skip=1, fetch=None
+04)------Projection: t2.t2_id, t2.t2_name, t2.t2_int
+05)--------Filter: t2.t2_id = outer_ref(t1.t1_id)
+06)----------TableScan: t2
+07)--TableScan: t1 projection=[t1_id, t1_name]
+
+# errors rather than returning wrong rows
+query error Physical plan does not support logical expression Exists
+SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id offset 1)
+
+#not_exists_subquery_with_offset
+#not de-correlated, the offset could make the subquery empty
+query TT
+explain SELECT t1_id, t1_name FROM t1 WHERE NOT EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id offset 1)
+----
+logical_plan
+01)Filter: NOT EXISTS (<subquery>)
+02)--Subquery:
+03)----Limit: skip=1, fetch=None
+04)------Projection: t2.t2_id, t2.t2_name, t2.t2_int
+05)--------Filter: t2.t2_id = outer_ref(t1.t1_id)
+06)----------TableScan: t2
+07)--TableScan: t1 projection=[t1_id, t1_name]
+
+# errors rather than returning wrong rows
+query error Physical plan does not support logical expression Exists
+SELECT t1_id, t1_name FROM t1 WHERE NOT EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id offset 1)
+
+#exists_subquery_with_offset_in_disjunction
+#not de-correlated, errors rather than returning wrong rows
+query error Physical plan does not support logical expression Exists
+SELECT t1_id, t1_name FROM t1 WHERE t1_id > 40 OR EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id offset 1)
+
+#exists_subquery_with_limit0_and_offset
+#de-correlated, limit 0 is empty whatever the offset
+query TT
+explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 0 offset 1)
+----
+logical_plan EmptyRelation: rows=0
+
+query IT rowsort
+SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit 0 offset 1)
+----
+
+#exists_subquery_with_non_literal_limit
+#not de-correlated, the fetch could evaluate to 0 and make the subquery empty
+query TT
+explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id limit (SELECT count(*) FROM t2))
+----
+logical_plan
+01)Filter: EXISTS (<subquery>)
+02)--Subquery:
+03)----Limit: skip=0, fetch=(<subquery>)
+04)------Subquery:
+05)--------Projection: count(Int64(1)) AS count(*)
+06)----------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+07)------------TableScan: t2
+08)------Projection: t2.t2_id, t2.t2_name, t2.t2_int
+09)--------Filter: t2.t2_id = outer_ref(t1.t1_id)
+10)----------TableScan: t2
+11)--TableScan: t1 projection=[t1_id, t1_name]
+
+#exists_subquery_with_non_literal_offset
+#not de-correlated, the offset could be positive and make the subquery empty
+query TT
+explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id offset (SELECT 1))
+----
+logical_plan
+01)Filter: EXISTS (<subquery>)
+02)--Subquery:
+03)----Limit: skip=(<subquery>), fetch=None
+04)------Subquery:
+05)--------Projection: Int64(1)
+06)----------EmptyRelation: rows=1
+07)------Projection: t2.t2_id, t2.t2_name, t2.t2_int
+08)--------Filter: t2.t2_id = outer_ref(t1.t1_id)
+09)----------TableScan: t2
+10)--TableScan: t1 projection=[t1_id, t1_name]
+
+#exists_subquery_with_limit_on_uncorrelated_branch
+#de-correlated, the limit is on an uncorrelated branch so it stays
+query TT
+explain SELECT t1_id FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT * FROM t2 WHERE t2_id = t1_id) a JOIN (SELECT * FROM t3 ORDER BY t3_id LIMIT 1) b ON a.t2_int = b.t3_int)
+----
+logical_plan
+01)LeftSemi Join: t1.t1_id = __correlated_sq_1.t2_id
+02)--TableScan: t1 projection=[t1_id]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Projection: a.t2_id
+05)------LeftSemi Join: a.t2_int = b.t3_int
+06)--------SubqueryAlias: a
+07)----------TableScan: t2 projection=[t2_id, t2_int]
+08)--------SubqueryAlias: b
+09)----------Projection: t3.t3_int
+10)------------Sort: t3.t3_id ASC NULLS LAST, fetch=1
+11)--------------TableScan: t3 projection=[t3_id, t3_int]
+
+query I rowsort
+SELECT t1_id FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT * FROM t2 WHERE t2_id = t1_id) a JOIN (SELECT * FROM t3 ORDER BY t3_id LIMIT 1) b ON a.t2_int = b.t3_int)
+----
+11
+44
+
+#exists_subquery_with_offset_on_uncorrelated_branch
+#de-correlated, the offset is on an uncorrelated branch so it stays
+query I rowsort
+SELECT t1_id FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT * FROM t2 WHERE t2_id = t1_id) a JOIN (SELECT * FROM t3 ORDER BY t3_id LIMIT 1 OFFSET 1) b ON a.t2_int = b.t3_int)
+----
+22
+
 #in_correlated_subquery_with_limit
 #not de-correlated
 query TT
@@ -716,6 +852,26 @@ logical_plan
 08)--------Filter: upper(t2.t2_name) = upper(outer_ref(t1.t1_name))
 09)----------TableScan: t2
 10)--TableScan: t1 projection=[t1_id, t1_name]
+
+#exists_subquery_with_limit_over_union
+#not de-correlated, the union below the removed limit still holds outer references
+query TT
+explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT * FROM t2 WHERE t2_id = t1_id UNION ALL SELECT * FROM t2 WHERE upper(t2_name) = upper(t1.t1_name) LIMIT 1)
+----
+logical_plan
+01)Filter: EXISTS (<subquery>)
+02)--Subquery:
+03)----Limit: skip=0, fetch=1
+04)------Union
+05)--------Projection: t2.t2_id, t2.t2_name, t2.t2_int
+06)----------Limit: skip=0, fetch=1
+07)------------Filter: t2.t2_id = outer_ref(t1.t1_id)
+08)--------------TableScan: t2
+09)--------Projection: t2.t2_id, t2.t2_name, t2.t2_int
+10)----------Limit: skip=0, fetch=1
+11)------------Filter: upper(t2.t2_name) = upper(outer_ref(t1.t1_name))
+12)--------------TableScan: t2
+13)--TableScan: t1 projection=[t1_id, t1_name]
 
 #simple_uncorrelated_scalar_subquery
 query TT
