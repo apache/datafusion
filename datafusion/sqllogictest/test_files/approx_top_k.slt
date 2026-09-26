@@ -1,0 +1,198 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+###########
+# approx_top_k tests
+###########
+
+# approx_top_k basic usage with string column
+query ?
+SELECT approx_top_k(column1, 2) FROM (VALUES ('apple'), ('banana'), ('apple'), ('cherry'), ('apple'), ('banana')) AS t(column1);
+----
+[{value: apple, count: 3}, {value: banana, count: 2}]
+
+# approx_top_k with integer column
+query ?
+SELECT approx_top_k(column1, 2) FROM (VALUES (1), (2), (1), (3), (1), (2)) AS t(column1);
+----
+[{value: 1, count: 3}, {value: 2, count: 2}]
+
+# approx_top_k with GROUP BY
+query T?
+SELECT column2, approx_top_k(column1, 2) FROM (VALUES ('a', 'x'), ('b', 'x'), ('a', 'x'), ('c', 'y'), ('c', 'y'), ('d', 'y')) AS t(column1, column2) GROUP BY column2 ORDER BY column2;
+----
+x [{value: a, count: 2}, {value: b, count: 1}]
+y [{value: c, count: 2}, {value: d, count: 1}]
+
+# approx_top_k with k=1
+query ?
+SELECT approx_top_k(column1, 1) FROM (VALUES ('red'), ('blue'), ('red'), ('green'), ('red')) AS t(column1);
+----
+[{value: red, count: 3}]
+
+# approx_top_k with NULLs (should be skipped)
+query ?
+SELECT approx_top_k(column1, 2) FROM (VALUES ('a'), (NULL), ('a'), ('b'), (NULL), ('b'), ('b')) AS t(column1);
+----
+[{value: b, count: 3}, {value: a, count: 2}]
+
+# approx_top_k error: missing k argument
+statement error .*expects 2 arguments.*
+SELECT approx_top_k(column1) FROM (VALUES ('a')) AS t(column1);
+
+# approx_top_k error: k must be positive
+statement error DataFusion error: Error during planning: approx_top_k requires k to be between 1 and 10000
+SELECT approx_top_k(column1, 0) FROM (VALUES ('a')) AS t(column1);
+
+# approx_top_k error: negative k
+statement error DataFusion error: Error during planning: approx_top_k requires k to be a positive literal integer
+SELECT approx_top_k(column1, -1) FROM (VALUES ('a')) AS t(column1);
+
+statement error .*approx_top_k does not support DISTINCT.*
+SELECT approx_top_k(DISTINCT column1, 2) FROM (VALUES ('a'), ('a')) AS t(column1);
+
+# Maximum k is accepted without eagerly allocating its full memory budget.
+query ?
+SELECT approx_top_k(column1, 10000) FROM (VALUES ('a')) AS t(column1);
+----
+[{value: a, count: 1}]
+
+statement error DataFusion error: Error during planning: approx_top_k requires k to be between 1 and 10000
+SELECT approx_top_k(column1, 10001) FROM (VALUES ('a')) AS t(column1);
+
+# approx_top_k with WHERE clause
+# Surviving rows are a, c, a, b -> a=2 and then a tie between b and c at 1,
+# which is resolved on the value so the result is stable.
+query ?
+SELECT approx_top_k(column1, 2) FROM (VALUES ('a', 1), ('b', 2), ('a', 3), ('c', 4), ('a', 5), ('b', 6)) AS t(column1, column2) WHERE column2 > 2;
+----
+[{value: a, count: 2}, {value: b, count: 1}]
+
+# approx_top_k on empty input (should return an empty list)
+query ?
+SELECT approx_top_k(column1, 3) FROM (VALUES ('a')) AS t(column1) WHERE false;
+----
+[]
+
+# approx_top_k with all NULLs (should return an empty list)
+query ?
+SELECT approx_top_k(column1, 2) FROM (VALUES (NULL), (NULL), (NULL)) AS t(column1);
+----
+[]
+
+# approx_top_k where k > number of distinct values (should return all distinct values)
+query ?
+SELECT approx_top_k(column1, 100) FROM (VALUES ('x'), ('y'), ('x')) AS t(column1);
+----
+[{value: x, count: 2}, {value: y, count: 1}]
+
+# approx_top_k ties are broken deterministically (by value) so results are stable
+query ?
+SELECT approx_top_k(column1, 4) FROM (VALUES ('delta'), ('alpha'), ('charlie'), ('bravo')) AS t(column1);
+----
+[{value: alpha, count: 1}, {value: bravo, count: 1}, {value: charlie, count: 1}, {value: delta, count: 1}]
+
+# approx_top_k over a view-encoded column
+query ?
+SELECT approx_top_k(arrow_cast(column1, 'Utf8View'), 2) FROM (VALUES ('a'), ('b'), ('a'), ('a'), ('b')) AS t(column1);
+----
+[{value: a, count: 3}, {value: b, count: 2}]
+
+###########
+# Multi-partition tests
+#
+# The sqllogictest harness runs with target_partitions = 4, so these produce a
+# two-phase aggregate and exercise the partial -> final state exchange
+# (serialize / from_bytes / merge) from SQL rather than only in unit tests.
+###########
+
+# Built as a UNION ALL of disjoint ranges so the data really does land in four
+# partitions; a plain CTAS over generate_series would leave it all in one and the
+# per-partition summaries would be trivial.
+statement ok
+CREATE TABLE topk_low_cardinality AS
+SELECT CASE WHEN v % 10 < 5 THEN 'hot' WHEN v % 10 < 8 THEN 'warm' ELSE 'cool' END AS item
+FROM generate_series(1, 250) AS t(v)
+UNION ALL
+SELECT CASE WHEN v % 10 < 5 THEN 'hot' WHEN v % 10 < 8 THEN 'warm' ELSE 'cool' END AS item
+FROM generate_series(251, 500) AS t(v)
+UNION ALL
+SELECT CASE WHEN v % 10 < 5 THEN 'hot' WHEN v % 10 < 8 THEN 'warm' ELSE 'cool' END AS item
+FROM generate_series(501, 750) AS t(v)
+UNION ALL
+SELECT CASE WHEN v % 10 < 5 THEN 'hot' WHEN v % 10 < 8 THEN 'warm' ELSE 'cool' END AS item
+FROM generate_series(751, 1000) AS t(v);
+
+# Few distinct values, so the merged result is exact.
+query ?
+SELECT approx_top_k(item, 2) FROM topk_low_cardinality;
+----
+[{value: hot, count: 500}, {value: warm, count: 300}]
+
+# Same data with a GROUP BY, merged across partitions.
+query T?
+SELECT item, approx_top_k(item, 1) FROM topk_low_cardinality GROUP BY item ORDER BY item;
+----
+cool [{value: cool, count: 200}]
+hot [{value: hot, count: 500}]
+warm [{value: warm, count: 300}]
+
+###########
+# Approximation tests
+#
+# 9000 copies of 'dominant' plus 1000 singleton values. With k = 1 the summary
+# tracks 3 counters, so filtering and eviction happen repeatedly in every
+# partition and the alpha map is exercised.
+###########
+
+statement ok
+CREATE TABLE topk_high_cardinality AS
+SELECT CASE WHEN v % 10 < 9 THEN 'dominant' ELSE 'rare_' || CAST(v AS VARCHAR) END AS item
+FROM generate_series(1, 2500) AS t(v)
+UNION ALL
+SELECT CASE WHEN v % 10 < 9 THEN 'dominant' ELSE 'rare_' || CAST(v AS VARCHAR) END AS item
+FROM generate_series(2501, 5000) AS t(v)
+UNION ALL
+SELECT CASE WHEN v % 10 < 9 THEN 'dominant' ELSE 'rare_' || CAST(v AS VARCHAR) END AS item
+FROM generate_series(5001, 7500) AS t(v)
+UNION ALL
+SELECT CASE WHEN v % 10 < 9 THEN 'dominant' ELSE 'rare_' || CAST(v AS VARCHAR) END AS item
+FROM generate_series(7501, 10000) AS t(v);
+
+# Space-Saving guarantees any item above total/capacity (10000/3 ~ 3333) is
+# retained, so 'dominant' must be found despite the surrounding churn. Its
+# reported count is an upper bound, hence the inequality rather than equality.
+query TB
+SELECT s['value'], s['count'] >= 9000
+FROM (SELECT unnest(approx_top_k(item, 1)) AS s FROM topk_high_cardinality);
+----
+dominant true
+
+# The evicted long tail must not crowd out the heavy hitter even when more
+# counters are requested.
+query TB
+SELECT s['value'], s['count'] >= 9000
+FROM (SELECT unnest(approx_top_k(item, 5)) AS s FROM topk_high_cardinality)
+LIMIT 1;
+----
+dominant true
+
+statement ok
+DROP TABLE topk_low_cardinality;
+
+statement ok
+DROP TABLE topk_high_cardinality;
