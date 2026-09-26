@@ -252,6 +252,9 @@ pub(super) struct ParquetMorselizer {
     pub preserve_order: bool,
     /// Optional predicate to apply during the scan
     pub predicate: Option<Arc<dyn PhysicalExpr>>,
+    /// If true, the scan uses `predicate` only to prune: a `FilterExec`
+    /// above the scan applies it.
+    pub pruning_only_predicate: bool,
     /// Table schema, including partition columns.
     pub table_schema: TableSchema,
     /// Optional hint for how large the initial request to read parquet metadata
@@ -455,6 +458,7 @@ struct PreparedParquetOpen {
     output_schema: SchemaRef,
     projection: ProjectionExprs,
     predicate: Option<Arc<dyn PhysicalExpr>>,
+    pruning_only_predicate: bool,
     /// Per-scan virtual-column state, Arc-cloned from [`ParquetMorselizer`] so
     /// each file shares validated fields, precomputed null replacements, and
     /// the logical-with-virtual schema. `None` when no virtual columns were
@@ -556,8 +560,14 @@ impl DecoderReadPlans {
         //
         // Either way every conjunct is applied; nothing is silently dropped.
         // ---------------------------------------------------------------
+        // A pruning-only predicate is applied by a `FilterExec` above the
+        // scan: the scan uses it only to prune.
+        let applied_predicate = prepared
+            .predicate
+            .as_ref()
+            .filter(|_| !prepared.pruning_only_predicate);
         let (row_filter_context, post_scan_conjuncts) =
-            match (prepared.pushdown_filters, prepared.predicate.as_ref()) {
+            match (prepared.pushdown_filters, applied_predicate) {
                 // Pushdown enabled: precompute the candidate list once per file.
                 // Both the initial `RowFilter` and any per-RG rebuilds (via
                 // `RowFilterContext::build_row_filter`) reuse it, so tree walks
@@ -1005,6 +1015,7 @@ impl ParquetMorselizer {
             output_schema,
             projection,
             predicate,
+            pruning_only_predicate: self.pruning_only_predicate,
             virtual_state: self.virtual_state.as_ref().map(Arc::clone),
             reorder_predicates: self.reorder_filters,
             pushdown_filters: self.pushdown_filters,
@@ -2613,6 +2624,7 @@ mod test {
                 limit: self.limit,
                 preserve_order: self.preserve_order,
                 predicate: self.predicate,
+                pruning_only_predicate: false,
                 table_schema,
                 metadata_size_hint: self.metadata_size_hint,
                 metrics: self.metrics,
