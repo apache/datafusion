@@ -1776,6 +1776,26 @@ ORDER BY b ASC NULLS LAST
 NULL
 NULL
 
+# An ordered expression can retain its ordering while its range type is unknown.
+# date_bin must not assume that such an input is safe to scale to nanoseconds.
+query P
+SELECT date_bin(INTERVAL '1 second', date_trunc('second', ts)) AS b
+FROM (
+  SELECT arrow_cast(column1, 'Timestamp(Second)') AS ts
+  FROM (VALUES
+    (-10000000000::bigint),
+    (0::bigint),
+    (10000000000::bigint)
+  )
+  ORDER BY ts
+  LIMIT 3
+)
+ORDER BY b ASC NULLS LAST
+----
+1970-01-01T00:00:00
+NULL
+NULL
+
 statement ok
 CREATE TABLE timestamp_strings(ts varchar)
 AS VALUES

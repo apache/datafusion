@@ -24,7 +24,7 @@ use arrow::array::types::{
     TimestampSecondType,
 };
 use arrow::array::{ArrayRef, AsArray, PrimitiveArray};
-use arrow::datatypes::DataType::{Time32, Time64, Timestamp};
+use arrow::datatypes::DataType::{Null, Time32, Time64, Timestamp};
 use arrow::datatypes::IntervalUnit::{DayTime, MonthDayNano};
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
@@ -274,11 +274,12 @@ impl ScalarUDFImpl for DateBinFunc {
         let reference = input.get(2);
 
         // Scaling these representations to nanoseconds can overflow and turn
-        // otherwise valid input rows into NULL. The generated NULLs need not
-        // have the same placement as the source ordering.
+        // otherwise valid input rows into NULL. Unknown ranges use the Null
+        // type and can hide one of these representations. The generated NULLs
+        // need not have the same placement as the source ordering.
         let scale_can_overflow = matches!(
             date_value.range.data_type(),
-            Timestamp(Second | Millisecond | Microsecond, _) | Time64(Microsecond)
+            Null | Timestamp(Second | Millisecond | Microsecond, _) | Time64(Microsecond)
         );
 
         if !scale_can_overflow
