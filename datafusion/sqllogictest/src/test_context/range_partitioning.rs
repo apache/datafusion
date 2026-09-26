@@ -71,6 +71,12 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         &[(20, 1, 200)],
         &[(30, 1, 300), (40, 4, 400)],
     ];
+    const COMPOSITE_RANGE_PARTITIONS: [&[(i32, i32, i32)]; 4] = [
+        &[(1, 1, 10), (10, 0, 90)],
+        &[(10, 1, 100), (10, 1, 101), (20, 0, 190)],
+        &[(20, 1, 200), (30, 0, 290)],
+        &[(30, 1, 300), (35, 2, 350)],
+    ];
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("range_key", DataType::Int32, false),
@@ -185,6 +191,35 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         Arc::clone(&schema),
         range_batches(&schema, SPARSE_RANGE_PARTITIONS),
         sparse_output_partitioning,
+        None,
+    );
+    let composite_partitioning = Partitioning::Range(
+        RangePartitioning::try_new(
+            vec![
+                col("range_key").sort(true, true),
+                col("non_range_key").sort(true, true),
+            ],
+            [10, 20, 30]
+                .into_iter()
+                .map(|key| {
+                    SplitPoint::new(vec![
+                        ScalarValue::Int32(Some(key)),
+                        ScalarValue::Int32(Some(1)),
+                    ])
+                })
+                .collect(),
+        )
+        .expect("composite range partitioning should be valid"),
+    );
+
+    register_parquet_listing_table(
+        ctx,
+        "range_partitioned_composite",
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test_files/scratch_range_partitioning/range_partitioned_composite"),
+        Arc::clone(&schema),
+        range_batches(&schema, COMPOSITE_RANGE_PARTITIONS),
+        composite_partitioning,
         None,
     );
 }
