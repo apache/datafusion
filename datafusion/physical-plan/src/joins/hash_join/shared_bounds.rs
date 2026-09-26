@@ -1000,7 +1000,7 @@ impl SharedBuildAccumulator {
             let values = match pushdown {
                 PushdownStrategy::InList(values) => values,
                 PushdownStrategy::Empty => continue,
-                PushdownStrategy::Map(_) => return Ok(None),
+                PushdownStrategy::Map(..) => return Ok(None),
             };
             if arrays
                 .first()
@@ -1225,9 +1225,10 @@ mod tests {
     }
 
     fn map_pushdown() -> PushdownStrategy {
-        PushdownStrategy::Map(Arc::new(Map::HashMap(Box::new(
-            JoinHashMapU32::with_capacity(1),
-        ))))
+        PushdownStrategy::Map(
+            Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(1)))),
+            None,
+        )
     }
 
     fn bounds(min: i32, max: i32) -> PartitionBounds {
