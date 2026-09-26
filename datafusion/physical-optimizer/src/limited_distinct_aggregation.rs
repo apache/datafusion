@@ -21,7 +21,9 @@
 use std::sync::Arc;
 
 use datafusion_physical_plan::aggregates::AggregateExec;
+use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use datafusion_common::Result;
@@ -116,6 +118,15 @@ impl LimitedDistinctAggregation {
                         return Ok(new_aggr);
                     }
                 }
+            } else if plan.downcast_ref::<RepartitionExec>().is_some()
+                || plan.downcast_ref::<CoalescePartitionsExec>().is_some()
+            {
+                // Distribution-only operators are transparent here: a partial
+                // and final aggregate that were directly connected when this
+                // rule runs pre-enforcement become separated by a repartition
+                // once enforcement runs first. Descend through them so the
+                // partial aggregate still receives the limit hint.
+                return Ok(Transformed::no(plan));
             }
             rewrite_applicable = false;
             Ok(Transformed::no(plan))

@@ -1575,11 +1575,9 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, row_number() PARTITION BY [t.c1] ORDER BY [t.c2 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rn]
 02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [t.c1] ORDER BY [t.c2 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [t.c1] ORDER BY [t.c2 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
-03)----SortPreservingMergeExec: [c1@0 ASC NULLS LAST, c2@1 DESC]
-04)------SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 DESC], preserve_partitioning=[true]
-05)--------PartitionedTopKExec: fn=row_number, fetch=1, partition=[c1@0], order=[c2@1 DESC]
-06)----------RepartitionExec: partitioning=Hash([c1@0], 5), input_partitions=1
-07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+03)----PartitionedTopKExec: fn=row_number, fetch=1, partition=[c1@0], order=[c2@1 DESC]
+04)------RepartitionExec: partitioning=Hash([c1@0], 5), input_partitions=1
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 set datafusion.execution.target_partitions = 4;

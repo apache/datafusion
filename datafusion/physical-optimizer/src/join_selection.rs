@@ -24,11 +24,12 @@
 //! `PartitionMode` and the build side using the available statistics for hash joins.
 
 use crate::PhysicalOptimizerRule;
+use crate::ensure_requirements::enforce_distribution_requirements;
 use crate::optimizer::{ConfigOnlyContext, PhysicalOptimizerContext};
 use datafusion_common::Statistics;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{JoinSide, JoinType, internal_err};
 use datafusion_expr_common::sort_properties::SortProperties;
 use datafusion_physical_expr::LexOrdering;
@@ -155,12 +156,24 @@ impl PhysicalOptimizerRule for JoinSelection {
             Box::new(hash_join_convert_symmetric_subrule),
             Box::new(hash_join_swap_subrule),
         ];
-        let new_plan = plan
-            .transform_up(|p| apply_subrules(p, &subrules, context.config_options()))
-            .data()?;
-        new_plan
-            .transform_up(|plan| statistical_join_selection_subrule(plan, context))
-            .data()
+        let fixed = plan
+            .transform_up(|p| apply_subrules(p, &subrules, context.config_options()))?;
+        let selected = fixed
+            .data
+            .transform_up(|plan| statistical_join_selection_subrule(plan, context))?;
+        // JoinSelection tightens each join's `required_input_distribution`
+        // (Auto -> CollectLeft/Partitioned, side swaps, symmetric conversion)
+        // without inserting the repartition/coalesce those new requirements
+        // need. When we actually changed a join, re-establish distribution
+        // validity here: the rule that breaks the invariant is the rule that
+        // restores it. Ordering is already self-satisfied at construction, so
+        // only distribution needs re-enforcing. If nothing changed, the plan is
+        // already valid and re-enforcing would be a gratuitous pass.
+        if fixed.transformed || selected.transformed {
+            enforce_distribution_requirements(selected.data, context)
+        } else {
+            Ok(selected.data)
+        }
     }
 
     fn name(&self) -> &str {

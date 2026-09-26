@@ -23,7 +23,7 @@ use std::sync::Arc;
 use crate::aggregate_statistics::AggregateStatistics;
 use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::ensure_coop::EnsureCooperative;
-use crate::ensure_requirements::EnsureRequirements;
+use crate::ensure_requirements::OptimizeSorts;
 use crate::filter_pushdown::FilterPushdown;
 use crate::join_selection::JoinSelection;
 use crate::limit_pushdown::LimitPushdown;
@@ -89,9 +89,12 @@ impl PhysicalOptimizer {
         //   queries, and will likely increase the optimization time. Please extend
         //   existing rules when possible, rather than adding a new rule.
         let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
-            // If there is a output requirement of the query, make sure that
-            // this information is not lost across different rules during optimization.
-            Arc::new(OutputRequirements::new_add_mode()),
+            // The output-requirement boundary (`OutputRequirements` add mode) and
+            // all enforcement (`EnforceDistribution`, `EnforceSorting`) run first
+            // in the analyzer phase (see `PhysicalAnalyzer`); the rules that change
+            // those requirements (`JoinSelection`, `WindowTopN`, `FilterPushdown`)
+            // re-establish validity themselves, so there is no enforcement pass
+            // here. The matching `OutputRequirements` remove pass still runs below.
             Arc::new(AggregateStatistics::new()),
             // Statistics-based join selection will change the Auto mode to a real join implementation,
             // like collect left, or hash join, or future sort merge join, which will influence the
@@ -115,25 +118,12 @@ impl PhysicalOptimizer {
             // window's declared ordering without pattern-matching a SortExec)
             // and before ProjectionPushdown (which embeds projections into FilterExec).
             Arc::new(WindowTopN::new()),
-            // Ensures each input plan satisfies the distribution and ordering
-            // requirements declared by `ExecutionPlan::required_input_distribution`
-            // and `ExecutionPlan::required_input_ordering`.
-            //
-            // If the requirements are already satisfied, this rule leaves the plan
-            // unchanged. For example, it does not add sorting when the input is a
-            // file scan whose existing order already satisfies the required ordering.
-            // Otherwise, this rule inserts the necessary repartitioning and sorting
-            // operators.
-            //
-            // This used to be implemented as two separate rules: `EnforceDistribution`
-            // and `EnforceSorting`. It is now a single idempotent rule that decides
-            // distribution and sorting together in one bottom-up pass, so the
-            // `pushdown_sorts` step no longer breaks distribution invariants set
-            // earlier in the pipeline. See the module-level doc on
-            // [`EnsureRequirements`](crate::ensure_requirements) for the per-phase
-            // breakdown, and <https://github.com/apache/datafusion/issues/21973>
-            // for the original failure mode.
-            Arc::new(EnsureRequirements::new()),
+            // All enforcement (distribution and ordering) runs first in the
+            // analyzer phase; the rules above that change those requirements
+            // (`JoinSelection`, `WindowTopN`, `FilterPushdown`) re-establish
+            // validity themselves. So no enforcement pass runs here -- only the
+            // sort *optimizations*, which are not enforcement.
+            Arc::new(OptimizeSorts::new()),
             // The CombinePartialFinalAggregate rule should be applied after distribution enforcement
             Arc::new(CombinePartialFinalAggregate::new()),
             // Run once after the local sorting requirement is changed

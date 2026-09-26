@@ -34,6 +34,8 @@
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
+use crate::ensure_requirements::enforce_distribution_requirements;
+use crate::optimizer::ConfigOnlyContext;
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Result, assert_eq_or_internal_err, config::ConfigOptions};
@@ -422,11 +424,30 @@ impl PhysicalOptimizerRule for FilterPushdown {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(
-            push_down_filters(&Arc::clone(&plan), vec![], config, self.phase)?
-                .updated_node
-                .unwrap_or(plan),
-        )
+        let updated = push_down_filters(&Arc::clone(&plan), vec![], config, self.phase)?
+            .updated_node;
+        match (self.phase, updated) {
+            // Pushing a predicate into a source changes the statistics the
+            // distribution decisions read (a source's row count flips
+            // Exact -> Inexact, which changes whether its scan is parallelized).
+            // Enforcement runs first, in the analyzer phase, so re-establish
+            // *distribution* here after a pre-phase pushdown actually rewrote the
+            // plan: the rule that changes enforcement's inputs restores validity
+            // itself, the same contract as JoinSelection / WindowTopN. Only
+            // distribution is re-enforced -- pushing a predicate down does not
+            // change any operator's ordering, so ordering stays valid and running
+            // sort enforcement here would be sort *optimization* (e.g. dropping a
+            // now-constant sort key), which is not this rule's job. The post phase
+            // runs after enforcement and only touches dynamic filters, so it does
+            // not re-enforce.
+            (FilterPushdownPhase::Pre, Some(new_plan)) => {
+                enforce_distribution_requirements(
+                    new_plan,
+                    &ConfigOnlyContext::new(config),
+                )
+            }
+            (_, updated) => Ok(updated.unwrap_or(plan)),
+        }
     }
 
     fn name(&self) -> &str {

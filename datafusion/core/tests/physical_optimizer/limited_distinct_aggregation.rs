@@ -34,10 +34,12 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{self, cast, col};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_plan::{
-    ExecutionPlan,
+    ExecutionPlan, Partitioning,
     aggregates::{AggregateExec, AggregateMode},
+    coalesce_partitions::CoalescePartitionsExec,
     collect, displayable,
     limit::{GlobalLimitExec, LocalLimitExec},
+    repartition::RepartitionExec,
 };
 
 async fn run_plan_and_format(plan: Arc<dyn ExecutionPlan>) -> Result<String> {
@@ -98,6 +100,101 @@ async fn test_partial_final() -> Result<()> {
     |   |
     | 4 |
     +---+
+    "
+    );
+
+    Ok(())
+}
+
+/// Regression for the decomposition: `LimitedDistinctAggregation` runs before
+/// enforcement, but with the distribution half moved into the analyzer phase a
+/// `RepartitionExec` can sit between the final and partial aggregates by the
+/// time this rule sees the plan. The rule must look through that
+/// distribution-only operator so the partial aggregate still receives the limit
+/// hint (`lim=[4]`), not just the final one.
+#[tokio::test]
+async fn test_partial_final_with_repartition_between() -> Result<()> {
+    let source = mock_data()?;
+    let schema = source.schema();
+
+    let partial_agg = AggregateExec::try_new(
+        AggregateMode::Partial,
+        build_group_by(&schema.clone(), vec!["a".to_string()]),
+        vec![],
+        vec![],
+        source,
+        schema.clone(),
+    )?;
+    // A distribution-only operator separating partial from final, as
+    // distribution-first enforcement would introduce.
+    let repartition = RepartitionExec::try_new(
+        Arc::new(partial_agg),
+        Partitioning::RoundRobinBatch(4),
+    )?;
+    let final_agg = AggregateExec::try_new(
+        AggregateMode::Final,
+        build_group_by(&schema.clone(), vec!["a".to_string()]),
+        vec![],
+        vec![],
+        Arc::new(repartition),
+        schema.clone(),
+    )?;
+    let plan: Arc<dyn ExecutionPlan> =
+        Arc::new(LocalLimitExec::new(Arc::new(final_agg), 4));
+
+    let formatted = get_optimized_plan(&plan)?;
+    // Both aggregates carry `lim=[4]`: the rule descended through the
+    // RepartitionExec to reach the partial aggregate.
+    assert_snapshot!(
+        formatted.trim(),
+        @r"
+    LocalLimitExec: fetch=4
+      AggregateExec: mode=Final, gby=[a@0 as a], aggr=[], lim=[4]
+        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+          AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[], lim=[4]
+            DataSourceExec: partitions=1, partition_sizes=[1]
+    "
+    );
+
+    Ok(())
+}
+
+/// The same look-through for a `CoalescePartitionsExec` between the aggregates
+/// (the other distribution-only operator enforcement can introduce).
+#[tokio::test]
+async fn test_partial_final_with_coalesce_between() -> Result<()> {
+    let source = mock_data()?;
+    let schema = source.schema();
+
+    let partial_agg = AggregateExec::try_new(
+        AggregateMode::Partial,
+        build_group_by(&schema.clone(), vec!["a".to_string()]),
+        vec![],
+        vec![],
+        source,
+        schema.clone(),
+    )?;
+    let coalesce = CoalescePartitionsExec::new(Arc::new(partial_agg));
+    let final_agg = AggregateExec::try_new(
+        AggregateMode::Final,
+        build_group_by(&schema.clone(), vec!["a".to_string()]),
+        vec![],
+        vec![],
+        Arc::new(coalesce),
+        schema.clone(),
+    )?;
+    let plan: Arc<dyn ExecutionPlan> =
+        Arc::new(LocalLimitExec::new(Arc::new(final_agg), 4));
+
+    let formatted = get_optimized_plan(&plan)?;
+    assert_snapshot!(
+        formatted.trim(),
+        @r"
+    LocalLimitExec: fetch=4
+      AggregateExec: mode=Final, gby=[a@0 as a], aggr=[], lim=[4]
+        CoalescePartitionsExec
+          AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[], lim=[4]
+            DataSourceExec: partitions=1, partition_sizes=[1]
     "
     );
 

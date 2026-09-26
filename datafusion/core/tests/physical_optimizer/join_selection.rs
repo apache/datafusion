@@ -48,6 +48,7 @@ use datafusion_physical_plan::operator_statistics::{
     ClosureStatisticsProvider, StatisticsRegistry, StatisticsResult,
 };
 use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{
     ChildrenPropertiesMode, ExecutionPlanProperties, ReplaceChildrenOptions,
@@ -322,36 +323,56 @@ async fn test_join_with_swap_to_sort_preserving_merge_fetch_side() {
     let optimized_join = JoinSelection::new()
         .optimize(join, &ConfigOptions::new())
         .unwrap();
-    let optimized_join = optimized_join
-        .downcast_ref::<ProjectionExec>()
-        .map(|projection| projection.input())
-        .unwrap_or(&optimized_join);
-    let swapped_join = optimized_join
+
+    // `JoinSelection` now enforces distribution itself, so the hash join sits
+    // under a swap `ProjectionExec` and its inputs are wrapped in enforcement
+    // exchanges. Descend through the single-child wrappers to reach the join.
+    let mut cursor = Arc::clone(&optimized_join);
+    while cursor.downcast_ref::<HashJoinExec>().is_none() {
+        let children = cursor.children();
+        assert_eq!(
+            children.len(),
+            1,
+            "expected to reach the hash join through single-child wrappers, got {cursor:?}"
+        );
+        cursor = Arc::clone(children[0]);
+    }
+    let swapped_join = cursor
         .downcast_ref::<HashJoinExec>()
         .expect("optimized plan should contain a hash join");
 
-    let left_spm = swapped_join
-        .left()
-        .downcast_ref::<SortPreservingMergeExec>()
-        .expect("SPM fetch side should become the left/build input");
-    assert_eq!(left_spm.fetch(), Some(1));
-    let statistics_context = StatisticsContext::new();
-    assert_eq!(
-        statistics_context
-            .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
-            .unwrap()
-            .num_rows,
-        Precision::Inexact(1)
-    );
-    let left_byte_size = statistics_context
-        .compute(swapped_join.left().as_ref(), &StatisticsArgs::new())
-        .unwrap()
-        .total_byte_size;
-    let right_byte_size = big_statistics().total_byte_size;
+    // The swap moved the fetch-limited side to the build (left) side: the left
+    // join key is now `top_col` (from the SPM/fetch input), not `big_col`.
+    let (left_key, _right_key) = &swapped_join.on()[0];
     assert!(
-        left_byte_size.get_value() < right_byte_size.get_value(),
-        "SPM fetch side should be estimated smaller than the big side"
+        format!("{left_key}").contains("top_col"),
+        "the fetch-limited side should be swapped to the build (left) side, got left key {left_key}"
     );
+
+    // Distribution enforcement rewrites the order-preserving merge into a
+    // `SortExec` TopK, but the `fetch=1` that made this side small must survive
+    // on the build side.
+    let mut left_cursor = Arc::clone(swapped_join.left());
+    let build_fetch = loop {
+        if let Some(sort) = left_cursor.downcast_ref::<SortExec>() {
+            break sort.fetch();
+        }
+        let children = left_cursor.children();
+        assert_eq!(
+            children.len(),
+            1,
+            "expected the fetch operator on the build side, got {left_cursor:?}"
+        );
+        left_cursor = Arc::clone(children[0]);
+    };
+    assert_eq!(
+        build_fetch,
+        Some(1),
+        "the fetch=1 must be preserved on the build side after enforcement"
+    );
+
+    // The probe (right) side is still the big input.
+    let statistics_context = StatisticsContext::new();
     assert_eq!(
         statistics_context
             .compute(swapped_join.right().as_ref(), &StatisticsArgs::new())
@@ -831,11 +852,15 @@ async fn test_nested_join_swap() {
         @r"
     ProjectionExec: expr=[medium_col@2 as medium_col, big_col@0 as big_col, small_col@1 as small_col]
       HashJoinExec: mode=CollectLeft, join_type=Right, on=[(small_col@1, medium_col@0)]
-        ProjectionExec: expr=[big_col@1 as big_col, small_col@0 as small_col]
-          HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(small_col@0, big_col@0)]
-            StatisticsExec: col_count=1, row_count=Inexact(1000)
-            StatisticsExec: col_count=1, row_count=Inexact(100000)
-        StatisticsExec: col_count=1, row_count=Inexact(10000)
+        CoalescePartitionsExec
+          ProjectionExec: expr=[big_col@1 as big_col, small_col@0 as small_col]
+            HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(small_col@0, big_col@0)]
+              CoalescePartitionsExec
+                StatisticsExec: col_count=1, row_count=Inexact(1000)
+              RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=2
+                StatisticsExec: col_count=1, row_count=Inexact(100000)
+        RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=2
+          StatisticsExec: col_count=1, row_count=Inexact(10000)
     "
     );
 }
@@ -1917,16 +1942,38 @@ fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
     let optimized_join_plan =
         JoinSelection::new().optimize(Arc::clone(&join), &ConfigOptions::new())?;
 
-    // If swap did happen
-    let projection_added = optimized_join_plan.is::<ProjectionExec>();
-    let plan = if projection_added {
-        let proj = optimized_join_plan
-            .downcast_ref::<ProjectionExec>()
-            .expect("A proj is required to swap columns back to their original order");
-        Arc::<dyn ExecutionPlan>::clone(proj.input())
-    } else {
-        optimized_join_plan
-    };
+    // `JoinSelection` now re-establishes distribution validity itself, so the
+    // hash join can sit under a swap `ProjectionExec` and/or enforcement
+    // exchanges (repartition / coalesce), and its inputs can likewise be wrapped
+    // in an exchange. Descend through those single-child wrappers to reach the
+    // join, and to reach the original source under each input.
+    fn descend_to_hash_join(
+        plan: &Arc<dyn ExecutionPlan>,
+    ) -> Option<Arc<dyn ExecutionPlan>> {
+        let mut current = Arc::clone(plan);
+        loop {
+            if current.downcast_ref::<HashJoinExec>().is_some() {
+                return Some(current);
+            }
+            let children = current.children();
+            if children.len() == 1 {
+                current = Arc::clone(children[0]);
+            } else {
+                return None;
+            }
+        }
+    }
+
+    fn leaf_source(plan: &Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        let mut current = Arc::clone(plan);
+        while current.children().len() == 1 {
+            current = Arc::clone(current.children()[0]);
+        }
+        current
+    }
+
+    let plan = descend_to_hash_join(&optimized_join_plan)
+        .unwrap_or_else(|| Arc::clone(&optimized_join_plan));
 
     if let Some(HashJoinExec {
         left,
@@ -1936,8 +1983,10 @@ fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
         ..
     }) = plan.downcast_ref::<HashJoinExec>()
     {
-        let left_changed = Arc::ptr_eq(left, &right_exec);
-        let right_changed = Arc::ptr_eq(right, &left_exec);
+        // Compare against the original sources under any enforcement exchanges
+        // the distribution pass inserted between the join and its inputs.
+        let left_changed = Arc::ptr_eq(&leaf_source(left), &right_exec);
+        let right_changed = Arc::ptr_eq(&leaf_source(right), &left_exec);
         // If this is not equal, we have a bigger problem.
         assert_eq!(left_changed, right_changed);
         assert_eq!(

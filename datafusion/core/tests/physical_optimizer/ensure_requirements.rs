@@ -25,8 +25,12 @@ use insta::assert_snapshot;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TransformedResult, TreeNode, TreeNodeRecursion};
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
+use datafusion_physical_optimizer::{
+    ConfigOnlyContext, PhysicalAnalyzerRule, PhysicalOptimizerRule,
+};
+use datafusion_physical_optimizer::ensure_requirements::{
+    EnforceDistribution, EnforceSorting, EnsureRequirements, OptimizeSorts,
+};
 use datafusion_physical_optimizer::ensure_requirements::enforce_sorting::{
     PlanWithCorrespondingCoalescePartitions, parallelize_sorts,
 };
@@ -1559,4 +1563,223 @@ fn test_sort_pushed_below_limit_with_skip_keeps_skip_rows() -> Result<()> {
           MockMultiPartitionExec
     ");
     Ok(())
+}
+
+// ========================================================================
+// Decomposition tests: `EnsureRequirements` was split into three rules
+// (`EnforceDistribution` / `EnforceSorting` / `OptimizeSorts`). These pin
+// the invariants that make the split behavior-preserving:
+//   1. the three rules in sequence reproduce the monolithic rule exactly;
+//   2. `EnforceDistribution` is idempotent (so it can run in the analyzer
+//      phase *and* be re-run in the optimizer phase);
+//   3. `EnforceDistribution` behaves identically whether driven as a
+//      `PhysicalAnalyzerRule` or a `PhysicalOptimizerRule`;
+//   4. `EnforceDistribution` only settles distribution; ordering is
+//      enforced later by `EnforceSorting`.
+// ========================================================================
+
+/// Run the decomposed pipeline (`EnforceDistribution` → `EnforceSorting` →
+/// `OptimizeSorts`), the same order the default optimizer registers them.
+fn run_decomposed(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+    let config = test_config();
+    let plan = EnforceDistribution::new().optimize(plan, &config)?;
+    let plan = EnforceSorting::new().optimize(plan, &config)?;
+    OptimizeSorts::new().optimize(plan, &config)
+}
+
+/// Distribution-shaped topologies: no operator requires an input *ordering*, so
+/// enforcing distribution never entangles with sort placement. These are the
+/// plans on which `EnforceDistribution` is genuinely idempotent.
+fn distribution_only_fixtures() -> Vec<(&'static str, Arc<dyn ExecutionPlan>)> {
+    // Union of mixed partition counts + sort + limit.
+    let union = {
+        let live = Arc::new(MockMultiPartitionExec::new(16));
+        let hist = Arc::new(MockMultiPartitionExec::new(1));
+        let union = UnionExec::try_new(vec![live as _, hist as _]).unwrap();
+        let sort = Arc::new(SortExec::new(sort_expr_on("a", 0, true, true), union));
+        Arc::new(GlobalLimitExec::new(sort, 0, Some(21))) as Arc<dyn ExecutionPlan>
+    };
+    // Coalesce + sort (parallelize_sorts path).
+    let coalesce_sort = {
+        let source = Arc::new(MockMultiPartitionExec::new(8));
+        let coalesce: Arc<dyn ExecutionPlan> =
+            Arc::new(CoalescePartitionsExec::new(source));
+        let sort = Arc::new(SortExec::new(sort_expr_on("a", 0, true, true), coalesce));
+        Arc::new(GlobalLimitExec::new(sort, 0, Some(10))) as Arc<dyn ExecutionPlan>
+    };
+    // Partitioned hash join.
+    let hash_join = {
+        let left: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(4));
+        let right: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(4));
+        let on = vec![(
+            Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>,
+        )];
+        Arc::new(
+            HashJoinExec::try_new(
+                left,
+                right,
+                on,
+                None,
+                &JoinType::Inner,
+                None,
+                PartitionMode::Partitioned,
+                NullEquality::NullEqualsNothing,
+                false,
+            )
+            .unwrap(),
+        ) as Arc<dyn ExecutionPlan>
+    };
+
+    vec![
+        ("union_mixed_partitions", union),
+        ("coalesce_sort", coalesce_sort),
+        ("partitioned_hash_join", hash_join),
+    ]
+}
+
+/// A window-like operator requiring *both* `Hash(a)` distribution and an input
+/// ordering, with a conflicting sort on top. This is the case where enforcing
+/// distribution and enforcing ordering entangle (order-preserving repartition),
+/// so `EnforceDistribution` alone is not a fixpoint here; the full decomposed
+/// pipeline still has to match the monolith.
+fn window_like_fixture() -> Arc<dyn ExecutionPlan> {
+    let source: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(8));
+    let ord = sort_expr_on("a", 0, false, false);
+    let dist = Distribution::KeyPartitioned(vec![Arc::new(Column::new("a", 0))]);
+    let window: Arc<dyn ExecutionPlan> =
+        Arc::new(MockReqExec::new(source, dist, Some(ord)));
+    let sort = Arc::new(SortExec::new(sort_expr_on("a", 0, true, true), window));
+    Arc::new(GlobalLimitExec::new(sort, 0, Some(20)))
+}
+
+/// Every representative topology, including the entangled `window_like` one.
+fn decomposition_fixtures() -> Vec<(&'static str, Arc<dyn ExecutionPlan>)> {
+    let mut fixtures = distribution_only_fixtures();
+    fixtures.push(("window_like", window_like_fixture()));
+    fixtures
+}
+
+/// The three decomposed rules run in sequence must produce exactly the plan the
+/// monolithic `EnsureRequirements` shim produces, for every representative
+/// topology. This is the core behavior-preservation guarantee of the split.
+#[test]
+fn test_decomposition_matches_monolith() {
+    let config = test_config();
+    for (name, plan) in decomposition_fixtures() {
+        let monolith = EnsureRequirements::new()
+            .optimize(Arc::clone(&plan), &config)
+            .unwrap_or_else(|e| panic!("[{name}] monolith optimize failed: {e:?}"));
+        let decomposed = run_decomposed(plan)
+            .unwrap_or_else(|e| panic!("[{name}] decomposed pipeline failed: {e:?}"));
+        assert_eq!(
+            plan_string(&monolith),
+            plan_string(&decomposed),
+            "[{name}] decomposed pipeline diverged from monolithic EnsureRequirements",
+        );
+    }
+}
+
+/// `EnforceDistribution` is idempotent on distribution-shaped plans: this is
+/// what lets it run once in the analyzer phase and then re-run in the optimizer
+/// phase (after `JoinSelection` / `WindowTopN`) without churning the plan.
+///
+/// The guarantee is scoped to plans whose operators declare distribution
+/// requirements but no input *ordering*. When an operator requires both (a
+/// window over a hash-partitioned, ordered input) distribution enforcement and
+/// order-preserving repartition entangle, so the distribution half alone is not
+/// a fixpoint; stability for those plans comes from the full decomposed
+/// pipeline matching the monolith (see `test_decomposition_matches_monolith`,
+/// which covers the `window_like` topology).
+#[test]
+fn test_enforce_distribution_is_idempotent() {
+    let config = test_config();
+    for (name, plan) in distribution_only_fixtures() {
+        let p1 = EnforceDistribution::new()
+            .optimize(plan, &config)
+            .unwrap_or_else(|e| panic!("[{name}] pass 1 failed: {e:?}"));
+        let p2 = EnforceDistribution::new()
+            .optimize(Arc::clone(&p1), &config)
+            .unwrap_or_else(|e| panic!("[{name}] pass 2 failed: {e:?}"));
+        assert_eq!(
+            plan_string(&p1),
+            plan_string(&p2),
+            "[{name}] EnforceDistribution is not idempotent",
+        );
+    }
+}
+
+/// `EnforceDistribution` uses one implementation for both the
+/// `PhysicalAnalyzerRule` and `PhysicalOptimizerRule` traits; both entry points
+/// must produce the same plan (the planner runs it as an analyzer first and as
+/// an optimizer later).
+#[test]
+fn test_enforce_distribution_analyzer_matches_optimizer() {
+    let config = test_config();
+    for (name, plan) in decomposition_fixtures() {
+        let context = ConfigOnlyContext::new(&config);
+        let as_analyzer = PhysicalAnalyzerRule::analyze_with_context(
+            &EnforceDistribution::new(),
+            Arc::clone(&plan),
+            &context,
+        )
+        .unwrap_or_else(|e| panic!("[{name}] analyze failed: {e:?}"));
+        let as_optimizer = PhysicalOptimizerRule::optimize_with_context(
+            &EnforceDistribution::new(),
+            plan,
+            &context,
+        )
+        .unwrap_or_else(|e| panic!("[{name}] optimize failed: {e:?}"));
+        assert_eq!(
+            plan_string(&as_analyzer),
+            plan_string(&as_optimizer),
+            "[{name}] EnforceDistribution diverged between analyzer and optimizer entry points",
+        );
+    }
+}
+
+/// `EnforceDistribution` settles distribution only: given an operator that
+/// *requires* an ordering its input does not provide, distribution enforcement
+/// must not insert the `SortExec` that satisfies it. That ordering is enforced
+/// later by `EnforceSorting`. Keeping the non-idempotent sort enforcement out of
+/// the distribution half is what lets the distribution half be re-run safely.
+#[test]
+fn test_enforce_distribution_does_not_enforce_sorting() {
+    let config = test_config();
+    // OutputRequirementExec asks for `a DESC` + SinglePartition over a source
+    // that is ordered `a ASC`: a fresh SortExec is required to satisfy the
+    // ordering, and no SortExec is pre-built into the input.
+    let source = Arc::new(MockMultiPartitionExec::new(8));
+    let ordering = sort_expr_on("a", 0, true, true);
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(OutputRequirementExec::new(
+        source,
+        Some(OrderingRequirements::from(ordering)),
+        Distribution::SinglePartition,
+        None,
+    ));
+
+    // Distribution enforcement satisfies SinglePartition but must NOT add a
+    // SortExec for the ordering requirement.
+    let dist_only = EnforceDistribution::new()
+        .optimize(Arc::clone(&plan), &config)
+        .expect("EnforceDistribution failed");
+    let dist_str = plan_string(&dist_only);
+    assert!(
+        !dist_str.contains("SortExec"),
+        "EnforceDistribution must not insert a SortExec (that is EnforceSorting's job):\n{dist_str}",
+    );
+
+    // EnforceSorting is what inserts the SortExec, producing a plan that passes
+    // the sanity checker.
+    let sorted = EnforceSorting::new()
+        .optimize(dist_only, &config)
+        .expect("EnforceSorting failed");
+    let sorted_str = plan_string(&sorted);
+    assert!(
+        sorted_str.contains("SortExec"),
+        "EnforceSorting should insert the SortExec that satisfies the ordering requirement:\n{sorted_str}",
+    );
+    SanityCheckPlan::new()
+        .optimize(sorted, &config)
+        .expect("fully enforced plan failed SanityCheckPlan");
 }
