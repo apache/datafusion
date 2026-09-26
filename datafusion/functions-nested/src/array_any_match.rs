@@ -162,10 +162,11 @@ impl HigherOrderUDFImpl for ArrayAnyMatch {
         };
 
         let predicate = evaluated.boolean_predicate(self.name())?;
+        let row_offsets = evaluated.row_offsets()?;
 
         let mut values = BooleanBuilder::with_capacity(evaluated.len());
-        for i in 0..evaluated.len() {
-            let (start, end) = evaluated.row_range(i);
+        for window in row_offsets.windows(2) {
+            let (start, end) = (window[0], window[1]);
             // any_match_for_range returns None when nulls poison the result;
             // null rows produce an empty range and return Some(false), but their
             // null bit is preserved by attaching the original null bitmap below.
