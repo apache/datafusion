@@ -24,7 +24,7 @@ use std::iter::once;
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
-use crate::expr::{Alias, PlannedReplaceSelectItem, Sort as SortExpr};
+use crate::expr::{Alias, Cast, PlannedReplaceSelectItem, Sort as SortExpr};
 use crate::expr_rewriter::{
     ColumnNormalizer, coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
@@ -45,8 +45,8 @@ use crate::utils::{
 };
 use crate::{
     BinaryExpr, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
-    RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource, WriteOp, and,
-    binary_expr, lit,
+    RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource, WindowUDF,
+    WriteOp, and, binary_expr, lit,
 };
 
 use super::dml::InsertOp;
@@ -1472,6 +1472,11 @@ impl LogicalPlanBuilder {
     }
 
     /// Process intersect set operator
+    ///
+    /// With `is_all = true` this builds a left semi join, which keeps every
+    /// matching left row and so does not preserve row multiplicities: a row
+    /// appearing twice on the left and once on the right is returned twice.
+    /// Use [`Self::intersect_all`] for `INTERSECT ALL` semantics.
     pub fn intersect(
         left_plan: LogicalPlan,
         right_plan: LogicalPlan,
@@ -1486,6 +1491,11 @@ impl LogicalPlanBuilder {
     }
 
     /// Process except set operator
+    ///
+    /// With `is_all = true` this builds a left anti join, which removes every
+    /// left row that has any match and so does not preserve row
+    /// multiplicities: a row appearing twice on the left and once on the right
+    /// is removed entirely. Use [`Self::except_all`] for `EXCEPT ALL` semantics.
     pub fn except(
         left_plan: LogicalPlan,
         right_plan: LogicalPlan,
@@ -1497,6 +1507,146 @@ impl LogicalPlanBuilder {
             JoinType::LeftAnti,
             is_all,
         )
+    }
+
+    /// Build an `INTERSECT ALL` plan, preserving the multiplicity of each row.
+    ///
+    /// `row_number` must be the `row_number` window function. It numbers the
+    /// copies of each distinct row on both sides so that they can be matched
+    /// one to one.
+    pub fn intersect_all(
+        left_plan: LogicalPlan,
+        right_plan: LogicalPlan,
+        row_number: &Arc<WindowUDF>,
+    ) -> Result<LogicalPlan> {
+        Self::multiset_set_operation(left_plan, right_plan, row_number, JoinType::Inner)
+    }
+
+    /// Build an `EXCEPT ALL` plan, subtracting matching row multiplicities.
+    ///
+    /// `row_number` must be the `row_number` window function, as for
+    /// [`Self::intersect_all`].
+    pub fn except_all(
+        left_plan: LogicalPlan,
+        right_plan: LogicalPlan,
+        row_number: &Arc<WindowUDF>,
+    ) -> Result<LogicalPlan> {
+        Self::multiset_set_operation(
+            left_plan,
+            right_plan,
+            row_number,
+            JoinType::LeftAnti,
+        )
+    }
+
+    fn multiset_set_operation(
+        left_plan: LogicalPlan,
+        right_plan: LogicalPlan,
+        row_number: &Arc<WindowUDF>,
+        join_type: JoinType,
+    ) -> Result<LogicalPlan> {
+        let left_columns = left_plan.schema().columns();
+        let right_columns = right_plan.schema().columns();
+        if left_columns.len() != right_columns.len() {
+            return plan_err!(
+                "INTERSECT/EXCEPT query must have the same number of columns. Left is {} and right is {}.",
+                left_columns.len(),
+                right_columns.len()
+            );
+        }
+        let from_right = left_plan
+            .schema()
+            .fields()
+            .iter()
+            .zip(right_plan.schema().fields())
+            .map(|(left, right)| {
+                join_type == JoinType::Inner
+                    && left.is_nullable()
+                    && !right.is_nullable()
+                    && left.data_type() == right.data_type()
+            })
+            .collect::<Vec<_>>();
+        // Each side gets its own row number column name, so the two synthetic
+        // columns never collide with each other. The sides are then only
+        // requalified when the user's own columns conflict.
+        let mut row_number_name = "__datafusion_set_operation_row_number".to_string();
+        let name_in_use = |name: &str| {
+            [left_plan.schema(), right_plan.schema()]
+                .iter()
+                .any(|schema| schema.fields().iter().any(|field| field.name() == name))
+        };
+        while name_in_use(&row_number_name)
+            || name_in_use(&format!("{row_number_name}_right"))
+        {
+            row_number_name.push('_');
+        }
+        let right_row_number_name = format!("{row_number_name}_right");
+        let with_row_number = |plan: LogicalPlan, columns: &[Column], name: &str| {
+            let mut window = crate::expr::WindowFunction::new(
+                crate::WindowFunctionDefinition::WindowUDF(Arc::clone(row_number)),
+                vec![],
+            );
+            window.params.partition_by =
+                columns.iter().cloned().map(Expr::Column).collect();
+            LogicalPlanBuilder::from(plan)
+                .window(vec![Expr::WindowFunction(Box::new(window)).alias(name)])?
+                .build()
+        };
+        let left_plan = with_row_number(left_plan, &left_columns, &row_number_name)?;
+        let right_plan =
+            with_row_number(right_plan, &right_columns, &right_row_number_name)?;
+        let (left_builder, right_builder, requalified) = requalify_sides_if_needed(
+            LogicalPlanBuilder::from(left_plan),
+            LogicalPlanBuilder::from(right_plan),
+        )?;
+        let left_plan = left_builder.build()?;
+        let right_plan = right_builder.build()?;
+        // Requalifying can also rename columns (`x` becomes `x:1` when two
+        // relations on one side both have an `x`), so read the join keys from
+        // the schemas the join actually sees.
+        let left_join_columns = left_plan.schema().columns();
+        let right_join_columns = right_plan.schema().columns();
+        let join_keys = left_join_columns
+            .iter()
+            .cloned()
+            .zip(right_join_columns.iter().cloned())
+            .collect();
+        // The output keeps the left input's qualifiers and names, so a query
+        // can keep referring to them after the set operation.
+        let projection = left_columns
+            .into_iter()
+            .zip(left_join_columns)
+            .zip(right_join_columns)
+            .zip(from_right)
+            .zip(left_plan.schema().fields())
+            .map(
+                |((((column, left_column), right_column), from_right), field)| {
+                    let expr = if from_right {
+                        let target_field = Arc::new(
+                            Field::new(&column.name, field.data_type().clone(), false)
+                                .with_metadata(field.metadata().clone()),
+                        );
+                        Expr::Cast(Cast::new_from_field(
+                            Box::new(Expr::Column(right_column)),
+                            target_field,
+                        ))
+                    } else if requalified {
+                        Expr::Column(left_column)
+                    } else {
+                        return Expr::Column(column);
+                    };
+                    expr.alias_qualified(column.relation, column.name)
+                },
+            )
+            .collect::<Vec<_>>();
+        let joined = LogicalPlanBuilder::from(left_plan).join_detailed(
+            right_plan,
+            join_type,
+            join_keys,
+            None,
+            NullEquality::NullEqualsNull,
+        )?;
+        joined.project(projection)?.build()
     }
 
     /// Process intersect or except
