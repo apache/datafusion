@@ -55,6 +55,7 @@ mod join_filter;
 /// Note: This module is public for internal testing purposes only
 /// and is not guaranteed to be stable across versions.
 pub mod join_hash_map;
+pub mod key_range_bitmap;
 
 use array_map::ArrayMap;
 use utils::JoinHashMapType;

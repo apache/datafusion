@@ -40,6 +40,7 @@ use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
 };
 use crate::joins::join_hash_map::{JoinHashMapU32, JoinHashMapU64};
+use crate::joins::key_range_bitmap::KeyRangeBitmap;
 use crate::joins::utils::{
     OnceAsync, OnceFut, asymmetric_join_output_partitioning, emits_unmatched_left_rows,
     is_existence_join, reorder_output_after_swap, swap_join_projection, update_hash,
@@ -3313,7 +3314,9 @@ async fn collect_left_input(
 
     let map = Arc::new(join_hash_map);
 
-    let membership = if num_rows == 0 {
+    // Nothing reads the strategy unless the dynamic filter accumulator exists,
+    // and that exists only when the pushdown is enabled.
+    let membership = if num_rows == 0 || !should_compute_dynamic_filters {
         PushdownStrategy::Empty
     } else {
         // If the build side is small enough we can use IN list pushdown.
@@ -3323,19 +3326,45 @@ async fn collect_left_input(
             .iter()
             .map(|arr| arr.get_array_memory_size())
             .sum::<usize>();
-        if left_values.is_empty()
-            || left_values[0].is_empty()
-            || estimated_size > config.optimizer.hash_join_inlist_pushdown_max_size
-            || map.num_of_distinct_key()
-                > config
+
+        let pushdown_inlist = !left_values.is_empty()
+            && !left_values[0].is_empty()
+            && estimated_size <= config.optimizer.hash_join_inlist_pushdown_max_size
+            && map.num_of_distinct_key()
+                <= config
                     .optimizer
-                    .hash_join_inlist_pushdown_max_distinct_values
+                    .hash_join_inlist_pushdown_max_distinct_values;
+
+        if pushdown_inlist
+            && let Some(in_list_values) = build_struct_inlist_values(&left_values)?
         {
-            PushdownStrategy::Map(Arc::clone(&map))
-        } else if let Some(in_list_values) = build_struct_inlist_values(&left_values)? {
             PushdownStrategy::InList(in_list_values)
         } else {
-            PushdownStrategy::Map(Arc::clone(&map))
+            // Past the InList threshold use a bucket bitmap for container pruning.
+            let pruning_bitmap = match (left_values.as_slice(), bounds.as_ref()) {
+                ([keys], Some(bounds)) if !keys.is_empty() => bounds
+                    .get_column_bounds(0)
+                    .and_then(|b| {
+                        KeyRangeBitmap::try_new(
+                            keys,
+                            &b.min,
+                            &b.max,
+                            map.num_of_distinct_key(),
+                        )
+                    })
+                    .map(Arc::new),
+                _ => None,
+            };
+            // Held for the join's lifetime, so charge it like the maps; it is
+            // optional, so skip it rather than fail when the pool is full.
+            let pruning_bitmap = pruning_bitmap.filter(|bitmap| {
+                let ok = reservation.try_grow(bitmap.size()).is_ok();
+                if ok {
+                    metrics.build_mem_used.add(bitmap.size());
+                }
+                ok
+            });
+            PushdownStrategy::Map(Arc::clone(&map), pruning_bitmap)
         }
     };
 
@@ -3509,6 +3538,57 @@ mod tests {
             drop(reservation);
             assert_eq!(pool.reserved(), 0);
         }
+        Ok(())
+    }
+
+    /// Runs a join whose 200 keys spread over 2M would size a pruning bitmap
+    /// at the 128 KiB cap, and reports the bytes the build side reserved.
+    async fn build_mem_used(limit: usize, dynamic_filters: bool) -> Result<usize> {
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let batch = |keys: Vec<i64>| {
+            let column = Arc::new(Int64Array::from(keys)) as ArrayRef;
+            let batch = RecordBatch::try_new(Arc::clone(&schema), vec![column])?;
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
+        };
+        let on = vec![(
+            Arc::new(Column::new_with_schema("k", &schema)?) as _,
+            Arc::new(Column::new_with_schema("k", &schema)?) as _,
+        )];
+        let build = batch((0..200).map(|i| i * 10_000).collect())?;
+        let probe = batch(vec![0, 500_000, 1_500_000])?;
+        let join = if dynamic_filters {
+            hash_join_with_dynamic_filter(build, probe, on, JoinType::Inner)?.0
+        } else {
+            join(
+                build,
+                probe,
+                on,
+                &JoinType::Inner,
+                NullEquality::NullEqualsNothing,
+            )?
+        };
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(limit, 1.0)
+            .build_arc()?;
+        let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+        let batches = common::collect(join.execute(0, task_ctx)?).await?;
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
+        Ok(join
+            .metrics()
+            .unwrap()
+            .sum_by_name("build_mem_used")
+            .unwrap()
+            .as_usize())
+    }
+
+    /// The bitmap is pruning-only: never built when no dynamic filter will read
+    /// it, and dropped rather than fatal when the pool cannot fit it.
+    #[tokio::test]
+    async fn pruning_bitmap_is_optional() -> Result<()> {
+        assert!(build_mem_used(1_000_000, false).await? < 100_000);
+        assert!(build_mem_used(1_000_000, true).await? > 100_000);
+        build_mem_used(100_000, true).await?;
         Ok(())
     }
 
