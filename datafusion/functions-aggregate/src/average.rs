@@ -36,7 +36,7 @@ use datafusion_common::{
     Result, ScalarValue, exec_datafusion_err, exec_err, internal_err, not_impl_err,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::utils::format_state_name;
+use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, Documentation, EmitTo, Expr, GroupSelection,
     GroupsAccumulator, ReversedUDAF, Signature, TypeSignature, TypeSignatureClass,
@@ -490,6 +490,10 @@ impl AggregateUDFImpl for Avg {
 
     fn reverse_expr(&self) -> ReversedUDAF {
         ReversedUDAF::Identical
+    }
+
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::Insensitive
     }
 
     fn documentation(&self) -> Option<&Documentation> {
