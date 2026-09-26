@@ -31,6 +31,7 @@ use crate::schema_adapter::SchemaAdapterFactory;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, not_impl_err};
+use datafusion_physical_expr::filter::{FilterConjunct, PhysicalFilter};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 use datafusion_physical_plan::DisplayFormatType;
@@ -206,6 +207,28 @@ pub trait FileSource: Any + Send + Sync {
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
             vec![PushedDown::No; filters.len()],
         ))
+    }
+
+    /// Try to push down a [`PhysicalFilter`] into this file source.
+    ///
+    /// The same as [`Self::try_pushdown_filters`], but each conjunct carries
+    /// its properties (for example [`FilterConjunct::is_optional`]). The
+    /// result has one [`PushedDown`] for each conjunct, in order.
+    ///
+    /// The default implementation calls [`Self::try_pushdown_filters`] with
+    /// the expressions. Thus a source that does not override this method
+    /// applies optional conjuncts as required conjuncts, which is correct.
+    fn try_pushdown_filter(
+        &self,
+        filter: PhysicalFilter,
+        config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
+        let filters = filter
+            .into_conjuncts()
+            .into_iter()
+            .map(FilterConjunct::into_expr)
+            .collect();
+        self.try_pushdown_filters(filters, config)
     }
 
     /// Try to create a new FileSource that can produce data in the specified sort order.

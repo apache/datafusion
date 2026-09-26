@@ -2044,7 +2044,9 @@ impl ExecutionPlan for HashJoinExec {
         {
             // Add actual dynamic filter to right side (probe side)
             let dynamic_filter = Self::create_dynamic_filter(&self.on);
-            right_child = right_child.with_self_filter(dynamic_filter);
+            // The join removes the rows that do not match, so the probe side
+            // does not need this filter for correctness.
+            right_child = right_child.with_optional_self_filter(dynamic_filter);
         }
 
         Ok(FilterDescription::new()

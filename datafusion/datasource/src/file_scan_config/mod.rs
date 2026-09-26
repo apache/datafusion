@@ -50,6 +50,7 @@ use datafusion_expr::Operator;
 use crate::source::OpenArgs;
 use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_physical_expr::expressions::{BinaryExpr, Column};
+use datafusion_physical_expr::filter::{FilterConjunct, PhysicalFilter};
 use datafusion_physical_expr::projection::{ProjectionExprs, ProjectionMapping};
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, split_conjunction};
@@ -1032,6 +1033,15 @@ impl DataSource for FileScanConfig {
         filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
+        let filter = filters.into_iter().map(FilterConjunct::required).collect();
+        self.try_pushdown_filter(filter, config)
+    }
+
+    fn try_pushdown_filter(
+        &self,
+        filter: PhysicalFilter,
+        config: &ConfigOptions,
+    ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
         // Remap filter Column indices to match the table schema (file + partition columns).
         // This is necessary because filters refer to the output schema of this `DataSource`
         // (e.g., after projection pushdown has been applied) and need to be remapped to the table schema
@@ -1041,23 +1051,21 @@ impl DataSource for FileScanConfig {
         // `DataSource` has a projection `c1 + c2 as c1_c2`, the filter must be rewritten
         // to refer to the table schema `c1 + c2 > 5`
         let table_schema = self.file_source.table_schema().table_schema();
-        let filters_to_remap = if let Some(projection) = self.file_source.projection() {
-            filters
-                .into_iter()
-                .map(|filter| projection.unproject_expr(&filter))
-                .collect::<Result<Vec<_>>>()?
-        } else {
-            filters
-        };
-        // Now remap column indices to match the table schema.
-        let remapped_filters = filters_to_remap
-            .into_iter()
-            .map(|filter| reassign_expr_columns(filter, table_schema))
-            .collect::<Result<Vec<_>>>()?;
+        let projection = self.file_source.projection();
+        // Remap each conjunct and keep its properties (for example, the
+        // optional flag).
+        let remapped_filter = filter.try_map_exprs(|expr| {
+            let expr = match &projection {
+                Some(projection) => projection.unproject_expr(&expr)?,
+                None => expr,
+            };
+            // Now remap column indices to match the table schema.
+            reassign_expr_columns(expr, table_schema)
+        })?;
 
         let result = self
             .file_source
-            .try_pushdown_filters(remapped_filters, config)?;
+            .try_pushdown_filter(remapped_filter, config)?;
         match result.updated_node {
             Some(new_file_source) => {
                 let mut new_file_scan_config = self.clone();

@@ -35,7 +35,7 @@ use crate::execution_plan::{
     CardinalityEffect, InvariantLevel, boundedness_from_children,
     check_default_invariants, emission_type_from_children,
 };
-use crate::filter::FilterExec;
+use crate::filter::FilterExecBuilder;
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation, PushedDown,
@@ -56,9 +56,8 @@ use datafusion_common::{
 };
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::{CastExpr, Column};
-use datafusion_physical_expr::{
-    EquivalenceProperties, PhysicalExpr, calculate_union, conjunction,
-};
+use datafusion_physical_expr::filter::PhysicalFilter;
+use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, calculate_union};
 
 use futures::Stream;
 use itertools::Itertools;
@@ -529,22 +528,25 @@ impl ExecutionPlan for UnionExec {
             {
                 if matches!(child_result, PushedDown::No) {
                     unsupported_filters_per_child[child_idx]
-                        .push(Arc::clone(&parent_filter_result.filter));
+                        .push(parent_filter_result.conjunct());
                 }
             }
         }
 
         // Wrap children that have unsupported filters with FilterExec
         let mut new_children = self.inputs.clone();
+        // Each filter keeps its properties (for example, the optional flag).
         for (child_idx, unsupported_filters) in
-            unsupported_filters_per_child.iter().enumerate()
+            unsupported_filters_per_child.into_iter().enumerate()
         {
             if !unsupported_filters.is_empty() {
-                let combined_filter = conjunction(unsupported_filters.clone());
-                new_children[child_idx] = Arc::new(FilterExec::try_new(
-                    combined_filter,
-                    Arc::clone(&self.inputs[child_idx]),
-                )?);
+                new_children[child_idx] = Arc::new(
+                    FilterExecBuilder::new_with_filter(
+                        PhysicalFilter::new(unsupported_filters),
+                        Arc::clone(&self.inputs[child_idx]),
+                    )
+                    .build()?,
+                );
             }
         }
 

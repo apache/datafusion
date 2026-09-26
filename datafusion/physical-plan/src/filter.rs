@@ -22,7 +22,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
-use itertools::Itertools;
 
 use super::{
     ColumnStatistics, DisplayAs, ExecutionPlanProperties, PlanProperties,
@@ -66,11 +65,12 @@ use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{
     BinaryExpr, Column, InListExpr, IsNotNullExpr, Literal, lit,
 };
+use datafusion_physical_expr::filter::{FilterConjunct, PhysicalFilter};
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
     AcrossPartitions, AnalysisContext, ConstExpr, ExprBoundaries, PhysicalExpr, analyze,
-    conjunction, split_conjunction,
+    split_conjunction,
 };
 
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
@@ -84,7 +84,10 @@ const FILTER_EXEC_DEFAULT_BATCH_SIZE: usize = 8192;
 /// include in its output batches.
 #[derive(Debug, Clone)]
 pub struct FilterExec {
-    /// The expression to filter on. This expression must evaluate to a boolean value.
+    /// The filter, with the properties of each conjunct.
+    filter: PhysicalFilter,
+    /// The `AND` of all conjuncts of `filter` (the evaluation form). This
+    /// expression must evaluate to a boolean value.
     predicate: Arc<dyn PhysicalExpr>,
     /// The input plan
     input: Arc<dyn ExecutionPlan>,
@@ -104,7 +107,7 @@ pub struct FilterExec {
 
 /// Builder for [`FilterExec`] to set optional parameters
 pub struct FilterExecBuilder {
-    predicate: Arc<dyn PhysicalExpr>,
+    filter: PhysicalFilter,
     input: Arc<dyn ExecutionPlan>,
     projection: Option<ProjectionRef>,
     default_selectivity: u8,
@@ -115,8 +118,16 @@ pub struct FilterExecBuilder {
 impl FilterExecBuilder {
     /// Create a new builder with required parameters (predicate and input)
     pub fn new(predicate: Arc<dyn PhysicalExpr>, input: Arc<dyn ExecutionPlan>) -> Self {
+        Self::new_with_filter(PhysicalFilter::from_expr(predicate), input)
+    }
+
+    /// Create a new builder with a [`PhysicalFilter`] and an input.
+    pub fn new_with_filter(
+        filter: PhysicalFilter,
+        input: Arc<dyn ExecutionPlan>,
+    ) -> Self {
         Self {
-            predicate,
+            filter,
             input,
             projection: None,
             default_selectivity: FILTER_EXEC_DEFAULT_SELECTIVITY,
@@ -131,9 +142,15 @@ impl FilterExecBuilder {
         self
     }
 
-    /// Set the predicate expression
+    /// Set the predicate expression (one required conjunct)
     pub fn with_predicate(mut self, predicate: Arc<dyn PhysicalExpr>) -> Self {
-        self.predicate = predicate;
+        self.filter = PhysicalFilter::from_expr(predicate);
+        self
+    }
+
+    /// Set the filter
+    pub fn with_filter(mut self, filter: PhysicalFilter) -> Self {
+        self.filter = filter;
         self
     }
 
@@ -187,7 +204,8 @@ impl FilterExecBuilder {
         }
 
         // Validate predicate type
-        match self.predicate.data_type(self.input.schema().as_ref())? {
+        let predicate = self.filter.to_expr();
+        match predicate.data_type(self.input.schema().as_ref())? {
             DataType::Boolean => {}
             other => {
                 return plan_err!(
@@ -206,16 +224,18 @@ impl FilterExecBuilder {
         // Validate projection if provided
         can_project(&self.input.schema(), self.projection.as_deref())?;
 
-        // Compute properties once with all parameters
+        // Compute properties once with all parameters. Only the required
+        // conjuncts give guarantees about the output rows.
         let cache = FilterExec::compute_properties(
             &self.input,
-            &self.predicate,
+            &self.filter.required_expr(),
             self.default_selectivity,
             self.projection.as_deref(),
         )?;
 
         Ok(FilterExec {
-            predicate: self.predicate,
+            filter: self.filter,
+            predicate,
             input: self.input,
             metrics: ExecutionPlanMetricsSet::new(),
             default_selectivity: self.default_selectivity,
@@ -230,7 +250,7 @@ impl FilterExecBuilder {
 impl From<&FilterExec> for FilterExecBuilder {
     fn from(exec: &FilterExec) -> Self {
         Self {
-            predicate: Arc::clone(&exec.predicate),
+            filter: exec.filter.clone(),
             input: Arc::clone(&exec.input),
             projection: exec.projection.clone(),
             default_selectivity: exec.default_selectivity,
@@ -291,6 +311,7 @@ impl FilterExec {
             return plan_err!("FilterExec: batch_size must be greater than 0");
         }
         Ok(Self {
+            filter: self.filter.clone(),
             predicate: Arc::clone(&self.predicate),
             input: Arc::clone(&self.input),
             metrics: self.metrics.clone(),
@@ -302,9 +323,37 @@ impl FilterExec {
         })
     }
 
-    /// The expression to filter on. This expression must evaluate to a boolean value.
+    /// The expression to filter on: the `AND` of all conjuncts of
+    /// [`Self::filter`]. This expression must evaluate to a boolean value.
     pub fn predicate(&self) -> &Arc<dyn PhysicalExpr> {
         &self.predicate
+    }
+
+    /// The filter, with the properties of each conjunct.
+    pub fn filter(&self) -> &PhysicalFilter {
+        &self.filter
+    }
+
+    /// The conjuncts that this node pushes to its input as self filters.
+    ///
+    /// A required conjunct is split on its root `AND` chain, so that the
+    /// input can accept each term separately. An optional conjunct is pushed
+    /// as one filter.
+    fn self_filter_conjuncts(&self) -> Vec<FilterConjunct> {
+        self.filter
+            .conjuncts()
+            .iter()
+            .flat_map(|c| {
+                if c.is_optional() {
+                    vec![c.clone()]
+                } else {
+                    split_conjunction(c.expr())
+                        .into_iter()
+                        .map(|e| FilterConjunct::required(Arc::clone(e)))
+                        .collect()
+                }
+            })
+            .collect()
     }
 
     /// The input plan
@@ -698,19 +747,22 @@ impl ExecutionPlan for FilterExec {
         // If the projection does not narrow the schema, we should not try to push it down:
         if projection.expr().len() < projection.input().schema().fields().len() {
             // Each column in the predicate expression must exist after the projection.
-            if let Some(new_predicate) =
-                update_expr(self.predicate(), projection.expr(), false)?
-            {
-                return FilterExecBuilder::from(self)
-                    .with_input(make_with_child(projection, self.input())?)
-                    .with_predicate(new_predicate)
-                    // The original FilterExec projection referenced columns from its old
-                    // input. After the swap the new input is the ProjectionExec which
-                    // already handles column selection, so clear the projection here.
-                    .apply_projection(None)?
-                    .build()
-                    .map(|e| Some(Arc::new(e) as _));
+            let mut new_conjuncts = Vec::with_capacity(self.filter.conjuncts().len());
+            for conjunct in self.filter.conjuncts() {
+                match update_expr(conjunct.expr(), projection.expr(), false)? {
+                    Some(expr) => new_conjuncts.push(conjunct.clone().with_expr(expr)),
+                    None => return try_embed_projection(projection, self),
+                }
             }
+            return FilterExecBuilder::from(self)
+                .with_input(make_with_child(projection, self.input())?)
+                .with_filter(PhysicalFilter::new(new_conjuncts))
+                // The original FilterExec projection referenced columns from its old
+                // input. After the swap the new input is the ProjectionExec which
+                // already handles column selection, so clear the projection here.
+                .apply_projection(None)?
+                .build()
+                .map(|e| Some(Arc::new(e) as _));
         }
         try_embed_projection(projection, self)
     }
@@ -724,12 +776,9 @@ impl ExecutionPlan for FilterExec {
         let mut child = self.parent_filters_for_input(&parent_filters);
         if phase == FilterPushdownPhase::Pre {
             child = child.map(|child| {
-                child.with_self_filters(
-                    split_conjunction(&self.predicate)
-                        .into_iter()
-                        .cloned()
-                        .collect(),
-                )
+                self.self_filter_conjuncts()
+                    .into_iter()
+                    .fold(child, |child, c| child.with_self_conjunct(c))
             });
         }
         child.map(|child| FilterDescription::new().with_child(child))
@@ -744,15 +793,14 @@ impl ExecutionPlan for FilterExec {
         if phase != FilterPushdownPhase::Pre {
             return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
         }
-        // We absorb any parent filters that were not handled by our children
-        let mut unsupported_parent_filters: Vec<Arc<dyn PhysicalExpr>> =
-            child_pushdown_result
-                .parent_filters
-                .iter()
-                .filter_map(|f| {
-                    matches!(f.all(), PushedDown::No).then_some(Arc::clone(&f.filter))
-                })
-                .collect();
+        // We absorb any parent filters that were not handled by our children.
+        // Each one keeps its properties (for example, the optional flag).
+        let mut unsupported_parent_filters: Vec<FilterConjunct> = child_pushdown_result
+            .parent_filters
+            .iter()
+            .filter(|f| matches!(f.all(), PushedDown::No))
+            .map(|f| f.conjunct())
+            .collect();
 
         // If this FilterExec has a projection, the unsupported parent filters
         // are in the output schema (after projection) coordinates. We need to
@@ -768,35 +816,39 @@ impl ExecutionPlan for FilterExec {
             );
             unsupported_parent_filters = unsupported_parent_filters
                 .into_iter()
-                .map(|expr| {
-                    remapper.try_remap(&expr)?.ok_or_else(|| {
+                .map(|conjunct| {
+                    let expr = conjunct.expr();
+                    let remapped = remapper.try_remap(expr)?.ok_or_else(|| {
                         internal_datafusion_err!(
                             "Parent filter {expr} references a column that is not in the FilterExec projection {projection:?}"
                         )
-                    })
+                    })?;
+                    Ok(conjunct.with_expr(remapped))
                 })
                 .collect::<Result<Vec<_>>>()?;
         }
 
+        // The results are in the order of `self_filter_conjuncts`, so the
+        // properties of each self filter are found by position.
         let unsupported_self_filters = child_pushdown_result
             .self_filters
             .first()
             .expect("we have exactly one child")
             .iter()
-            .filter_map(|f| match f.discriminant {
+            .zip(self.self_filter_conjuncts())
+            .filter_map(|(f, conjunct)| match f.discriminant {
                 PushedDown::Yes => None,
-                PushedDown::No => Some(&f.predicate),
-            })
-            .cloned();
+                PushedDown::No => Some(conjunct.with_expr(Arc::clone(&f.predicate))),
+            });
 
-        let unhandled_filters = unsupported_parent_filters
+        let new_filter: PhysicalFilter = unsupported_parent_filters
             .into_iter()
             .chain(unsupported_self_filters)
-            .collect_vec();
+            .collect();
 
         // If we have unhandled filters, we need to create a new FilterExec
         let filter_input = Arc::clone(self.input());
-        let new_predicate = conjunction(unhandled_filters);
+        let new_predicate = new_filter.to_expr();
         let updated_node = if new_predicate.eq(&lit(true)) {
             // FilterExec is no longer needed, but we may need to leave a projection in place.
             // If this FilterExec had a fetch limit, propagate it to the child.
@@ -848,13 +900,14 @@ impl ExecutionPlan for FilterExec {
                 default_selectivity: self.default_selectivity,
                 cache: Arc::new(Self::compute_properties(
                     &filter_input,
-                    &new_predicate,
+                    &new_filter.required_expr(),
                     self.default_selectivity,
                     self.projection.as_deref(),
                 )?),
                 projection: self.projection.clone(),
                 batch_size: self.batch_size,
                 fetch: self.fetch,
+                filter: new_filter,
             };
             Some(Arc::new(new) as _)
         };
@@ -871,6 +924,7 @@ impl ExecutionPlan for FilterExec {
 
     fn with_fetch(&self, fetch: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         Some(Arc::new(Self {
+            filter: self.filter.clone(),
             predicate: Arc::clone(&self.predicate),
             input: Arc::clone(&self.input),
             metrics: self.metrics.clone(),
@@ -905,6 +959,9 @@ impl ExecutionPlan for FilterExec {
         // `FilterExec` is a compile error here until it is either serialized or
         // explicitly documented as not needing to be.
         let Self {
+            // Encoded as `predicate` (the AND of all conjuncts) and one
+            // optional flag for each term.
+            filter,
             predicate,
             input,
             // Runtime metrics, not part of the plan shape.
@@ -918,6 +975,13 @@ impl ExecutionPlan for FilterExec {
         } = self;
         let input_node = ctx.encode_child(input)?;
         let expr = ctx.encode_expr(predicate)?;
+        // Write the flags only if a conjunct is optional, so that a filter
+        // with only required conjuncts has the same encoding as before.
+        let optional_conjuncts = if filter.optional().next().is_some() {
+            filter.split_optional_flags()
+        } else {
+            vec![]
+        };
         if *batch_size == 0 {
             return plan_err!("FilterExec: batch_size must be greater than 0");
         }
@@ -945,6 +1009,7 @@ impl ExecutionPlan for FilterExec {
                         projection,
                         batch_size,
                         fetch,
+                        optional_conjuncts,
                     },
                 )),
             ),
@@ -981,6 +1046,7 @@ impl FilterExec {
             projection,
             batch_size,
             fetch,
+            optional_conjuncts,
         } = &**filter_node;
         let input = ctx.decode_required_child(input.as_deref(), "FilterExec", "input")?;
         let predicate = ctx.decode_required_expr(
@@ -1015,7 +1081,8 @@ impl FilterExec {
         let fetch = fetch
             .map(|f| usize_from_wire(f, "FilterExec", "fetch"))
             .transpose()?;
-        let filter = FilterExecBuilder::new(predicate, input)
+        let filter = PhysicalFilter::from_split_flags(predicate, optional_conjuncts);
+        let filter = FilterExecBuilder::new_with_filter(filter, input)
             .apply_projection(projection)?
             .with_batch_size(batch_size)
             .with_fetch(fetch)
@@ -2560,6 +2627,62 @@ mod tests {
         assert_eq!(output_schema.field(0).name(), "a");
         assert_eq!(output_schema.field(1).name(), "c");
 
+        Ok(())
+    }
+
+    /// An optional conjunct is evaluated like a required one, but it does
+    /// not feed equivalence classes, and it stays optional when `FilterExec`
+    /// pushes it to its input.
+    #[test]
+    fn test_physical_filter_optional_conjunct() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+        let input = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let a_eq_10: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
+        ));
+        let b_eq_c: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("b", 1)),
+            Operator::Eq,
+            Arc::new(Column::new("c", 2)),
+        ));
+        let filter = PhysicalFilter::new([
+            FilterConjunct::required(Arc::clone(&a_eq_10)),
+            FilterConjunct::optional(Arc::clone(&b_eq_c)),
+        ]);
+        let exec = FilterExecBuilder::new_with_filter(filter, input).build()?;
+
+        // Evaluation form: the AND of all conjuncts.
+        assert_eq!(exec.predicate().to_string(), "a@0 = 10 AND b@1 = c@2");
+
+        // Only the required conjunct gives guarantees about the output rows.
+        let eq_properties = exec.properties().equivalence_properties();
+        let b = Arc::new(Column::new("b", 1)) as Arc<dyn PhysicalExpr>;
+        let c = Arc::new(Column::new("c", 2)) as Arc<dyn PhysicalExpr>;
+        assert!(!eq_properties.eq_group().exprs_equal(&b, &c));
+
+        // Self filters keep their flags.
+        let description = exec.gather_filters_for_pushdown(
+            FilterPushdownPhase::Pre,
+            vec![],
+            &ConfigOptions::default(),
+        )?;
+        let flags: Vec<_> = description.self_conjuncts()[0]
+            .iter()
+            .map(|c| (c.to_string(), c.is_optional()))
+            .collect();
+        assert_eq!(
+            flags,
+            vec![
+                ("a@0 = 10".to_string(), false),
+                ("b@1 = c@2".to_string(), true)
+            ]
+        );
         Ok(())
     }
 
