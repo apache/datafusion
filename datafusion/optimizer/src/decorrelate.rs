@@ -157,7 +157,7 @@ impl PullUpCorrelatedExpr {
     /// A grouping set that omits a correlated column only needs to reject the
     /// pull up when something reads the column the pull up would fill in, so
     /// [`Self::f_up`] needs this computed ahead of time. See
-    /// [`columns_read_above_aggregate`].
+    /// `columns_read_above_aggregate`.
     pub fn with_column_refs_above_aggregate(
         mut self,
         subquery_plan: &LogicalPlan,
