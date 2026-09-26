@@ -740,24 +740,34 @@ impl Unparser<'_> {
             "named_struct must have an even number of arguments"
         );
 
-        let args = args
+        let fields = args
             .as_chunks::<2>()
             .0
             .iter()
-            .map(|[name, value]| {
-                let key = match name {
-                    Expr::Literal(ScalarValue::Utf8(Some(s)), _) => self.new_ident_quoted_if_needs(s.to_string()),
-                    _ => return internal_err!("named_struct expects even arguments to be strings, but received: {name:?}")
-                };
+            .map(|[name, value]| match name {
+                Expr::Literal(ScalarValue::Utf8(Some(name)), _) => Ok((name, value)),
+                _ => internal_err!(
+                    "named_struct expects even arguments to be strings, but received: {name:?}"
+                ),
+            })
+            .collect::<Result<Vec<_>>>()?;
 
+        // dialects whose parsers reject dictionary syntax get a function call
+        if !self.dialect.supports_dictionary_syntax() {
+            return self.function_to_sql_internal("named_struct", args);
+        }
+
+        let fields = fields
+            .into_iter()
+            .map(|(name, value)| {
                 Ok(ast::DictionaryField {
-                    key,
+                    key: self.new_ident_quoted_if_needs(name.to_string()),
                     value: Box::new(self.expr_to_sql_with_nesting(value)?),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(ast::Expr::Dictionary(args))
+        Ok(ast::Expr::Dictionary(fields))
     }
 
     fn get_field_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
@@ -2555,6 +2565,48 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn custom_dialect_without_dictionary_syntax() -> Result<()> {
+        let dialect = CustomDialectBuilder::new()
+            .with_supports_dictionary_syntax(false)
+            .build();
+        let unparser = Unparser::new(&dialect);
+        let struct_expr = named_struct(vec![lit("a"), lit(1)]);
+
+        assert_eq!(
+            unparser.expr_to_sql(&struct_expr)?.to_string(),
+            "named_struct('a', 1)"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn named_struct_validates_arguments_for_function_syntax_dialects() {
+        let dialect = PostgreSqlDialect {};
+        let unparser = Unparser::new(&dialect);
+
+        let error = unparser
+            .expr_to_sql(&named_struct(vec![lit("a")]))
+            .expect_err("odd arguments should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("named_struct must have an even number of arguments"),
+            "unexpected error: {error}"
+        );
+
+        let error = unparser
+            .expr_to_sql(&named_struct(vec![lit(1), lit("value")]))
+            .expect_err("non-string field names should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("named_struct expects even arguments to be strings"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
