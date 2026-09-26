@@ -80,6 +80,7 @@ pub mod covariance;
 pub mod first_last;
 pub mod grouping;
 pub mod hyperloglog;
+pub mod map_agg;
 pub mod median;
 pub mod min_max;
 pub mod nth_value;
@@ -124,6 +125,7 @@ pub mod expr_fn {
     pub use super::first_last::first_value;
     pub use super::first_last::last_value;
     pub use super::grouping::grouping;
+    pub use super::map_agg::map_agg;
     pub use super::median::median;
     pub use super::min_max::max;
     pub use super::min_max::min;
@@ -151,6 +153,7 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
     vec![
         any_value::any_value_udaf(),
         array_agg::array_agg_udaf(),
+        map_agg::map_agg_udaf(),
         first_last::first_value_udaf(),
         first_last::last_value_udaf(),
         covariance::covar_samp_udaf(),
