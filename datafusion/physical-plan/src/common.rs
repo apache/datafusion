@@ -196,7 +196,7 @@ pub fn spawn_buffered(
 
             let sender = builder.tx();
 
-            builder.spawn(async move {
+            builder.spawn_reclaimable(async move {
                 // We call `reserve` (which waits until there's room for at least 1 message in the
                 // channel buffer) **before** polling from input to ensure we hold a maximum of
                 // `buffer` record batches in memory.
