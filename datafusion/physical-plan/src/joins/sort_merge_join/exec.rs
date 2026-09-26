@@ -194,8 +194,16 @@ impl SortMergeJoinExec {
 
         let schema =
             Arc::new(build_join_schema(&left_schema, &right_schema, &join_type).0);
-        let cache =
-            Self::compute_properties(&left, &right, &schema, join_type, &on, None)?;
+        let cache = Self::compute_properties(
+            &left,
+            &right,
+            &schema,
+            join_type,
+            &on,
+            None,
+            filter.is_some(),
+            null_equality,
+        )?;
         Ok(Self {
             left,
             right,
@@ -224,6 +232,8 @@ impl SortMergeJoinExec {
             self.join_type,
             &self.on,
             projection.as_deref(),
+            self.filter.is_some(),
+            self.null_equality,
         )?;
         Ok(Self {
             projection,
@@ -307,6 +317,7 @@ impl SortMergeJoinExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    #[expect(clippy::too_many_arguments)]
     fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
         right: &Arc<dyn ExecutionPlan>,
@@ -314,6 +325,8 @@ impl SortMergeJoinExec {
         join_type: JoinType,
         join_on: JoinOnRef,
         projection: Option<&[usize]>,
+        has_filter: bool,
+        null_equality: NullEquality,
     ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
         let mut eq_properties = join_equivalence_properties(
@@ -324,6 +337,8 @@ impl SortMergeJoinExec {
             &Self::maintains_input_order(join_type),
             Some(Self::probe_side(&join_type)),
             join_on,
+            has_filter,
+            null_equality,
         )?;
 
         let mut output_partitioning =
