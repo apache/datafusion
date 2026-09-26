@@ -58,6 +58,13 @@ been able to finish it yet, you should feel free to work on it as well. In
 general it is both polite and will help avoid unnecessary duplication of work if
 you leave a note on an issue when you start working on it.
 
+If there is already a recent/active PR for an issue you plan to work on, please
+check said PR before considering opening up a new one. Duplicate PRs cause unnecessary
+maintenance burden and are only preferable when either the existing PR is inactive/stale
+or if you believe you have a different way of accomplishing the issue at hand.
+If the latter is the case, please make sure to call this out in the PR description
+to acknowledge that you have done your due diligence.
+
 If you want to work on an issue which is not already assigned to someone else
 and there are no comment indicating that someone is already working on that
 issue then you can assign the issue to yourself by submitting a single word
@@ -193,6 +200,12 @@ DataFusion has the following policy for AI-assisted PRs:
 
 - The PR author should **understand the core ideas** behind the implementation **end-to-end**, and be able to justify the design and code during review.
 - **Calls out unknowns and assumptions**. It's okay to not fully understand some bits of AI generated code. You should comment on these cases and point them out to reviewers so that they can use their knowledge of the codebase to clear up any concerns. For example, you might comment "calling this function here seems to work but I'm not familiar with how it works internally, I wonder if there's a race condition if it is called concurrently".
+
+If we see multiple PRs being created in a short amount of time, especially from
+a first time contributor, and we suspect AI involvement, we are at liberty to
+close them due to AI spam. We welcome new contributors, but creating 10 PRs at
+once creates high maintenance burden for us and it is often the result of a contributor
+simply asking their AI to do the work for them.
 
 ### Why fully AI-generated PRs without understanding are not helpful
 
