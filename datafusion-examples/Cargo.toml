@@ -38,8 +38,8 @@ workspace = true
 [dependencies]
 arrow = { workspace = true }
 arrow-schema = { workspace = true }
+# note: only use the main datafusion crate for examples
 datafusion = { workspace = true, default-features = true, features = ["parquet_encryption"] }
-datafusion-common = { workspace = true }
 nom = "8.0.0"
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
@@ -49,12 +49,8 @@ arrow-flight = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true }
-# note only use main datafusion crate for examples
 base64 = "0.23.0"
-datafusion-expr = { workspace = true }
-datafusion-physical-expr-adapter = { workspace = true }
 datafusion-proto = { workspace = true, features = ["parquet"] }
-datafusion-sql = { workspace = true }
 env_logger = { workspace = true }
 futures = { workspace = true }
 insta = { workspace = true }

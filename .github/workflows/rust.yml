@@ -897,6 +897,16 @@ jobs:
         run: |
           bash ci/scripts/check_examples_docs.sh
 
+  # Ensures that the examples only use the main `datafusion` crate and not its subcrates, which are
+  # already exported by `datafusion` (there are a few exceptions, like `datafusion-proto`).
+  # See: https://github.com/apache/datafusion/pull/14305
+  examples-check-datafusion-crates:
+    name: Check datafusion crates used in datafusion-examples
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - run: ./ci/scripts/check_examples_datafusion_crates.py
+
   # Verify MSRV for the crates which are directly used by other projects:
   # - datafusion
   # - datafusion-substrait

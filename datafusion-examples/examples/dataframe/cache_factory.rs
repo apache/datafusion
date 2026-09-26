@@ -26,6 +26,7 @@ use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::catalog::memory::MemorySourceConfig;
 use datafusion::common::DFSchemaRef;
+use datafusion::common::HashMap;
 use datafusion::error::Result;
 use datafusion::execution::context::QueryPlanner;
 use datafusion::execution::session_state::CacheFactory;
@@ -39,7 +40,6 @@ use datafusion::physical_planner::{
     DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner,
 };
 use datafusion::prelude::*;
-use datafusion_common::HashMap;
 use datafusion_examples::utils::{datasets::ExampleDataset, write_csv_to_parquet};
 
 /// This example demonstrates how to leverage [CacheFactory] to implement custom caching strategies for dataframes in DataFusion.
