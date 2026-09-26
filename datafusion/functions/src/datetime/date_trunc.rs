@@ -37,6 +37,7 @@ use arrow::datatypes::TimeUnit::{self, Microsecond, Millisecond, Nanosecond, Sec
 use arrow::datatypes::{Field, FieldRef};
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::types::{NativeType, logical_date, logical_string};
+use datafusion_common::utils::is_fixed_offset_timezone;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, internal_err,
 };
@@ -435,10 +436,13 @@ impl ScalarUDFImpl for DateTruncFunc {
         let precision = &input[0];
         let date_value = &input[1];
 
-        let order_safe_input = matches!(
-            date_value.range.data_type(),
-            Timestamp(_, None) | Time32(_) | Time64(_)
-        );
+        let order_safe_input = match date_value.range.data_type() {
+            Timestamp(_, None) | Time32(_) | Time64(_) => true,
+            // UTC and fixed offsets have no transitions that could reverse ordering.
+            Timestamp(_, Some(tz)) => is_fixed_offset_timezone(&tz),
+            // An unknown range may hide a timestamp with a named timezone.
+            _ => false,
+        };
 
         if precision.sort_properties == SortProperties::Singleton && order_safe_input {
             Ok(date_value.sort_properties)
@@ -897,42 +901,194 @@ mod tests {
 
     #[test]
     fn output_ordering_respects_timestamp_timezone() {
-        let precision_value = ScalarValue::Utf8(Some("hour".into()));
-        let precision = ExprProperties::new_unknown()
-            .with_order(SortProperties::Singleton)
-            .with_range(
-                Interval::try_new(precision_value.clone(), precision_value).unwrap(),
-            );
-        let ordered = SortProperties::Ordered(SortOptions::default());
-        let date_value = |data_type| {
-            ExprProperties::new_unknown()
-                .with_order(ordered)
-                .with_range(Interval::make_unbounded(&data_type).unwrap())
-        };
-        let function = DateTruncFunc::new();
-
-        let timestamp = date_value(DataType::Timestamp(TimeUnit::Second, None));
-        assert_eq!(
-            function
-                .output_ordering(&[precision.clone(), timestamp])
-                .unwrap(),
-            ordered
-        );
-        let timestamp_with_timezone = date_value(DataType::Timestamp(
+        let mut types = vec![
+            (DataType::Null, false),
+            (DataType::Time32(TimeUnit::Second), true),
+            (DataType::Time32(TimeUnit::Millisecond), true),
+            (DataType::Time64(TimeUnit::Microsecond), true),
+            (DataType::Time64(TimeUnit::Nanosecond), true),
+        ];
+        for unit in [
             TimeUnit::Second,
-            Some("America/Goose_Bay".into()),
-        ));
-        assert_eq!(
-            function
-                .output_ordering(&[precision.clone(), timestamp_with_timezone])
-                .unwrap(),
-            SortProperties::Unordered
-        );
-        let unknown = ExprProperties::new_unknown().with_order(ordered);
-        assert_eq!(
-            function.output_ordering(&[precision, unknown]).unwrap(),
-            SortProperties::Unordered
-        );
+            TimeUnit::Millisecond,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ] {
+            types.push((DataType::Timestamp(unit, None), true));
+            for (tz, safe) in [
+                ("UTC", true),
+                ("+00:00", true),
+                ("-00:00", true),
+                ("+05:30", true),
+                ("-03:30", true),
+                ("+0545", true),
+                ("-02", true),
+                ("+23:59", true),
+                ("-23:59", true),
+                ("America/Goose_Bay", false),
+                ("Australia/Lord_Howe", false),
+                // Do not infer safety for other names, even aliases of UTC.
+                ("Etc/UTC", false),
+                ("invalid", false),
+                ("+invalid", false),
+                ("+24:00", false),
+            ] {
+                types.push((DataType::Timestamp(unit, Some(tz.into())), safe));
+            }
+        }
+        let function = DateTruncFunc::new();
+        for descending in [false, true] {
+            for nulls_first in [false, true] {
+                let ordered = SortProperties::Ordered(SortOptions {
+                    descending,
+                    nulls_first,
+                });
+                for (data_type, safe) in &types {
+                    for input_order in [
+                        ordered,
+                        SortProperties::Singleton,
+                        SortProperties::Unordered,
+                    ] {
+                        for precision_order in
+                            [SortProperties::Singleton, SortProperties::Unordered]
+                        {
+                            let precision =
+                                ExprProperties::new_unknown().with_order(precision_order);
+                            let date_value = ExprProperties::new_unknown()
+                                .with_order(input_order)
+                                .with_range(Interval::make_unbounded(data_type).unwrap());
+                            let expected = if *safe
+                                && precision_order == SortProperties::Singleton
+                            {
+                                input_order
+                            } else {
+                                SortProperties::Unordered
+                            };
+                            assert_eq!(
+                                function
+                                    .output_ordering(&[precision, date_value])
+                                    .unwrap(),
+                                expected,
+                                "{data_type:?}, {input_order:?}, {precision_order:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Exercise the public UDF array path, rather than only its ordering metadata.
+    // Seeded random values span centuries; adjacent values around calendar
+    // boundaries also check where truncation changes its output bucket.
+    #[test]
+    fn fixed_timezone_truncation_is_monotonic() {
+        use chrono::{Offset, TimeZone};
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        let mut rng = StdRng::seed_from_u64(25464);
+        let mut nanos = (0..256)
+            .map(|_| {
+                rng.random_range(-8_000_000_000_000_000_000i64..8_000_000_000_000_000_000)
+            })
+            .collect::<Vec<_>>();
+        for boundary in [
+            "1969-12-31T00:00:00Z",
+            "1970-01-01T00:00:00Z",
+            "2000-02-29T00:00:00Z",
+            "2000-03-01T00:00:00Z",
+            "2024-04-01T00:00:00Z",
+            "2025-01-01T00:00:00Z",
+        ] {
+            let boundary = string_to_timestamp_nanos(boundary).unwrap();
+            for delta in [
+                -1_000_000_001,
+                -1_000_001,
+                -1_001,
+                -1,
+                0,
+                1,
+                1_001,
+                1_000_001,
+                1_000_000_001,
+            ] {
+                nanos.push(boundary + delta);
+            }
+        }
+        nanos.sort_unstable();
+        for unit in [
+            TimeUnit::Second,
+            TimeUnit::Millisecond,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ] {
+            for tz in [
+                "UTC", "+00:00", "-00:00", "+05:30", "-03:30", "+0545", "-02", "+23:59",
+                "-23:59",
+            ] {
+                let offset = tz
+                    .parse::<arrow::array::timezone::Tz>()
+                    .unwrap()
+                    .offset_from_utc_datetime(&chrono::DateTime::UNIX_EPOCH.naive_utc())
+                    .fix()
+                    .local_minus_utc() as i64
+                    * 1_000_000_000;
+                // Put the boundary cases at local midnight for each timezone.
+                let values =
+                    std::iter::once(None).chain(nanos.iter().map(|n| Some(*n - offset)));
+                let nanos_array =
+                    TimestampNanosecondArray::from_iter(values).with_timezone(tz);
+                let data_type = DataType::Timestamp(unit, Some(tz.into()));
+                let input = arrow::compute::cast(&nanos_array, &data_type).unwrap();
+                for granularity in [
+                    "microsecond",
+                    "millisecond",
+                    "second",
+                    "minute",
+                    "hour",
+                    "day",
+                    "week",
+                    "month",
+                    "quarter",
+                    "year",
+                ] {
+                    let args = ScalarFunctionArgs {
+                        args: vec![
+                            ScalarValue::from(granularity).into(),
+                            ColumnarValue::Array(Arc::clone(&input)),
+                        ],
+                        arg_fields: vec![
+                            Field::new("precision", DataType::Utf8, false).into(),
+                            Field::new("ts", data_type.clone(), true).into(),
+                        ],
+                        number_rows: input.len(),
+                        return_field: Field::new("result", data_type.clone(), true)
+                            .into(),
+                        config_options: Arc::new(ConfigOptions::default()),
+                    };
+                    let output = DateTruncFunc::new()
+                        .invoke_with_args(args)
+                        .unwrap()
+                        .into_array(input.len())
+                        .unwrap();
+                    assert_eq!(output.data_type(), &data_type);
+                    assert!(output.is_null(0));
+                    assert_eq!(output.null_count(), 1);
+                    let output = arrow::compute::cast(&output, &DataType::Int64).unwrap();
+                    let output = output
+                        .as_any()
+                        .downcast_ref::<arrow::array::Int64Array>()
+                        .unwrap();
+                    for pair in output.values()[1..].windows(2) {
+                        assert!(
+                            pair[0] <= pair[1],
+                            "{unit:?}, {tz}, {granularity}: {pair:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

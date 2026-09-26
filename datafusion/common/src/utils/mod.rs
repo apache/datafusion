@@ -56,6 +56,19 @@ use std::ops::Range;
 use std::sync::{Arc, LazyLock};
 use std::thread::available_parallelism;
 
+/// Whether a timezone is known to have a constant UTC offset.
+///
+/// Recognizes `UTC` and numeric offsets accepted by Arrow (for example,
+/// `+05:30`, `-0330`, and `+09`). Other names and invalid timezones return
+/// `false`; this is a conservative check, not a complete classification of
+/// the timezone database. A timezone's offset at one instant does not prove
+/// that it has no historical transitions.
+pub fn is_fixed_offset_timezone(tz: &str) -> bool {
+    tz == "UTC"
+        || (tz.starts_with(['+', '-'])
+            && tz.parse::<arrow::array::timezone::Tz>().is_ok())
+}
+
 /// Applies an optional projection to a [`SchemaRef`], returning the
 /// projected schema
 ///
@@ -1653,6 +1666,30 @@ mod tests {
             &empty,
         ));
         Ok(())
+    }
+
+    #[test]
+    fn test_is_fixed_offset_timezone() {
+        for tz in [
+            "UTC", "+00:00", "-00:00", "+05:30", "-0330", "+09", "+23:59", "-23:59",
+        ] {
+            assert!(is_fixed_offset_timezone(tz), "{tz}");
+        }
+        for tz in [
+            "",
+            "utc",
+            "Etc/UTC",
+            "Etc/GMT+5",
+            "America/Goose_Bay",
+            "Australia/Lord_Howe",
+            "invalid",
+            "+invalid",
+            "+24:00",
+            "-24:00",
+            "+05:30:00",
+        ] {
+            assert!(!is_fixed_offset_timezone(tz), "{tz}");
+        }
     }
 
     #[test]

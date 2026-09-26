@@ -30,6 +30,7 @@ use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::nested_struct::{
     requires_nested_struct_cast, validate_data_type_compatibility,
 };
+use datafusion_common::utils::is_fixed_offset_timezone;
 use datafusion_common::{Result, not_impl_err};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
@@ -284,11 +285,6 @@ impl CastExpr {
     }
 }
 
-/// UTC and fixed offsets have no timezone transitions.
-fn is_fixed_offset(tz: &str) -> bool {
-    tz == "UTC" || tz.starts_with(['+', '-'])
-}
-
 /// Whether successful casts preserve order when conversion failures return errors.
 /// Unlike `check_bigger_cast`, this allows precision loss and is not sufficient
 /// for propagating distinct counts or the ordering of subsequent sort keys.
@@ -306,7 +302,7 @@ fn is_order_preserving_cast(source_type: &DataType, target_type: &DataType) -> b
         (Date32 | Date64, Date32 | Date64)
         | (Date32 | Date64, Timestamp(_, None))
         | (Timestamp(_, None), Date32) => true,
-        (Timestamp(_, Some(tz)), Date32) => is_fixed_offset(tz),
+        (Timestamp(_, Some(tz)), Date32) => is_fixed_offset_timezone(tz),
         // Arrow converts timestamps to Date64 by scaling the epoch value,
         // whereas Date32 extracts the date in the timestamp's timezone.
         (Timestamp(_, _), Date64) => true,
@@ -319,7 +315,7 @@ fn is_order_preserving_cast(source_type: &DataType, target_type: &DataType) -> b
         (Timestamp(_, from_tz), Timestamp(_, to_tz)) => {
             // Adding a timezone to naive timestamps interprets local times;
             // other timezone changes only change metadata on the epoch value.
-            from_tz.is_some() || to_tz.as_deref().is_none_or(is_fixed_offset)
+            from_tz.is_some() || to_tz.as_deref().is_none_or(is_fixed_offset_timezone)
         }
         _ => false,
     }
@@ -1917,6 +1913,8 @@ mod tests {
             (Timestamp(Second, None), Date32, true),
             (Timestamp(Second, Some("UTC".into())), Date32, true),
             (Timestamp(Second, Some("+08:00".into())), Date32, true),
+            (Timestamp(Second, Some("-0330".into())), Date32, true),
+            (Timestamp(Second, Some("+invalid".into())), Date32, false),
             (Timestamp(Second, timezone.clone()), Date32, false),
             (Timestamp(Second, timezone.clone()), Date64, true),
             (Timestamp(Second, None), Timestamp(Nanosecond, None), true),
@@ -1930,6 +1928,11 @@ mod tests {
                 Timestamp(Second, None),
                 Timestamp(Second, Some("+08:00".into())),
                 true,
+            ),
+            (
+                Timestamp(Second, None),
+                Timestamp(Second, Some("+24:00".into())),
+                false,
             ),
             (
                 Timestamp(Second, timezone.clone()),
