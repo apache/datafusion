@@ -347,6 +347,20 @@ for the tools it needs and the files it writes.
 
 [`ci/scripts/check_docs_html.sh`]: https://github.com/apache/datafusion/blob/main/ci/scripts/check_docs_html.sh
 
+## CodeQL Actions Check
+
+[`ci/scripts/check_codeql_actions.sh`] runs the default CodeQL query suite for
+GitHub Actions, the same queries the "Analyze Actions" job runs. It writes a
+SARIF report and does not fail on findings. `./dev/rust_lint.sh` runs it, so
+the suite now needs CodeQL. Run the script with `--help` for the bundle it
+needs and the files it writes.
+
+```shell
+./ci/scripts/check_codeql_actions.sh
+```
+
+[`ci/scripts/check_codeql_actions.sh`]: https://github.com/apache/datafusion/blob/main/ci/scripts/check_codeql_actions.sh
+
 ## Benchmarks
 
 ### Criterion Benchmarks

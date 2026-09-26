@@ -139,6 +139,7 @@ declare -a READONLY_STEPS=(
   "ci/scripts/check_large_files.sh|false"
   "ci/scripts/markdown_link_check.sh|false"
   "ci/scripts/security_audit.sh|false"
+  "ci/scripts/check_codeql_actions.sh|false"
   "ci/scripts/check_circular_dependencies.sh|false"
   "ci/scripts/check_unused_dependencies.sh|false"
   "ci/scripts/rust_docs.sh|false"
