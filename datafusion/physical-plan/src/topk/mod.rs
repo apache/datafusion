@@ -2703,6 +2703,48 @@ mod tests {
         Ok(())
     }
 
+    /// An empty batch has no last row to prove early completion with, so it
+    /// must leave the TopK unchanged, both with an empty heap and a full one.
+    #[tokio::test]
+    async fn test_empty_batch_with_prefix_does_not_finish() -> Result<()> {
+        let schema = make_ab_schema();
+        let mut topk = make_ab_topk(Arc::clone(&schema), make_topk_filter())?;
+        let empty = RecordBatch::new_empty(Arc::clone(&schema));
+
+        topk.insert_batch(empty.clone())?;
+        assert!(!topk.finished);
+        assert_eq!(topk.heap.store.len(), 0);
+
+        topk.insert_batch(make_ab_batch(
+            Arc::clone(&schema),
+            &[Some(1), Some(1), Some(2)],
+            &[20.0, 15.0, 30.0],
+        )?)?;
+        let heap_before = heap_snapshot(&topk);
+        let store_len_before = topk.heap.store.len();
+
+        topk.insert_batch(empty)?;
+        assert!(!topk.finished);
+        assert_eq!(heap_snapshot(&topk), heap_before);
+        assert_eq!(topk.heap.store.len(), store_len_before);
+
+        let results: Vec<_> = topk.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+---+------+",
+                "| a | b    |",
+                "+---+------+",
+                "| 1 | 15.0 |",
+                "| 1 | 20.0 |",
+                "| 2 | 30.0 |",
+                "+---+------+",
+            ],
+            &results
+        );
+
+        Ok(())
+    }
+
     /// Builds a `k = 3` TopK over `(a, b)` sorted by the single key `expr`,
     /// with no input sort prefix.
     fn make_single_key_topk(
