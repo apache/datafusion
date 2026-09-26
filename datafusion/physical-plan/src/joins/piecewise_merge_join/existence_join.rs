@@ -92,11 +92,13 @@ use std::task::{Poll, ready};
 use arrow::array::{Array, ArrayRef, RecordBatch};
 use arrow::compute::BatchCoalescer;
 use arrow_schema::{SchemaRef, SortOptions};
-use datafusion_common::{NullEquality, Result, internal_err};
+use datafusion_common::cast::as_boolean_array;
+use datafusion_common::{NullEquality, Result, ScalarValue, internal_err};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
-use datafusion_expr::{JoinType, Operator};
+use datafusion_expr::{ColumnarValue, JoinType, Operator};
 use datafusion_functions_aggregate_common::min_max::{max_batch, min_batch};
 use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr_common::datum::apply_cmp;
 use futures::{Stream, StreamExt};
 
 use crate::handle_state;
@@ -244,6 +246,7 @@ impl ExistencePWMJStream {
                 // An empty batch has no extreme key to compare, so it can neither match
                 // nor miss -- counting it either way would understate the real hit rate.
                 if batch.num_rows() > 0 {
+                    self.record_probe_hits(&stream_values)?;
                     // Only the batch's extreme key is ever compared against the buffered
                     // side, so reduce the batch to that one key.
                     let stream_values =
@@ -293,12 +296,63 @@ impl ExistencePWMJStream {
         Ok(())
     }
 
+    /// Records `probe_hit_rate` for every row of a streamed batch: the fraction of probe
+    /// rows with a build-side join-key match, as documented on
+    /// [`BuildProbeJoinMetrics::probe_hit_rate`]. Counted here, over the whole batch,
+    /// rather than in `mark_matched_buffered_rows`, which only ever looks at the batch's
+    /// extreme key and so can't tell how many of the batch's rows actually matched.
+    ///
+    /// `is_match` is monotone over the sorted buffered side, so the single most-matching
+    /// buffered key is its last non-null row, and a streamed row matches something exactly
+    /// when that key satisfies `buffered <op> streamed` against it. That is one vectorized
+    /// comparison per batch rather than a per-row binary search. NULL streamed keys compare
+    /// to NULL and are dropped by `true_count()`.
+    ///
+    /// `apply_cmp` rather than arrow's `lt`/`gt` kernels: those reject nested keys, and
+    /// it also normalizes `-0.0`, so floats agree with the watermark's
+    /// `JoinKeyComparator`.
+    ///
+    /// Only batches actually read are counted: once `nothing_left_to_mark` stops the scan
+    /// early, the remaining streamed rows are in neither the numerator nor the denominator.
+    fn record_probe_hits(&self, stream_values: &ArrayRef) -> Result<()> {
+        self.join_metrics
+            .probe_hit_rate
+            .add_total(stream_values.len());
+
+        let buffered_data = &self.buffered_side.try_as_ready()?.buffered_data;
+        let buffered_values = buffered_data.values();
+        let buffered_len = buffered_values.len();
+
+        // An all-null or empty buffered side has no key to beat, so nothing is counted
+        // as a hit.
+        if buffered_len == buffered_values.null_count() {
+            return Ok(());
+        }
+
+        // Nulls sort first, so the last buffered row is the most favorable non-null key:
+        // the max for `>`/`>=`, the min for `<`/`<=`.
+        let extreme_buffered = ColumnarValue::Scalar(ScalarValue::try_from_array(
+            buffered_values,
+            buffered_len - 1,
+        )?);
+        let hits = apply_cmp(
+            self.operator,
+            &extreme_buffered,
+            &ColumnarValue::Array(Arc::clone(stream_values)),
+        )?
+        .into_array(stream_values.len())?;
+        self.join_metrics
+            .probe_hit_rate
+            .add_part(as_boolean_array(&hits)?.true_count());
+
+        Ok(())
+    }
+
     /// Marks every buffered row matched by `stream_values`, a one-row array holding the
     /// batch's extreme compare key (null only if the whole batch was null).
     fn mark_matched_buffered_rows(&mut self, stream_values: &ArrayRef) -> Result<()> {
         let operator = self.operator;
         let sort_option = self.sort_option;
-        self.join_metrics.probe_hit_rate.add_total(1);
 
         {
             let buffered_data = &self.buffered_side.try_as_ready()?.buffered_data;
@@ -337,7 +391,7 @@ impl ExistencePWMJStream {
                 }
             };
 
-            if row_idx < stream_values.len() && first_non_null_buffered < buffered_len {
+            if row_idx < stream_values.len() && first_non_null_buffered < scan_limit {
                 let cmp = JoinKeyComparator::new(
                     &[Arc::clone(stream_values)],
                     &[Arc::clone(buffered_values)],
@@ -350,53 +404,41 @@ impl ExistencePWMJStream {
                         || (match_on_equal && compare == Ordering::Equal)
                 };
 
-                // Whether this batch matches *anything* is independent of the watermark:
-                // another partition's batch may have already marked this batch's true
-                // match point, leaving nothing left for the bounded search below to find.
-                // `is_match` is monotone over the whole buffered side, so checking the
-                // last row alone (rather than re-deriving `buffer_idx` unbounded) is
-                // enough to tell whether a match exists anywhere.
-                if is_match(buffered_len - 1) {
-                    self.join_metrics.probe_hit_rate.add_part(1);
+                // Because the buffered side is sorted, `is_match` is monotone over
+                // it: false while the buffered key has not yet passed the streamed
+                // key, true from there on. So the first match is a partition point
+                // and can be found by binary search instead of a walk --
+                // `O(log buffered)` per batch rather than `O(buffered)`.
+                let mut lo = first_non_null_buffered;
+                let mut hi = scan_limit;
+                while lo < hi {
+                    let mid = lo + (hi - lo) / 2;
+                    if is_match(mid) {
+                        hi = mid;
+                    } else {
+                        lo = mid + 1;
+                    }
                 }
 
-                if first_non_null_buffered < scan_limit {
-                    // Because the buffered side is sorted, `is_match` is monotone over
-                    // it: false while the buffered key has not yet passed the streamed
-                    // key, true from there on. So the first match is a partition point
-                    // and can be found by binary search instead of a walk --
-                    // `O(log buffered)` per batch rather than `O(buffered)`.
-                    let mut lo = first_non_null_buffered;
-                    let mut hi = scan_limit;
-                    while lo < hi {
-                        let mid = lo + (hi - lo) / 2;
-                        if is_match(mid) {
-                            hi = mid;
-                        } else {
-                            lo = mid + 1;
-                        }
-                    }
-
-                    // `lo` is now the first matching buffered index, or `scan_limit` if
-                    // this batch matches nothing new.
-                    let buffer_idx = lo;
-                    if buffer_idx < scan_limit {
-                        // Everything from `buffer_idx` on matches, so lowering the
-                        // watermark to it records the match: the marked set is exactly
-                        // `[min_marked, buffered_len)` and needs no bitmap.
-                        //
-                        // INVARIANT: sound only because the buffered side and each
-                        // streamed batch are sorted the same way for this operator
-                        // (`try_new` derives `sort_option`: descending for `<`/`<=`,
-                        // ascending for `>`/`>=`). That makes this the smallest
-                        // reachable `buffer_idx`, so the marked suffix is maximal. Only
-                        // the ordering *within* a batch matters; batches themselves may
-                        // arrive in any order, which is why the watermark takes a `min`
-                        // rather than just decreasing.
-                        buffered_data
-                            .min_marked
-                            .fetch_min(buffer_idx, AtomicOrdering::SeqCst);
-                    }
+                // `lo` is now the first matching buffered index, or `scan_limit` if
+                // this batch matches nothing new.
+                let buffer_idx = lo;
+                if buffer_idx < scan_limit {
+                    // Everything from `buffer_idx` on matches, so lowering the
+                    // watermark to it records the match: the marked set is exactly
+                    // `[min_marked, buffered_len)` and needs no bitmap.
+                    //
+                    // INVARIANT: sound only because the buffered side and each
+                    // streamed batch are sorted the same way for this operator
+                    // (`try_new` derives `sort_option`: descending for `<`/`<=`,
+                    // ascending for `>`/`>=`). That makes this the smallest
+                    // reachable `buffer_idx`, so the marked suffix is maximal. Only
+                    // the ordering *within* a batch matters; batches themselves may
+                    // arrive in any order, which is why the watermark takes a `min`
+                    // rather than just decreasing.
+                    buffered_data
+                        .min_marked
+                        .fetch_min(buffer_idx, AtomicOrdering::SeqCst);
                 }
             }
         }
@@ -840,12 +882,13 @@ mod tests {
         Ok(())
     }
 
-    /// Existence join never populated `probe_hit_rate`, so a streamed batch whose extreme
-    /// key failed to lower the watermark was indistinguishable from one that did. Two
-    /// batches here: the first lowers the watermark, the second matches nothing in the
-    /// buffered side and must count as a miss.
+    /// `probe_hit_rate` must count matching *rows*, not matching batches: only the
+    /// extreme key of a batch ever advances the watermark, but every row of the batch
+    /// is a probe row and should be judged against the buffered side on its own. A
+    /// single streamed batch here mixes hits and misses so that a batch-level count
+    /// and a row-level count disagree.
     #[tokio::test]
-    async fn probe_hit_rate_counts_batches_that_advance_the_watermark() -> Result<()> {
+    async fn probe_hit_rate_counts_matching_rows_not_batches() -> Result<()> {
         let left = build_table(
             ("a1", &vec![1, 2, 3, 4, 5]),
             ("b1", &vec![1, 2, 3, 4, 5]),
@@ -857,14 +900,17 @@ mod tests {
             Field::new("b1", DataType::Int32, false),
             Field::new("c2", DataType::Int32, false),
         ]);
-        // b1=3 lowers the watermark to buffered index 3 (value 4).
-        let batch1 =
-            build_table_i32(("a2", &vec![10]), ("b1", &vec![3]), ("c2", &vec![70]));
-        // b1=10 matches no buffered value (max buffered value is 5) -- a genuine miss.
-        let batch2 =
-            build_table_i32(("a2", &vec![20]), ("b1", &vec![10]), ("c2", &vec![80]));
+        // Five rows in one batch, `Gt` against a buffered max of 5: b1=0 and b1=1 are
+        // hits (they beat 5), the other three (5, 10, 20) are not. A batch-level count
+        // would report this whole batch as a single hit (its extreme key, 0, matches);
+        // a row-level count must report 2 hits out of 5.
+        let batch = build_table_i32(
+            ("a2", &vec![10, 20, 30, 40, 50]),
+            ("b1", &vec![0, 1, 5, 10, 20]),
+            ("c2", &vec![70, 80, 90, 100, 110]),
+        );
         let right = TestMemoryExec::try_new_exec(
-            &[vec![batch1, batch2]],
+            &[vec![batch]],
             Arc::new(streamed_schema),
             None,
         )?;
@@ -885,10 +931,14 @@ mod tests {
         let stream = join.execute(0, Arc::new(TaskContext::default()))?;
         let batches = common::collect(stream).await?;
 
+        // b1=0 is below every buffered value, so all five buffered rows match.
         assert_snapshot!(batches_to_string(&batches), @r"
         +----+----+----+
         | a1 | b1 | c1 |
         +----+----+----+
+        | 1  | 1  | 10 |
+        | 2  | 2  | 20 |
+        | 3  | 3  | 30 |
         | 4  | 4  | 40 |
         | 5  | 5  | 50 |
         +----+----+----+
@@ -907,7 +957,11 @@ mod tests {
                 _ => None,
             })
             .expect("probe_hit_rate metric");
-        assert_eq!(hit_rate, (1, 2), "one hit, one miss");
+        assert_eq!(
+            hit_rate,
+            (2, 5),
+            "two rows beat the buffered max, three don't"
+        );
 
         Ok(())
     }
@@ -1162,6 +1216,129 @@ mod tests {
             .expect("probe_hit_rate metric");
         // Only the real batch counts -- the empty batch contributes to neither part nor total.
         assert_eq!(hit_rate, (1, 1));
+
+        Ok(())
+    }
+
+    /// Runs a one-column `LeftSemi` join of `buffered <operator> streamed` and returns
+    /// `probe_hit_rate` as `(part, total)`. Both sides must already be sorted as the
+    /// operator requires, since there is no `SortExec` here to enforce it.
+    async fn single_key_probe_hit_rate(
+        buffered: ArrayRef,
+        streamed: ArrayRef,
+        operator: Operator,
+    ) -> Result<(usize, usize)> {
+        let exec = |array: ArrayRef| {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "k",
+                array.data_type().clone(),
+                true,
+            )]));
+            let batch = RecordBatch::try_new(Arc::clone(&schema), vec![array])?;
+            TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)
+        };
+        let left = exec(buffered)?;
+        let right = exec(streamed)?;
+        let on = (
+            Arc::new(Column::new_with_schema("k", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("k", &right.schema())?) as _,
+        );
+        let join = PiecewiseMergeJoinExec::try_new(
+            left,
+            right,
+            on,
+            operator,
+            JoinType::LeftSemi,
+            1,
+        )?;
+
+        let stream = join.execute(0, Arc::new(TaskContext::default()))?;
+        common::collect(stream).await?;
+
+        Ok(join
+            .metrics()
+            .unwrap()
+            .iter()
+            .find_map(|m| match m.value() {
+                crate::metrics::MetricValue::Ratio {
+                    name,
+                    ratio_metrics,
+                } if name == "probe_hit_rate" => {
+                    Some((ratio_metrics.part(), ratio_metrics.total()))
+                }
+                _ => None,
+            })
+            .expect("probe_hit_rate metric"))
+    }
+
+    /// Every operator decides hits against a different end of the buffered side, and
+    /// nested keys can't use arrow's comparison kernels, so check each operator on both
+    /// a primitive and a struct key. The leading NULL streamed row counts in the total
+    /// but never as a hit.
+    #[tokio::test]
+    async fn probe_hit_rate_counts_rows_for_every_operator_and_nested_keys() -> Result<()>
+    {
+        use arrow::array::{Int32Array, StructArray};
+
+        let int =
+            |values: Vec<Option<i32>>| -> ArrayRef { Arc::new(Int32Array::from(values)) };
+        let nested = |values: Vec<Option<i32>>| -> ArrayRef {
+            let child = int(values);
+            let nulls = child.logical_nulls();
+            Arc::new(StructArray::new(
+                vec![Field::new("v", DataType::Int32, true)].into(),
+                vec![child],
+                nulls,
+            ))
+        };
+
+        // `>`/`>=` sort ascending, `<`/`<=` descending, nulls first either way.
+        let cases = [
+            // 5 > {0, 1}
+            (
+                Operator::Gt,
+                vec![1, 2, 5],
+                vec![None, Some(0), Some(1), Some(5), Some(6)],
+                2,
+            ),
+            // 5 >= {0, 1, 5}
+            (
+                Operator::GtEq,
+                vec![1, 2, 5],
+                vec![None, Some(0), Some(1), Some(5), Some(6)],
+                3,
+            ),
+            // 1 < {6, 5}
+            (
+                Operator::Lt,
+                vec![5, 2, 1],
+                vec![None, Some(6), Some(5), Some(1), Some(0)],
+                2,
+            ),
+            // 1 <= {6, 5, 1}
+            (
+                Operator::LtEq,
+                vec![5, 2, 1],
+                vec![None, Some(6), Some(5), Some(1), Some(0)],
+                3,
+            ),
+        ];
+
+        for (operator, buffered, streamed, hits) in cases {
+            let buffered: Vec<_> = buffered.into_iter().map(Some).collect();
+            for (label, make) in [
+                ("Int32", &int as &dyn Fn(_) -> ArrayRef),
+                ("Struct", &nested),
+            ] {
+                let hit_rate = single_key_probe_hit_rate(
+                    make(buffered.clone()),
+                    make(streamed.clone()),
+                    operator,
+                )
+                .await?;
+                assert_eq!(hit_rate, (hits, 5), "{label} key, {operator}");
+            }
+        }
 
         Ok(())
     }
