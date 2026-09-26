@@ -185,7 +185,7 @@ pub(crate) struct OptionalFilterSaving {
     /// Rows that the filter removed as a row filter predicate.
     removed_rows: AtomicU64,
     /// The removed rows that the decoder can skip, see
-    /// [`skippable_rows`](crate::row_filter_cost::skippable_rows).
+    /// [`skippable_rows`].
     skippable_rows: AtomicU64,
     /// True if the filter is a row filter predicate (the default). The
     /// adaptive filter placement can put the filter in the post-scan filter:
