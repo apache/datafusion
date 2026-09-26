@@ -706,7 +706,9 @@ impl CrossJoinStream {
 mod tests {
     use super::*;
     use crate::common;
-    use crate::test::{assert_join_metrics, build_table_scan_i32};
+    use crate::test::{
+        TestMemoryExec, assert_join_metrics, build_table_i32, build_table_scan_i32,
+    };
 
     use datafusion_common::{assert_contains, test_util::batches_to_sort_string};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -725,6 +727,29 @@ mod tests {
         let metrics = join.metrics().unwrap();
 
         Ok((columns_header, batches, metrics))
+    }
+
+    /// Split a 3-column i32 table into `RecordBatch`es of at most `input_batch_size` rows.
+    fn build_table_scan_i32_chunked(
+        a: (&str, &Vec<i32>),
+        b: (&str, &Vec<i32>),
+        c: (&str, &Vec<i32>),
+        input_batch_size: usize,
+    ) -> Arc<dyn ExecutionPlan> {
+        let full = build_table_i32(a, b, c);
+        let n = full.num_rows();
+        let batches = (0..n)
+            .step_by(input_batch_size)
+            .map(|i| full.slice(i, input_batch_size.min(n - i)))
+            .collect();
+        TestMemoryExec::try_new_exec(&[batches], full.schema(), None).unwrap()
+    }
+
+    fn metric_count(metrics: &MetricsSet, name: &str) -> usize {
+        metrics
+            .sum_by_name(name)
+            .expect("missing metric")
+            .as_usize()
     }
 
     #[tokio::test]
@@ -966,6 +991,40 @@ mod tests {
         ");
 
         assert_join_metrics!(metrics, 6);
+        assert_eq!(metric_count(&metrics, "build_input_rows"), 3);
+        assert_eq!(metric_count(&metrics, "input_rows"), 2);
+
+        Ok(())
+    }
+
+    /// `build_input_rows`, `input_rows`, and `output_rows` must count each row
+    /// once when the build and probe sides arrive as several batches.
+    #[tokio::test]
+    async fn join_metrics_count_rows_once_across_batches() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        // 2: left 2+1, right 2.  1: left 3×1, right 2×1.
+        for input_batch_size in [2, 1] {
+            let left = build_table_scan_i32_chunked(
+                ("a1", &vec![1, 2, 3]),
+                ("b1", &vec![4, 5, 6]),
+                ("c1", &vec![7, 8, 9]),
+                input_batch_size,
+            );
+            let right = build_table_scan_i32_chunked(
+                ("a2", &vec![10, 11]),
+                ("b2", &vec![12, 13]),
+                ("c2", &vec![14, 15]),
+                input_batch_size,
+            );
+
+            let (_, batches, metrics) =
+                join_collect(left, right, Arc::clone(&task_ctx)).await?;
+            let num_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+            assert_eq!(num_rows, 6);
+            assert_join_metrics!(metrics, 6);
+            assert_eq!(metric_count(&metrics, "build_input_rows"), 3);
+            assert_eq!(metric_count(&metrics, "input_rows"), 2);
+        }
 
         Ok(())
     }
