@@ -116,11 +116,15 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
 }
 
 impl<C: CursorValues> SortPreservingMergeStream<C> {
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn new(
         streams: CursorStream<C>,
         schema: SchemaRef,
         metrics: BaselineMetrics,
         batch_size: usize,
+        target_batch_bytes: Option<usize>,
+        output_construction_reservation: Option<MemoryReservation>,
+        retain_output_construction_reservation: bool,
         fetch: Option<usize>,
         reservation: MemoryReservation,
         enable_round_robin_tie_breaker: bool,
@@ -130,8 +134,22 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
         let stream_count = streams.partitions();
 
+        let in_progress = BatchBuilder::new(
+            schema,
+            stream_count,
+            batch_size,
+            reservation,
+            output_construction_reservation,
+            target_batch_bytes,
+        );
+        let in_progress = if retain_output_construction_reservation {
+            in_progress.retain_output_construction_reservation()
+        } else {
+            in_progress
+        };
+
         Self {
-            in_progress: BatchBuilder::new(schema, stream_count, batch_size, reservation),
+            in_progress,
             streams,
             metrics,
             cursors: (0..stream_count).map(|_| None).collect(),
@@ -742,6 +760,9 @@ mod tests {
             Arc::clone(&schema),
             BaselineMetrics::new(&metrics, 0),
             16,
+            None,
+            None,
+            false,
             Some(1),
             reservation,
             true,

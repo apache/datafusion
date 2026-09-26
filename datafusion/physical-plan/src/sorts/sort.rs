@@ -2572,7 +2572,13 @@ mod tests {
         )
         .await?;
 
-        assert_eq!(result.len(), 2);
+        assert!(!result.is_empty());
+        assert!(
+            result
+                .iter()
+                .all(|batch| batch.num_rows() <= task_ctx.session_config().batch_size()),
+            "sort output batches must not exceed the configured row limit"
+        );
 
         // Now, validate metrics
         let metrics = sort_exec.metrics().unwrap();
@@ -2590,11 +2596,10 @@ mod tests {
         assert!((9000..=10000).contains(&spilled_rows));
         assert!((38000..=44000).contains(&spilled_bytes));
 
-        let columns = result[0].columns();
-
-        let i = as_primitive_array::<Int32Type>(&columns[0])?;
+        let sorted = concat_batches(&schema, &result)?;
+        let i = as_primitive_array::<Int32Type>(sorted.column(0))?;
         assert_eq!(i.value(0), 0);
-        assert_eq!(i.value(i.len() - 1), 81);
+        assert_eq!(i.value(i.len() - 1), 99);
         assert_eq!(
             task_ctx.runtime_env().memory_pool.reserved(),
             0,
@@ -2812,7 +2817,10 @@ mod tests {
 
             let result =
                 collect(Arc::clone(&sort_exec) as _, Arc::clone(&task_ctx)).await?;
-            assert_eq!(result.len(), 1);
+            assert_eq!(
+                result.iter().map(RecordBatch::num_rows).sum::<usize>(),
+                fetch.unwrap_or(partitions * 100)
+            );
 
             let metrics = sort_exec.metrics().unwrap();
             let did_it_spill = metrics.spill_count().unwrap_or(0) > 0;
@@ -3247,16 +3255,31 @@ mod tests {
         };
 
         // Smaller than batch size and require more than a single batch to get the requested batch size
-        test_sort_output_batch_size_and_base_metrics(10, batch_size / 4, create_task_ctx)
-            .await?;
+        test_sort_output_batch_size_and_base_metrics(
+            10,
+            batch_size / 4,
+            create_task_ctx,
+            false,
+        )
+        .await?;
 
         // Not evenly divisible by batch size
-        test_sort_output_batch_size_and_base_metrics(10, batch_size + 7, create_task_ctx)
-            .await?;
+        test_sort_output_batch_size_and_base_metrics(
+            10,
+            batch_size + 7,
+            create_task_ctx,
+            false,
+        )
+        .await?;
 
         // Evenly divisible by batch size and is larger than 2 output batches
-        test_sort_output_batch_size_and_base_metrics(10, batch_size * 3, create_task_ctx)
-            .await?;
+        test_sort_output_batch_size_and_base_metrics(
+            10,
+            batch_size * 3,
+            create_task_ctx,
+            false,
+        )
+        .await?;
 
         Ok(())
     }
@@ -3280,6 +3303,7 @@ mod tests {
                 10,
                 batch_size / 4,
                 create_task_ctx,
+                false,
             )
             .await?;
 
@@ -3296,6 +3320,7 @@ mod tests {
                 10,
                 batch_size + 7,
                 create_task_ctx,
+                false,
             )
             .await?;
 
@@ -3312,6 +3337,7 @@ mod tests {
                 10,
                 batch_size * 3,
                 create_task_ctx,
+                false,
             )
             .await?;
 
@@ -3342,6 +3368,7 @@ mod tests {
                 1,
                 batch_size / 4,
                 create_task_ctx,
+                false,
             )
             .await?;
 
@@ -3359,6 +3386,7 @@ mod tests {
                 1,
                 batch_size + 7,
                 create_task_ctx,
+                false,
             )
             .await?;
 
@@ -3376,6 +3404,7 @@ mod tests {
                 1,
                 batch_size * 3,
                 create_task_ctx,
+                false,
             )
             .await?;
 
@@ -3422,6 +3451,7 @@ mod tests {
                 10,
                 batch_size / 4,
                 create_task_ctx,
+                true,
             )
             .await?;
 
@@ -3434,6 +3464,7 @@ mod tests {
                 10,
                 batch_size + 7,
                 create_task_ctx,
+                true,
             )
             .await?;
 
@@ -3446,6 +3477,7 @@ mod tests {
                 10,
                 batch_size * 3,
                 create_task_ctx,
+                true,
             )
             .await?;
 
@@ -3459,6 +3491,7 @@ mod tests {
         number_of_batches: usize,
         batch_size_to_generate: usize,
         create_task_ctx: impl Fn(&[RecordBatch]) -> TaskContext,
+        allow_byte_targeted_batches: bool,
     ) -> Result<MetricsSet> {
         let batches = (0..number_of_batches)
             .map(|_| make_partition(batch_size_to_generate as i32))
@@ -3473,10 +3506,16 @@ mod tests {
         let (mut output_batches, metrics) =
             run_sort_on_input(task_ctx, "i", batches, schema).await?;
 
+        let output_batch_count = output_batches.len();
         let last_batch = output_batches.pop().unwrap();
 
         for batch in output_batches {
-            assert_eq!(batch.num_rows(), expected_batch_size);
+            if allow_byte_targeted_batches {
+                assert_ne!(batch.num_rows(), 0);
+                assert!(batch.num_rows() <= expected_batch_size);
+            } else {
+                assert_eq!(batch.num_rows(), expected_batch_size);
+            }
         }
 
         let mut last_expected_batch_size =
@@ -3484,12 +3523,17 @@ mod tests {
         if last_expected_batch_size == 0 {
             last_expected_batch_size = expected_batch_size;
         }
-        assert_eq!(last_batch.num_rows(), last_expected_batch_size);
+        if allow_byte_targeted_batches {
+            assert_ne!(last_batch.num_rows(), 0);
+            assert!(last_batch.num_rows() <= expected_batch_size);
+        } else {
+            assert_eq!(last_batch.num_rows(), last_expected_batch_size);
+        }
 
         assert_baseline_metrics_for_non_empty_output(
             &metrics,
             output_rows,
-            expected_batch_size,
+            output_batch_count,
         );
 
         Ok(metrics)
@@ -3523,7 +3567,7 @@ mod tests {
     fn assert_baseline_metrics_for_non_empty_output(
         metrics: &MetricsSet,
         output_rows: usize,
-        batch_size: usize,
+        output_batch_count: usize,
     ) {
         let end_time = metrics
             .iter()
@@ -3555,7 +3599,7 @@ mod tests {
             })
             .expect("Must have output_batches metric since it exists in the baseline");
 
-        assert_eq!(output_batches.value(), output_rows.div_ceil(batch_size));
+        assert_eq!(output_batches.value(), output_batch_count);
     }
 
     async fn run_sort_on_input(
