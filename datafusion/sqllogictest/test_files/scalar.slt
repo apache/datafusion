@@ -1479,6 +1479,21 @@ from (values (NULL::INT, 7), (3, 7)) as t(a, b);
 7 7 0
 NULL NULL NULL
 
+# arithmetic negation is not bitwise NOT
+query IIIIII
+select
+  i,
+  (-i) & i,
+  i | (-i),
+  (-i) ^ i,
+  -(i & j),
+  -(i | j)
+from (values (5, 3), (6, 3)) as t(i, j)
+order by i;
+----
+5 1 -1 -2 -1 -7
+6 2 -2 -4 -2 -7
+
 # bitwise xor with other operators
 query II rowsort
 select 2 * c - 1 ^ 856 + d + 3, d ^ 7 >> 4 from signed_integers;
