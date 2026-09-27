@@ -4342,6 +4342,19 @@ SELECT arrow_typeof(arrow_cast('2024-01-01T12:00:00', 'Timestamp(Microsecond, No
 ----
 Timestamp(µs, "America/Denver")
 
+# A typed NULL takes the dispatch of its type. PostgreSQL:
+# `NULL::timestamp AT TIME ZONE zone` is a NULL `timestamptz`, and
+# `NULL::timestamptz AT TIME ZONE zone` is a NULL `timestamp`.
+query TP
+SELECT arrow_typeof(NULL::timestamp AT TIME ZONE 'America/Denver'), NULL::timestamp AT TIME ZONE 'America/Denver';
+----
+Timestamp(ns, "America/Denver") NULL
+
+query TP
+SELECT arrow_typeof(NULL::timestamptz AT TIME ZONE 'America/Denver'), NULL::timestamptz AT TIME ZONE 'America/Denver';
+----
+Timestamp(ns) NULL
+
 # A real (multi-row) tz-aware column, spanning both DST transitions in
 # America/Denver.
 statement ok
