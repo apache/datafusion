@@ -59,9 +59,10 @@ use crate::{
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays};
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::config::SpillCompression;
 use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::utils::memory::RecordBatchMemoryCounter;
 use datafusion_common::{
     DataFusionError, Result, assert_or_internal_err, internal_datafusion_err,
     unwrap_or_internal_err,
@@ -236,6 +237,12 @@ struct ExternalSorter {
     // ========================================================================
     /// Unsorted input batches stored in the memory buffer
     in_mem_batches: Vec<RecordBatch>,
+    /// Counts the buffers retained by `in_mem_batches`. The batches can share
+    /// buffers, for example zero-copy slices of one larger batch, and each
+    /// buffer is reserved only once. `None` if the sorted runs keep referencing
+    /// input buffers (see [`sorted_copy_keeps_buffers`]), in which case each
+    /// batch is reserved on its own.
+    in_mem_batches_counter: Option<RecordBatchMemoryCounter>,
 
     /// During external sorting, in-memory intermediate data will be appended to
     /// this file incrementally. Once finished, this file will be moved to [`Self::finished_spill_files`].
@@ -310,9 +317,16 @@ impl ExternalSorter {
         )
         .with_compression_type(spill_compression);
 
+        let in_mem_batches_counter = (!schema
+            .fields()
+            .iter()
+            .any(|field| sorted_copy_keeps_buffers(field.data_type())))
+        .then(RecordBatchMemoryCounter::new);
+
         Ok(Self {
             schema,
             in_mem_batches: vec![],
+            in_mem_batches_counter,
             in_progress_spill_file: None,
             finished_spill_files: vec![],
             expr,
@@ -643,6 +657,9 @@ impl ExternalSorter {
             return Ok(self.observe_if_output(empty_stream, is_output_stream));
         }
 
+        // Every path below consumes all of `in_mem_batches`
+        self.in_mem_batches_counter = self.new_buffered_batches_counter();
+
         // The elapsed compute timer is updated when the value is dropped.
         // There is no need for an explicit call to drop.
         let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
@@ -657,7 +674,7 @@ impl ExternalSorter {
         if self.in_mem_batches.len() == 1 {
             let batch = self.in_mem_batches.swap_remove(0);
             let reservation = self.reservation.take();
-            let sorted_stream = self.sort_batch_stream(batch, reservation)?;
+            let sorted_stream = self.sort_batch_stream(batch, reservation, None)?;
             return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
@@ -674,7 +691,7 @@ impl ExternalSorter {
                 .try_resize(get_reserved_bytes_for_record_batch(&batch)?)
                 .map_err(Self::err_with_oom_context)?;
             let reservation = self.reservation.take();
-            let sorted_stream = self.sort_batch_stream(batch, reservation)?;
+            let sorted_stream = self.sort_batch_stream(batch, reservation, None)?;
             return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
@@ -690,16 +707,11 @@ impl ExternalSorter {
             batches
         };
 
-        let streams = runs
+        let streams = self
+            .sort_run_streams(runs)?
             .into_iter()
-            .map(|batch| {
-                let reservation = self
-                    .reservation
-                    .split(get_reserved_bytes_for_record_batch(&batch)?);
-                let input = self.sort_batch_stream(batch, reservation)?;
-                Ok(spawn_buffered(input, 1))
-            })
-            .collect::<Result<_>>()?;
+            .map(|stream| spawn_buffered(stream, 1))
+            .collect();
 
         StreamingMergeBuilder::new()
             .with_streams(streams)
@@ -728,6 +740,8 @@ impl ExternalSorter {
         let mut runs: Vec<RecordBatch> = Vec::new();
         let mut group: Vec<RecordBatch> = Vec::new();
         let mut group_bytes = 0usize;
+        // Count the buffers the batches share as when they were buffered
+        let mut counter = self.new_buffered_batches_counter();
 
         // Flush a group into a run, skipping the copy for a single-batch group.
         let flush = |group: &mut Vec<RecordBatch>,
@@ -746,7 +760,8 @@ impl ExternalSorter {
         };
 
         for batch in batches {
-            let bytes = get_reserved_bytes_for_record_batch(&batch)?;
+            let bytes =
+                get_reserved_bytes_for_next_record_batch(&batch, counter.as_mut())?;
             if !group.is_empty() && group_bytes.saturating_add(bytes) > target {
                 flush(&mut group, &mut runs, &self.schema)?;
                 group_bytes = 0;
@@ -757,9 +772,10 @@ impl ExternalSorter {
         flush(&mut group, &mut runs, &self.schema)?;
 
         // Realign the reservation: concatenation may shift the footprint slightly.
+        let mut counter = self.new_buffered_batches_counter();
         let total: usize = runs
             .iter()
-            .map(get_reserved_bytes_for_record_batch)
+            .map(|run| get_reserved_bytes_for_next_record_batch(run, counter.as_mut()))
             .sum::<Result<usize>>()?;
         self.reservation
             .try_resize(total)
@@ -768,10 +784,64 @@ impl ExternalSorter {
         Ok(runs)
     }
 
+    /// Returns a counter for sizing batches that are buffered together, or
+    /// `None` if each batch is sized on its own (see
+    /// [`Self::in_mem_batches_counter`]).
+    fn new_buffered_batches_counter(&self) -> Option<RecordBatchMemoryCounter> {
+        self.in_mem_batches_counter
+            .as_ref()
+            .map(|_| RecordBatchMemoryCounter::new())
+    }
+
+    /// Sorts each run into its own stream, splitting `self.reservation` between
+    /// them.
+    ///
+    /// Runs can share buffers, for example zero-copy slices of one larger batch,
+    /// and `self.reservation` covers each shared buffer once. A shared buffer
+    /// stays alive until the last run holding it is sorted, so if any buffers are
+    /// shared, the reservation for every run's input is held until all the runs
+    /// are sorted. Otherwise each run releases its input once it is sorted.
+    fn sort_run_streams(
+        &self,
+        runs: Vec<RecordBatch>,
+    ) -> Result<Vec<SendableRecordBatchStream>> {
+        let mut counter = self.new_buffered_batches_counter();
+        let mut shares_buffers = false;
+        let mut sizes = Vec::with_capacity(runs.len());
+        for run in &runs {
+            let memory_size = get_record_batch_memory_size(run);
+            let retained = counter
+                .as_mut()
+                .map_or(memory_size, |counter| counter.count_batch(run));
+            shares_buffers |= retained < memory_size;
+            sizes.push((retained, run.get_sliced_size()?));
+        }
+
+        let shared_input = shares_buffers.then(|| {
+            let retained = sizes.iter().map(|(retained, _)| retained).sum();
+            Arc::new(self.reservation.split(retained))
+        });
+
+        runs.into_iter()
+            .zip(sizes)
+            .map(|(run, (retained, sliced))| {
+                let size = match shared_input {
+                    Some(_) => sliced,
+                    None => get_reserved_bytes_for_record_batch_size(retained, sliced),
+                };
+                let reservation = self.reservation.split(size);
+                self.sort_batch_stream(run, reservation, shared_input.clone())
+            })
+            .collect()
+    }
+
     /// Sorts a single `RecordBatch` into a single stream.
     ///
     /// This may output multiple batches depending on the size of the
     /// sorted data and the target batch size.
+    /// If given, `shared_input` covers the input buffers of every run, which can
+    /// share buffers, and `reservation` only covers sorting `batch`. This stream
+    /// drops its handle to `shared_input` once `batch` is sorted.
     /// For single-batch output cases, `reservation` will be freed immediately after sorting,
     /// as the batch will be output and is expected to be reserved by the consumer of the stream.
     /// For multi-batch output cases, `reservation` and any borrowed spill workspace
@@ -781,11 +851,14 @@ impl ExternalSorter {
         &self,
         batch: RecordBatch,
         reservation: MemoryReservation,
+        shared_input: Option<Arc<MemoryReservation>>,
     ) -> Result<SendableRecordBatchStream> {
-        assert_eq!(
-            get_reserved_bytes_for_record_batch(&batch)?,
-            reservation.size()
-        );
+        let reserved_bytes = get_reserved_bytes_for_record_batch(&batch)?;
+        match &shared_input {
+            None => assert_eq!(reserved_bytes, reservation.size()),
+            // `shared_input` covers every buffer of every run's input
+            Some(shared) => assert!(reservation.size() + shared.size() >= reserved_bytes),
+        }
 
         let schema = batch.schema();
         let expressions = self.expr.clone();
@@ -793,6 +866,9 @@ impl ExternalSorter {
         let merge_pool = Arc::clone(&self.merge_pool);
 
         let stream = futures::stream::once(async move {
+            // Held until `batch` is sorted, when this block ends. The last run to
+            // drop it releases the reservation for the runs' input.
+            let _shared_input = shared_input;
             let schema = batch.schema();
 
             // Sort the batch immediately and get all output batches
@@ -865,7 +941,10 @@ impl ExternalSorter {
         &mut self,
         input: &RecordBatch,
     ) -> Result<()> {
-        let size = get_reserved_bytes_for_record_batch(input)?;
+        let size = get_reserved_bytes_for_next_record_batch(
+            input,
+            self.in_mem_batches_counter.as_mut(),
+        )?;
 
         match self.reservation.try_grow(size) {
             Ok(_) => Ok(()),
@@ -874,8 +953,13 @@ impl ExternalSorter {
                     return Err(Self::err_with_oom_context(e));
                 }
 
-                // Spill and try again.
+                // Spill and try again. Nothing is buffered after the spill, so
+                // `input` shares no buffers with a buffered batch.
                 self.sort_and_spill_in_mem_batches().await?;
+                let size = get_reserved_bytes_for_next_record_batch(
+                    input,
+                    self.in_mem_batches_counter.as_mut(),
+                )?;
                 self.reservation
                     .try_grow(size)
                     .map_err(Self::err_with_oom_context)
@@ -944,6 +1028,58 @@ pub(crate) fn get_reserved_bytes_for_record_batch(batch: &RecordBatch) -> Result
             sliced_size,
         )
     })
+}
+
+/// Estimate how much memory is needed to sort `batch` when it is buffered with
+/// the batches `counter` has already counted.
+///
+/// Like [`get_reserved_bytes_for_record_batch`], but only counts the buffers of
+/// `batch` that `counter` has not seen. Buffered batches can share buffers, for
+/// example zero-copy slices of one larger batch, and a shared buffer only needs
+/// to be reserved once. Without a `counter`, every buffer of `batch` is counted.
+fn get_reserved_bytes_for_next_record_batch(
+    batch: &RecordBatch,
+    counter: Option<&mut RecordBatchMemoryCounter>,
+) -> Result<usize> {
+    let Some(counter) = counter else {
+        return get_reserved_bytes_for_record_batch(batch);
+    };
+    let sliced_size = batch.get_sliced_size()?;
+    Ok(get_reserved_bytes_for_record_batch_size(
+        counter.count_batch(batch),
+        sliced_size,
+    ))
+}
+
+/// Returns whether the sorted copy of an array of `data_type` keeps
+/// referencing some of the array's buffers.
+///
+/// Sorting takes the selected rows into new buffers, except that `take` keeps
+/// the data buffers of view arrays and the values of dictionaries and list
+/// views. Every sorted run is charged for those buffers in full, so buffered
+/// batches that share them must be charged for them each, too.
+fn sorted_copy_keeps_buffers(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Utf8View
+        | DataType::BinaryView
+        | DataType::Dictionary(_, _)
+        | DataType::ListView(_)
+        | DataType::LargeListView(_) => true,
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::Map(field, _) => sorted_copy_keeps_buffers(field.data_type()),
+        DataType::Struct(fields) => fields
+            .iter()
+            .any(|field| sorted_copy_keeps_buffers(field.data_type())),
+        DataType::Union(fields, _) => fields
+            .iter()
+            .any(|(_, field)| sorted_copy_keeps_buffers(field.data_type())),
+        DataType::RunEndEncoded(_, values) => {
+            sorted_copy_keeps_buffers(values.data_type())
+        }
+        _ => false,
+    }
 }
 
 impl Debug for ExternalSorter {
@@ -3760,6 +3896,60 @@ mod tests {
         // The reserved memory for the sliced batch should be less than that of the full batch
         assert!(reserved > sliced_reserved);
 
+        Ok(())
+    }
+
+    /// Zero-copy slices of one batch share its buffers, so buffering them
+    /// reserves those buffers once. Sorting the slices as separate runs must
+    /// keep the shared buffers reserved while any run still holds them.
+    #[tokio::test]
+    async fn test_sliced_runs_reserve_shared_buffers_once() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, false)]));
+        let parent = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from_iter_values((0..4096).rev()))],
+        )?;
+        let slices: Vec<_> = (0..4).map(|i| parent.slice(i * 1024, 1024)).collect();
+
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1024 * 1024));
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::clone(&pool))
+            .build_arc()?;
+        let ordering: LexOrdering =
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("x", 0)))].into();
+        let mut sorter = ExternalSorter::new(
+            0,
+            Arc::clone(&schema),
+            ordering.clone(),
+            1024,
+            0,
+            0, // Sort each slice as its own run, rather than concatenating them.
+            SpillCompression::Uncompressed,
+            &ExecutionPlanMetricsSet::new(),
+            runtime,
+        )?;
+        for slice in &slices {
+            sorter.insert_batch(slice.clone()).await?;
+        }
+        let parent_bytes = get_record_batch_memory_size(&parent);
+        let sliced_bytes = slices
+            .iter()
+            .map(|slice| slice.get_sliced_size())
+            .sum::<Result<usize>>()?;
+        assert_eq!(pool.reserved(), parent_bytes + sliced_bytes);
+
+        let runs = std::mem::take(&mut sorter.in_mem_batches);
+        let mut streams = sorter.sort_run_streams(runs)?;
+        let last = streams.pop().unwrap();
+        for stream in streams {
+            stream.try_collect::<Vec<_>>().await?;
+        }
+        // The last run still holds the parent's buffers until it is sorted
+        assert_eq!(pool.reserved(), parent_bytes + slices[3].get_sliced_size()?);
+
+        let sorted = concat_batches(&schema, &last.try_collect::<Vec<_>>().await?)?;
+        assert_eq!(sorted, sort_batch(&slices[3], &ordering, None)?);
+        assert_eq!(pool.reserved(), 0);
         Ok(())
     }
 
