@@ -261,10 +261,16 @@ impl ExecutionPlan for OutputRequirementExec {
 
     fn execute(
         &self,
-        _partition: usize,
-        _context: Arc<TaskContext>,
+        partition: usize,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        unreachable!();
+        // `OutputRequirementExec` is a planning-only marker that the matching
+        // `OutputRequirements` remove pass strips before execution. It can still
+        // reach execution when a caller replaces the physical optimizer rules
+        // (dropping the remove pass) while keeping the analyzer that adds it, so
+        // rather than panicking we behave transparently: the node carries its
+        // child's partitioning/ordering, so delegating to the child is correct.
+        self.input.execute(partition, context)
     }
 
     fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
