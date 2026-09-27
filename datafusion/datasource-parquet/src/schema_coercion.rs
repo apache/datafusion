@@ -419,7 +419,6 @@ fn coerce_map_entries(
     Some(field_with_new_type(file_entries, DataType::Struct(fields)))
 }
 
-
 // Find the value type that can represent both sides without narrowing offsets
 // or crossing string/binary families.
 fn common_dictionary_value_type(
