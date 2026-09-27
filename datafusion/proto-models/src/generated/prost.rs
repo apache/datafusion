@@ -1833,10 +1833,12 @@ pub struct PhysicalBinaryExprNode {
     pub r: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(string, tag = "3")]
     pub op: ::prost::alloc::string::String,
-    /// Linearized operands for chains of the same operator (e.g. a AND b AND c).
+    /// Linearized operands for chains of the same operator and overflow policy.
     /// When present, `l` and `r` are ignored and `operands` holds the flattened list.
     #[prost(message, repeated, tag = "4")]
     pub operands: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(bool, tag = "5")]
+    pub fail_on_overflow: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalDateTimeIntervalExprNode {
@@ -2432,8 +2434,15 @@ pub struct PhysicalHashRepartition {
 pub struct PhysicalRangePartitioning {
     #[prost(message, repeated, tag = "1")]
     pub sort_expr: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
+    /// Effective split points. Kept for compatibility with older readers.
     #[prost(message, repeated, tag = "2")]
     pub split_point: ::prost::alloc::vec::Vec<PhysicalRangeSplitPoint>,
+    /// Maximum-resolution sample points used to derive effective split points.
+    #[prost(message, repeated, tag = "3")]
+    pub sample_point: ::prost::alloc::vec::Vec<PhysicalRangeSplitPoint>,
+    /// Zero in legacy payloads means split_point.len() + 1.
+    #[prost(uint64, tag = "4")]
+    pub partition_count: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalRangeSplitPoint {

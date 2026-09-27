@@ -30,7 +30,7 @@ mod tests {
     use datafusion_physical_expr_common::metrics::{MetricCategory, MetricValue};
     use datafusion_physical_plan::execution_plan::InvariantLevel;
     use datafusion_physical_plan::{
-        ChildrenPropertiesMode, ExecutionPlan, ReplaceChildrenOptions,
+        ChildrenPropertiesMode, ExecutionPlan, Partitioning, ReplaceChildrenOptions,
     };
     use std::sync::Arc;
 
@@ -137,6 +137,30 @@ mod tests {
                 .iter()
                 .any(|s| s == "stream_memory_usage{partition=0}=2.0 KB"),
             "stream_memory_usage should survive the FFI round trip byte-formatted, got: {rendered:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_range_partitioning_cross_library() -> Result<(), DataFusionError> {
+        let module = get_module()?;
+        let plan = (module.create_exec_with_statistics)();
+        let plan: Arc<dyn ExecutionPlan> = (&plan).try_into()?;
+        let Partitioning::Range(range) = plan.properties().output_partitioning() else {
+            panic!("expected range partitioning");
+        };
+
+        assert_eq!(range.partition_count(), 3);
+        assert_eq!(range.max_partition_count(), 6);
+        assert_eq!(range.samples().len(), 5);
+        assert_eq!(
+            range
+                .split_points()
+                .iter()
+                .map(|point| point.to_string())
+                .collect::<Vec<_>>(),
+            vec!["(20)", "(40)"]
         );
 
         Ok(())

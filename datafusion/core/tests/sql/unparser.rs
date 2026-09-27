@@ -748,6 +748,31 @@ async fn optimized_duckdb_unparse_top_level_sort_over_agg_uses_select_alias() ->
 }
 
 #[tokio::test]
+async fn optimized_filter_with_subquery_alias() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.sql("create table t (a int)").await?.collect().await?;
+    let df = ctx
+        .sql(
+            "
+            select *
+            from (
+                select a
+                from t
+            ) t2
+            where a = 1
+        ",
+        )
+        .await?;
+    let plan = df.into_optimized_plan()?;
+    let sql = plan_to_sql(&plan)?.to_string();
+    assert_eq!(
+        sql,
+        "SELECT * FROM (SELECT t.a FROM t WHERE (t.a = 1)) AS t2"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn optimized_filter_after_projection() -> Result<()> {
     let ctx = SessionContext::new();
     ctx.sql("create table t (a bigint)")

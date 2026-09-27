@@ -18,8 +18,10 @@
 use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::consumer::utils::NameTracker;
 use async_recursion::async_recursion;
+use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::common::{Column, not_impl_err};
 use datafusion::logical_expr::builder::project;
+use datafusion::logical_expr::expr_rewriter::NamePreserver;
 use datafusion::logical_expr::utils::find_window_exprs;
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use std::collections::HashSet;
@@ -65,6 +67,37 @@ pub async fn from_project_rel(
         }
 
         let input = if !window_exprs.is_empty() {
+            // Window outputs must have unique names across the input schema
+            // and the new window expressions.
+            let mut window_names = NameTracker::new();
+            window_names.reserve_schema(&original_schema);
+
+            let mut aliased_columns: Vec<(Expr, Expr)> = vec![];
+            let window_exprs = window_exprs
+                .into_iter()
+                .map(|window_expr| {
+                    let named =
+                        window_names.get_uniquely_named_expr(window_expr.clone())?;
+
+                    if let Expr::Alias(alias) = &named {
+                        aliased_columns.push((
+                            window_expr,
+                            Expr::Column(Column::from_name(&alias.name)),
+                        ));
+                    }
+
+                    Ok(named)
+                })
+                .collect::<datafusion::common::Result<Vec<_>>>()?;
+
+            // References to renamed windows must point to their new output columns.
+            if !aliased_columns.is_empty() {
+                explicit_exprs = explicit_exprs
+                    .into_iter()
+                    .map(|expr| reference_aliased_windows(expr, &aliased_columns))
+                    .collect::<datafusion::common::Result<Vec<_>>>()?;
+            }
+
             LogicalPlanBuilder::window_plan(input, window_exprs)?
         } else {
             input
@@ -80,4 +113,31 @@ pub async fn from_project_rel(
     } else {
         not_impl_err!("Projection without an input is not supported")
     }
+}
+
+/// Reference renamed window outputs while preserving the projection's
+/// original output name.
+fn reference_aliased_windows(
+    expr: Expr,
+    aliased_columns: &[(Expr, Expr)],
+) -> datafusion::common::Result<Expr> {
+    let saved_name = NamePreserver::new_for_projection().save(&expr);
+
+    let rewritten = expr
+        .transform_down(|node| {
+            match aliased_columns
+                .iter()
+                .find(|(window_expr, _)| *window_expr == node)
+            {
+                Some((_, column)) => Ok(Transformed::new(
+                    column.clone(),
+                    true,
+                    TreeNodeRecursion::Jump,
+                )),
+                None => Ok(Transformed::no(node)),
+            }
+        })?
+        .data;
+
+    Ok(saved_name.restore(rewritten))
 }
