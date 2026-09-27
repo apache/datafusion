@@ -390,9 +390,7 @@ enum ParquetOpenState {
     /// Loading [Parquet Page Index](https://parquet.apache.org/docs/file-format/pageindex/)
     LoadPageIndex(BoxFuture<'static, Result<RowGroupsPrunedParquetOpen>>),
     /// Loading bloom filters required for row-group pruning
-    LoadBloomFilters(BoxFuture<'static, Result<BloomFiltersLoadedParquetOpen>>),
-    /// Pruning with preloaded Bloom Filters
-    PruneWithBloomFilters(Box<BloomFiltersLoadedParquetOpen>),
+    LoadBloomFilters(BoxFuture<'static, Result<RowGroupsPrunedParquetOpen>>),
     /// Builds the final reader stream
     ///
     /// TODO: split state as this currently does both I/O and CPU work.
@@ -415,7 +413,6 @@ impl fmt::Debug for ParquetOpenState {
             ParquetOpenState::LoadPageIndex(_) => "LoadPageIndex",
             ParquetOpenState::PruneWithStatistics(_) => "PruneWithStatistics",
             ParquetOpenState::LoadBloomFilters(_) => "LoadBloomFilters",
-            ParquetOpenState::PruneWithBloomFilters(_) => "PruneWithBloomFilters",
             ParquetOpenState::BuildStream(_) => "BuildStream",
             ParquetOpenState::Ready(_) => "Ready",
             ParquetOpenState::Done => "Done",
@@ -587,16 +584,6 @@ impl DecoderReadPlans {
 }
 
 /// State of [`ParquetOpenState`]
-///
-/// Result of loading bloom filters needed for row-group pruning.
-struct BloomFiltersLoadedParquetOpen {
-    prepared: RowGroupsPrunedParquetOpen,
-    /// Bloom filters loaded for each row group that remains under consideration.
-    ///
-    /// indexed by parquet row-group index
-    row_group_bloom_filters: Vec<BloomFilterStatistics>,
-}
-
 impl ParquetOpenState {
     /// Applies one CPU-only state transition.
     ///
@@ -681,9 +668,6 @@ impl ParquetOpenState {
             ParquetOpenState::LoadBloomFilters(future) => {
                 Ok(ParquetOpenState::LoadBloomFilters(future))
             }
-            ParquetOpenState::PruneWithBloomFilters(loaded) => Ok(
-                ParquetOpenState::BuildStream(Box::new(loaded.prune_bloom_filters())),
-            ),
             ParquetOpenState::BuildStream(prepared) => {
                 Ok(ParquetOpenState::Ready(prepared.build_stream()?))
             }
@@ -798,9 +782,7 @@ impl MorselPlanner for ParquetMorselPlanner {
             }
             ParquetOpenState::LoadBloomFilters(future) => {
                 Ok(Some(Self::schedule_io(async move {
-                    Ok(ParquetOpenState::PruneWithBloomFilters(Box::new(
-                        future.await?,
-                    )))
+                    Ok(ParquetOpenState::BuildStream(Box::new(future.await?)))
                 })))
             }
             ParquetOpenState::Ready(stream) => {
@@ -1468,21 +1450,20 @@ impl RowGroupsPrunedParquetOpen {
     }
 
     /// Load bloom filters needed for pruning when enabled and a pruning predicate exists.
-    async fn load_bloom_filters(mut self) -> Result<BloomFiltersLoadedParquetOpen> {
-        let num_row_groups = self
-            .prepared
-            .loaded
-            .reader_metadata
-            .metadata()
-            .num_row_groups();
-        let mut row_group_bloom_filters =
-            vec![BloomFilterStatistics::new(); num_row_groups];
-
+    async fn load_bloom_filters(mut self) -> Result<RowGroupsPrunedParquetOpen> {
         if let Some(predicate) =
             self.prepared.pruning_predicate.as_ref().map(|p| p.as_ref())
             && self.prepared.loaded.prepared.enable_bloom_filter
             && !self.row_groups.is_empty()
         {
+            let bloom_filter_eval_time = self
+                .prepared
+                .loaded
+                .prepared
+                .file_metrics
+                .bloom_filter_eval_time
+                .clone();
+
             // Use the existing reader for bloom filter I/O;
             // replace with a fresh reader for decoding below.
             let reader_metadata = self.prepared.loaded.reader_metadata.clone();
@@ -1520,9 +1501,13 @@ impl RowGroupsPrunedParquetOpen {
                 })
                 .collect();
 
-            for idx in self.row_groups.row_group_indexes() {
+            let row_group_indexes: Vec<usize> =
+                self.row_groups.row_group_indexes().collect();
+            for idx in row_group_indexes {
                 let mut row_group_filters =
                     BloomFilterStatistics::with_capacity(parquet_columns.len());
+                let mut prune_group = false;
+
                 for (column_name, column_idx, physical_type, type_length) in
                     &parquet_columns
                 {
@@ -1544,47 +1529,49 @@ impl RowGroupsPrunedParquetOpen {
                         *physical_type,
                         *type_length,
                     );
+
+                    let _timer_guard = bloom_filter_eval_time.timer();
+                    prune_group = match predicate.prune(&row_group_filters) {
+                        Ok(values) => !values[0],
+                        Err(e) => {
+                            log::debug!(
+                                "Error evaluating row group predicate on bloom filter: {e}"
+                            );
+                            prepared.file_metrics.predicate_evaluation_errors.add(1);
+                            false
+                        }
+                    };
+
+                    if prune_group {
+                        break;
+                    }
                 }
-                row_group_bloom_filters[idx] = row_group_filters;
+
+                let _timer_guard = bloom_filter_eval_time.timer();
+                if row_group_filters.is_empty() {
+                    prepared
+                        .file_metrics
+                        .row_groups_pruned_bloom_filter
+                        .add_matched(1);
+                    continue;
+                }
+
+                if prune_group {
+                    prepared
+                        .file_metrics
+                        .row_groups_pruned_bloom_filter
+                        .add_pruned(1);
+                    self.row_groups.access_plan_mut().skip(idx);
+                } else {
+                    prepared
+                        .file_metrics
+                        .row_groups_pruned_bloom_filter
+                        .add_matched(1);
+                }
             }
         }
 
-        Ok(BloomFiltersLoadedParquetOpen {
-            prepared: self,
-            row_group_bloom_filters,
-        })
-    }
-}
-
-impl BloomFiltersLoadedParquetOpen {
-    /// Apply bloom filter pruning using already loaded bloom filters.
-    fn prune_bloom_filters(mut self) -> RowGroupsPrunedParquetOpen {
-        let bloom_filter_eval_time = self
-            .prepared
-            .prepared
-            .loaded
-            .prepared
-            .file_metrics
-            .bloom_filter_eval_time
-            .clone();
-        let _timer_guard = bloom_filter_eval_time.timer();
-        if let Some(predicate) = self
-            .prepared
-            .prepared
-            .pruning_predicate
-            .as_ref()
-            .map(|p| p.as_ref())
-            && self.prepared.prepared.loaded.prepared.enable_bloom_filter
-            && !self.prepared.row_groups.is_empty()
-        {
-            self.prepared.row_groups.prune_by_bloom_filters(
-                predicate,
-                &self.prepared.prepared.loaded.prepared.file_metrics,
-                &self.row_group_bloom_filters,
-            );
-        }
-
-        self.prepared
+        Ok(self)
     }
 }
 
