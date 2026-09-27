@@ -385,6 +385,22 @@ fn parquet_exec_multiple_sorted(
 fn parquet_exec_with_output_partitioning(
     output_partitioning: Partitioning,
 ) -> Arc<DataSourceExec> {
+    parquet_exec_with_partitioning_and_size(
+        output_partitioning,
+        Precision::Absent,
+        Precision::Absent,
+    )
+}
+
+fn parquet_exec_with_partitioning_and_size(
+    output_partitioning: Partitioning,
+    num_rows: Precision<usize>,
+    total_byte_size: Precision<usize>,
+) -> Arc<DataSourceExec> {
+    let mut statistics = Statistics::new_unknown(&schema());
+    statistics.num_rows = num_rows;
+    statistics.total_byte_size = total_byte_size;
+
     let file_groups = (0..output_partitioning.partition_count())
         .map(|partition| {
             FileGroup::new(vec![PartitionedFile::new(format!("p{partition}"), 100)])
@@ -397,6 +413,7 @@ fn parquet_exec_with_output_partitioning(
     )
     .with_file_groups(file_groups)
     .with_output_partitioning(Some(output_partitioning))
+    .with_statistics(statistics)
     .build();
 
     DataSourceExec::from_data_source(config)
@@ -1119,6 +1136,76 @@ fn range_hash_join_repartitions_unpartitioned_side_to_match_range() -> Result<()
       DataSourceExec: file_groups={4 groups: [[p0], [p1], [p2], [p3]]}, projection=[a, b, c, d, e], output_partitioning=Range([a@0 ASC], [(10), (20), (30)], 4), file_type=parquet
     "
     );
+
+    Ok(())
+}
+
+#[test]
+fn range_hash_join_rejects_smaller_reference() -> Result<()> {
+    let left = parquet_exec_with_partitioning_and_size(
+        Partitioning::UnknownPartitioning(4),
+        Precision::Inexact(100_000),
+        Precision::Inexact(8_000_000),
+    );
+    let right = parquet_exec_with_partitioning_and_size(
+        range_partitioning("a", [10, 20, 30], SortOptions::default())?,
+        Precision::Inexact(100),
+        Precision::Inexact(8_000),
+    );
+
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("a", &right.schema())?) as _,
+    )];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(join, &DISTRIB_DISTRIB_SORT);
+
+    let children = plan.children();
+    assert_eq!(children.len(), 2);
+    for child in children {
+        assert!(
+            matches!(child.output_partitioning(), Partitioning::Hash(_, 4)),
+            "expected hash fallback, got {:?}",
+            child.output_partitioning(),
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn range_hash_join_preserves_equal_reference() -> Result<()> {
+    let left = parquet_exec_with_partitioning_and_size(
+        Partitioning::UnknownPartitioning(4),
+        Precision::Inexact(100),
+        Precision::Inexact(8_000),
+    );
+    let right = parquet_exec_with_partitioning_and_size(
+        range_partitioning("a", [10, 20, 30], SortOptions::default())?,
+        Precision::Inexact(100),
+        Precision::Inexact(8_000),
+    );
+
+    let join_on = vec![(
+        Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+        Arc::new(Column::new_with_schema("a", &right.schema())?) as _,
+    )];
+    let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+
+    let plan = TestConfig::default()
+        .with_query_execution_partitions(4)
+        .to_plan(join, &DISTRIB_DISTRIB_SORT);
+
+    let expected = range_partitioning("a", [10, 20, 30], SortOptions::default())?;
+
+    let children = plan.children();
+    assert_eq!(children.len(), 2);
+    for child in children {
+        assert_eq!(child.output_partitioning(), &expected);
+    }
 
     Ok(())
 }
