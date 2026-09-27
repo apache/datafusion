@@ -3058,7 +3058,11 @@ fn deduplicate_view_array_buffers<T: ByteViewType>(
     // been remapped to point at the logically equivalent deduplicated buffer in
     // `unique_buffers`, preserving the original byte offsets and lengths.
     unsafe {
-        GenericByteViewArray::<T>::new_unchecked(new_views_buffer, unique_buffers.into(), nulls)
+        GenericByteViewArray::<T>::new_unchecked(
+            new_views_buffer,
+            unique_buffers.into(),
+            nulls,
+        )
     }
 }
 
@@ -7736,11 +7740,11 @@ mod tests {
             Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8View, true)]));
 
         let batch1 =
-            RecordBatch::try_new(schema.clone(), vec![Arc::new(base_array.clone())])?;
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(base_array.clone())])?;
         let batch2 =
-            RecordBatch::try_new(schema.clone(), vec![Arc::new(base_array.clone())])?;
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(base_array.clone())])?;
         let batch3 =
-            RecordBatch::try_new(schema.clone(), vec![Arc::new(base_array.clone())])?;
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(base_array.clone())])?;
 
         // Before deduplication, concat_batches puts 3 duplicate buffer references in data_buffers
         let concatenated_raw =
