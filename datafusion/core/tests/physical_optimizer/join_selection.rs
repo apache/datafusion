@@ -787,8 +787,14 @@ macro_rules! assert_optimized {
     ($PLAN: expr, @$EXPECTED_LINES: literal $(,)?) => {
 
         let plan = Arc::new($PLAN);
+        // Pin target_partitions so JoinSelection's distribution self-maintain
+        // renders a fixed RoundRobin partition count in the snapshot instead of
+        // the machine's num_cpus (which fails on CI runners with a different
+        // core count than the one snapshots were accepted on).
+        let mut config = ConfigOptions::new();
+        config.execution.target_partitions = 4;
         let optimized = JoinSelection::new()
-            .optimize(plan.clone(), &ConfigOptions::new())
+            .optimize(plan.clone(), &config)
             .unwrap();
 
         let plan_string = displayable(optimized.as_ref()).indent(true).to_string();
@@ -857,9 +863,9 @@ async fn test_nested_join_swap() {
             HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(small_col@0, big_col@0)]
               CoalescePartitionsExec
                 StatisticsExec: col_count=1, row_count=Inexact(1000)
-              RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=2
+              RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
                 StatisticsExec: col_count=1, row_count=Inexact(100000)
-        RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=2
+        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2
           StatisticsExec: col_count=1, row_count=Inexact(10000)
     "
     );
