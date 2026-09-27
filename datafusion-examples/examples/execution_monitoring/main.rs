@@ -37,7 +37,7 @@
 //!   (file: staged_execution.rs, desc: Pause and resume a boundary and measure its drain time)
 //!
 //! - `stage_admission`
-//!   (file: staged_execution.rs, desc: Defer boundary execution until memory is available)
+//!   (file: staged_execution.rs, desc: Await a shared memory budget before starting a boundary)
 //!
 //! - `stage_dependencies`
 //!   (file: staged_execution.rs, desc: Execute dependent boundaries in plan order)

@@ -29,11 +29,13 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::instant::Instant;
 use datafusion::common::runtime::SpawnedTask;
 use datafusion::common::tree_node::TreeNodeRecursion;
-use datafusion::common::{Result, assert_eq_or_internal_err, internal_err};
+use datafusion::common::{
+    DataFusionError, Result, assert_eq_or_internal_err, internal_err,
+};
 use datafusion::datasource::MemTable;
 use datafusion::execution::TaskContext;
 use datafusion::execution::memory_pool::{
-    GreedyMemoryPool, MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation,
+    GreedyMemoryPool, MemoryConsumer, MemoryPool, MemoryReservation,
 };
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::physical_expr::PhysicalExpr;
@@ -44,17 +46,20 @@ use datafusion::physical_plan::{
     PlanProperties, RecordBatchStream, ReplaceChildrenOptions, SendableRecordBatchStream,
     StageBoundary, collect_partitioned, execute_stream_partitioned,
 };
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use futures::future::try_join_all;
 use futures::task::AtomicWaker;
 use futures::{Stream, StreamExt, TryStreamExt, pin_mut, poll};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::timeout;
 
 async fn input_plan(
     partitions: &[Vec<RecordBatch>],
     schema: SchemaRef,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let context = SessionContext::new();
+    // Keep the source partitions stable across machines running these examples.
+    let context =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
     context.register_table(
         "input",
         Arc::new(MemTable::try_new(schema, partitions.to_vec())?),
@@ -382,23 +387,38 @@ impl ExecutionPlan for ObservedExec {
 }
 
 fn boundaries_are_ready(boundaries: &[Arc<dyn StageBoundary>]) -> bool {
-    boundaries.iter().all(|boundary| {
-        let partition_count = boundary
-            .properties()
-            .output_partitioning()
-            .partition_count();
-        (0..partition_count).all(|partition| boundary.is_ready(partition))
-    })
+    boundaries
+        .iter()
+        .all(|boundary| boundary_is_ready(boundary.as_ref()))
 }
 
-fn has_memory_headroom(context: &TaskContext, required: usize) -> bool {
-    // This is a snapshot; the boundary still reserves each buffered batch.
-    let pool = context.memory_pool();
-    match pool.memory_limit() {
-        MemoryLimit::Infinite => true,
-        MemoryLimit::Finite(limit) => limit.saturating_sub(pool.reserved()) >= required,
-        MemoryLimit::Unknown => false,
+fn boundary_is_ready(boundary: &dyn StageBoundary) -> bool {
+    let partition_count = boundary
+        .properties()
+        .output_partitioning()
+        .partition_count();
+    (0..partition_count).all(|partition| boundary.is_ready(partition))
+}
+
+async fn prime_with_budget(
+    boundary: &dyn StageBoundary,
+    context: Arc<TaskContext>,
+    budget: Arc<Semaphore>,
+    required_bytes: u32,
+) -> Result<OwnedSemaphorePermit> {
+    // The caller budgets concurrent stages; each boundary accounts for actual batches.
+    let permit = budget
+        .acquire_many_owned(required_bytes)
+        .await
+        .map_err(|error| DataFusionError::External(Box::new(error)))?;
+    let partition_count = boundary
+        .properties()
+        .output_partitioning()
+        .partition_count();
+    for partition in 0..partition_count {
+        boundary.prime(partition, Arc::clone(&context))?;
     }
+    Ok(permit)
 }
 
 async fn wait_until(mut predicate: impl FnMut() -> bool) {
@@ -517,45 +537,105 @@ pub async fn pause_and_resume() -> Result<()> {
 }
 
 pub async fn memory_admission() -> Result<()> {
-    let (schema, mut partitions) = make_batches()?;
-    partitions.truncate(1);
-    let input: Arc<dyn ExecutionPlan> = input_plan(&partitions, schema).await?;
-    let observations = Arc::new(Observations::default());
-    let observed_input: Arc<dyn ExecutionPlan> =
-        Arc::new(ObservedExec::new(input, Arc::clone(&observations)));
-    let boundary = Arc::new(InMemoryStageBoundaryExec::new(observed_input));
-
-    let memory_pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1_048_576));
+    let pool_size = 1_048_576;
+    let budget = Arc::new(Semaphore::new(pool_size));
+    let memory_pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(pool_size));
     let runtime = Arc::new(
         RuntimeEnvBuilder::new()
             .with_memory_pool(Arc::clone(&memory_pool))
             .build()?,
     );
     let context = Arc::new(TaskContext::default().with_runtime(runtime));
-    let running_stage =
-        MemoryConsumer::new("running stage").register(context.memory_pool());
-    running_stage.try_grow(786_432)?;
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int32,
+        false,
+    )]));
+    let make_batch = |value| -> Result<RecordBatch> {
+        Ok(RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![value; 8_192]))],
+        )?)
+    };
+    let first_batches = vec![(0..24).map(|_| make_batch(1)).collect::<Result<Vec<_>>>()?];
+    let second_batches =
+        vec![(0..24).map(|_| make_batch(2)).collect::<Result<Vec<_>>>()?];
+    // Each buffer fits individually, but together they exceed the shared pool.
+    let first_bytes: usize = first_batches[0]
+        .iter()
+        .map(RecordBatch::get_array_memory_size)
+        .sum();
+    let second_bytes: usize = second_batches[0]
+        .iter()
+        .map(RecordBatch::get_array_memory_size)
+        .sum();
+    assert!(first_bytes <= pool_size && second_bytes <= pool_size);
+    assert!(first_bytes + second_bytes > pool_size);
+    let first = Arc::new(InMemoryStageBoundaryExec::new(
+        input_plan(&first_batches, Arc::clone(&schema)).await?,
+    ));
+    let second_observations = Arc::new(Observations::default());
+    let second = Arc::new(InMemoryStageBoundaryExec::new(Arc::new(ObservedExec::new(
+        input_plan(&second_batches, schema).await?,
+        Arc::clone(&second_observations),
+    ))));
 
-    assert!(!has_memory_headroom(&context, 524_288));
-    println!("Admission deferred: a running stage holds 768 KiB of the 1 MiB pool");
-    assert_eq!(observations.execute_calls.load(Ordering::Relaxed), 0);
-    assert!(!boundary.is_ready(0));
+    let first_permit = prime_with_budget(
+        first.as_ref(),
+        Arc::clone(&context),
+        Arc::clone(&budget),
+        u32::try_from(first_bytes).expect("example budget fits u32"),
+    )
+    .await?;
+    wait_until(|| boundary_is_ready(first.as_ref())).await;
+    assert_eq!(memory_pool.reserved(), first_bytes);
 
-    assert_eq!(running_stage.free(), 786_432);
-    assert!(has_memory_headroom(&context, 524_288));
-    println!("Reservation freed: starting the next boundary");
-    boundary.prime(0, Arc::clone(&context))?;
-    wait_until(|| boundary.is_ready(0)).await;
-    assert_eq!(observations.execute_calls.load(Ordering::Relaxed), 1);
-    assert!(memory_pool.reserved() > 0);
+    let second_admission = prime_with_budget(
+        second.as_ref(),
+        Arc::clone(&context),
+        Arc::clone(&budget),
+        u32::try_from(second_bytes).expect("example budget fits u32"),
+    );
+    pin_mut!(second_admission);
+    assert!(poll!(second_admission.as_mut()).is_pending());
+    assert_eq!(second_observations.execute_calls.load(Ordering::Relaxed), 0);
+    assert!(!second.is_ready(0));
+    println!("Second boundary is awaiting budget held by the first buffer");
 
-    boundary.release();
-    let boundary_plan: Arc<dyn ExecutionPlan> =
-        Arc::<InMemoryStageBoundaryExec>::clone(&boundary);
-    let actual = collect_partitioned(boundary_plan, context).await?;
-    assert_eq!(actual, partitions);
+    first.release();
+    assert_eq!(memory_pool.reserved(), first_bytes);
+    assert!(poll!(second_admission.as_mut()).is_pending());
+    let first_plan: Arc<dyn ExecutionPlan> = first;
+    let first_output = collect_partitioned(first_plan, Arc::clone(&context)).await?;
+    assert_eq!(first_output, first_batches);
+    drop(first_output);
     assert_eq!(memory_pool.reserved(), 0);
-    println!("Boundary consumed: its batch reservations were released");
+    // Return the admission permit only after consuming the buffered output.
+    assert!(poll!(second_admission.as_mut()).is_pending());
+    drop(first_permit);
+
+    let second_permit = timeout(Duration::from_secs(5), second_admission)
+        .await
+        .map_err(|error| DataFusionError::External(Box::new(error)))??;
+    assert_eq!(
+        second_observations.execute_calls.load(Ordering::Relaxed),
+        second.properties().output_partitioning().partition_count()
+    );
+    wait_until(|| boundary_is_ready(second.as_ref())).await;
+    assert_eq!(memory_pool.reserved(), second_bytes);
+    println!("First output consumed: the waiting second boundary has now started");
+
+    second.release();
+    let second_plan: Arc<dyn ExecutionPlan> =
+        Arc::<InMemoryStageBoundaryExec>::clone(&second);
+    assert_eq!(
+        collect_partitioned(second_plan, context).await?,
+        second_batches
+    );
+    assert_eq!(memory_pool.reserved(), 0);
+    drop(second_permit);
+    assert_eq!(budget.available_permits(), pool_size);
+    println!("Both boundaries completed within the shared memory budget");
     Ok(())
 }
 
@@ -591,7 +671,6 @@ pub async fn dependent_boundaries() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::common::DataFusionError;
     use datafusion::physical_plan::test::exec::{ErrorExec, MockExec};
 
     #[tokio::test]
@@ -599,8 +678,54 @@ mod tests {
         pause_and_resume().await
     }
     #[tokio::test]
-    async fn admission_defers_input_execution() -> Result<()> {
+    async fn admission_waits_until_consumption_releases_budget() -> Result<()> {
         memory_admission().await
+    }
+
+    #[tokio::test]
+    async fn cancelled_admission_does_not_start_input() -> Result<()> {
+        let (schema, partitions) = make_batches()?;
+        let observations = Arc::new(Observations::default());
+        let boundary = InMemoryStageBoundaryExec::new(Arc::new(ObservedExec::new(
+            input_plan(&partitions[..1], schema).await?,
+            Arc::clone(&observations),
+        )));
+        let budget = Arc::new(Semaphore::new(10));
+        let running = Arc::clone(&budget).acquire_many_owned(8).await.unwrap();
+        {
+            let admission = prime_with_budget(
+                &boundary,
+                Arc::new(TaskContext::default()),
+                Arc::clone(&budget),
+                5,
+            );
+            pin_mut!(admission);
+            assert!(poll!(admission.as_mut()).is_pending());
+        }
+        assert_eq!(observations.execute_calls.load(Ordering::Relaxed), 0);
+        assert!(!boundary.is_ready(0));
+        assert_eq!(budget.available_permits(), 2);
+        drop(running);
+        assert_eq!(budget.available_permits(), 10);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn startup_error_returns_admission_permit() {
+        let boundary = InMemoryStageBoundaryExec::new(Arc::new(ErrorExec::new()));
+        let budget = Arc::new(Semaphore::new(128));
+        assert!(
+            prime_with_budget(
+                &boundary,
+                Arc::new(TaskContext::default()),
+                Arc::clone(&budget),
+                64,
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(budget.available_permits(), 128);
+        assert!(!boundary.is_ready(0));
     }
     #[tokio::test]
     async fn dependencies_determine_execution_order() -> Result<()> {
