@@ -75,13 +75,13 @@ distribution; `EnforceSorting` then enforces ordering on the distribution-fixed
 plan. The only optimizer rules that later change these requirements
 (`join_selection`, `WindowTopN`, `FilterPushdown`) re-establish validity
 themselves, so enforcement runs exactly once. The optimizer phase keeps only the
-sort *optimizations* (`OptimizeSorts`), which make an already-valid plan faster.
+sort _optimizations_ (`OptimizeSorts`), which make an already-valid plan faster.
 
-| order | rule                  | summary                                                                                    |
-| ----- | --------------------- | ------------------------------------------------------------------------------------------ |
-| 1     | `OutputRequirements`  | Adds helper nodes so output requirements survive enforcement and later physical rewrites.  |
-| 2     | `EnforceDistribution` | Enforces the distribution requirements each operator declares (repartition / coalesce).    |
-| 3     | `EnforceSorting`      | Enforces ordering requirements (inserts SortExecs) on the distribution-fixed plan.         |
+| order | rule                  | summary                                                                                   |
+| ----- | --------------------- | ----------------------------------------------------------------------------------------- |
+| 1     | `OutputRequirements`  | Adds helper nodes so output requirements survive enforcement and later physical rewrites. |
+| 2     | `EnforceDistribution` | Enforces the distribution requirements each operator declares (repartition / coalesce).   |
+| 3     | `EnforceSorting`      | Enforces ordering requirements (inserts SortExecs) on the distribution-fixed plan.        |
 
 ### Physical Optimizer Rules
 
@@ -99,7 +99,7 @@ appear in this list; the rules that change those requirements (`join_selection`,
 | 1     | `aggregate_statistics`         | -                       | Uses exact source statistics to answer some aggregates without scanning data.                                           |
 | 2     | `join_selection`               | -                       | Chooses join implementation, build side, and partition mode; re-establishes distribution validity for joins it changes. |
 | 3     | `LimitedDistinctAggregation`   | -                       | Pushes limit hints into grouped distinct-style aggregations when only a small result is needed.                         |
-| 4     | `FilterPushdown`               | pre-optimization phase  | Pushes supported physical filters down toward data sources; re-establishes validity for what it changes.                 |
+| 4     | `FilterPushdown`               | pre-optimization phase  | Pushes supported physical filters down toward data sources; re-establishes validity for what it changes.                |
 | 5     | `WindowTopN`                   | -                       | Replaces eligible row-number window and filter patterns with per-partition TopK execution; re-enforces validity.        |
 | 6     | `OptimizeSorts`                | -                       | Sort optimizations: parallelize sorts, order-preserving variants, sort pushdown, partial sort.                          |
 | 7     | `CombinePartialFinalAggregate` | -                       | Collapses adjacent partial and final aggregates when the distributed shape makes them redundant.                        |
