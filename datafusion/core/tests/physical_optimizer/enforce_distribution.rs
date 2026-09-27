@@ -385,27 +385,22 @@ fn parquet_exec_multiple_sorted(
 fn parquet_exec_with_output_partitioning(
     output_partitioning: Partitioning,
 ) -> Arc<DataSourceExec> {
-    let file_groups = (0..output_partitioning.partition_count())
-        .map(|partition| {
-            FileGroup::new(vec![PartitionedFile::new(format!("p{partition}"), 100)])
-        })
-        .collect::<Vec<_>>();
-
-    let config = FileScanConfigBuilder::new(
-        ObjectStoreUrl::parse("test:///").unwrap(),
-        Arc::new(ParquetSource::new(schema())),
+    parquet_exec_with_partitioning_and_size(
+        output_partitioning,
+        Precision::Absent,
+        Precision::Absent,
     )
-    .with_file_groups(file_groups)
-    .with_output_partitioning(Some(output_partitioning))
-    .build();
-
-    DataSourceExec::from_data_source(config)
 }
 
-fn parquet_exec_with_output_partitioning_and_statistics(
+fn parquet_exec_with_partitioning_and_size(
     output_partitioning: Partitioning,
-    statistics: Statistics,
+    num_rows: Precision<usize>,
+    total_byte_size: Precision<usize>,
 ) -> Arc<DataSourceExec> {
+    let mut statistics = Statistics::new_unknown(&schema());
+    statistics.num_rows = num_rows;
+    statistics.total_byte_size = total_byte_size;
+
     let file_groups = (0..output_partitioning.partition_count())
         .map(|partition| {
             FileGroup::new(vec![PartitionedFile::new(format!("p{partition}"), 100)])
@@ -1147,20 +1142,15 @@ fn range_hash_join_repartitions_unpartitioned_side_to_match_range() -> Result<()
 
 #[test]
 fn range_hash_join_rejects_smaller_reference() -> Result<()> {
-    let stats = |rows, bytes| {
-        let mut statistics = Statistics::new_unknown(&schema());
-        statistics.num_rows = Precision::Inexact(rows);
-        statistics.total_byte_size = Precision::Inexact(bytes);
-        statistics
-    };
-
-    let left = parquet_exec_with_output_partitioning_and_statistics(
+    let left = parquet_exec_with_partitioning_and_size(
         Partitioning::UnknownPartitioning(4),
-        stats(100_000, 8_000_000),
+        Precision::Inexact(100_000),
+        Precision::Inexact(8_000_000),
     );
-    let right = parquet_exec_with_output_partitioning_and_statistics(
+    let right = parquet_exec_with_partitioning_and_size(
         range_partitioning("a", [10, 20, 30], SortOptions::default())?,
-        stats(100, 8_000),
+        Precision::Inexact(100),
+        Precision::Inexact(8_000),
     );
 
     let join_on = vec![(
@@ -1188,20 +1178,15 @@ fn range_hash_join_rejects_smaller_reference() -> Result<()> {
 
 #[test]
 fn range_hash_join_preserves_equal_reference() -> Result<()> {
-    let stats = |rows, bytes| {
-        let mut statistics = Statistics::new_unknown(&schema());
-        statistics.num_rows = Precision::Inexact(rows);
-        statistics.total_byte_size = Precision::Inexact(bytes);
-        statistics
-    };
-
-    let left = parquet_exec_with_output_partitioning_and_statistics(
+    let left = parquet_exec_with_partitioning_and_size(
         Partitioning::UnknownPartitioning(4),
-        stats(100, 8_000),
+        Precision::Inexact(100),
+        Precision::Inexact(8_000),
     );
-    let right = parquet_exec_with_output_partitioning_and_statistics(
+    let right = parquet_exec_with_partitioning_and_size(
         range_partitioning("a", [10, 20, 30], SortOptions::default())?,
-        stats(100, 8_000),
+        Precision::Inexact(100),
+        Precision::Inexact(8_000),
     );
 
     let join_on = vec![(
