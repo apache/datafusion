@@ -340,6 +340,140 @@ WHERE partition_col = 'D'
 GROUP BY int_col;
 ----
 
+# Regression for https://github.com/apache/datafusion/issues/25817.
+# The files store microsecond timestamps while the declared table schema uses
+# nanoseconds. Statistics must be converted to the table type before comparing
+# file ranges. Otherwise, missing bounds can make the files appear constant and
+# the scan incorrectly advertises sorted output in filename order.
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE TABLE timestamp_src AS
+SELECT arrow_cast(
+    -- Start at 2024-01-01 00:00:00.123456, advancing in microseconds.
+    1704067200123456 + day_index * 86400000000 + minute_index * 60000000,
+    'Timestamp(Microsecond, None)'
+) AS ts
+FROM (VALUES (0), (1), (2)) AS days(day_index)
+CROSS JOIN (VALUES (0), (1), (2), (3), (4)) AS minutes(minute_index);
+
+# Deliberately write the latest range to the first file in listing order.
+query I
+COPY (SELECT ts FROM timestamp_src WHERE ts >= TIMESTAMP '2024-01-03' ORDER BY ts)
+TO 'test_files/scratch/parquet_sorted_statistics/timestamps/a.parquet'
+STORED AS PARQUET;
+----
+5
+
+query I
+COPY (SELECT ts FROM timestamp_src WHERE ts < TIMESTAMP '2024-01-02' ORDER BY ts)
+TO 'test_files/scratch/parquet_sorted_statistics/timestamps/b.parquet'
+STORED AS PARQUET;
+----
+5
+
+query I
+COPY (SELECT ts FROM timestamp_src
+      WHERE ts >= TIMESTAMP '2024-01-02' AND ts < TIMESTAMP '2024-01-03'
+      ORDER BY ts)
+TO 'test_files/scratch/parquet_sorted_statistics/timestamps/c.parquet'
+STORED AS PARQUET;
+----
+5
+
+statement ok
+CREATE EXTERNAL TABLE timestamp_table (ts TIMESTAMP)
+STORED AS PARQUET
+WITH ORDER (ts ASC NULLS LAST)
+LOCATION 'test_files/scratch/parquet_sorted_statistics/timestamps';
+
+# The files should be reordered using their statistics, without adding a sort.
+query TT
+EXPLAIN SELECT ts FROM timestamp_table ORDER BY ts;
+----
+logical_plan
+01)Sort: timestamp_table.ts ASC NULLS LAST
+02)--TableScan: timestamp_table projection=[ts]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/timestamps/b.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/timestamps/c.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_sorted_statistics/timestamps/a.parquet]]}, projection=[ts], output_ordering=[ts@0 ASC NULLS LAST], file_type=parquet
+
+# Do not use rowsort: verify the actual output order across file boundaries.
+query P
+SELECT ts FROM timestamp_table ORDER BY ts;
+----
+2024-01-01T00:00:00.123456
+2024-01-01T00:01:00.123456
+2024-01-01T00:02:00.123456
+2024-01-01T00:03:00.123456
+2024-01-01T00:04:00.123456
+2024-01-02T00:00:00.123456
+2024-01-02T00:01:00.123456
+2024-01-02T00:02:00.123456
+2024-01-02T00:03:00.123456
+2024-01-02T00:04:00.123456
+2024-01-03T00:00:00.123456
+2024-01-03T00:01:00.123456
+2024-01-03T00:02:00.123456
+2024-01-03T00:03:00.123456
+2024-01-03T00:04:00.123456
+
+query P
+SELECT ts FROM timestamp_table ORDER BY ts LIMIT 3;
+----
+2024-01-01T00:00:00.123456
+2024-01-01T00:01:00.123456
+2024-01-01T00:02:00.123456
+
+# Check consumers of the converted bounds beyond file ordering.
+query PP
+SELECT min(ts), max(ts) FROM timestamp_table;
+----
+2024-01-01T00:00:00.123456 2024-01-03T00:04:00.123456
+
+query P
+SELECT ts FROM timestamp_table
+WHERE ts >= TIMESTAMP '2024-01-02 00:01:00.123456'
+  AND ts < TIMESTAMP '2024-01-02 00:03:00.123456'
+ORDER BY ts;
+----
+2024-01-02T00:01:00.123456
+2024-01-02T00:02:00.123456
+
+# Only the middle file can contain timestamps in this range.
+query TT
+EXPLAIN ANALYZE SELECT ts FROM timestamp_table
+WHERE ts >= TIMESTAMP '2024-01-02 00:01:00.123456'
+  AND ts < TIMESTAMP '2024-01-02 00:03:00.123456';
+----
+Plan with Metrics
+<slt:ignore>DataSourceExec: <slt:ignore>files_ranges_pruned_statistics=3 total → 1 matched<slt:ignore>
+
+# Downcasting timestamps truncates toward zero, including before the epoch.
+# The converted statistics must agree with the converted rows.
+statement ok
+COPY (SELECT arrow_cast(column1, 'Timestamp(Microsecond, None)') AS ts
+      FROM (VALUES (-1001), (-1), (1001)) ORDER BY ts)
+TO 'test_files/scratch/parquet_sorted_statistics/timestamp_downcast/data.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE timestamp_downcast (ts TIMESTAMP(3))
+STORED AS PARQUET
+WITH ORDER (ts ASC NULLS LAST)
+LOCATION 'test_files/scratch/parquet_sorted_statistics/timestamp_downcast';
+
+query P
+SELECT ts FROM timestamp_downcast ORDER BY ts;
+----
+1969-12-31T23:59:59.999
+1970-01-01T00:00:00
+1970-01-01T00:00:00.001
+
+query PP
+SELECT min(ts), max(ts) FROM timestamp_downcast;
+----
+1969-12-31T23:59:59.999 1970-01-01T00:00:00.001
+
 # Config reset
 
 # The SLT runner sets `target_partitions` to 4 instead of using the default, so
