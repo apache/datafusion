@@ -538,6 +538,21 @@ DataFusion CLI:</p>
 restores optimizations that depend on them. Preserve the required data ordering
 and ordering metadata when rewriting sorted files.</p>
 </section>
+<section id="timestamp-u-some-tz-timestamp-u-none-reads-the-naive-operand-in-tz">
+<h3><code class="docutils literal notranslate"><span class="pre">Timestamp(u,</span> <span class="pre">Some(tz))</span> <span class="pre">-</span> <span class="pre">Timestamp(u,</span> <span class="pre">None)</span></code> reads the naive operand in <code class="docutils literal notranslate"><span class="pre">tz</span></code><a class="headerlink" href="#timestamp-u-some-tz-timestamp-u-none-reads-the-naive-operand-in-tz" title="Link to this heading">#</a></h3>
+<p>Subtracting a timezone-naive timestamp from a timezone-aware one <em>at the same
+time unit</em> did not coerce at all in <code class="docutils literal notranslate"><span class="pre">55.0.0</span></code>: the naive operand was read as UTC,
+which differed both from <code class="docutils literal notranslate"><span class="pre">=</span></code> on the same pair of values and from every other
+pairing of time units. It now coerces like the rest, so the naive operand is
+read in the aware operand’s time zone:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- ts_tz is 2024-11-01T00:00:00-04:00 (America/New_York), ts is the naive</span>
+<span class="c1">-- 2024-11-01T00:00:00; ts_tz = ts is true in both versions</span>
+<span class="c1">-- 55.0.0: 0 days 4 hours 0 mins 0.000000000 secs</span>
+<span class="c1">-- 56.0.0: 0 days 0 hours 0 mins 0.000000000 secs</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">ts_tz</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">ts</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">timestamps</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
 <section id="foreignsession-create-physical-plan-is-unsupported">
 <h3><code class="docutils literal notranslate"><span class="pre">ForeignSession::create_physical_plan</span></code> is unsupported<a class="headerlink" href="#foreignsession-create-physical-plan-is-unsupported" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">ForeignSession::create_physical_plan</span></code> no longer forwards to the library that
@@ -1017,6 +1032,7 @@ expressions, which can cause resolution failure or incorrect rebinding.</p></li>
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquetaccessplan-into-overall-row-selection-is-deprecated"><code class="docutils literal notranslate"><span class="pre">ParquetAccessPlan::into_overall_row_selection</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#missing-parquet-null-counts-are-treated-as-unknown">Missing Parquet null counts are treated as unknown</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#timestamp-u-some-tz-timestamp-u-none-reads-the-naive-operand-in-tz"><code class="docutils literal notranslate"><span class="pre">Timestamp(u,</span> <span class="pre">Some(tz))</span> <span class="pre">-</span> <span class="pre">Timestamp(u,</span> <span class="pre">None)</span></code> reads the naive operand in <code class="docutils literal notranslate"><span class="pre">tz</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#foreignsession-create-physical-plan-is-unsupported"><code class="docutils literal notranslate"><span class="pre">ForeignSession::create_physical_plan</span></code> is unsupported</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupcolumn-now-requires-values-preserving"><code class="docutils literal notranslate"><span class="pre">GroupColumn</span></code> now requires <code class="docutils literal notranslate"><span class="pre">values_preserving</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-proto-common-option-and-constraint-conversions-are-fallible"><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: common option and constraint conversions are fallible</a></li>
