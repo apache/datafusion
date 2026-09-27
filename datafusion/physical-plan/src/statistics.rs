@@ -207,7 +207,7 @@ impl StatisticsContext {
         plan: &dyn ExecutionPlan,
         args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
-        self.compute_base(plan, args)
+        self.compute_base(plan, args, false)
             .map(|(statistics, _)| statistics)
     }
 
@@ -219,7 +219,7 @@ impl StatisticsContext {
         plan: &dyn ExecutionPlan,
         args: &StatisticsArgs,
     ) -> Result<Arc<ExtendedStatistics>> {
-        let (statistics, extensions) = self.compute_base(plan, args)?;
+        let (statistics, extensions) = self.compute_base(plan, args, true)?;
         Ok(Arc::new(ExtendedStatistics::new_with_extensions(
             statistics,
             extensions.unwrap_or_default(),
@@ -230,10 +230,13 @@ impl StatisticsContext {
     /// first and consulting the provider chain before the operator's built-in
     /// [`ExecutionPlan::statistics_from_inputs`].
     ///
-    /// Also returns the extensions a provider attached to this node (from the
-    /// provider result, or from the cache on a hit), so callers never need to
-    /// read the node's own extensions back out of the cache. Extensions are
-    /// still recorded in the cache so parents can consume them.
+    /// Also returns the extensions a provider attached to this node, so callers
+    /// never need to read the node's own extensions back out of the cache.
+    /// Extensions are still recorded in the cache so parents can consume them.
+    /// A freshly computed provider result always returns its extensions (they
+    /// are moved, not cloned); on a cache hit they are cloned out of the cache
+    /// only when `read_cached_extensions` is set, so child lookups that discard
+    /// them pay nothing.
     ///
     /// When `args.partition()` is `Some(idx)`, `idx` is validated against the
     /// plan's partition count.
@@ -241,6 +244,7 @@ impl StatisticsContext {
         &self,
         plan: &dyn ExecutionPlan,
         args: &StatisticsArgs,
+        read_cached_extensions: bool,
     ) -> Result<(Arc<Statistics>, Option<Extensions>)> {
         let partition = args.partition();
 
@@ -257,11 +261,12 @@ impl StatisticsContext {
         if let Some(cached) = self.cached_statistics(plan, partition) {
             // Only providers store extensions, so with an empty registry the
             // extension cache is never touched.
-            let extensions = if self.registry.providers().is_empty() {
-                None
-            } else {
-                self.cached_extensions(plan, partition)
-            };
+            let extensions =
+                if read_cached_extensions && !self.registry.providers().is_empty() {
+                    self.cached_extensions(plan, partition)
+                } else {
+                    None
+                };
             return Ok((cached, extensions));
         }
 
@@ -329,7 +334,11 @@ impl StatisticsContext {
             .enumerate()
             .map(|(i, (child, directive))| match directive {
                 ChildStats::At(p) => self
-                    .compute_base(child.as_ref(), &StatisticsArgs::new().with_partition(*p))
+                    .compute_base(
+                        child.as_ref(),
+                        &StatisticsArgs::new().with_partition(*p),
+                        false,
+                    )
                     .map(|(statistics, _)| statistics)
                     .map_err(|e| {
                         e.context(format!(
@@ -346,9 +355,10 @@ impl StatisticsContext {
     }
 
     /// Runs the provider chain, returning the first `Computed` result's core
-    /// statistics and non-empty extensions (also recording the extensions in the
-    /// cache), or `None` if the chain is empty or all delegate. A partition-blind provider applies only to overall stats
-    /// (its default `compute_statistics_with_args` delegates per partition).
+    /// statistics and non-empty extensions (also recording the extensions in
+    /// the cache), or `None` if the chain is empty or all delegate. A
+    /// partition-blind provider applies only to overall stats (its default
+    /// `compute_statistics_with_args` delegates per partition).
     ///
     /// Each provider's child statistics come from its own
     /// [`child_stats_requests`](crate::operator_statistics::StatisticsProvider::child_stats_requests)
@@ -391,14 +401,14 @@ impl StatisticsContext {
             if let StatisticsResult::Computed(computed) =
                 provider.compute_statistics_with_args(plan, &child_extended, args)?
             {
-                let extensions = if computed.extensions().is_empty() {
+                let (statistics, extensions) = computed.into_parts();
+                let extensions = if extensions.is_empty() {
                     None
                 } else {
-                    let extensions = computed.extensions().clone();
                     self.store_extensions(plan, partition, extensions.clone());
                     Some(extensions)
                 };
-                return Ok(Some((Arc::clone(computed.base_arc()), extensions)));
+                return Ok(Some((statistics, extensions)));
             }
         }
         Ok(None)
@@ -690,6 +700,34 @@ mod tests {
         assert_eq!(first.get_extension::<Tag>(), Some(&Tag(7)));
         assert_eq!(second.get_extension::<Tag>(), Some(&Tag(7)));
         assert!(Arc::ptr_eq(first.base_arc(), second.base_arc()));
+    }
+
+    /// The walk returns a freshly computed node's extensions from the provider
+    /// result itself, not from the cache, so `compute_extended` does not depend
+    /// on the root having a cache entry. On a cache hit they are read only on
+    /// request.
+    #[test]
+    fn walk_returns_provider_extensions_directly() {
+        let leaf = make_stats_leaf(100);
+        let ctx = ctx_with(Arc::new(TagLeafProvider { rows: 100, tag: 7 }));
+        let args = StatisticsArgs::new();
+
+        // Fresh computation: returned even though no cached read was requested,
+        // and still recorded for parents.
+        let (_, extensions) = ctx.compute_base(leaf.as_ref(), &args, false).unwrap();
+        assert_eq!(extensions.unwrap().get::<Tag>(), Some(&Tag(7)));
+        assert!(
+            ctx.cache
+                .borrow()
+                .extensions
+                .contains_key(&cache_key(leaf.as_ref(), None))
+        );
+
+        // Cache hit: extensions are cloned out of the cache only on request.
+        let (_, extensions) = ctx.compute_base(leaf.as_ref(), &args, false).unwrap();
+        assert!(extensions.is_none());
+        let (_, extensions) = ctx.compute_base(leaf.as_ref(), &args, true).unwrap();
+        assert_eq!(extensions.unwrap().get::<Tag>(), Some(&Tag(7)));
     }
 
     #[test]

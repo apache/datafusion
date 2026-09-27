@@ -183,9 +183,9 @@ impl ExtendedStatistics {
         Self { base, extensions }
     }
 
-    /// Returns the extension map.
-    pub(crate) fn extensions(&self) -> &Extensions {
-        &self.extensions
+    /// Splits into the base statistics and the extension map without cloning.
+    pub(crate) fn into_parts(self) -> (Arc<Statistics>, Extensions) {
+        (self.base, self.extensions)
     }
 }
 
