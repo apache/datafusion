@@ -425,7 +425,9 @@ impl ExternalSorter {
         debug!("Spilling sort data of ExternalSorter to disk whilst inserting");
 
         let batches_to_spill = std::mem::take(globally_sorted_batches);
-        self.reservation.free();
+        // Keep the reservation alive while the batches remain in memory during
+        // the writes. It is released on success or error via RAII.
+        let _spill_reservation = self.reservation.take();
 
         let (in_progress_file, max_record_batch_size) =
             self.in_progress_spill_file.as_mut().ok_or_else(|| {
@@ -1734,16 +1736,20 @@ mod tests {
     use arrow::array::*;
     use arrow::compute::SortOptions;
     use arrow::datatypes::*;
+    use bytes::Bytes;
     use datafusion_common::ScalarValue;
     use datafusion_common::cast::as_primitive_array;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::test_util::batches_to_string;
-    use datafusion_execution::RecordBatchStream;
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::disk_manager::DiskManagerBuilder;
     use datafusion_execution::memory_pool::{
         GreedyMemoryPool, MemoryConsumer, MemoryPool,
     };
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_execution::{
+        RecordBatchStream, SpillFile, SpillWriter, TempFileFactory,
+    };
     use datafusion_physical_expr::expressions::{Column, Literal};
     use datafusion_physical_expr::{DynamicFilterTracking, EquivalenceProperties};
 
@@ -3558,6 +3564,127 @@ mod tests {
         }
 
         drop(contender);
+        Ok(())
+    }
+
+    /// Spill backend that records the pool's reservation whenever batch data
+    /// is written.
+    struct RecordingTempFileFactory {
+        pool: Arc<dyn MemoryPool>,
+        reserved_during_writes: Arc<parking_lot::Mutex<Vec<usize>>>,
+    }
+
+    impl TempFileFactory for RecordingTempFileFactory {
+        fn create_temp_file(&self, _description: &str) -> Result<Arc<dyn SpillFile>> {
+            Ok(Arc::new(RecordingSpillFile {
+                pool: Arc::clone(&self.pool),
+                reserved_during_writes: Arc::clone(&self.reserved_during_writes),
+            }))
+        }
+    }
+
+    struct RecordingSpillFile {
+        pool: Arc<dyn MemoryPool>,
+        reserved_during_writes: Arc<parking_lot::Mutex<Vec<usize>>>,
+    }
+
+    impl SpillFile for RecordingSpillFile {
+        fn size(&self) -> Option<u64> {
+            Some(0)
+        }
+
+        fn read_stream(
+            &self,
+        ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>> {
+            Ok(Box::pin(futures::stream::empty()))
+        }
+
+        fn open_writer(&self) -> Result<Box<dyn SpillWriter>> {
+            Ok(Box::new(RecordingSpillWriter {
+                pool: Arc::clone(&self.pool),
+                reserved_during_writes: Arc::clone(&self.reserved_during_writes),
+            }))
+        }
+    }
+
+    struct RecordingSpillWriter {
+        pool: Arc<dyn MemoryPool>,
+        reserved_during_writes: Arc<parking_lot::Mutex<Vec<usize>>>,
+    }
+
+    impl std::io::Write for RecordingSpillWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            // Skip the 4-byte continuation and length prefixes, which include
+            // the end-of-stream marker written after the batches.
+            if buf.len() > 8 {
+                self.reserved_during_writes
+                    .lock()
+                    .push(self.pool.reserved());
+            }
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl SpillWriter for RecordingSpillWriter {
+        fn finish(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Sorted batches stay in memory until they are written to the spill
+    /// file, so their reservation must be held until then.
+    #[tokio::test]
+    async fn test_spill_reservation_held_during_write() -> Result<()> {
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1024 * 1024));
+        let reserved_during_writes = Arc::new(parking_lot::Mutex::new(vec![]));
+        let disk_manager_builder = DiskManagerBuilder::default().with_temp_file_factory(
+            Arc::new(RecordingTempFileFactory {
+                pool: Arc::clone(&pool),
+                reserved_during_writes: Arc::clone(&reserved_during_writes),
+            }),
+        );
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::clone(&pool))
+            .with_disk_manager_builder(disk_manager_builder)
+            .build_arc()?;
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, false)]));
+        let metrics = ExecutionPlanMetricsSet::new();
+        let mut sorter = ExternalSorter::new(
+            0,
+            Arc::clone(&schema),
+            [PhysicalSortExpr::new_default(Arc::new(Column::new("x", 0)))].into(),
+            128,
+            0,
+            usize::MAX,
+            SpillCompression::Uncompressed,
+            &metrics,
+            runtime,
+        )?;
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from_iter_values((0..100).rev()))],
+        )?;
+        let batch_bytes = get_record_batch_memory_size(&batch);
+        sorter
+            .reservation
+            .try_grow(get_reserved_bytes_for_record_batch(&batch)?)?;
+        sorter.in_mem_batches.push(batch);
+
+        sorter.sort_and_spill_in_mem_batches().await?;
+
+        let reserved_during_writes = reserved_during_writes.lock();
+        assert!(!reserved_during_writes.is_empty());
+        assert!(
+            reserved_during_writes
+                .iter()
+                .all(|&reserved| reserved >= batch_bytes),
+            "sorted batches must stay reserved while they are written: {reserved_during_writes:?}"
+        );
+        assert_eq!(pool.reserved(), 0);
         Ok(())
     }
 
