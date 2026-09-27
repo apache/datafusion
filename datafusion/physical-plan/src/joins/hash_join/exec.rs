@@ -76,6 +76,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_schema::{DataType, Schema};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::utils::memory::{
     RecordBatchMemoryCounter, estimate_memory_size, get_record_batch_memory_size,
@@ -102,6 +103,9 @@ use futures::TryStreamExt;
 use parking_lot::Mutex;
 
 use super::partitioned_hash_eval::SeededRandomState;
+
+mod prepared;
+pub use prepared::PreparedHashJoinBuild;
 
 /// Hard-coded seed to ensure hash values from the hash join differ from `RepartitionExec`, avoiding collisions.
 pub(crate) const HASH_JOIN_SEED: SeededRandomState =
@@ -288,11 +292,24 @@ impl NullAwareMode {
     }
 }
 
-/// HashTable and input data for the left (build side) of a join
+/// Immutable build buffers and their durable reservation.
+struct JoinBuildData {
+    /// Hash table with row indices into `batch`, also shared with dynamic filters.
+    map: Arc<Map>,
+    /// The input rows for the build side.
+    batch: RecordBatch,
+    /// Evaluated build-side key expressions.
+    values: Vec<ArrayRef>,
+    /// Bounds computed from the build side; absent for an empty partition.
+    bounds: Option<PartitionBounds>,
+    /// IN-list values or a hash-table reference used for filter pushdown.
+    membership: PushdownStrategy,
+    // Keep the reservation after the allocations it accounts for.
+    reservation: MemoryReservation,
+}
+
+/// A build lease and mutable bookkeeping for one join execution.
 pub(super) struct JoinLeftData {
-    /// The hash table with indices into `batch`
-    /// Arc is used to allow sharing with SharedBuildAccumulator for hash map pushdown
-    pub(super) map: Arc<Map>,
     /// Hash table over correlated scope keys for correlated null-aware joins.
     ///
     /// Key 0 is the scalar `NOT IN` value key and keys 1..N are correlated
@@ -303,37 +320,23 @@ pub(super) struct JoinLeftData {
     /// The build rows whose value key is NULL (see [`NullValueBuildRows`]).
     /// `None` when the build side has no NULL value keys.
     null_value_build_rows: Option<NullValueBuildRows>,
-    /// The input rows for the build side
-    batch: RecordBatch,
-    /// The build side on expressions values
-    values: Vec<ArrayRef>,
-    /// Shared bitmap builder for visited left indices
+    /// Shared bitmap for visited left indices within this consuming join.
     visited_indices_bitmap: SharedBitmapBuilder,
-    /// Shared bitmap builder for null marks
+    /// Shared bitmap for NULL marks within this consuming join.
     null_indices_bitmap: SharedBitmapBuilder,
-    /// Tracks which probe partition finishes last and what the partitions
-    /// collectively saw. See [`ProbeCompletion`] for the invariant it upholds.
+    /// Tracks the final probe partition and what every partition observed.
+    /// See [`ProbeCompletion`] for the completion invariant.
     probe_completion: ProbeCompletion,
-    /// We need to keep this field to maintain accurate memory accounting, even though we don't directly use it.
-    /// Without holding onto this reservation, the recorded memory usage would become inconsistent with actual usage.
-    /// This could hide potential out-of-memory issues, especially when upstream operators increase their memory consumption.
-    /// The MemoryReservation ensures proper tracking of memory resources throughout the join operation's lifecycle.
-    _reservation: MemoryReservation,
-    /// Bounds computed from the build side for dynamic filter pushdown.
-    /// If the partition is empty (no rows) this will be None.
-    /// If the partition has some rows this will be Some with the bounds for each join key column.
-    pub(super) bounds: Option<PartitionBounds>,
-    /// Membership testing strategy for filter pushdown
-    /// Contains either InList values for small build sides or hash table reference for large build sides
-    pub(super) membership: PushdownStrategy,
-    // For RightAnti joins, where the build side is a smaller subquery, truthy if has null for the single join key
+    /// Whether the smaller RightAnti subquery contains a NULL key.
     pub(super) build_side_has_null: bool,
+    // Drop the reservation after the mutable state it also accounts for.
+    build: Arc<JoinBuildData>,
 }
 
 impl JoinLeftData {
     /// return a reference to the map
     pub(super) fn map(&self) -> &Map {
-        &self.map
+        &self.build.map
     }
 
     pub(super) fn null_aware_scope_map(&self) -> Option<&dyn JoinHashMapType> {
@@ -346,7 +349,7 @@ impl JoinLeftData {
 
     /// returns a reference to the build side batch
     pub(super) fn batch(&self) -> &RecordBatch {
-        &self.batch
+        &self.build.batch
     }
 
     /// Returns `true` if the build side physically contains rows.
@@ -368,7 +371,7 @@ impl JoinLeftData {
 
     /// returns a reference to the build side expressions values
     pub(super) fn values(&self) -> &[ArrayRef] {
-        &self.values
+        &self.build.values
     }
 
     /// returns a reference to the visited indices bitmap
@@ -382,7 +385,12 @@ impl JoinLeftData {
 
     /// returns a reference to the InList values for filter pushdown
     pub(super) fn membership(&self) -> &PushdownStrategy {
-        &self.membership
+        &self.build.membership
+    }
+
+    /// Borrow bounds without sharing a consuming join's dynamic-filter state.
+    pub(super) fn bounds(&self) -> Option<&PartitionBounds> {
+        self.build.bounds.as_ref()
     }
 
     /// Records what a probe partition saw in one batch, for the null-aware
@@ -444,6 +452,7 @@ impl HashJoinExecBuilder {
                 filter: None,
                 join_type,
                 left_fut: Default::default(),
+                prepared_build: None,
                 random_state: HASH_JOIN_SEED,
                 mode: PartitionMode::Auto,
                 fetch: None,
@@ -535,13 +544,20 @@ impl HashJoinExecBuilder {
             children.len() == 2,
             "wrong number of children passed into `HashJoinExecBuilder`"
         );
+        if self.exec.prepared_build.is_some()
+            && !Arc::ptr_eq(&self.exec.left, &children[0])
+        {
+            return plan_err!(
+                "Cannot replace the build child after attaching a prepared hash-join build"
+            );
+        }
         self.preserve_properties &= has_same_children_properties(&self.exec, &children)?;
         self.exec.right = children.swap_remove(1);
         self.exec.left = children.swap_remove(0);
         Ok(self)
     }
 
-    /// Reset runtime state.
+    /// Reset task-local runtime state while retaining the immutable prepared build.
     pub fn reset_state(mut self) -> Self {
         self.exec.left_fut = Default::default();
         self.exec.dynamic_filter = None;
@@ -557,10 +573,18 @@ impl HashJoinExecBuilder {
     /// Build resulting execution plan.
     pub fn build(self) -> Result<HashJoinExec> {
         let Self {
-            exec,
+            mut exec,
             preserve_properties,
         } = self;
 
+        if let Some(prepared) = &exec.prepared_build {
+            prepared.validate(&exec)?;
+            exec.left_fut = Default::default();
+            exec.metrics = ExecutionPlanMetricsSet::new();
+            if let Some(filter) = &mut exec.dynamic_filter {
+                filter.build_accumulator = OnceLock::new();
+            }
+        }
         // Validate null_aware flag
         exec.null_aware_mode()?;
 
@@ -575,6 +599,7 @@ impl HashJoinExecBuilder {
             filter,
             join_type,
             left_fut,
+            prepared_build,
             random_state,
             mode,
             metrics,
@@ -622,6 +647,7 @@ impl HashJoinExecBuilder {
             join_type,
             join_schema,
             left_fut,
+            prepared_build,
             random_state,
             mode,
             metrics,
@@ -652,6 +678,7 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
                 join_type: exec.join_type,
                 join_schema: Arc::clone(&exec.join_schema),
                 left_fut: Arc::clone(&exec.left_fut),
+                prepared_build: exec.prepared_build.clone(),
                 random_state: exec.random_state.clone(),
                 mode: exec.mode,
                 metrics: exec.metrics.clone(),
@@ -881,6 +908,8 @@ pub struct HashJoinExec {
     /// Each output stream waits on the `OnceAsync` to signal the completion of
     /// the hash table creation.
     left_fut: Arc<OnceAsync<JoinLeftData>>,
+    /// Immutable build attached by an embedding executor.
+    prepared_build: Option<Arc<PreparedHashJoinBuild>>,
     /// Shared the `SeededRandomState` for the hashing algorithm (seeds preserved for serialization)
     random_state: SeededRandomState,
     /// Partitioning mode to use
@@ -939,6 +968,7 @@ impl fmt::Debug for HashJoinExec {
             .field("join_type", &self.join_type)
             .field("join_schema", &self.join_schema)
             .field("left_fut", &self.left_fut)
+            .field("prepared_build", &self.prepared_build)
             .field("random_state", &self.random_state)
             .field("mode", &self.mode)
             .field("null_aware", &self.null_aware)
@@ -1457,6 +1487,12 @@ impl DisplayAs for HashJoinExec {
                     .map_or_else(String::new, |f| format!(", fetch={f}"));
                 let display_null_aware =
                     if self.null_aware { ", null_aware" } else { "" };
+                let display_prepared = self
+                    .prepared_build
+                    .as_ref()
+                    .map_or_else(String::new, |prepared| {
+                        format!(", prepared_build={} rows", prepared.num_rows())
+                    });
                 let on = self
                     .on
                     .iter()
@@ -1465,7 +1501,7 @@ impl DisplayAs for HashJoinExec {
                     .join(", ");
                 write!(
                     f,
-                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}{}{}{}",
+                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}{}{}{}{}",
                     self.mode,
                     self.join_type,
                     on,
@@ -1474,6 +1510,7 @@ impl DisplayAs for HashJoinExec {
                     display_null_equality,
                     display_fetch,
                     display_null_aware,
+                    display_prepared,
                 )
             }
             DisplayFormatType::TreeRender => {
@@ -1491,6 +1528,10 @@ impl DisplayAs for HashJoinExec {
                 }
 
                 writeln!(f, "on={on}")?;
+
+                if let Some(prepared) = &self.prepared_build {
+                    writeln!(f, "prepared_build={} rows", prepared.num_rows())?;
+                }
 
                 if self.null_equality() == NullEquality::NullEqualsNull {
                     writeln!(f, "NullsEqual: true")?;
@@ -1708,8 +1749,16 @@ impl ExecutionPlan for HashJoinExec {
 
         let null_aware = self.null_aware_mode()?;
 
-        let left_fut = match self.mode {
-            PartitionMode::CollectLeft => self.left_fut.try_once(|| {
+        let left_fut = match (&self.prepared_build, self.mode) {
+            (Some(prepared), _) => {
+                // Public join fields can change after builder validation.
+                prepared.validate(self)?;
+                let prepared = Arc::clone(prepared);
+                self.left_fut.try_once(|| {
+                    Ok(async move { Ok(prepared.probe_data(right_partitions)) })
+                })?
+            }
+            (None, PartitionMode::CollectLeft) => self.left_fut.try_once(|| {
                 let left_stream = self.left.execute(0, Arc::clone(&context))?;
 
                 let reservation =
@@ -1722,15 +1771,16 @@ impl ExecutionPlan for HashJoinExec {
                     join_metrics.clone(),
                     reservation,
                     need_produce_result_in_final(self.join_type),
-                    self.right().output_partitioning().partition_count(),
+                    right_partitions,
                     enable_dynamic_filter_pushdown,
                     Arc::clone(context.session_config().options()),
                     self.null_equality,
                     null_aware,
                     array_map_created_count,
+                    BuildMode::Ordinary,
                 ))
             })?,
-            PartitionMode::Partitioned => {
+            (None, PartitionMode::Partitioned) => {
                 let left_stream = self.left.execute(partition, Arc::clone(&context))?;
 
                 let reservation =
@@ -1749,9 +1799,10 @@ impl ExecutionPlan for HashJoinExec {
                     self.null_equality,
                     null_aware,
                     array_map_created_count,
+                    BuildMode::Ordinary,
                 ))
             }
-            PartitionMode::Auto => {
+            (None, PartitionMode::Auto) => {
                 return plan_err!(
                     "Invalid HashJoinExec, unsupported PartitionMode {:?} in execute()",
                     PartitionMode::Auto
@@ -1834,11 +1885,17 @@ impl ExecutionPlan for HashJoinExec {
         input_stats: &[Arc<Statistics>],
         _args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
-        let left_stats = Arc::clone(&input_stats[0]);
-        let right_stats = Arc::clone(&input_stats[1]);
+        let left_stats = if let Some(prepared) = &self.prepared_build {
+            // The declared left child supplies the schema but is never executed.
+            Statistics::new_unknown(self.left.schema().as_ref())
+                .with_num_rows(Precision::Exact(prepared.num_rows()))
+        } else {
+            input_stats[0].as_ref().clone()
+        };
+        let right_stats = input_stats[1].as_ref().clone();
         let stats = estimate_join_statistics(
-            Arc::unwrap_or_clone(left_stats),
-            Arc::unwrap_or_clone(right_stats),
+            left_stats,
+            right_stats,
             &self.on,
             self.null_equality,
             &self.join_type,
@@ -1860,6 +1917,9 @@ impl ExecutionPlan for HashJoinExec {
         // TODO: currently if there is projection in HashJoinExec, we can't push down projection to left or right input. Maybe we can pushdown the mixed projection later.
         if self.contains_projection() {
             return Ok(None);
+        }
+        if self.prepared_build.is_some() {
+            return try_embed_projection(projection, self);
         }
 
         let schema = self.schema();
@@ -2085,6 +2145,7 @@ impl ExecutionPlan for HashJoinExec {
             join_schema: _,
             // runtime build-side state, not part of the plan
             left_fut: _,
+            prepared_build,
             // the fixed `HASH_JOIN_SEED` constant, set identically by the
             // builder on decode
             random_state: _,
@@ -2096,6 +2157,11 @@ impl ExecutionPlan for HashJoinExec {
             cache: _,
         } = self;
 
+        if prepared_build.is_some() {
+            return datafusion_common::not_impl_err!(
+                "HashJoinExec with a prepared build cannot be serialized"
+            );
+        }
         let left = ctx.encode_child(left)?;
         let right = ctx.encode_child(right)?;
 
@@ -2750,6 +2816,12 @@ impl CollectLeftAccumulator {
     }
 }
 
+#[derive(PartialEq, Eq)]
+enum BuildMode {
+    Ordinary,
+    Prepared,
+}
+
 /// State for collecting the build-side data during hash join
 struct BuildSideState {
     batches: Vec<RecordBatch>,
@@ -2931,8 +3003,8 @@ fn concat_build_batches(
 /// * `with_visited_indices_bitmap` - Whether to track visited indices (for outer joins)
 /// * `probe_threads_count` - Number of threads that will probe this hash table
 /// * `should_compute_dynamic_filters` - Whether to compute min/max bounds for dynamic filtering
-/// * `with_null_aware_mark_state` - Whether to build the per-build-row null-indices bitmap
-///   and correlation-scope maps used by correlated null-aware `LeftMark` joins
+/// * `null_aware` - The null-aware join mode, including whether per-build-row
+///   bitmaps and correlation-scope maps are required
 ///
 /// # Memory Accounting
 /// Build batches are added to `reservation` as they arrive. They are then copied
@@ -2954,7 +3026,7 @@ fn concat_build_batches(
 #[expect(clippy::too_many_arguments)]
 async fn collect_left_input(
     random_state: RandomState,
-    left_stream: SendableRecordBatchStream,
+    mut left_stream: SendableRecordBatchStream,
     on_left: Vec<PhysicalExprRef>,
     metrics: BuildProbeJoinMetrics,
     reservation: MemoryReservation,
@@ -2965,8 +3037,10 @@ async fn collect_left_input(
     null_equality: NullEquality,
     null_aware: Option<NullAwareMode>,
     array_map_created_count: Count,
+    mode: BuildMode,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
+    let prepared = mode == BuildMode::Prepared;
 
     // The extra scope maps + null bitmap are only built for correlated
     // null-aware joins (see `NullAwareMode`).
@@ -2974,7 +3048,7 @@ async fn collect_left_input(
 
     let is_phj_candidate = is_perfect_hash_join_candidate(&on_left, &schema)?;
 
-    let initial = BuildSideState::try_new(
+    let mut state = BuildSideState::try_new(
         metrics,
         reservation,
         on_left.clone(),
@@ -2982,41 +3056,52 @@ async fn collect_left_input(
         should_compute_dynamic_filters || is_phj_candidate,
     )?;
 
-    let state = left_stream
-        .try_fold(initial, |mut state, batch| async move {
-            // Update accumulators if computing bounds
-            if let Some(ref mut accumulators) = state.bounds_accumulators {
-                for accumulator in accumulators {
-                    accumulator.update_batch(&batch)?;
-                }
+    let mut max_batch_rows = 0;
+    while let Some(batch) = left_stream.try_next().await? {
+        max_batch_rows = max_batch_rows.max(batch.num_rows());
+        if let Some(accumulators) = &mut state.bounds_accumulators {
+            for accumulator in accumulators {
+                accumulator.update_batch(&batch)?;
             }
+        }
+        let batch_size = state.memory_counter.count_batch(&batch);
+        state.reservation.try_grow(batch_size)?;
+        state.metrics.build_mem_used.add(batch_size);
+        state.metrics.build_input_batches.add(1);
+        state.metrics.build_input_rows.add(batch.num_rows());
+        state.num_rows += batch.num_rows();
+        state.batches.push(batch);
+    }
+    drop(left_stream);
+    if prepared && state.batches.is_empty() {
+        // Even empty UTF-8 output retains an offset buffer.
+        let empty = RecordBatch::new_empty(Arc::clone(&schema));
+        state
+            .reservation
+            .try_grow(state.memory_counter.count_batch(&empty))?;
+        state.batches.push(empty);
+    }
+    let input_bytes = state.memory_counter.memory_usage();
 
-            // Decide if we spill or not
-            let batch_size = state.memory_counter.count_batch(&batch);
-            // Reserve memory for incoming batch
-            state.reservation.try_grow(batch_size)?;
-            // Update metrics
-            state.metrics.build_mem_used.add(batch_size);
-            state.metrics.build_input_batches.add(1);
-            state.metrics.build_input_rows.add(batch.num_rows());
-            // Update row count
-            state.num_rows += batch.num_rows();
-            // Push batch to output
-            state.batches.push(batch);
-            Ok(state)
-        })
-        .await?;
-
-    // Extract fields from state
+    // Bind the reservation first so error paths release allocations before their charge.
     let BuildSideState {
-        batches,
+        mut reservation,
+        mut batches,
         num_rows,
         metrics,
-        mut reservation,
         bounds_accumulators,
-        memory_counter,
+        memory_counter: _,
     } = state;
-    let inputs_reserved = memory_counter.memory_usage();
+
+    // Admit concatenation copies while the original batches are retained.
+    // Arrow keeps a single batch as an inexpensive slice.
+    let copy_bytes = if prepared && batches.len() > 1 {
+        let copy_bytes = prepared::prepared_copy_bytes(&batches)?;
+        reservation.try_grow(copy_bytes)?;
+        copy_bytes
+    } else {
+        0
+    };
 
     // Compute bounds
     let mut bounds = match bounds_accumulators {
@@ -3041,14 +3126,18 @@ async fn collect_left_input(
             config.execution.perfect_hash_join_min_key_density,
             null_equality,
         )? {
-        let batch = concat_build_batches(
-            &schema,
-            batches,
-            false,
-            inputs_reserved,
-            &mut reservation,
-            &metrics,
-        )?;
+        let batch = if prepared {
+            concat_batches(&schema, batches.iter())?
+        } else {
+            concat_build_batches(
+                &schema,
+                std::mem::take(&mut batches),
+                false,
+                input_bytes,
+                &mut reservation,
+                &metrics,
+            )?
+        };
         let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
         let array_map = ArrayMap::try_new(&left_values[0], min_val, max_val)?;
 
@@ -3064,7 +3153,16 @@ async fn collect_left_input(
         // Arc is used instead of Box to allow sharing with SharedBuildAccumulator for hash map pushdown
         let mut hashmap = new_join_hashmap(num_rows, &mut reservation, &metrics)?;
 
-        let mut hashes_buffer = Vec::new();
+        let scratch_reservation = reservation.new_empty();
+        if prepared {
+            scratch_reservation.try_grow(prepared::prepared_scratch_bytes(
+                max_batch_rows,
+                on_left.len(),
+                null_equality,
+            )?)?;
+        }
+        // The maximum is known: avoid geometric growth and its excess capacity.
+        let mut hashes_buffer = Vec::with_capacity(max_batch_rows);
         let mut offset = 0;
 
         // Updating hashmap starting from the last batch
@@ -3086,14 +3184,18 @@ async fn collect_left_input(
         }
 
         // Merge all batches into a single batch, so we can directly index into the arrays
-        let batch = concat_build_batches(
-            &schema,
-            batches,
-            true,
-            inputs_reserved,
-            &mut reservation,
-            &metrics,
-        )?;
+        let batch = if prepared {
+            concat_batches(&schema, batches.iter().rev())?
+        } else {
+            concat_build_batches(
+                &schema,
+                std::mem::take(&mut batches),
+                true,
+                input_bytes,
+                &mut reservation,
+                &metrics,
+            )?
+        };
 
         let left_values = evaluate_expressions_to_arrays(&on_left, &batch)?;
 
@@ -3245,18 +3347,33 @@ async fn collect_left_input(
         && !left_values.is_empty()
         && left_values[0].logical_null_count() > 0;
 
+    if prepared {
+        drop(batches);
+        // Prepared keys are direct columns. IN-list arrays share these batch
+        // buffers, including through multi-key StructArray children.
+        let retained = RecordBatchMemoryCounter::new().count_batch(&batch);
+        prepared::reconcile_prepared_copy_reservation(
+            &reservation,
+            input_bytes,
+            copy_bytes,
+            retained,
+        )?;
+    }
+
     let data = JoinLeftData {
-        map,
+        build: Arc::new(JoinBuildData {
+            map,
+            batch,
+            values: left_values,
+            bounds,
+            membership,
+            reservation,
+        }),
         null_aware_scope_map,
         null_value_build_rows,
-        batch,
-        values: left_values,
         visited_indices_bitmap: Mutex::new(visited_indices_bitmap),
         null_indices_bitmap: Mutex::new(null_indices_bitmap),
         probe_completion: ProbeCompletion::new(probe_threads_count),
-        _reservation: reservation,
-        bounds,
-        membership,
         build_side_has_null: build_has_null,
     };
 
