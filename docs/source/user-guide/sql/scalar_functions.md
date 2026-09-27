@@ -962,7 +962,7 @@ trunc(numeric_expression[, decimal_places])
 
 ### `coalesce`
 
-Returns the first of its arguments that is not _null_. Returns _null_ if all arguments are _null_. This function is often used to substitute a default value for _null_ values.
+Returns the first of its arguments that is not _null_. Returns _null_ if all arguments are _null_. Arguments after the first non-_null_ one are normally not evaluated, but when any argument other than the last is volatile every argument is evaluated, so that each is evaluated exactly once. This function is often used to substitute a default value for _null_ values.
 
 ```sql
 coalesce(expression1[, ..., expression_n])
@@ -1066,7 +1066,7 @@ nullif(expression1, expression2)
 
 ### `nvl`
 
-Returns _expression2_ if _expression1_ is NULL otherwise it returns _expression1_ and _expression2_ is not evaluated. This function can be used to substitute a default value for NULL values.
+Returns _expression2_ if _expression1_ is NULL otherwise it returns _expression1_. _expression2_ is normally not evaluated, but when _expression1_ is volatile both arguments are evaluated, so that _expression1_ is evaluated exactly once. This function can be used to substitute a default value for NULL values.
 
 ```sql
 nvl(expression1, expression2)
