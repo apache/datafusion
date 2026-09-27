@@ -411,26 +411,25 @@ impl Unparser<'_> {
                 // An aggregate's `order_by` is spelled one of two ways in SQL:
                 // `WITHIN GROUP (ORDER BY ..)` for ordered-set aggregates, and an
                 // `ORDER BY` clause inside the argument list for every other
-                // aggregate. Both map onto `params.order_by`, so pick the spelling
-                // the function asks for rather than dropping the ordering.
-                let use_within_group =
-                    agg.func.supports_within_group_clause() && !order_by.is_empty();
-                let order_by_sql = order_by
-                    .iter()
-                    .map(|sort_expr| self.sort_to_sql(sort_expr))
-                    .collect::<Result<Vec<ast::OrderByExpr>>>()?;
-
-                let (args_to_use, within_group, clauses) = if use_within_group {
-                    // if this is a WITHIN GROUP aggregate, skip the prepended arg
-                    (self.function_args_to_sql(&args[1..])?, order_by_sql, vec![])
-                } else if order_by.is_empty() {
+                // aggregate. Both map onto `params.order_by`.
+                let (args_to_use, within_group, clauses) = if order_by.is_empty() {
                     (self.function_args_to_sql(args)?, vec![], vec![])
                 } else {
-                    (
-                        self.function_args_to_sql(args)?,
-                        vec![],
-                        vec![ast::FunctionArgumentClause::OrderBy(order_by_sql)],
-                    )
+                    let order_by_sql = order_by
+                        .iter()
+                        .map(|sort_expr| self.sort_to_sql(sort_expr))
+                        .collect::<Result<Vec<ast::OrderByExpr>>>()?;
+                    if agg.func.supports_within_group_clause() {
+                        // Ordered-set aggregates carry the ordered value as their
+                        // first argument, so skip it.
+                        (self.function_args_to_sql(&args[1..])?, order_by_sql, vec![])
+                    } else {
+                        (
+                            self.function_args_to_sql(args)?,
+                            vec![],
+                            vec![ast::FunctionArgumentClause::OrderBy(order_by_sql)],
+                        )
+                    }
                 };
 
                 let filter = match filter {
