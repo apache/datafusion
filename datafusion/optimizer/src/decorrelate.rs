@@ -30,6 +30,7 @@ use datafusion_common::{
     Column, DFSchemaRef, HashMap, Result, ScalarValue, assert_or_internal_err, plan_err,
 };
 use datafusion_expr::expr::{Alias, GroupingSet};
+use datafusion_expr::logical_plan::Join;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
@@ -149,7 +150,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             // above the join changes the result. The side a semi, anti or mark
             // join does not output cannot give its columns to a pulled up
             // filter either.
-            LogicalPlan::Join(_) if !correlated_inputs_are_preserved(&plan) => {
+            LogicalPlan::Join(ref join) if !correlated_inputs_are_preserved(join) => {
                 // the unsupported case
                 self.can_pull_up = false;
                 Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
@@ -547,13 +548,10 @@ impl PullUpCorrelatedExpr {
     }
 }
 
-/// Whether every input of the join `plan` that holds outer references is a
-/// side whose rows the join preserves, so a correlated filter below it can be
-/// pulled above the join without changing the result. `true` for other plans.
-fn correlated_inputs_are_preserved(plan: &LogicalPlan) -> bool {
-    let LogicalPlan::Join(join) = plan else {
-        return true;
-    };
+/// Whether every input of `join` that holds outer references is a side whose
+/// rows the join preserves, so a correlated filter below it can be pulled above
+/// the join without changing the result.
+fn correlated_inputs_are_preserved(join: &Join) -> bool {
     let (left_preserved, right_preserved) = lr_is_preserved(join.join_type);
     (left_preserved || !holds_outer_reference(&join.left))
         && (right_preserved || !holds_outer_reference(&join.right))
