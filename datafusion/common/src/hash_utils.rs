@@ -2432,13 +2432,14 @@ mod tests {
     #[test]
     #[cfg(not(feature = "force_hash_collisions"))]
     fn create_hashes_for_union_arrays_match_selected_values() {
-        // In sparse unions, Utf8 exercises the null mask path and the others `take`
-        let children = |lens: [usize; 4]| -> Vec<ArrayRef> {
+        // In sparse unions both string children are masked, the others use `take`
+        let children = |lens: [usize; 5]| -> Vec<ArrayRef> {
             let ints = |len| {
                 Int32Array::from_iter((0..len as i32).map(|v| (v % 3 != 1).then_some(v)))
             };
             let views = (0..lens[0]).map(|v| format!("longer than inline {}", v % 2));
             let strings = (0..lens[1]).map(|v| (v % 3 != 1).then(|| format!("s{v}")));
+            let large = (0..lens[4]).map(|v| (v % 2 == 0).then(|| format!("l{v}")));
             vec![
                 Arc::new(StringViewArray::from_iter_values(views)),
                 Arc::new(StringArray::from_iter(strings)),
@@ -2447,30 +2448,39 @@ mod tests {
                     Arc::new(ints(lens[2])) as ArrayRef,
                 )])),
                 Arc::new(NullArray::new(lens[3])),
+                Arc::new(LargeStringArray::from_iter(large)),
             ]
         };
-        let fields: UnionFields = [0, 3, 5, 7]
+        let fields: UnionFields = [0, 3, 5, 7, 9]
             .into_iter()
-            .zip(children([0; 4]))
+            .zip(children([0; 5]))
             .map(|(id, c)| (id, Arc::new(Field::new("", c.data_type().clone(), true))))
             .collect();
-        let type_ids = ScalarBuffer::from(vec![0, 3, 5, 0, 0, 0, 7, 3]);
-        let offsets = ScalarBuffer::from(vec![0, 0, 0, 1, 2, 3, 0, 1]);
-        let sparse =
-            UnionArray::try_new(fields.clone(), type_ids.clone(), None, children([8; 4]))
-                .unwrap();
+        let type_ids = ScalarBuffer::from(vec![0, 3, 9, 0, 0, 0, 5, 7, 3, 9]);
+        let offsets = ScalarBuffer::from(vec![0, 0, 0, 1, 2, 3, 0, 0, 1, 1]);
+        let sparse = UnionArray::try_new(
+            fields.clone(),
+            type_ids.clone(),
+            None,
+            children([10; 5]),
+        )
+        .unwrap();
         // Utf8 selecting too few rows to mask is hashed through `take` instead
         let few_strings = (0..40).map(|i| if i == 20 { 3 } else { [0, 5, 7][i % 3] });
         let sparse_few_strings = UnionArray::try_new(
             fields.clone(),
             few_strings.collect(),
             None,
-            children([40; 4]),
+            children([40; 5]),
         )
         .unwrap();
-        let dense =
-            UnionArray::try_new(fields, type_ids, Some(offsets), children([4, 2, 1, 1]))
-                .unwrap();
+        let dense = UnionArray::try_new(
+            fields,
+            type_ids,
+            Some(offsets),
+            children([4, 2, 1, 1, 2]),
+        )
+        .unwrap();
 
         for union in [
             sparse.clone(),
