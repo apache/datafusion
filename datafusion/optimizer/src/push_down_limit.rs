@@ -163,16 +163,24 @@ fn rewrite_limit(mut limit: Limit) -> Result<Transformed<LogicalPlan>> {
                 let sort_fetch = skip + fetch;
                 Some(sort.fetch.map(|f| f.min(sort_fetch)).unwrap_or(sort_fetch))
             };
-            if new_fetch == sort.fetch {
-                if skip > 0 {
-                    original_limit(skip, fetch, LogicalPlan::Sort(sort))
+            let fetch_changed = new_fetch != sort.fetch;
+            sort.fetch = new_fetch;
+            if skip > 0 {
+                if fetch_changed {
+                    limit.input = Arc::new(LogicalPlan::Sort(sort));
+                    Ok(Transformed::yes(LogicalPlan::Limit(limit)))
                 } else {
-                    Ok(Transformed::yes(LogicalPlan::Sort(sort)))
+                    original_limit(skip, fetch, LogicalPlan::Sort(sort))
                 }
             } else {
-                sort.fetch = new_fetch;
-                limit.input = Arc::new(LogicalPlan::Sort(sort));
-                Ok(Transformed::yes(LogicalPlan::Limit(limit)))
+                // With `skip = 0` the Sort's fetch already caps the output, so
+                // drop the Limit now instead of on the next pass. The Sort then
+                // replaces the Limit as the visited node and its own visit is
+                // skipped, so apply the TopK pushdown here. The plan changed
+                // (the Limit is gone) even if the TopK does not move.
+                let mut result = push_topk_through_join(sort)?;
+                result.transformed = true;
+                Ok(result)
             }
         }
         LogicalPlan::Projection(mut proj) => {
@@ -660,15 +668,51 @@ mod test {
             .limit(0, Some(10))?
             .build()?;
 
-        // Should push down limit to sort
+        // Should push down limit to sort, and drop the now redundant limit
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Limit: skip=0, fetch=10
-          Sort: test.a ASC NULLS LAST, fetch=10
-            TableScan: test
+        Sort: test.a ASC NULLS LAST, fetch=10
+          TableScan: test
         "
         )
+    }
+
+    /// `Limit(skip=0) -> Sort` settles in the first pass: the second pass
+    /// leaves the plan unchanged, so the optimizer stops after 2 passes.
+    #[test]
+    fn limit_push_down_sort_settles_in_first_pass() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .sort_by(vec![col("a")])?
+            .limit(0, Some(10))?
+            .build()?;
+
+        let optimizer_ctx = OptimizerContext::new().with_max_passes(3);
+        let optimizer =
+            crate::Optimizer::with_rules(vec![Arc::new(PushDownLimit::new())]);
+        let mut passes = 0;
+        optimizer.optimize(plan, &optimizer_ctx, |_, _| passes += 1)?;
+        assert_eq!(passes, 2);
+        Ok(())
+    }
+
+    /// Dropping the `Limit` above a `Sort` changes the plan even when the
+    /// TopK has no join to move through, so the rule must report it.
+    #[test]
+    fn limit_push_down_sort_reports_transformed() -> Result<()> {
+        for sort_fetch in [None, Some(10), Some(5)] {
+            let plan = LogicalPlanBuilder::from(test_table_scan()?)
+                .sort_with_limit(vec![col("a").sort(true, false)], sort_fetch)?
+                .limit(0, Some(10))?
+                .build()?;
+
+            let result = PushDownLimit::new().rewrite(plan, &OptimizerContext::new())?;
+            assert!(result.transformed, "sort fetch {sort_fetch:?}");
+            assert!(matches!(result.data, LogicalPlan::Sort(_)));
+        }
+        Ok(())
     }
 
     #[test]
