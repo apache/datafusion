@@ -678,9 +678,13 @@ fn roundtrip_unnest() -> Result<()> {
 async fn analyze_roundtrip_unoptimized() -> Result<()> {
     let ctx = SessionContext::new();
 
-    // No optimizations
+    // No optimizations. Clear the analyzer phase too: it would otherwise wrap
+    // the root in an `OutputRequirementExec` whose remove pass lives among the
+    // optimizer rules cleared here, leaving a planning-only marker in the plan
+    // that gets serialized.
     let session_state =
         datafusion::execution::SessionStateBuilder::new_from_existing(ctx.state())
+            .with_physical_analyzer_rules(vec![])
             .with_physical_optimizer_rules(vec![])
             .build();
 
