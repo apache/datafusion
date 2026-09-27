@@ -569,6 +569,23 @@ serialized physical plan reconstructed with local type identities. See the
 pattern. <code class="docutils literal notranslate"><span class="pre">ForeignSession::query_planner</span></code>, <code class="docutils literal notranslate"><span class="pre">optimize</span></code>, and <code class="docutils literal notranslate"><span class="pre">physical_optimizers</span></code>
 continue to forward to the owning session across the FFI boundary.</p>
 </section>
+<section id="range-partitioning-supports-retained-samples-and-scaling">
+<h3>Range partitioning supports retained samples and scaling<a class="headerlink" href="#range-partitioning-supports-retained-samples-and-scaling" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">RangePartitioning::new</span></code> is deprecated. Prefer the validated
+<code class="docutils literal notranslate"><span class="pre">RangePartitioning::try_new_with_samples(ordering,</span> <span class="pre">samples,</span> <span class="pre">partition_count)</span></code>.
+For exact boundaries, pass <code class="docutils literal notranslate"><span class="pre">split_points.len()</span> <span class="pre">+</span> <span class="pre">1</span></code> as the count, or keep using
+the validated <code class="docutils literal notranslate"><span class="pre">try_new</span></code> constructor. Retain additional samples when future
+scaling above that count is required; scaling does not create new sample values.</p>
+<p><code class="docutils literal notranslate"><span class="pre">scale</span></code> returns <code class="docutils literal notranslate"><span class="pre">Option&lt;RangePartitioning&gt;</span></code>. It returns <code class="docutils literal notranslate"><span class="pre">None</span></code> when the target
+partition count is zero or exceeds the retained sample capacity; callers can
+then retain the existing layout or choose another partitioning. Equality includes
+retained samples; use <code class="docutils literal notranslate"><span class="pre">has_same_layout</span></code> to compare the current key ordering and
+effective boundaries.</p>
+<p><code class="docutils literal notranslate"><span class="pre">FFI_RangePartitioning</span></code> has a new layout; rebuild FFI consumers against the
+compatible release. The generated <code class="docutils literal notranslate"><span class="pre">PhysicalRangePartitioning</span></code> protobuf struct
+also gains fields, affecting exhaustive struct literals. Older protobuf payloads
+remain readable, and effective split points remain available to older readers.</p>
+</section>
 <section id="groupcolumn-now-requires-values-preserving">
 <h3><code class="docutils literal notranslate"><span class="pre">GroupColumn</span></code> now requires <code class="docutils literal notranslate"><span class="pre">values_preserving</span></code><a class="headerlink" href="#groupcolumn-now-requires-values-preserving" title="Link to this heading">#</a></h3>
 <p>Custom implementations of the public <code class="docutils literal notranslate"><span class="pre">GroupColumn</span></code> trait must implement
@@ -1034,6 +1051,7 @@ expressions, which can cause resolution failure or incorrect rebinding.</p></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#missing-parquet-null-counts-are-treated-as-unknown">Missing Parquet null counts are treated as unknown</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#timestamp-u-some-tz-timestamp-u-none-reads-the-naive-operand-in-tz"><code class="docutils literal notranslate"><span class="pre">Timestamp(u,</span> <span class="pre">Some(tz))</span> <span class="pre">-</span> <span class="pre">Timestamp(u,</span> <span class="pre">None)</span></code> reads the naive operand in <code class="docutils literal notranslate"><span class="pre">tz</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#foreignsession-create-physical-plan-is-unsupported"><code class="docutils literal notranslate"><span class="pre">ForeignSession::create_physical_plan</span></code> is unsupported</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#range-partitioning-supports-retained-samples-and-scaling">Range partitioning supports retained samples and scaling</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupcolumn-now-requires-values-preserving"><code class="docutils literal notranslate"><span class="pre">GroupColumn</span></code> now requires <code class="docutils literal notranslate"><span class="pre">values_preserving</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-proto-common-option-and-constraint-conversions-are-fallible"><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: common option and constraint conversions are fallible</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionoptions-has-a-new-enable-nlj-coordinated-fallback-field"><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> has a new <code class="docutils literal notranslate"><span class="pre">enable_nlj_coordinated_fallback</span></code> field</a></li>
