@@ -753,6 +753,63 @@ FROM t1, LATERAL (
 ) AS sub
 ORDER BY t1.id, sub.x;
 
+# --- Correlated filter below a window function ---
+# https://github.com/apache/datafusion/issues/25792
+# Pulling `t2.t1_id = t1.id` above the window would number the t2 rows of all
+# t1 rows together instead of the t2 rows of each t1 row.
+# Expected result once supported: (1, 10, 1), (1, 20, 2), (2, 30, 1).
+statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn
+SELECT t1.id, sub.id, sub.rn
+FROM t1, LATERAL (
+    SELECT t2.id, row_number() OVER (ORDER BY t2.id) AS rn
+    FROM (SELECT * FROM t2 WHERE t2.t1_id = t1.id) AS t2
+) AS sub
+ORDER BY t1.id, sub.id;
+
+# A correlated filter above the window is still decorrelated. The window
+# numbers all t2 rows, then the filter keeps the rows of each t1 row.
+query TT
+EXPLAIN SELECT t1.id, sub.id, sub.rn
+FROM t1, LATERAL (
+    SELECT w.id, w.rn
+    FROM (SELECT t2.id, t2.t1_id, row_number() OVER (ORDER BY t2.id) AS rn FROM t2) AS w
+    WHERE w.t1_id = t1.id
+) AS sub
+ORDER BY t1.id, sub.id;
+----
+logical_plan
+01)Sort: t1.id ASC NULLS LAST, sub.id ASC NULLS LAST
+02)--Projection: t1.id, sub.id, sub.rn
+03)----Inner Join: t1.id = sub.t1_id
+04)------TableScan: t1 projection=[id]
+05)------SubqueryAlias: sub
+06)--------Projection: w.id, w.rn, w.t1_id
+07)----------SubqueryAlias: w
+08)------------Projection: t2.id, t2.t1_id, row_number() ORDER BY [t2.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+09)--------------WindowAggr: windowExpr=[[row_number() ORDER BY [t2.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+10)----------------TableScan: t2 projection=[id, t1_id]
+physical_plan
+01)SortExec: expr=[id@0 ASC NULLS LAST, id@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1_id@2, id@0)], projection=[id@3, id@0, rn@1]
+03)----ProjectionExec: expr=[id@0 as id, row_number() ORDER BY [t2.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as rn, t1_id@1 as t1_id]
+04)------BoundedWindowAggExec: wdw=[row_number() ORDER BY [t2.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [t2.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+05)--------SortExec: expr=[id@0 ASC NULLS LAST], preserve_partitioning=[false]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
+07)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query III
+SELECT t1.id, sub.id, sub.rn
+FROM t1, LATERAL (
+    SELECT w.id, w.rn
+    FROM (SELECT t2.id, t2.t1_id, row_number() OVER (ORDER BY t2.id) AS rn FROM t2) AS w
+    WHERE w.t1_id = t1.id
+) AS sub
+ORDER BY t1.id, sub.id;
+----
+1 10 1
+1 20 2
+2 30 3
+
 # --- Implicit LATERAL (comma without LATERAL keyword) ---
 # DuckDB auto-detects lateral correlation; DataFusion requires
 # the explicit LATERAL keyword.
