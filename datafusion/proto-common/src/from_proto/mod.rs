@@ -1283,6 +1283,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             )?,
             schema_force_view_types: value.schema_force_view_types,
             binary_as_string: value.binary_as_string,
+            coerce_binary_to_string: value.coerce_binary_to_string,
             coerce_int96: value.coerce_int96_opt.as_ref().map(|opt| match opt {
                 protobuf::parquet_options::CoerceInt96Opt::CoerceInt96(v) => v.parse(),
             }).transpose()?,
