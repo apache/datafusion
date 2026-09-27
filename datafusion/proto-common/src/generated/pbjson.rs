@@ -6494,9 +6494,6 @@ impl serde::Serialize for ParquetOptions {
         if !self.created_by.is_empty() {
             len += 1;
         }
-        if self.read_ahead_conditional {
-            len += 1;
-        }
         if self.content_defined_chunking.is_some() {
             len += 1;
         }
@@ -6624,9 +6621,6 @@ impl serde::Serialize for ParquetOptions {
         }
         if !self.created_by.is_empty() {
             struct_ser.serialize_field("createdBy", &self.created_by)?;
-        }
-        if self.read_ahead_conditional {
-            struct_ser.serialize_field("readAheadConditional", &self.read_ahead_conditional)?;
         }
         if let Some(v) = self.content_defined_chunking.as_ref() {
             struct_ser.serialize_field("contentDefinedChunking", v)?;
@@ -6796,8 +6790,6 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "maxInListSize",
             "created_by",
             "createdBy",
-            "read_ahead_conditional",
-            "readAheadConditional",
             "content_defined_chunking",
             "contentDefinedChunking",
             "metadata_size_hint",
@@ -6852,7 +6844,6 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             MaxRowGroupSize,
             MaxInListSize,
             CreatedBy,
-            ReadAheadConditional,
             ContentDefinedChunking,
             MetadataSizeHint,
             Compression,
@@ -6911,7 +6902,6 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
                             "maxInListSize" | "max_in_list_size" => Ok(GeneratedField::MaxInListSize),
                             "createdBy" | "created_by" => Ok(GeneratedField::CreatedBy),
-                            "readAheadConditional" | "read_ahead_conditional" => Ok(GeneratedField::ReadAheadConditional),
                             "contentDefinedChunking" | "content_defined_chunking" => Ok(GeneratedField::ContentDefinedChunking),
                             "metadataSizeHint" | "metadata_size_hint" => Ok(GeneratedField::MetadataSizeHint),
                             "compression" => Ok(GeneratedField::Compression),
@@ -6968,7 +6958,6 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut max_row_group_size__ = None;
                 let mut max_in_list_size__ = None;
                 let mut created_by__ = None;
-                let mut read_ahead_conditional__ = None;
                 let mut content_defined_chunking__ = None;
                 let mut metadata_size_hint_opt__ = None;
                 let mut compression_opt__ = None;
@@ -7134,12 +7123,6 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             created_by__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::ReadAheadConditional => {
-                            if read_ahead_conditional__.is_some() {
-                                return Err(serde::de::Error::duplicate_field("readAheadConditional"));
-                            }
-                            read_ahead_conditional__ = Some(map_.next_value()?);
-                        }
                         GeneratedField::ContentDefinedChunking => {
                             if content_defined_chunking__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("contentDefinedChunking"));
@@ -7255,7 +7238,6 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     max_row_group_size: max_row_group_size__.unwrap_or_default(),
                     max_in_list_size: max_in_list_size__.unwrap_or_default(),
                     created_by: created_by__.unwrap_or_default(),
-                    read_ahead_conditional: read_ahead_conditional__.unwrap_or_default(),
                     content_defined_chunking: content_defined_chunking__,
                     metadata_size_hint_opt: metadata_size_hint_opt__,
                     compression_opt: compression_opt__,

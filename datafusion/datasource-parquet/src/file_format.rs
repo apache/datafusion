@@ -718,7 +718,6 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             read_ahead_bytes_opt: global_options.global.read_ahead_bytes.map(|size| {
                 parquet_options::ReadAheadBytesOpt::ReadAheadBytes(size as u64)
             }),
-            read_ahead_conditional: global_options.global.read_ahead_conditional,
             max_row_group_bytes_opt: global_options.global.max_row_group_bytes.map(|size| {
                 parquet_options::MaxRowGroupBytesOpt::MaxRowGroupBytes(size.get() as u64)
             }),

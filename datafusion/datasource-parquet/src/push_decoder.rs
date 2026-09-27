@@ -787,14 +787,10 @@ pub(crate) struct ReadAhead {
     current_row_group: Option<usize>,
     /// No fetch has been made yet.
     first_fetch: bool,
-    /// Also read ahead [`PlannedRange::conditional`] ranges
-    /// (`read_ahead_conditional`). Off by default, so a scan reads the same
-    /// bytes as without read-ahead.
-    conditional: bool,
 }
 
 impl ReadAhead {
-    pub(crate) fn new(window: u64, plan: ScanPlan, conditional: bool) -> Self {
+    pub(crate) fn new(window: u64, plan: ScanPlan) -> Self {
         Self {
             window,
             plan,
@@ -803,7 +799,6 @@ impl ReadAhead {
             in_flight: None,
             current_row_group: None,
             first_fetch: true,
-            conditional,
         }
     }
 
@@ -814,10 +809,11 @@ impl ReadAhead {
         self.pending.clear();
     }
 
-    /// Whether read-ahead should skip this planned range.
+    /// Whether read-ahead should skip this planned range: it is fetched
+    /// already. Ranges that a filter can make unnecessary
+    /// ([`PlannedRange::conditional`]) are read ahead too.
     fn skip(&self, range: &PlannedRange) -> bool {
-        (range.conditional && !self.conditional)
-            || self.fetched.contains(&(range.range.start, range.range.end))
+        self.fetched.contains(&(range.range.start, range.range.end))
     }
 
     /// The next planned range to read ahead, without taking it.

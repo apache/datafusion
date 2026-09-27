@@ -877,9 +877,6 @@ pub struct ParquetOptions {
     pub max_in_list_size: u64,
     #[prost(string, tag = "16")]
     pub created_by: ::prost::alloc::string::String,
-    /// default = false
-    #[prost(bool, tag = "40")]
-    pub read_ahead_conditional: bool,
     #[prost(message, optional, tag = "35")]
     pub content_defined_chunking: ::core::option::Option<ParquetCdcOptions>,
     #[prost(oneof = "parquet_options::MetadataSizeHintOpt", tags = "4")]
