@@ -26,9 +26,7 @@ use itertools::Itertools;
 use log::{Level, debug, log_enabled};
 
 use datafusion_common::instant::Instant;
-use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
-};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     Column, DFSchema, Result, assert_eq_or_internal_err, internal_err, plan_err,
     qualified_name,
@@ -1421,6 +1419,7 @@ fn rewrite_projection(
         .partition(|(_, value)| {
             value.is_volatile()
                 || value.placement() == ExpressionPlacement::MoveTowardsLeafNodes
+                || value.placement() == ExpressionPlacement::KeepInPlace
         });
 
     let mut push_predicates = vec![];
@@ -1485,6 +1484,13 @@ pub fn replace_cols_by_name(
     e: Expr,
     replace_map: &HashMap<String, impl AsRef<Expr>>,
 ) -> Result<Expr> {
+    Ok(replace_cols_by_name_impl(e, replace_map)?.data)
+}
+
+pub(super) fn replace_cols_by_name_impl(
+    e: Expr,
+    replace_map: &HashMap<String, impl AsRef<Expr>>,
+) -> Result<Transformed<Expr>> {
     e.transform_up(|expr| {
         if let Expr::Column(c) = &expr
             && let Some(new_expr) = replace_map.get(&c.flat_name())
@@ -1494,7 +1500,6 @@ pub fn replace_cols_by_name(
             Ok(Transformed::no(expr))
         }
     })
-    .data()
 }
 
 /// Unalias expression reference.
@@ -1563,7 +1568,7 @@ mod tests {
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::optimizer::Optimizer;
     use crate::simplify_expressions::SimplifyExpressions;
-    use crate::test::udfs::leaf_udf_expr;
+    use crate::test::udfs::{PlacementTestUDF, get_field_like, leaf_udf_expr};
     use crate::test::*;
     use datafusion_expr::test::function_stub::sum;
     use insta::assert_snapshot;
@@ -4568,6 +4573,37 @@ mod tests {
           Projection: leaf_udf(test.a) AS val, test.b, test.c
             TableScan: test, full_filters=[test.b > Int64(5)]
         "
+        )
+    }
+
+    #[test]
+    fn filter_not_pushed_through_nested_computed_projection() -> Result<()> {
+        let udf = ScalarUDF::new_from_impl(
+            PlacementTestUDF::new().with_placement(ExpressionPlacement::KeepInPlace),
+        );
+        let inner = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![udf.call(vec![col("a")]).alias("c1"), col("b")])?
+            .build()?;
+        let outer = LogicalPlanBuilder::from(inner)
+            .project(vec![
+                get_field_like(col("c1"), "x").alias("c2"),
+                col("c1"),
+                col("b"),
+            ])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(outer)
+            .filter(col("c1").is_not_null().and(col("c2").is_null()))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r#"
+        Filter: c2 IS NULL
+          Projection: get_field_like(c1, Utf8("x")) AS c2, c1, test.b
+            Filter: c1 IS NOT NULL
+              Projection: keep_in_place_udf(test.a) AS c1, test.b
+                TableScan: test
+        "#
         )
     }
 
