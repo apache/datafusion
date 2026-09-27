@@ -461,7 +461,6 @@ impl RowGroupAccessPlanFilter {
             // evaluation in that case: it runs once per row group and can be expensive for wide
             // predicates, a cost files written without bloom filters would pay for nothing.
             if stats.is_empty() {
-                metrics.row_groups_pruned_bloom_filter.add_matched(1);
                 continue;
             }
 
@@ -473,7 +472,7 @@ impl RowGroupAccessPlanFilter {
                         "Error evaluating row group predicate on bloom filter: {e}"
                     );
                     metrics.predicate_evaluation_errors.add(1);
-                    false
+                    continue;
                 }
             };
 
@@ -1522,7 +1521,7 @@ mod tests {
         // the row group with a bloom filter is still evaluated and pruned.
         assert_pruned(row_groups, ExpectedPruning::Some(vec![0]));
         assert_eq!(metrics.row_groups_pruned_bloom_filter.pruned(), 1);
-        assert_eq!(metrics.row_groups_pruned_bloom_filter.matched(), 1);
+        assert_eq!(metrics.row_groups_pruned_bloom_filter.matched(), 0);
     }
 
     fn get_row_group_meta_data(
