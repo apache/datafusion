@@ -643,7 +643,8 @@ message ParquetOptions {
     uint64 read_ahead_bytes = 41;
   }
 
-  bool read_ahead_conditional = 40; // default = false
+  reserved 40;
+  reserved "read_ahead_conditional";
 
   oneof max_row_group_bytes_opt {
     uint64 max_row_group_bytes = 37;

@@ -307,8 +307,6 @@ pub(super) struct ParquetMorselizer {
     /// Read-ahead window in bytes. If set, decode a batch at a time. Sourced
     /// from `datafusion.execution.parquet.read_ahead_bytes`.
     pub read_ahead_bytes: Option<u64>,
-    /// Sourced from `datafusion.execution.parquet.read_ahead_conditional`.
-    pub read_ahead_conditional: bool,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
     /// Optional sort order used to reorder row groups by their min/max statistics.
@@ -506,7 +504,6 @@ struct PreparedParquetOpen {
     max_in_list_size: usize,
     row_group_range_assignment: RowGroupRangeAssignment,
     read_ahead_bytes: Option<u64>,
-    read_ahead_conditional: bool,
     reverse_row_groups: bool,
     sort_order_for_reorder: Option<LexOrdering>,
     preserve_order: bool,
@@ -1023,7 +1020,6 @@ impl ParquetMorselizer {
             max_in_list_size: self.max_in_list_size,
             row_group_range_assignment: self.row_group_range_assignment,
             read_ahead_bytes: self.read_ahead_bytes,
-            read_ahead_conditional: self.read_ahead_conditional,
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             preserve_order: self.preserve_order,
@@ -1925,9 +1921,8 @@ impl RowGroupsPrunedParquetOpen {
             .file_metrics
             .row_groups_pruned_dynamic_filter
             .clone();
-        let read_ahead = read_ahead_bytes.map(|window| {
-            ReadAhead::new(window, decoder.scan_plan(), prepared.read_ahead_conditional)
-        });
+        let read_ahead =
+            read_ahead_bytes.map(|window| ReadAhead::new(window, decoder.scan_plan()));
         let stream = PushDecoderStreamState {
             decoder: Some(decoder),
             active_reader: None,
@@ -2683,7 +2678,6 @@ mod test {
                 max_in_list_size: self.max_in_list_size,
                 row_group_range_assignment: self.row_group_range_assignment,
                 read_ahead_bytes: self.read_ahead_bytes,
-                read_ahead_conditional: false,
                 reverse_row_groups: self.reverse_row_groups,
                 sort_order_for_reorder: None,
                 virtual_state,

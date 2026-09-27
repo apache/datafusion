@@ -500,7 +500,6 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                     }
                 })
                 .transpose()?,
-            read_ahead_conditional: proto.read_ahead_conditional,
             max_row_group_bytes: proto
                 .max_row_group_bytes_opt
                 .as_ref()

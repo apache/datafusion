@@ -1412,12 +1412,10 @@ config_namespace! {
         /// (reading) If set, decode Parquet a batch at a time and read ahead up to
         /// this many bytes per partition stream, in the order the decoder reads
         /// them. If unset, the reader fetches one row group at a time.
+        /// Read-ahead also fetches ranges that a pushed-down filter can make
+        /// unnecessary (speculative reads). The memory pool bounds these
+        /// reads, in addition to this window.
         pub read_ahead_bytes: Option<usize>, default = None
-
-        /// (reading) With `read_ahead_bytes` set, also read ahead byte ranges
-        /// that a pushed-down filter can make unnecessary. This reduces waits on
-        /// high-latency storage but can read bytes that the scan does not use.
-        pub read_ahead_conditional: bool, default = false
 
         /// Maximum number of input values in an `IN (...)` list eligible for
         /// min/max pruning. Lists above this cap, or a cap of 0, skip this
