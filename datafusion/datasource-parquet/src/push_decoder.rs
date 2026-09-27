@@ -60,6 +60,9 @@ use parquet::file::metadata::ParquetMetaData;
 
 use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_common_runtime::SpawnedTask;
+use datafusion_execution::memory_pool::{
+    MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation, UnboundedMemoryPool,
+};
 use datafusion_physical_expr::expressions::DynamicFilterTracking;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::{BaselineMetrics, Count, Gauge};
@@ -767,6 +770,58 @@ type FetchResult = (
 struct InFlight {
     task: SpawnedTask<FetchResult>,
     ranges: Vec<TaggedRange>,
+    /// Total length of `ranges`.
+    bytes: u64,
+}
+
+/// Accounts read-ahead in the [`MemoryPool`]: the bytes the decoder holds
+/// plus the bytes in flight. Bytes the decoder asks for are always
+/// reserved. Speculative read-ahead takes only what the pool can grant.
+pub(crate) struct ReadAheadMemory {
+    pool: Arc<dyn MemoryPool>,
+    reservation: MemoryReservation,
+}
+
+impl ReadAheadMemory {
+    /// Register a consumer in `pool`, or in an unbounded pool if `None`.
+    pub(crate) fn new(pool: Option<Arc<dyn MemoryPool>>, partition: usize) -> Self {
+        let pool = pool.unwrap_or_else(|| Arc::new(UnboundedMemoryPool::default()));
+        let reservation =
+            MemoryConsumer::new(format!("ParquetReadAhead[{partition}]")).register(&pool);
+        Self { pool, reservation }
+    }
+
+    /// Reserve bytes the decoder needs. Never fails and can exceed the pool
+    /// limit: the decoder cannot continue without these bytes.
+    fn reserve_required(&self, bytes: u64) {
+        self.reservation.grow(to_usize(bytes));
+    }
+
+    /// Bytes the pool can grant now. Unlimited if the pool has no limit or
+    /// does not report one (then [`Self::try_reserve_speculative`] decides).
+    fn available(&self) -> u64 {
+        match self.pool.memory_limit() {
+            MemoryLimit::Finite(limit) => {
+                limit.saturating_sub(self.pool.reserved()) as u64
+            }
+            MemoryLimit::Infinite | MemoryLimit::Unknown => u64::MAX,
+        }
+    }
+
+    /// Reserve bytes for speculative read-ahead. `false` if the pool refuses.
+    fn try_reserve_speculative(&self, bytes: u64) -> bool {
+        self.reservation.try_grow(to_usize(bytes)).is_ok()
+    }
+
+    /// Set the reservation to what is held plus what is in flight.
+    fn sync(&self, held: u64, in_flight: u64) {
+        self.reservation
+            .resize(to_usize(held.saturating_add(in_flight)));
+    }
+}
+
+fn to_usize(bytes: u64) -> usize {
+    usize::try_from(bytes).unwrap_or(usize::MAX)
 }
 
 /// Background read-ahead for the streaming policy: the decoder's
@@ -787,10 +842,11 @@ pub(crate) struct ReadAhead {
     current_row_group: Option<usize>,
     /// No fetch has been made yet.
     first_fetch: bool,
+    memory: ReadAheadMemory,
 }
 
 impl ReadAhead {
-    pub(crate) fn new(window: u64, plan: ScanPlan) -> Self {
+    pub(crate) fn new(window: u64, plan: ScanPlan, memory: ReadAheadMemory) -> Self {
         Self {
             window,
             plan,
@@ -799,6 +855,7 @@ impl ReadAhead {
             in_flight: None,
             current_row_group: None,
             first_fetch: true,
+            memory,
         }
     }
 
@@ -832,14 +889,38 @@ impl ReadAhead {
         }
     }
 
+    /// Take planned ranges, in order, while they fit in `free` bytes and in
+    /// what the memory pool grants, and reserve them. If the pool refuses,
+    /// take nothing: the ranges stay pending for a later round.
+    fn take_ranges(
+        &mut self,
+        free: u64,
+        keep: impl FnMut(usize) -> bool,
+    ) -> Vec<TaggedRange> {
+        let free = free.min(self.memory.available());
+        let ranges = self.take_planned(free, keep);
+        let bytes = ranges.iter().map(PlannedRange::len).sum();
+        if bytes > 0 && !self.memory.try_reserve_speculative(bytes) {
+            for range in ranges.into_iter().rev() {
+                self.fetched.remove(&(range.range.start, range.range.end));
+                self.pending.push_front(range);
+            }
+            return vec![];
+        }
+        ranges
+            .into_iter()
+            .map(|range| (range.range, Some(range.row_group)))
+            .collect()
+    }
+
     /// Take planned ranges, in order, while they fit in `free` bytes.
     /// Ranges of row groups that `keep` rejects are skipped: the decoder asks
     /// for them if it reads them after all.
-    fn take_ranges(
+    fn take_planned(
         &mut self,
         mut free: u64,
         mut keep: impl FnMut(usize) -> bool,
-    ) -> Vec<TaggedRange> {
+    ) -> Vec<PlannedRange> {
         let mut ranges = vec![];
         let mut kept: Option<(usize, bool)> = None;
         while let Some(next) = self.peek() {
@@ -862,7 +943,7 @@ impl ReadAhead {
             free -= next.len();
             let next = self.pending.pop_front().expect("peeked");
             self.fetched.insert((next.range.start, next.range.end));
-            ranges.push((next.range, Some(next.row_group)));
+            ranges.push(next);
         }
         ranges
     }
@@ -925,6 +1006,7 @@ impl PushDecoderStreamState {
                 Ok(false) => {}
                 Err(e) => return Some((Err(e), self)),
             }
+            self.sync_memory();
             self.start_read_ahead();
 
             // Step 3: decode the next batch, or fetch what it needs.
@@ -941,6 +1023,8 @@ impl PushDecoderStreamState {
             }
             match decoder.try_decode() {
                 Ok(DecodeResult::Data(batch)) => {
+                    // Decoding can release buffered bytes.
+                    self.sync_memory();
                     self.copy_arrow_reader_metrics();
                     let result = self.project_batch(&batch);
                     return Some((result, self));
@@ -1017,12 +1101,17 @@ impl PushDecoderStreamState {
         }
         ranges.sort_by_key(|(range, _)| range.start);
         let fetch: Vec<Range<u64>> = ranges.iter().map(|(r, _)| r.clone()).collect();
+        let bytes = fetch.iter().map(|r| r.end - r.start).sum();
         let mut reader = self.reader.take().expect("reader is idle");
         let task = SpawnedTask::spawn(async move {
             let data = reader.get_byte_ranges(fetch).await;
             (reader, data)
         });
-        read_ahead.in_flight = Some(InFlight { task, ranges });
+        read_ahead.in_flight = Some(InFlight {
+            task,
+            ranges,
+            bytes,
+        });
     }
 
     /// Fetch what the decoder asked for, filled with read-ahead up to the
@@ -1047,6 +1136,8 @@ impl PushDecoderStreamState {
             }
         }
 
+        // Decoding can release buffered bytes.
+        self.sync_memory();
         let held = self
             .decoder
             .as_ref()
@@ -1054,6 +1145,7 @@ impl PushDecoderStreamState {
             .buffered_bytes();
         let read_ahead = self.read_ahead.as_mut().expect("streaming policy");
         let needed_bytes: u64 = needed.iter().map(|r| r.end - r.start).sum();
+        read_ahead.memory.reserve_required(needed_bytes);
         for range in &needed {
             read_ahead.fetched.insert((range.start, range.end));
         }
@@ -1079,14 +1171,41 @@ impl PushDecoderStreamState {
             .as_mut()
             .expect("no fetch in flight")
             .get_byte_ranges(fetch)
-            .await
-            .map_err(DataFusionError::from)?;
-        self.push_fetched(ranges, data)
+            .await;
+        match data {
+            Ok(data) => self.push_fetched(ranges, data),
+            Err(e) => {
+                self.sync_memory();
+                Err(DataFusionError::from(e))
+            }
+        }
+    }
+
+    /// Set the read-ahead memory reservation to the bytes the decoder holds
+    /// plus the bytes in flight.
+    fn sync_memory(&self) {
+        let Some(read_ahead) = self.read_ahead.as_ref() else {
+            return;
+        };
+        let held = self.decoder.as_ref().map_or(0, |d| d.buffered_bytes());
+        let in_flight = read_ahead.in_flight.as_ref().map_or(0, |f| f.bytes);
+        read_ahead.memory.sync(held, in_flight);
     }
 
     /// Push fetched ranges into the decoder. Read-ahead ranges of row groups
-    /// that were pruned since the fetch started are dropped.
+    /// that were pruned since the fetch started are dropped. Then release
+    /// the memory of bytes that were not pushed.
     fn push_fetched(&mut self, ranges: Vec<TaggedRange>, data: Vec<Bytes>) -> Result<()> {
+        let result = self.push_fetched_inner(ranges, data);
+        self.sync_memory();
+        result
+    }
+
+    fn push_fetched_inner(
+        &mut self,
+        ranges: Vec<TaggedRange>,
+        data: Vec<Bytes>,
+    ) -> Result<()> {
         if ranges.len() != data.len() {
             return internal_err!(
                 "fetched {} buffers for {} ranges",
@@ -1338,5 +1457,25 @@ mod tests {
             err.to_string().contains("diverged"),
             "expected a divergence internal error, got: {err}",
         );
+    }
+
+    #[test]
+    fn read_ahead_memory_tracks_held_and_in_flight() {
+        use datafusion_execution::memory_pool::GreedyMemoryPool;
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(100));
+        let memory = ReadAheadMemory::new(Some(Arc::clone(&pool)), 0);
+        // Required bytes can exceed the limit; speculative bytes cannot.
+        memory.reserve_required(150);
+        assert_eq!(pool.reserved(), 150);
+        assert_eq!(memory.available(), 0);
+        assert!(!memory.try_reserve_speculative(1));
+        memory.sync(40, 20);
+        assert_eq!(pool.reserved(), 60);
+        assert_eq!(memory.available(), 40);
+        assert!(memory.try_reserve_speculative(40));
+        assert!(!memory.try_reserve_speculative(1));
+        assert_eq!(pool.reserved(), 100);
+        drop(memory);
+        assert_eq!(pool.reserved(), 0);
     }
 }
