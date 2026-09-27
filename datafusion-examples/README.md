@@ -122,11 +122,14 @@ cargo run --example dataframe -- dataframe
 
 #### Category: Single Process
 
-| Subcommand         | File Path                                                                                                           | Description                              |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
-| mem_pool_exec_plan | [`execution_monitoring/memory_pool_execution_plan.rs`](examples/execution_monitoring/memory_pool_execution_plan.rs) | Memory-aware ExecutionPlan with spilling |
-| mem_pool_tracking  | [`execution_monitoring/memory_pool_tracking.rs`](examples/execution_monitoring/memory_pool_tracking.rs)             | Demonstrates memory tracking             |
-| tracing            | [`execution_monitoring/tracing.rs`](examples/execution_monitoring/tracing.rs)                                       | Demonstrates tracing integration         |
+| Subcommand         | File Path                                                                                                           | Description                                            |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| mem_pool_exec_plan | [`execution_monitoring/memory_pool_execution_plan.rs`](examples/execution_monitoring/memory_pool_execution_plan.rs) | Memory-aware ExecutionPlan with spilling               |
+| mem_pool_tracking  | [`execution_monitoring/memory_pool_tracking.rs`](examples/execution_monitoring/memory_pool_tracking.rs)             | Demonstrates memory tracking                           |
+| stage_pause        | [`execution_monitoring/staged_execution.rs`](examples/execution_monitoring/staged_execution.rs)                     | Pause and resume a boundary and measure its drain time |
+| stage_admission    | [`execution_monitoring/staged_execution.rs`](examples/execution_monitoring/staged_execution.rs)                     | Defer boundary execution until memory is available     |
+| stage_dependencies | [`execution_monitoring/staged_execution.rs`](examples/execution_monitoring/staged_execution.rs)                     | Execute dependent boundaries in plan order             |
+| tracing            | [`execution_monitoring/tracing.rs`](examples/execution_monitoring/tracing.rs)                                       | Demonstrates tracing integration                       |
 
 ## Extension Types Examples
 
