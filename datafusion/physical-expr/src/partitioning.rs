@@ -629,9 +629,12 @@ impl Partitioning {
                 )
             }
             Partitioning::Range(range) => {
-                let sort_expr = sort_exprs_try_to_proto(range.ordering().iter(), ctx)?;
-                let split_point = range
-                    .split_points()
+                let RangePartitioning {
+                    ordering,
+                    split_points,
+                } = range;
+                let sort_expr = sort_exprs_try_to_proto(ordering.iter(), ctx)?;
+                let split_point = split_points
                     .iter()
                     .map(|split_point| {
                         let value = split_point
@@ -673,7 +676,8 @@ impl Partitioning {
 
         let partition_count =
             |count: u64| usize_from_wire(count, "Partitioning", "partition_count");
-        let Some(partition_method) = node.partition_method.as_ref() else {
+        let protobuf::Partitioning { partition_method } = node;
+        let Some(partition_method) = partition_method.as_ref() else {
             return Ok(None);
         };
         let partitioning = match partition_method {
@@ -681,18 +685,25 @@ impl Partitioning {
                 Partitioning::RoundRobinBatch(partition_count(*n)?)
             }
             protobuf::partitioning::PartitionMethod::Hash(hash) => {
-                let exprs = hash
-                    .hash_expr
+                let protobuf::PhysicalHashRepartition {
+                    hash_expr,
+                    partition_count: hash_partition_count,
+                } = hash;
+                let exprs = hash_expr
                     .iter()
                     .map(|expr| ctx.decode(expr))
                     .collect::<Result<Vec<_>>>()?;
-                Partitioning::Hash(exprs, partition_count(hash.partition_count)?)
+                Partitioning::Hash(exprs, partition_count(*hash_partition_count)?)
             }
             protobuf::partitioning::PartitionMethod::Unknown(n) => {
                 Partitioning::UnknownPartitioning(partition_count(*n)?)
             }
             protobuf::partitioning::PartitionMethod::Range(range) => {
-                let sort_exprs = sort_exprs_try_from_proto(&range.sort_expr, ctx)?;
+                let protobuf::PhysicalRangePartitioning {
+                    sort_expr,
+                    split_point,
+                } = range;
+                let sort_exprs = sort_exprs_try_from_proto(sort_expr, ctx)?;
                 let sort_expr_count = sort_exprs.len();
                 let ordering = LexOrdering::new(sort_exprs).ok_or_else(|| {
                     internal_datafusion_err!(
@@ -704,12 +715,11 @@ impl Partitioning {
                         "Range partitioning ordering must not contain duplicate expressions"
                     );
                 }
-                let split_points = range
-                    .split_point
+                let split_points = split_point
                     .iter()
                     .map(|split_point| {
-                        let values = split_point
-                            .value
+                        let protobuf::PhysicalRangeSplitPoint { value } = split_point;
+                        let values = value
                             .iter()
                             .map(|value| ScalarValue::try_from(value).map_err(Into::into))
                             .collect::<Result<Vec<_>>>()?;
@@ -1575,13 +1585,16 @@ mod ordering_proto_tests {
 mod partition_count_proto_tests {
     use std::sync::Arc;
 
+    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::{ScalarValue, SplitPoint};
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx;
     use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
     use datafusion_proto_models::protobuf;
 
-    use super::Partitioning;
+    use super::{Partitioning, RangePartitioning};
     use crate::expressions::Column;
     use crate::proto_test_util::{StubDecoder, StubEncoder, column_node};
 
@@ -1661,5 +1674,52 @@ mod partition_count_proto_tests {
 
         // Every variant widens to the same wire value, with no truncation.
         assert_eq!(encoded, vec![u64::try_from(usize::MAX).unwrap(); 3]);
+    }
+
+    #[test]
+    fn range_partitioning_round_trip_preserves_split_points_and_options() {
+        // Single-column ordering so the stub encoder (which emits an identical
+        // placeholder for every expression) cannot produce duplicates that the
+        // decoder's deduplication step would collapse.
+        let sort_options = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+        let ordering = LexOrdering::from([PhysicalSortExpr::new(
+            Arc::new(Column::new("a", 0)),
+            sort_options,
+        )]);
+        let split_points = vec![
+            SplitPoint::new(vec![ScalarValue::Int32(Some(10))]),
+            SplitPoint::new(vec![ScalarValue::Int32(Some(30))]),
+        ];
+        let range =
+            RangePartitioning::try_new(ordering.clone(), split_points.clone()).unwrap();
+
+        let encoder = StubEncoder::ok();
+        let encode_ctx = PhysicalExprEncodeCtx::new(&encoder);
+        let node = Partitioning::Range(range)
+            .try_to_proto(&encode_ctx)
+            .unwrap();
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let decoder = StubDecoder::ok();
+        let decode_ctx = PhysicalExprDecodeCtx::new(&schema, &decoder);
+        let decoded = Partitioning::try_from_proto(&node, &decode_ctx)
+            .unwrap()
+            .unwrap();
+
+        let Partitioning::Range(decoded_range) = decoded else {
+            panic!("expected Range partitioning, got {decoded:?}");
+        };
+        assert_eq!(
+            decoded_range
+                .ordering()
+                .iter()
+                .map(|e| e.options)
+                .collect::<Vec<_>>(),
+            [sort_options],
+        );
+        assert_eq!(decoded_range.split_points(), split_points);
     }
 }

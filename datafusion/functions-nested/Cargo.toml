@@ -145,3 +145,7 @@ name = "array_range"
 [[bench]]
 harness = false
 name = "cardinality"
+
+[[bench]]
+harness = false
+name = "range"

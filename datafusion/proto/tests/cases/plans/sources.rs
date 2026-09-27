@@ -75,12 +75,43 @@ use std::sync::Arc;
 use std::vec;
 
 #[test]
+fn parquet_schema_provider_requires_extension_codec() -> Result<()> {
+    use datafusion::parquet;
+
+    #[derive(Debug)]
+    struct PhysicalSchema;
+    impl datafusion_datasource_parquet::ParquetFileSchemaProvider for PhysicalSchema {
+        fn schema(
+            &self,
+            schema: &parquet::schema::types::SchemaDescriptor,
+        ) -> Result<Arc<Schema>> {
+            Ok(Arc::new(parquet::arrow::parquet_to_arrow_schema(
+                schema, None,
+            )?))
+        }
+    }
+
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+    let source =
+        ParquetSource::new(schema).with_schema_provider(Arc::new(PhysicalSchema));
+    let config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), Arc::new(source))
+            .build();
+    let plan = DataSourceExec::from_data_source(config);
+    let error =
+        PhysicalPlanNode::try_from_physical_plan(plan, &DefaultPhysicalExtensionCodec {})
+            .unwrap_err();
+    datafusion_common::assert_contains!(error.to_string(), "extension codec failed");
+    Ok(())
+}
+
+#[test]
 fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     let file_schema =
         Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
     let predicate = Arc::new(BinaryExpr::new(
-        Arc::new(Column::new("col", 1)),
+        Arc::new(Column::new("col", 0)),
         Operator::Eq,
         lit("1"),
     ));
@@ -88,28 +119,51 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     let mut options = TableParquetOptions::new();
     options.global.pushdown_filters = true;
 
-    let file_source = Arc::new(
-        ParquetSource::new(Arc::clone(&file_schema))
-            .with_table_parquet_options(options)
-            .with_predicate(predicate),
-    );
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    for metadata_size_hint in [None, Some(0), Some(8192), Some(usize::MAX)] {
+        let mut file_source = ParquetSource::new(Arc::clone(&file_schema))
+            .with_table_parquet_options(options.clone())
+            .with_predicate(predicate.clone());
+        if let Some(hint) = metadata_size_hint {
+            file_source = file_source.with_metadata_size_hint(hint);
+        }
+        let scan_config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            Arc::new(file_source),
+        )
+        .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+            "/path/to/file.parquet".to_string(),
+            1024,
+        )])])
+        .with_statistics(Statistics {
+            num_rows: Precision::Inexact(100),
+            total_byte_size: Precision::Inexact(1024),
+            column_statistics: Statistics::unknown_column(&file_schema),
+        })
+        .build();
 
-    let scan_config =
-        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
-            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
-                "/path/to/file.parquet".to_string(),
-                1024,
-            )])])
-            .with_statistics(Statistics {
-                num_rows: Precision::Inexact(100),
-                total_byte_size: Precision::Inexact(1024),
-                column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(
-                    vec![Field::new("col", DataType::Utf8, false)],
-                ))),
-            })
-            .build();
-
-    roundtrip_test(DataSourceExec::from_data_source(scan_config))
+        let roundtripped = roundtrip_test_and_return(
+            DataSourceExec::from_data_source(scan_config),
+            &ctx,
+            &codec,
+            &proto_converter,
+        )?;
+        #[cfg(feature = "json")]
+        let roundtripped = super::roundtrip_test_json_and_return(roundtripped, &ctx)?;
+        let node = PhysicalPlanNode::try_from_physical_plan(roundtripped, &codec)?;
+        let Some(protobuf::physical_plan_node::PhysicalPlanType::ParquetScan(scan)) =
+            node.physical_plan_type
+        else {
+            return internal_err!("Expected ParquetScan node");
+        };
+        assert_eq!(
+            scan.metadata_size_hint,
+            metadata_size_hint.map(|hint| hint as u64)
+        );
+    }
+    Ok(())
 }
 
 #[tokio::test]

@@ -51,7 +51,7 @@ mod null_builder;
 
 pub(crate) use metrics::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
-    GroupByMetrics,
+    GroupByMetrics, aggregate_sub_metrics,
 };
 
 /// Stores the group values during hash aggregation.
