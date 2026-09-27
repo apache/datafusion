@@ -62,14 +62,12 @@ fn find_library() -> Result<PathBuf> {
     find_cdylib(deps_dir)
 }
 
-pub fn get_module() -> Result<ForeignLibraryModule> {
+fn load_module(lib_path: &Path) -> Result<ForeignLibraryModule> {
     let expected_version = crate::version();
-
-    let lib_path = find_library()?;
 
     // Load the library using libloading
     let lib = unsafe {
-        libloading::Library::new(&lib_path)
+        libloading::Library::new(lib_path)
             .map_err(|e| DataFusionError::External(Box::new(e)))?
     };
 
@@ -83,7 +81,74 @@ pub fn get_module() -> Result<ForeignLibraryModule> {
     assert_eq!((module.version)(), expected_version);
 
     // Leak the library to keep it loaded for the duration of the test
+    #[expect(clippy::mem_forget)]
     std::mem::forget(lib);
 
     Ok(module)
+}
+
+pub fn get_module() -> Result<ForeignLibraryModule> {
+    load_module(&find_library()?)
+}
+
+/// Load [`crate::execution_plan::FFI_ExecutionPlan`] from a fresh call to
+/// `datafusion_ffi_test_create_exec_with_byte_metrics`, exported as its own
+/// top-level symbol rather than a [`ForeignLibraryModule`] field precisely so
+/// that adding this test factory never touches that struct's `#[repr(C)]`
+/// layout - see the doc comment on the exported function for the rationale.
+pub fn get_byte_metrics_exec() -> Result<crate::execution_plan::FFI_ExecutionPlan> {
+    let lib_path = find_library()?;
+
+    let lib = unsafe {
+        libloading::Library::new(&lib_path)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+    };
+
+    let create_exec: libloading::Symbol<
+        extern "C" fn() -> crate::execution_plan::FFI_ExecutionPlan,
+    > = unsafe {
+        lib.get(b"datafusion_ffi_test_create_exec_with_byte_metrics")
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+    };
+
+    let plan = create_exec();
+
+    // Leak the library to keep it loaded for the duration of the test
+    #[expect(clippy::mem_forget)]
+    std::mem::forget(lib);
+
+    Ok(plan)
+}
+
+/// Load an independent copy of the integration-test cdylib.
+///
+/// Copying to a unique path makes the dynamic loader create a separate image
+/// with its own library marker and Rust object graph.
+pub fn get_module_copy(name: &str) -> Result<ForeignLibraryModule> {
+    let source = find_library()?;
+    let file_name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| DataFusionError::External("Invalid cdylib filename".into()))?;
+    // Windows cannot remove a loaded DLL, so use a stable name that bounds the
+    // retained test artifacts to one file per library role.
+    #[cfg(target_os = "windows")]
+    let destination = source.with_file_name(format!("{name}_{file_name}"));
+    #[cfg(not(target_os = "windows"))]
+    let destination =
+        source.with_file_name(format!("{}_{}_{}", std::process::id(), name, file_name));
+
+    std::fs::copy(&source, &destination)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    match load_module(&destination) {
+        Ok(module) => {
+            #[cfg(not(target_os = "windows"))]
+            let _ = std::fs::remove_file(destination);
+            Ok(module)
+        }
+        Err(error) => {
+            let _ = std::fs::remove_file(destination);
+            Err(error)
+        }
+    }
 }

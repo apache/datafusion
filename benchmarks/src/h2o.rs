@@ -109,6 +109,7 @@ impl RunOpt {
 
         let iterations = self.common.iterations;
         let mut benchmark_run = BenchmarkRun::new();
+        benchmark_run.set_memory_pool(&ctx.runtime_env().memory_pool);
         for query_id in query_range {
             benchmark_run.start_new_case(&format!("Query {query_id}"));
             let sql = queries.get_query(query_id)?;
@@ -131,7 +132,7 @@ impl RunOpt {
             println!("Query {query_id} avg time: {avg:.2} ms");
 
             // Print memory usage stats using mimalloc (only when compiled with --features mimalloc_extended)
-            print_memory_stats();
+            print_memory_stats(&*ctx.runtime_env().memory_pool);
 
             if self.common.debug {
                 ctx.sql(sql)

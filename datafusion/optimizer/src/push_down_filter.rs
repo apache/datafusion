@@ -40,7 +40,7 @@ use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    BinaryExpr, Distinct, Expr, Filter, Operator, Projection,
+    BinaryExpr, Distinct, Expr, ExprSchemable, Filter, Operator, Projection,
     TableProviderFilterPushDown, and, or,
 };
 
@@ -406,7 +406,25 @@ fn push_down_all_join(
 ) -> Result<Transformed<LogicalPlan>> {
     let is_inner_join = join.join_type == JoinType::Inner;
     // Get pushable predicates from current optimizer state
-    let (left_preserved, right_preserved) = lr_is_preserved(join.join_type);
+    let (left_preserved, mut right_preserved) = lr_is_preserved(join.join_type);
+    let (on_left_preserved, mut on_right_preserved) = on_lr_is_preserved(join.join_type);
+
+    // Null-aware joins (e.g. `NOT IN` with a nullable subquery) implement SQL
+    // three-valued logic: a NULL join key on the right/subquery side makes the
+    // predicate UNKNOWN and empties the result. Anything pushed into the right
+    // input runs before the join can observe those NULLs, so a null-rejecting
+    // predicate would drop them and silently produce wrong results.
+    // `infer_join_predicates` skips null-aware joins for the same reason.
+    //
+    // `on_right_preserved` is what actually matters here: it is what lets a
+    // right-only join filter — the shape `<constant> NOT IN (<subquery>)`
+    // produces — reach the subquery. `right_preserved` is already false for
+    // every join type that can carry `null_aware` today, so clearing it is
+    // defence in depth.
+    if join.null_aware {
+        right_preserved = false;
+        on_right_preserved = false;
+    }
 
     // The predicates can be divided to three categories:
     // 1) can push through join to its children(left or right)
@@ -447,7 +465,6 @@ fn push_down_all_join(
     }
 
     let mut on_filter_join_conditions = vec![];
-    let (on_left_preserved, on_right_preserved) = on_lr_is_preserved(join.join_type);
     for on in on_filter {
         if on_left_preserved && checker.is_left_only(&on) {
             left_push.push(on)
@@ -648,7 +665,7 @@ impl InferredPredicates {
             || matches!(
                 is_restrict_null_predicate(
                     predicate.clone(),
-                    replace_map.keys().cloned()
+                    replace_map.keys().copied()
                 ),
                 Ok(true)
             )
@@ -790,7 +807,7 @@ impl OptimizerRule for PushDownFilter {
         let _ = config;
         if let LogicalPlan::Join(join) = plan {
             return push_down_join(join, None);
-        };
+        }
 
         let LogicalPlan::Filter(mut filter) = plan else {
             return Ok(Transformed::no(plan));
@@ -997,7 +1014,16 @@ impl OptimizerRule for PushDownFilter {
             }
             LogicalPlan::Aggregate(mut agg) => {
                 // We can push down Predicate which in groupby_expr.
-                let group_expr_columns = expr_columns(&agg.group_expr);
+                // Volatile group keys are excluded: below the aggregate, the
+                // predicate would evaluate the key again and see a different
+                // value than the one used for grouping.
+                let non_volatile_group_exprs: Vec<Expr> = agg
+                    .group_expr
+                    .iter()
+                    .filter(|expr| !expr.is_volatile())
+                    .cloned()
+                    .collect();
+                let group_expr_columns = expr_columns(&non_volatile_group_exprs);
 
                 // As for plan Filter: Column(a+b) > 0 -- Agg: groupby:[Column(a)+Column(b)]
                 // After push, we need to replace `a+b` with Column(a)+Column(b)
@@ -1115,6 +1141,89 @@ impl OptimizerRule for PushDownFilter {
                 result.map_data(|plan| Ok(with_filters(keep_predicates, plan)))
             }
             LogicalPlan::Join(join) => push_down_join(join, Some(filter.predicate)),
+            // Pushes deterministic left-only predicates below the ASOF join and
+            // mirrors eligible equality-key predicates to the right input.
+            // Example:
+            //   Before:
+            //     Filter: l.key = 42
+            //       AsOfJoin: on=[l.key = r.key]
+            //         Left
+            //         Right
+            //   ---
+            //   After:
+            //     AsOfJoin: on=[l.key = r.key]
+            //       Filter: l.key = 42
+            //         Left
+            //       Filter: r.key = 42
+            //         Right
+            LogicalPlan::AsOfJoin(mut join) => {
+                // ASOF emits exactly one output row per left row without
+                // changing left values, so deterministic left-only predicates
+                // can run before matching. Right or mixed predicates must stay
+                // above the join because unmatched right fields are NULL-padded.
+                let (push_predicates, keep_predicates): (Vec<_>, Vec<_>) =
+                    split_conjunction_owned(filter.predicate)
+                        .into_iter()
+                        .partition(|predicate| {
+                            !predicate.is_volatile()
+                                && predicate.column_refs().iter().all(|column| {
+                                    join.left.schema().is_column_from_schema(column)
+                                })
+                        });
+
+                // A literal comparison on an equal, same-typed key has the
+                // same value for every matching pair. Mirroring it to the
+                // right can prune groups without changing the ASOF candidate.
+                let mut right_predicates = Vec::new();
+                for predicate in &push_predicates {
+                    let Expr::BinaryExpr(BinaryExpr {
+                        left,
+                        op: Operator::Eq,
+                        right,
+                    }) = predicate
+                    else {
+                        continue;
+                    };
+                    let ((Expr::Column(left_column), Expr::Literal(_, _))
+                    | (Expr::Literal(_, _), Expr::Column(left_column))) =
+                        (left.as_ref(), right.as_ref())
+                    else {
+                        continue;
+                    };
+                    for (left_key, right_key) in &join.on {
+                        let (Some(left_key_column), Some(right_key_column)) =
+                            (left_key.try_as_col(), right_key.try_as_col())
+                        else {
+                            continue;
+                        };
+                        if left_column == left_key_column
+                            && left_key.get_type(join.left.schema())?
+                                == right_key.get_type(join.right.schema())?
+                        {
+                            let replacements =
+                                HashMap::from([(left_key_column, right_key_column)]);
+                            right_predicates
+                                .push(replace_col(predicate.clone(), &replacements)?);
+                            break;
+                        }
+                    }
+                }
+                if let Some(predicate) = conjunction(right_predicates) {
+                    join.right =
+                        Arc::new(LogicalPlan::Filter(Filter::new(predicate, join.right)));
+                }
+
+                let result = if let Some(predicate) = conjunction(push_predicates) {
+                    filter.predicate = predicate;
+                    filter.input = join.left;
+                    join.left = Arc::new(LogicalPlan::Filter(filter));
+                    Transformed::yes(LogicalPlan::AsOfJoin(join))
+                } else {
+                    Transformed::no(LogicalPlan::AsOfJoin(join))
+                };
+
+                result.map_data(|plan| Ok(with_filters(keep_predicates, plan)))
+            }
             LogicalPlan::TableScan(mut scan) => {
                 let filter_predicates = split_conjunction(&filter.predicate);
                 // Filters containing scalar subqueries cannot be pushed to
@@ -1343,7 +1452,7 @@ fn rewrite_projection(
 /// Creates a new LogicalPlan::Filter node.
 ///
 /// Deprecated: use [`Filter::try_new`] directly.
-#[deprecated]
+#[deprecated(since = "55.0.0", note = "Use `Filter::try_new` instead")]
 pub fn make_filter(predicate: Expr, input: Arc<LogicalPlan>) -> Result<LogicalPlan> {
     Filter::try_new(predicate, input).map(LogicalPlan::Filter)
 }
@@ -1437,7 +1546,7 @@ mod tests {
     use std::cmp::Ordering;
     use std::fmt::{Debug, Formatter};
 
-    use arrow::datatypes::{Field, Schema, SchemaRef};
+    use arrow::datatypes::{Field, Metadata, Schema, SchemaRef};
     use async_trait::async_trait;
 
     use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
@@ -3882,6 +3991,46 @@ mod tests {
         )
     }
 
+    /// Regression test for a null-aware LeftAnti join whose join filter only
+    /// references the subquery side, the shape produced by
+    /// `<constant> NOT IN (<subquery>)`. Pushing that filter into the right
+    /// input would drop the subquery's NULL rows before the join can observe
+    /// them, so `NOT IN` would wrongly evaluate to TRUE instead of UNKNOWN.
+    #[test]
+    fn null_aware_left_anti_join_keeps_right_only_join_filter() -> Result<()> {
+        let table_scan = test_table_scan_with_name("test1")?;
+        let left = LogicalPlanBuilder::from(table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join_detailed_with_options(
+                right,
+                JoinType::LeftAnti,
+                (Vec::<Column>::new(), Vec::<Column>::new()),
+                Some(lit(3u32).eq(col("test2.a"))),
+                datafusion_common::NullEquality::NullEqualsNothing,
+                true,
+            )?
+            .build()?;
+
+        // `UInt32(3) = test2.a` stays on the join: it must not become a
+        // `TableScan: test2, full_filters=[...]`.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        LeftAnti Join:  Filter: UInt32(3) = test2.a null_aware
+          Projection: test1.a, test1.b
+            TableScan: test1
+          Projection: test2.a, test2.b
+            TableScan: test2
+        "
+        )
+    }
+
     #[test]
     fn left_anti_join_with_filters() -> Result<()> {
         let table_scan = test_table_scan_with_name("test1")?;
@@ -4092,6 +4241,34 @@ mod tests {
     }
 
     #[test]
+    fn test_filter_on_volatile_group_key_not_pushed_below_aggregate() -> Result<()> {
+        // SELECT r, sum(b) FROM test1 GROUP BY a, TestScalarUDF() + 1 AS r HAVING a > 5 AND r > 0.5
+        let table_scan = test_table_scan_with_name("test1")?;
+        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
+            signature: Signature::exact(vec![], Volatility::Volatile),
+        });
+        let expr = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a"), add(expr, lit(1)).alias("r")],
+                vec![sum(col("b"))],
+            )?
+            .filter(col("a").gt(lit(5)).and(col("r").gt(lit(0.5))))?
+            .build()?;
+
+        // `a > 5` is pushed below the aggregate, `r > 0.5` must stay above it
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: r > Float64(0.5)
+          Aggregate: groupBy=[[test1.a, TestScalarUDF() + Int32(1) AS r]], aggr=[[sum(test1.b)]]
+            TableScan: test1, full_filters=[test1.a > Int32(5)]
+        "
+        )
+    }
+
+    #[test]
     fn test_push_down_volatile_function_in_join() -> Result<()> {
         // SELECT t.a, t.r FROM (SELECT test1.a AS a, TestScalarUDF() AS r FROM test1 join test2 ON test1.a = test2.a) AS t WHERE t.r > 0.5;
         let table_scan = test_table_scan_with_name("test1")?;
@@ -4263,7 +4440,7 @@ mod tests {
                 let schema = Arc::new(
                     DFSchema::new_with_metadata(
                         vec![(None, Field::new("a", DataType::Int64, false).into())],
-                        Default::default(),
+                        Metadata::new(),
                     )
                     .unwrap(),
                 );

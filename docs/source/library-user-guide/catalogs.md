@@ -34,7 +34,7 @@ DataFusion supports DDL queries (e.g. `CREATE TABLE`) using the catalog API desc
 
 Similarly to other concepts in DataFusion, you'll implement various traits to create your own catalogs, schemas, and tables. The following sections describe the traits you'll need to implement.
 
-The `CatalogProviderList` trait has methods to register new catalogs, get a catalog by name and list all catalogs .The `CatalogProvider` trait has methods to set a schema to a name, get a schema by name, and list all schemas. The `SchemaProvider`, which can be registered with a `CatalogProvider`, has methods to set a table to a name, get a table by name, list all tables, deregister a table, and check for a table's existence. The `TableProvider` trait has methods to scan underlying data and use it in DataFusion. The `TableProvider` trait is covered in more detail [here](./custom-table-providers.md).
+The `CatalogProviderList` trait has methods to register new catalogs, get a catalog by name and list all catalogs. The `CatalogProvider` trait has methods to set a schema to a name, get a schema by name, and list all schemas. The `SchemaProvider`, which can be registered with a `CatalogProvider`, has methods to set a table to a name, get a table by name, list all tables, deregister a table, and check for a table's existence. The `TableProvider` trait has methods to scan underlying data and use it in DataFusion. The `TableProvider` trait is covered in more detail [here](./custom-table-providers.md).
 
 In the following example, we'll implement an in memory catalog, starting with the `SchemaProvider` trait as we need one to register with the `CatalogProvider`. Finally we will implement `CatalogProviderList` to register the `CatalogProvider`.
 
@@ -304,6 +304,74 @@ impl CatalogProviderList for MemoryCatalogProviderList {
 ```
 
 Like other traits, it also maintains the mapping of the Catalog's name to the CatalogProvider.
+
+## Catalog Provider Factories
+
+The catalogs above are all registered programmatically, ahead of time,
+before a query ever runs. Sometimes it is useful to let users attach a
+catalog dynamically from SQL instead — for example, a catalog backed by a
+remote catalog service such as an Iceberg REST catalog. This is exactly
+analogous to how [`TableProviderFactory`] lets `CREATE EXTERNAL TABLE`
+create a `TableProvider` "on the fly": `CatalogProviderFactory` lets
+`CREATE EXTERNAL CATALOG ... STORED AS <catalog_type> ...` create a
+`CatalogProvider` on the fly.
+
+To support `CREATE EXTERNAL CATALOG`, implement `CatalogProviderFactory`:
+
+```rust
+use std::sync::Arc;
+use async_trait::async_trait;
+use datafusion::catalog::{CatalogProvider, CatalogProviderFactory, MemoryCatalogProvider, Session};
+use datafusion::common::Result;
+use datafusion::logical_expr::CreateExternalCatalog;
+
+#[derive(Debug)]
+struct MyCatalogProviderFactory {}
+
+#[async_trait]
+impl CatalogProviderFactory for MyCatalogProviderFactory {
+    async fn create(
+        &self,
+        _state: &dyn Session,
+        cmd: &CreateExternalCatalog,
+    ) -> Result<Arc<dyn CatalogProvider>> {
+        // `cmd.location` and `cmd.options` carry whatever was supplied in the
+        // `LOCATION` and `OPTIONS` clauses of the SQL statement; a real
+        // implementation would use them to connect to the remote catalog
+        // service. This example just returns an empty in-memory catalog.
+        Ok(Arc::new(MemoryCatalogProvider::new()))
+    }
+}
+```
+
+Then register it on the `SessionState`, keyed by the `STORED AS` value that
+should resolve to it:
+
+```rust,ignore
+use datafusion::execution::session_state::SessionStateBuilder;
+
+let state = SessionStateBuilder::new()
+    .with_default_features()
+    .with_catalog_factory("MY_CATALOG_TYPE".to_string(), Arc::new(MyCatalogProviderFactory {}))
+    .build();
+```
+
+With the factory registered, users can attach and detach the catalog from
+SQL:
+
+```sql
+CREATE EXTERNAL CATALOG my_catalog
+STORED AS MY_CATALOG_TYPE
+LOCATION 's3://bucket/warehouse'
+OPTIONS ('warehouse' 'my_catalog');
+
+DROP CATALOG my_catalog;
+```
+
+See [DDL: `CREATE EXTERNAL CATALOG`](../user-guide/sql/ddl.md#create-external-catalog)
+for the full SQL syntax.
+
+[`tableproviderfactory`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProviderFactory.html
 
 ## Recap
 

@@ -22,7 +22,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DFSchema, Result};
 
-use crate::utils::NamePreserver;
+use crate::utils::{NamePreserver, merge_into_schema};
 use datafusion_expr::LogicalPlan;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::utils::merge_schema;
@@ -56,6 +56,13 @@ impl ApplyFunctionRewrites {
                 &ts.source.schema(),
             )?;
             schema.merge(&source_schema);
+        }
+
+        // MERGE expressions reference the target table, which is not one of
+        // `plan.inputs()`. Use the operation's visible qualifier when adding
+        // its target schema.
+        if let Some(merge_schema) = merge_into_schema(&plan)? {
+            schema = merge_schema;
         }
 
         let name_preserver = NamePreserver::new(&plan);

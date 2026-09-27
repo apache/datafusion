@@ -153,7 +153,7 @@ impl FilePruner {
         };
         match pruning_predicate.prune(&self.file_stats_pruning) {
             Ok(values) => {
-                assert!(values.len() == 1);
+                assert_eq!(values.len(), 1);
                 // We expect a single container -> if all containers are false skip this file
                 if values.into_iter().all(|v| !v) {
                     return Ok(true);

@@ -33,7 +33,8 @@
 //! * [`ExecutionPlanEncode`] / [`ExecutionPlanDecode`] — internal dispatch
 //!   traits, *defined* here but *implemented* in `datafusion-proto`, that the
 //!   context types delegate to. This is the dependency inversion that keeps the
-//!   proto types flowing in one direction only.
+//!   proto types flowing in one direction only. They are `#[doc(hidden)]`: not
+//!   public API, `pub` only because their implementors live in another crate.
 //!
 //! `datafusion-physical-plan` depends on the pure prost types in
 //! `datafusion-proto-models` (feature `proto`), never on `datafusion-proto`.
@@ -62,8 +63,15 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 use datafusion_common::{Result, internal_datafusion_err};
 use datafusion_execution::TaskContext;
+use datafusion_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::physical_expr::proto_decode::{
+    PhysicalExprDecode, PhysicalExprDecodeCtx,
+};
+use datafusion_physical_expr_common::physical_expr::proto_encode::{
+    PhysicalExprEncode, PhysicalExprEncodeCtx,
+};
 use datafusion_proto_models::protobuf::{PhysicalExprNode, PhysicalPlanNode};
 
 use crate::ExecutionPlan;
@@ -72,6 +80,11 @@ use crate::ExecutionPlan;
 ///
 /// Implemented by `datafusion-proto`. Plan authors never name this trait; they
 /// call methods on [`ExecutionPlanEncodeCtx`] instead.
+///
+/// **Not public API.** `pub` only because the implementors live in another
+/// crate; `#[doc(hidden)]` records that, so encoding primitives can be added
+/// here as the serialization hooks grow without breaking downstream code.
+#[doc(hidden)]
 pub trait ExecutionPlanEncode {
     /// Serialize a child execution plan (recursing through the central
     /// serializer, so the child's own `try_to_proto` hook is honored).
@@ -97,10 +110,23 @@ pub trait ExecutionPlanEncode {
 ///
 /// Implemented by `datafusion-proto`. Plan authors never name this trait; they
 /// call methods on [`ExecutionPlanDecodeCtx`] instead.
+///
+/// **Not public API.** `pub` only because the implementors live in another
+/// crate; `#[doc(hidden)]` records that, so decoding primitives can be added
+/// here as the serialization hooks grow without breaking downstream code.
+#[doc(hidden)]
 pub trait ExecutionPlanDecode {
     /// Deserialize a child execution plan (recursing through the central
     /// deserializer, so the child's own `try_from_proto` is honored).
     fn decode_plan(&self, node: &PhysicalPlanNode) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Deserialize a child plan with `results` active for scalar subquery
+    /// expressions in that plan's subtree.
+    fn decode_plan_with_scalar_subquery_results(
+        &self,
+        node: &PhysicalPlanNode,
+        results: ScalarSubqueryResults,
+    ) -> Result<Arc<dyn ExecutionPlan>>;
 
     /// Deserialize a physical expression against `input_schema`.
     fn decode_expr(
@@ -190,6 +216,25 @@ impl<'a> ExecutionPlanEncodeCtx<'a> {
     pub fn encode_udwf(&self, udwf: &WindowUDF) -> Result<Option<Vec<u8>>> {
         self.encoder.encode_udwf(udwf)
     }
+
+    /// An expression-level encode context backed by this plan context.
+    ///
+    /// Lets a plan hand `ctx` to expression-level conversions that own their own
+    /// wire logic — e.g.
+    /// [`Partitioning::try_to_proto`](datafusion_physical_expr::Partitioning::try_to_proto)
+    /// and
+    /// [`PhysicalSortExpr::try_to_proto`](datafusion_physical_expr::PhysicalSortExpr::try_to_proto).
+    pub fn expr_ctx(&self) -> PhysicalExprEncodeCtx<'_> {
+        PhysicalExprEncodeCtx::new(self)
+    }
+}
+
+/// Lets [`ExecutionPlanEncodeCtx`] back a [`PhysicalExprEncodeCtx`], so
+/// expression-level conversions can be reused from plan hooks.
+impl PhysicalExprEncode for ExecutionPlanEncodeCtx<'_> {
+    fn encode(&self, expr: &Arc<dyn PhysicalExpr>) -> Result<PhysicalExprNode> {
+        self.encode_expr(expr)
+    }
 }
 
 /// Context handed to a plan's `try_from_proto` associated function.
@@ -213,6 +258,17 @@ impl<'a> ExecutionPlanDecodeCtx<'a> {
         node: &PhysicalPlanNode,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.decoder.decode_plan(node)
+    }
+
+    /// Deserialize a child plan with `results` active for scalar subquery
+    /// expressions in that plan's subtree.
+    pub fn decode_child_with_scalar_subquery_results(
+        &self,
+        node: &PhysicalPlanNode,
+        results: ScalarSubqueryResults,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.decoder
+            .decode_plan_with_scalar_subquery_results(node, results)
     }
 
     /// Deserialize a required child plan, producing a uniform "missing required
@@ -285,6 +341,28 @@ impl<'a> ExecutionPlanDecodeCtx<'a> {
         payload: Option<&[u8]>,
     ) -> Result<Arc<WindowUDF>> {
         self.decoder.decode_udwf(name, payload)
+    }
+
+    /// An expression-level decode context backed by this plan context, bound to
+    /// `input_schema`.
+    ///
+    /// The decode counterpart of
+    /// [`ExecutionPlanEncodeCtx::expr_ctx`], for calling conversions such as
+    /// [`Partitioning::try_from_proto`](datafusion_physical_expr::Partitioning::try_from_proto).
+    pub fn expr_ctx<'s>(&'s self, input_schema: &'s Schema) -> PhysicalExprDecodeCtx<'s> {
+        PhysicalExprDecodeCtx::new(input_schema, self)
+    }
+}
+
+/// Lets [`ExecutionPlanDecodeCtx`] back a [`PhysicalExprDecodeCtx`], so
+/// expression-level conversions can be reused from plan hooks.
+impl PhysicalExprDecode for ExecutionPlanDecodeCtx<'_> {
+    fn decode(
+        &self,
+        node: &PhysicalExprNode,
+        schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        self.decode_expr(node, schema)
     }
 }
 

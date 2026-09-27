@@ -136,8 +136,18 @@ fn criterion_benchmark(c: &mut Criterion) {
     }
 
     for &size in &sizes {
+        let data = generate_utf8_data(size, 0.0);
+        run_benchmark(c, "hex_utf8_no_nulls", size, Arc::new(data));
+    }
+
+    for &size in &sizes {
         let data = generate_binary_data(size, null_density);
         run_benchmark(c, "hex_binary", size, Arc::new(data));
+    }
+
+    for &size in &sizes {
+        let data = generate_binary_data(size, 0.0);
+        run_benchmark(c, "hex_binary_no_nulls", size, Arc::new(data));
     }
 
     for &size in &sizes {

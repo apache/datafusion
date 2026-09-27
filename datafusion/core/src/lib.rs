@@ -761,7 +761,7 @@
 //! [`RecordBatch`]: arrow::array::RecordBatch
 //! [`RecordBatchReader`]: arrow::record_batch::RecordBatchReader
 //! [`Array`]: arrow::array::Array
-#![doc = include_str!("optimizer_rule_reference.md")]
+#![cfg_attr(doc, doc = include_str!("optimizer_rule_reference.md"))]
 
 extern crate core;
 #[cfg(feature = "sql")]

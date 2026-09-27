@@ -123,11 +123,8 @@
 //! ```
 pub mod bytes;
 pub mod common;
-pub mod convert;
 pub mod logical_plan;
 pub mod physical_plan;
-
-pub use convert::{FromProto, TryFromProto};
 
 pub mod protobuf {
     pub use datafusion_proto_common::common::proto_error;

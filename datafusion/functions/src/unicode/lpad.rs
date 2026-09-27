@@ -118,7 +118,7 @@ impl ScalarUDFImpl for LPadFunc {
         // fast path.
         if let Some(target_len) = try_as_scalar_i64(&args[1]) {
             let target_len: usize = match usize::try_from(target_len) {
-                Ok(n) if n <= i32::MAX as usize => n,
+                Ok(n) if i32::try_from(n).is_ok() => n,
                 Ok(n) => {
                     return exec_err!(
                         "lpad requested length {n} too large, maximum allowed length is {}",

@@ -49,6 +49,14 @@ impl CatalogProviderList for DynamicFileCatalog {
         self.inner.register_catalog(name, catalog)
     }
 
+    fn deregister_catalog(
+        &self,
+        name: &str,
+        cascade: bool,
+    ) -> datafusion_common::Result<Option<Arc<dyn CatalogProvider>>> {
+        self.inner.deregister_catalog(name, cascade)
+    }
+
     fn catalog_names(&self) -> Vec<String> {
         self.inner.catalog_names()
     }
@@ -138,7 +146,7 @@ impl SchemaProvider for DynamicFileSchemaProvider {
     ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
         if let Some(table) = self.inner.table(name).await? {
             return Ok(Some(table));
-        };
+        }
 
         self.factory.try_new(name).await
     }

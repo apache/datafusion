@@ -4811,7 +4811,7 @@ mod tests {
         ];
 
         for case in cases {
-            assert_eq!(case.0.not().unwrap(), case.1, "Failed for NOT {}", case.0,);
+            assert_eq!(case.0.not().unwrap(), case.1, "Failed for NOT {}", case.0);
         }
         Ok(())
     }
@@ -4832,7 +4832,7 @@ mod tests {
 
         for (interval, expected) in test_cases {
             let result = interval.is_certainly_true();
-            assert_eq!(result, expected, "Failed for interval: {interval}",);
+            assert_eq!(result, expected, "Failed for interval: {interval}");
         }
     }
 
@@ -4852,7 +4852,7 @@ mod tests {
 
         for (interval, expected) in test_cases {
             let result = interval.is_true().unwrap();
-            assert_eq!(result, expected, "Failed for interval: {interval}",);
+            assert_eq!(result, expected, "Failed for interval: {interval}");
         }
     }
 
@@ -4872,7 +4872,7 @@ mod tests {
 
         for (interval, expected) in test_cases {
             let result = interval.is_certainly_false();
-            assert_eq!(result, expected, "Failed for interval: {interval}",);
+            assert_eq!(result, expected, "Failed for interval: {interval}");
         }
     }
 
@@ -4892,7 +4892,7 @@ mod tests {
 
         for (interval, expected) in test_cases {
             let result = interval.is_false().unwrap();
-            assert_eq!(result, expected, "Failed for interval: {interval}",);
+            assert_eq!(result, expected, "Failed for interval: {interval}");
         }
     }
 
@@ -4912,7 +4912,7 @@ mod tests {
 
         for (interval, expected) in test_cases {
             let result = interval.is_certainly_unknown();
-            assert_eq!(result, expected, "Failed for interval: {interval}",);
+            assert_eq!(result, expected, "Failed for interval: {interval}");
         }
     }
 
@@ -4932,7 +4932,7 @@ mod tests {
 
         for (interval, expected) in test_cases {
             let result = interval.is_unknown().unwrap();
-            assert_eq!(result, expected, "Failed for interval: {interval}",);
+            assert_eq!(result, expected, "Failed for interval: {interval}");
         }
     }
 

@@ -18,7 +18,6 @@
 //! [`PullUpCorrelatedExpr`] converts correlated subqueries to `Joins`
 
 use std::collections::BTreeSet;
-use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::simplify_expressions::ExprSimplifier;
@@ -29,7 +28,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     Column, DFSchemaRef, HashMap, Result, ScalarValue, assert_or_internal_err, plan_err,
 };
-use datafusion_expr::expr::Alias;
+use datafusion_expr::expr::{Alias, GroupingSet};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
@@ -199,7 +198,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
 
                 let mut expr_result_map_for_count_bug = HashMap::new();
                 let pull_up_expr_opt = if let Some(expr_result_map) =
-                    self.collected_count_expr_map.get(plan_filter.input.deref())
+                    self.collected_count_expr_map.get(&*plan_filter.input)
                 {
                     if let Some(expr) = conjunction(subquery_filters.clone()) {
                         filter_exprs_evaluation_result_on_empty_batch(
@@ -258,7 +257,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
 
                 let mut expr_result_map_for_count_bug = HashMap::new();
                 if let Some(expr_result_map) =
-                    self.collected_count_expr_map.get(projection.input.deref())
+                    self.collected_count_expr_map.get(&*projection.input)
                 {
                     proj_exprs_evaluation_result_on_empty_batch(
                         &projection.expr,
@@ -300,11 +299,51 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     &self.correlated_subquery_cols_map,
                     &mut local_correlated_cols,
                 );
-                // add missing columns to Aggregation's group expressions
-                let mut missing_exprs = self.collect_missing_exprs(
-                    &aggregate.group_expr,
-                    &local_correlated_cols,
-                )?;
+
+                // A grouping set cannot take the columns the pull up adds.
+                // `LogicalPlanBuilder::aggregate` cross joins a plain group
+                // expression with the sets that are already there, so `ROLLUP(i.k)`,
+                // which is `GROUPING SETS ((i.k), ())`, becomes
+                // `GROUPING SETS ((i.k), (i.k, i.k))`. The empty set is gone, and
+                // with it the grand total row the subquery returns for every outer
+                // row, including the rows whose correlated filter matches nothing.
+                // The join that replaces the filter cannot bring those rows back,
+                // so the subquery stays correlated unless every set already groups
+                // by each column the pull up would add.
+                let mut missing_exprs = if aggregate
+                    .group_expr
+                    .iter()
+                    .any(|expr| matches!(expr, Expr::GroupingSet(_)))
+                {
+                    if self.grouping_sets_cover_pull_up_cols(
+                        &aggregate.group_expr,
+                        &local_correlated_cols,
+                    ) {
+                        // Every set already groups by them, so the sets stay as
+                        // they are. Adding the columns again would repeat them
+                        // inside every set.
+                        aggregate.group_expr.to_vec()
+                    } else {
+                        self.can_pull_up = false;
+                        // The rewrite still runs, the same way the
+                        // `can_pull_over_aggregation` case above does. The callers
+                        // read `can_pull_up` only after the whole rewrite has
+                        // finished, and the nodes above this one still expect the
+                        // pulled up columns in its output, so leaving them out here
+                        // would fail the rewrite with a schema error instead. They
+                        // drop this plan and keep the correlated subquery.
+                        self.collect_missing_exprs(
+                            &aggregate.group_expr,
+                            &local_correlated_cols,
+                        )?
+                    }
+                } else {
+                    // add missing columns to Aggregation's group expressions
+                    self.collect_missing_exprs(
+                        &aggregate.group_expr,
+                        &local_correlated_cols,
+                    )?
+                };
 
                 // if the original group expressions are empty, need to handle the Count bug
                 let mut expr_result_map_for_count_bug = HashMap::new();
@@ -350,21 +389,34 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     new_correlated_cols
                         .insert(Column::new(Some(alias.alias.clone()), col.name.clone()));
                 }
+
+                let new_plan = if alias.input.schema().fields().len()
+                    != alias.schema.fields().len()
+                {
+                    LogicalPlanBuilder::from((*alias.input).clone())
+                        .alias(alias.alias.clone())?
+                        .build()?
+                } else {
+                    plan.clone()
+                };
+
                 self.correlated_subquery_cols_map
-                    .insert(plan.clone(), new_correlated_cols);
-                if let Some(input_map) =
-                    self.collected_count_expr_map.get(alias.input.deref())
+                    .insert(new_plan.clone(), new_correlated_cols);
+                if let Some(input_map) = self.collected_count_expr_map.get(&*alias.input)
                 {
                     self.collected_count_expr_map
-                        .insert(plan.clone(), input_map.clone());
+                        .insert(new_plan.clone(), input_map.clone());
                 }
-                Ok(Transformed::no(plan))
+
+                if new_plan != plan {
+                    Ok(Transformed::yes(new_plan))
+                } else {
+                    Ok(Transformed::no(plan))
+                }
             }
             LogicalPlan::Limit(limit) => {
-                let input_expr_map = self
-                    .collected_count_expr_map
-                    .get(limit.input.deref())
-                    .cloned();
+                let input_expr_map =
+                    self.collected_count_expr_map.get(&*limit.input).cloned();
                 // handling the limit clause in the subquery
                 let new_plan = match (self.exists_sub_query, self.join_filters.is_empty())
                 {
@@ -392,6 +444,64 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
 }
 
 impl PullUpCorrelatedExpr {
+    /// Whether the pull up can add its columns to `group_expr` without changing
+    /// what the aggregate returns.
+    ///
+    /// `true` when `group_expr` holds no grouping set, and when every set of every
+    /// grouping set it holds already groups by each column
+    /// [`Self::collect_missing_exprs`] would add. In the second case the pull up
+    /// adds nothing and the aggregate keeps the sets it has.
+    ///
+    /// `ROLLUP` and `CUBE` always contain the empty set, which yields a row for
+    /// outer rows the correlated filter matches nothing for, so they are only safe
+    /// when there is nothing to add.
+    ///
+    /// A non-empty set that leaves a column out fills it with NULL. Adding the
+    /// column would give it a value instead, which a `HAVING` or a projection
+    /// above the aggregate can read, so such a set is rejected as well.
+    fn grouping_sets_cover_pull_up_cols(
+        &self,
+        group_expr: &[Expr],
+        correlated_subquery_cols: &BTreeSet<Column>,
+    ) -> bool {
+        let grouping_sets = group_expr
+            .iter()
+            .filter_map(|expr| match expr {
+                Expr::GroupingSet(grouping_set) => Some(grouping_set),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if grouping_sets.is_empty() {
+            return true;
+        }
+
+        // The same columns `collect_missing_exprs` appends: the correlated columns
+        // and the columns of a pulled up HAVING, minus the ones `group_expr`
+        // already lists on their own, which it leaves alone.
+        let mut required_cols = correlated_subquery_cols.iter().collect::<BTreeSet<_>>();
+        if let Some(pull_up_having) = &self.pull_up_having_expr {
+            required_cols.extend(pull_up_having.column_refs());
+        }
+        required_cols.retain(|col| {
+            !group_expr
+                .iter()
+                .any(|expr| matches!(expr, Expr::Column(c) if c == *col))
+        });
+        if required_cols.is_empty() {
+            return true;
+        }
+
+        grouping_sets.iter().all(|grouping_set| match grouping_set {
+            GroupingSet::Rollup(_) | GroupingSet::Cube(_) => false,
+            GroupingSet::GroupingSets(sets) => sets.iter().all(|set| {
+                required_cols.iter().all(|col| {
+                    set.iter()
+                        .any(|expr| matches!(expr, Expr::Column(c) if c == *col))
+                })
+            }),
+        })
+    }
+
     fn collect_missing_exprs(
         &self,
         exprs: &[Expr],
@@ -432,16 +542,16 @@ fn can_pullup_over_aggregation(expr: &Expr) -> bool {
         right,
     }) = expr
     {
-        match (left.deref(), right.deref()) {
+        match (&**left, &**right) {
             (Expr::Column(_), right) => !right.any_column_refs(),
             (left, Expr::Column(_)) => !left.any_column_refs(),
             (Expr::Cast(Cast { expr, .. }), right)
-                if matches!(expr.deref(), Expr::Column(_)) =>
+                if matches!(&**expr, Expr::Column(_)) =>
             {
                 !right.any_column_refs()
             }
             (left, Expr::Cast(Cast { expr, .. }))
-                if matches!(expr.deref(), Expr::Column(_)) =>
+                if matches!(&**expr, Expr::Column(_)) =>
             {
                 !left.any_column_refs()
             }

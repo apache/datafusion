@@ -314,7 +314,7 @@ pub trait UserDefinedLogicalNodeCore:
     }
 }
 
-/// Automatically derive UserDefinedLogicalNode to `UserDefinedLogicalNode`
+/// Automatically derive `UserDefinedLogicalNode` from `UserDefinedLogicalNodeCore`
 /// to avoid boiler plate for implementing `as_any`, `Hash`, `PartialEq` and `PartialOrd`.
 impl<T: UserDefinedLogicalNodeCore> UserDefinedLogicalNode for T {
     fn as_any(&self) -> &dyn Any {

@@ -28,6 +28,7 @@ use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scala
 use arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common::{exec_err, internal_err, plan_err};
+use datafusion_physical_expr_common::regex::explain_regexp_kernel_error;
 
 use std::sync::Arc;
 
@@ -159,29 +160,33 @@ create_left_integral_dyn_scalar_kernel!(
     bitwise_shift_left_scalar
 );
 
+/// The SQL spelling of the operator, for error messages.
+fn operator_name(not_match: bool, case_insensitive: bool) -> &'static str {
+    match (not_match, case_insensitive) {
+        (false, false) => "~",
+        (false, true) => "~*",
+        (true, false) => "!~",
+        (true, true) => "!~*",
+    }
+}
+
 /// Invoke a compute kernel on a pair of binary data arrays with flags
 macro_rules! regexp_is_match_flag {
     ($LEFT:expr, $RIGHT:expr, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
         // The analyzer coerces both operands to a common string type, but
         // expressions that bypass it may still reach here with mismatched
         // types, which must surface as an error rather than a panic.
-        let ll = match $LEFT.as_any().downcast_ref::<$ARRAYTYPE>() {
-            Some(ll) => ll,
-            None => {
-                return exec_err!(
-                    "failed to downcast array to {} for operation 'regex_match_dyn'",
-                    stringify!($ARRAYTYPE)
-                );
-            }
+        let Some(ll) = $LEFT.as_any().downcast_ref::<$ARRAYTYPE>() else {
+            return exec_err!(
+                "failed to downcast array to {} for operation 'regex_match_dyn'",
+                stringify!($ARRAYTYPE)
+            );
         };
-        let rr = match $RIGHT.as_any().downcast_ref::<$ARRAYTYPE>() {
-            Some(rr) => rr,
-            None => {
-                return exec_err!(
-                    "failed to downcast array to {} for operation 'regex_match_dyn'",
-                    stringify!($ARRAYTYPE)
-                );
-            }
+        let Some(rr) = $RIGHT.as_any().downcast_ref::<$ARRAYTYPE>() else {
+            return exec_err!(
+                "failed to downcast array to {} for operation 'regex_match_dyn'",
+                stringify!($ARRAYTYPE)
+            );
         };
 
         let flag = if $FLAG {
@@ -189,7 +194,19 @@ macro_rules! regexp_is_match_flag {
         } else {
             None
         };
-        let mut array = regexp_is_match(ll, rr, flag.as_ref())?;
+        // The kernel compiles the pattern of each row. A pattern that does
+        // not compile is explained only after the kernel has failed.
+        let mut array = regexp_is_match(ll, rr, flag.as_ref()).map_err(|error| {
+            explain_regexp_kernel_error(
+                operator_name($NOT, $FLAG),
+                error,
+                // The kernel compiles the pattern of a row only if that row
+                // has a value.
+                Some(ll as &dyn Array),
+                rr,
+                flag.as_ref().map(|flag| flag as &dyn Array),
+            )
+        })?;
         if $NOT {
             array = not(&array).unwrap();
         }
@@ -223,14 +240,11 @@ pub(crate) fn regex_match_dyn(
 /// Invoke a compute kernel on a data array and a scalar value with flag
 macro_rules! regexp_is_match_flag_scalar {
     ($LEFT:expr, $RIGHT:expr, $ARRAYTYPE:ident, $NOT:expr, $FLAG:expr) => {{
-        let ll = match $LEFT.as_any().downcast_ref::<$ARRAYTYPE>() {
-            Some(ll) => ll,
-            None => {
-                return Some(exec_err!(
-                    "failed to downcast array to {} for operation 'regex_match_dyn_scalar'",
-                    stringify!($ARRAYTYPE)
-                ));
-            }
+        let Some(ll) = $LEFT.as_any().downcast_ref::<$ARRAYTYPE>() else {
+            return Some(exec_err!(
+                "failed to downcast array to {} for operation 'regex_match_dyn_scalar'",
+                stringify!($ARRAYTYPE)
+            ));
         };
 
         if let Some(Some(string_value)) = $RIGHT.try_as_str() {
@@ -242,7 +256,22 @@ macro_rules! regexp_is_match_flag_scalar {
                     }
                     Ok(Arc::new(array))
                 }
-                Err(e) => internal_err!("failed to call 'regex_match_dyn_scalar' {}", e),
+                Err(error) => {
+                    // Describe the scalar pattern and flags as arrays of one
+                    // value, so that the failure is explained the same way as
+                    // on the paths that pass arrays.
+                    let patterns = StringArray::from(vec![string_value]);
+                    let flags = flag.map(|flag| StringArray::from(vec![flag]));
+                    Err(explain_regexp_kernel_error(
+                        operator_name($NOT, $FLAG),
+                        error,
+                        // The kernel compiles the one pattern up front,
+                        // whatever the values are.
+                        None,
+                        &patterns,
+                        flags.as_ref().map(|flags| flags as &dyn Array),
+                    ))
+                }
             }
         } else {
             internal_err!(
@@ -270,7 +299,8 @@ pub(crate) fn regex_match_dyn_scalar(
             regexp_is_match_flag_scalar!(left, right, LargeStringArray, not_match, flag)
         }
         DataType::Dictionary(_, _) => {
-            let values = left.as_any_dictionary().values();
+            let dictionary = left.as_any_dictionary();
+            let values = dictionary.values();
 
             match values.data_type() {
                 DataType::Utf8 => regexp_is_match_flag_scalar!(values, right, StringArray, not_match, flag),
@@ -280,16 +310,15 @@ pub(crate) fn regex_match_dyn_scalar(
                     "Data type {} not supported as a dictionary value type for operation 'regex_match_dyn_scalar' on string array",
                     other
                 ),
-            }.map(
-                // downcast_dictionary_array duplicates code per possible key type, so we aim to do all prep work before
-                |evaluated_values| downcast_dictionary_array! {
-                    left => {
-                        let unpacked_dict = evaluated_values.take_iter(left.keys().iter().map(|opt| opt.map(|v| v as _))).collect::<BooleanArray>();
-                        Arc::new(unpacked_dict) as ArrayRef
-                    },
-                    _ => unreachable!(),
-                }
-            )
+            }
+            .and_then(|evaluated_values| {
+                // Expand back to rows while preserving nulls from both keys and values.
+                Ok(arrow::compute::take(
+                    evaluated_values.as_ref(),
+                    dictionary.keys(),
+                    None,
+                )?)
+            })
         }
         other => internal_err!(
             "Data type {} not supported for operation 'regex_match_dyn_scalar' on string array",

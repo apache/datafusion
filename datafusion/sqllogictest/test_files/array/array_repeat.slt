@@ -238,5 +238,37 @@ NULL [NULL, NULL, NULL]
 statement ok
 drop table array_repeat_large_nested_null_table
 
+# https://github.com/apache/datafusion/issues/25223
+statement ok
+create table array_repeat_null_slot_table
+as values
+([1, 2, 3], [1, 2, 3], 1),
+([4, 5, 6], [7], 2);
+
+query I?
+select column3, array_repeat(nullif(column1, column2), 2)
+from array_repeat_null_slot_table order by column3;
+----
+1 [NULL, NULL]
+2 [[4, 5, 6], [4, 5, 6]]
+
+query I?
+select
+  column3,
+  array_repeat(
+    nullif(
+      arrow_cast(column1, 'LargeList(Int64)'),
+      arrow_cast(column2, 'LargeList(Int64)')
+    ),
+    2
+  )
+from array_repeat_null_slot_table order by column3;
+----
+1 [NULL, NULL]
+2 [[4, 5, 6], [4, 5, 6]]
+
+statement ok
+drop table array_repeat_null_slot_table
+
 
 include ./cleanup.slt.part

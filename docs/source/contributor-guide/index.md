@@ -101,6 +101,11 @@ If you are concerned that a larger design will be lost in a string of small PRs,
 
 Note all commits in a PR are squashed when merged to the `main` branch so there is one commit per PR after merge.
 
+For larger PRs, it is often helpful to leave a review on your own PR with
+comments calling out important changes or specific important choices. These
+annotations can help reviewers quickly find areas they should focus on, thus
+speeding up review.
+
 ## Release Management and Backports
 
 Contributor-facing guidance for release branches, patch releases, and backports
@@ -135,22 +140,8 @@ do take priority over the conventional commit approach, allowing maintainers to 
 
 ## Reviewing Pull Requests
 
-Some helpful links:
-
-- [PRs Waiting for Review] on GitHub
-- [Approved PRs Waiting for Merge] on GitHub
-
-[prs waiting for review]: https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+-review%3Aapproved+-is%3Adraft+
-[approved prs waiting for merge]: https://github.com/apache/datafusion/pulls?q=is%3Apr+is%3Aopen+review%3Aapproved+-is%3Adraft
-
-When reviewing PRs, our primary goal is to improve DataFusion and its community together. PR feedback should be constructive with the aim to help improve the code as well as the understanding of the contributor.
-
-Please ensure any issues you raise contains a rationale and suggested alternative -- it is frustrating to be told "don't do it this way" without any clear reason or alternate provided.
-
-Some things to specifically check:
-
-1. Is the feature or fix covered sufficiently with tests (see the [Testing](testing.md) section)?
-2. Is the code clear, and fits the style of the existing codebase?
+See the [Reviewing Pull Requests](pr_review.md) guide for what we look for
+when reviewing PRs and how to prepare your own for review.
 
 ## Performance Improvements
 

@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -185,6 +185,93 @@ physical_plan
 
 statement ok
 DROP TABLE typed_table;
+
+######
+# Aggregate statistics through casts
+######
+
+# String extrema do not bound the numeric values after a CAST. These aggregates
+# must not be replaced with casts of the Parquet string min/max statistics.
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+COPY (SELECT * FROM (VALUES ('1'), ('100'), ('2')) AS t(a))
+TO 'test_files/scratch/parquet_statistics/cast_strings.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE cast_stats_strings STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_statistics/cast_strings.parquet';
+
+query II
+SELECT MIN(CAST(a AS INT)), MAX(CAST(a AS INT)) FROM cast_stats_strings;
+----
+1 100
+
+query II
+SELECT MIN(CAST(a AS BIGINT)), MAX(CAST(a AS BIGINT)) FROM cast_stats_strings;
+----
+1 100
+
+statement ok
+DROP TABLE cast_stats_strings;
+
+# Exact Int64 extrema that fit in Int8 preserve the aggregate optimization.
+statement ok
+COPY (SELECT CAST(a AS BIGINT) AS a FROM (VALUES (-128), (0), (127), (NULL)) AS t(a))
+TO 'test_files/scratch/parquet_statistics/cast_ints.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE cast_stats_ints STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_statistics/cast_ints.parquet';
+
+query II
+SELECT MIN(CAST(a AS TINYINT)), MAX(CAST(a AS TINYINT)) FROM cast_stats_ints;
+----
+-128 127
+
+statement ok
+SET datafusion.explain.show_statistics = false;
+
+query TT
+EXPLAIN SELECT MIN(CAST(a AS TINYINT)), MAX(CAST(a AS TINYINT)) FROM cast_stats_ints;
+----
+physical_plan
+01)ProjectionExec: expr=[-128 as min(cast_stats_ints.a), 127 as max(cast_stats_ints.a)]
+02)--PlaceholderRowExec
+
+statement ok
+DROP TABLE cast_stats_ints;
+
+# An out-of-range minimum or maximum must prevent aggregate folding and preserve
+# the runtime cast error, even when the other endpoint fits in Int8.
+statement ok
+COPY (SELECT CAST(a AS BIGINT) AS a, CAST(b AS BIGINT) AS b
+      FROM (VALUES (-129, -128), (0, 0), (127, 128), (NULL, NULL)) AS t(a, b))
+TO 'test_files/scratch/parquet_statistics/cast_ints_overflow.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE cast_stats_ints_overflow STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_statistics/cast_ints_overflow.parquet';
+
+query error Cast error: Can't cast value -129 to type Int8
+SELECT MIN(CAST(a AS TINYINT)), MAX(CAST(a AS TINYINT)) FROM cast_stats_ints_overflow;
+
+query error Cast error: Can't cast value 128 to type Int8
+SELECT MIN(CAST(b AS TINYINT)), MAX(CAST(b AS TINYINT)) FROM cast_stats_ints_overflow;
+
+query TT
+EXPLAIN SELECT MIN(CAST(a AS TINYINT)), MAX(CAST(a AS TINYINT)) FROM cast_stats_ints_overflow;
+----
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[min(cast_stats_ints_overflow.a), max(cast_stats_ints_overflow.a)]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/cast_ints_overflow.parquet]]}, projection=[CAST(a@0 AS Int8) as __common_expr_1], file_type=parquet
+
+statement ok
+DROP TABLE cast_stats_ints_overflow;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
 
 # Config reset
 statement ok
