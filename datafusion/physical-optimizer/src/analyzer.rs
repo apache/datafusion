@@ -29,10 +29,11 @@ pub use datafusion_session::PhysicalAnalyzerRule;
 ///
 /// Analyzer rules make the plan *valid*: they enforce the invariants every
 /// operator declares (distribution, ordering) rather than making the plan
-/// faster, mirroring the logical layer's `Analyzer`/`Optimizer` split. They run
-/// as a distinct phase relative to the [`PhysicalOptimizer`](crate::optimizer::PhysicalOptimizer)
-/// rules; see [`PhysicalAnalyzerRule`] for how the default planner places that
-/// phase (it is not run strictly before every optimizer rule).
+/// faster, mirroring the logical layer's `Analyzer`/`Optimizer` split. The
+/// default planner runs the whole analyzer phase before the
+/// [`PhysicalOptimizer`](crate::optimizer::PhysicalOptimizer) phase, so every
+/// optimizer rule can assume it receives a valid plan; see
+/// [`PhysicalAnalyzerRule`] for details.
 #[derive(Clone, Debug)]
 pub struct PhysicalAnalyzer {
     /// All rules to apply

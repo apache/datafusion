@@ -39,22 +39,23 @@ use crate::physical_optimizer::PhysicalOptimizerContext;
 /// to match [`ExecutionPlan::required_input_distribution`] or insert a
 /// `SortExec` to match [`ExecutionPlan::required_input_ordering`].
 ///
-/// This mirrors the logical layer's split between `AnalyzerRule` (make the
-/// plan valid) and `OptimizerRule` (make the plan faster).
+/// This mirrors the logical layer's split between [`AnalyzerRule`] (make the
+/// plan valid) and [`OptimizerRule`] (make the plan faster).
 ///
 /// # Ordering
 ///
-/// Analyzer rules run as their own phase, conceptually before the optimizer
-/// rules that assume a valid plan. Note that the built-in planner does not
-/// literally run every analyzer before every optimizer: to preserve the
-/// hand-tuned order of the default pipeline it runs the analyzer phase at the
-/// position `EnsureRequirements` historically occupied (see
-/// [`DefaultPhysicalPlanner::optimize_physical_plan`]), because some default
-/// optimizer rules (notably join selection) must run before enforcement. A
-/// custom rule should therefore not assume it sees the raw initial plan, only
-/// that requirement enforcement has not yet run when it does.
+/// Analyzer rules run as their own phase, before the optimizer rules, in
+/// [`DefaultPhysicalPlanner::optimize_physical_plan`]: every analyzer rule runs,
+/// then every optimizer rule. Requirement enforcement (distribution, ordering)
+/// is itself an analyzer phase, so an optimizer rule can assume it receives a
+/// valid plan. The handful of optimizer rules that change a requirement (for
+/// example `JoinSelection` choosing a partitioned join, `WindowTopN`, or
+/// `FilterPushdown`) re-establish validity themselves rather than relying on a
+/// later enforcement pass.
 ///
 /// [`DefaultPhysicalPlanner::optimize_physical_plan`]: https://docs.rs/datafusion/latest/datafusion/physical_planner/struct.DefaultPhysicalPlanner.html#method.optimize_physical_plan
+/// [`AnalyzerRule`]: https://docs.rs/datafusion/latest/datafusion/optimizer/analyzer/trait.AnalyzerRule.html
+/// [`OptimizerRule`]: https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html
 ///
 /// [`PhysicalOptimizerRule`]: crate::physical_optimizer::PhysicalOptimizerRule
 /// [`ExecutionPlan::required_input_distribution`]: datafusion_physical_plan::ExecutionPlan::required_input_distribution
