@@ -475,14 +475,11 @@ fn get_udf_args_and_return_types(
         arg_types
             .into_iter()
             .map(|arg_types| {
-                let mut arg_fields = arg_types
+                let arg_fields = arg_types
                     .iter()
                     .enumerate()
                     .map(|(i, t)| resolve_informational_field(i, t))
                     .collect::<Result<Vec<FieldRef>>>()?;
-                // Even with collecting results into a set, drop duplicates early
-                arg_fields.sort();
-                arg_fields.dedup();
                 let scalar_arguments = vec![None; arg_fields.len()];
                 let return_type = udf
                     .return_field_from_args(ReturnFieldArgs {
@@ -516,14 +513,11 @@ fn get_udaf_args_and_return_types(
         arg_types
             .into_iter()
             .map(|arg_types| {
-                let mut arg_fields = arg_types
+                let arg_fields = arg_types
                     .iter()
                     .enumerate()
                     .map(|(i, t)| resolve_informational_field(i, t))
                     .collect::<Result<Vec<FieldRef>>>()?;
-                // Even with collecting results into a set, drop duplicates early
-                arg_fields.sort();
-                arg_fields.dedup();
                 let return_type = udaf
                     .return_field(&arg_fields)
                     .map(|f| {
@@ -553,14 +547,11 @@ fn get_udwf_args_and_return_types(
         arg_types
             .into_iter()
             .map(|arg_types| {
-                let mut arg_fields = arg_types
+                let arg_fields = arg_types
                     .iter()
                     .enumerate()
                     .map(|(i, t)| resolve_informational_field(i, t))
                     .collect::<Result<Vec<FieldRef>>>()?;
-                // Even with collecting results into a set, drop duplicates early
-                arg_fields.sort();
-                arg_fields.dedup();
                 let return_type = udwf
                     .field(WindowUDFFieldArgs::new(&arg_fields, udwf.name()))
                     .map(|f| {
@@ -1521,6 +1512,8 @@ mod tests {
     use super::*;
     use crate::CatalogProvider;
     use arrow::array::Array;
+    use datafusion_common::ScalarValue;
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
     #[test]
     fn schemata_builder_emits_canonical_schema_and_rows() {
@@ -1589,6 +1582,59 @@ mod tests {
         assert!(config.make_tables(&mut builder).await.is_ok());
 
         assert_eq!("BASE TABLE", builder.table_types.finish().value(0));
+    }
+
+    // UDF
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct TestScalarUDF {
+        signature: Signature,
+    }
+    impl ScalarUDFImpl for TestScalarUDF {
+        fn name(&self) -> &str {
+            "TestScalarUDF"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+            Ok(arg_types.last().unwrap().clone())
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::from("a")))
+        }
+    }
+
+    #[test]
+    fn test_get_udf_args_and_return_types() -> Result<()> {
+        // heterogeneous arguments to test mixed arguments retrieval
+        let signature = Signature::exact(
+            [
+                vec![DataType::Int32; 6],
+                vec![DataType::Float32; 6],
+                vec![DataType::Utf8; 1],
+            ]
+            .concat(),
+            Volatility::Stable,
+        );
+        let udf = Arc::new(ScalarUDF::from(TestScalarUDF { signature }));
+        let result = get_udf_args_and_return_types(&udf)?;
+        assert_eq!(result.len(), 1);
+        let (args, ret) = result.iter().next().unwrap();
+        assert_eq!(
+            *args,
+            [
+                vec![String::from("Int32"); 6],
+                vec![String::from("Float32"); 6],
+                vec![String::from("String"); 1]
+            ]
+            .concat()
+        );
+        assert_eq!(*ret, Some(String::from("String")));
+
+        Ok(())
     }
 
     #[derive(Debug)]
