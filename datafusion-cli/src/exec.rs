@@ -36,7 +36,7 @@ use datafusion::logical_expr::{DdlStatement, LogicalPlan};
 use datafusion::physical_plan::execution_plan::EmissionType;
 use datafusion::physical_plan::spill::get_record_batch_memory_size;
 use datafusion::physical_plan::{ExecutionPlanProperties, execute_stream};
-use datafusion::sql::parser::{DFParser, Statement};
+use datafusion::sql::parser::{DFParserBuilder, Statement};
 use datafusion::sql::sqlparser;
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 use futures::StreamExt;
@@ -126,10 +126,13 @@ pub async fn exec_from_repl(
     print_options: &mut PrintOptions,
 ) -> rustyline::Result<()> {
     let mut rl = Editor::new()?;
-    rl.set_helper(Some(CliHelper::new(
-        &ctx.task_ctx().session_config().options().sql_parser.dialect,
-        print_options.color,
-    )));
+    {
+        let task_ctx = ctx.task_ctx();
+        let sql_parser = &task_ctx.session_config().options().sql_parser;
+        let mut helper = CliHelper::new(&sql_parser.dialect, print_options.color);
+        helper.set_recursion_limit(sql_parser.recursion_limit.get());
+        rl.set_helper(Some(helper));
+    }
     rl.load_history(".history").ok();
 
     loop {
@@ -183,10 +186,12 @@ pub async fn exec_from_repl(
                             continue
                         },
                     }
-                    // dialect might have changed
-                    rl.helper_mut().unwrap().set_dialect(
-                        &ctx.task_ctx().session_config().options().sql_parser.dialect,
-                    );
+                    // dialect or recursion limit might have changed
+                    let task_ctx = ctx.task_ctx();
+                    let sql_parser = &task_ctx.session_config().options().sql_parser;
+                    let helper = rl.helper_mut().unwrap();
+                    helper.set_dialect(&sql_parser.dialect);
+                    helper.set_recursion_limit(sql_parser.recursion_limit.get());
                 }
             }
             Err(ReadlineError::Interrupted) => {
@@ -222,7 +227,11 @@ pub(super) async fn exec_and_print(
         )
     })?;
 
-    let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
+    let statements = DFParserBuilder::new(sql.as_str())
+        .with_dialect(dialect.as_ref())
+        .with_recursion_limit(options.sql_parser.recursion_limit.get())
+        .build()?
+        .parse_statements()?;
     for statement in statements {
         StatementExecutor::new(statement)
             .execute(ctx, print_options)
@@ -519,6 +528,7 @@ mod tests {
     use super::*;
 
     use datafusion::common::plan_err;
+    use datafusion::sql::parser::DFParser;
 
     use datafusion::prelude::SessionContext;
     use datafusion_common::assert_contains;
