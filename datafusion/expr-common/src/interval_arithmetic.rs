@@ -1243,6 +1243,50 @@ fn prev_value(value: ScalarValue) -> ScalarValue {
     value_transition!(MIN, false, value)
 }
 
+/// Returns the previous distinct value of `value`, or `None` if `value` is
+/// null, non-finite, already at the type minimum, or a type that has no
+/// predecessor.
+///
+/// Non-finite floats (`NaN`, ±∞) return `None` instead of calling
+/// `prev_value`, which debug-asserts that the operand is finite.
+pub fn checked_predecessor(value: &ScalarValue) -> Option<ScalarValue> {
+    checked_adjacent(value, false)
+}
+
+/// Returns the next distinct value of `value`, or `None` if `value` is
+/// null, non-finite, already at the type maximum, or a type that has no
+/// successor.
+///
+/// Non-finite floats (`NaN`, ±∞) return `None` instead of calling
+/// `next_value`, which debug-asserts that the operand is finite.
+pub fn checked_successor(value: &ScalarValue) -> Option<ScalarValue> {
+    checked_adjacent(value, true)
+}
+
+fn checked_adjacent(value: &ScalarValue, successor: bool) -> Option<ScalarValue> {
+    if value.is_null() || is_non_finite_float(value) {
+        return None;
+    }
+    let adjacent = if successor {
+        next_value(value.clone())
+    } else {
+        prev_value(value.clone())
+    };
+    if adjacent.is_null() || adjacent == *value {
+        None
+    } else {
+        Some(adjacent)
+    }
+}
+
+fn is_non_finite_float(value: &ScalarValue) -> bool {
+    match value {
+        ScalarValue::Float32(Some(v)) => !v.is_finite(),
+        ScalarValue::Float64(Some(v)) => !v.is_finite(),
+        _ => false,
+    }
+}
+
 trait OneTrait: Sized + std::ops::Add + std::ops::Sub {
     fn one() -> Self;
 }
@@ -2261,7 +2305,8 @@ impl NullableInterval {
 mod tests {
     use crate::{
         interval_arithmetic::{
-            Interval, handle_overflow, next_value, prev_value, satisfy_greater,
+            Interval, checked_predecessor, checked_successor, handle_overflow,
+            next_value, prev_value, satisfy_greater,
         },
         operator::Operator,
     };
@@ -2356,6 +2401,72 @@ mod tests {
         });
 
         Ok(())
+    }
+
+    #[test]
+    fn test_checked_predecessor() {
+        assert_eq!(
+            checked_predecessor(&ScalarValue::Int64(Some(10))),
+            Some(ScalarValue::Int64(Some(9)))
+        );
+        assert_eq!(checked_predecessor(&ScalarValue::Int64(None)), None);
+        assert_eq!(
+            checked_predecessor(&ScalarValue::Int64(Some(i64::MIN))),
+            None
+        );
+        assert_eq!(
+            checked_predecessor(&ScalarValue::TimestampNanosecond(Some(i64::MIN), None)),
+            None
+        );
+        // Types without a discrete predecessor return the same value from
+        // `prev_value`, which `checked_predecessor` treats as absent.
+        assert_eq!(
+            checked_predecessor(&ScalarValue::Utf8(Some("a".into()))),
+            None
+        );
+        // Non-finite floats must not reach `prev_value` (debug-asserts finite).
+        assert_eq!(
+            checked_predecessor(&ScalarValue::Float64(Some(f64::NAN))),
+            None
+        );
+        assert_eq!(
+            checked_predecessor(&ScalarValue::Float64(Some(f64::INFINITY))),
+            None
+        );
+        assert_eq!(
+            checked_predecessor(&ScalarValue::Float32(Some(f32::NEG_INFINITY))),
+            None
+        );
+    }
+
+    #[test]
+    fn test_checked_successor() {
+        assert_eq!(
+            checked_successor(&ScalarValue::Int64(Some(10))),
+            Some(ScalarValue::Int64(Some(11)))
+        );
+        assert_eq!(checked_successor(&ScalarValue::Int64(None)), None);
+        assert_eq!(checked_successor(&ScalarValue::Int64(Some(i64::MAX))), None);
+        assert_eq!(
+            checked_successor(&ScalarValue::TimestampNanosecond(Some(i64::MAX), None)),
+            None
+        );
+        assert_eq!(
+            checked_successor(&ScalarValue::Utf8(Some("a".into()))),
+            None
+        );
+        assert_eq!(
+            checked_successor(&ScalarValue::Float64(Some(f64::NAN))),
+            None
+        );
+        assert_eq!(
+            checked_successor(&ScalarValue::Float64(Some(f64::INFINITY))),
+            None
+        );
+        assert_eq!(
+            checked_successor(&ScalarValue::Float32(Some(f32::NEG_INFINITY))),
+            None
+        );
     }
 
     #[test]
