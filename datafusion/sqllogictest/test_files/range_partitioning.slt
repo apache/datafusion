@@ -1893,6 +1893,47 @@ ORDER BY b.range_key;
 5 50 50
 20 200 200
 
+##########
+# TEST 49: Reorder Composite Join Keys to Match Range Partitioning
+##########
+
+statement ok
+set datafusion.optimizer.enable_join_dynamic_filter_pushdown = false;
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+query TT
+EXPLAIN SELECT l.range_key, l.non_range_key, l.value, r.value
+FROM range_partitioned_composite l
+JOIN range_partitioned_composite r
+  ON l.non_range_key = r.non_range_key
+ AND l.range_key = r.range_key;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(range_key@0, range_key@0), (non_range_key@1, non_range_key@1)], projection=[range_key@0, non_range_key@1, value@2, value@5]
+02)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC, non_range_key@1 ASC], [(10, 1), (20, 1), (30, 1)], 4), file_type=parquet
+03)--DataSourceExec: file_groups=<slt:ignore>, projection=[range_key, non_range_key, value], output_partitioning=Range([range_key@0 ASC, non_range_key@1 ASC], [(10, 1), (20, 1), (30, 1)], 4), file_type=parquet
+
+query IIII rowsort
+SELECT l.range_key, l.non_range_key, l.value, r.value
+FROM range_partitioned_composite l
+JOIN range_partitioned_composite r
+  ON l.non_range_key = r.non_range_key
+ AND l.range_key = r.range_key;
+----
+1 1 10 10
+10 0 90 90
+10 1 100 100
+10 1 100 101
+10 1 101 100
+10 1 101 101
+20 0 190 190
+20 1 200 200
+30 0 290 290
+30 1 300 300
+35 2 350 350
+
 statement ok
 reset datafusion.optimizer.preserve_file_partitions;
 
