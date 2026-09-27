@@ -231,14 +231,13 @@ impl Metric {
 
 /// A snapshot of the metrics for a particular execution plan.
 ///
-/// Snapshots returned by [`ExecutionPlanMetricsSet::clone_inner`] record a fixed
-/// registration boundary and defer copying metric handles until iteration. Their
-/// membership is fixed while metric values remain live. Cloning these snapshots
-/// is O(1); cloning an owned set copies its handles.
+/// The set's members remain fixed as execution registers more metrics, but their
+/// values continue to reflect execution progress. Use [`Self::for_partition`] to
+/// select the metrics belonging to one partition.
 ///
-/// A registry-backed snapshot retains its source registry, including later
-/// registrations. Full iteration caches its original members in O(n) time;
-/// [`Self::for_partition`] can instead use the registry's incremental index.
+/// Snapshots from [`ExecutionPlanMetricsSet::clone_inner`] retain the source
+/// registry, including later registrations, until dropped. A partition selection
+/// retains only the selected metrics.
 #[derive(Default, Debug, Clone)]
 pub struct MetricsSet {
     metrics: Snapshot,
@@ -250,29 +249,17 @@ impl MetricsSet {
         Default::default()
     }
 
-    /// Add the specified metric.
-    ///
-    /// Mutating a deferred snapshot first copies its members into an independent
-    /// vector. Subsequent additions append to that vector.
+    /// Add the specified metric without changing other snapshots.
     pub fn push(&mut self, metric: Arc<Metric>) {
         self.metrics.push(metric)
     }
 
-    /// Return a snapshot containing only metrics with `partition == Some(partition)`.
+    /// Return the metrics whose partition ID equals `partition`.
     ///
-    /// For registry-backed snapshots, this incrementally indexes registrations
-    /// not processed by earlier partition reads, then clones only matching handles.
-    /// Each registration is indexed at most once across snapshots of the registry.
-    /// Owned sets instead filter their handles in O(n) time.
-    ///
-    /// Unpartitioned metrics are excluded; an unknown partition yields an empty set.
-    /// Registration order, duplicates and shared metric values are preserved. The
-    /// result owns its handles and does not retain the source registry. It never
-    /// acquires metrics registered after this snapshot was created.
-    ///
-    /// Index updates and selection hold the registry lock and can delay concurrent
-    /// registration. This does not avoid work already performed by the provider,
-    /// such as full metrics transport over FFI.
+    /// Unpartitioned metrics are excluded; an unknown partition yields an empty
+    /// set. Registration order and duplicates are preserved. Selected metrics
+    /// share their current values with this set, but changes to either set's
+    /// membership do not affect the other.
     pub fn for_partition(&self, partition: usize) -> Self {
         Self {
             metrics: self.metrics.for_partition(partition),
@@ -553,18 +540,16 @@ impl ExecutionPlanMetricsSet {
 
     /// Add the specified metric to the underlying metric set
     pub fn register(&self, metric: Arc<Metric>) {
-        self.inner.lock().metrics.push(metric)
+        self.inner.lock().register(metric)
     }
 
-    /// Return a snapshot with the current registration boundary in O(1).
+    /// Return a snapshot of the currently registered metrics.
     ///
-    /// Metric handles are copied on iteration or partition selection. Later
-    /// registrations leave this snapshot's membership unchanged, while values
-    /// remain shared. Retaining a snapshot also retains the source registry.
+    /// Later registrations do not appear in this snapshot, but changes to the
+    /// values of existing metrics remain visible.
     pub fn clone_inner(&self) -> MetricsSet {
-        let end = self.inner.lock().metrics.len();
         MetricsSet {
-            metrics: Snapshot::new(Arc::clone(&self.inner), end),
+            metrics: Snapshot::new(Arc::clone(&self.inner)),
         }
     }
 }
