@@ -73,7 +73,8 @@ select date_bin(
 ----
 NULL
 
-# Extreme timestamp overflow: source - origin overflows i64 (should return NULL, not panic)
+# Extreme timestamp overflow: source - origin overflows i64, so the bin is
+# computed in i128 instead (previously NULL, and before that a panic)
 query P
 select date_bin(
   interval '1 nanosecond',
@@ -81,7 +82,7 @@ select date_bin(
   arrow_cast(-9223372036854775808, 'Timestamp(Nanosecond, None)')
 );
 ----
-NULL
+2262-04-11T23:47:16.854775807
 
 # compute_distance overflow: source at i64::MIN nanoseconds previously panicked
 # inside compute_distance; it must return NULL through the SQL execution path
@@ -93,25 +94,27 @@ select date_bin(
 ----
 NULL
 
-# Source timestamp scaling to nanoseconds overflows: should return NULL, not panic
-query P
-select date_bin(
+# Source timestamp scaling to nanoseconds overflows, so the bin is computed in
+# i128 instead (previously NULL, and before that a panic). The result cannot be
+# displayed as a date, so show its raw value.
+query I
+select arrow_cast(date_bin(
   interval '1 nanosecond',
   arrow_cast(9223372036854775807, 'Timestamp(Second, None)'),
   timestamp '1970-01-01 00:00:00'
-);
+), 'Int64');
 ----
-NULL
+9223372036854775807
 
-# Source timestamp scaling to nanoseconds overflows in array path: should return NULL, not panic
-query P
-select date_bin(
+# Same in the array path
+query I
+select arrow_cast(date_bin(
   interval '1 nanosecond',
   ts,
   timestamp '1970-01-01 00:00:00'
-)
+), 'Int64')
 from (
   values (arrow_cast(9223372036854775807, 'Timestamp(Second, None)'))
 ) as t(ts);
 ----
-NULL
+9223372036854775807
