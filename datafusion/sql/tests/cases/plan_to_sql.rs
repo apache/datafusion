@@ -343,6 +343,18 @@ macro_rules! roundtrip_statement_with_dialect_helper {
             .with_aggregate_function(
                 datafusion_functions_aggregate::percentile_cont::percentile_cont_udaf(),
             )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::array_agg::array_agg_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::first_last::first_value_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::first_last::last_value_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::string_agg::string_agg_udaf(),
+            )
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
             .with_expr_planner(Arc::new(NestedFunctionPlanner))
             .with_expr_planner(Arc::new(FieldAccessPlanner));
@@ -4608,6 +4620,99 @@ fn roundtrip_approx_percentile_cont_within_group_with_centroids()
         unparser_dialect: UnparserDefaultDialect {},
         expected: @"SELECT approx_percentile_cont(0.9, 200) WITHIN GROUP (ORDER BY (person.salary * 2) DESC NULLS FIRST) FROM person",
     );
+    Ok(())
+}
+
+/// Ordering of an ordered aggregate that uses the argument-list syntax
+/// (`array_agg(x ORDER BY y)`) must survive unparsing, not just the
+/// `WITHIN GROUP` spelling. See #25796.
+#[test]
+fn roundtrip_ordered_aggregate_order_by() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, last_value(age ORDER BY salary) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, last_value(person.age ORDER BY person.salary ASC NULLS LAST) FROM person GROUP BY person.first_name",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, first_value(age ORDER BY salary DESC) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, first_value(person.age ORDER BY person.salary DESC NULLS FIRST) FROM person GROUP BY person.first_name",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, array_agg(age ORDER BY salary) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, array_agg(person.age ORDER BY person.salary ASC NULLS LAST) FROM person GROUP BY person.first_name",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, string_agg(CAST(age AS VARCHAR), ',' ORDER BY salary) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, string_agg(CAST(person.age AS VARCHAR), ',' ORDER BY person.salary ASC NULLS LAST) FROM person GROUP BY person.first_name",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, array_agg(DISTINCT age ORDER BY salary, id) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, array_agg(DISTINCT person.age ORDER BY person.salary ASC NULLS LAST, person.id ASC NULLS LAST) FROM person GROUP BY person.first_name",
+    );
+    Ok(())
+}
+
+/// The emitted SQL must not merely *look* right: re-planning it has to produce
+/// the same plan, so a frozen-but-broken snapshot cannot hide an ordering that
+/// was dropped or moved to a clause the parser reads differently. Covers both
+/// spellings, since the unparser picks between them. See #25796.
+#[test]
+fn ordered_aggregate_order_by_survives_replanning() -> Result<(), DataFusionError> {
+    let state = MockSessionState::default()
+        .with_aggregate_function(
+            datafusion_functions_aggregate::array_agg::array_agg_udaf(),
+        )
+        .with_aggregate_function(
+            datafusion_functions_aggregate::first_last::first_value_udaf(),
+        )
+        .with_aggregate_function(
+            datafusion_functions_aggregate::first_last::last_value_udaf(),
+        )
+        .with_aggregate_function(
+            datafusion_functions_aggregate::string_agg::string_agg_udaf(),
+        )
+        .with_aggregate_function(
+            datafusion_functions_aggregate::percentile_cont::percentile_cont_udaf(),
+        )
+        .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
+    let context = MockContextProvider { state };
+    let sql_to_rel = SqlToRel::new(&context);
+    let unparser = Unparser::default();
+
+    for sql in [
+        "SELECT first_name, last_value(age ORDER BY salary) FROM person GROUP BY first_name",
+        "SELECT first_name, first_value(age ORDER BY salary DESC) FROM person GROUP BY first_name",
+        "SELECT first_name, array_agg(age ORDER BY salary) FROM person GROUP BY first_name",
+        "SELECT first_name, array_agg(DISTINCT age ORDER BY salary, id) FROM person GROUP BY first_name",
+        "SELECT first_name, string_agg(CAST(age AS VARCHAR), ',' ORDER BY salary) FROM person GROUP BY first_name",
+        "SELECT first_name, percentile_cont(0.5) WITHIN GROUP (ORDER BY age) FROM person GROUP BY first_name",
+    ] {
+        let plan = sql_to_rel.sql_statement_to_plan(
+            Parser::new(&GenericDialect {})
+                .try_with_sql(sql)?
+                .parse_statement()?,
+        )?;
+        let unparsed = unparser.plan_to_sql(&plan)?.to_string();
+        let replanned = sql_to_rel.sql_statement_to_plan(
+            Parser::new(&GenericDialect {})
+                .try_with_sql(&unparsed)?
+                .parse_statement()?,
+        )?;
+        assert_eq!(
+            plan.display_indent().to_string(),
+            replanned.display_indent().to_string(),
+            "unparsing changed the plan for `{sql}`, emitting `{unparsed}`"
+        );
+    }
     Ok(())
 }
 
