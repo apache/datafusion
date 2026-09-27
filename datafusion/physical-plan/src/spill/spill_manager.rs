@@ -22,12 +22,14 @@ use crate::coop::cooperative;
 use crate::{common::spawn_buffered, metrics::SpillMetrics};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result, config::SpillCompression};
+use arrow_data::{ArrayData, layout};
+use datafusion_common::{DataFusionError, HashSet, Result, config::SpillCompression};
 use datafusion_execution::SendableRecordBatchStream;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::spill_file::SpillFile;
 use log::debug;
 use std::borrow::Borrow;
+use std::num::NonZero;
 use std::sync::Arc;
 
 /// The `SpillManager` is responsible for the following tasks:
@@ -221,22 +223,43 @@ impl SpillManager {
 
 pub(crate) trait GetSlicedSize {
     /// Returns the size of the `RecordBatch` when sliced.
-    /// Note: if multiple arrays or even a single array share the same data buffers, we may double count each buffer.
-    /// Therefore, make sure we call gc() or gc_view_arrays() before using this method.
+    /// A view data buffer listed more than once, in one array or across arrays, is counted once.
     fn get_sliced_size(&self) -> Result<usize>;
 }
 
 impl GetSlicedSize for RecordBatch {
     fn get_sliced_size(&self) -> Result<usize> {
         let mut total = 0;
+        let mut counted_view_buffers = HashSet::new();
         for array in self.columns() {
             let data = array.to_data();
             // Since https://github.com/apache/arrow-rs/issues/8230 this also
             // accounts for the variadic data buffers retained by view arrays
             total += data.get_slice_memory_size()?;
+            total -= repeated_view_buffers_size(&data, &mut counted_view_buffers);
         }
         Ok(total)
     }
+}
+
+/// Capacity of the view data buffers in `data` that were already counted.
+fn repeated_view_buffers_size(
+    data: &ArrayData,
+    counted: &mut HashSet<NonZero<usize>>,
+) -> usize {
+    let layout = layout(data.data_type());
+    let mut repeated = 0;
+    if layout.variadic {
+        for buffer in data.buffers().iter().skip(layout.buffers.len()) {
+            if !counted.insert(buffer.data_ptr().addr()) {
+                repeated += buffer.capacity();
+            }
+        }
+    }
+    for child in data.child_data() {
+        repeated += repeated_view_buffers_size(child, counted);
+    }
+    repeated
 }
 
 #[cfg(test)]
@@ -510,6 +533,30 @@ mod tests {
         let views_sliced_size = data.get_slice_memory_size()?;
         assert_eq!(views_sliced_size, half_batch.get_sliced_size().unwrap());
 
+        Ok(())
+    }
+
+    #[test]
+    fn sliced_size_counts_repeated_view_buffers_once() -> Result<()> {
+        let array = StringViewArray::from(vec!["x".repeat(100)]);
+        let buffer = array.data_buffers()[0].clone();
+        // `concat` of view arrays that share a buffer lists it once per input
+        let repeated = StringViewArray::try_new(
+            array.views().clone(),
+            vec![buffer.clone(); 3],
+            None,
+        )?;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8View, false),
+            Field::new("b", DataType::Utf8View, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(repeated.clone()), Arc::new(repeated)],
+        )?;
+
+        let views_size = 2 * size_of::<u128>();
+        assert_eq!(batch.get_sliced_size()?, views_size + buffer.capacity());
         Ok(())
     }
 }
