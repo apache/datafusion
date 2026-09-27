@@ -2002,6 +2002,38 @@ SELECT ts - ts_tz_ns, ts - ts_tz_ms FROM mixed_tz_minus;
 ----
 0 days 0 hours 0 mins 0.000000000 secs 0 days 0 hours 0 mins 0.000000000 secs
 
+# The same at every time unit, with the aware and naive operands at equal units:
+# seconds, milliseconds, microseconds and nanoseconds.
+statement ok
+CREATE TABLE mixed_tz_minus_units AS SELECT
+  arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Second, Some("America/New_York"))') AS ts_tz_s,
+  arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Millisecond, Some("America/New_York"))') AS ts_tz_ms,
+  arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Microsecond, Some("America/New_York"))') AS ts_tz_us,
+  arrow_cast('2024-11-01T00:00:00-04:00', 'Timestamp(Nanosecond, Some("America/New_York"))') AS ts_tz_ns,
+  arrow_cast('2024-11-01T00:00:00', 'Timestamp(Second, None)') AS ts_s,
+  arrow_cast('2024-11-01T00:00:00', 'Timestamp(Millisecond, None)') AS ts_ms,
+  arrow_cast('2024-11-01T00:00:00', 'Timestamp(Microsecond, None)') AS ts_us,
+  arrow_cast('2024-11-01T00:00:00', 'Timestamp(Nanosecond, None)') AS ts_ns;
+
+# postgresql / duckdb (session time zone America/New_York): 00:00:00 for every unit
+query ????
+SELECT ts_tz_s - ts_s, ts_tz_ms - ts_ms, ts_tz_us - ts_us, ts_tz_ns - ts_ns FROM mixed_tz_minus_units;
+----
+0 days 0 hours 0 mins 0 secs 0 days 0 hours 0 mins 0.000 secs 0 days 0 hours 0 mins 0.000000 secs 0 days 0 hours 0 mins 0.000000000 secs
+
+query ????
+SELECT ts_s - ts_tz_s, ts_ms - ts_tz_ms, ts_us - ts_tz_us, ts_ns - ts_tz_ns FROM mixed_tz_minus_units;
+----
+0 days 0 hours 0 mins 0 secs 0 days 0 hours 0 mins 0.000 secs 0 days 0 hours 0 mins 0.000000 secs 0 days 0 hours 0 mins 0.000000000 secs
+
+query BBBB
+SELECT ts_tz_s = ts_s, ts_tz_ms = ts_ms, ts_tz_us = ts_us, ts_tz_ns = ts_ns FROM mixed_tz_minus_units;
+----
+true true true true
+
+statement ok
+DROP TABLE mixed_tz_minus_units
+
 statement ok
 SET datafusion.explain.logical_plan_only = true
 
