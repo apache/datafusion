@@ -536,7 +536,13 @@ before merge.</p>
 <span class="c1"># ./dev/rust_lint.sh --write --allow-dirty</span>
 </pre></div>
 </div>
-<p>You should also run any relevant commands from the <a class="reference internal" href="testing.html#testing-quick-start"><span class="std std-ref">testing quick start</span></a>.</p>
+<p>Please ensure your PR follows the <a class="reference internal" href="testing.html"><span class="std std-doc">testing guide</span></a>. In particular:</p>
+<ul class="simple">
+<li><p>Prefer end-to-end Public API tests such as <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> (<code class="docutils literal notranslate"><span class="pre">.slt</span></code>) and DataFrame API,
+over Rust unit tests where possible. See
+<a class="reference internal" href="testing.html#choosing-what-kind-of-test-to-write"><span class="std std-ref">Choosing What Kind of Test to Write</span></a>.</p></li>
+<li><p>Run any relevant commands from the <a class="reference internal" href="testing.html#testing-quick-start"><span class="std std-ref">testing quick start</span></a>.</p></li>
+</ul>
 </section>
 <section id="conventional-commits-labeling-prs">
 <h2>Conventional Commits &amp; Labeling PRs<a class="headerlink" href="#conventional-commits-labeling-prs" title="Link to this heading">#</a></h2>

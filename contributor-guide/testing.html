@@ -486,6 +486,27 @@ the Rust standard <a class="reference external" href="https://doc.rust-lang.org/
 </pre></div>
 </div>
 </section>
+<section id="choosing-what-kind-of-test-to-write">
+<h2>Choosing What Kind of Test to Write<a class="headerlink" href="#choosing-what-kind-of-test-to-write" title="Link to this heading">#</a></h2>
+<p>When adding tests, prefer tests that exercise <strong>user-visible behavior</strong> over
+tests of internal implementation details. Doing so means your tests are more
+likely to keep working (and keep catching regressions) while the code is
+refactored. In rough order of preference:</p>
+<ol class="arabic">
+<li><p>Use <a class="reference internal" href="#sqllogictests-tests">sqllogictest</a> (<code class="docutils literal notranslate"><span class="pre">.slt</span></code>) tests for any behavior that can
+be expressed in SQL.</p></li>
+<li><p>End-to-end tests that use public APIs such as the DataFrame API, for behavior
+that cannot be expressed in SQL. For example, DataFrame tests live in
+<a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/core/tests/dataframe"><code class="docutils literal notranslate"><span class="pre">datafusion/core/tests/dataframe</span></code></a> and run as part of the <code class="docutils literal notranslate"><span class="pre">core_integration</span></code>
+test binary:</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-p<span class="w"> </span>datafusion<span class="w"> </span>--test<span class="w"> </span>core_integration<span class="w"> </span>--<span class="w"> </span>dataframe
+</pre></div>
+</div>
+</li>
+<li><p>Rust unit tests for logic that cannot practically be reached through
+SQL or DataFrame public APIs.</p></li>
+</ol>
+</section>
 <section id="unit-tests">
 <h2>Unit tests<a class="headerlink" href="#unit-tests" title="Link to this heading">#</a></h2>
 <p>Tests for code in an individual module are defined in the same source file with a <code class="docutils literal notranslate"><span class="pre">test</span></code> module, following Rust convention.</p>
@@ -785,6 +806,7 @@ for the tools it needs and the files it writes.</p>
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#testing-quick-start">Testing Quick Start</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#testing-overview">Testing Overview</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#choosing-what-kind-of-test-to-write">Choosing What Kind of Test to Write</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#unit-tests">Unit tests</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sqllogictests-tests">sqllogictests Tests</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#snapshot-testing-cargo-insta">Snapshot testing (<code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">insta</span></code>)</a></li>

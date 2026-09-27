@@ -545,7 +545,8 @@ reported problem.</p>
 <ol class="arabic simple">
 <li><p>Prefer <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> (<code class="docutils literal notranslate"><span class="pre">.slt</span></code>) tests or DataFrame API tests where
 possible, as they exercise <strong>user-visible behavior</strong> and are less coupled
-to internal implementation details than unit tests.</p></li>
+to internal implementation details than unit tests (see
+<a class="reference internal" href="testing.html#choosing-what-kind-of-test-to-write"><span class="std std-ref">Choosing What Kind of Test to Write</span></a>).</p></li>
 <li><p>Verify tests cover edge cases and common failure scenarios, not just the
 common successful path. However, it is NOT necessary to test every possible
 error path, especially if it is difficult to trigger or unlikely to occur in
