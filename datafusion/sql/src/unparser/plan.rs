@@ -519,6 +519,14 @@ impl Unparser<'_> {
                     schema: projection.input.schema().as_ref(),
                 })
             }
+            // when a filter references aliases from its input, we add a subquery around it to
+            // prevent invalid references, so we need to keep track of it here
+            LogicalPlan::Filter(filter) if filter_depends_on_input_alias(filter) => {
+                Some(DerivedInputScope {
+                    alias: "derived_projection",
+                    schema: filter.input.schema().as_ref(),
+                })
+            }
             LogicalPlan::Filter(filter) => {
                 Self::derived_input_scope(filter.input.as_ref(), select)
             }
@@ -1247,7 +1255,13 @@ impl Unparser<'_> {
                 // if the inner plan aliases columns used by the filter, we need to convert to a
                 // subquery to prevent invalid references
                 if filter_depends_on_input_alias(filter) {
-                    return self.derive(&filter.input, relation, None, false);
+                    return self.derive_with_dialect_alias(
+                        "derived_projection",
+                        &filter.input,
+                        relation,
+                        false,
+                        vec![],
+                    );
                 }
 
                 self.select_to_sql_recursively(

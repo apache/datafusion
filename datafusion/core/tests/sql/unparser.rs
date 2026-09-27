@@ -51,7 +51,7 @@ use datafusion_catalog::memory::MemorySchemaProvider;
 use datafusion_catalog::{CatalogProvider, MemoryCatalogProvider, SchemaProvider};
 use datafusion_common::Column;
 use datafusion_expr::Expr;
-use datafusion_sql::unparser::dialect::{DefaultDialect, DuckDBDialect};
+use datafusion_sql::unparser::dialect::{DefaultDialect, DuckDBDialect, MySqlDialect};
 use datafusion_sql::unparser::{Unparser, plan_to_sql};
 use itertools::Itertools;
 use recursive::{set_minimum_stack_size, set_stack_allocation_size};
@@ -872,6 +872,24 @@ async fn optimized_filter_after_projection() -> Result<()> {
     assert_eq!(
         sql,
         "SELECT (t.a + 1) AS a FROM t WHERE (((t.a + 1) + 1) = 1)"
+    );
+
+    // x>a adds a subquery but converts "t.a" to "a"
+    let df = ctx
+        .sql("SELECT * FROM (SELECT a, random() AS x FROM t) WHERE x > a")
+        .await?;
+    let plan = df.into_optimized_plan()?;
+    let sql = plan_to_sql(&plan)?.to_string();
+    assert_eq!(
+        sql,
+        "SELECT * FROM (SELECT t.a, random() AS x FROM t) WHERE (x > CAST(a AS DOUBLE))"
+    );
+    // dialects like MySQL require aliasing subqueries
+    let unparser = Unparser::new(&MySqlDialect {});
+    let sql = unparser.plan_to_sql(&plan)?.to_string();
+    assert_eq!(
+        sql,
+        "SELECT * FROM (SELECT `t`.`a`, random() AS `x` FROM `t`) AS `derived_projection` WHERE (`x` > CAST(`derived_projection`.`a` AS DOUBLE))"
     );
 
     Ok(())
