@@ -898,7 +898,14 @@ macro_rules! create_hashes_internal {
                 DataType::Decimal128(_, _) => {
                     $crate::hash_array_decimal!(Decimal128Array, col, $hashes_buffer, $hash_method);
                 }
-                DataType::Dictionary(index_type, _) => match **index_type {
+                DataType::Dictionary(index_type, _) => {
+                    // Only use the fast path if every row starts from the same hash
+                    let first_col = first_col
+                        && match $hashes_buffer.first() {
+                            None => true,
+                            Some(first) => $hashes_buffer.iter().all(|h| h == first),
+                        };
+                    match **index_type {
                     DataType::Int8 => {
                         $create_dictionary_hash_method::<Int8Type>(col, $hashes_buffer, first_col)?;
                     }
@@ -957,7 +964,8 @@ macro_rules! create_hashes_internal {
                             col.data_type(),
                         )))
                     }
-                },
+                    }
+                }
                 DataType::List(field) => {
                     let list_array = col.as_any().downcast_ref::<ListArray>().unwrap();
                     let values = list_array.values();

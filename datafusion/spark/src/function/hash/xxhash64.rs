@@ -105,17 +105,19 @@ fn spark_compatible_xxhash64<T: AsRef<[u8]>>(data: T, seed: u64) -> u64 {
 fn create_xxhash64_hashes_dictionary<K: ArrowDictionaryKeyType>(
     array: &ArrayRef,
     hashes_buffer: &mut [u64],
-    first_col: bool,
+    seeds_are_pristine: bool,
 ) -> Result<()> {
     let dict_array = array.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
-    if !first_col {
+    if !seeds_are_pristine {
         let unpacked = take(dict_array.values().as_ref(), dict_array.keys(), None)?;
         create_xxhash64_hashes(&[unpacked], hashes_buffer)?;
     } else {
         // Hash each dictionary value once, then look up by key. This avoids
         // redundant hashing of large dictionary entries (e.g. long strings).
         let dict_values = Arc::clone(dict_array.values());
-        let mut dict_hashes = vec![DEFAULT_SEED; dict_values.len()];
+        // Every row has the same running hash here, so start from it instead of 42
+        let seed = hashes_buffer.first().copied().unwrap_or(DEFAULT_SEED);
+        let mut dict_hashes = vec![seed; dict_values.len()];
         create_xxhash64_hashes(&[dict_values], &mut dict_hashes)?;
 
         for (hash, key) in hashes_buffer.iter_mut().zip(dict_array.keys().iter()) {
@@ -341,6 +343,61 @@ mod tests {
         assert_eq!(hashes[3], spark_compatible_xxhash64("hello", 42));
         assert_eq!(hashes[1], DEFAULT_SEED);
         assert_eq!(hashes[4], DEFAULT_SEED);
+    }
+
+    /// A dictionary inside a list keeps the running hash instead of restarting from 42
+    #[test]
+    fn test_dictionary_element_in_list_matches_decoded() {
+        use arrow::array::ListArray;
+        use arrow::buffer::OffsetBuffer;
+        use arrow::datatypes::Int8Type;
+
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![10, 20]));
+        let keys = arrow::array::Int8Array::from(vec![0i8, 1]);
+        let dict: ArrayRef =
+            Arc::new(DictionaryArray::<Int8Type>::try_new(keys, values).unwrap());
+        let decoded: ArrayRef = Arc::new(Int32Array::from(vec![10, 20]));
+
+        let as_list = |elems: ArrayRef| -> ArrayRef {
+            Arc::new(ListArray::new(
+                Arc::new(Field::new("item", elems.data_type().clone(), true)),
+                OffsetBuffer::new(vec![0i32, 2].into()),
+                elems,
+                None,
+            ))
+        };
+
+        let mut from_dict = vec![DEFAULT_SEED; 1];
+        create_xxhash64_hashes(&[as_list(dict)], &mut from_dict).unwrap();
+        let mut from_decoded = vec![DEFAULT_SEED; 1];
+        create_xxhash64_hashes(&[as_list(decoded)], &mut from_decoded).unwrap();
+        assert_eq!(from_dict, from_decoded);
+    }
+
+    /// Rows with different running hashes skip the fast path
+    #[test]
+    fn test_dictionary_with_nonuniform_seeds_matches_decoded() {
+        use arrow::datatypes::Int8Type;
+
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![Some(10), Some(20), None]));
+        let keys =
+            arrow::array::Int8Array::from(vec![Some(0), Some(1), Some(2), None, Some(0)]);
+        let dict: ArrayRef =
+            Arc::new(DictionaryArray::<Int8Type>::try_new(keys, values).unwrap());
+        let decoded: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(10),
+            Some(20),
+            None,
+            None,
+            Some(10),
+        ]));
+
+        let seeds: Vec<u64> = vec![7, 38, 69, 100, 131];
+        let mut from_dict = seeds.clone();
+        create_xxhash64_hashes(&[dict], &mut from_dict).unwrap();
+        let mut from_decoded = seeds;
+        create_xxhash64_hashes(&[decoded], &mut from_decoded).unwrap();
+        assert_eq!(from_dict, from_decoded);
     }
 
     #[test]
