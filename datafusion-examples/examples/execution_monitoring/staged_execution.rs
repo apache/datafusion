@@ -17,7 +17,9 @@
 
 //! Pause/resume, stage timing, and memory admission with an in-memory boundary.
 
+use std::any::Any;
 use std::fmt;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -39,7 +41,10 @@ use datafusion::execution::memory_pool::{
 };
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_plan::execution_plan::{EmissionType, EvaluationType};
+use datafusion::physical_plan::coop::make_cooperative;
+use datafusion::physical_plan::execution_plan::{
+    EmissionType, EvaluationType, SchedulingType,
+};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
@@ -49,8 +54,8 @@ use datafusion::physical_plan::{
 use datafusion::prelude::{SessionConfig, SessionContext};
 use futures::future::try_join_all;
 use futures::task::AtomicWaker;
-use futures::{Stream, StreamExt, TryStreamExt, pin_mut, poll};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use futures::{FutureExt, Stream, StreamExt, TryStreamExt, pin_mut, poll};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 use tokio::time::timeout;
 
 async fn input_plan(
@@ -80,6 +85,7 @@ struct PartitionState {
     ready: Arc<AtomicBool>,
     consumer_waker: Arc<AtomicWaker>,
     executed: AtomicBool,
+    cancellation: watch::Sender<bool>,
 }
 
 /// Example boundary that buffers each partition in memory until release.
@@ -97,7 +103,8 @@ impl InMemoryStageBoundaryExec {
         let partition_count = input.properties().output_partitioning().partition_count();
         let properties = PlanProperties::clone(input.properties())
             .with_emission_type(EmissionType::Final)
-            .with_evaluation_type(EvaluationType::Eager);
+            .with_evaluation_type(EvaluationType::Eager)
+            .with_scheduling_type(SchedulingType::Cooperative);
         let partitions = (0..partition_count)
             .map(|_| PartitionState {
                 buffered: Arc::new(Mutex::new(None)),
@@ -105,6 +112,7 @@ impl InMemoryStageBoundaryExec {
                 ready: Arc::new(AtomicBool::new(false)),
                 consumer_waker: Arc::new(AtomicWaker::new()),
                 executed: AtomicBool::new(false),
+                cancellation: watch::channel(false).0,
             })
             .collect();
         Self {
@@ -127,14 +135,32 @@ impl StageBoundary for InMemoryStageBoundaryExec {
         if task.is_some() {
             return Ok(());
         }
-        let mut input = self.input.execute(partition, Arc::clone(&context))?;
+        let input = self.input.execute(partition, Arc::clone(&context))?;
+        let mut input = make_cooperative(input);
         let reservation = MemoryConsumer::new(format!("stage boundary[{partition}]"))
             .register(context.memory_pool());
         let buffered = Arc::clone(&state.buffered);
         let ready = Arc::clone(&state.ready);
+        let mut cancellation = state.cancellation.subscribe();
         *task = Some(SpawnedTask::spawn(async move {
+            if *cancellation.borrow() {
+                return;
+            }
             let mut batches = Vec::new();
-            while let Some(item) = input.next().await {
+            loop {
+                let polled = tokio::select! {
+                    biased;
+                    _ = cancellation.changed() => return,
+                    polled = AssertUnwindSafe(input.next()).catch_unwind() => polled,
+                };
+                let item = match polled {
+                    Ok(Some(item)) => item,
+                    Ok(None) => break,
+                    Err(panic) => Err(DataFusionError::Execution(format!(
+                        "InMemoryStageBoundaryExec input stream panicked: {}",
+                        panic_message(panic.as_ref())
+                    ))),
+                };
                 let item = item.and_then(|batch| {
                     reservation.try_grow(batch.get_array_memory_size())?;
                     Ok(batch)
@@ -145,7 +171,11 @@ impl StageBoundary for InMemoryStageBoundaryExec {
                     break;
                 }
             }
-            *buffered.lock().unwrap() = Some(BufferedPartition {
+            let mut buffered = buffered.lock().unwrap();
+            if *cancellation.borrow() {
+                return;
+            }
+            *buffered = Some(BufferedPartition {
                 batches,
                 reservation,
             });
@@ -168,6 +198,14 @@ impl StageBoundary for InMemoryStageBoundaryExec {
             state.consumer_waker.wake();
         }
     }
+}
+
+fn panic_message(panic: &(dyn Any + Send)) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_string())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic".to_string())
 }
 
 impl DisplayAs for InMemoryStageBoundaryExec {
@@ -231,14 +269,16 @@ impl ExecutionPlan for InMemoryStageBoundaryExec {
                 "InMemoryStageBoundaryExec partition {partition} executed twice"
             );
         }
-        Ok(Box::pin(BoundaryStream {
+        let stream: SendableRecordBatchStream = Box::pin(BoundaryStream {
             schema: self.schema(),
             buffered: Arc::clone(&state.buffered),
             batches: None,
             reservation: None,
             released: Arc::clone(&self.released),
             consumer_waker: Arc::clone(&state.consumer_waker),
-        }))
+            cancellation: state.cancellation.clone(),
+        });
+        Ok(make_cooperative(stream))
     }
 }
 
@@ -249,6 +289,14 @@ struct BoundaryStream {
     reservation: Option<MemoryReservation>,
     released: Arc<AtomicBool>,
     consumer_waker: Arc<AtomicWaker>,
+    cancellation: watch::Sender<bool>,
+}
+
+impl Drop for BoundaryStream {
+    fn drop(&mut self) {
+        self.cancellation.send_replace(true);
+        self.buffered.lock().unwrap().take();
+    }
 }
 
 impl Stream for BoundaryStream {
@@ -474,6 +522,10 @@ pub async fn pause_and_resume() -> Result<()> {
     ));
     assert_eq!(boundary.properties().emission_type, EmissionType::Final);
     assert_eq!(boundary.properties().evaluation_type, EvaluationType::Eager);
+    assert_eq!(
+        boundary.properties().scheduling_type,
+        SchedulingType::Cooperative
+    );
 
     let downstream_observations = Arc::new(Observations::default());
     let downstream: Arc<dyn ExecutionPlan> = Arc::new(ObservedExec::new(
@@ -671,7 +723,9 @@ pub async fn dependent_boundaries() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::physical_plan::test::exec::{ErrorExec, MockExec};
+    use datafusion::physical_plan::test::exec::{
+        BlockingExec, ErrorExec, MockExec, PanicExec,
+    };
 
     #[tokio::test]
     async fn pause_and_resume_preserves_partitioned_output() -> Result<()> {
@@ -824,6 +878,63 @@ mod tests {
         boundary.release();
         let error = stream.next().await.unwrap().unwrap_err();
         assert!(error.to_string().contains("drain failed"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dropping_output_cancels_drain_and_releases_buffered_memory() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let blocking = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
+        let refs = blocking.refs();
+        let input: Arc<dyn ExecutionPlan> = blocking;
+        let boundary = InMemoryStageBoundaryExec::new(input);
+        let context = Arc::new(TaskContext::default());
+        boundary.prime(0, Arc::clone(&context))?;
+        wait_until(|| refs.strong_count() > 1).await;
+        let stream = boundary.execute(0, context)?;
+        drop(stream);
+        wait_until(|| refs.strong_count() == 1).await;
+        assert!(!boundary.is_ready(0));
+
+        let (_schema, partitions) = make_batches()?;
+        let input = input_plan(&partitions[..1], schema).await?;
+        let boundary = InMemoryStageBoundaryExec::new(input);
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1024));
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::clone(&pool))
+            .build_arc()?;
+        let context = Arc::new(TaskContext::default().with_runtime(runtime));
+        boundary.prime(0, Arc::clone(&context))?;
+        wait_until(|| boundary.is_ready(0)).await;
+        assert!(pool.reserved() > 0);
+        let stream = boundary.execute(0, context)?;
+        drop(stream);
+        assert_eq!(pool.reserved(), 0);
+        assert!(boundary.partitions[0].buffered.lock().unwrap().is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn input_stream_panic_becomes_a_buffered_error() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(PanicExec::new(schema, 1));
+        let boundary = InMemoryStageBoundaryExec::new(input);
+        boundary.prime(0, Arc::new(TaskContext::default()))?;
+        wait_until(|| boundary.is_ready(0)).await;
+        let mut stream = boundary.execute(0, Arc::new(TaskContext::default()))?;
+        boundary.release();
+        let error = stream.next().await.unwrap().unwrap_err();
+        assert!(error.to_string().contains("input stream panicked"));
+        assert!(error.to_string().contains("PanickingStream did panic"));
+        assert!(stream.next().await.is_none());
         Ok(())
     }
 
