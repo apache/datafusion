@@ -3058,7 +3058,7 @@ fn deduplicate_view_array_buffers<T: ByteViewType>(
     // been remapped to point at the logically equivalent deduplicated buffer in
     // `unique_buffers`, preserving the original byte offsets and lengths.
     unsafe {
-        GenericByteViewArray::<T>::new_unchecked(new_views_buffer, unique_buffers, nulls)
+        GenericByteViewArray::<T>::new_unchecked(new_views_buffer, unique_buffers.into(), nulls)
     }
 }
 
