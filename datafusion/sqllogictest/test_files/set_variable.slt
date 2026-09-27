@@ -751,6 +751,31 @@ Invalid or Unsupported Configuration: Invalid parquet statistics setting: invali
 statement ok
 RESET datafusion.execution.parquet.statistics_enabled
 
+# parquet.encoding is validated when it is set
+statement ok
+SET datafusion.execution.parquet.encoding = 'PLAIN'
+
+query TT
+SHOW datafusion.execution.parquet.encoding
+----
+datafusion.execution.parquet.encoding plain
+
+statement error
+SET datafusion.execution.parquet.encoding = 'invalid'
+----
+DataFusion error: Error setting config datafusion.execution.parquet.encoding
+caused by
+Invalid or Unsupported Configuration: Unknown or unsupported parquet encoding: invalid. Valid values are: plain, plain_dictionary, rle, bit_packed, delta_binary_packed, delta_length_byte_array, delta_byte_array, rle_dictionary, and byte_stream_split.
+
+
+query TT
+SHOW datafusion.execution.parquet.encoding
+----
+datafusion.execution.parquet.encoding plain
+
+statement ok
+RESET datafusion.execution.parquet.encoding
+
 # parquet.compression is validated when it is set, including the level
 statement ok
 SET datafusion.execution.parquet.compression = 'GZIP(6)'

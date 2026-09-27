@@ -24,7 +24,7 @@ use crate::encryption::{FileDecryptionProperties, FileEncryptionProperties};
 use crate::error::{_config_datafusion_err, _config_err};
 use crate::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use crate::parquet_config::{
-    DFParquetCompression, DFParquetStatistics, DFParquetWriterVersion,
+    DFParquetCompression, DFParquetEncoding, DFParquetStatistics, DFParquetWriterVersion,
 };
 use crate::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use crate::utils::get_available_parallelism;
@@ -1494,7 +1494,7 @@ config_namespace! {
         /// delta_byte_array, rle_dictionary, and byte_stream_split.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
-        pub encoding: Option<String>, transform = str::to_lowercase, default = None
+        pub encoding: Option<DFParquetEncoding>, default = None
 
         /// (writing) Write bloom filters for all columns when creating parquet files
         pub bloom_filter_on_write: bool, default = false
@@ -4685,6 +4685,47 @@ mod tests {
         let mut scalar = DFParquetStatistics::Page;
         assert!(ConfigField::set(&mut scalar, "typo", "none").is_err());
         assert_eq!(scalar, DFParquetStatistics::Page);
+    }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn test_parquet_encoding_validation() {
+        use crate::{config::ConfigOptions, parquet_config::DFParquetEncoding};
+
+        let key = "datafusion.execution.parquet.encoding";
+        let mut config = ConfigOptions::default();
+        assert_eq!(config.execution.parquet.encoding, None);
+
+        config.set(key, "PLAIN").unwrap();
+        assert_eq!(
+            config.execution.parquet.encoding,
+            Some(DFParquetEncoding::Plain)
+        );
+
+        let err = config.set(key, "invalid").unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "Unknown or unsupported parquet encoding: invalid"
+        );
+        assert_eq!(
+            config.execution.parquet.encoding,
+            Some(DFParquetEncoding::Plain)
+        );
+
+        assert!(
+            config
+                .set("datafusion.execution.parquet.encoding.typo", "rle")
+                .is_err()
+        );
+        assert_eq!(
+            config.execution.parquet.encoding,
+            Some(DFParquetEncoding::Plain)
+        );
+
+        config.reset(key).unwrap();
+        assert_eq!(config.execution.parquet.encoding, None);
+        assert!(config.set(key, "invalid").is_err());
+        assert_eq!(config.execution.parquet.encoding, None);
     }
 
     #[cfg(feature = "parquet")]

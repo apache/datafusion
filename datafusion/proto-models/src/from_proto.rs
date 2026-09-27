@@ -434,11 +434,13 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                 proto.data_page_row_count_limit,
                 "data_page_row_count_limit",
             )?,
-            encoding: proto.encoding_opt.as_ref().map(|opt| match opt {
-                parquet_options::EncodingOpt::Encoding(encoding) => {
-                    encoding.clone()
-                }
-            }),
+            encoding: proto
+                .encoding_opt
+                .as_ref()
+                .map(|opt| match opt {
+                    parquet_options::EncodingOpt::Encoding(encoding) => encoding.parse(),
+                })
+                .transpose()?,
             bloom_filter_on_read: proto.bloom_filter_on_read,
             bloom_filter_on_write: proto.bloom_filter_on_write,
             bloom_filter_fpp: proto
@@ -571,6 +573,22 @@ impl TryFrom<&TableParquetOptionsProto> for TableParquetOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_invalid_parquet_encoding() {
+        let proto = ParquetOptionsProto {
+            encoding_opt: Some(parquet_options::EncodingOpt::Encoding(
+                "invalid".to_string(),
+            )),
+            ..Default::default()
+        };
+
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Unknown or unsupported parquet encoding: invalid")
+        );
+    }
 
     #[test]
     fn rejects_invalid_parquet_statistics() {

@@ -690,7 +690,7 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             }),
             data_page_row_count_limit: global_options.global.data_page_row_count_limit as u64,
             encoding_opt: global_options.global.encoding.map(|encoding| {
-                parquet_options::EncodingOpt::Encoding(encoding)
+                parquet_options::EncodingOpt::Encoding(encoding.to_string())
             }),
             bloom_filter_on_read: global_options.global.bloom_filter_on_read,
             bloom_filter_on_write: global_options.global.bloom_filter_on_write,

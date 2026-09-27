@@ -1241,11 +1241,12 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 "data_page_row_count_limit",
             )?,
             encoding: value
-                .encoding_opt.clone()
+                .encoding_opt
+                .as_ref()
                 .map(|opt| match opt {
-                    protobuf::parquet_options::EncodingOpt::Encoding(v) => Some(v),
+                    protobuf::parquet_options::EncodingOpt::Encoding(v) => v.parse(),
                 })
-                .unwrap_or(None),
+                .transpose()?,
             bloom_filter_on_read: value.bloom_filter_on_read,
             bloom_filter_on_write: value.bloom_filter_on_write,
             bloom_filter_fpp: value.clone()
@@ -1438,7 +1439,9 @@ mod tests {
     use datafusion_common::config::{
         MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions, TableParquetOptions,
     };
-    use datafusion_common::parquet_config::{DFParquetCompression, DFParquetStatistics};
+    use datafusion_common::parquet_config::{
+        DFParquetCompression, DFParquetEncoding, DFParquetStatistics,
+    };
 
     #[test]
     fn constraint_requires_mode() {
@@ -1569,6 +1572,37 @@ mod tests {
         };
         let recovered = parquet_options_proto_round_trip(opts);
         assert_eq!(recovered.compression, Some(DFParquetCompression::Gzip(6)));
+    }
+
+    #[test]
+    fn test_parquet_encoding_round_trip() {
+        for encoding in [None, Some(DFParquetEncoding::ByteStreamSplit)] {
+            let opts = ParquetOptions {
+                encoding,
+                ..ParquetOptions::default()
+            };
+            let recovered = parquet_options_proto_round_trip(opts);
+            assert_eq!(recovered.encoding, encoding);
+        }
+    }
+
+    #[test]
+    fn test_invalid_parquet_encoding_rejected_from_proto() {
+        let opts = ParquetOptions::default();
+        let mut proto: crate::protobuf_common::ParquetOptions =
+            (&opts).try_into().expect("to_proto");
+        proto.encoding_opt = Some(
+            crate::protobuf_common::parquet_options::EncodingOpt::Encoding(
+                "invalid".to_string(),
+            ),
+        );
+
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Unknown or unsupported parquet encoding: invalid"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
