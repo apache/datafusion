@@ -1336,25 +1336,13 @@ impl FiltersPreparedParquetOpen {
                     .row_groups_pruned_statistics
                     .add_matched(row_groups.remaining_row_group_count());
             }
-
-            if !prepared.enable_bloom_filter || row_groups.is_empty() {
-                // Update metrics: bloom filter unavailable, so all row groups are
-                // matched (not pruned)
-                prepared
-                    .file_metrics
-                    .row_groups_pruned_bloom_filter
-                    .add_matched(row_groups.remaining_row_group_count());
-            }
         } else {
             // Update metrics: no predicate, so all row groups are matched (not pruned)
+            // by statistics. Bloom pruning did not run, so its metrics are unchanged.
             let remaining = row_groups.remaining_row_group_count();
             prepared
                 .file_metrics
                 .row_groups_pruned_statistics
-                .add_matched(remaining);
-            prepared
-                .file_metrics
-                .row_groups_pruned_bloom_filter
                 .add_matched(remaining);
         }
 
