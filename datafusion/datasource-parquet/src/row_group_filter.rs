@@ -621,9 +621,12 @@ mod tests {
 
     use arrow::datatypes::DataType::Decimal128;
     use arrow::datatypes::{DataType, Field};
-    use datafusion_expr::{cast, col, lit};
-    use datafusion_physical_expr::PhysicalExpr;
+    use datafusion_expr::{Operator, cast, col, lit};
     use datafusion_physical_expr::planner::logical2physical;
+    use datafusion_physical_expr::{
+        PhysicalExpr,
+        expressions::{BinaryExpr, CastExpr, Column as PhysicalColumn, Literal},
+    };
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use datafusion_pruning::PruningPredicateBuilder;
     use parquet::arrow::ArrowSchemaConverter;
@@ -1639,6 +1642,48 @@ mod tests {
         // the row group with a bloom filter is still evaluated and pruned.
         assert_pruned(row_groups, ExpectedPruning::Some(vec![0]));
         assert_eq!(metrics.row_groups_pruned_bloom_filter.pruned(), 1);
+        assert_eq!(metrics.row_groups_pruned_bloom_filter.matched(), 0);
+    }
+
+    #[test]
+    fn bloom_filter_pruning_error_retains_row_group_without_match() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, false)]));
+        let cast_expr: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
+            Arc::new(PhysicalColumn::new("c1", 0)),
+            DataType::FixedSizeBinary(4),
+            None,
+        ));
+        let literal: Arc<dyn PhysicalExpr> = Arc::new(Literal::new(
+            ScalarValue::FixedSizeBinary(4, Some(vec![0, 0, 0, 1])),
+        ));
+        let expr = Arc::new(BinaryExpr::new(cast_expr, Operator::Eq, literal));
+        let pruning_predicate = PruningPredicateBuilder::new()
+            .with_file_schema(schema)
+            .try_build(expr)
+            .unwrap();
+
+        // A nonempty map bypasses the no-filter path. Evaluating the predicate
+        // then fails because Arrow cannot cast Int32 statistics to FixedSizeBinary.
+        let mut sbbf = Sbbf::new_with_ndv_fpp(10, 0.01).unwrap();
+        sbbf.insert(&1_i32);
+        let mut bloom_statistics = BloomFilterStatistics::new();
+        bloom_statistics.insert("loaded_filter", sbbf, PhysicalType::INT32, 4);
+        assert!(pruning_predicate.prune(&bloom_statistics).is_err());
+
+        let metrics = parquet_file_metrics();
+        let mut row_groups = RowGroupAccessPlanFilter::new(ParquetAccessPlan::new_all(1));
+        row_groups.prune_by_bloom_filters(
+            &pruning_predicate,
+            &metrics,
+            &[bloom_statistics],
+        );
+
+        // An evaluation failure is conservative: retain the row group, report
+        // the error separately, and do not call the result a Bloom match.
+        assert_pruned(row_groups, ExpectedPruning::Some(vec![0]));
+        assert_eq!(metrics.predicate_evaluation_errors.value(), 1);
+        assert_eq!(metrics.row_groups_pruned_bloom_filter.pruned(), 0);
         assert_eq!(metrics.row_groups_pruned_bloom_filter.matched(), 0);
     }
 
