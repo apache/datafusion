@@ -18,7 +18,7 @@
 use std::hint::black_box;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, TimestampSecondArray};
+use arrow::array::{Array, TimestampNanosecondArray, TimestampSecondArray};
 use arrow::datatypes::Field;
 use criterion::{Criterion, criterion_group};
 use datafusion_common::ScalarValue;
@@ -27,34 +27,54 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::date_bin;
 use rand::prelude::*;
 
-fn timestamps(rng: &mut StdRng) -> TimestampSecondArray {
-    let mut seconds = vec![];
-    for _ in 0..1000 {
-        seconds.push(rng.random_range(0..1_000_000));
-    }
+const NUM_ROWS: usize = 1_000_000;
+const NANOS_PER_SECOND: i64 = 1_000_000_000;
+/// Roughly 1 year, so that values span many buckets.
+const RANGE_SECONDS: i64 = 365 * 24 * 60 * 60;
 
-    TimestampSecondArray::from(seconds)
+fn second_timestamps() -> TimestampSecondArray {
+    let mut rng = StdRng::seed_from_u64(42);
+    (0..NUM_ROWS)
+        .map(|_| Some(rng.random_range(-RANGE_SECONDS..RANGE_SECONDS)))
+        .collect()
 }
 
-fn criterion_benchmark(c: &mut Criterion) {
-    c.bench_function("date_bin_1000", |b| {
-        let mut rng = StdRng::seed_from_u64(0);
-        let timestamps_array = Arc::new(timestamps(&mut rng)) as ArrayRef;
-        let batch_len = timestamps_array.len();
-        let interval = ColumnarValue::Scalar(ScalarValue::new_interval_dt(0, 1_000_000));
-        let timestamps = ColumnarValue::Array(timestamps_array);
-        let udf = date_bin();
-        let return_type = udf
-            .return_type(&[interval.data_type(), timestamps.data_type()])
-            .unwrap();
-        let return_field = Arc::new(Field::new("f", return_type, true));
+fn nanosecond_timestamps() -> TimestampNanosecondArray {
+    let mut rng = StdRng::seed_from_u64(42);
+    (0..NUM_ROWS)
+        .map(|_| {
+            let seconds = rng.random_range(-RANGE_SECONDS..RANGE_SECONDS);
+            Some(seconds * NANOS_PER_SECOND + rng.random_range(0..NANOS_PER_SECOND))
+        })
+        .collect()
+}
 
-        let arg_fields = vec![
-            Field::new("a", interval.data_type(), true).into(),
-            Field::new("b", timestamps.data_type(), true).into(),
-        ];
-        let config_options = Arc::new(ConfigOptions::default());
+fn run_benchmark(
+    c: &mut Criterion,
+    name: &str,
+    stride_nanos: i64,
+    timestamps: &ColumnarValue,
+) {
+    let batch_len = match timestamps {
+        ColumnarValue::Array(a) => a.len(),
+        _ => unreachable!(),
+    };
+    let interval = ColumnarValue::Scalar(ScalarValue::new_interval_dt(
+        0,
+        (stride_nanos / 1_000_000) as i32,
+    ));
+    let udf = date_bin();
+    let return_type = udf
+        .return_type(&[interval.data_type(), timestamps.data_type()])
+        .unwrap();
+    let return_field = Arc::new(Field::new("f", return_type, true));
+    let arg_fields = vec![
+        Field::new("a", interval.data_type(), true).into(),
+        Field::new("b", timestamps.data_type(), true).into(),
+    ];
+    let config_options = Arc::new(ConfigOptions::default());
 
+    c.bench_function(name, |b| {
         b.iter(|| {
             black_box(
                 udf.invoke_with_args(ScalarFunctionArgs {
@@ -68,6 +88,22 @@ fn criterion_benchmark(c: &mut Criterion) {
             )
         })
     });
+}
+
+/// Bench cases: second and nanosecond precision, 1-hour stride, 1-year time range.
+fn criterion_benchmark(c: &mut Criterion) {
+    run_benchmark(
+        c,
+        &format!("date_bin_seconds_{NUM_ROWS}"),
+        3_600 * NANOS_PER_SECOND,
+        &ColumnarValue::Array(Arc::new(second_timestamps())),
+    );
+    run_benchmark(
+        c,
+        &format!("date_bin_nanos_{NUM_ROWS}"),
+        3_600 * NANOS_PER_SECOND,
+        &ColumnarValue::Array(Arc::new(nanosecond_timestamps())),
+    );
 }
 
 criterion_group!(benches, criterion_benchmark);

@@ -23,7 +23,7 @@ use arrow::array::types::{
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
     TimestampSecondType,
 };
-use arrow::array::{ArrayRef, AsArray, PrimitiveArray};
+use arrow::array::{Array, ArrayRef, AsArray, PrimitiveArray};
 use arrow::datatypes::DataType::{Time32, Time64, Timestamp};
 use arrow::datatypes::IntervalUnit::{DayTime, MonthDayNano};
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
@@ -473,6 +473,69 @@ fn date_bin_timestamp_value<T: ArrowTimestampType>(
         .map(|binned| binned / scale)
 }
 
+/// Fast path for the common nanosecond interval `date_bin` cases
+///
+/// Time-based interval strides (`INTERVAL '1 hour'`, `'1 day'`, `'1 minute'`,
+/// etc.) all carry `months == 0` and are represented as
+/// [`Interval::Nanoseconds`], which is the overwhelmingly common case for
+/// time-series bucketing. Month/year strides (`INTERVAL '1 month'`) use the
+/// general path and never reach this function.
+///
+/// This is a vectorized fast path: it computes every bin with a single
+/// infallible pass of plain integer arithmetic
+/// (`bin = origin + floor((value * scale - origin) / stride) * stride`),
+/// avoiding the per-value function-pointer dispatch and checked
+/// arithmetic / `Result` plumbing of the general path. It is only used when
+/// the whole array is bounded away from the `i64` extremes (checked with a
+/// cheap min/max scan and a margin covering the shifting by `origin` and
+/// `stride`); otherwise `None` falls back to the general path.
+fn try_fast_date_bin_nanos_stride<T: ArrowTimestampType>(
+    array: &PrimitiveArray<T>,
+    origin: i64,
+    stride: i64,
+) -> Option<PrimitiveArray<T>> {
+    if stride <= 0 {
+        return None;
+    }
+
+    let scale = timestamp_scale::<T>();
+
+    // Whole-array safety check: min/max scan.
+    let (min_value, max_value) = array
+        .values()
+        .iter()
+        .fold((i64::MAX, i64::MIN), |(mn, mx), v| (mn.min(*v), mx.max(*v)));
+    let scaled_max = max_value.checked_mul(scale)?;
+    let scaled_min = min_value.checked_mul(scale)?;
+
+    // One binning can shift the value by at most `2 * |origin| + |stride|`
+    // from the scaled input, so require every scaled value to stay within
+    // that margin of the `i64` range. If not, fall back (return `None`) and
+    // let the caller use the general path unchanged.
+    let margin = origin
+        .unsigned_abs()
+        .saturating_mul(2)
+        .saturating_add(stride.unsigned_abs())
+        .saturating_add(1) as i64;
+    if scaled_min < i64::MIN.saturating_add(margin)
+        || scaled_max > i64::MAX.saturating_sub(margin)
+    {
+        return None;
+    }
+
+    let values = array
+        .values()
+        .iter()
+        .map(|value| {
+            let scaled = value.wrapping_mul(scale);
+            let diff = scaled.wrapping_sub(origin);
+            let delta = diff.div_euclid(stride).wrapping_mul(stride);
+            origin.wrapping_add(delta) / scale
+        })
+        .collect::<Vec<_>>();
+    Some(PrimitiveArray::new(values.into(), array.nulls().cloned()))
+}
+
 // Per-row TIME binning shared by scalar and array paths.
 // The modulo keeps the result within a single day before unscaling.
 #[inline]
@@ -598,6 +661,9 @@ fn date_bin_impl(
         }
     };
 
+    // Checks if the stride is nanos interval.
+    let is_nanos_stride = matches!(stride, Interval::Nanoseconds(_));
+
     let (stride, stride_fn) = stride.bin_fn();
 
     // Return error if stride is 0
@@ -691,6 +757,7 @@ fn date_bin_impl(
                 origin: i64,
                 stride: i64,
                 stride_fn: BinFunction,
+                is_nanos_stride: bool,
                 array: &ArrayRef,
                 tz_opt: Option<&Arc<str>>,
             ) -> Result<ColumnarValue>
@@ -698,6 +765,15 @@ fn date_bin_impl(
                 T: ArrowTimestampType,
             {
                 let array = as_primitive_array::<T>(array)?;
+
+                // Try the fast path for the common nanosecond-stride.
+                if is_nanos_stride
+                    && let Some(result) =
+                        try_fast_date_bin_nanos_stride(array, origin, stride)
+                {
+                    let array = result.with_timezone_opt(tz_opt.cloned());
+                    return Ok(ColumnarValue::Array(Arc::new(array)));
+                }
 
                 // Per-row errors become NULL, matching scalar behavior.
                 let result: PrimitiveArray<T> = array.unary_opt(|val| {
@@ -714,6 +790,7 @@ fn date_bin_impl(
                         origin,
                         stride,
                         stride_fn,
+                        is_nanos_stride,
                         array,
                         tz_opt.as_ref(),
                     )?
@@ -723,6 +800,7 @@ fn date_bin_impl(
                         origin,
                         stride,
                         stride_fn,
+                        is_nanos_stride,
                         array,
                         tz_opt.as_ref(),
                     )?
@@ -732,6 +810,7 @@ fn date_bin_impl(
                         origin,
                         stride,
                         stride_fn,
+                        is_nanos_stride,
                         array,
                         tz_opt.as_ref(),
                     )?
@@ -741,6 +820,7 @@ fn date_bin_impl(
                         origin,
                         stride,
                         stride_fn,
+                        is_nanos_stride,
                         array,
                         tz_opt.as_ref(),
                     )?
