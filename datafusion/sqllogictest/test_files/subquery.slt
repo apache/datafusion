@@ -2988,6 +2988,29 @@ SELECT oj_outer.k FROM oj_outer WHERE EXISTS (SELECT 1 FROM oj_a LEFT JOIN oj_b 
 ----
 1
 
+# A null-rejecting filter above the outer join makes it an inner join, so the
+# subquery is still decorrelated (in a later optimizer pass).
+query TT
+EXPLAIN SELECT oj_outer.k, EXISTS (SELECT 1 FROM oj_a LEFT JOIN (SELECT * FROM oj_b WHERE oj_b.y = oj_outer.k) AS b ON oj_a.id = b.id WHERE b.y > 0) AS e FROM oj_outer;
+----
+logical_plan
+01)Projection: oj_outer.k, __correlated_sq_2.mark AS e
+02)--LeftMark Join: oj_outer.k = __correlated_sq_2.y
+03)----TableScan: oj_outer projection=[k]
+04)----SubqueryAlias: __correlated_sq_2
+05)------Projection: b.y
+06)--------RightSemi Join: oj_a.id = b.id
+07)----------TableScan: oj_a projection=[id]
+08)----------SubqueryAlias: b
+09)------------Filter: oj_b.y > Int32(0)
+10)--------------TableScan: oj_b projection=[id, y]
+
+query IB
+SELECT oj_outer.k, EXISTS (SELECT 1 FROM oj_a LEFT JOIN (SELECT * FROM oj_b WHERE oj_b.y = oj_outer.k) AS b ON oj_a.id = b.id WHERE b.y > 0) AS e FROM oj_outer ORDER BY oj_outer.k;
+----
+1 true
+5 false
+
 statement ok
 RESET datafusion.explain.logical_plan_only;
 

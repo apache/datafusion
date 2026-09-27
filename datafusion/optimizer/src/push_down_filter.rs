@@ -173,10 +173,14 @@ pub(crate) fn lr_is_preserved(join_type: JoinType) -> (bool, bool) {
         JoinType::Right => (false, true),
         JoinType::Full => (false, false),
         // No columns from the right side of the join can be referenced in output
-        // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
+        // predicates for semi/anti joins. The right side must stay `false`:
+        // `PullUpCorrelatedExpr` uses it to refuse to pull a correlated filter
+        // out of a side that the join does not output.
         JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => (true, false),
         // No columns from the left side of the join can be referenced in output
-        // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
+        // predicates for semi/anti joins. The left side must stay `false`:
+        // `PullUpCorrelatedExpr` uses it to refuse to pull a correlated filter
+        // out of a side that the join does not output.
         JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => (false, true),
     }
 }
