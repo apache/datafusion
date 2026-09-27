@@ -47,7 +47,6 @@ use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
 use crate::statistics::{ChildStats, StatisticsArgs};
-use crate::stream::ReservationStream;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use crate::topk::TopK;
 use crate::topk::TopKDynamicFilters;
@@ -798,22 +797,29 @@ impl ExternalSorter {
             // Sort the batch immediately and get all output batches
             let sorted_batches = sort_batch_chunked(&batch, &expressions, batch_size)?;
 
-            // The chunks share the input buffers, so count each buffer once
+            // Charge each shared buffer to its last chunk, since it is freed with that chunk
             let mut counter = RecordBatchMemoryCounter::new();
-            for batch in &sorted_batches {
-                counter.count_batch(batch);
-            }
+            let mut sizes: Vec<usize> = sorted_batches
+                .iter()
+                .rev()
+                .map(|batch| counter.count_batch(batch))
+                .collect();
+            sizes.reverse();
             reservation
                 .try_resize(counter.memory_usage())
                 .map_err(Self::err_with_oom_context)?;
 
-            Result::<_, DataFusionError>::Ok(Box::pin(ReservationStream::new(
+            let batches =
+                sorted_batches
+                    .into_iter()
+                    .zip(sizes)
+                    .map(move |(batch, size)| {
+                        reservation.shrink(size);
+                        Ok(batch)
+                    });
+            Result::<_, DataFusionError>::Ok(Box::pin(RecordBatchStreamAdapter::new(
                 Arc::clone(&schema),
-                Box::pin(RecordBatchStreamAdapter::new(
-                    Arc::clone(&schema),
-                    futures::stream::iter(sorted_batches.into_iter().map(Ok)),
-                )),
-                reservation,
+                futures::stream::iter(batches),
             )) as SendableRecordBatchStream)
         })
         .try_flatten();
@@ -2520,6 +2526,8 @@ mod tests {
                 .rev()
                 .map(|i| format!("row-{i:08}-{}", "x".repeat(87))),
         );
+        let data_buffers: usize =
+            values.data_buffers().iter().map(|b| b.capacity()).sum();
         let schema = Arc::new(Schema::new(vec![Field::new(
             "s",
             DataType::Utf8View,
@@ -2537,7 +2545,7 @@ mod tests {
         let task_ctx = Arc::new(
             TaskContext::default()
                 .with_session_config(session_config)
-                .with_runtime(runtime),
+                .with_runtime(Arc::clone(&runtime)),
         );
 
         let sort_exec = Arc::new(SortExec::new(
@@ -2549,8 +2557,14 @@ mod tests {
             TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)?,
         ));
 
-        let result = collect(sort_exec, task_ctx).await?;
-        assert_eq!(result.iter().map(|b| b.num_rows()).sum::<usize>(), 4096);
+        let mut stream = sort_exec.execute(0, task_ctx)?;
+        // The remaining chunks still hold the shared buffers, so they stay reserved
+        let mut rows = stream.next().await.unwrap()?.num_rows();
+        assert!(runtime.memory_pool.reserved() >= data_buffers);
+        while let Some(batch) = stream.next().await {
+            rows += batch?.num_rows();
+        }
+        assert_eq!(rows, 4096);
         Ok(())
     }
 
