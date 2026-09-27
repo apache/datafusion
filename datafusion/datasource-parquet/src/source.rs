@@ -669,6 +669,10 @@ impl FileSource for ParquetSource {
             enable_row_group_stats_pruning: self.table_parquet_options.global.pruning,
             coerce_int96,
             coerce_int96_tz,
+            coerce_binary_to_string: self
+                .table_parquet_options
+                .global
+                .coerce_binary_to_string,
             #[cfg(feature = "parquet_encryption")]
             file_decryption_properties,
             expr_adapter_factory,

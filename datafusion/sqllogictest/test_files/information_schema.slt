@@ -237,6 +237,7 @@ datafusion.execution.parquet.bloom_filter_fpp NULL
 datafusion.execution.parquet.bloom_filter_ndv NULL
 datafusion.execution.parquet.bloom_filter_on_read true
 datafusion.execution.parquet.bloom_filter_on_write false
+datafusion.execution.parquet.coerce_binary_to_string true
 datafusion.execution.parquet.coerce_int96 NULL
 datafusion.execution.parquet.coerce_int96_tz NULL
 datafusion.execution.parquet.column_index_truncate_length 64
@@ -398,6 +399,7 @@ datafusion.execution.parquet.bloom_filter_fpp NULL (writing) Sets bloom filter f
 datafusion.execution.parquet.bloom_filter_ndv NULL (writing) Sets bloom filter number of distinct values. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.bloom_filter_on_read true (reading) Use any available bloom filters when reading parquet files
 datafusion.execution.parquet.bloom_filter_on_write false (writing) Write bloom filters for all columns when creating parquet files
+datafusion.execution.parquet.coerce_binary_to_string true (reading) If true, a column the parquet file stores as binary is read directly as a string when the table schema declares a string type for it. The parquet reader only validates UTF-8 for columns with the `UTF8` annotation, so invalid bytes in such a column produce an invalid string array. If false, such a column is read as binary and cast to the table's string type by the `PhysicalExprAdapter`, which rejects invalid UTF-8 unless a custom adapter converts it differently. Statistics and bloom filter pruning do not apply to predicates on these columns.
 datafusion.execution.parquet.coerce_int96 NULL (reading) If true, parquet reader will read columns of physical type int96 as originating from a different resolution than nanosecond. This is useful for reading data from systems like Spark which stores microsecond resolution timestamps in an int96 allowing it to write values with a larger date range than 64-bit timestamps with nanosecond resolution.
 datafusion.execution.parquet.coerce_int96_tz NULL (reading) Optional timezone applied to INT96 columns when `coerce_int96` is set. When `Some`, INT96 columns coerce to `Timestamp(<coerce_int96>, Some(<tz>))` instead of the default `Timestamp(<coerce_int96>, None)`. Spark and other systems write INT96 values as UTC-adjusted instants, so callers that need the resulting Arrow type to be timezone-aware (e.g. for Spark `TimestampType` semantics) should set this to `"UTC"`. No effect when `coerce_int96` is `None`.
 datafusion.execution.parquet.column_index_truncate_length 64 (writing) Sets column index truncate length

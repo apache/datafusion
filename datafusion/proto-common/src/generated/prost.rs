@@ -864,6 +864,9 @@ pub struct ParquetOptions {
     /// default = false
     #[prost(bool, tag = "29")]
     pub binary_as_string: bool,
+    /// default = true
+    #[prost(bool, tag = "39")]
+    pub coerce_binary_to_string: bool,
     /// default = false
     #[prost(bool, tag = "30")]
     pub skip_arrow_metadata: bool,

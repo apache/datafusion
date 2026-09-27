@@ -243,9 +243,10 @@ impl ParquetOptions {
             maximum_buffered_record_batches_per_stream: _,
             bloom_filter_on_read: _, // reads not used for writer props
             schema_force_view_types: _,
-            binary_as_string: _, // not used for writer props
-            coerce_int96: _,     // not used for writer props
-            coerce_int96_tz: _,  // not used for writer props
+            binary_as_string: _,        // not used for writer props
+            coerce_binary_to_string: _, // not used for writer props
+            coerce_int96: _,            // not used for writer props
+            coerce_int96_tz: _,         // not used for writer props
             skip_arrow_metadata: _,
             max_predicate_cache_size: _,
             max_in_list_size: _,
@@ -422,6 +423,7 @@ mod tests {
             bloom_filter_on_read: defaults.bloom_filter_on_read,
             schema_force_view_types: defaults.schema_force_view_types,
             binary_as_string: defaults.binary_as_string,
+            coerce_binary_to_string: defaults.coerce_binary_to_string,
             skip_arrow_metadata: defaults.skip_arrow_metadata,
             coerce_int96: None,
             coerce_int96_tz: None,
@@ -550,6 +552,7 @@ mod tests {
                     .max_predicate_cache_size,
                 schema_force_view_types: global_options_defaults.schema_force_view_types,
                 binary_as_string: global_options_defaults.binary_as_string,
+                coerce_binary_to_string: global_options_defaults.coerce_binary_to_string,
                 skip_arrow_metadata: global_options_defaults.skip_arrow_metadata,
                 coerce_int96: None,
                 coerce_int96_tz: None,

@@ -1370,6 +1370,18 @@ config_namespace! {
         /// reading them as binary and then casting to string.
         pub binary_as_string: bool, default = false
 
+        /// (reading) If true, a column the parquet file stores as binary is
+        /// read directly as a string when the table schema declares a string
+        /// type for it. The parquet reader only validates UTF-8 for columns
+        /// with the `UTF8` annotation, so invalid bytes in such a column
+        /// produce an invalid string array.
+        ///
+        /// If false, such a column is read as binary and cast to the table's
+        /// string type by the `PhysicalExprAdapter`, which rejects invalid
+        /// UTF-8 unless a custom adapter converts it differently. Statistics
+        /// and bloom filter pruning do not apply to predicates on these columns.
+        pub coerce_binary_to_string: bool, default = true
+
         /// (reading) If true, parquet reader will read columns of
         /// physical type int96 as originating from a different resolution
         /// than nanosecond. This is useful for reading data from systems like Spark
