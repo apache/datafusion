@@ -42,31 +42,5 @@ jobs:
         uses: actions/github-script@v9.0.0
         with:
           script: |
-            const target_version = 'v56.0.0';
-
-            // create label first if not exists
-            try {
-              await github.rest.issues.getLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                name: target_version
-              });
-            } catch (error) {
-              if (error.status === 404) {
-                await github.rest.issues.createLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name: target_version,
-                  color: '222222'
-                });
-              } else {
-                throw error;
-              }
-            }
-
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
-              labels: [target_version]
-            });
+            const labeler = require('./ci/scripts/release_version_labeler.js');
+            await labeler({ github, context });

@@ -123,8 +123,8 @@ def update_docs(path: str, new_version: str):
 
 def update_ci(new_version: str):
     # release version script
-    print("updating .github/workflows/release_version_labeler.yaml")
-    with open(".github/workflows/release_version_labeler.yaml", 'r+') as fd:
+    print("updating ci/scripts/release_version_labeler.js")
+    with open("ci/scripts/release_version_labeler.js", 'r+') as fd:
         new_major_version = int(new_version.split(".")[0])
         next_version = f"v{new_major_version + 1}.0.0"
         content = fd.read()
