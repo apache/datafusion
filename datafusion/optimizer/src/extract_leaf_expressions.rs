@@ -637,12 +637,13 @@ impl<'a> LeafExpressionExtractor<'a> {
     }
 }
 
-/// The way `schema` names `col`, or `None` when `schema` does not hold it
-/// or the name is ambiguous.
+/// Resolves `col` against `schema` and returns it with the qualifier that
+/// `schema` gives the field. Returns `None` if `schema` does not hold `col`,
+/// or if the name is ambiguous in `schema`.
 ///
-/// The result always carries the qualifier the schema gives the field, so
-/// two spellings of the same input column compare equal, and a column pushed
-/// into a projection reads as the input spells it.
+/// Two spellings of the same input column (a bare `c` and a qualified `t.c`)
+/// resolve to the same `Column`, so they compare equal. A column pushed into
+/// a projection this way uses the name that the input gives it.
 fn resolve_against(schema: &DFSchema, col: &Column) -> Option<Column> {
     schema
         .qualified_field_from_column(col)
@@ -716,11 +717,17 @@ fn build_extraction_projection_impl(
         // by alias expressions (e.g., CSE's __common_expr_N) exist in the output but
         // not the input, and cannot be added as pass-through Column references.
         //
-        // Compare both sides in the input's spelling (see `resolve_against`).
-        // Without this, a bare `c` and a qualified `t.c` do not match, and the
-        // merged projection holds both, which `Projection::try_new` rejects as
-        // ambiguous. Eliminating the empty side of a union makes this shape.
-        // A same-name alias (`t.c AS c`) counts as a pass-through of `t.c`.
+        // Resolve the pass-through columns of `existing` and the columns in
+        // `columns_needed` against the input schema before comparing them (see
+        // `resolve_against`). Without this, a bare `c` in one set and a
+        // qualified `t.c` in the other do not match, so the merged projection
+        // holds both, and `Projection::try_new` rejects it as ambiguous.
+        //
+        // This shape occurs when the optimizer removes the empty input of a
+        // `UNION ALL` (for example `... UNION ALL SELECT ... WHERE 1 = 2`): the
+        // projection that remains lists bare column names over a qualified
+        // input. A same-name alias (`t.c AS c`) counts as a pass-through of
+        // `t.c`.
         let input_schema = existing.input.schema();
         let existing_cols: IndexSet<Column> = existing
             .expr
