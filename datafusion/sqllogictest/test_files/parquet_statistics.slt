@@ -197,9 +197,7 @@ SELECT a, b, a * b AS x FROM mul_wrap WHERE a * b < -100;
 query TT
 EXPLAIN SELECT a, b FROM mul_wrap WHERE a * b < -100;
 ----
-physical_plan
-01)FilterExec: a@0 * b@1 < -100, statistics=[Rows=Inexact(2), Bytes=Inexact(4), [(Col[0]: Min=Inexact(Int8(0)) Max=Inexact(Int8(20)) Null=Inexact(0) ScanBytes=Inexact(2)),(Col[1]: Min=Inexact(Int8(-3)) Max=Inexact(Int8(7)) Null=Inexact(0) ScanBytes=Inexact(2))]]
-02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/mul_wrap.parquet]]}, projection=[a, b], file_type=parquet, predicate=a@0 * b@1 < -100, statistics=[Rows=Inexact(2), Bytes=Inexact(4), [(Col[0]: Min=Inexact(Int8(0)) Max=Inexact(Int8(20)) Null=Inexact(0) ScanBytes=Inexact(2)),(Col[1]: Min=Inexact(Int8(-3)) Max=Inexact(Int8(7)) Null=Inexact(0) ScanBytes=Inexact(2))]]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_statistics/mul_wrap.parquet]]}, projection=[a, b], file_type=parquet, predicate=a@0 * b@1 < -100, statistics=[Rows=Inexact(2), Bytes=Inexact(4), [(Col[0]: Min=Inexact(Int8(0)) Max=Inexact(Int8(20)) Null=Inexact(0) ScanBytes=Inexact(2)),(Col[1]: Min=Inexact(Int8(-3)) Max=Inexact(Int8(7)) Null=Inexact(0) ScanBytes=Inexact(2))]]
 
 statement ok
 DROP TABLE mul_wrap;
