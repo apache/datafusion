@@ -36,8 +36,8 @@ use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
 };
 use datafusion_expr::{
-    BinaryExpr, Cast, EmptyRelation, Expr, ExprSchemable, FetchType, LogicalPlan,
-    LogicalPlanBuilder, Operator, expr, lit,
+    BinaryExpr, Cast, Distinct, EmptyRelation, Expr, ExprSchemable, FetchType,
+    LogicalPlan, LogicalPlanBuilder, Operator, expr, lit,
 };
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -136,6 +136,9 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
     type Node = LogicalPlan;
 
     fn f_down(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+        // This match is exhaustive on purpose. A correlated filter moves above
+        // a node only when the node is known to keep the result the same. Add
+        // each new `LogicalPlan` variant to one of the groups below.
         match plan {
             LogicalPlan::Filter(_) => Ok(Transformed::no(plan)),
             // Subquery nodes are scope boundaries for correlation. A nested
@@ -151,16 +154,19 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             // join does not output cannot give its columns to a pulled up
             // filter either.
             LogicalPlan::Join(ref join) if !correlated_inputs_are_preserved(join) => {
-                // the unsupported case
-                self.can_pull_up = false;
-                Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+                Ok(self.stop_pull_up(plan))
+            }
+            // An ASOF join keeps each left row once, so a filter on the left
+            // side can move above it. A filter on the right side selects the
+            // rows the join can match, so it must stay below the join.
+            LogicalPlan::AsOfJoin(ref join) if holds_outer_reference(&join.right) => {
+                Ok(self.stop_pull_up(plan))
             }
             LogicalPlan::Union(_) | LogicalPlan::Sort(_) | LogicalPlan::Extension(_) => {
                 let plan_hold_outer = !plan.all_out_ref_exprs().is_empty();
                 if plan_hold_outer {
                     // the unsupported case
-                    self.can_pull_up = false;
-                    Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+                    Ok(self.stop_pull_up(plan))
                 } else {
                     Ok(Transformed::no(plan))
                 }
@@ -170,18 +176,62 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 match (self.exists_sub_query, plan_hold_outer) {
                     (false, true) => {
                         // the unsupported case
-                        self.can_pull_up = false;
-                        Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+                        Ok(self.stop_pull_up(plan))
                     }
                     _ => Ok(Transformed::no(plan)),
                 }
             }
-            _ if plan.contains_outer_reference() => {
-                // the unsupported cases, the plan expressions contain out reference columns(like window expressions)
-                self.can_pull_up = false;
-                Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+            // A correlated filter below these nodes can move above them. `f_up`
+            // adds the columns the pulled up filter needs to a Projection or an
+            // Aggregate, and checks that the filter can move above an
+            // Aggregate. A `DISTINCT` gives the same rows when a filter runs
+            // before it or after it, and its output takes the columns the node
+            // below it adds. The node itself must not hold an outer reference,
+            // because only a Filter gives its outer references to the join.
+            LogicalPlan::Projection(_)
+            | LogicalPlan::Aggregate(_)
+            | LogicalPlan::Distinct(Distinct::All(_))
+            | LogicalPlan::Join(_)
+            | LogicalPlan::AsOfJoin(_)
+            | LogicalPlan::Repartition(_)
+            | LogicalPlan::SubqueryAlias(_)
+            | LogicalPlan::TableScan(_)
+            | LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::Values(_) => {
+                if plan.contains_outer_reference() {
+                    // the unsupported cases, the plan expressions contain out
+                    // reference columns
+                    Ok(self.stop_pull_up(plan))
+                } else {
+                    Ok(Transformed::no(plan))
+                }
             }
-            _ => Ok(Transformed::no(plan)),
+            // A correlated filter below these nodes cannot move above them:
+            // - A Window function reads the rows of its partition, so the
+            //   filter changes the rows each function sees.
+            // - `DISTINCT ON` keeps the first row of each group, so the filter
+            //   changes which row is first.
+            // - The pull up does not carry the columns of the pulled up filter
+            //   through an Unnest, and fails with a schema error.
+            // - A RecursiveQuery repeats its recursive term.
+            // - The other nodes are not queries and are not in a subquery.
+            LogicalPlan::Window(_)
+            | LogicalPlan::Distinct(Distinct::On(_))
+            | LogicalPlan::Unnest(_)
+            | LogicalPlan::RecursiveQuery(_)
+            | LogicalPlan::Statement(_)
+            | LogicalPlan::Explain(_)
+            | LogicalPlan::Analyze(_)
+            | LogicalPlan::Dml(_)
+            | LogicalPlan::Ddl(_)
+            | LogicalPlan::Copy(_)
+            | LogicalPlan::DescribeTable(_) => {
+                if holds_outer_reference(&plan) {
+                    Ok(self.stop_pull_up(plan))
+                } else {
+                    Ok(Transformed::no(plan))
+                }
+            }
         }
     }
 
@@ -457,6 +507,13 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
 }
 
 impl PullUpCorrelatedExpr {
+    /// Keeps the correlated expressions below `plan` where they are. The caller
+    /// then keeps the subquery correlated.
+    fn stop_pull_up(&mut self, plan: LogicalPlan) -> Transformed<LogicalPlan> {
+        self.can_pull_up = false;
+        Transformed::new(plan, false, TreeNodeRecursion::Jump)
+    }
+
     /// Whether the pull up can add its columns to `group_expr` without changing
     /// what the aggregate returns.
     ///
