@@ -2791,9 +2791,18 @@ SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k 
 statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
 SELECT gs_outer.k, EXISTS (SELECT 1 FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY ROLLUP(gs_inner.j)) FROM gs_outer;
 
-# The `IN` form of the same subquery.
-statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression InSubquery
-SELECT gs_outer.k, gs_outer.k IN (SELECT gs_inner.k FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY ROLLUP(gs_inner.k)) FROM gs_outer;
+# The `IN` form of the same subquery decorrelates: the correlation repeats the
+# `IN` predicate, so the pull up drops it and adds no column to the grouping
+# set. The grand-total row is a NULL for every outer row, so a miss is UNKNOWN.
+# Pinned to the current wrong result: `k = 4` and `k = NULL` should be NULL.
+query IB
+SELECT gs_outer.k, gs_outer.k IN (SELECT gs_inner.k FROM gs_inner WHERE gs_inner.k = gs_outer.k GROUP BY ROLLUP(gs_inner.k)) FROM gs_outer ORDER BY gs_outer.k;
+----
+1 true
+2 true
+4 false
+5 true
+NULL false
 
 # `NOT EXISTS` too.
 statement error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
