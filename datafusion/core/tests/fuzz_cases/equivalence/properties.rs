@@ -39,7 +39,7 @@ fn test_find_longest_permutation_random() -> Result<()> {
 
     for (seed, &null_pct) in (0..N_RANDOM_SCHEMA).cartesian_product(NULL_PCTS) {
         // Create a random schema with random properties
-        let (test_schema, eq_properties) = create_random_schema(seed as u64)?;
+        let (test_schema, eq_properties) = create_random_schema(seed as u64, null_pct)?;
         // Generate a data that satisfies properties given
         let table_data_with_properties = generate_table_for_eq_properties(
             &eq_properties,

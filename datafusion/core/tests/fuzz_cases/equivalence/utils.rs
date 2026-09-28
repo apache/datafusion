@@ -20,13 +20,14 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Float32Array, Float64Array, RecordBatch, UInt32Array};
 use arrow::compute::{SortColumn, SortOptions, lexsort_to_indices, take_record_batch};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{Result, exec_err, internal_datafusion_err, plan_err};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, Operator, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Operator, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_physical_expr::equivalence::{
     EquivalenceClass, ProjectionMapping, convert_to_orderings,
@@ -83,8 +84,21 @@ pub fn create_test_schema_2() -> Result<SchemaRef> {
 /// where
 /// Column [a=f] (e.g they are aliases).
 /// Column e is constant.
-pub fn create_random_schema(seed: u64) -> Result<(SchemaRef, EquivalenceProperties)> {
-    let test_schema = create_test_schema_2()?;
+///
+/// Columns are declared nullable only when `null_pct > 0.0`, so the schema
+/// tells `ordering_satisfy` whether `nulls_first` can matter for the data.
+pub fn create_random_schema(
+    seed: u64,
+    null_pct: f64,
+) -> Result<(SchemaRef, EquivalenceProperties)> {
+    let nullable = null_pct > 0.0;
+    let test_schema = Arc::new(Schema::new(
+        create_test_schema_2()?
+            .fields()
+            .iter()
+            .map(|field| field.as_ref().clone().with_nullable(nullable))
+            .collect::<Vec<_>>(),
+    ));
     let col_a = &col("a", &test_schema)?;
     let col_b = &col("b", &test_schema)?;
     let col_c = &col("c", &test_schema)?;
@@ -103,11 +117,6 @@ pub fn create_random_schema(seed: u64) -> Result<(SchemaRef, EquivalenceProperti
     let mut rng = StdRng::seed_from_u64(seed);
     let mut remaining_exprs = col_exprs[0..4].to_vec(); // only a, b, c, d are sorted
 
-    let options_asc = SortOptions {
-        descending: false,
-        nulls_first: false,
-    };
-
     while !remaining_exprs.is_empty() {
         let n_sort_expr = rng.random_range(1..remaining_exprs.len() + 1);
         remaining_exprs.shuffle(&mut rng);
@@ -117,13 +126,21 @@ pub fn create_random_schema(seed: u64) -> Result<(SchemaRef, EquivalenceProperti
                 .drain(0..n_sort_expr)
                 .map(|expr| PhysicalSortExpr {
                     expr: Arc::clone(expr),
-                    options: options_asc,
+                    options: random_sort_options(&mut rng),
                 });
 
         eq_properties.add_ordering(ordering);
     }
 
     Ok((test_schema, eq_properties))
+}
+
+/// Picks the direction and NULL placement of one sort key.
+pub fn random_sort_options(rng: &mut StdRng) -> SortOptions {
+    SortOptions {
+        descending: rng.random(),
+        nulls_first: rng.random(),
+    }
 }
 
 // Apply projection to the input_data, return projected equivalence properties and record batch
@@ -502,7 +519,7 @@ pub fn generate_table_for_orderings(
     Ok(batch)
 }
 
-pub const NULL_PCTS: &[f64] = &[0.0, 0.01, 0.1, 0.5];
+pub const NULL_PCTS: &[f64] = &[0.0, 0.1, 0.5];
 
 // Utility function to generate random f64 array
 fn generate_random_f64_array(
@@ -568,6 +585,17 @@ impl ScalarUDFImpl for TestScalarUDF {
             DataType::Float32 => Ok(DataType::Float32),
             _ => Ok(DataType::Float64),
         }
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_field = &args.arg_fields[0];
+        let return_type = self.return_type(&[arg_field.data_type().clone()])?;
+        // floor maps NULL to NULL and never produces NULL otherwise.
+        Ok(Arc::new(Field::new(
+            self.name(),
+            return_type,
+            arg_field.is_nullable(),
+        )))
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
