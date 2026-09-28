@@ -279,7 +279,19 @@ impl ScalarUDFImpl for DateBinFunc {
         // starting before the minimum value of the type, or a month bin
         // outside the range of `DateTime<Utc>`. These extremes are accepted
         // rather than giving up the ordering for all inputs.
-        if step.sort_properties == SortProperties::Singleton
+        //
+        // A negative month stride can move a bin past its source (see
+        // `bin_months`), so its output is not monotonic, even for ordinary
+        // dates. Only propagate the ordering for strides known not to be one.
+        let monotonic_stride =
+            matches!(step.range.lower(), ScalarValue::IntervalDayTime(Some(_)))
+                || matches!(
+                    step.range.lower(),
+                    ScalarValue::IntervalMonthDayNano(Some(v)) if v.months >= 0
+                );
+
+        if monotonic_stride
+            && step.sort_properties == SortProperties::Singleton
             && reference
                 .map(|r| r.sort_properties == SortProperties::Singleton)
                 .unwrap_or(true)
@@ -1006,6 +1018,51 @@ mod tests {
         assert!(
             err.strip_backtrace().contains("overflows i64"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn output_ordering_requires_monotonic_stride() {
+        use arrow::compute::SortOptions;
+        use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
+
+        let literal = |value: ScalarValue| {
+            ExprProperties::new_unknown()
+                .with_order(SortProperties::Singleton)
+                .with_range(value.into())
+        };
+        let ordered = SortProperties::Ordered(SortOptions::default());
+        let source = ExprProperties::new_unknown().with_order(ordered);
+        let ordering = |stride: ExprProperties| {
+            DateBinFunc::new()
+                .output_ordering(&[stride, source.clone()])
+                .unwrap()
+        };
+
+        assert_eq!(
+            ordering(literal(ScalarValue::new_interval_dt(0, 1000))),
+            ordered
+        );
+        assert_eq!(
+            ordering(literal(ScalarValue::new_interval_dt(-1, 0))),
+            ordered
+        );
+        assert_eq!(
+            ordering(literal(ScalarValue::new_interval_mdn(1, 0, 0))),
+            ordered
+        );
+        assert_eq!(
+            ordering(literal(ScalarValue::new_interval_mdn(0, -1, 0))),
+            ordered
+        );
+        assert_eq!(
+            ordering(literal(ScalarValue::new_interval_mdn(-1, 0, 0))),
+            SortProperties::Unordered
+        );
+        // A constant stride whose value is unknown may be a negative month.
+        assert_eq!(
+            ordering(ExprProperties::new_unknown().with_order(SortProperties::Singleton)),
+            SortProperties::Unordered
         );
     }
 
