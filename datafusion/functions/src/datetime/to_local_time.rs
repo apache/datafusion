@@ -48,7 +48,7 @@ use datafusion_macros::user_doc;
 
 A timestamp that already has no timezone is returned unchanged.
 
-`AT TIME ZONE` applied to a timezone-*aware* timestamp is defined in terms of this function: it relabels the instant into the target timezone and then applies `to_local_time`. Wrapping such an expression in `to_local_time` is therefore redundant. The examples below instead apply `AT TIME ZONE` to timezone-*naive* values, which is the form that produces a timezone-aware timestamp for `to_local_time` to strip."#,
+`to_local_time` uses the timezone that the value already has. To get the wall-clock time in a timezone that you name in the query, use [`timezone(zone, expression)`](#timezone) or `expression AT TIME ZONE zone`: for a timestamp with a timezone, both return the wall-clock time in `zone`, without a timezone."#,
     syntax_example = "to_local_time(expression)",
     sql_example = r#"```sql
 > SELECT to_local_time('2024-04-01T00:00:20Z'::timestamp);
@@ -162,7 +162,7 @@ fn transform_array<T: ArrowTimestampType>(
     Ok(ColumnarValue::Array(Arc::new(result)))
 }
 
-fn to_local_time(time_value: &ColumnarValue) -> Result<ColumnarValue> {
+pub(crate) fn to_local_time(time_value: &ColumnarValue) -> Result<ColumnarValue> {
     let arg_type = time_value.data_type();
 
     let tz: Tz = match &arg_type {

@@ -2384,6 +2384,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 - [make_date](#make_date)
 - [make_time](#make_time)
 - [now](#now)
+- [timezone](#timezone)
 - [to_char](#to_char)
 - [to_date](#to_date)
 - [to_local_time](#to_local_time)
@@ -2807,6 +2808,44 @@ now()
 
 - current_timestamp
 
+### `timezone`
+
+Converts a timestamp to another timezone. This is the function form of `expression AT TIME ZONE zone`, and it follows PostgreSQL and DuckDB:
+
+- A timestamp **with** a timezone is an instant. The result is the wall-clock time of that instant in `zone`, as a timestamp **without** a timezone.
+- A timestamp **without** a timezone is a wall-clock time. The result is the instant at which that wall-clock time occurs in `zone`, as a timestamp **with** the timezone `zone`.
+- Any other type (for example a string) is converted as for a timestamp without a timezone.
+
+The result keeps the time unit of a timestamp input.
+
+```sql
+timezone(zone, expression)
+```
+
+#### Arguments
+
+- **zone**: Target timezone, as a constant string. An IANA timezone name such as `'America/Denver'`, or a fixed offset such as `'+05:30'`.
+- **expression**: Timestamp expression to convert. Can be a constant, column, or function.
+
+#### Example
+
+```sql
+> SET datafusion.execution.time_zone = 'UTC';
+> SELECT timezone('America/Denver', '2024-01-01T12:00:00Z'::timestamptz) AS denver_wall_clock;
++---------------------+
+| denver_wall_clock   |
++---------------------+
+| 2024-01-01T05:00:00 |
++---------------------+
+
+> SELECT timezone('America/Denver', '2024-01-01T12:00:00'::timestamp) AS denver_instant;
++---------------------------+
+| denver_instant            |
++---------------------------+
+| 2024-01-01T12:00:00-07:00 |
++---------------------------+
+```
+
 ### `to_char`
 
 Returns a string representation of a date, time, timestamp or duration based on a [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html). Unlike the PostgreSQL equivalent of this function numerical formatting is not supported.
@@ -2883,7 +2922,7 @@ Converts a timestamp with a timezone to a timestamp without a timezone (with no 
 
 A timestamp that already has no timezone is returned unchanged.
 
-`AT TIME ZONE` applied to a timezone-_aware_ timestamp is defined in terms of this function: it relabels the instant into the target timezone and then applies `to_local_time`. Wrapping such an expression in `to_local_time` is therefore redundant. The examples below instead apply `AT TIME ZONE` to timezone-_naive_ values, which is the form that produces a timezone-aware timestamp for `to_local_time` to strip.
+`to_local_time` uses the timezone that the value already has. To get the wall-clock time in a timezone that you name in the query, use [`timezone(zone, expression)`](#timezone) or `expression AT TIME ZONE zone`: for a timestamp with a timezone, both return the wall-clock time in `zone`, without a timezone.
 
 ```sql
 to_local_time(expression)
