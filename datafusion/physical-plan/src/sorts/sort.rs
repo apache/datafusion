@@ -41,8 +41,8 @@ use crate::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, SpillMetrics,
 };
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
-use crate::sorts::IncrementalSortIterator;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
+use crate::sorts::{IncrementalSortIterator, interleave_memory_size_from_sliced};
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
@@ -449,8 +449,10 @@ impl ExternalSorter {
 
         for batch in batches_to_spill {
             let gc_sliced_size = in_progress_file.append_batch_async(&batch).await?;
+            let output_size = interleave_memory_size_from_sliced(&batch, gc_sliced_size)
+                .unwrap_or(gc_sliced_size);
 
-            *max_record_batch_size = (*max_record_batch_size).max(gc_sliced_size);
+            *max_record_batch_size = (*max_record_batch_size).max(output_size);
         }
 
         assert_or_internal_err!(
@@ -2590,11 +2592,10 @@ mod tests {
         assert!((9000..=10000).contains(&spilled_rows));
         assert!((38000..=44000).contains(&spilled_bytes));
 
-        let columns = result[0].columns();
-
-        let i = as_primitive_array::<Int32Type>(&columns[0])?;
+        let sorted = concat_batches(&schema, &result)?;
+        let i = as_primitive_array::<Int32Type>(sorted.column(0))?;
         assert_eq!(i.value(0), 0);
-        assert_eq!(i.value(i.len() - 1), 81);
+        assert_eq!(i.value(i.len() - 1), 99);
         assert_eq!(
             task_ctx.runtime_env().memory_pool.reserved(),
             0,
