@@ -28,11 +28,7 @@ pub use datafusion_common::utils::memory::get_record_batch_memory_size;
 #[doc(hidden)]
 pub use spill_manager::SpillManager;
 
-use std::collections::VecDeque;
-
-use hashbrown::DefaultHashBuilder;
-use hashbrown::hash_table::HashTable;
-use std::hash::BuildHasher;
+use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
@@ -750,6 +746,7 @@ fn get_max_alignment_for_schema(schema: &Schema) -> usize {
 
 /// Size of a single view structure in StringView/BinaryView arrays (in bytes).
 /// Each view is 16 bytes: 4 bytes length + 4 bytes prefix + 8 bytes buffer ID/offset.
+#[cfg(test)]
 const VIEW_SIZE_BYTES: usize = 16;
 
 /// Performs garbage collection on StringView and BinaryView arrays before spilling to reduce memory usage.
@@ -804,112 +801,6 @@ pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
     }
 }
 
-/// Compacts the data buffers of a view array, or returns `None` when the
-/// array is too small for compaction to be worth it.
-///
-/// Arrow's `gc()` copies the bytes of every view separately, so repeated
-/// values each get their own copy. For a dictionary-encoded Parquet column
-/// this inflates the spilled data by the average repeat count: 1M rows of
-/// 1000 distinct 64 byte values spill as 64 MB
-/// (<https://github.com/apache/datafusion/issues/23564>).
-/// [`gc_dedup_view_array`] copies each distinct value once instead, and falls
-/// back to `gc()` when the values turn out to be distinct.
-fn gc_view_array<T: ByteViewType>(
-    array: &GenericByteViewArray<T>,
-) -> Option<GenericByteViewArray<T>> {
-    if !should_gc_view_array(array) {
-        return None;
-    }
-    Some(gc_dedup_view_array(array).unwrap_or_else(|| array.gc()))
-}
-
-/// Number of non-inline values [`gc_dedup_view_array`] deduplicates before
-/// it checks whether the array has enough repeats to be worth it.
-const DEDUP_SAMPLE_VALUES: usize = 256;
-
-/// Like `gc()`, but copies each distinct value once, and zeroes null views.
-///
-/// Returns `None` if the first [`DEDUP_SAMPLE_VALUES`] non-inline values
-/// hold almost no repeats, since hashing every value then costs more than
-/// deduplication saves.
-fn gc_dedup_view_array<T: ByteViewType>(
-    array: &GenericByteViewArray<T>,
-) -> Option<GenericByteViewArray<T>> {
-    let buffers = array.data_buffers();
-    let bytes_of = |view: &ByteView| {
-        let start = view.offset as usize;
-        &buffers[view.buffer_index as usize][start..start + view.length as usize]
-    };
-    let hasher = DefaultHashBuilder::default();
-
-    // (input view, output view) of the first occurrence of each distinct value
-    let mut distinct: HashTable<(u128, u128)> = HashTable::new();
-    let mut completed: Vec<Buffer> = vec![];
-    let mut data: Vec<u8> = vec![];
-    let mut non_inline = 0;
-    let mut views = Vec::with_capacity(array.len());
-
-    for (i, &raw) in array.views().iter().enumerate() {
-        if array.is_null(i) {
-            views.push(0);
-            continue;
-        }
-        if (raw as u32) <= MAX_INLINE_VIEW_LEN {
-            views.push(raw);
-            continue;
-        }
-
-        let view = ByteView::from(raw);
-        let bytes = bytes_of(&view);
-        let hash = hasher.hash_one(bytes);
-        let found = distinct.find(hash, |(first, _)| {
-            *first == raw || bytes_of(&ByteView::from(*first)) == bytes
-        });
-        let new_view = match found {
-            Some((_, new_view)) => *new_view,
-            None => {
-                // A view offset is a `u32`, and a buffer may not exceed `i32::MAX`
-                if data.len() + bytes.len() > i32::MAX as usize {
-                    completed.push(Buffer::from_vec(std::mem::take(&mut data)));
-                }
-                let new_view = ByteView {
-                    buffer_index: completed.len() as u32,
-                    offset: data.len() as u32,
-                    ..view
-                }
-                .as_u128();
-                data.extend_from_slice(bytes);
-                distinct.insert_unique(hash, (raw, new_view), |(first, _)| {
-                    hasher.hash_one(bytes_of(&ByteView::from(*first)))
-                });
-                new_view
-            }
-        };
-        views.push(new_view);
-
-        non_inline += 1;
-        if non_inline == DEDUP_SAMPLE_VALUES
-            && non_inline - distinct.len() < DEDUP_SAMPLE_VALUES / 64
-        {
-            return None;
-        }
-    }
-    if !data.is_empty() {
-        completed.push(Buffer::from_vec(data));
-    }
-
-    // SAFETY: every non-null, non-inline view points at a copy of the bytes
-    // it referenced in `array`, which are valid for `T`, and inline views are
-    // unchanged.
-    Some(unsafe {
-        GenericByteViewArray::new_unchecked(
-            ScalarBuffer::from(views),
-            completed.into(),
-            array.nulls().cloned(),
-        )
-    })
-}
-
 fn gc_array(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
     match array.data_type() {
         DataType::Utf8View => {
@@ -917,8 +808,8 @@ fn gc_array(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
                 .as_any()
                 .downcast_ref::<StringViewArray>()
                 .expect("Utf8View array should downcast to StringViewArray");
-            Ok(match gc_view_array(string_view) {
-                Some(gc) => (Arc::new(gc) as ArrayRef, true),
+            Ok(match compact_view_array(string_view) {
+                Some(compacted) => (Arc::new(compacted) as ArrayRef, true),
                 None => (Arc::clone(array), false),
             })
         }
@@ -927,13 +818,93 @@ fn gc_array(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
                 .as_any()
                 .downcast_ref::<BinaryViewArray>()
                 .expect("BinaryView array should downcast to BinaryViewArray");
-            Ok(match gc_view_array(binary_view) {
-                Some(gc) => (Arc::new(gc) as ArrayRef, true),
+            Ok(match compact_view_array(binary_view) {
+                Some(compacted) => (Arc::new(compacted) as ArrayRef, true),
                 None => (Arc::clone(array), false),
             })
         }
         _ => gc_array_children(array),
     }
+}
+
+/// Compacts a view array before spilling, or returns `None` to spill it as is.
+///
+/// The IPC writer writes every data buffer of an array in full, once per
+/// entry, and `gc()` copies the bytes of every view separately. Neither
+/// handles views that share bytes, as the views of a dictionary-encoded
+/// Parquet column do: after `concat` or `interleave` the dictionary is often
+/// listed once per input batch, and `gc()` copies it once per row
+/// (<https://github.com/apache/datafusion/issues/23564>).
+///
+/// Repeated buffer entries are merged first. `gc()` then runs only if it
+/// writes less than the merged buffers hold, and runs on the original array
+/// so that the views are rewritten at most once.
+fn compact_view_array<T: ByteViewType>(
+    array: &GenericByteViewArray<T>,
+) -> Option<GenericByteViewArray<T>> {
+    let buffers = array.data_buffers();
+    if buffers.is_empty() {
+        return None;
+    }
+
+    let (remap, unique) = dedup_buffer_entries(buffers);
+    let unique_size: usize = unique.iter().map(|b| b.len()).sum();
+    if should_gc_view_array(array, unique_size) {
+        return Some(array.gc());
+    }
+    if unique.len() == buffers.len() {
+        return None;
+    }
+
+    let views: Vec<u128> = array
+        .views()
+        .iter()
+        .enumerate()
+        .map(|(i, &raw)| {
+            if array.is_null(i) {
+                0
+            } else if (raw as u32) <= MAX_INLINE_VIEW_LEN {
+                raw
+            } else {
+                let view = ByteView::from(raw);
+                ByteView {
+                    buffer_index: remap[view.buffer_index as usize],
+                    ..view
+                }
+                .as_u128()
+            }
+        })
+        .collect();
+
+    // SAFETY: every non-null, non-inline view points at the same bytes as
+    // before, in an entry of `unique` that holds the same buffer, and inline
+    // views are unchanged.
+    Some(unsafe {
+        GenericByteViewArray::new_unchecked(
+            ScalarBuffer::from(views),
+            unique.into(),
+            array.nulls().cloned(),
+        )
+    })
+}
+
+/// Returns, for each entry of `buffers`, its index in a list without repeated
+/// entries of the same buffer, and that list.
+fn dedup_buffer_entries(buffers: &[Buffer]) -> (Vec<u32>, Vec<Buffer>) {
+    let mut first_index: HashMap<(*const u8, usize), u32> = HashMap::new();
+    let mut unique: Vec<Buffer> = Vec::with_capacity(buffers.len());
+    let remap = buffers
+        .iter()
+        .map(|buffer| {
+            *first_index
+                .entry((buffer.as_ptr(), buffer.len()))
+                .or_insert_with(|| {
+                    unique.push(buffer.clone());
+                    (unique.len() - 1) as u32
+                })
+        })
+        .collect();
+    (remap, unique)
 }
 
 fn gc_array_children(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
@@ -966,28 +937,32 @@ fn gc_array_children(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
     Ok((make_array(rebuilt), true))
 }
 
-/// Determines whether a view array should be garbage collected before spilling.
+/// Determines whether a view array should be garbage collected before spilling,
+/// given `data_size`, the bytes its data buffers hold after
+/// [`dedup_buffer_entries`].
 ///
-/// Arrow's `gc()` always allocates new compact buffers (it is never a no-op), so we
-/// check here to skip the allocation cost when data buffers are small. We subtract
-/// the views buffer (16 bytes × n_rows) from `get_buffer_memory_size()` so the
-/// threshold tracks non-inline string data rather than row count.
-fn should_gc_view_array<T: ByteViewType>(array: &GenericByteViewArray<T>) -> bool {
+/// Arrow's `gc()` always allocates new compact buffers (it is never a no-op), so
+/// it is skipped when the data buffers are small. It is also skipped when it
+/// would write more than the data buffers hold: `gc()` copies the bytes of
+/// every view separately, so views that share bytes each get their own copy.
+/// Both sizes come from the views and buffer lengths, without reading values.
+fn should_gc_view_array<T: ByteViewType>(
+    array: &GenericByteViewArray<T>,
+    data_size: usize,
+) -> bool {
     const MIN_BUFFER_SIZE_FOR_GC: usize = 10 * 1024; // 10KB threshold
 
-    if array.data_buffers().is_empty() {
-        return false;
-    }
+    // `total_buffer_bytes_used` is the size of the data buffer `gc()` writes
+    data_size > MIN_BUFFER_SIZE_FOR_GC && array.total_buffer_bytes_used() < data_size
+}
 
-    let data_buffer_size = array
-        .get_buffer_memory_size()
-        .saturating_sub(array.len() * VIEW_SIZE_BYTES);
-    data_buffer_size > MIN_BUFFER_SIZE_FOR_GC
+#[cfg(test)]
+fn data_buffers_size(array: &StringViewArray) -> usize {
+    array.data_buffers().iter().map(|b| b.len()).sum()
 }
 
 #[cfg(test)]
 fn calculate_string_view_waste_ratio(array: &StringViewArray) -> f64 {
-    use arrow_data::MAX_INLINE_VIEW_LEN;
     calculate_view_waste_ratio(array.len(), array.data_buffers(), |i| {
         if !array.is_null(i) {
             let value = array.value(i);
@@ -2286,13 +2261,12 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![array_ref])?;
 
         // GC should return the original batch for small arrays
-        let should_gc = should_gc_view_array(
-            batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<StringViewArray>()
-                .unwrap(),
-        );
+        let array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap();
+        let should_gc = should_gc_view_array(array, data_buffers_size(array));
         let gc_batch = gc_view_arrays(&batch)?;
 
         assert!(!should_gc);
@@ -2364,7 +2338,8 @@ mod tests {
             .as_any()
             .downcast_ref::<StringViewArray>()
             .unwrap();
-        let should_gc = should_gc_view_array(sliced_array);
+        let should_gc =
+            should_gc_view_array(sliced_array, data_buffers_size(sliced_array));
         let waste_ratio = calculate_string_view_waste_ratio(sliced_array);
 
         assert!(
@@ -2515,57 +2490,154 @@ mod tests {
         Ok(())
     }
 
-    /// Repeated values are copied once, whether their views share bytes, as
-    /// the views of a Parquet dictionary-encoded column do, or reference
-    /// separate copies (<https://github.com/apache/datafusion/issues/23564>).
-    #[test]
-    fn test_gc_copies_repeated_values_once() -> Result<()> {
+    /// `len` distinct 63 byte values in a single data buffer
+    fn dictionary_array(len: u32) -> Result<StringViewArray> {
+        use arrow::array::AsArray;
+
+        let values = StringArray::from_iter_values(
+            (0..len).map(|i| format!("container-id-{i:0>50}")),
+        );
+        // Casting to Utf8View keeps the values in the one existing buffer
+        let dictionary = cast(&values, &DataType::Utf8View)?;
+        let dictionary = dictionary.as_string_view().clone();
+        assert_eq!(dictionary.data_buffers().len(), 1);
+        Ok(dictionary)
+    }
+
+    /// Arrays that each hold views into one shared dictionary buffer, as the
+    /// Parquet reader produces for a dictionary-encoded column, combined the
+    /// way a sort combines its input batches. Each output row cycles through
+    /// the dictionary (<https://github.com/apache/datafusion/issues/23564>).
+    fn shared_dictionary_views(
+        dictionary_len: u32,
+        inputs: u32,
+        rows_per_input: u32,
+    ) -> Result<(StringViewArray, StringViewArray)> {
         use arrow::array::{AsArray, UInt32Array};
-        use arrow::compute::take;
+        use arrow::compute::{interleave, take};
 
-        let value = |i: u32| format!("repeated-{i:0>55}");
-        let data_bytes = |array: &StringViewArray| -> usize {
-            array.data_buffers().iter().map(|b| b.len()).sum()
-        };
+        let dictionary = dictionary_array(dictionary_len)?;
+        let arrays = (0..inputs)
+            .map(|input| {
+                let indices = UInt32Array::from_iter_values(
+                    (0..rows_per_input)
+                        .map(|row| (input * rows_per_input + row) % dictionary_len),
+                );
+                take(&dictionary, &indices, None)
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let arrays: Vec<&dyn Array> = arrays.iter().map(|a| a.as_ref()).collect();
+        let indices: Vec<(usize, usize)> = (0..rows_per_input as usize)
+            .flat_map(|row| (0..inputs as usize).map(move |input| (input, row)))
+            .collect();
+        let merged = interleave(&arrays, &indices)?;
+        Ok((dictionary, merged.as_string_view().clone()))
+    }
 
-        // 256 distinct non-inline values: 16 KB, above the GC threshold
-        let distinct = StringViewArray::from_iter_values((0..256).map(value));
-        assert_eq!(data_bytes(&distinct), 256 * 64);
+    #[test]
+    fn test_gc_keeps_shared_dictionary_buffer() -> Result<()> {
+        let (dictionary, merged) = shared_dictionary_views(1000, 8, 1024)?;
+        // `interleave` lists the dictionary once per input
+        assert_eq!(merged.data_buffers().len(), 8);
+        // `gc()` would copy 8192 values of 63 bytes, 8x the dictionary
+        assert!(merged.total_buffer_bytes_used() > data_buffers_size(&dictionary));
 
-        // 10,000 views into the same buffer, some of them null
-        let indices = UInt32Array::from_iter(
-            (0..10_000u32).map(|i| (i % 7 != 0).then_some((i * 31) % 256)),
+        let compacted = compact_view_array(&merged).expect("buffer entries repeat");
+        assert_eq!(compacted.data_buffers().len(), 1);
+        assert_eq!(
+            compacted.data_buffers()[0].as_ptr(),
+            dictionary.data_buffers()[0].as_ptr()
         );
-        let shared = take(&distinct, &indices, None)?;
-        let shared = shared.as_string_view();
-        let gc = gc_view_array(shared).expect("array is above the GC threshold");
-        assert_eq!(data_bytes(&gc), 256 * 64);
-        assert_eq!(&gc, shared);
-
-        // 1,000 separate copies of 256 distinct values, in shuffled order. A
-        // run of DEDUP_SAMPLE_VALUES distinct values would fall back to `gc()`.
-        let copies = StringViewArray::from_iter_values(
-            (0..1_000u32).map(|i| value((i * 7919) % 1_000 % 256)),
-        );
-        let gc = gc_view_array(&copies).expect("array is above the GC threshold");
-        assert_eq!(data_bytes(&gc), 256 * 64);
-        assert_eq!(gc, copies);
+        assert_eq!(compacted, merged);
 
         Ok(())
     }
 
-    /// Distinct values fall back to `gc()`, which copies every value once
     #[test]
-    fn test_gc_distinct_values() -> Result<()> {
-        let array = StringViewArray::from_iter_values(
-            (0..1_000).map(|i| format!("distinct-{i:0>55}")),
+    fn test_gc_small_slice_of_shared_buffer() -> Result<()> {
+        // 8 inputs of 4 rows each reference a 63 KB dictionary: `gc()` writes
+        // 32 values, far less than the dictionary
+        let (dictionary, merged) = shared_dictionary_views(1000, 8, 4)?;
+        assert_eq!(merged.data_buffers().len(), 8);
+
+        let compacted = compact_view_array(&merged).expect("gc() is smaller");
+        assert_eq!(compacted.data_buffers().len(), 1);
+        assert_eq!(data_buffers_size(&compacted), 32 * 63);
+        assert_ne!(
+            compacted.data_buffers()[0].as_ptr(),
+            dictionary.data_buffers()[0].as_ptr()
         );
-        let sliced = array.slice(100, 500);
-        let gc = gc_view_array(&sliced).expect("array is above the GC threshold");
-        let gc_bytes: usize = gc.data_buffers().iter().map(|b| b.len()).sum();
-        assert_eq!(gc_bytes, 500 * 64);
-        assert_eq!(gc, sliced);
-        assert!(gc_dedup_view_array(&sliced).is_none());
+        assert_eq!(compacted, merged);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_gc_shared_buffer_with_nulls() -> Result<()> {
+        use arrow::array::{AsArray, BooleanArray};
+        use arrow::compute::nullif;
+
+        let (_, merged) = shared_dictionary_views(1000, 8, 1024)?;
+        let mask = BooleanArray::from_iter((0..merged.len()).map(|i| Some(i % 7 == 0)));
+        let with_nulls = nullif(&merged, &mask)?;
+        let with_nulls = with_nulls.as_string_view();
+
+        let compacted = compact_view_array(with_nulls).expect("buffer entries repeat");
+        assert_eq!(compacted.data_buffers().len(), 1);
+        assert_eq!(compacted.null_count(), with_nulls.null_count());
+        assert_eq!(&compacted, with_nulls);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_gc_skips_array_that_shares_one_buffer() -> Result<()> {
+        use arrow::array::{AsArray, UInt32Array};
+        use arrow::compute::take;
+
+        // 10,000 views into one 63 KB dictionary: `gc()` would write 630 KB
+        let dictionary = dictionary_array(1000)?;
+        let indices = UInt32Array::from_iter_values((0..10_000).map(|i| i % 1000));
+        let shared = take(&dictionary, &indices, None)?;
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "label",
+            DataType::Utf8View,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::clone(&shared)])?;
+
+        assert!(compact_view_array(shared.as_string_view()).is_none());
+        let gc_batch = gc_view_arrays(&batch)?;
+        assert!(Arc::ptr_eq(batch.column(0), gc_batch.column(0)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_spill_shared_dictionary_writes_it_once() -> Result<()> {
+        let (dictionary, merged) = shared_dictionary_views(1000, 8, 1024)?;
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "label",
+            DataType::Utf8View,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(merged)])?;
+
+        let env = Arc::new(RuntimeEnv::default());
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let spill_manager = SpillManager::new(env, metrics, schema);
+        let mut in_progress_file = spill_manager.create_in_progress_file("Test GC")?;
+        in_progress_file.append_batch(&batch)?;
+        let spill_file = in_progress_file.finish()?.unwrap();
+        let file_size = std::fs::metadata(spill_file.path().unwrap())?.len() as usize;
+
+        // The views and one copy of the dictionary, not 8192 copied values
+        let views_size = batch.num_rows() * VIEW_SIZE_BYTES;
+        let dictionary_size = data_buffers_size(&dictionary);
+        assert!(
+            file_size < views_size + 2 * dictionary_size,
+            "spill file is {file_size} bytes, views {views_size}, dictionary {dictionary_size}"
+        );
 
         Ok(())
     }
