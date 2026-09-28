@@ -53,6 +53,29 @@ use crate::physical_optimizer::PhysicalOptimizerContext;
 /// `FilterPushdown`) re-establish validity themselves rather than relying on a
 /// later enforcement pass.
 ///
+/// ```text
+/// ExecutionPlan  (every operator declares its distribution and ordering
+///                 requirements; nothing satisfies them yet)
+///                                │
+///                                ▼
+/// ┌─ PhysicalAnalyzer phase ── make the plan VALID ──────────────┐
+/// │ 1. OutputRequirements (add)   establish the output boundary  │
+/// │ 2. EnforceDistribution        required_input_distribution    │
+/// │ 3. EnforceSorting             required_input_ordering        │
+/// └──────────────────────────────┬───────────────────────────────┘
+///                                │  invariant: the plan is valid
+///                                ▼
+/// ┌─ PhysicalOptimizer phase ── make the plan FASTER ────────────┐
+/// │ every rule receives a valid plan and leaves a valid plan     │
+/// │                                                              │
+/// │ JoinSelection   ─┐                                           │
+/// │ FilterPushdown  ─┴─▶ re-enforce distribution                 │
+/// │ WindowTopN      ───▶ re-enforce distribution + ordering      │
+/// └──────────────────────────────┬───────────────────────────────┘
+///                                ▼
+///                   valid, optimized ExecutionPlan
+/// ```
+///
 /// [`DefaultPhysicalPlanner::optimize_physical_plan`]: https://docs.rs/datafusion/latest/datafusion/physical_planner/struct.DefaultPhysicalPlanner.html#method.optimize_physical_plan
 /// [`AnalyzerRule`]: https://docs.rs/datafusion/latest/datafusion/optimizer/analyzer/trait.AnalyzerRule.html
 /// [`OptimizerRule`]: https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html

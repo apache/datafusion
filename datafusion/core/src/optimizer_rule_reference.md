@@ -26,6 +26,44 @@ The rule names listed here match the names shown by `EXPLAIN VERBOSE`.
 
 Rule order matters. The default pipeline may change between releases.
 
+```text
+  SQL / DataFrame
+        │
+        ▼
+  LogicalPlan
+        │  Analyzer ......... make the plan VALID   (type_coercion, ...)
+        │  Optimizer ........ make the plan FASTER  (push_down_filter, ...)
+        ▼
+  physical planning
+        │
+        ▼
+  ExecutionPlan       every operator declares its required input distribution
+        │             and ordering; nothing satisfies them yet
+        │
+        │  PhysicalAnalyzer ... make the plan VALID
+        │    1. OutputRequirements (add)  establish the output boundary
+        │    2. EnforceDistribution       satisfy required_input_distribution
+        │    3. EnforceSorting            satisfy required_input_ordering
+        │
+        │  ==> from here on every PhysicalOptimizerRule receives a valid plan
+        │      and must leave a valid plan
+        │
+        │  PhysicalOptimizer .. make the plan FASTER
+        │    aggregate_statistics
+        │    join_selection   ─┐  changes partition mode / build side
+        │    FilterPushdown   ─┤  changes a source's row-count precision
+        │    WindowTopN       ─┤  rebuilds the window over a partitioned TopK
+        │    OptimizeSorts     │
+        │    ... (full list in the table below)
+        │    OutputRequirements (remove)
+        │    SanityCheckPlan   │
+        │                      └─▶ each re-establishes validity itself, scoped
+        │                          to what it changed, and only when it
+        │                          actually rewrote the plan
+        ▼
+  valid, optimized ExecutionPlan
+```
+
 ### Analyzer Rules
 
 | order | rule                        | summary                                                                                 |

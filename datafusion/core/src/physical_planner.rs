@@ -3092,8 +3092,20 @@ impl DefaultPhysicalPlanner {
         ))
     }
 
-    /// Optimize a physical plan by applying each physical optimizer,
-    /// calling observer(plan, optimizer after each one)
+    /// Run the two physical planning phases over `plan`, calling
+    /// `observer(plan, rule_name)` after each rule.
+    ///
+    /// The analyzer phase runs first and in full: it makes the plan *valid* by
+    /// satisfying the distribution and ordering requirements every operator
+    /// declares. The optimizer phase then makes that already-valid plan
+    /// *faster*, so every [`PhysicalOptimizerRule`] receives a valid plan and
+    /// is expected to leave one. See [`PhysicalAnalyzerRule`] for the phase
+    /// diagram and for how the rules that change a requirement
+    /// (`JoinSelection`, `FilterPushdown`, `WindowTopN`) re-establish validity
+    /// themselves.
+    ///
+    /// [`PhysicalOptimizerRule`]: datafusion_physical_optimizer::PhysicalOptimizerRule
+    /// [`PhysicalAnalyzerRule`]: datafusion_physical_optimizer::analyzer::PhysicalAnalyzerRule
     #[expect(clippy::needless_pass_by_value)]
     pub fn optimize_physical_plan<F>(
         &self,
