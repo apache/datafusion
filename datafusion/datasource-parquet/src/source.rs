@@ -763,11 +763,18 @@ impl FileSource for ParquetSource {
         self.predicate.clone()
     }
 
-    /// The predicate is applied to every row only when filter pushdown is
-    /// enabled, and then only the conjuncts that can become a `RowFilter`.
-    /// Otherwise the predicate is used only for pruning.
+    /// The scan applies each conjunct of its predicate to every row: as a
+    /// `RowFilter` predicate when filter pushdown is enabled, else (and for
+    /// the conjuncts that the `RowFilter` cannot evaluate) in the post-scan
+    /// filter. Only the conjuncts that can be pushed down are returned, the
+    /// same test that `try_pushdown_filters` uses before it replies
+    /// `PushedDown::Yes`.
+    ///
+    /// A pruning-only predicate (see
+    /// [`FileSource::try_pushdown_pruning_filters`]) is used only to prune:
+    /// a `FilterExec` above the scan applies it. Thus it is not exact.
     fn exact_filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
-        if !self.pushdown_filters() {
+        if self.pruning_only_predicate {
             return None;
         }
         let predicate = self.predicate.as_ref()?;
@@ -2323,6 +2330,9 @@ mod tests {
             pruning.predicate.as_ref().unwrap().to_string(),
             "value@0 > 1"
         );
+        // A pruning-only predicate is not exact: a `FilterExec` above the
+        // scan applies it.
+        assert!(pruning.exact_filter().is_none());
 
         // It uses later filters only to prune too.
         let prop = pruning
@@ -2344,6 +2354,10 @@ mod tests {
         assert!(matches!(prop.filters[..], [PushedDown::Yes]));
         let applied = downcast(&prop.updated_node.unwrap());
         assert!(!applied.pruning_only_predicate);
+        // The scan applies the accepted filter to every row, also with
+        // `pushdown_filters = false` (in the post-scan filter).
+        assert!(!applied.pushdown_filters());
+        assert_eq!(applied.exact_filter().unwrap().to_string(), "value@0 > 1");
         assert!(
             applied
                 .try_pushdown_pruning_filters(&[filter(2)], &config)
