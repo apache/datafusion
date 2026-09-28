@@ -35,7 +35,7 @@ use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::sink::DataSink;
 #[cfg(feature = "proto")]
 use datafusion_datasource::sink::DataSinkExec;
-use datafusion_datasource::write::demux::DemuxedStreamReceiver;
+use datafusion_datasource::write::demux::{DemuxedStreamReceiver, FileMetadata};
 use datafusion_datasource::write::{
     ObjectWriterBuilder, SharedBuffer, get_writer_schema,
 };
@@ -50,7 +50,6 @@ use datafusion_physical_plan::metrics::{
 };
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType};
 use object_store::ObjectStore;
-use object_store::buffered::BufWriter;
 use object_store::path::Path;
 use parquet::arrow::arrow_writer::{
     ArrowColumnChunk, ArrowColumnWriter, ArrowLeafColumn, ArrowRowGroupWriterFactory,
@@ -177,20 +176,25 @@ impl ParquetSink {
     /// AsyncArrowWriters are used when individual parquet file serialization is not parallelized
     fn create_async_arrow_writer(
         &self,
-        location: &Path,
+        file_metadata: &FileMetadata,
         object_store: Arc<dyn ObjectStore>,
         context: &Arc<TaskContext>,
         parquet_props: WriterProperties,
-    ) -> Result<AsyncArrowWriter<BufWriter>> {
-        let buf_writer = BufWriter::with_capacity(
+    ) -> Result<AsyncArrowWriter<Box<dyn AsyncWrite + Send + Unpin>>> {
+        let buf_writer = ObjectWriterBuilder::new(
+            FileCompressionType::UNCOMPRESSED,
+            &file_metadata.path,
             object_store,
-            location.clone(),
+        )
+        .with_buffer_size(Some(
             context
                 .session_config()
                 .options()
                 .execution
                 .objectstore_writer_buffer_size,
-        );
+        ))
+        .with_bytes_written_counter(Arc::clone(&file_metadata.size))
+        .build()?;
         let options = ArrowWriterOptions::new()
             .with_properties(parquet_props)
             .with_skip_arrow_metadata(self.parquet_options.global.skip_arrow_metadata);
@@ -293,21 +297,24 @@ impl FileSink for ParquetSink {
                 .maximum_buffered_record_batches_per_stream,
         };
 
-        while let Some((path, mut rx)) = file_stream_rx.recv().await {
-            let parquet_props = self.create_writer_props(&runtime, &path).await?;
+        while let Some((file_metadata, mut rx)) = file_stream_rx.recv().await {
+            let parquet_props = self
+                .create_writer_props(&runtime, &file_metadata.path)
+                .await?;
             // CDC requires the sequential writer: the chunker state lives in ArrowWriter
             // and persists across row groups. The parallel path bypasses ArrowWriter entirely.
             if !parquet_opts.global.allow_single_file_parallelism
                 || parquet_opts.global.content_defined_chunking.enabled
             {
                 let mut writer = self.create_async_arrow_writer(
-                    &path,
+                    &file_metadata,
                     Arc::clone(&object_store),
                     context,
                     parquet_props.clone(),
                 )?;
-                let reservation = MemoryConsumer::new(format!("ParquetSink[{path}]"))
-                    .register(context.memory_pool());
+                let reservation =
+                    MemoryConsumer::new(format!("ParquetSink[{}]", file_metadata.path))
+                        .register(context.memory_pool());
                 file_write_tasks.spawn(
                     async move {
                         while let Some(batch) = rx.recv().await {
@@ -318,7 +325,7 @@ impl FileSink for ParquetSink {
                             .close()
                             .await
                             .map_err(|e| DataFusionError::ParquetError(Box::new(e)))?;
-                        Ok((path, parquet_meta_data))
+                        Ok((file_metadata.path, parquet_meta_data))
                     }
                     .with_elapsed_compute(elapsed_compute.clone()),
                 );
@@ -327,7 +334,7 @@ impl FileSink for ParquetSink {
                     // Parquet files as a whole are never compressed, since they
                     // manage compressed blocks themselves.
                     FileCompressionType::UNCOMPRESSED,
-                    &path,
+                    &file_metadata.path,
                     Arc::clone(&object_store),
                 )
                 .with_buffer_size(Some(
@@ -337,6 +344,7 @@ impl FileSink for ParquetSink {
                         .execution
                         .objectstore_writer_buffer_size,
                 ))
+                .with_bytes_written_counter(file_metadata.size)
                 .build()?;
                 let ctx = ParquetFileWriteContext {
                     schema: get_writer_schema(&self.config),
@@ -354,7 +362,7 @@ impl FileSink for ParquetSink {
                         encoding_time,
                     )
                     .await?;
-                    Ok((path, parquet_meta_data))
+                    Ok((file_metadata.path, parquet_meta_data))
                 });
             }
         }
