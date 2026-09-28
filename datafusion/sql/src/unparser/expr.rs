@@ -417,6 +417,11 @@ impl Unparser<'_> {
                             .map(|sort_expr| self.sort_to_sql(sort_expr))
                             .collect::<Result<Vec<ast::OrderByExpr>>>()?;
                         (args_to_use, within_group)
+                    } else if args.is_empty() && func_name == "count" {
+                        // Many dialects only accept `count(*)` for a parameterless count
+                        let wildcard =
+                            ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Wildcard);
+                        (vec![wildcard], Vec::new())
                     } else {
                         (self.function_args_to_sql(args)?, Vec::new())
                     };
@@ -2278,6 +2283,7 @@ mod tests {
                     .unwrap(),
                 "count(*) FILTER (WHERE true)",
             ),
+            (count_udaf().call(vec![]), "count(*)"),
             (
                 Expr::from(WindowFunction {
                     fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),

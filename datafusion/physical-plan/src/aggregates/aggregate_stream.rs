@@ -32,7 +32,9 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, ScalarValue, internal_datafusion_err, internal_err};
+use datafusion_common::{
+    DataFusionError, Result, ScalarValue, internal_datafusion_err, internal_err,
+};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::PhysicalExpr;
@@ -496,12 +498,13 @@ fn aggregate_batch(
         .enumerate()
         .try_for_each(|(index, ((accum, expr), filter))| {
             // 1.2 and 1.3
-            let values = aggregate_argument_metrics.time(index, || {
+            let (values, num_rows) = aggregate_argument_metrics.time(index, || {
                 let batch = match filter {
                     Some(filter) => Cow::Owned(batch_filter(batch, filter)?),
                     None => Cow::Borrowed(batch),
                 };
-                evaluate_expressions_to_arrays(expr, batch.as_ref())
+                let values = evaluate_expressions_to_arrays(expr, batch.as_ref())?;
+                Ok::<_, DataFusionError>((values, batch.num_rows()))
             })?;
 
             // 1.4
@@ -510,7 +513,7 @@ fn aggregate_batch(
                 AggregateInputMode::Raw => aggregate_accumulator_metrics.time(
                     index,
                     AccumulatorPhase::Update,
-                    || accum.update_batch(&values),
+                    || accum.update_batch_with_num_rows(&values, num_rows),
                 ),
                 AggregateInputMode::Partial => aggregate_accumulator_metrics.time(
                     index,

@@ -567,9 +567,8 @@ async fn optimized_duckdb_unparse_preserves_nested_aggregate_scope() -> Result<(
 
     assert!(
         sql.contains(concat!(
-            r#"FROM (SELECT sum("total_revenue") AS "alias2", "#,
-            r#"date_part('year', "signup_date") AS "group_alias_0", "#,
-            r#""customer_id" AS "alias1" "#
+            r#"FROM (SELECT date_part('year', "signup_date") AS "group_alias_0", "#,
+            r#"sum("total_revenue") AS "alias2" "#
         )),
         "inner aggregate should define the aliases before the outer aggregate uses them: {sql}",
     );

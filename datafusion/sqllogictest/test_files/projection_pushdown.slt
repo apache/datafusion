@@ -1858,11 +1858,11 @@ FROM simple_struct GROUP BY s;
 ----
 logical_plan
 01)Projection: get_field(simple_struct.s, Utf8("label")) IS NOT NULL AS has_label, count(Int64(1))
-02)--Aggregate: groupBy=[[simple_struct.s]], aggr=[[count(Int64(1))]]
+02)--Aggregate: groupBy=[[simple_struct.s]], aggr=[[count() AS count(Int64(1))]]
 03)----TableScan: simple_struct projection=[s]
 physical_plan
 01)ProjectionExec: expr=[get_field(s@0, label) IS NOT NULL as has_label, count(Int64(1))@1 as count(Int64(1))]
-02)--AggregateExec: mode=Single, gby=[s@0 as s], aggr=[count(Int64(1))]
+02)--AggregateExec: mode=Single, gby=[s@0 as s], aggr=[count() as count(Int64(1))]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/simple.parquet]]}, projection=[s], file_type=parquet
 
 # Verify correctness - all labels are non-null

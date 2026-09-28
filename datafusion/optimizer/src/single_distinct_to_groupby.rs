@@ -104,6 +104,32 @@ struct CountRollup {
     sum: Arc<AggregateUDF>,
 }
 
+fn unalias_top(mut expr: &Expr) -> &Expr {
+    while let Expr::Alias(alias) = expr
+        && alias
+            .metadata
+            .as_ref()
+            .is_none_or(|metadata| metadata.is_empty())
+    {
+        expr = &alias.expr;
+    }
+    expr
+}
+
+fn into_unaliased_top(expr: Expr) -> Expr {
+    match expr {
+        Expr::Alias(alias)
+            if alias
+                .metadata
+                .as_ref()
+                .is_none_or(|metadata| metadata.is_empty()) =>
+        {
+            into_unaliased_top(*alias.expr)
+        }
+        expr => expr,
+    }
+}
+
 impl CountRollup {
     fn try_new(config: &dyn OptimizerConfig) -> Option<Self> {
         let registry = config.function_registry()?;
@@ -131,6 +157,7 @@ fn is_single_distinct_agg(
     let mut distinct_aggs = vec![];
     let mut has_count_rollup = false;
     for expr in aggr_expr {
+        let expr = unalias_top(expr);
         if let Expr::AggregateFunction(AggregateFunction {
             func,
             params:
@@ -301,7 +328,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 // zero that `sum` reports as NULL over an empty input.
                 let (outer_aggr_exprs, outer_proj_exprs): (Vec<Expr>, Vec<Expr>) = aggr_expr
                     .into_iter()
-                    .map(|aggr_expr| match aggr_expr {
+                    .map(|aggr_expr| match into_unaliased_top(aggr_expr) {
                         Expr::AggregateFunction(AggregateFunction {
                             func,
                             params:
@@ -381,7 +408,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                 Ok((outer, proj))
                             }
                         }
-                        _ => Ok((aggr_expr.clone(), aggr_expr)),
+                        aggr_expr => Ok((aggr_expr.clone(), aggr_expr)),
                     })
                     .collect::<Result<Vec<_>>>()?
                     .into_iter()
@@ -1152,6 +1179,41 @@ mod tests {
         Projection: CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END AS count(Int64(1)), count(alias1) AS count(DISTINCT test.b) [count(Int64(1)):Int64, count(DISTINCT test.b):Int64]
           Aggregate: groupBy=[[]], aggr=[[sum(alias2), count(alias1)]] [sum(alias2):Int64;N, count(alias1):Int64]
             Aggregate: groupBy=[[test.b AS alias1]], aggr=[[count(Int64(1)) AS alias2]] [alias1:Utf8, alias2:Int64]
+              TableScan: test [a:UInt32, b:Utf8, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn aliased_count_star_and_distinct_without_groupby() -> Result<()> {
+        let table_scan = test_table_scan_utf8_b()?;
+
+        // Simplifying `count(1)` to `count()` preserves its old name with an
+        // alias before this rule runs.
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![
+                    Expr::AggregateFunction(AggregateFunction::new_udf(
+                        count_udaf(),
+                        vec![],
+                        false,
+                        None,
+                        vec![],
+                        None,
+                    ))
+                    .alias("count(Int64(1))"),
+                    count_distinct(col("b")),
+                ],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END AS count(Int64(1)), count(alias1) AS count(DISTINCT test.b) [count(Int64(1)):Int64, count(DISTINCT test.b):Int64]
+          Aggregate: groupBy=[[]], aggr=[[sum(alias2), count(alias1)]] [sum(alias2):Int64;N, count(alias1):Int64]
+            Aggregate: groupBy=[[test.b AS alias1]], aggr=[[count() AS alias2]] [alias1:Utf8, alias2:Int64]
               TableScan: test [a:UInt32, b:Utf8, c:UInt32]
         "
         )

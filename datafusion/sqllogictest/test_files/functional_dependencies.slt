@@ -160,7 +160,7 @@ EXPLAIN SELECT x, cnt FROM (SELECT x, count(*) AS cnt FROM t_uniq GROUP BY x) OR
 logical_plan
 01)Sort: t_uniq.x ASC NULLS LAST
 02)--Projection: t_uniq.x, count(Int64(1)) AS cnt
-03)----Aggregate: groupBy=[[t_uniq.x]], aggr=[[count(Int64(1))]]
+03)----Aggregate: groupBy=[[t_uniq.x]], aggr=[[count() AS count(Int64(1))]]
 04)------TableScan: t_uniq projection=[x]
 
 
@@ -268,14 +268,14 @@ EXPLAIN SELECT g.x, count(*) AS c
 ----
 logical_plan
 01)Projection: g.x, count(Int64(1)) AS count(*) AS c
-02)--Aggregate: groupBy=[[g.x, g.cnt]], aggr=[[count(Int64(1))]]
+02)--Aggregate: groupBy=[[g.x, g.cnt]], aggr=[[count() AS count(Int64(1))]]
 03)----Projection: g.x, g.cnt
 04)------Left Join: CAST(a.z AS Int64) = g.cnt
 05)--------SubqueryAlias: a
 06)----------TableScan: t_probe projection=[z]
 07)--------SubqueryAlias: g
 08)----------Projection: t_null.x, count(Int64(1)) AS count(*) AS cnt
-09)------------Aggregate: groupBy=[[t_null.x]], aggr=[[count(Int64(1))]]
+09)------------Aggregate: groupBy=[[t_null.x]], aggr=[[count() AS count(Int64(1))]]
 10)--------------TableScan: t_null projection=[x]
 
 # 5.2 The ORDER BY variant: `g.x` is NULL for both rows, so the `g.cnt`

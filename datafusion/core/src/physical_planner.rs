@@ -4800,7 +4800,7 @@ mod tests {
 
         assert_contains!(
             aggregate_explain(&logical_plan).await?,
-            "aggr=[count(1) as count(*)]"
+            "aggr=[count() as count(*)]"
         );
 
         Ok(())
@@ -4815,7 +4815,7 @@ mod tests {
 
         assert_contains!(
             aggregate_explain(&logical_plan).await?,
-            "aggr=[count(1) as total_rows]"
+            "aggr=[count() as total_rows]"
         );
 
         Ok(())

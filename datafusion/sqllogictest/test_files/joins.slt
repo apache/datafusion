@@ -1423,16 +1423,16 @@ group by t1_id
 ----
 logical_plan
 01)Projection: count(Int64(1)) AS count(*)
-02)--Aggregate: groupBy=[[join_t1.t1_id]], aggr=[[count(Int64(1))]]
+02)--Aggregate: groupBy=[[join_t1.t1_id]], aggr=[[count() AS count(Int64(1))]]
 03)----Projection: join_t1.t1_id
 04)------Inner Join: join_t1.t1_id = join_t2.t2_id
 05)--------TableScan: join_t1 projection=[t1_id]
 06)--------TableScan: join_t2 projection=[t2_id]
 physical_plan
 01)ProjectionExec: expr=[count(Int64(1))@1 as count(*)]
-02)--AggregateExec: mode=FinalPartitioned, gby=[t1_id@0 as t1_id], aggr=[count(Int64(1))]
+02)--AggregateExec: mode=FinalPartitioned, gby=[t1_id@0 as t1_id], aggr=[count() as count(Int64(1))]
 03)----RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
-04)------AggregateExec: mode=Partial, gby=[t1_id@0 as t1_id], aggr=[count(Int64(1))]
+04)------AggregateExec: mode=Partial, gby=[t1_id@0 as t1_id], aggr=[count() as count(Int64(1))]
 05)--------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(t1_id@0, t2_id@0)], projection=[t1_id@0]
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 07)----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
@@ -4524,7 +4524,7 @@ JOIN my_catalog.my_schema.table_with_many_types AS r ON l.binary_col = r.binary_
 ----
 logical_plan
 01)Projection: count(Int64(1)) AS count(*)
-02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+02)--Aggregate: groupBy=[[]], aggr=[[count() AS count(Int64(1))]]
 03)----Projection:
 04)------Inner Join: l.binary_col = r.binary_col
 05)--------SubqueryAlias: l
@@ -4533,7 +4533,7 @@ logical_plan
 08)----------TableScan: my_catalog.my_schema.table_with_many_types projection=[binary_col]
 physical_plan
 01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
-02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count() as count(Int64(1))]
 03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(binary_col@0, binary_col@0)], projection=[]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
@@ -5766,7 +5766,7 @@ EXPLAIN SELECT count(*) FROM elim_orders LEFT JOIN elim_users ON user_id = id;
 ----
 logical_plan
 01)Projection: count(Int64(1)) AS count(*)
-02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+02)--Aggregate: groupBy=[[]], aggr=[[count() AS count(Int64(1))]]
 03)----TableScan: elim_orders projection=[]
 physical_plan
 01)ProjectionExec: expr=[3 as count(*)]
@@ -5862,16 +5862,16 @@ EXPLAIN SELECT count(*) FROM elim_users LEFT JOIN elim_orders ON elim_users.id =
 ----
 logical_plan
 01)Projection: count(Int64(1)) AS count(*)
-02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+02)--Aggregate: groupBy=[[]], aggr=[[count() AS count(Int64(1))]]
 03)----Projection:
 04)------Left Join: elim_users.id = elim_orders.user_id
 05)--------TableScan: elim_users projection=[id]
 06)--------TableScan: elim_orders projection=[user_id]
 physical_plan
 01)ProjectionExec: expr=[count(Int64(1))@0 as count(*)]
-02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count() as count(Int64(1))]
 03)----CoalescePartitionsExec
-04)------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count() as count(Int64(1))]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 06)----------HashJoinExec: mode=CollectLeft, join_type=Left, on=[(id@0, user_id@0)], projection=[]
 07)------------DataSourceExec: partitions=1, partition_sizes=[1]
@@ -6083,7 +6083,7 @@ EXPLAIN SELECT count(*) FROM elim_users RIGHT JOIN elim_orders ON id = user_id;
 ----
 logical_plan
 01)Projection: count(Int64(1)) AS count(*)
-02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+02)--Aggregate: groupBy=[[]], aggr=[[count() AS count(Int64(1))]]
 03)----TableScan: elim_orders projection=[]
 physical_plan
 01)ProjectionExec: expr=[3 as count(*)]

@@ -1328,7 +1328,7 @@ async fn simple_intersect() -> Result<()> {
     async fn check_wildcard(syntax: &str) -> Result<()> {
         let expected_plan_str = format!(
             "Projection: count(Int64(1)) AS {syntax}\
-        \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
+        \n  Aggregate: groupBy=[[]], aggr=[[count() AS count(Int64(1))]]\
         \n    Projection:\
         \n      LeftSemi Join: data.a = data2.a\
         \n        Aggregate: groupBy=[[data.a]], aggr=[[]]\
@@ -1362,13 +1362,9 @@ async fn simple_intersect() -> Result<()> {
 
     check_wildcard("count(*)").await?;
     check_wildcard("count()").await?;
-    check_constant("count(1)", "count(Int64(1))").await?;
-    check_constant("count(2)", "count(Int64(2))").await?;
-    check_constant(
-        "count(1 + 2)",
-        "count(Int64(3)) AS count(Int64(1) + Int64(2))",
-    )
-    .await?;
+    check_constant("count(1)", "count() AS count(Int64(1))").await?;
+    check_constant("count(2)", "count() AS count(Int64(2))").await?;
+    check_constant("count(1 + 2)", "count() AS count(Int64(1) + Int64(2))").await?;
     Ok(())
 }
 
@@ -1546,7 +1542,7 @@ async fn simple_intersect_table_reuse() -> Result<()> {
     async fn check_wildcard(syntax: &str) -> Result<()> {
         let expected_plan_str = format!(
             "Projection: count(Int64(1)) AS {syntax}\
-        \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
+        \n  Aggregate: groupBy=[[]], aggr=[[count() AS count(Int64(1))]]\
         \n    Projection:\
         \n      LeftSemi Join: left.a = right.a\
         \n        SubqueryAlias: left\
@@ -1584,13 +1580,9 @@ async fn simple_intersect_table_reuse() -> Result<()> {
 
     check_wildcard("count(*)").await?;
     check_wildcard("count()").await?;
-    check_constant("count(1)", "count(Int64(1))").await?;
-    check_constant("count(2)", "count(Int64(2))").await?;
-    check_constant(
-        "count(1 + 2)",
-        "count(Int64(3)) AS count(Int64(1) + Int64(2))",
-    )
-    .await?;
+    check_constant("count(1)", "count() AS count(Int64(1))").await?;
+    check_constant("count(2)", "count() AS count(Int64(2))").await?;
+    check_constant("count(1 + 2)", "count() AS count(Int64(1) + Int64(2))").await?;
 
     Ok(())
 }

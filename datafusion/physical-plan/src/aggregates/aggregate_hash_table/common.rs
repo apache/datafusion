@@ -583,6 +583,8 @@ pub(super) struct RowAlignedAccumulatorArgs {
     pub(super) arguments: Vec<ArrayRef>,
     /// Original row-aligned filter passed through to state conversion.
     pub(super) filter: Option<BooleanArray>,
+    /// Number of rows represented by the arguments.
+    pub(super) num_rows: usize,
 }
 
 /// Evaluated all group by keys and accumulator args.
@@ -813,7 +815,11 @@ impl HashAggregateAccumulator {
             })
             .collect::<Result<_>>()?;
 
-        Ok(RowAlignedAccumulatorArgs { arguments, filter })
+        Ok(RowAlignedAccumulatorArgs {
+            arguments,
+            filter,
+            num_rows: batch.num_rows(),
+        })
     }
 
     fn evaluate_filter(&self, batch: &RecordBatch) -> Result<Option<BooleanArray>> {
@@ -888,8 +894,11 @@ impl HashAggregateAccumulator {
         &self,
         values: &RowAlignedAccumulatorArgs,
     ) -> Result<Vec<ArrayRef>> {
-        self.accumulator
-            .convert_to_state(&values.arguments, values.filter.as_ref())
+        self.accumulator.convert_to_state_with_num_rows(
+            &values.arguments,
+            values.filter.as_ref(),
+            values.num_rows,
+        )
     }
 
     pub(super) fn null_arguments(
