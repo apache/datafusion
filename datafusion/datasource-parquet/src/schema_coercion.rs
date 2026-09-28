@@ -77,7 +77,7 @@ pub fn apply_file_schema_type_coercions(
     file_schema: &Schema,
 ) -> Option<Schema> {
     let fields =
-        coerce_fields_by_name(table_schema.fields(), file_schema.fields(), true)?;
+        coerce_fields_by_name(table_schema.fields(), file_schema.fields(), true, false)?;
     Some(Schema::new_with_metadata(
         fields,
         file_schema.metadata.clone(),
@@ -92,169 +92,12 @@ pub(crate) fn apply_file_schema_type_coercions_with_rle(
     file_schema: &Schema,
     enable_rle_to_dictionary: bool,
 ) -> Option<Schema> {
-    let mut needs_view_transform = false;
-    let mut needs_string_transform = false;
-    let mut needs_nested_transform = false;
-    let mut needs_dict_transform = false;
-
-    // Create a mapping of table field names to their data types for fast lookup
-    // and simultaneously check if we need any transformations
-    let table_fields: HashMap<_, _> = table_schema
-        .fields()
-        .iter()
-        .map(|field| {
-            let data_type = field.data_type();
-            // Check if we need view type transformation
-            if matches!(data_type, &DataType::Utf8View | &DataType::BinaryView) {
-                needs_view_transform = true;
-            }
-            // Check if we need string type transformation
-            if matches!(
-                data_type,
-                &DataType::Utf8 | &DataType::LargeUtf8 | &DataType::Utf8View
-            ) {
-                needs_string_transform = true;
-            }
-            // Nested fields can need transformations even when their parent does not.
-            if matches!(
-                data_type,
-                DataType::Struct(_)
-                    | DataType::List(_)
-                    | DataType::LargeList(_)
-                    | DataType::ListView(_)
-                    | DataType::LargeListView(_)
-                    | DataType::FixedSizeList(_, _)
-                    | DataType::Map(_, _)
-            ) {
-                needs_nested_transform = true;
-            }
-            if enable_rle_to_dictionary
-                && matches!(data_type, &DataType::Dictionary(_, _))
-            {
-                needs_dict_transform = true;
-            }
-
-            (field.name(), data_type)
-        })
-        .collect();
-
-    // Early return if no transformation needed
-    if !needs_view_transform
-        && !needs_string_transform
-        && !needs_nested_transform
-        && !needs_dict_transform
-    {
-        return None;
-    }
-
-    let fields: Vec<Arc<Field>> = file_schema
-        .fields()
-        .iter()
-        .map(|field| {
-            let field_name = field.name();
-            let field_type = field.data_type();
-
-            // Look up the corresponding field type in the table schema
-            if let Some(table_type) = table_fields.get(field_name) {
-                match (table_type, field_type) {
-                    // table schema uses string type, coerce the file schema to use string type
-                    (
-                        &DataType::Utf8,
-                        DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
-                    ) => {
-                        return field_with_new_type(field, DataType::Utf8);
-                    }
-                    // table schema uses large string type, coerce the file schema to use large string type
-                    (
-                        &DataType::LargeUtf8,
-                        DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
-                    ) => {
-                        return field_with_new_type(field, DataType::LargeUtf8);
-                    }
-                    // table schema uses string view type, coerce the file schema to use view type
-                    (
-                        &DataType::Utf8View,
-                        DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
-                    ) => {
-                        return field_with_new_type(field, DataType::Utf8View);
-                    }
-                    // Handle view type conversions
-                    (&DataType::Utf8View, DataType::Utf8 | DataType::LargeUtf8) => {
-                        return field_with_new_type(field, DataType::Utf8View);
-                    }
-                    (&DataType::BinaryView, DataType::Binary | DataType::LargeBinary) => {
-                        return field_with_new_type(field, DataType::BinaryView);
-                    }
-                    // Apply the same coercions to matching fields inside structs.
-                    (DataType::Struct(table_fields), DataType::Struct(file_fields)) => {
-                        if let Some(schema) = apply_file_schema_type_coercions(
-                            &Schema::new(table_fields.clone()),
-                            &Schema::new(file_fields.clone()),
-                        ) {
-                            return field_with_new_type(
-                                field,
-                                DataType::Struct(schema.fields),
-                            );
-                        }
-                    }
-                    // Container children match by position, regardless of their names.
-                    (DataType::List(table_child), DataType::List(file_child))
-                    | (
-                        DataType::LargeList(table_child),
-                        DataType::LargeList(file_child),
-                    )
-                    | (DataType::ListView(table_child), DataType::ListView(file_child))
-                    | (
-                        DataType::LargeListView(table_child),
-                        DataType::LargeListView(file_child),
-                    )
-                    | (
-                        DataType::FixedSizeList(table_child, _),
-                        DataType::FixedSizeList(file_child, _),
-                    )
-                    | (DataType::Map(table_child, _), DataType::Map(file_child, _)) => {
-                        if let Some(schema) = apply_file_schema_type_coercions(
-                            &Schema::new(vec![field_with_new_type(
-                                file_child,
-                                table_child.data_type().clone(),
-                            )]),
-                            &Schema::new(vec![Arc::clone(file_child)]),
-                        ) {
-                            let child = Arc::clone(&schema.fields()[0]);
-                            let new_type = match field_type {
-                                DataType::List(_) => DataType::List(child),
-                                DataType::LargeList(_) => DataType::LargeList(child),
-                                DataType::ListView(_) => DataType::ListView(child),
-                                DataType::LargeListView(_) => {
-                                    DataType::LargeListView(child)
-                                }
-                                DataType::FixedSizeList(_, size) => {
-                                    DataType::FixedSizeList(child, *size)
-                                }
-                                DataType::Map(_, sorted) => DataType::Map(child, *sorted),
-                                _ => return Arc::clone(field),
-                            };
-                            return field_with_new_type(field, new_type);
-                        }
-                    }
-                    (DataType::Dictionary(_, _), _)
-                        if enable_rle_to_dictionary
-                            && can_promote_to_dictionary_type(field_type, table_type) =>
-                    {
-                        return field_with_new_type(field, (*table_type).clone());
-                    }
-                    _ => {}
-                }
-            }
-            // If no transformation is needed, keep the original field
-            Arc::clone(field)
-        })
-        .collect();
-
-    if fields.iter().eq(file_schema.fields().iter()) {
-        return None;
-    }
-
+    let fields = coerce_fields_by_name(
+        table_schema.fields(),
+        file_schema.fields(),
+        true,
+        enable_rle_to_dictionary,
+    )?;
     Some(Schema::new_with_metadata(
         fields,
         file_schema.metadata.clone(),
@@ -270,6 +113,7 @@ fn coerce_fields_by_name(
     table_fields: &Fields,
     file_fields: &Fields,
     binary_to_string: bool,
+    enable_rle: bool,
 ) -> Option<Fields> {
     // Create a mapping of table field names to their data types for fast lookup
     let table_types: HashMap<_, _> = table_fields
@@ -279,7 +123,7 @@ fn coerce_fields_by_name(
 
     coerce_fields(file_fields, |_, field| {
         let table_type = table_types.get(field.name())?;
-        coerce_data_type(table_type, field.data_type(), binary_to_string)
+        coerce_data_type(table_type, field.data_type(), binary_to_string, enable_rle)
             .map(|new_type| field_with_new_type(field, new_type))
     })
 }
@@ -330,6 +174,7 @@ fn coerce_data_type(
     table_type: &DataType,
     file_type: &DataType,
     binary_to_string: bool,
+    enable_rle: bool,
 ) -> Option<DataType> {
     use DataType::*;
     match (table_type, file_type) {
@@ -347,24 +192,28 @@ fn coerce_data_type(
         (BinaryView, Binary | LargeBinary) => Some(BinaryView),
         // Struct children match by name
         (Struct(table_fields), Struct(file_fields)) => {
-            coerce_fields_by_name(table_fields, file_fields, binary_to_string).map(Struct)
+            coerce_fields_by_name(table_fields, file_fields, binary_to_string, enable_rle)
+                .map(Struct)
         }
         // List-like children match by position, regardless of their names.
         // The container kind and FixedSizeList width always come from the file.
         (List(table_child), List(file_child)) => {
-            coerce_child(table_child, file_child, binary_to_string).map(List)
+            coerce_child(table_child, file_child, binary_to_string, enable_rle).map(List)
         }
         (LargeList(table_child), LargeList(file_child)) => {
-            coerce_child(table_child, file_child, binary_to_string).map(LargeList)
+            coerce_child(table_child, file_child, binary_to_string, enable_rle)
+                .map(LargeList)
         }
         (ListView(table_child), ListView(file_child)) => {
-            coerce_child(table_child, file_child, binary_to_string).map(ListView)
+            coerce_child(table_child, file_child, binary_to_string, enable_rle)
+                .map(ListView)
         }
         (LargeListView(table_child), LargeListView(file_child)) => {
-            coerce_child(table_child, file_child, binary_to_string).map(LargeListView)
+            coerce_child(table_child, file_child, binary_to_string, enable_rle)
+                .map(LargeListView)
         }
         (FixedSizeList(table_child, _), FixedSizeList(file_child, size)) => {
-            coerce_child(table_child, file_child, binary_to_string)
+            coerce_child(table_child, file_child, binary_to_string, enable_rle)
                 .map(|child| FixedSizeList(child, *size))
         }
         // Map keys and values match by position: Parquet always names them
@@ -372,6 +221,12 @@ fn coerce_data_type(
         (Map(table_entries, _), Map(file_entries, sorted)) => {
             coerce_map_entries(table_entries, file_entries)
                 .map(|entries| Map(entries, *sorted))
+        }
+        // Promote a plain file column to the dictionary type the table expects.
+        (Dictionary(_, _), _)
+            if enable_rle && can_promote_to_dictionary_type(file_type, table_type) =>
+        {
+            Some(table_type.clone())
         }
         _ => None,
     }
@@ -383,11 +238,13 @@ fn coerce_child(
     table_child: &FieldRef,
     file_child: &FieldRef,
     binary_to_string: bool,
+    enable_rle: bool,
 ) -> Option<FieldRef> {
     coerce_data_type(
         table_child.data_type(),
         file_child.data_type(),
         binary_to_string,
+        enable_rle,
     )
     .map(|new_type| field_with_new_type(file_child, new_type))
 }
@@ -413,7 +270,7 @@ fn coerce_map_entries(
     }
 
     let fields = coerce_fields(file_fields, |idx, file_child| {
-        coerce_child(&table_fields[idx], file_child, false)
+        coerce_child(&table_fields[idx], file_child, false, false)
     })?;
 
     Some(field_with_new_type(file_entries, DataType::Struct(fields)))
