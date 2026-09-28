@@ -117,6 +117,30 @@ async fn unsupported_copy_returns_error() {
 }
 
 #[tokio::test]
+async fn copy_can_be_disabled_independently_from_dml() {
+    let tmpdir = TempDir::new().unwrap();
+    let tmpfile = tmpdir.path().join("foo.parquet");
+
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE test (x int)").await.unwrap();
+
+    let options = SQLOptions::new().with_allow_copy(false);
+    let sql = format!(
+        "COPY (values(1)) TO '{}' STORED AS parquet",
+        tmpfile.to_string_lossy()
+    );
+    let df = ctx.sql_with_options(&sql, options).await;
+    assert_eq!(
+        df.unwrap_err().strip_backtrace(),
+        "Error during planning: COPY not supported"
+    );
+
+    ctx.sql_with_options("INSERT INTO test VALUES (1)", options)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn unsupported_statement_returns_error() {
     let ctx = SessionContext::new();
     ctx.sql("CREATE TABLE test (x int)").await.unwrap();
