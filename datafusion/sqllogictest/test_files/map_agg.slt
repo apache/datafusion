@@ -55,7 +55,7 @@ ORDER BY k
 a {1: 10, 2: 20}
 b {3: 30}
 
-# duplicate group keys: each group still collects its own pairs
+# duplicate group keys: each group keeps only its first pair per key
 query T?
 SELECT k, map_agg(k,v)
 FROM (VALUES
@@ -66,7 +66,7 @@ FROM (VALUES
 GROUP BY k
 ORDER BY k
 ----
-a {a: 1, a: 2}
+a {a: 1}
 b {b: 3}
 
 # ORDER BY inside the aggregate controls the map entry order
@@ -80,6 +80,102 @@ FROM (VALUES
 ----
 {b: 1, c: 2, a: 3}
 
+# ORDER BY DESC reverses the entry order.
+query ?
+SELECT map_agg(k, v ORDER BY v DESC)
+FROM (VALUES ('a', 3), ('b', 1), ('c', 2)) t(k, v)
+----
+{a: 3, c: 2, b: 1}
+
+# Ordering by the key puts the entries in key order.
+query ?
+SELECT map_agg(k, v ORDER BY k)
+FROM (VALUES ('c', 3), ('a', 1), ('b', 2)) t(k, v)
+----
+{a: 1, b: 2, c: 3}
+
+# Multiple ordering expressions are applied left to right.
+query ?
+SELECT map_agg(k, v ORDER BY g, v DESC)
+FROM (VALUES
+    ('a', 1, 'x'),
+    ('b', 5, 'x'),
+    ('c', 3, 'y')
+) t(k, v, g)
+----
+{b: 5, a: 1, c: 3}
+
+# The ordering may reference a column that is neither the key nor the value.
+query ?
+SELECT map_agg(k, v ORDER BY o)
+FROM (VALUES ('a', 10, 3), ('b', 20, 1), ('c', 30, 2)) t(k, v, o)
+----
+{b: 20, c: 30, a: 10}
+
+# With an ORDER BY the pairs are sorted before de-duplication, so the pair that
+# sorts first wins -- unlike the unordered accumulator, which keeps the first
+# input row.
+query ?
+SELECT map_agg(k, v ORDER BY v)
+FROM (VALUES ('a', 20), ('b', 5), ('a', 10)) t(k, v)
+----
+{b: 5, a: 10}
+
+# The default null ordering is NULLS LAST for ascending order, so NULL ordering
+# values sort to the end.
+query ?
+SELECT map_agg(k, v ORDER BY v)
+FROM (VALUES ('a', 1), ('b', NULL), ('c', 2)) t(k, v)
+----
+{a: 1, c: 2, b: NULL}
+
+# NULLS FIRST moves them to the front.
+query ?
+SELECT map_agg(k, v ORDER BY v NULLS FIRST)
+FROM (VALUES ('a', 1), ('b', NULL), ('c', 2)) t(k, v)
+----
+{b: NULL, a: 1, c: 2}
+
+# NULL keys cannot be represented in an Arrow map, so the ordered accumulator
+# skips the whole pair instead of failing like the unordered one.
+query ?
+SELECT map_agg(k, v ORDER BY v) FROM (VALUES ('a', 1), (NULL, 2)) t(k, v)
+----
+{a: 1}
+
+# Empty input produces a NULL map even when an ORDER BY is present.
+query ?
+SELECT map_agg(k, v ORDER BY v) FROM (VALUES ('a', 1)) t(k, v) WHERE false
+----
+NULL
+
+# The ORDER BY is applied independently within each group.
+query T?
+SELECT g, map_agg(k, v ORDER BY v DESC)
+FROM (VALUES
+    ('a', 'p', 1),
+    ('a', 'q', 3),
+    ('b', 'r', 2)
+) t(g, k, v)
+GROUP BY g
+ORDER BY g
+----
+a {q: 3, p: 1}
+b {r: 2}
+
+# Partial states from every partition are merged on the ordering, so the entry
+# order is deterministic under the default parallelism -- in contrast to the
+# unordered accumulator, whose entry order depends on which partial state
+# finishes first.
+query ?
+SELECT map_agg(k, v ORDER BY v)
+FROM (VALUES
+    ('a', 1), ('b', 2), ('c', 3), ('d', 4),
+    ('e', 5), ('f', 6), ('g', 7), ('h', 8)
+) t(k, v)
+----
+{a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8}
+
 # Multiple batches: with batch_size = 1 every row arrives in its own batch.
 # A single partition keeps the input order, so the entries stay in row order.
 statement ok
@@ -92,6 +188,14 @@ query ?
 SELECT map_agg(v, m) FROM (VALUES (1, 10), (2, NULL), (3, 30)) t(v, m)
 ----
 {1: 10, 2: NULL, 3: 30}
+
+# The ordered accumulator keeps its ordering when every row arrives in its own
+# batch.
+query ?
+SELECT map_agg(k, v ORDER BY v)
+FROM (VALUES ('a', 3), ('b', 1), ('c', 2)) t(k, v)
+----
+{b: 1, c: 2, a: 3}
 
 # The SLT runner sets target_partitions to 4 instead of using the default, so
 # set it back explicitly rather than resetting.

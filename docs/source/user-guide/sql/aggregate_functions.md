@@ -374,10 +374,10 @@ last_value(expression [ORDER BY expression])
 
 ### `map_agg`
 
-Returns a map created from the key and value expression elements. For each row, the key expression becomes a map key and the value expression becomes the corresponding map value.
+Returns a map created from the key and value expression elements. For each row, the key expression becomes a map key and the value expression becomes the corresponding map value. Entries appear in input order, or in the order given by the optional `ORDER BY`. When a key repeats, only the first entry for that key is kept.
 
 ```sql
-map_agg(key, value)
+map_agg(key, value [ORDER BY expression])
 ```
 
 #### Arguments
