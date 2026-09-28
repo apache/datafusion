@@ -719,7 +719,7 @@ impl From<StreamType> for SendableRecordBatchStream {
             StreamType::FinalHash(stream) => stream.into_stream(),
             StreamType::SingleHash(stream) => Box::pin(stream),
             StreamType::OrderedPartialAggregate(stream) => stream.into_stream(),
-            StreamType::OrderedFinalAggregate(stream) => Box::pin(stream),
+            StreamType::OrderedFinalAggregate(stream) => stream.into_stream(),
             StreamType::OrderedSingleAggregate(stream) => Box::pin(stream),
             StreamType::GroupedHash(stream) => Box::pin(stream),
             StreamType::GroupedPriorityQueue(stream) => Box::pin(stream),
@@ -5526,6 +5526,83 @@ mod tests {
         | 3 |   | 30.0        |
         +---+---+-------------+
         ");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unsorted_contiguous_groups_use_final_emission() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("time_bin", DataType::Int64, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+        // Two sorted logical runs are emitted as batches in one DataFusion
+        // partition. Every distinct grouping tuple occupies one contiguous range,
+        // but tuple order resets at the batch boundary, so (key, time_bin) is not
+        // globally sorted.
+        let input_batches = vec![
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 1, 2, 2])),
+                    Arc::new(Int64Array::from(vec![20, 20, 20, 20])),
+                    Arc::new(Int64Array::from(vec![10, 20, 30, 40])),
+                ],
+            )?,
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 1, 2, 2])),
+                    Arc::new(Int64Array::from(vec![0, 0, 0, 0])),
+                    Arc::new(Int64Array::from(vec![50, 60, 70, 80])),
+                ],
+            )?,
+        ];
+        let group_by = PhysicalGroupBy::new_single(vec![
+            (col("key", &schema)?, "key".to_string()),
+            (col("time_bin", &schema)?, "time_bin".to_string()),
+        ]);
+        let aggr_expr = Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("SUM(value)")
+                .build()?,
+        );
+        let input: Arc<dyn ExecutionPlan> =
+            TestMemoryExec::try_new_exec(&[input_batches], Arc::clone(&schema), None)?;
+        assert_eq!(input.output_partitioning().partition_count(), 1);
+
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Single,
+            group_by,
+            vec![aggr_expr],
+            vec![None],
+            input,
+            schema,
+        )?;
+
+        assert_eq!(aggregate.input_order_mode(), &InputOrderMode::Linear);
+        // This captures the behavior before #24438. When the source can declare
+        // `(key, time_bin)` group-contiguous, the corresponding case can use
+        // `EmissionType::Incremental`.
+        assert_eq!(aggregate.cache().emission_type, EmissionType::Final);
+
+        let task_ctx = new_migrated_hash_ctx(1024);
+        let stream = aggregate.execute_typed(0, &task_ctx)?;
+        assert!(matches!(stream, StreamType::SingleHash(_)));
+        let stream: SendableRecordBatchStream = stream.into();
+        let output = collect(stream).await?;
+        assert_snapshot!(batches_to_sort_string(&output), @r"
++-----+----------+------------+
+| key | time_bin | SUM(value) |
++-----+----------+------------+
+| 1   | 0        | 110        |
+| 1   | 20       | 30         |
+| 2   | 0        | 150        |
+| 2   | 20       | 70         |
++-----+----------+------------+
+");
 
         Ok(())
     }
