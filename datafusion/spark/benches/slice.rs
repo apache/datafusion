@@ -23,7 +23,8 @@ use arrow::datatypes::{DataType, Field, Int64Type};
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
+use datafusion_expr::type_coercion::functions::fields_with_udf;
+use datafusion_expr::{ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs};
 use datafusion_spark::function::array::slice;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -115,6 +116,19 @@ fn array_slice_benchmark(
             <Arc<Field>>::from(Field::new(format!("arg_{idx}"), arg.data_type(), true))
         })
         .collect::<Vec<_>>();
+    // Apply planner coercion (including ListView to List) before timing the UDF.
+    let arg_fields = fields_with_udf(&arg_fields, array_slice.as_ref()).unwrap();
+    let args = args
+        .iter()
+        .zip(&arg_fields)
+        .map(|(arg, field)| arg.cast_to(field.data_type(), None).unwrap())
+        .collect::<Vec<_>>();
+    let return_field = array_slice
+        .return_field_from_args(ReturnFieldArgs {
+            arg_fields: &arg_fields,
+            scalar_arguments: &vec![None; arg_fields.len()],
+        })
+        .unwrap();
     c.bench_function(name, |b| {
         b.iter(|| {
             black_box(
@@ -123,8 +137,7 @@ fn array_slice_benchmark(
                         args: args.clone(),
                         arg_fields: arg_fields.clone(),
                         number_rows: size,
-                        return_field: Field::new_list_field(args[0].data_type(), true)
-                            .into(),
+                        return_field: Arc::clone(&return_field),
                         config_options: Arc::new(ConfigOptions::default()),
                     })
                     .unwrap(),
