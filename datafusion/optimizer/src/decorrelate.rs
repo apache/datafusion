@@ -20,6 +20,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use crate::push_down_filter::lr_is_preserved;
 use crate::simplify_expressions::ExprSimplifier;
 
 use datafusion_common::tree_node::{
@@ -29,6 +30,7 @@ use datafusion_common::{
     Column, DFSchemaRef, HashMap, Result, ScalarValue, assert_or_internal_err, plan_err,
 };
 use datafusion_expr::expr::{Alias, GroupingSet};
+use datafusion_expr::logical_plan::Join;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
@@ -140,6 +142,17 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             // Subquery's outer references belong to a different decorrelation
             // level and must not be pulled up into the current scope.
             LogicalPlan::Subquery(_) => {
+                Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+            }
+            // A correlated filter can only move above a join from a side whose
+            // rows the join preserves. Below the side an outer join fills with
+            // NULLs, the filter decides which rows are unmatched, so pulling it
+            // above the join changes the result. The side a semi, anti or mark
+            // join does not output cannot give its columns to a pulled up
+            // filter either.
+            LogicalPlan::Join(ref join) if !correlated_inputs_are_preserved(join) => {
+                // the unsupported case
+                self.can_pull_up = false;
                 Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
             }
             LogicalPlan::Union(_) | LogicalPlan::Sort(_) | LogicalPlan::Extension(_) => {
@@ -533,6 +546,36 @@ impl PullUpCorrelatedExpr {
         }
         Ok(missing_exprs)
     }
+}
+
+/// Whether every input of `join` that holds outer references is a side whose
+/// rows the join preserves, so a correlated filter below it can be pulled above
+/// the join without changing the result.
+fn correlated_inputs_are_preserved(join: &Join) -> bool {
+    let (left_preserved, right_preserved) = lr_is_preserved(join.join_type);
+    (left_preserved || !holds_outer_reference(&join.left))
+        && (right_preserved || !holds_outer_reference(&join.right))
+}
+
+/// Whether `plan` or any of its inputs holds an outer reference of the scope
+/// being decorrelated. Like [`PullUpCorrelatedExpr`], this does not descend into
+/// a [`LogicalPlan::Subquery`], whose outer references belong to a nested
+/// scope, such as the right side of a `LATERAL` join that is not decorrelated
+/// yet.
+fn holds_outer_reference(plan: &LogicalPlan) -> bool {
+    let mut found = false;
+    plan.apply(|node| {
+        Ok(match node {
+            LogicalPlan::Subquery(_) => TreeNodeRecursion::Jump,
+            _ if node.contains_outer_reference() => {
+                found = true;
+                TreeNodeRecursion::Stop
+            }
+            _ => TreeNodeRecursion::Continue,
+        })
+    })
+    .expect("apply closure is infallible");
+    found
 }
 
 fn can_pullup_over_aggregation(expr: &Expr) -> bool {
