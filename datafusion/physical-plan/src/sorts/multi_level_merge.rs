@@ -1036,13 +1036,6 @@ mod tests {
         ExecutionPlanMetricsSet, SpillMetrics,
     };
 
-    type SpillMergeRun = (
-        SendableRecordBatchStream,
-        Arc<dyn MemoryPool>,
-        Arc<RuntimeEnv>,
-        SchemaRef,
-    );
-
     fn test_schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, false)]))
     }
@@ -1653,35 +1646,30 @@ mod tests {
     #[tokio::test]
     async fn spill_merge_output_construction_uses_the_real_pool() -> Result<()> {
         let output_budget = size_of::<i64>();
-
-        let run_once = |pool_extra: usize| -> Result<SpillMergeRun> {
-            let env = Arc::new(RuntimeEnv::default());
-            let schema = test_schema();
-            let spill_manager = build_spill_manager(&env, &schema);
-            let first = make_sorted_spill_file(&spill_manager, &schema, vec![1]);
-            let second = make_sorted_spill_file(&spill_manager, &schema, vec![2]);
-            let read_reservation = [&first, &second]
-                .into_iter()
-                .map(|spill| {
-                    get_reserved_bytes_for_record_batch_size(
-                        spill.max_record_batch_memory,
-                        spill.max_record_batch_memory,
-                    ) * 2
-                })
-                .sum::<usize>();
-            let pool: Arc<dyn MemoryPool> =
-                Arc::new(GreedyMemoryPool::new(read_reservation + pool_extra));
-            let builder = build_merge_builder(
-                spill_manager,
-                Arc::clone(&schema),
-                vec![first, second],
-                &pool,
-                8192,
-            );
-            Ok((builder.create_spillable_merge_stream(), pool, env, schema))
-        };
-
-        let (stream, pool, env, schema) = run_once(output_budget)?;
+        let env = Arc::new(RuntimeEnv::default());
+        let schema = test_schema();
+        let spill_manager = build_spill_manager(&env, &schema);
+        let first = make_sorted_spill_file(&spill_manager, &schema, vec![1]);
+        let second = make_sorted_spill_file(&spill_manager, &schema, vec![2]);
+        let read_reservation = [&first, &second]
+            .into_iter()
+            .map(|spill| {
+                get_reserved_bytes_for_record_batch_size(
+                    spill.max_record_batch_memory,
+                    spill.max_record_batch_memory,
+                ) * 2
+            })
+            .sum::<usize>();
+        let pool: Arc<dyn MemoryPool> =
+            Arc::new(GreedyMemoryPool::new(read_reservation + output_budget));
+        let builder = build_merge_builder(
+            spill_manager,
+            Arc::clone(&schema),
+            vec![first, second],
+            &pool,
+            8192,
+        );
+        let stream = builder.create_spillable_merge_stream();
         let batches: Vec<RecordBatch> = stream.try_collect().await?;
         let merged = concat_batches(&schema, &batches)?;
         let values = merged.column(0).as_primitive::<Int64Type>();
