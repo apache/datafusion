@@ -1468,7 +1468,7 @@ mod tests {
                         Arc::new(ArrowSchemaConverter::new().convert(&file_schema)?);
                     let table_schema = Arc::new(Schema::new(vec![Field::new(
                         "col_0",
-                        DataType::Timestamp(table_unit.clone(), timezone.clone()),
+                        DataType::Timestamp(table_unit, timezone.clone()),
                         true,
                     )]));
                     let groups = [(1900, false), (1000, true)]
