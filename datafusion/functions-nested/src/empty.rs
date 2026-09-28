@@ -43,14 +43,14 @@ make_udf_expr_and_func!(
 
 #[user_doc(
     doc_section(label = "Array Functions"),
-    description = "Returns 1 for an empty array or 0 for a non-empty array.",
+    description = "Returns true for an empty array or false for a non-empty array.",
     syntax_example = "empty(array)",
     sql_example = r#"```sql
 > select empty([1]);
 +------------------+
 | empty(List([1])) |
 +------------------+
-| 0                |
+| false            |
 +------------------+
 ```"#,
     argument(

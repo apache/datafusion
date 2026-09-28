@@ -200,15 +200,15 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
         );
 
         let group_ordering = GroupOrdering::try_new(input_order_mode)?;
-        let group_schema = agg.group_by.group_schema(input_schema)?;
+        let group_schema = agg.group_by().group_schema(input_schema)?;
         let group_values = new_group_values(group_schema, &group_ordering)?;
         let aggregate_arguments = aggregate_expressions(
-            &agg.aggr_expr,
+            agg.aggr_expr(),
             aggregate_mode,
-            agg.group_by.num_group_exprs(),
+            agg.group_by().num_group_exprs(),
         )?;
         let accumulators = agg
-            .aggr_expr
+            .aggr_expr()
             .iter()
             .zip(aggregate_arguments)
             .zip(filters)
@@ -235,7 +235,7 @@ impl<AggrMode> OrderedAggregateTable<AggrMode> {
             aggregate_accumulator_metrics: metrics.accumulator,
             aggregate_submetrics: metrics.submetrics,
             buffer: OrderedAggregateTableBuffer {
-                group_by: Arc::clone(&agg.group_by),
+                group_by: Arc::clone(agg.group_by()),
                 group_ordering,
                 group_values,
                 group_indices: vec![],
