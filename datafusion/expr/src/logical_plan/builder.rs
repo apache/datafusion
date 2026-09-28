@@ -45,8 +45,8 @@ use crate::utils::{
 };
 use crate::{
     BinaryExpr, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
-    RecursiveQuery, Statement, TableProviderFilterPushDown, TableSource, WriteOp, and,
-    binary_expr, lit,
+    RecursiveQuery, Statement, TableProviderFilterPushDown, TableScan, TableSource,
+    WriteOp, and, binary_expr, lit,
 };
 
 use super::dml::InsertOp;
@@ -417,7 +417,10 @@ impl LogicalPlanBuilder {
         table_source: Arc<dyn TableSource>,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
-        Self::scan_with_filters(table_name, table_source, projection, vec![])
+        let table_scan = TableScanBuilder::new(table_name, table_source)
+            .with_projection(projection)
+            .build()?;
+        Self::table_scan(table_scan)
     }
 
     /// Create a [CopyTo] for copying the contents of this builder to the specified file(s)
@@ -485,23 +488,22 @@ impl LogicalPlanBuilder {
     }
 
     /// Convert a table provider into a builder with a TableScan
+    #[deprecated(since = "56.0.0", note = "Use table_scan([`TableScan`]) instead")]
     pub fn scan_with_filters(
         table_name: impl Into<TableReference>,
         table_source: Arc<dyn TableSource>,
         projection: Option<Vec<usize>>,
         filters: Vec<Expr>,
     ) -> Result<Self> {
-        Self::scan_with_filters_inner(
-            table_name,
-            table_source,
-            projection,
-            filters,
-            None,
-            None,
-        )
+        let table_scan = TableScanBuilder::new(table_name, table_source)
+            .with_projection(projection)
+            .with_filters(filters)
+            .build()?;
+        Self::table_scan(table_scan)
     }
 
     /// Convert a table provider into a builder with a TableScan with filter and fetch
+    #[deprecated(since = "56.0.0", note = "Use table_scan([`TableScan`]) instead")]
     pub fn scan_with_filters_fetch(
         table_name: impl Into<TableReference>,
         table_source: Arc<dyn TableSource>,
@@ -509,50 +511,16 @@ impl LogicalPlanBuilder {
         filters: Vec<Expr>,
         fetch: Option<usize>,
     ) -> Result<Self> {
-        Self::scan_with_filters_inner(
-            table_name,
-            table_source,
-            projection,
-            filters,
-            fetch,
-            None,
-        )
-    }
-
-    /// Convert a table provider into a builder with a TableScan with filter, fetch and skip
-    pub fn scan_with_filters_fetch_skip(
-        table_name: impl Into<TableReference>,
-        table_source: Arc<dyn TableSource>,
-        projection: Option<Vec<usize>>,
-        filters: Vec<Expr>,
-        fetch: Option<usize>,
-        skip: Option<usize>,
-    ) -> Result<Self> {
-        Self::scan_with_filters_inner(
-            table_name,
-            table_source,
-            projection,
-            filters,
-            fetch,
-            skip,
-        )
-    }
-
-    fn scan_with_filters_inner(
-        table_name: impl Into<TableReference>,
-        table_source: Arc<dyn TableSource>,
-        projection: Option<Vec<usize>>,
-        filters: Vec<Expr>,
-        fetch: Option<usize>,
-        skip: Option<usize>,
-    ) -> Result<Self> {
         let table_scan = TableScanBuilder::new(table_name, table_source)
             .with_projection(projection)
             .with_filters(filters)
             .with_fetch(fetch)
-            .skip(skip)
             .build()?;
+        Self::table_scan(table_scan)
+    }
 
+    /// Convert a [`TableScan`] into a builder
+    pub fn table_scan(table_scan: TableScan) -> Result<Self> {
         // Inline TableScan
         if table_scan.filters.is_empty()
             && let Some(p) = table_scan.source.get_logical_plan()
@@ -2241,11 +2209,7 @@ pub fn table_scan_with_filters(
     projection: Option<Vec<usize>>,
     filters: Vec<Expr>,
 ) -> Result<LogicalPlanBuilder> {
-    let table_source = table_source(table_schema);
-    let name = name
-        .map(|n| n.into())
-        .unwrap_or_else(|| TableReference::bare(UNNAMED_TABLE));
-    LogicalPlanBuilder::scan_with_filters(name, table_source, projection, filters)
+    table_scan_with_filter_and_fetch(name, table_schema, projection, filters, None)
 }
 
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema,
@@ -2258,7 +2222,7 @@ pub fn table_scan_with_filter_and_fetch(
     filters: Vec<Expr>,
     fetch: Option<usize>,
 ) -> Result<LogicalPlanBuilder> {
-    table_scan_with_filter_and_fetch_and_offset(
+    table_scan_with_filter_and_fetch_and_skip(
         name,
         table_schema,
         projection,
@@ -2271,26 +2235,25 @@ pub fn table_scan_with_filter_and_fetch(
 /// Create a LogicalPlanBuilder representing a scan of a table with the provided name and schema,
 /// filters, inlined fetch and offset.
 /// This is mostly used for testing and documentation.
-pub fn table_scan_with_filter_and_fetch_and_offset(
+pub fn table_scan_with_filter_and_fetch_and_skip(
     name: Option<impl Into<TableReference>>,
     table_schema: &Schema,
     projection: Option<Vec<usize>>,
     filters: Vec<Expr>,
     fetch: Option<usize>,
-    offset: Option<usize>,
+    skip: Option<usize>,
 ) -> Result<LogicalPlanBuilder> {
     let table_source = table_source(table_schema);
     let name = name
         .map(|n| n.into())
         .unwrap_or_else(|| TableReference::bare(UNNAMED_TABLE));
-    LogicalPlanBuilder::scan_with_filters_fetch_skip(
-        name,
-        table_source,
-        projection,
-        filters,
-        fetch,
-        offset,
-    )
+    let table_scan = TableScanBuilder::new(name, table_source)
+        .with_projection(projection)
+        .with_filters(filters)
+        .with_fetch(fetch)
+        .with_skip(skip)
+        .build()?;
+    LogicalPlanBuilder::table_scan(table_scan)
 }
 
 pub fn table_source(table_schema: &Schema) -> Arc<dyn TableSource> {

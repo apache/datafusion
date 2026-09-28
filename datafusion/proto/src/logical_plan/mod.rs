@@ -696,15 +696,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     projection = Some(column_indices);
                 }
 
-                LogicalPlanBuilder::scan_with_filters_fetch_skip(
-                    table_name,
-                    provider_as_source(Arc::new(provider)),
-                    projection,
-                    filters,
-                    scan.fetch.map(|f| f as usize),
-                    scan.skip.map(|o| o as usize),
-                )?
-                .build()
+                let table_scan = TableScanBuilder::new(table_name, provider_as_source(Arc::new(provider)))
+                    .with_projection(projection)
+                    .with_filters(filters)
+                    .with_fetch(scan.fetch.map(|f| f as usize))
+                    .with_skip(scan.skip.map(|o| o as usize))
+                    .build()?;
+                LogicalPlanBuilder::table_scan(table_scan)?.build()
             }
             LogicalPlanType::CustomScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
@@ -732,15 +730,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ctx,
                 )?;
 
-                LogicalPlanBuilder::scan_with_filters_fetch_skip(
-                    table_name,
-                    provider_as_source(provider),
-                    projection,
-                    filters,
-                    scan.fetch.map(|f| f as usize),
-                    scan.skip.map(|o| o as usize),
-                )?
-                .build()
+                let table_scan =
+                    TableScanBuilder::new(table_name, provider_as_source(provider))
+                        .with_projection(projection)
+                        .with_filters(filters)
+                        .with_fetch(scan.fetch.map(|f| f as usize))
+                        .with_skip(scan.skip.map(|o| o as usize))
+                        .build()?;
+                LogicalPlanBuilder::table_scan(table_scan)?.build()
             }
             LogicalPlanType::Sort(sort) => {
                 let input: LogicalPlan =
@@ -1214,15 +1211,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let table_name =
                     from_table_reference(scan.table_name.as_ref(), "ViewScan")?;
 
-                LogicalPlanBuilder::scan_with_filters_fetch_skip(
-                    table_name,
-                    provider_as_source(Arc::new(provider)),
-                    projection,
-                    vec![],
-                    scan.fetch.map(|f| f as usize),
-                    scan.skip.map(|o| o as usize),
-                )?
-                .build()
+                let table_scan = TableScanBuilder::new(table_name, provider_as_source(Arc::new(provider)))
+                    .with_projection(projection)
+                    .with_fetch(scan.fetch.map(|f| f as usize))
+                    .with_skip(scan.skip.map(|o| o as usize))
+                    .build()?;
+                LogicalPlanBuilder::table_scan(table_scan)?.build()
             }
             LogicalPlanType::Prepare(prepare) => {
                 let input: LogicalPlan =
@@ -1359,13 +1353,12 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 let provider = Arc::new(EmptyTable::new(Arc::clone(&schema)));
 
-                LogicalPlanBuilder::scan_with_filters(
-                    table_name,
-                    provider_as_source(provider),
-                    projection,
-                    filters,
-                )?
-                .build()
+                let table_scan =
+                    TableScanBuilder::new(table_name, provider_as_source(provider))
+                        .with_projection(projection)
+                        .with_filters(filters)
+                        .build()?;
+                LogicalPlanBuilder::table_scan(table_scan)?.build()
             }
             LogicalPlanType::Dml(dml_node) => {
                 let table_name =

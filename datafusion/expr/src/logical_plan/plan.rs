@@ -3291,7 +3291,7 @@ impl TableScanBuilder {
     }
 
     /// Set the number of rows to skip.
-    pub fn skip(mut self, skip: Option<usize>) -> Self {
+    pub fn with_skip(mut self, skip: Option<usize>) -> Self {
         self.skip = skip;
         self
     }

@@ -773,7 +773,8 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::builder::table_source;
     use datafusion_expr::{
-        and, binary_expr, col, cube, grouping_set, out_ref_col, rollup, table_scan,
+        TableScanBuilder, and, binary_expr, col, cube, grouping_set, out_ref_col, rollup,
+        table_scan,
     };
 
     macro_rules! assert_optimized_plan_equal {
@@ -2531,14 +2532,11 @@ mod tests {
             DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
             true,
         )]));
-        let subquery = LogicalPlanBuilder::scan_with_filters(
-            "sq",
-            subquery_table_source,
-            None,
-            vec![],
-        )?
-        .unnest_column("arr")?
-        .build()?;
+        let subquery_table_scan =
+            TableScanBuilder::new("sq", subquery_table_source).build()?;
+        let subquery = LogicalPlanBuilder::table_scan(subquery_table_scan)?
+            .unnest_column("arr")?
+            .build()?;
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(exists(Arc::new(subquery)))?
@@ -2566,15 +2564,12 @@ mod tests {
             DataType::List(Arc::new(Field::new_list_field(DataType::UInt32, true))),
             true,
         )]));
-        let subquery = LogicalPlanBuilder::scan_with_filters(
-            "sq",
-            subquery_table_source,
-            None,
-            vec![],
-        )?
-        .unnest_column("a")?
-        .filter(col("a").eq(out_ref_col(DataType::UInt32, "test.b")))?
-        .build()?;
+        let subquery_table_scan =
+            TableScanBuilder::new("sq", subquery_table_source).build()?;
+        let subquery = LogicalPlanBuilder::table_scan(subquery_table_scan)?
+            .unnest_column("a")?
+            .filter(col("a").eq(out_ref_col(DataType::UInt32, "test.b")))?
+            .build()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(exists(Arc::new(subquery)))?
             .project(vec![col("test.b")])?
