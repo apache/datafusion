@@ -2455,6 +2455,50 @@ mod tests {
         );
     }
 
+    /// An optional conjunct is not exact: in the `adaptive` mode its gate can
+    /// skip it, in the `pruning_only` mode the scan does not evaluate it, and
+    /// the scan drops it when the `RowFilter` cannot evaluate it. Thus it
+    /// must not give equivalences, in all modes.
+    #[test]
+    fn exact_filter_excludes_optional_conjuncts_in_all_modes() {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_common::config::{ConfigOptions, OptionalFilterMode};
+        use datafusion_expr::{col, lit as logical_lit};
+        use datafusion_physical_expr::expressions::OptionalFilterPhysicalExpr;
+        use datafusion_physical_expr::planner::logical2physical;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]));
+        let required = logical2physical(&col("a").eq(logical_lit(1i64)), &schema);
+        let optional: Arc<dyn PhysicalExpr> = Arc::new(OptionalFilterPhysicalExpr::new(
+            logical2physical(&col("b").eq(logical_lit(2i64)), &schema),
+        ));
+        for mode in [
+            OptionalFilterMode::Always,
+            OptionalFilterMode::Adaptive,
+            OptionalFilterMode::PruningOnly,
+        ] {
+            let mut config = ConfigOptions::default();
+            config.execution.parquet.pushdown_filters = true;
+            config.execution.optional_filter_mode = mode;
+            let prop = ParquetSource::new(Arc::clone(&schema))
+                .try_pushdown_filters(
+                    vec![Arc::clone(&required), Arc::clone(&optional)],
+                    &config,
+                )
+                .unwrap();
+            let source = prop.updated_node.unwrap();
+            let source = source.downcast_ref::<ParquetSource>().unwrap();
+            assert_eq!(
+                source.exact_filter().unwrap().to_string(),
+                "a@0 = 1",
+                "mode {mode}"
+            );
+        }
+    }
+
     #[test]
     fn try_pushdown_filters_reads_optional_filter_config() {
         use arrow::datatypes::{DataType, Field, Schema};
