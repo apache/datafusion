@@ -55,7 +55,7 @@ use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
 use datafusion_physical_expr::optional_filter_gate::OptionalFilterGateConfig;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::{
-    debug_assert_optional_on_root_chain, split_conjunction,
+    debug_assert_optional_on_root_chain, is_optional_filter, split_conjunction,
 };
 use datafusion_physical_expr::{EquivalenceProperties, conjunction};
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
@@ -773,6 +773,10 @@ impl FileSource for ParquetSource {
     /// A pruning-only predicate (see
     /// [`FileSource::try_pushdown_pruning_filters`]) is used only to prune:
     /// a `FilterExec` above the scan applies it. Thus it is not exact.
+    ///
+    /// Optional conjuncts (see `split_optional`) are not exact either: the
+    /// scan does not evaluate them after the decode, and it drops them when
+    /// the `RowFilter` cannot evaluate them.
     fn exact_filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
         if self.pruning_only_predicate {
             return None;
@@ -781,6 +785,7 @@ impl FileSource for ParquetSource {
         let pushable_schema = self.table_schema.schema_without_virtual_columns();
         let exact = split_conjunction(predicate)
             .into_iter()
+            .filter(|expr| !is_optional_filter(expr))
             .filter(|expr| can_expr_be_pushed_down_with_schemas(expr, pushable_schema))
             .cloned()
             .collect::<Vec<_>>();
@@ -2364,6 +2369,52 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    /// An optional conjunct is not exact: the scan does not evaluate it
+    /// after the decode, and drops it when the `RowFilter` cannot evaluate
+    /// it. Thus it must not give equivalences.
+    #[test]
+    fn exact_filter_excludes_optional_conjuncts() {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::{col, lit as logical_lit};
+        use datafusion_physical_expr::expressions::OptionalFilterPhysicalExpr;
+        use datafusion_physical_expr::planner::logical2physical;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]));
+        let required = logical2physical(&col("a").eq(logical_lit(1i64)), &schema);
+        let optional: Arc<dyn PhysicalExpr> = Arc::new(OptionalFilterPhysicalExpr::new(
+            logical2physical(&col("b").eq(logical_lit(2i64)), &schema),
+        ));
+        for pushdown_filters in [false, true] {
+            let mut config = ConfigOptions::default();
+            config.execution.parquet.pushdown_filters = pushdown_filters;
+            let prop = ParquetSource::new(Arc::clone(&schema))
+                .try_pushdown_filters(
+                    vec![Arc::clone(&required), Arc::clone(&optional)],
+                    &config,
+                )
+                .unwrap();
+            let source = prop.updated_node.unwrap();
+            let source = source.downcast_ref::<ParquetSource>().unwrap();
+            assert_eq!(
+                source.exact_filter().unwrap().to_string(),
+                "a@0 = 1",
+                "pushdown_filters = {pushdown_filters}"
+            );
+        }
+
+        // A predicate with only optional conjuncts is not exact.
+        let prop = ParquetSource::new(Arc::clone(&schema))
+            .try_pushdown_filters(vec![Arc::clone(&optional)], &ConfigOptions::default())
+            .unwrap();
+        let source = prop.updated_node.unwrap();
+        let source = source.downcast_ref::<ParquetSource>().unwrap();
+        assert!(source.exact_filter().is_none());
     }
 
     #[test]
