@@ -774,9 +774,11 @@ impl FileSource for ParquetSource {
     /// [`FileSource::try_pushdown_pruning_filters`]) is used only to prune:
     /// a `FilterExec` above the scan applies it. Thus it is not exact.
     ///
-    /// Optional conjuncts (see `split_optional`) are not exact either: the
-    /// scan does not evaluate them after the decode, and it drops them when
-    /// the `RowFilter` cannot evaluate them.
+    /// Optional conjuncts (see `split_optional`) are not exact either: in
+    /// the `adaptive` mode their gate can skip them (also in the post-scan
+    /// filter of the adaptive filter placement, and the placement can skip
+    /// them), in the `pruning_only` mode the scan does not evaluate them, and
+    /// the scan drops them when the `RowFilter` cannot evaluate them.
     fn exact_filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
         if self.pruning_only_predicate {
             return None;
