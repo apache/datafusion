@@ -1030,7 +1030,7 @@ impl AggregateExec {
         let group_by = group_by.into();
         let filter_expr = filter_expr.into();
 
-        if group_by.is_empty() && aggr_expr.is_empty() {
+        if group_by.is_true_no_grouping() && aggr_expr.is_empty() {
             return internal_err!(
                 "Grouping expressions and aggregate expressions cannot both be empty"
             );
