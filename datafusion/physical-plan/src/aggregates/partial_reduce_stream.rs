@@ -30,7 +30,7 @@ use super::AggregateExec;
 use super::aggregate_hash_table::{AggregateHashTable, PartialReduceMarker};
 use crate::metrics::{BaselineMetrics, Count, MetricBuilder, RecordOutput, SpillMetrics};
 use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
-use crate::{InputOrderMode, RecordBatchStream, SendableRecordBatchStream};
+use crate::{InputOrderMode, SendableRecordBatchStream};
 
 /// Hash aggregation can combine multiple partial stages before final
 /// evaluation. This stream implements the partial-reduce stage.
@@ -167,13 +167,14 @@ impl PartialReduceHashAggregateStream {
             debug_assert!(hash_table.is_building());
             let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
 
-            let mut last_state = HandleInputResult::ProcessNext;
             while let Some(batch) = self.input.next().await.transpose()? {
                 let timer = elapsed_compute.timer();
 
-                last_state = self.handle_input_batch(batch, &mut hash_table)?;
+                let state = self.handle_input_batch(&batch, &mut hash_table)?;
+                // Avoid holding on the batch
+                drop(batch);
 
-                match last_state {
+                match state {
                     HandleInputResult::ProcessNext => {}
                     HandleInputResult::OOM => {
                         let materialized_group_states = hash_table.take_state_batch()?.ok_or_else(|| {
@@ -210,11 +211,11 @@ impl PartialReduceHashAggregateStream {
     /// Aggregate partial state batch into the hash table
     fn handle_input_batch(
         &mut self,
-        batch: RecordBatch,
+        batch: &RecordBatch,
         hash_table: &mut AggregateHashTable<PartialReduceMarker>,
     ) -> Result<HandleInputResult> {
         debug_assert!(hash_table.is_building());
-        hash_table.aggregate_batch(&batch)?;
+        hash_table.aggregate_batch(batch)?;
 
         let resize_result = self.reservation.try_resize(hash_table.memory_size());
         match resize_result {
