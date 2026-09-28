@@ -295,6 +295,6 @@ impl AggregateSpill {
             None,
             reservation,
         )?;
-        Ok(Box::pin(replay))
+        Ok(replay.into_stream())
     }
 }
