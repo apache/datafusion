@@ -1681,8 +1681,8 @@ impl PartitionedTopKRank {
     /// rows through the rank classifier into its dedicated heap and
     /// ties Vec.
     pub(crate) fn insert_batch(&mut self, batch: &RecordBatch) -> Result<()> {
-        let baseline = self.metrics.baseline.clone();
-        let _timer = baseline.elapsed_compute().timer();
+        let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
+        let _timer = elapsed_compute.timer();
 
         let num_rows = batch.num_rows();
         if num_rows == 0 {
@@ -2178,8 +2178,8 @@ impl PartitionedTopKDenseRank {
     /// by distinct ob value and merge each bucket into the partition
     /// state as one [`GroupEntry`].
     pub(crate) fn insert_batch(&mut self, batch: &RecordBatch) -> Result<()> {
-        let baseline = self.metrics.baseline.clone();
-        let _timer = baseline.elapsed_compute().timer();
+        let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
+        let _timer = elapsed_compute.timer();
 
         let num_rows = batch.num_rows();
         if num_rows == 0 {
