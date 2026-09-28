@@ -28,7 +28,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, internal_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_expr::{AggregateMetrics, EmitTo, GroupsAccumulator};
+use datafusion_expr::{AggregateMetrics, EmitTo, GroupSelection, GroupsAccumulator};
 use datafusion_physical_expr::GroupsAccumulatorAdapter;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use log::debug;
@@ -414,6 +414,13 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     /// Returns the number of distinct groups accumulated so far.
     pub(in crate::aggregates) fn building_group_count(&self) -> usize {
         self.state.building().group_values.len()
+    }
+
+    /// Returns the current group keys in group-id order without draining state.
+    pub(in crate::aggregates) fn building_group_keys(&mut self) -> Result<Vec<ArrayRef>> {
+        let values = &mut self.state.building_mut().group_values;
+        let group_count = values.len();
+        values.values_preserving(GroupSelection::all(group_count))
     }
 
     /// Takes every intermediate aggregate state and resets the table so it can

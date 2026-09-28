@@ -1,0 +1,8 @@
+name Q06_near_unique_long_string
+group aggregate_frozen
+
+expect_plan mode=FinalPartitioned
+
+run
+SELECT concat('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-', CAST(value % 2200000 AS VARCHAR)), COUNT(*)
+FROM range(2400000) GROUP BY 1;

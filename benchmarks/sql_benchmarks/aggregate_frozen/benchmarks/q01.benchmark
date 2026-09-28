@@ -1,0 +1,11 @@
+name Q01_hot_integer
+group aggregate_frozen
+
+expect_plan mode=FinalPartitioned
+
+run
+-- 80% of rows share 1,000 hot keys; remaining rows have unique keys.
+SELECT k, COUNT(*) FROM (
+  SELECT CASE WHEN value % 10 < 8 THEN value % 1000 ELSE value END AS k
+  FROM range(2400000)
+) GROUP BY k;

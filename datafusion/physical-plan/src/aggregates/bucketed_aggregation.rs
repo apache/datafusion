@@ -24,6 +24,7 @@ use std::sync::Arc;
 use arrow::compute::BatchCoalescer;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::instant::Instant;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::{TryEmitter, async_try_stream};
@@ -66,6 +67,8 @@ pub(super) struct BucketedAggregation {
     bucket_splits: metrics::Count,
     /// Number of times the rows of a bucket were replaced by their aggregated state
     bucket_compactions: metrics::Count,
+    /// CPU time merging state after input has reached the buckets.
+    bucket_merge_time: metrics::Time,
 }
 
 /// What [`BucketedAggregation::output_stream`] works with while it runs.
@@ -92,6 +95,8 @@ impl BucketedAggregation {
             MetricBuilder::new(&agg.metrics).counter("bucket_splits", partition);
         let bucket_compactions =
             MetricBuilder::new(&agg.metrics).counter("bucket_compactions", partition);
+        let bucket_merge_time =
+            MetricBuilder::new(&agg.metrics).subset_time("bucket_merge_time", partition);
         Self {
             threshold,
             agg,
@@ -102,6 +107,7 @@ impl BucketedAggregation {
             spill_manager,
             bucket_splits,
             bucket_compactions,
+            bucket_merge_time,
         }
     }
 
@@ -314,7 +320,9 @@ impl BucketedAggregation {
                         continue;
                     }
 
+                    let started = Instant::now();
                     hash_table.aggregate_batch(&batch)?;
+                    self.bucket_merge_time.add_elapsed(started);
                     table_rows += batch.num_rows();
 
                     let can_split = next_level < MAX_BUCKET_LEVELS;

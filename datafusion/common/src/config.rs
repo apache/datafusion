@@ -1141,6 +1141,12 @@ config_namespace! {
         /// Set to 0 to disable.
         pub hash_aggregate_bucket_threshold: usize, default = 0
 
+        /// Experimental: retain the final aggregation's threshold-sized table
+        /// for keys already seen, staging only misses in hash buckets. After
+        /// 65,536 post-freeze rows, bypass its probe if fewer than 25% hit.
+        /// Requires `hash_aggregate_bucket_threshold` to be nonzero.
+        pub hash_aggregate_bucket_adaptive: bool, default = false
+
         /// Should DataFusion use row number estimates at the input to decide
         /// whether increasing parallelism is beneficial or not. By default,
         /// only exact row numbers (not estimates) are used for this decision.

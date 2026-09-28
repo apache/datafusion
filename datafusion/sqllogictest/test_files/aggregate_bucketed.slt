@@ -185,6 +185,35 @@ select k, c, s from (select v as k, count(*) c, sum(v) s from t group by v) orde
 199998 1 199998
 
 statement ok
+set datafusion.execution.hash_aggregate_bucket_adaptive = true;
+
+# frozen integer groups merge aggregate state
+query IIIII
+select count(*), sum(c), sum(s), min(mn), max(mx) from (select v % 10007 as k, count(*) c, sum(v) s, min(v) mn, max(v) mx from t group by k);
+----
+10007 200000 20000100000 1 200000
+
+# long string view keys exercise the frozen lookup
+query II
+select count(*), sum(c) from (select arrow_cast(concat('a-long-enough-string-view-key-', cast(v % 9973 as varchar)), 'Utf8View') as k, count(*) c from t group by k);
+----
+9973 200000
+
+# nulls and mixed key columns keep their grouping semantics
+query II
+select count(*), sum(c) from (select case when v % 11 = 0 then null else v % 5003 end as k, count(*) c from t group by k);
+----
+5004 200000
+
+query III
+select count(*), sum(c), sum(s) from (select v % 101 as k1, concat('k', cast(v % 103 as varchar)) as k2, v % 7 = 0 as k3, count(*) c, sum(v) s from t group by k1, k2, k3);
+----
+20806 200000 20000100000
+
+statement ok
+reset datafusion.execution.hash_aggregate_bucket_adaptive;
+
+statement ok
 reset datafusion.execution.hash_aggregate_bucket_threshold;
 
 statement ok

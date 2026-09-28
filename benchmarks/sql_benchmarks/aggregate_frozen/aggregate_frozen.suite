@@ -1,0 +1,7 @@
+description = "Synthetic final aggregation workloads for the frozen-table bucket experiment"
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[[examples]]
+command = "DATAFUSION_EXECUTION_HASH_AGGREGATE_BUCKET_THRESHOLD=4000 cargo run -p datafusion-benchmarks --release --bin benchmark_runner -- aggregate_frozen --partitions 12 --iterations 3"
+description = "Run the original bucket path; use threshold 0 for no bucketing or set DATAFUSION_EXECUTION_HASH_AGGREGATE_BUCKET_ADAPTIVE=true for the experiment."

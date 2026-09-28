@@ -20,15 +20,20 @@
 //! See comments in [`PartialHashAggregateStream`] and [`FinalHashAggregateStream`]
 //! for details.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::mem::size_of;
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
+use arrow::array::{ArrayRef, PrimitiveArray};
+use arrow::compute::take_arrays;
+use arrow::datatypes::{DataType, SchemaRef, UInt32Type};
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use arrow::row::{RowConverter, SortField};
 use datafusion_common::hash_utils::{RandomState, create_hashes};
+use datafusion_common::instant::Instant;
 use datafusion_common::{
     DataFusionError, Result, assert_ne_or_internal_err, internal_datafusion_err,
+    internal_err,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
@@ -208,6 +213,159 @@ pub(crate) struct FinalHashAggregateStream {
     spill_context: Option<Box<AggregateSpill>>,
     /// `None` unless `hash_aggregate_bucket_threshold` is set and applies.
     bucketing: Option<Arc<BucketedAggregation>>,
+    /// Enables the frozen-table experiment for this execution.
+    adaptive_buckets: bool,
+    adaptive_metrics: AdaptiveBucketMetrics,
+}
+
+struct AdaptiveBucketMetrics {
+    probes: metrics::Count,
+    hits: metrics::Count,
+    misses: metrics::Count,
+    bypass_rows: metrics::Count,
+    staged_rows: metrics::Count,
+    staged_bytes: metrics::Count,
+    routing_time: metrics::Time,
+    aggregation_time: metrics::Time,
+    tail_time: metrics::Time,
+}
+
+impl AdaptiveBucketMetrics {
+    fn new(agg: &AggregateExec, partition: usize) -> Self {
+        let counter = |name| MetricBuilder::new(&agg.metrics).counter(name, partition);
+        let timer = |name| MetricBuilder::new(&agg.metrics).subset_time(name, partition);
+        Self {
+            probes: counter("frozen_probes"),
+            hits: counter("frozen_hits"),
+            misses: counter("frozen_misses"),
+            bypass_rows: counter("frozen_bypass_rows"),
+            staged_rows: counter("bucket_staged_rows"),
+            staged_bytes: counter("bucket_staged_bytes"),
+            routing_time: timer("bucket_routing_time"),
+            aggregation_time: timer("bucket_aggregation_time"),
+            tail_time: timer("bucket_tail_time"),
+        }
+    }
+}
+
+/// Keys present when a final aggregation first enters bucketing.
+/// The table retains their aggregate state; this index only classifies rows.
+struct FrozenGroups {
+    converter: RowConverter,
+    keys: HashSet<Vec<u8>>,
+    group_columns: usize,
+    key_bytes: usize,
+    sampled_rows: usize,
+    sampled_hits: usize,
+    bypass: bool,
+}
+
+impl FrozenGroups {
+    fn supports(keys: &[ArrayRef]) -> bool {
+        !keys.is_empty()
+            && keys.iter().all(|array| {
+                matches!(
+                    array.data_type(),
+                    DataType::Boolean
+                        | DataType::Int8
+                        | DataType::Int16
+                        | DataType::Int32
+                        | DataType::Int64
+                        | DataType::UInt8
+                        | DataType::UInt16
+                        | DataType::UInt32
+                        | DataType::UInt64
+                        | DataType::Utf8
+                        | DataType::LargeUtf8
+                        | DataType::Utf8View
+                        | DataType::Binary
+                        | DataType::LargeBinary
+                        | DataType::BinaryView
+                        | DataType::Date32
+                        | DataType::Date64
+                )
+            })
+    }
+
+    fn new(keys: &[ArrayRef]) -> Result<Self> {
+        let fields = keys
+            .iter()
+            .map(|array| SortField::new(array.data_type().clone()))
+            .collect::<Vec<_>>();
+        let converter = RowConverter::new(fields)?;
+        let rows = converter.convert_columns(keys)?;
+        let mut stored = HashSet::with_capacity(rows.num_rows());
+        let mut key_bytes = 0;
+        for row in rows.iter() {
+            key_bytes += row.data().len();
+            stored.insert(row.data().to_vec());
+        }
+        Ok(Self {
+            converter,
+            keys: stored,
+            group_columns: keys.len(),
+            key_bytes,
+            sampled_rows: 0,
+            sampled_hits: 0,
+            bypass: false,
+        })
+    }
+
+    fn memory_size(&self) -> usize {
+        self.key_bytes + self.keys.capacity() * (size_of::<Vec<u8>>() + 8)
+    }
+
+    fn partition(&mut self, batch: &RecordBatch) -> Result<(Vec<u32>, Vec<u32>, usize)> {
+        let mut hits = Vec::new();
+        let mut misses = Vec::new();
+        if self.bypass {
+            misses.extend(0..batch.num_rows() as u32);
+            return Ok((hits, misses, 0));
+        }
+        let rows = self
+            .converter
+            .convert_columns(&batch.columns()[..self.group_columns])?;
+        let mut probes = 0;
+        for (index, row) in rows.iter().enumerate() {
+            let hit = self.keys.contains(row.data());
+            probes += 1;
+            if hit {
+                hits.push(index as u32);
+            } else {
+                misses.push(index as u32);
+            }
+            if self.sampled_rows < 65_536 {
+                self.sampled_rows += 1;
+                self.sampled_hits += usize::from(hit);
+                if self.sampled_rows == 65_536 {
+                    self.bypass = self.sampled_hits * 4 < self.sampled_rows;
+                }
+            }
+            if self.bypass {
+                misses.extend((index + 1..batch.num_rows()).map(|i| i as u32));
+                break;
+            }
+        }
+        Ok((hits, misses, probes))
+    }
+}
+
+fn take_state_rows(
+    batch: &RecordBatch,
+    indices: Vec<u32>,
+) -> Result<Option<RecordBatch>> {
+    if indices.is_empty() {
+        return Ok(None);
+    }
+    let row_count = indices.len();
+    let indices: PrimitiveArray<UInt32Type> = indices.into();
+    let columns = take_arrays(batch.columns(), &indices, None)?;
+    let options = RecordBatchOptions::new().with_row_count(Some(row_count));
+    Ok(Some(RecordBatch::try_new_with_options(
+        batch.schema(),
+        columns,
+        &options,
+    )?))
 }
 
 #[derive(PartialEq)]
@@ -825,6 +983,11 @@ impl FinalHashAggregateStream {
             .execution
             .hash_aggregate_bucket_threshold;
         // A soft limit stops reading input early, which bucketing cannot do.
+        let adaptive_buckets = context
+            .session_config()
+            .options()
+            .execution
+            .hash_aggregate_bucket_adaptive;
         let bucketing = (bucket_threshold > 0
             && group_values_soft_limit.is_none()
             && BucketedAggregation::supports_state(
@@ -854,6 +1017,8 @@ impl FinalHashAggregateStream {
             hash_table: Some(hash_table),
             spill_context,
             bucketing,
+            adaptive_buckets,
+            adaptive_metrics: AdaptiveBucketMetrics::new(agg, partition),
         })
     }
 
@@ -878,6 +1043,7 @@ impl FinalHashAggregateStream {
             let buckets = self
                 .consume_input(&mut hash_table, &mut spill_context)
                 .await?;
+            let input_eof = Instant::now();
             self.close_input();
 
             if let (Some(buckets), Some(bucketing)) = (buckets, self.bucketing.clone()) {
@@ -895,6 +1061,7 @@ impl FinalHashAggregateStream {
                 while let Some(batch) = output.next().await.transpose()? {
                     emitter.emit(batch).await;
                 }
+                self.adaptive_metrics.tail_time.add_elapsed(input_eof);
                 return Ok(());
             }
 
@@ -958,6 +1125,7 @@ impl FinalHashAggregateStream {
     ) -> Result<Option<FinalBuckets>> {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let mut buckets: Option<FinalBuckets> = None;
+        let mut frozen: Option<FrozenGroups> = None;
         let mut compaction_table = None;
         // Rows aggregated by `hash_table`
         let mut table_rows = 0usize;
@@ -968,9 +1136,70 @@ impl FinalHashAggregateStream {
             if let (Some(buckets), Some(bucketing)) =
                 (buckets.as_mut(), self.bucketing.as_ref())
             {
-                buckets.route(&batch)?;
+                if let Some(frozen) = frozen.as_mut() {
+                    let started = Instant::now();
+                    let (hits, misses, probes) = frozen.partition(&batch)?;
+                    self.adaptive_metrics.routing_time.add_elapsed(started);
+                    self.adaptive_metrics.probes.add(probes);
+                    self.adaptive_metrics.hits.add(hits.len());
+                    self.adaptive_metrics.misses.add(probes - hits.len());
+                    self.adaptive_metrics
+                        .bypass_rows
+                        .add(batch.num_rows() - probes);
+                    if let Some(hit_batch) = take_state_rows(&batch, hits)? {
+                        let started = Instant::now();
+                        let group_count = hash_table.building_group_count();
+                        hash_table.aggregate_batch(&hit_batch)?;
+                        if hash_table.building_group_count() != group_count {
+                            return internal_err!(
+                                "Frozen aggregate table inserted a new group while merging hits"
+                            );
+                        }
+                        self.adaptive_metrics.aggregation_time.add_elapsed(started);
+                    }
+                    if let Some(miss_batch) = take_state_rows(&batch, misses)? {
+                        self.adaptive_metrics.staged_rows.add(miss_batch.num_rows());
+                        self.adaptive_metrics
+                            .staged_bytes
+                            .add(miss_batch.get_array_memory_size());
+                        let started = Instant::now();
+                        buckets.route(&miss_batch)?;
+                        self.adaptive_metrics.routing_time.add_elapsed(started);
+                    }
+                } else {
+                    self.adaptive_metrics.staged_rows.add(batch.num_rows());
+                    self.adaptive_metrics
+                        .staged_bytes
+                        .add(batch.get_array_memory_size());
+                    let started = Instant::now();
+                    buckets.route(&batch)?;
+                    self.adaptive_metrics.routing_time.add_elapsed(started);
+                }
+                let started = Instant::now();
                 bucketing.compact(buckets, &mut compaction_table)?;
-                bucketing.reserve(&self.reservation, 0, buckets)?;
+                self.adaptive_metrics.aggregation_time.add_elapsed(started);
+                let retained_bytes = frozen
+                    .as_ref()
+                    .map_or(0, |frozen| hash_table.memory_size() + frozen.memory_size());
+                if let Err(error) =
+                    bucketing.reserve(&self.reservation, retained_bytes, buckets)
+                {
+                    match error {
+                        DataFusionError::ResourcesExhausted(_) if frozen.is_some() => {
+                            if let Some(state) = hash_table.take_state_batch()? {
+                                buckets.route(&state)?;
+                            }
+                            drop(frozen.take());
+                            bucketing.compact(buckets, &mut compaction_table)?;
+                            bucketing.reserve(
+                                &self.reservation,
+                                hash_table.memory_size(),
+                                buckets,
+                            )?;
+                        }
+                        error => return Err(error),
+                    }
+                }
                 continue;
             }
 
@@ -999,13 +1228,41 @@ impl FinalHashAggregateStream {
             {
                 let kept =
                     hash_table.building_group_count() as f64 / table_rows.max(1) as f64;
-                let mut new_buckets =
-                    bucketing.split(0, hash_table.take_state_batch()?, kept)?;
-                bucketing.reserve(
+                let candidate = if self.adaptive_buckets {
+                    let keys = hash_table.building_group_keys()?;
+                    FrozenGroups::supports(&keys)
+                        .then(|| FrozenGroups::new(&keys))
+                        .transpose()?
+                } else {
+                    None
+                };
+                let mut new_buckets = if candidate.is_some() {
+                    bucketing.split(0, None, kept)?
+                } else {
+                    bucketing.split(0, hash_table.take_state_batch()?, kept)?
+                };
+                let retained_bytes = hash_table.memory_size()
+                    + candidate.as_ref().map_or(0, FrozenGroups::memory_size);
+                match bucketing.reserve(
                     &self.reservation,
-                    hash_table.memory_size(),
+                    retained_bytes,
                     &mut new_buckets,
-                )?;
+                ) {
+                    Ok(()) => frozen = candidate,
+                    Err(DataFusionError::ResourcesExhausted(_))
+                        if candidate.is_some() =>
+                    {
+                        if let Some(state) = hash_table.take_state_batch()? {
+                            new_buckets.route(&state)?;
+                        }
+                        bucketing.reserve(
+                            &self.reservation,
+                            hash_table.memory_size(),
+                            &mut new_buckets,
+                        )?;
+                    }
+                    Err(error) => return Err(error),
+                }
                 buckets = Some(new_buckets);
                 continue;
             }
@@ -1062,6 +1319,20 @@ impl FinalHashAggregateStream {
             }
         }
 
+        if frozen.is_some() {
+            let buckets = buckets.as_mut().expect("frozen table has buckets");
+            let bucketing = self.bucketing.as_ref().expect("frozen table has bucketing");
+            if let Some(state) = hash_table.take_state_batch()? {
+                let started = Instant::now();
+                buckets.route(&state)?;
+                self.adaptive_metrics.routing_time.add_elapsed(started);
+                let started = Instant::now();
+                bucketing.compact(buckets, &mut compaction_table)?;
+                self.adaptive_metrics.aggregation_time.add_elapsed(started);
+            }
+            drop(frozen.take());
+            bucketing.reserve(&self.reservation, hash_table.memory_size(), buckets)?;
+        }
         Ok(buckets)
     }
 
@@ -1490,6 +1761,24 @@ mod tests {
         bucket_threshold: usize,
         memory_limit: Option<usize>,
     ) -> Result<(Vec<(i32, i64)>, usize, usize)> {
+        let (rows, splits, spills, _, _) = run_final_hash_aggregate_adaptive(
+            num_groups,
+            num_partitions,
+            bucket_threshold,
+            memory_limit,
+            false,
+        )
+        .await?;
+        Ok((rows, splits, spills))
+    }
+
+    async fn run_final_hash_aggregate_adaptive(
+        num_groups: usize,
+        num_partitions: usize,
+        bucket_threshold: usize,
+        memory_limit: Option<usize>,
+        adaptive: bool,
+    ) -> Result<(Vec<(i32, i64)>, usize, usize, usize, usize)> {
         use datafusion_common::ScalarValue;
 
         let batch_size = 1024;
@@ -1513,6 +1802,10 @@ mod tests {
             .set(
                 "datafusion.execution.hash_aggregate_bucket_threshold",
                 &ScalarValue::UInt64(Some(bucket_threshold as u64)),
+            )
+            .set(
+                "datafusion.execution.hash_aggregate_bucket_adaptive",
+                &ScalarValue::Boolean(Some(adaptive)),
             );
         let task_ctx = Arc::new(task_ctx.with_session_config(session_config));
 
@@ -1599,7 +1892,34 @@ mod tests {
                     .unwrap_or(0),
             )
         });
-        Ok((rows, bucket_splits, metrics.spill_count().unwrap_or(0)))
+        let metric_count = |name| {
+            metrics
+                .sum_by_name(name)
+                .map(|value| value.as_usize())
+                .unwrap_or(0)
+        };
+        if std::env::var_os("DATAFUSION_BUCKET_DIAGNOSTICS").is_some() {
+            println!(
+                "adaptive={adaptive} groups={num_groups} repeats={num_partitions} splits={bucket_splits} probes={} hits={} misses={} bypass={} staged_rows={} staged_bytes={} routing_ns={} aggregation_ns={} bucket_merge_ns={} tail_ns={}",
+                metric_count("frozen_probes"),
+                metric_count("frozen_hits"),
+                metric_count("frozen_misses"),
+                metric_count("frozen_bypass_rows"),
+                metric_count("bucket_staged_rows"),
+                metric_count("bucket_staged_bytes"),
+                metric_count("bucket_routing_time"),
+                metric_count("bucket_aggregation_time"),
+                metric_count("bucket_merge_time"),
+                metric_count("bucket_tail_time"),
+            );
+        }
+        Ok((
+            rows,
+            bucket_splits,
+            metrics.spill_count().unwrap_or(0),
+            metric_count("frozen_hits"),
+            metric_count("frozen_bypass_rows"),
+        ))
     }
 
     /// Runs the partial hash aggregation of `SELECT group_col, COUNT(value_col)
@@ -1773,6 +2093,50 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn final_hash_aggregate_frozen_table_merges_bypassed_keys() -> Result<()> {
+        let (expected, _, _) = run_final_hash_aggregate(100_000, 2, 0, None).await?;
+        let (rows, splits, spills, hits, bypass_rows) =
+            run_final_hash_aggregate_adaptive(100_000, 2, 4_000, None, true).await?;
+        assert_eq!(rows, expected);
+        assert!(splits > 0);
+        assert_eq!(spills, 0);
+        assert!(bypass_rows > 0, "low hit rate bypasses the frozen table");
+        assert!(hits < 65_536, "the initial sample should have few hits");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn final_hash_aggregate_frozen_table_merges_hits_and_misses() -> Result<()> {
+        let (expected, _, _) = run_final_hash_aggregate(10_000, 20, 0, None).await?;
+        let (rows, splits, _, hits, _) =
+            run_final_hash_aggregate_adaptive(10_000, 20, 4_000, None, true).await?;
+        assert_eq!(rows, expected);
+        assert!(splits > 0);
+        assert!(hits > 0, "frozen keys were merged during input");
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "diagnostic comparison; run with DATAFUSION_BUCKET_DIAGNOSTICS=1 --nocapture"]
+    async fn final_hash_aggregate_frozen_table_diagnostics() -> Result<()> {
+        for (groups, repeats) in [(10_000, 20), (100_000, 6), (200_000, 1)] {
+            for (threshold, adaptive) in [(0, false), (4_000, false), (4_000, true)] {
+                let started = Instant::now();
+                let (rows, _, _, _, _) = run_final_hash_aggregate_adaptive(
+                    groups, repeats, threshold, None, adaptive,
+                )
+                .await?;
+                println!(
+                    "diagnostic groups={groups} repeats={repeats} threshold={threshold} adaptive={adaptive} total_ms={:.2} output_groups={}",
+                    started.elapsed().as_secs_f64() * 1000.0,
+                    rows.len(),
+                );
+            }
+        }
+        Ok(())
+    }
+
     #[test]
     fn starts_buckets_early_only_when_groups_do_not_repeat() {
         // One row per group: a quarter of the threshold is enough
@@ -1818,6 +2182,23 @@ mod tests {
         assert_eq!(rows, expected);
         assert!(splits >= 1);
         assert!(spills > 0, "buckets were spilled");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn final_hash_aggregate_frozen_table_spills_buckets() -> Result<()> {
+        let (expected, _, _) = run_final_hash_aggregate(200_000, 3, 0, None).await?;
+        let (rows, splits, spills, _, _) = run_final_hash_aggregate_adaptive(
+            200_000,
+            3,
+            10_000,
+            Some(3 * 1024 * 1024),
+            true,
+        )
+        .await?;
+        assert_eq!(rows, expected);
+        assert!(splits > 0);
+        assert!(spills > 0);
         Ok(())
     }
 

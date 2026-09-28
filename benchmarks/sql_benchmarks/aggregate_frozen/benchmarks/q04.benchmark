@@ -1,0 +1,11 @@
+name Q04_hot_long_string
+group aggregate_frozen
+
+expect_plan mode=FinalPartitioned
+
+run
+SELECT concat('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-', CAST(k AS VARCHAR)), COUNT(*)
+FROM (
+  SELECT CASE WHEN value % 10 < 8 THEN value % 1000 ELSE value END AS k
+  FROM range(2400000)
+) GROUP BY 1;

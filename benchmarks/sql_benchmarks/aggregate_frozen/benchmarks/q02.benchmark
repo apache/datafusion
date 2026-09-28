@@ -1,0 +1,8 @@
+name Q02_uniform_integer
+group aggregate_frozen
+
+expect_plan mode=FinalPartitioned
+
+run
+-- Five rows per key, evenly spread over the input.
+SELECT value % 480000 AS k, COUNT(*) FROM range(2400000) GROUP BY k;

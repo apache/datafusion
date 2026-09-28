@@ -1,0 +1,8 @@
+name Q03_near_unique_integer
+group aggregate_frozen
+
+expect_plan mode=FinalPartitioned
+
+run
+-- Most keys occur once; the first 50,000 repeat at the end.
+SELECT value % 2200000 AS k, COUNT(*) FROM range(2400000) GROUP BY k;
