@@ -3012,22 +3012,23 @@ fn deduplicate_view_array_buffers<T: ByteViewType>(
         return array.clone();
     }
 
-    // Use the raw buffer address as the deduplication key. Casting to usize is the
+    // Use the raw buffer address and length as the deduplication key. Casting to usize is the
     // idiomatic way to use pointer values as HashMap keys on stable Rust.
     let mut unique_buffers: Vec<arrow::buffer::Buffer> =
         Vec::with_capacity(data_buffers.len());
-    let mut pointer_map: HashMap<usize, u32> = HashMap::with_capacity(data_buffers.len());
+    let mut pointer_map: HashMap<(usize, usize), u32> =
+        HashMap::with_capacity(data_buffers.len());
     let mut index_remap: Vec<u32> = Vec::with_capacity(data_buffers.len());
     let mut has_duplicates = false;
 
     for buf in data_buffers.iter() {
-        let addr = buf.as_ptr() as usize;
-        if let Some(&new_idx) = pointer_map.get(&addr) {
+        let key = (buf.as_ptr() as usize, buf.len());
+        if let Some(&new_idx) = pointer_map.get(&key) {
             index_remap.push(new_idx);
             has_duplicates = true;
         } else {
             let new_idx = unique_buffers.len() as u32;
-            pointer_map.insert(addr, new_idx);
+            pointer_map.insert(key, new_idx);
             unique_buffers.push(buf.clone());
             index_remap.push(new_idx);
         }
@@ -7739,12 +7740,18 @@ mod tests {
         let schema =
             Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8View, true)]));
 
-        let batch1 =
-            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(base_array.clone())])?;
-        let batch2 =
-            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(base_array.clone())])?;
-        let batch3 =
-            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(base_array.clone())])?;
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(base_array.clone())],
+        )?;
+        let batch2 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(base_array.clone())],
+        )?;
+        let batch3 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(base_array.clone())],
+        )?;
 
         // Before deduplication, concat_batches puts 3 duplicate buffer references in data_buffers
         let concatenated_raw =
@@ -7778,6 +7785,185 @@ mod tests {
             .unwrap();
         assert_eq!(view_arr.data_buffers().len(), 1);
         assert_eq!(batch.num_rows(), 6);
+        Ok(())
+    }
+
+    #[test]
+    fn concat_build_batches_deduplicates_binary_view_buffers() -> Result<()> {
+        use arrow::array::BinaryViewBuilder;
+
+        let mut builder = BinaryViewBuilder::new();
+        builder.append_value(b"this is a long binary that exceeds inline size 12");
+        builder.append_value(b"another long binary that exceeds inline size 12");
+        let base_array: BinaryViewArray = builder.finish();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "b",
+            DataType::BinaryView,
+            true,
+        )]));
+
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(base_array.clone())],
+        )?;
+        let batch2 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(base_array.clone())],
+        )?;
+        let batch3 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(base_array.clone())],
+        )?;
+
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let batches = vec![batch1, batch2, batch3];
+        let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+
+        let batch = concat_build_batches(
+            &schema,
+            batches,
+            false,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )?;
+
+        let view_arr = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<BinaryViewArray>()
+            .unwrap();
+        assert_eq!(view_arr.data_buffers().len(), 1);
+        assert_eq!(batch.num_rows(), 6);
+        Ok(())
+    }
+
+    /// Regression test: two arrays backed by Buffer objects that share the same
+    /// base pointer but have *different* declared lengths (produced via
+    /// `Buffer::slice_with_length`) must NOT be collapsed into one buffer entry,
+    /// because the longer one covers bytes beyond the shorter one's range.
+    /// Values that live in the longer buffer must survive concatenation intact.
+    #[test]
+    fn concat_build_batches_deduplicates_slices_regression() -> Result<()> {
+        use arrow::array::StringViewBuilder;
+        use arrow::buffer::Buffer;
+
+        // Build a two-element array so the builder allocates a single contiguous
+        // data buffer large enough to hold both non-inline strings.
+        let mut builder = StringViewBuilder::new();
+        builder.append_value("this is a long string that exceeds inline size 12");
+        builder.append_value("another long string that exceeds inline size 12");
+        let base_array: StringViewArray = builder.finish();
+
+        // Pull out the single data buffer Arrow produced.
+        let data_buffers = base_array.data_buffers();
+        assert_eq!(data_buffers.len(), 1, "expected one backing data buffer");
+        let full_buf: &Buffer = &data_buffers[0];
+        let full_len = full_buf.len();
+
+        // Slice the same allocation to two different declared lengths.  Both
+        // handles start at offset 0, so `buf.as_ptr()` is identical, but
+        // `buf.len()` differs.  The deduplication key is (ptr, len), so these
+        // are distinct keys — the longer buffer must not be discarded.
+        //
+        // Derive the split point from the first view's actual byte range so
+        // the short buffer provably covers only the first string.
+        let view0 = ByteView::from(base_array.views()[0]);
+        let first_string_end = view0.offset as usize + view0.length as usize;
+        assert!(
+            first_string_end < full_len,
+            "second string must extend beyond the split point"
+        );
+        let short_buf = full_buf.slice_with_length(0, first_string_end);
+        let long_buf = full_buf.clone(); // full length — covers both strings
+
+        // Borrow the raw 128-bit view words from `base_array`.  Each word
+        // encodes (length, prefix, buffer_index, offset); buffer_index is 0 in
+        // both because `base_array` has a single data buffer.
+        let views = base_array.views();
+        let view0_raw: u128 = views[0]; // first string — lives within short_buf
+        let view1_raw: u128 = views[1]; // second string — lives in long_buf only
+
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8View, true)]));
+
+        // Array 1: backed only by `short_buf` (shorter declared length)
+        let arr1: StringViewArray = {
+            let views_buf = ScalarBuffer::from(vec![view0_raw]);
+            // SAFETY: view0 was taken verbatim from `base_array` which is valid,
+            // and `short_buf` is sized to exactly cover the first string's byte
+            // range (offset 0..first_string_end), so all offsets referenced by
+            // view0 are in bounds.
+            unsafe {
+                GenericByteViewArray::new_unchecked(
+                    views_buf,
+                    vec![short_buf].into(),
+                    None,
+                )
+            }
+        };
+
+        // Array 2: backed only by `long_buf` (full declared length)
+        let arr2: StringViewArray = {
+            let views_buf = ScalarBuffer::from(vec![view1_raw]);
+            // SAFETY: view1 was taken verbatim from `base_array` which is valid,
+            // and `long_buf` is the full allocation, so all byte ranges are covered.
+            unsafe {
+                GenericByteViewArray::new_unchecked(
+                    views_buf,
+                    vec![long_buf].into(),
+                    None,
+                )
+            }
+        };
+
+        // Sanity-check the arrays read back correctly before we feed them in.
+        assert_eq!(
+            arr1.value(0),
+            "this is a long string that exceeds inline size 12"
+        );
+        assert_eq!(
+            arr2.value(0),
+            "another long string that exceeds inline size 12"
+        );
+
+        let batch1 = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(arr1)])?;
+        let batch2 = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(arr2)])?;
+
+        let metrics = BuildProbeJoinMetrics::new(0, &ExecutionPlanMetricsSet::new());
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let batches = vec![batch1, batch2];
+        let (mut reservation, inputs_reserved) = reserve_inputs(&batches, &pool)?;
+
+        let batch = concat_build_batches(
+            &schema,
+            batches,
+            false,
+            inputs_reserved,
+            &mut reservation,
+            &metrics,
+        )?;
+
+        let view_arr = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap();
+
+        // Both rows must be readable after deduplication — the value that lives
+        // exclusively in the longer buffer must not have been dropped.
+        assert_eq!(
+            view_arr.value(0),
+            "this is a long string that exceeds inline size 12",
+            "value from the shorter-declared-length buffer should survive"
+        );
+        assert_eq!(
+            view_arr.value(1),
+            "another long string that exceeds inline size 12",
+            "value from the longer-declared-length buffer should survive"
+        );
+        assert_eq!(batch.num_rows(), 2);
         Ok(())
     }
 
