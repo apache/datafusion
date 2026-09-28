@@ -214,15 +214,18 @@ impl BatchBuilder {
                 return Err(e.into());
             }
         };
+        #[cfg(debug_assertions)]
         if self.target_batch_bytes.is_some() {
             let actual_size = get_record_batch_memory_size(&batch);
-            if let Err(e) = try_grow_reservation_to_at_least(
-                &mut self.output_construction_reservation,
-                actual_size,
-            ) {
-                self.output_construction_reservation.free();
-                return Err(e);
-            }
+            // A target-enabled output reaches this point only after its estimate
+            // succeeded and the reservation was grown before interleave. Every
+            // supported estimate upper-bounds Arrow's output buffer capacities,
+            // so actual <= estimated <= the reservation already acquired.
+            debug_assert!(
+                actual_size <= self.output_construction_reservation.size(),
+                "sort output used {actual_size} bytes after reserving {} bytes",
+                self.output_construction_reservation.size()
+            );
         }
 
         // Remove consumed indices, keeping any remaining for the next call.
@@ -334,16 +337,18 @@ impl BatchBuilder {
             return Ok(None);
         }
 
-        let Some((mut rows_to_emit, mut estimated_bytes)) = self
-            .target_batch_bytes
-            .and_then(|target| self.prefix_under_target(target))
-        else {
+        let Some(target_batch_bytes) = self.target_batch_bytes else {
             let (rows_to_emit, columns) =
                 retry_interleave(self.indices.len(), |rows_to_emit| {
                     self.try_interleave_columns(&self.indices[..rows_to_emit])
                 })?;
 
             return Ok(Some(self.finish_record_batch(rows_to_emit, columns)?));
+        };
+        let Some((mut rows_to_emit, mut estimated_bytes)) =
+            self.prefix_under_target(target_batch_bytes)
+        else {
+            return Err(self.fail_prefix_estimation());
         };
 
         loop {
@@ -378,6 +383,61 @@ impl BatchBuilder {
             };
 
         Ok(Some(self.finish_record_batch(rows_to_emit, columns)?))
+    }
+
+    /// Release output memory and classify a failed target-enabled prefix estimate.
+    ///
+    /// The checked arithmetic in the estimator is the only expected failure
+    /// after schema validation. A byte-array downcast failure instead means the
+    /// builder's schema and buffered arrays are internally inconsistent.
+    fn fail_prefix_estimation(&mut self) -> DataFusionError {
+        let type_mismatch =
+            self.batches
+                .iter()
+                .enumerate()
+                .find_map(|(batch_idx, (_, batch))| {
+                    self.schema.fields.iter().enumerate().find_map(
+                        |(column_idx, field)| {
+                            let array = batch.column(column_idx);
+                            let matches_expected_type = match field.data_type() {
+                                DataType::Binary => array
+                                    .as_any()
+                                    .downcast_ref::<GenericByteArray<BinaryType>>()
+                                    .is_some(),
+                                DataType::LargeBinary => array
+                                    .as_any()
+                                    .downcast_ref::<GenericByteArray<LargeBinaryType>>()
+                                    .is_some(),
+                                DataType::Utf8 => array
+                                    .as_any()
+                                    .downcast_ref::<GenericByteArray<Utf8Type>>()
+                                    .is_some(),
+                                DataType::LargeUtf8 => array
+                                    .as_any()
+                                    .downcast_ref::<GenericByteArray<LargeUtf8Type>>()
+                                    .is_some(),
+                                _ => true,
+                            };
+                            (!matches_expected_type).then_some((
+                                batch_idx,
+                                column_idx,
+                                field.data_type().clone(),
+                                array.data_type().clone(),
+                            ))
+                        },
+                    )
+                });
+        self.output_construction_reservation.free();
+
+        if let Some((batch_idx, column_idx, expected, actual)) = type_mismatch {
+            DataFusionError::Internal(format!(
+                "Sort output size estimate expected {expected} at batch {batch_idx}, column {column_idx}, but found {actual}"
+            ))
+        } else {
+            DataFusionError::ResourcesExhausted(
+                "Sort output size estimate overflow".to_string(),
+            )
+        }
     }
 
     fn prefix_under_target(&self, target_batch_bytes: usize) -> Option<(usize, usize)> {
@@ -868,7 +928,8 @@ mod tests {
     use super::*;
     use arrow::array::{
         Array, ArrayDataBuilder, BinaryArray, BooleanArray, FixedSizeBinaryArray,
-        Int32Array, Int64Array, ListArray, StringArray, StringViewArray, StructArray,
+        Int32Array, Int64Array, ListArray, NullArray, StringArray, StringViewArray,
+        StructArray,
     };
     use arrow::buffer::Buffer;
     use arrow::datatypes::{DataType, Field, Fields, Schema};
@@ -1197,6 +1258,96 @@ mod tests {
                 "target {target}"
             );
         }
+    }
+
+    #[test]
+    fn test_byte_target_estimate_covers_null_and_byte_array_buffers() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("n", DataType::Null, true),
+            Field::new("s", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(NullArray::new(2)),
+                Arc::new(StringArray::from(vec![Some("a"), None])),
+            ],
+        )
+        .unwrap();
+        let mut builder =
+            BatchBuilder::new(schema, 1, 2, reservation(), None, Some(usize::MAX));
+        builder.push_batch(0, batch).unwrap();
+        push_n_rows(&mut builder, 0, 2);
+        let estimated_bytes = builder.estimated_prefix_bytes(2).unwrap();
+
+        let output = builder.build_record_batch().unwrap().unwrap();
+
+        assert_eq!(output.num_rows(), 2);
+        assert!(get_record_batch_memory_size(&output) <= estimated_bytes);
+    }
+
+    #[test]
+    fn test_prefix_estimation_failure_reports_overflow_and_releases_reservation() {
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int64, false)]));
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(8));
+        let output_reservation = MemoryConsumer::new("output").register(&pool);
+        output_reservation.try_grow(8).unwrap();
+        let mut builder = BatchBuilder::new(
+            schema,
+            1,
+            1,
+            reservation(),
+            Some(output_reservation),
+            Some(8),
+        );
+
+        let error = builder.fail_prefix_estimation();
+
+        assert!(matches!(
+            error,
+            DataFusionError::ResourcesExhausted(message)
+                if message == "Sort output size estimate overflow"
+        ));
+        assert_eq!(builder.output_construction_reservation.size(), 0);
+        assert_eq!(pool.reserved(), 0);
+    }
+
+    #[test]
+    fn test_prefix_estimation_type_mismatch_fails_before_interleave() {
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+        let binary_schema =
+            Arc::new(Schema::new(vec![Field::new("s", DataType::Binary, false)]));
+        let binary_batch = RecordBatch::try_new(
+            binary_schema,
+            vec![Arc::new(BinaryArray::from_vec(vec![b"value".as_slice()]))],
+        )
+        .unwrap();
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(64));
+        let output_reservation = MemoryConsumer::new("output").register(&pool);
+        output_reservation.try_grow(64).unwrap();
+        let mut builder = BatchBuilder::new(
+            schema,
+            1,
+            1,
+            reservation(),
+            Some(output_reservation),
+            Some(64),
+        );
+        // Construct an internally inconsistent state that RecordBatch validation
+        // normally prevents, so the estimator's downcast failure is reachable.
+        builder.batches.push((0, binary_batch));
+        builder.indices.push((0, 0));
+
+        let error = builder.build_record_batch().unwrap_err();
+
+        assert!(matches!(
+            error,
+            DataFusionError::Internal(message)
+                if message.contains("expected Utf8") && message.contains("found Binary")
+        ));
+        assert_eq!(builder.indices, vec![(0, 0)]);
+        assert_eq!(builder.output_construction_reservation.size(), 0);
+        assert_eq!(pool.reserved(), 0);
     }
 
     #[test]
