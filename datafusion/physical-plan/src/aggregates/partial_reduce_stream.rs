@@ -429,10 +429,6 @@ impl PartialReduceHashAggregateStream {
             Err(e) => Self::break_with_err(e),
         }
     }
-}
-
-impl Stream for PartialReduceHashAggregateStream {
-    type Item = Result<RecordBatch>;
 
     /// Entry point for the partial-reduce hash aggregate state machine.
     ///
@@ -485,15 +481,15 @@ impl Stream for PartialReduceHashAggregateStream {
     /// Done
     ///   -> (end)
     /// ```
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
+    fn poll_next_inner(
+        &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
+    ) -> Poll<Option<Result<RecordBatch>>> {
         loop {
             let cur_state = self
-                .state
-                .take()
-                .expect("PartialReduceHashAggregateStream state should not be None");
+              .state
+              .take()
+              .expect("PartialReduceHashAggregateStream state should not be None");
 
             let next_state = match cur_state {
                 state @ PartialReduceHashAggregateState::ReadingInput { .. } => {
@@ -541,6 +537,17 @@ impl Stream for PartialReduceHashAggregateStream {
                 }
             }
         }
+    }
+}
+
+impl Stream for PartialReduceHashAggregateStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        self.poll_next_inner(cx)
     }
 }
 
