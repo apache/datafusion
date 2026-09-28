@@ -2472,6 +2472,7 @@ name = "datafusion-physical-expr-adapter"
 version = "55.1.0"
 dependencies = [
  "arrow",
+ "criterion",
  "datafusion-common",
  "datafusion-expr",
  "datafusion-functions",

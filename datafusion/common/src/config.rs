@@ -1038,12 +1038,13 @@ config_namespace! {
         /// SEMI, LEFT ANTI, LEFT MARK, FULL) when the right side has multiple
         /// partitions.
         ///
-        /// This fallback coordinates per-chunk left state (visited bitmap and
-        /// probe-thread counter) across all right-side partitions, which
-        /// assumes every partition runs in the same process. Distributed
-        /// engines that execute each output partition as an independent task
-        /// (e.g. Ballista, datafusion-distributed) build a separate coordinator
-        /// per task and poll only one partition, so the cross-partition
+        /// This fallback shares left-side state (the current left chunk, the
+        /// visited bitmap and the probe-thread counter) across all right-side
+        /// partitions, which assumes every partition runs in the same process.
+        /// Distributed engines that execute each output partition as an
+        /// independent task (e.g. Ballista, datafusion-distributed) give each
+        /// task its own copy
+        /// of this state and poll only one partition, so the cross-partition
         /// counter never reaches zero and the fallback would stall. Such
         /// engines should set this to `false`: the coordinated fallback is then
         /// disabled for left-emitting multi-partition joins, which instead fail
