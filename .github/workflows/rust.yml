@@ -583,16 +583,20 @@ jobs:
     name: build and run with wasm-pack
     if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') }}
     runs-on: ubuntu-24.04
+    env:
+      # Use the preinstalled Clang 18 even if the runner's default Clang changes.
+      CC_wasm32_unknown_unknown: clang-18
+      CXX_wasm32_unknown_unknown: clang++-18
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - parallel:
           - name: Setup for wasm32
             run: |
               rustup target add wasm32-unknown-unknown
-          - name: Install dependencies
+          - name: Check preinstalled Clang
             run: |
-              sudo apt-get update -qq
-              sudo apt-get install -y -qq clang
+              clang-18 --version
+              clang++-18 --version
           - name: Setup wasm-pack
             uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3  # v2.87.16
             with:
