@@ -558,6 +558,93 @@ mod test {
         )
     }
 
+    fn skip_pushdown_table_scan_with(
+        fetch: Option<usize>,
+        skip: Option<usize>,
+    ) -> Result<LogicalPlan> {
+        let LogicalPlan::TableScan(scan) = skip_pushdown_table_scan()? else {
+            unreachable!()
+        };
+        Ok(LogicalPlan::TableScan(
+            TableScanBuilder::from(scan)
+                .with_fetch(fetch)
+                .with_skip(skip)
+                .build()?,
+        ))
+    }
+
+    /// A scan that already skips/fetches: the new skip is added on top of
+    /// the existing one and the existing fetch shrinks by the new skip.
+    #[test]
+    fn limit_pushdown_skip_into_scan_with_skip_and_fetch() -> Result<()> {
+        let table_scan = skip_pushdown_table_scan_with(Some(15), Some(3))?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .limit(10, Some(1000))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Limit: skip=0, fetch=1000
+          TableScan: test, fetch=5, skip=13
+        "
+        )
+    }
+
+    /// Skipping past the scan's existing fetch leaves nothing to read
+    #[test]
+    fn limit_pushdown_skip_beyond_scan_fetch() -> Result<()> {
+        let table_scan = skip_pushdown_table_scan_with(Some(5), None)?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .limit(10, Some(3))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Limit: skip=0, fetch=3
+          TableScan: test, fetch=0, skip=10
+        "
+        )
+    }
+
+    #[test]
+    fn limit_pushdown_skip_with_fetch_zero() -> Result<()> {
+        let table_scan = skip_pushdown_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .limit(10, Some(0))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Limit: skip=0, fetch=0
+          TableScan: test, fetch=0, skip=10
+        "
+        )
+    }
+
+    /// Adding to an existing skip must saturate instead of overflowing
+    #[test]
+    fn limit_pushdown_skip_saturates() -> Result<()> {
+        let table_scan = skip_pushdown_table_scan_with(None, Some(usize::MAX - 1))?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .limit(10, Some(3))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Limit: skip=0, fetch=3
+          TableScan: test, fetch=3, skip=18446744073709551615
+        "
+        )
+    }
+
     #[test]
     fn limit_pushdown_multiple_limits() -> Result<()> {
         let table_scan = test_table_scan()?;
