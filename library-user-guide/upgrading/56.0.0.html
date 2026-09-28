@@ -992,6 +992,30 @@ ignores the unknown field but cannot preserve the qualifier required by the
 expressions, which can cause resolution failure or incorrect rebinding.</p></li>
 </ul>
 </section>
+<section id="filesource-exact-filter-controls-scan-equivalence-properties">
+<h3><code class="docutils literal notranslate"><span class="pre">FileSource::exact_filter</span></code> controls scan equivalence properties<a class="headerlink" href="#filesource-exact-filter-controls-scan-equivalence-properties" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">FileScanConfig</span></code> no longer derives equivalence properties (constant columns
+and equal columns) from <code class="docutils literal notranslate"><span class="pre">FileSource::filter</span></code>. It uses the new
+<code class="docutils literal notranslate"><span class="pre">FileSource::exact_filter</span></code> method instead. This method returns the part of the
+filter that every output row satisfies. A filter that the source uses only for
+pruning (for example, Parquet row group statistics when
+<code class="docutils literal notranslate"><span class="pre">datafusion.execution.parquet.pushdown_filters</span></code> is <code class="docutils literal notranslate"><span class="pre">false</span></code>) lets
+non-matching rows through, and equivalences derived from it gave wrong query
+results.</p>
+<p><code class="docutils literal notranslate"><span class="pre">exact_filter</span></code> returns <code class="docutils literal notranslate"><span class="pre">None</span></code> by default. <code class="docutils literal notranslate"><span class="pre">ParquetSource</span></code> returns the pushed-down
+conjuncts when <code class="docutils literal notranslate"><span class="pre">pushdown_filters</span></code> is enabled.</p>
+<p><strong>Migration guide:</strong></p>
+<p>If your custom <code class="docutils literal notranslate"><span class="pre">FileSource</span></code> applies its filter to every row, implement
+<code class="docutils literal notranslate"><span class="pre">exact_filter</span></code> to keep the equivalence properties of the scan:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">impl</span><span class="w"> </span><span class="n">FileSource</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MySource</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">exact_filter</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">PhysicalExpr</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="bp">self</span><span class="p">.</span><span class="n">filter</span><span class="p">()</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
 </section>
 </section>
 
@@ -1070,6 +1094,7 @@ expressions, which can cause resolution failure or incorrect rebinding.</p></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ensure-distribution-is-deprecated-in-favour-of-ensure-distribution-with-stats"><code class="docutils literal notranslate"><span class="pre">ensure_distribution</span></code> is deprecated in favour of <code class="docutils literal notranslate"><span class="pre">ensure_distribution_with_stats</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#mergeintoop-requires-the-sql-visible-target-qualifier"><code class="docutils literal notranslate"><span class="pre">MergeIntoOp</span></code> requires the SQL-visible target qualifier</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#mergeintoopnode-protobuf-literals-require-target-qualifier"><code class="docutils literal notranslate"><span class="pre">MergeIntoOpNode</span></code> protobuf literals require <code class="docutils literal notranslate"><span class="pre">target_qualifier</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#filesource-exact-filter-controls-scan-equivalence-properties"><code class="docutils literal notranslate"><span class="pre">FileSource::exact_filter</span></code> controls scan equivalence properties</a></li>
 </ul>
 </li>
 </ul>
