@@ -663,23 +663,19 @@ CREATE TABLE nam_res_inner(id INT, z INT, g INT) AS VALUES
 (4, 35, 2),
 (NULL, 2, 2);
 
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query II rowsort
 SELECT id, z FROM nam_res_outer
 WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < nam_res_outer.z)) IS NULL;
 ----
+2 20
+NULL 30
 
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query II rowsort
 SELECT id, z FROM nam_res_outer
 WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < nam_res_outer.z)) IS TRUE;
 ----
-2 20
 5 1
 NULL 1
-NULL 30
 
 query II rowsort
 SELECT id, z FROM nam_res_outer
@@ -689,36 +685,33 @@ WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < nam_res_outer.z))
 4 40
 
 # `NOT mark` must stay NULL for UNKNOWN rows instead of turning into TRUE.
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query II rowsort
 SELECT id, z FROM nam_res_outer
 WHERE NOT (id IN (SELECT i.id FROM nam_res_inner i WHERE i.z < nam_res_outer.z)) OR id = 4;
 ----
+4 40
+5 1
+NULL 1
+
+# Positive IN goes through the same mark.
+query II rowsort
+SELECT id, z FROM nam_res_outer
+WHERE (id IN (SELECT i.id FROM nam_res_inner i WHERE i.z > nam_res_outer.z)) IS NULL;
+----
+1 10
 2 20
 4 40
 5 1
 NULL 1
 NULL 30
 
-# Positive IN goes through the same mark.
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
-query II rowsort
-SELECT id, z FROM nam_res_outer
-WHERE (id IN (SELECT i.id FROM nam_res_inner i WHERE i.z > nam_res_outer.z)) IS NULL;
-----
-
 # Equality and non-equality correlation together.
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query II rowsort
 SELECT id, z FROM nam_res_outer
 WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.g = nam_res_outer.g AND i.z < nam_res_outer.z)) IS NULL;
 ----
+NULL 30
 
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query II rowsort
 SELECT id, z FROM nam_res_outer
 WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.g = nam_res_outer.g AND i.z < nam_res_outer.z)) IS TRUE;
@@ -726,7 +719,6 @@ WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.g = nam_res_outer.g A
 2 20
 5 1
 NULL 1
-NULL 30
 
 # Equality correlation only (already null-aware; control).
 query II rowsort
@@ -774,8 +766,6 @@ physical_plan
 
 # The negated form of the same query stays null-aware, because `NOT mark` tells
 # NULL from FALSE.
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query TT
 EXPLAIN SELECT id FROM nam_res_outer o
 WHERE o.z > 35 OR o.id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < o.z);
@@ -783,7 +773,7 @@ WHERE o.z > 35 OR o.id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < o.z)
 logical_plan
 01)Projection: o.id
 02)--Filter: o.z > Int32(35) OR NOT __correlated_sq_1.mark
-03)----LeftMark Join: o.id = __correlated_sq_1.id Filter: __correlated_sq_1.z < o.z
+03)----LeftMark Join: o.id = __correlated_sq_1.id Filter: __correlated_sq_1.z < o.z null_aware
 04)------SubqueryAlias: o
 05)--------TableScan: nam_res_outer projection=[id, z]
 06)------SubqueryAlias: __correlated_sq_1
@@ -792,7 +782,7 @@ logical_plan
 physical_plan
 01)FilterExec: z@1 > 35 OR NOT mark@2, projection=[id@0]
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-03)----HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(id@0, id@0)], filter=z@1 < z@0
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], filter=z@1 < z@0, null_aware
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -801,12 +791,12 @@ physical_plan
 statement ok
 SET datafusion.execution.batch_size = 1;
 
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query II rowsort
 SELECT id, z FROM nam_res_outer
 WHERE (id NOT IN (SELECT i.id FROM nam_res_inner i WHERE i.z < nam_res_outer.z)) IS NULL;
 ----
+2 20
+NULL 30
 
 statement ok
 RESET datafusion.execution.batch_size;
@@ -925,8 +915,6 @@ CREATE TABLE nam_guard_inner(id INT, z INT) AS VALUES (1,5), (NULL,50);
 # A non-negated `IN` reached through `OR` keeps the same rows with a NULL mark
 # and with a FALSE mark, so the join must NOT be null-aware. It is then free to
 # swap sides to `RightMark` as well.
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query TT
 EXPLAIN SELECT id FROM nam_guard_outer
 WHERE id IN (SELECT i.id FROM nam_guard_inner i) OR z > 25;
@@ -934,7 +922,7 @@ WHERE id IN (SELECT i.id FROM nam_guard_inner i) OR z > 25;
 logical_plan
 01)Projection: nam_guard_outer.id
 02)--Filter: __correlated_sq_1.mark OR nam_guard_outer.z > Int32(25)
-03)----LeftMark Join: nam_guard_outer.id = __correlated_sq_1.id null_aware
+03)----LeftMark Join: nam_guard_outer.id = __correlated_sq_1.id
 04)------TableScan: nam_guard_outer projection=[id, z]
 05)------SubqueryAlias: __correlated_sq_1
 06)--------SubqueryAlias: i
@@ -942,7 +930,7 @@ logical_plan
 physical_plan
 01)FilterExec: mark@2 OR z@1 > 25, projection=[id@0]
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], null_aware
+03)----HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(id@0, id@0)]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 05)------DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -950,8 +938,6 @@ physical_plan
 # two-valued, so its mark is never NULL and it cannot make the `IN` mark
 # observable. Treating it as negative cost this query the plain join and the
 # `RightMark` swap.
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query TT
 EXPLAIN SELECT id FROM nam_guard_outer
 WHERE id IN (SELECT i.id FROM nam_guard_inner i)
@@ -962,7 +948,7 @@ logical_plan
 02)--Filter: __correlated_sq_1.mark OR NOT __correlated_sq_2.mark
 03)----Projection: nam_guard_outer.id, __correlated_sq_1.mark, __correlated_sq_2.mark
 04)------LeftMark Join:  Filter: __correlated_sq_2.z > nam_guard_outer.z
-05)--------LeftMark Join: nam_guard_outer.id = __correlated_sq_1.id null_aware
+05)--------LeftMark Join: nam_guard_outer.id = __correlated_sq_1.id
 06)----------TableScan: nam_guard_outer projection=[id, z]
 07)----------SubqueryAlias: __correlated_sq_1
 08)------------SubqueryAlias: i
@@ -975,15 +961,13 @@ physical_plan
 02)--NestedLoopJoinExec: join_type=RightMark, filter=z@1 > z@0, projection=[id@0, mark@2, mark@3]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 04)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)------HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0)], null_aware
+05)------HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(id@0, id@0)]
 06)--------DataSourceExec: partitions=1, partition_sizes=[1]
 07)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # A constant value expression is projected as an outer column only when the
 # join ends up null-aware. This mark join does not, so the constant stays a
 # filter and no `__correlated_sq_*_value` column is produced.
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
 query TT
 EXPLAIN SELECT id FROM nam_guard_outer
 WHERE 3 IN (SELECT i.id FROM nam_guard_inner i) OR z > 25;
@@ -991,22 +975,23 @@ WHERE 3 IN (SELECT i.id FROM nam_guard_inner i) OR z > 25;
 logical_plan
 01)Projection: nam_guard_outer.id
 02)--Filter: __correlated_sq_1.mark OR nam_guard_outer.z > Int32(25)
-03)----Projection: nam_guard_outer.id, nam_guard_outer.z, __correlated_sq_1.mark
-04)------LeftMark Join: __correlated_sq_1_value = __correlated_sq_1.i.id null_aware
-05)--------Projection: nam_guard_outer.id, nam_guard_outer.z, Int64(3) AS __correlated_sq_1_value
-06)----------TableScan: nam_guard_outer projection=[id, z]
-07)--------SubqueryAlias: __correlated_sq_1
-08)----------Projection: CAST(i.id AS Int64)
-09)------------SubqueryAlias: i
-10)--------------TableScan: nam_guard_inner projection=[id]
+03)----LeftMark Join:
+04)------TableScan: nam_guard_outer projection=[id, z]
+05)------SubqueryAlias: __correlated_sq_1
+06)--------Projection: CAST(i.id AS Int64)
+07)----------SubqueryAlias: i
+08)------------Filter: nam_guard_inner.id = Int32(3)
+09)--------------TableScan: nam_guard_inner projection=[id]
 physical_plan
 01)FilterExec: mark@2 OR z@1 > 25, projection=[id@0]
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(__correlated_sq_1_value@2, i.id@0)], projection=[id@0, z@1, mark@3], null_aware
-04)------ProjectionExec: expr=[id@0 as id, z@1 as z, 3 as __correlated_sq_1_value]
-05)--------DataSourceExec: partitions=1, partition_sizes=[1]
-06)------ProjectionExec: expr=[CAST(id@0 AS Int64) as i.id]
-07)--------DataSourceExec: partitions=1, partition_sizes=[1]
+03)----NestedLoopJoinExec: join_type=RightMark
+04)------CoalescePartitionsExec
+05)--------ProjectionExec: expr=[CAST(id@0 AS Int64) as i.id]
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------FilterExec: id@0 = 3
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 DROP TABLE nam_guard_outer;

@@ -1246,6 +1246,14 @@ struct OrderedArrayAggEntry {
     row_idx: usize,
 }
 
+/// Coalesce consecutive small payload batches up to this row count to reduce
+/// per-array memory overhead while limiting repeated concatenation costs.
+const ORDERED_ARRAY_AGG_COALESCE_ROWS: usize = 64;
+
+/// Skip coalescing once the tail batch is large enough that the fixed
+/// per-array overhead is negligible relative to the payload.
+const ORDERED_ARRAY_AGG_COALESCE_BYTES: usize = 4096;
+
 #[derive(Debug)]
 pub(crate) struct OrderSensitiveArrayAggAccumulator {
     /// Arrow payload arrays. Entries refer to rows in these batches.
@@ -1515,27 +1523,98 @@ impl OrderSensitiveArrayAggAccumulator {
         } else {
             (values, None)
         };
+
         let ordering_values = filtered_ordering_values
             .as_deref()
             .unwrap_or(ordering_values);
-        // Detach the stored payload from potentially oversized backing buffers.
-        let values = make_array(copy_array_data(&values.to_data()));
-        let values = compact_payload(values)?;
 
-        let row_count = values.len();
         // RowConverter validates the number, lengths, and types of ordering columns.
         self.ordering_converter
             .append(&mut self.ordering_rows, ordering_values)?;
+
+        let row_count = values.len();
+
         if row_count == 0 {
             return Ok(None);
         }
 
-        let start = self.entries.len();
-        let batch_idx = self.batches.len();
-        self.batches.push(values);
-        self.entries.extend(
-            (0..row_count).map(|row_idx| OrderedArrayAggEntry { batch_idx, row_idx }),
+        // Concat copies these payloads into fresh buffers when they fit in the tail.
+        let concat_copies = values.data_type().is_primitive()
+            || matches!(
+                values.data_type(),
+                DataType::Boolean
+                    | DataType::Utf8
+                    | DataType::LargeUtf8
+                    | DataType::Binary
+                    | DataType::LargeBinary
+            );
+
+        // View concat shares input buffers, but compacting the merged array
+        // detaches them.
+        // If the input fits in the tail, the earlier detach is unnecessary.
+        let compact_view_after_concat = matches!(
+            values.data_type(),
+            DataType::Utf8View | DataType::BinaryView
         );
+
+        let fits_tail = |value: &ArrayRef| {
+            self.batches.last().is_some_and(|last| {
+                last.len() + row_count <= ORDERED_ARRAY_AGG_COALESCE_ROWS
+                    && last.get_buffer_memory_size() + value.get_array_memory_size()
+                        <= ORDERED_ARRAY_AGG_COALESCE_BYTES
+            })
+        };
+
+        // Skip the first detach only when merging will detach the input:
+        // concat copies the types above, and post-concat compaction copies views.
+        let skip_detach =
+            (concat_copies || compact_view_after_concat) && fits_tail(&values);
+
+        // Detach inputs stored separately or needing compaction before the cap check.
+        let values = if skip_detach {
+            values
+        } else {
+            compact_payload(make_array(copy_array_data(&values.to_data())))?
+        };
+
+        // Recheck the cap after compaction, which can shrink view and dictionary buffers.
+        let should_coalesce = fits_tail(&values);
+
+        let start = self.entries.len();
+        let (batch_idx, row_offset) = match self.batches.last() {
+            Some(last_batch) if should_coalesce => {
+                let merged =
+                    arrow::compute::concat(&[last_batch.as_ref(), values.as_ref()])?;
+
+                // View concat shares input data buffers. Compact them so the
+                // tail does not retain one buffer per small input batch.
+                let merged = if compact_view_after_concat {
+                    compact_payload(merged)?
+                } else {
+                    merged
+                };
+
+                // Concatenation preserves the existing row offsets, while new rows
+                // start at the previous length of the tail batch.
+                let batch_idx = self.batches.len() - 1;
+                let row_offset = last_batch.len();
+
+                self.batches[batch_idx] = merged;
+                (batch_idx, row_offset)
+            }
+            _ => {
+                let batch_idx = self.batches.len();
+                self.batches.push(values);
+                (batch_idx, 0)
+            }
+        };
+
+        self.entries
+            .extend((0..row_count).map(|row_idx| OrderedArrayAggEntry {
+                batch_idx,
+                row_idx: row_offset + row_idx,
+            }));
+
         self.sorted_entry_indices = None;
 
         debug_assert_eq!(self.entries.len(), self.ordering_rows.num_rows());
@@ -2147,6 +2226,19 @@ mod tests {
     }
 
     #[test]
+    fn ordered_array_agg_detaches_unmerged_slices() -> Result<()> {
+        use arrow::array::{Int64Array, StringArray};
+
+        let integers = Int64Array::from_iter_values(0..10_000);
+        let strings = StringArray::from_iter_values(
+            (0..10_000).map(|i| format!("payload-value-{i:03}")),
+        );
+        assert_compact_ordered_payload(Arc::new(integers), 2_000)?;
+        assert_compact_ordered_payload(Arc::new(strings), 2_000)?;
+        Ok(())
+    }
+
+    #[test]
     fn ordered_array_agg_compacts_views() -> Result<()> {
         use arrow::array::{BinaryViewArray, StringViewArray};
 
@@ -2512,6 +2604,10 @@ mod tests {
             ordered_accumulator(DataType::Utf8, DataType::Int64, options, false, false)?;
         final_acc.merge_batch(&state_a)?;
         final_acc.merge_batch(&state_b)?;
+
+        // Small partial-state batches are coalesced into one payload batch.
+        assert_eq!(final_acc.batches.len(), 1);
+        assert_eq!(final_acc.batches[0].len(), 4);
 
         let result = print_nulls(str_arr(final_acc.evaluate()?)?);
         assert_eq!(result, vec!["a1", "a2", "b1", "b2"]);
@@ -2905,6 +3001,264 @@ mod tests {
             .merge_batch(&[payload_states, ordering_states])
             .unwrap_err();
         assert!(err.to_string().contains("state lengths differ"));
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_array_agg_coalesces_small_batches_up_to_threshold() -> Result<()> {
+        use arrow::array::Int64Array;
+
+        let mut acc = ordered_accumulator(
+            DataType::Int64,
+            DataType::Int64,
+            SortOptions::new(false, false),
+            false,
+            false,
+        )?;
+
+        let threshold = ORDERED_ARRAY_AGG_COALESCE_ROWS;
+        let threshold_i64 = i64::try_from(threshold).unwrap();
+
+        for values in [
+            (0..(threshold_i64 - 1)).collect::<Vec<_>>(),
+            vec![threshold_i64 - 1],
+            vec![threshold_i64],
+            ((threshold_i64 + 1)..(threshold_i64 * 2)).collect::<Vec<i64>>(),
+            vec![threshold_i64 * 2],
+        ] {
+            let values = Arc::new(Int64Array::from(values)) as ArrayRef;
+
+            acc.update_batch(&[Arc::clone(&values), values])?;
+        }
+
+        assert_eq!(
+            acc.batches
+                .iter()
+                .map(|batch| batch.len())
+                .collect::<Vec<usize>>(),
+            vec![threshold, threshold, 1],
+        );
+
+        assert_eq!(acc.entries.len(), threshold * 2 + 1);
+        assert_eq!(acc.ordering_rows.num_rows(), threshold * 2 + 1);
+
+        assert_eq!(acc.entries[threshold - 1].batch_idx, 0);
+        assert_eq!(acc.entries[threshold - 1].row_idx, threshold - 1);
+
+        assert_eq!(acc.entries[threshold].batch_idx, 1);
+        assert_eq!(acc.entries[threshold].row_idx, 0);
+
+        assert_eq!(acc.entries[threshold * 2 - 1].batch_idx, 1);
+        assert_eq!(acc.entries[threshold * 2 - 1].row_idx, threshold - 1);
+
+        assert_eq!(acc.entries[threshold * 2].batch_idx, 2);
+        assert_eq!(acc.entries[threshold * 2].row_idx, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_array_agg_sorts_across_coalesced_int64_batches() -> Result<()> {
+        use arrow::array::Int64Array;
+
+        let mut acc = ordered_accumulator(
+            DataType::Int64,
+            DataType::Int64,
+            SortOptions::new(false, false),
+            false,
+            false,
+        )?;
+
+        for value in (0_i64..128).rev() {
+            let payload = Arc::new(Int64Array::from(vec![value])) as ArrayRef;
+            let ordering = Arc::new(Int64Array::from(vec![value + 1000])) as ArrayRef;
+            acc.update_batch(&[payload, ordering])?;
+        }
+
+        let ScalarValue::List(result) = acc.evaluate()? else {
+            return internal_err!("expect list");
+        };
+
+        assert_eq!(
+            result
+                .values()
+                .as_primitive::<arrow::datatypes::Int64Type>()
+                .values(),
+            &(0..128).collect::<Vec<i64>>()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_array_agg_does_not_coalesce_large_payloads() -> Result<()> {
+        use arrow::array::{Int64Array, StringArray};
+
+        let mut acc = ordered_accumulator(
+            DataType::Utf8,
+            DataType::Int64,
+            SortOptions::new(false, false),
+            false,
+            false,
+        )?;
+
+        let value = "x".repeat(ORDERED_ARRAY_AGG_COALESCE_BYTES);
+
+        for i in 0_i64..2 {
+            let payload = Arc::new(StringArray::from(vec![value.as_str()])) as ArrayRef;
+            let ordering = Arc::new(Int64Array::from(vec![i])) as ArrayRef;
+            acc.update_batch(&[payload, ordering])?;
+        }
+
+        // Each payload exceeds the byte cap, so the tail batch must not be coalesced.
+        assert_eq!(acc.batches.len(), 2);
+        assert_eq!(acc.entries[1].batch_idx, 1);
+        assert_eq!(acc.entries[1].row_idx, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_array_agg_sorts_across_coalesced_utf8_view_batches() -> Result<()> {
+        use arrow::array::{Int64Array, StringViewArray};
+
+        let mut acc = ordered_accumulator(
+            DataType::Utf8View,
+            DataType::Int64,
+            SortOptions::new(false, false),
+            false,
+            false,
+        )?;
+
+        // Longer than 12 bytes so view payloads are stored in data buffers.
+        let value = |i: usize| format!("payload-value-{i:03}");
+        let total_payloads = 100;
+
+        for i in (0..total_payloads).rev() {
+            let payload =
+                Arc::new(StringViewArray::from_iter_values([value(i)])) as ArrayRef;
+            let ordering =
+                Arc::new(Int64Array::from(vec![i64::try_from(i).unwrap()])) as ArrayRef;
+            acc.update_batch(&[payload, ordering])?;
+        }
+
+        assert_eq!(
+            acc.batches
+                .iter()
+                .map(|batch| batch.len())
+                .collect::<Vec<_>>(),
+            vec![ORDERED_ARRAY_AGG_COALESCE_ROWS, 36],
+        );
+        assert_eq!(acc.batches[0].as_string_view().data_buffers().len(), 1);
+
+        let ScalarValue::List(result) = acc.evaluate()? else {
+            return internal_err!("expect list");
+        };
+
+        let values = result.values().as_string_view();
+
+        for i in 0..total_payloads {
+            assert_eq!(values.value(i), value(i));
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_array_agg_sorts_across_coalesced_binary_view_batches() -> Result<()> {
+        use arrow::array::{BinaryViewArray, Int64Array};
+
+        let mut acc = ordered_accumulator(
+            DataType::BinaryView,
+            DataType::Int64,
+            SortOptions::new(false, false),
+            false,
+            false,
+        )?;
+
+        // Longer than 12 bytes so view payloads are stored in data buffers.
+        let value = |i: usize| format!("payload-value-{i:03}").into_bytes();
+        let total_payloads = 100;
+
+        for i in (0..total_payloads).rev() {
+            let payload =
+                Arc::new(BinaryViewArray::from_iter_values([value(i)])) as ArrayRef;
+            let ordering =
+                Arc::new(Int64Array::from(vec![i64::try_from(i).unwrap()])) as ArrayRef;
+            acc.update_batch(&[payload, ordering])?;
+        }
+
+        assert_eq!(
+            acc.batches
+                .iter()
+                .map(|batch| batch.len())
+                .collect::<Vec<_>>(),
+            vec![ORDERED_ARRAY_AGG_COALESCE_ROWS, 36],
+        );
+        assert_eq!(acc.batches[0].as_binary_view().data_buffers().len(), 1);
+
+        let ScalarValue::List(result) = acc.evaluate()? else {
+            return internal_err!("expect list");
+        };
+
+        let values = result.values().as_binary_view();
+        for i in 0..total_payloads {
+            assert_eq!(values.value(i), value(i));
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn ordered_array_agg_sorts_across_coalesced_dictionary_batches() -> Result<()> {
+        use arrow::array::{ArrayAccessor, DictionaryArray, Int64Array, StringArray};
+        use arrow::datatypes::Int8Type;
+
+        let dictionary_type =
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8));
+        let mut acc = ordered_accumulator(
+            dictionary_type,
+            DataType::Int64,
+            SortOptions::new(false, false),
+            false,
+            false,
+        )?;
+
+        // Each input has its own dictionary, so coalescing must remap its keys.
+        let value = |i: usize| format!("payload-value-{i:03}");
+        let total_payloads = 100;
+
+        for i in (0..total_payloads).rev() {
+            let payload = Arc::new(
+                std::iter::once(value(i).as_str()).collect::<DictionaryArray<Int8Type>>(),
+            ) as ArrayRef;
+            let ordering =
+                Arc::new(Int64Array::from(vec![i64::try_from(i).unwrap()])) as ArrayRef;
+            acc.update_batch(&[payload, ordering])?;
+        }
+
+        assert_eq!(
+            acc.batches
+                .iter()
+                .map(|batch| batch.len())
+                .collect::<Vec<_>>(),
+            vec![ORDERED_ARRAY_AGG_COALESCE_ROWS, 36],
+        );
+
+        let ScalarValue::List(result) = acc.evaluate()? else {
+            return internal_err!("expect list");
+        };
+
+        let values = result
+            .values()
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int8Type>>()
+            .expect("expected DictionaryArray<Int8Type>")
+            .downcast_dict::<StringArray>()
+            .expect("expected Utf8 dictionary values");
+
+        for i in 0..total_payloads {
+            assert_eq!(values.value(i), value(i));
+        }
+
         Ok(())
     }
 

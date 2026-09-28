@@ -50,6 +50,7 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_functions::core::file_row_index::FileRowIndexFunc;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
 use datafusion_physical_expr::projection::ProjectionExprs;
+use datafusion_physical_expr::utils::split_conjunction;
 use datafusion_physical_expr::{EquivalenceProperties, conjunction};
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_adapter::rewrite::{
@@ -702,6 +703,23 @@ impl FileSource for ParquetSource {
         self.predicate.clone()
     }
 
+    /// The predicate is applied to every row only when filter pushdown is
+    /// enabled, and then only the conjuncts that can become a `RowFilter`.
+    /// Otherwise the predicate is used only for pruning.
+    fn exact_filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        if !self.pushdown_filters() {
+            return None;
+        }
+        let predicate = self.predicate.as_ref()?;
+        let pushable_schema = self.table_schema.schema_without_virtual_columns();
+        let exact = split_conjunction(predicate)
+            .into_iter()
+            .filter(|expr| can_expr_be_pushed_down_with_schemas(expr, pushable_schema))
+            .cloned()
+            .collect::<Vec<_>>();
+        (!exact.is_empty()).then(|| conjunction(exact))
+    }
+
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
         let mut conf = self.clone();
         conf.batch_size = Some(batch_size);
@@ -774,7 +792,7 @@ impl FileSource for ParquetSource {
                 // the parquet opener will pause the single decoder at row
                 // group boundaries and consult `RowGroupPruner` to drop
                 // RGs the current threshold proves unwinnable, rebuilding
-                // the decoder via `into_builder().with_row_groups(...)` to
+                // the decoder via `into_builder().with_row_group_selections(...)` to
                 // skip them. The actual pruning count appears as
                 // `row_groups_pruned_dynamic_filter` in EXPLAIN ANALYZE.
                 // We use `contains_dynamic_filter()` (matches both `Watching`
