@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use crate::fuzz_cases::equivalence::utils::{
-    TestScalarUDF, create_random_schema, generate_table_for_eq_properties,
+    NULL_PCTS, TestScalarUDF, create_random_schema, generate_table_for_eq_properties,
     is_table_same_after_sort,
 };
 
@@ -37,12 +37,16 @@ fn test_find_longest_permutation_random() -> Result<()> {
     const N_ELEMENTS: usize = 125;
     const N_DISTINCT: usize = 5;
 
-    for seed in 0..N_RANDOM_SCHEMA {
+    for (seed, &null_pct) in (0..N_RANDOM_SCHEMA).cartesian_product(NULL_PCTS) {
         // Create a random schema with random properties
         let (test_schema, eq_properties) = create_random_schema(seed as u64)?;
         // Generate a data that satisfies properties given
-        let table_data_with_properties =
-            generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
+        let table_data_with_properties = generate_table_for_eq_properties(
+            &eq_properties,
+            N_ELEMENTS,
+            N_DISTINCT,
+            null_pct,
+        )?;
 
         let test_fun = Arc::new(ScalarUDF::new_from_impl(TestScalarUDF::new()));
         let col_a = col("a", &test_schema)?;
@@ -88,7 +92,7 @@ fn test_find_longest_permutation_random() -> Result<()> {
                 );
 
                 let err_msg = format!(
-                    "Error in test case ordering:{ordering:?}, eq_properties: {eq_properties}"
+                    "Error in test case seed: {seed}, null_pct: {null_pct}, ordering:{ordering:?}, eq_properties: {eq_properties}"
                 );
                 assert_eq!(ordering.len(), indices.len(), "{err_msg}");
                 // Since ordered section satisfies schema, we expect

@@ -369,6 +369,7 @@ pub fn generate_table_for_eq_properties(
     eq_properties: &EquivalenceProperties,
     n_elem: usize,
     n_distinct: usize,
+    null_pct: f64,
 ) -> Result<RecordBatch> {
     let mut rng = StdRng::seed_from_u64(23);
 
@@ -377,10 +378,7 @@ pub fn generate_table_for_eq_properties(
 
     // Utility closure to generate random array
     let mut generate_random_array = |num_elems: usize, max_val: usize| -> ArrayRef {
-        let values: Vec<f64> = (0..num_elems)
-            .map(|_| rng.random_range(0..max_val) as f64 / 2.0)
-            .collect();
-        Arc::new(Float64Array::from_iter_values(values))
+        generate_random_f64_array(num_elems, max_val, null_pct, &mut rng)
     };
 
     // Fill constant columns
@@ -450,6 +448,7 @@ pub fn generate_table_for_orderings(
     schema: SchemaRef,
     n_elem: usize,
     n_distinct: usize,
+    null_pct: f64,
 ) -> Result<RecordBatch> {
     let mut rng = StdRng::seed_from_u64(23);
 
@@ -463,7 +462,7 @@ pub fn generate_table_for_orderings(
         .map(|field| {
             (
                 field.name(),
-                generate_random_f64_array(n_elem, n_distinct, &mut rng),
+                generate_random_f64_array(n_elem, n_distinct, null_pct, &mut rng),
             )
         })
         .collect::<Vec<_>>();
@@ -503,16 +502,25 @@ pub fn generate_table_for_orderings(
     Ok(batch)
 }
 
+pub const NULL_PCTS: &[f64] = &[0.0, 0.01, 0.1, 0.5];
+
 // Utility function to generate random f64 array
 fn generate_random_f64_array(
     n_elems: usize,
     n_distinct: usize,
+    null_pct: f64,
     rng: &mut StdRng,
 ) -> ArrayRef {
-    let values: Vec<f64> = (0..n_elems)
-        .map(|_| rng.random_range(0..n_distinct) as f64 / 2.0)
-        .collect();
-    Arc::new(Float64Array::from_iter_values(values))
+    let values = (0..n_elems)
+        .map(|_| {
+            if rng.random::<f64>() < null_pct {
+                None
+            } else {
+                Some(rng.random_range(0..n_distinct) as f64 / 2.0)
+            }
+        })
+        .collect::<Float64Array>();
+    Arc::new(values)
 }
 
 // Helper function to get sort columns from a batch

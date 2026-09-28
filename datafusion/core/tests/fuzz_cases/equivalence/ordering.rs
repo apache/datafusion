@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::fuzz_cases::equivalence::utils::{
-    TestScalarUDF, contains_overflowable_arithmetic, create_random_schema,
+    NULL_PCTS, TestScalarUDF, contains_overflowable_arithmetic, create_random_schema,
     create_test_params, create_test_schema_2, generate_table_for_eq_properties,
     generate_table_for_orderings, is_table_same_after_sort,
 };
@@ -44,12 +44,16 @@ fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
         nulls_first: false,
     };
 
-    for seed in 0..N_RANDOM_SCHEMA {
+    for (seed, &null_pct) in (0..N_RANDOM_SCHEMA).cartesian_product(NULL_PCTS) {
         // Create a random schema with random properties
         let (test_schema, eq_properties) = create_random_schema(seed as u64)?;
         // Generate a data that satisfies properties given
-        let table_data_with_properties =
-            generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
+        let table_data_with_properties = generate_table_for_eq_properties(
+            &eq_properties,
+            N_ELEMENTS,
+            N_DISTINCT,
+            null_pct,
+        )?;
         let col_exprs = [
             col("a", &test_schema)?,
             col("b", &test_schema)?,
@@ -72,7 +76,7 @@ fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
                     &table_data_with_properties,
                 )?;
                 let err_msg = format!(
-                    "Error in test case requirement:{ordering:?}, expected: {expected:?}, eq_properties {eq_properties}"
+                    "Error in test case seed: {seed}, null_pct: {null_pct}, requirement:{ordering:?}, expected: {expected:?}, eq_properties {eq_properties}"
                 );
                 // Check whether ordering_satisfy API result and
                 // experimental result matches.
@@ -98,12 +102,16 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
         nulls_first: false,
     };
 
-    for seed in 0..N_RANDOM_SCHEMA {
+    for (seed, &null_pct) in (0..N_RANDOM_SCHEMA).cartesian_product(NULL_PCTS) {
         // Create a random schema with random properties
         let (test_schema, eq_properties) = create_random_schema(seed as u64)?;
         // Generate a data that satisfies properties given
-        let table_data_with_properties =
-            generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
+        let table_data_with_properties = generate_table_for_eq_properties(
+            &eq_properties,
+            N_ELEMENTS,
+            N_DISTINCT,
+            null_pct,
+        )?;
 
         let test_fun = Arc::new(ScalarUDF::new_from_impl(TestScalarUDF::new()));
         let col_a = col("a", &test_schema)?;
@@ -142,7 +150,7 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
                     &table_data_with_properties,
                 )?;
                 let err_msg = format!(
-                    "Error in test case requirement:{ordering:?}, expected: {expected:?}, eq_properties: {eq_properties}",
+                    "Error in test case seed: {seed}, null_pct: {null_pct}, requirement:{ordering:?}, expected: {expected:?}, eq_properties: {eq_properties}",
                 );
                 // A rejection turns inconclusive only from the first `+`/`-`
                 // key onwards, since possible overflow makes an ordering
@@ -197,7 +205,7 @@ fn test_ordering_satisfy_with_equivalence() -> Result<()> {
         nulls_first: true,
     };
     let table_data_with_properties =
-        generate_table_for_eq_properties(&eq_properties, 625, 5)?;
+        generate_table_for_eq_properties(&eq_properties, 625, 5, 0.0)?;
 
     // First element in the tuple stores vector of requirement, second element is the expected return value for ordering_satisfy function
     let requirements = vec![
@@ -372,7 +380,7 @@ fn test_ordering_satisfy_on_data() -> Result<()> {
     ];
     let orderings = convert_to_orderings(&orderings);
 
-    let batch = generate_table_for_orderings(orderings, schema, 1000, 10)?;
+    let batch = generate_table_for_orderings(orderings, schema, 1000, 10, 0.0)?;
 
     // [a ASC, c ASC, d ASC] cannot be deduced
     let ordering = vec![

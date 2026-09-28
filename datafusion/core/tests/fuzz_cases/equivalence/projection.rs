@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::fuzz_cases::equivalence::utils::{
-    TestScalarUDF, apply_projection, contains_overflowable_arithmetic,
+    NULL_PCTS, TestScalarUDF, apply_projection, contains_overflowable_arithmetic,
     create_random_schema, generate_table_for_eq_properties, is_table_same_after_sort,
 };
 use arrow::compute::SortOptions;
@@ -37,12 +37,16 @@ fn project_orderings_random() -> Result<()> {
     const N_ELEMENTS: usize = 125;
     const N_DISTINCT: usize = 5;
 
-    for seed in 0..N_RANDOM_SCHEMA {
+    for (seed, &null_pct) in (0..N_RANDOM_SCHEMA).cartesian_product(NULL_PCTS) {
         // Create a random schema with random properties
         let (test_schema, eq_properties) = create_random_schema(seed as u64)?;
         // Generate a data that satisfies properties given
-        let table_data_with_properties =
-            generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
+        let table_data_with_properties = generate_table_for_eq_properties(
+            &eq_properties,
+            N_ELEMENTS,
+            N_DISTINCT,
+            null_pct,
+        )?;
         // Floor(a)
         let test_fun = Arc::new(ScalarUDF::new_from_impl(TestScalarUDF::new()));
         let col_a = col("a", &test_schema)?;
@@ -84,7 +88,7 @@ fn project_orderings_random() -> Result<()> {
                 // Make sure each ordering after projection is valid.
                 for ordering in projected_eq.oeq_class().iter() {
                     let err_msg = format!(
-                        "Error in test case ordering:{ordering:?}, eq_properties {eq_properties}, proj_exprs: {proj_exprs:?}",
+                        "Error in test case seed: {seed}, null_pct: {null_pct}, ordering:{ordering:?}, eq_properties {eq_properties}, proj_exprs: {proj_exprs:?}",
                     );
                     // Since ordered section satisfies schema, we expect
                     // that result will be same after sort (e.g sort was unnecessary).
@@ -111,12 +115,16 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
         nulls_first: false,
     };
 
-    for seed in 0..N_RANDOM_SCHEMA {
+    for (seed, &null_pct) in (0..N_RANDOM_SCHEMA).cartesian_product(NULL_PCTS) {
         // Create a random schema with random properties
         let (test_schema, eq_properties) = create_random_schema(seed as u64)?;
         // Generate a data that satisfies properties given
-        let table_data_with_properties =
-            generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
+        let table_data_with_properties = generate_table_for_eq_properties(
+            &eq_properties,
+            N_ELEMENTS,
+            N_DISTINCT,
+            null_pct,
+        )?;
         // Floor(a)
         let test_fun = Arc::new(ScalarUDF::new_from_impl(TestScalarUDF::new()));
         let col_a = col("a", &test_schema)?;
@@ -177,7 +185,7 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
                         let expected =
                             is_table_same_after_sort(ordering.clone(), &projected_batch)?;
                         let err_msg = format!(
-                            "Error in test case requirement:{ordering:?}, expected: {expected:?}, eq_properties: {eq_properties}, projected_eq: {projected_eq}, projection_mapping: {projection_mapping:?}"
+                            "Error in test case seed: {seed}, null_pct: {null_pct}, requirement:{ordering:?}, expected: {expected:?}, eq_properties: {eq_properties}, projected_eq: {projected_eq}, projection_mapping: {projection_mapping:?}"
                         );
                         // Same reasoning as in `ordering.rs`: only keys from
                         // the first `+`/`-` source onwards are inconclusive,
