@@ -161,7 +161,9 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
                     .set_column_bloom_filter_max_ndv(path.clone(), bloom_filter_ndv);
             }
 
-            if let Some(compression_threshold) = options.data_page_compression_ratio_threshold {
+            if let Some(compression_threshold) =
+                options.data_page_compression_ratio_threshold
+            {
                 builder = builder.set_column_data_page_v2_compression_ratio_threshold(
                     path.clone(),
                     compression_threshold,
@@ -291,10 +293,6 @@ impl ParquetOptions {
         // Therefore, only overwrite if these settings exist.
         if let Some(compression) = compression {
             builder = builder.set_compression((*compression).into());
-        }
-        if let Some(compression_threshold) = compression_threshold {
-            builder = builder
-                .set_data_page_v2_compression_ratio_threshold(*compression_threshold);
         }
         if let Some(compression_threshold) = compression_threshold {
             builder = builder
@@ -464,7 +462,9 @@ mod tests {
                 }
                 _ => None,
             },
-            data_page_compression_ratio_threshold: Some(props.data_page_v2_compression_ratio_threshold()),
+            data_page_compression_ratio_threshold: Some(
+                props.data_page_v2_compression_ratio_threshold(),
+            ),
             statistics_enabled: Some(
                 match props.statistics_enabled(&col) {
                     EnabledStatistics::None => "none",
@@ -541,7 +541,8 @@ mod tests {
                     }
                     _ => None,
                 },
-                data_page_compression_ratio_threshold: default_col_props.data_page_compression_ratio_threshold,
+                data_page_compression_ratio_threshold: default_col_props
+                    .data_page_compression_ratio_threshold,
                 dictionary_enabled: default_col_props.dictionary_enabled,
                 statistics_enabled: Some(props.statistics_enabled(&default_col).into()),
                 bloom_filter_on_write: default_col_props

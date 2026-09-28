@@ -1454,7 +1454,7 @@ config_namespace! {
 
         /// (writing) Sets the default compression ratio threshold at or above which a Data Page
         /// v2's compressed values are discarded in favor of writing the values uncompressed.
-        pub data_page_compression_ratio_threshold: Option<f64>, default = None
+        pub data_page_compression_ratio_threshold: Option<f64>, default = Some(1.0)
 
         /// (writing) Sets if dictionary encoding is enabled. If NULL, uses
         /// default parquet writer setting
