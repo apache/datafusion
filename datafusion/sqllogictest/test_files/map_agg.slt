@@ -55,6 +55,31 @@ ORDER BY k
 a {1: 10, 2: 20}
 b {3: 30}
 
+# duplicate group keys: each group still collects its own pairs
+query T?
+SELECT k, map_agg(k,v)
+FROM (VALUES
+    ('a', 1),
+    ('a', 2),
+    ('b', 3)
+) t(k, v )
+GROUP BY k
+ORDER BY k
+----
+a {a: 1, a: 2}
+b {b: 3}
+
+# ORDER BY inside the aggregate controls the map entry order
+query ?
+SELECT map_agg(k, v ORDER BY v)
+FROM (VALUES
+    ('a', 3),
+    ('b', 1),
+    ('c', 2)
+) t(k, v)
+----
+{b: 1, c: 2, a: 3}
+
 # Multiple batches: with batch_size = 1 every row arrives in its own batch.
 # A single partition keeps the input order, so the entries stay in row order.
 statement ok

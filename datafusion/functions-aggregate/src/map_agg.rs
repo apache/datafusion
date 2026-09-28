@@ -20,7 +20,6 @@
 //! Aggregates key/value pairs into a `Map`, analogous to how `array_agg`
 //! aggregates values into a `List`.
 
-use std::collections::VecDeque;
 use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
@@ -28,6 +27,7 @@ use arrow::array::{Array, ArrayRef, MapArray, StructArray};
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 
+use datafusion_common::HashSet;
 use datafusion_common::cast::as_map_array;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
@@ -138,8 +138,13 @@ impl AggregateUDFImpl for MapAgg {
     }
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        MapAggAccumulator::try_new(acc_args.return_field.data_type().clone())
-            .map(|acc| Box::new(acc) as _)
+        let [key_field, value_field] =
+            take_function_args(self.name(), acc_args.expr_fields)?;
+        MapAggAccumulator::try_new(
+            key_field.data_type().clone(),
+            value_field.data_type().clone(),
+        )
+        .map(|acc| Box::new(acc) as _)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -149,24 +154,51 @@ impl AggregateUDFImpl for MapAgg {
 
 /// Accumulates key/value pairs for [`MapAgg`].
 ///
-/// Collected batches are concatenated when the map is built in [`Self::evaluate`];
-/// partial states are single-row [`MapArray`] scalars that are split back into
-/// batches in [`Self::merge_batch`].
+/// Input rows are kept as parallel [`ScalarValue`] lists and concatenated into
+/// the map in [`Self::evaluate`]; partial states are single-row [`MapArray`]
+/// scalars that are split back into rows in [`Self::merge_batch`].
 #[derive(Debug)]
 pub struct MapAggAccumulator {
-    keys: VecDeque<ArrayRef>, // mirrors ArrayAggAccumulator::values
-    values: VecDeque<ArrayRef>,
-    datatype: DataType, // DataType::Map, from return_type
+    key_type: DataType,
+    value_type: DataType,
+    keys: Vec<ScalarValue>,
+    values: Vec<ScalarValue>,
 }
 
 impl MapAggAccumulator {
-    /// Create a new map_agg accumulator for the given map data type
-    pub fn try_new(datatype: DataType) -> Result<Self> {
+    /// Create a new map_agg accumulator for the given key and value types
+    pub fn try_new(key_type: DataType, value_type: DataType) -> Result<Self> {
         Ok(Self {
-            keys: VecDeque::new(),
-            values: VecDeque::new(),
-            datatype,
+            key_type,
+            value_type,
+            keys: vec![],
+            values: vec![],
         })
+    }
+    fn dedup_first_wins(
+        keys: Vec<ScalarValue>,
+        values: Vec<ScalarValue>,
+    ) -> (Vec<ScalarValue>, Vec<ScalarValue>) {
+        // First pass: mark each position that is the first occurrence of its key.
+        let mut seen = HashSet::with_capacity(keys.len());
+        let keep: Vec<bool> = keys.iter().map(|k| seen.insert(k.clone())).collect();
+
+        // Second pass: keep only the first-occurrence positions.
+        let out_keys = keys
+            .into_iter()
+            .zip(&keep)
+            .filter_map(|(k, &keep)| keep.then_some(k))
+            .collect();
+        let out_values = values
+            .into_iter()
+            .zip(&keep)
+            .filter_map(|(v, &keep)| keep.then_some(v))
+            .collect();
+        (out_keys, out_values)
+    }
+    /// The `DataType::Map` this accumulator evaluates to
+    fn map_type(&self) -> DataType {
+        MapAgg::map_data_type(&self.key_type, &self.value_type)
     }
 }
 
@@ -178,15 +210,13 @@ impl Accumulator for MapAggAccumulator {
         let vals = &values[1];
         assert_eq_or_internal_err!(keys.len(), vals.len(), "key/value length mismatch");
 
-        if keys.is_empty() {
-            return Ok(());
+        for row in 0..keys.len() {
+            self.keys.push(ScalarValue::try_from_array(keys, row)?);
+            self.values.push(ScalarValue::try_from_array(vals, row)?);
         }
 
-        self.keys.push_back(Arc::clone(keys));
-        self.values.push_back(Arc::clone(vals));
         Ok(())
     }
-
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         if states.is_empty() {
             return Ok(());
@@ -196,21 +226,19 @@ impl Accumulator for MapAggAccumulator {
 
         let map_arr = as_map_array(states[0].as_ref())?;
         let offsets = map_arr.value_offsets();
+        let map_keys = map_arr.keys();
+        let map_values = map_arr.values();
 
         for row in 0..map_arr.len() {
             // Partial states are nullable so empty groups can produce a NULL map
             if map_arr.is_null(row) {
                 continue;
             }
-            let start = offsets[row] as usize;
-            let end = offsets[row + 1] as usize;
-            if start == end {
-                continue;
+            for idx in offsets[row] as usize..offsets[row + 1] as usize {
+                self.keys.push(ScalarValue::try_from_array(map_keys, idx)?);
+                self.values
+                    .push(ScalarValue::try_from_array(map_values, idx)?);
             }
-            self.keys
-                .push_back(map_arr.keys().slice(start, end - start));
-            self.values
-                .push_back(map_arr.values().slice(start, end - start));
         }
 
         Ok(())
@@ -221,28 +249,25 @@ impl Accumulator for MapAggAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
+        let map_type = self.map_type();
+
         if self.keys.is_empty() {
-            return ScalarValue::try_new_null(&self.datatype);
-        }
-
-        let key_refs: Vec<&dyn Array> = self.keys.iter().map(|a| a.as_ref()).collect();
-        let value_refs: Vec<&dyn Array> =
-            self.values.iter().map(|a| a.as_ref()).collect();
-
-        let keys = arrow::compute::concat(&key_refs)?;
-        let values = arrow::compute::concat(&value_refs)?;
-
-        if keys.is_empty() {
-            return ScalarValue::try_new_null(&self.datatype);
+            return ScalarValue::try_new_null(&map_type);
         }
 
         // Arrow maps cannot represent null keys (same rule as the `map` function)
-        if keys.logical_null_count() > 0 {
+        if self.keys.iter().any(ScalarValue::is_null) {
             return exec_err!("map key cannot be null");
         }
 
-        let DataType::Map(entries_field, ordered) = &self.datatype else {
-            return internal_err!("map_agg expected Map type, got {}", self.datatype);
+        let (keys, values) =
+            Self::dedup_first_wins(self.keys.clone(), self.values.clone());
+
+        let keys = ScalarValue::iter_to_array(keys.into_iter())?;
+        let values = ScalarValue::iter_to_array(values.into_iter())?;
+
+        let DataType::Map(entries_field, ordered) = &map_type else {
+            return internal_err!("map_agg expected Map type, got {map_type}");
         };
         let DataType::Struct(entry_fields) = entries_field.data_type() else {
             return internal_err!(
@@ -251,8 +276,11 @@ impl Accumulator for MapAggAccumulator {
             );
         };
 
-        let entries =
-            StructArray::try_new(entry_fields.clone(), vec![keys, values], None)?;
+        let entries = StructArray::try_new(
+            entry_fields.clone(),
+            vec![keys.clone(), values.clone()],
+            None,
+        )?;
 
         let Ok(num_entries) = i32::try_from(entries.len()) else {
             return internal_err!(
@@ -273,18 +301,16 @@ impl Accumulator for MapAggAccumulator {
     }
 
     fn size(&self) -> usize {
+        // ScalarValue::size already counts the enum itself, so spare capacity is
+        // accounted for separately to avoid double counting the held values
         size_of_val(self)
-            + (size_of::<ArrayRef>() * (self.keys.capacity() + self.values.capacity()))
+            + (size_of::<ScalarValue>() * (self.keys.capacity() + self.values.capacity()))
             + self
                 .keys
                 .iter()
                 .chain(self.values.iter())
-                // See ArrayAggAccumulator::size: this approximates the memory each
-                // ArrayRef would occupy if fully owned by this accumulator.
-                .map(|arr| arr.to_data().get_slice_memory_size().unwrap_or_default())
+                .map(|s| s.size() - size_of::<ScalarValue>())
                 .sum::<usize>()
-            + self.datatype.size()
-            - size_of_val(&self.datatype)
     }
 }
 
@@ -295,9 +321,7 @@ mod tests {
     use arrow::array::{Int32Array, StringArray};
 
     fn map_agg_accumulator() -> Result<MapAggAccumulator> {
-        let datatype =
-            MapAgg::default().return_type(&[DataType::Utf8, DataType::Int32])?;
-        MapAggAccumulator::try_new(datatype)
+        MapAggAccumulator::try_new(DataType::Utf8, DataType::Int32)
     }
 
     #[test]
@@ -325,6 +349,38 @@ mod tests {
 
         let map_values = map.values().as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(map_values, &Int32Array::from(vec![Some(1), None, Some(3)]));
+
+        Ok(())
+    }
+    #[test]
+    fn duplicate_key_handling() -> Result<()> {
+        let mut acc = map_agg_accumulator()?;
+        acc.update_batch(&[
+            Arc::new(StringArray::from(vec!["a", "b"])),
+            Arc::new(Int32Array::from(vec![Some(1), Some(23)])),
+        ])?;
+        acc.update_batch(&[
+            Arc::new(StringArray::from(vec!["a"])),
+            Arc::new(Int32Array::from(vec![Some(3)])),
+        ])?;
+
+        let ScalarValue::Map(map) = acc.evaluate()? else {
+            panic!("expected map scalar");
+        };
+        println!("{map:?}");
+        // Arrow maps may hold repeated keys, so every entry is kept in input order
+        assert_eq!(map.len(), 1);
+        assert!(map.is_valid(0));
+        assert_eq!(map.value_offsets(), &[0, 3]);
+
+        let map_keys = map.keys().as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(map_keys, &StringArray::from(vec!["a", "b", "a"]));
+
+        let map_values = map.values().as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(
+            map_values,
+            &Int32Array::from(vec![Some(1), Some(23), Some(3)])
+        );
 
         Ok(())
     }
