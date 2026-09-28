@@ -1,0 +1,25 @@
+description = "ClickBench analytics queries over the hits dataset"
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[path_replacements]
+DATA_DIR = "../../data"
+
+[[options]]
+name = "partitioning"
+env = "CLICKBENCH_TYPE"
+default = "single"
+values = ["single", "partitioned"]
+help = "Selects the single-file or partitioned ClickBench dataset."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- clickbench"
+description = "Run all ClickBench queries against the single-file dataset."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- clickbench --query 7"
+description = "Run ClickBench query 7."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- clickbench --partitioning partitioned"
+description = "Run all ClickBench queries against the partitioned dataset."

@@ -29,7 +29,7 @@ use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::normalize_float_zero;
 use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
-use datafusion_expr::EmitTo;
+use datafusion_expr::{EmitTo, GroupSelection};
 use hashbrown::hash_table::HashTable;
 use log::debug;
 use std::mem::size_of;
@@ -255,6 +255,33 @@ impl GroupValues for GroupValuesRows {
         Ok(output)
     }
 
+    fn values_preserving(
+        &mut self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        let empty_rows;
+        let group_values = if let Some(group_values) = self.group_values.as_ref() {
+            group_values
+        } else {
+            empty_rows = self.row_converter.empty_rows(0, 0);
+            &empty_rows
+        };
+        selection.validate_num_groups(group_values.num_rows())?;
+        let rows = selection.iter().map(|index| group_values.row(index));
+        let mut output = self.row_converter.convert_rows(rows)?;
+
+        // TODO: Materialize dictionaries in group keys
+        // https://github.com/apache/datafusion/issues/7647
+        for (field, array) in self.schema.fields.iter().zip(&mut output) {
+            *array = encode_array_if_necessary(array, field.data_type())?;
+        }
+        Ok(output)
+    }
+
+    fn supports_values_preserving(&self) -> bool {
+        true
+    }
+
     fn clear_shrink(&mut self, num_rows: usize) {
         self.group_values = self.group_values.take().map(|mut rows| {
             rows.clear();
@@ -410,5 +437,51 @@ pub(crate) fn encode_array_if_necessary(
         }
         (DataType::RunEndEncoded(_, _), _) => Ok(cast(array.as_ref(), expected)?),
         (_, _) => Ok(Arc::<dyn Array>::clone(array)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{AsArray, ListArray};
+    use arrow::datatypes::{Field, Int32Type, Schema};
+
+    #[test]
+    fn preserving_nested_row_values() -> Result<()> {
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group",
+            DataType::List(field),
+            true,
+        )]));
+        let mut group_values = GroupValuesRows::try_new(schema)?;
+        let input = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3)]),
+            Some(vec![Some(1), Some(2)]),
+        ])) as ArrayRef;
+        let mut groups = vec![];
+        group_values.intern(&[input], &mut groups)?;
+        assert_eq!(groups, vec![0, 1, 2, 0]);
+
+        let selection = GroupSelection::try_from_indices(&[2, 0, 1, 2], 3)?;
+        let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(3)]),
+            Some(vec![Some(1), Some(2)]),
+            None,
+            Some(vec![Some(3)]),
+        ]);
+        for _ in 0..2 {
+            let actual = group_values.values_preserving(selection)?;
+            assert_eq!(actual[0].as_list::<i32>(), &expected);
+        }
+
+        let input = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(4)]),
+        ])) as ArrayRef;
+        group_values.intern(&[input], &mut groups)?;
+        assert_eq!(groups, vec![3]);
+        Ok(())
     }
 }

@@ -972,6 +972,82 @@ NULL NULL NULL NULL
 # Test FIND_IN_SET
 # --------------------------------------
 
+# array on the left and a literal on the right
+query I
+SELECT find_in_set(ascii_1, 'Andrew,Xiangpeng') FROM test_basic_operator
+----
+1
+2
+0
+0
+0
+0
+0
+0
+0
+NULL
+NULL
+
+# literal on the left and an array on the right
+query I
+SELECT find_in_set('🔥', unicode_2) FROM test_basic_operator
+----
+1
+0
+0
+0
+0
+0
+0
+0
+0
+NULL
+1
+
+# arrays on both sides
+query I
+SELECT find_in_set(unicode_2, unicode_1) FROM test_basic_operator
+----
+0
+1
+0
+0
+0
+1
+1
+1
+1
+NULL
+NULL
+
+# Explicit casts are needed to exercise the LargeUtf8 scalar/array paths;
+# otherwise string coercion chooses a different common physical type.
+query II
+SELECT
+  find_in_set(arrow_cast(ascii_1, 'LargeUtf8'), arrow_cast('Andrew,Xiangpeng', 'LargeUtf8')),
+  find_in_set(arrow_cast('🔥', 'LargeUtf8'), arrow_cast(unicode_2, 'LargeUtf8'))
+FROM test_basic_operator
+----
+1 1
+2 0
+0 0
+0 0
+0 0
+0 0
+0 0
+0 0
+0 0
+NULL NULL
+NULL 1
+
+# null literals paired with arrays
+query II
+SELECT find_in_set(ascii_1, NULL), find_in_set(NULL, ascii_2)
+FROM test_basic_operator
+LIMIT 1
+----
+NULL NULL
+
 query IIIIII
 SELECT
   FIND_IN_SET(ascii_1, 'a,b,c,d'),
@@ -1253,8 +1329,8 @@ NULL NULL NULL NULL NULL NULL
 
 query II
 SELECT
-  CHARACTER_LENGTH(ascii_1),
-  CHARACTER_LENGTH(unicode_1)
+  arrow_cast(CHARACTER_LENGTH(ascii_1), 'Int64'),
+  arrow_cast(CHARACTER_LENGTH(unicode_1), 'Int64')
 FROM
     test_basic_operator
 ----

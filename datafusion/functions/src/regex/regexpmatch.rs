@@ -23,7 +23,7 @@ use arrow::datatypes::Field;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_common::exec_err;
-use datafusion_common::{arrow_datafusion_err, plan_err};
+use datafusion_common::plan_err;
 use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs, TypeSignature};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
@@ -57,12 +57,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
     ),
     argument(
         name = "flags",
-        description = r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
-  - **i**: case-insensitive: letters match both upper and lower case
-  - **m**: multi-line mode: ^ and $ match begin/end of line
-  - **s**: allow . to match \n
-  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
-  - **U**: swap the meaning of x* and x*?"#
+        description = r#"Optional regular expression flags that control the behavior of the regular expression. Refer to the flags reference above for supported flags."#
     )
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -190,14 +185,21 @@ fn regexp_match_scalar_pattern(args: &[ColumnarValue]) -> Result<Option<ArrayRef
     if !matches!(pattern.try_as_str(), Some(Some(_)))
         || &pattern.data_type() != value_type
         || flags.is_some_and(|flags| {
-            flags.try_as_str() == Some(Some("g")) || &flags.data_type() != value_type
+            flags
+                .try_as_str()
+                .flatten()
+                .is_some_and(|flags| flags.contains('g'))
+                || &flags.data_type() != value_type
         })
     {
         return Ok(None);
     }
 
     let pattern = pattern.to_scalar()?;
-    let flags = flags.map(ScalarValue::to_scalar).transpose()?;
+    let flags = flags
+        .filter(|flags| flags.try_as_str() != Some(Some("")))
+        .map(ScalarValue::to_scalar)
+        .transpose()?;
 
     regexp::regexp_match(
         values,
@@ -205,31 +207,62 @@ fn regexp_match_scalar_pattern(args: &[ColumnarValue]) -> Result<Option<ArrayRef
         flags.as_ref().map(|flags| flags as &dyn Datum),
     )
     .map(Some)
-    .map_err(|e| arrow_datafusion_err!(e))
+    // The kernel compiles the pattern. A scalar argument reaches it as an
+    // array of one value.
+    .map_err(|error| {
+        super::explain_regexp_kernel_error(
+            "regexp_match",
+            error,
+            // The kernel compiles the one pattern up front, whatever the
+            // values are.
+            None,
+            pattern.get().0,
+            flags.as_ref().map(|flags| flags.get().0),
+        )
+    })
 }
 
 pub fn regexp_match(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
-        2 => regexp::regexp_match(&args[0], &args[1], None)
-            .map_err(|e| arrow_datafusion_err!(e)),
+        2 => regexp::regexp_match(&args[0], &args[1], None).map_err(|error| {
+            super::explain_regexp_kernel_error(
+                "regexp_match",
+                error,
+                Some(args[0].as_ref()),
+                args[1].as_ref(),
+                None,
+            )
+        }),
         3 => {
             match args[2].data_type() {
                 DataType::Utf8View => {
-                    if args[2].as_string_view().iter().any(|s| s == Some("g")) {
+                    if args[2]
+                        .as_string_view()
+                        .iter()
+                        .any(|s| s.is_some_and(|s| s.contains('g')))
+                    {
                         return plan_err!(
                             "regexp_match() does not support the \"global\" option"
                         );
                     }
                 }
                 DataType::Utf8 => {
-                    if args[2].as_string::<i32>().iter().any(|s| s == Some("g")) {
+                    if args[2]
+                        .as_string::<i32>()
+                        .iter()
+                        .any(|s| s.is_some_and(|s| s.contains('g')))
+                    {
                         return plan_err!(
                             "regexp_match() does not support the \"global\" option"
                         );
                     }
                 }
                 DataType::LargeUtf8 => {
-                    if args[2].as_string::<i64>().iter().any(|s| s == Some("g")) {
+                    if args[2]
+                        .as_string::<i64>()
+                        .iter()
+                        .any(|s| s.is_some_and(|s| s.contains('g')))
+                    {
                         return plan_err!(
                             "regexp_match() does not support the \"global\" option"
                         );
@@ -242,8 +275,16 @@ pub fn regexp_match(args: &[ArrayRef]) -> Result<ArrayRef> {
                 }
             }
 
-            regexp::regexp_match(&args[0], &args[1], Some(&args[2]))
-                .map_err(|e| arrow_datafusion_err!(e))
+            let flags = super::normalize_empty_flags(&args[2])?;
+            regexp::regexp_match(&args[0], &args[1], Some(&flags)).map_err(|error| {
+                super::explain_regexp_kernel_error(
+                    "regexp_match",
+                    error,
+                    Some(args[0].as_ref()),
+                    args[1].as_ref(),
+                    Some(flags.as_ref()),
+                )
+            })
         }
         other => exec_err!(
             "regexp_match was called with {other} arguments. It requires at least 2 and at most 3."

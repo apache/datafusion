@@ -25,14 +25,13 @@ use super::demux::DemuxedStreamReceiver;
 use super::{BatchSerializer, ObjectWriterBuilder};
 use crate::file_compression_type::FileCompressionType;
 use datafusion_common::error::Result;
-
-use arrow::array::RecordBatch;
 use datafusion_common::{
     DataFusionError, exec_datafusion_err, internal_datafusion_err, internal_err,
 };
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_execution::TaskContext;
 
+use arrow::array::RecordBatch;
 use bytes::Bytes;
 use futures::join;
 use object_store::ObjectStore;
@@ -122,7 +121,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
                             exec_datafusion_err!("Error writing to object store: {e}"),
                         );
                     }
-                };
+                }
                 row_count += cnt;
             }
             Ok(Err(e)) => {
@@ -259,23 +258,27 @@ pub async fn spawn_writer_tasks_and_join(
         .execution
         .max_buffered_batches_per_output_file;
 
-    let (tx_file_bundle, rx_file_bundle) = mpsc::channel(rb_buffer_size / 2);
+    let (tx_file_bundle, rx_file_bundle) = mpsc::channel(rb_buffer_size.get() / 2);
     let (tx_row_cnt, rx_row_cnt) = tokio::sync::oneshot::channel();
     let write_coordinator_task = SpawnedTask::spawn(async move {
         stateless_serialize_and_write_files(rx_file_bundle, tx_row_cnt).await
     });
-    while let Some((location, rb_stream)) = file_stream_rx.recv().await {
-        let writer =
-            ObjectWriterBuilder::new(compression, &location, Arc::clone(&object_store))
-                .with_buffer_size(Some(
-                    context
-                        .session_config()
-                        .options()
-                        .execution
-                        .objectstore_writer_buffer_size,
-                ))
-                .with_compression_level(compression_level)
-                .build()?;
+    while let Some((file_metadata, rb_stream)) = file_stream_rx.recv().await {
+        let writer = ObjectWriterBuilder::new(
+            compression,
+            &file_metadata.path,
+            Arc::clone(&object_store),
+        )
+        .with_buffer_size(Some(
+            context
+                .session_config()
+                .options()
+                .execution
+                .objectstore_writer_buffer_size,
+        ))
+        .with_compression_level(compression_level)
+        .with_bytes_written_counter(file_metadata.size)
+        .build()?;
 
         if tx_file_bundle
             .send((rb_stream, Arc::clone(&serializer), writer))

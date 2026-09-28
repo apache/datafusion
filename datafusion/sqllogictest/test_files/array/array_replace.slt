@@ -753,6 +753,93 @@ select
 ----
 [3, 5, NULL] [3, 5, 5] [3, 5, 5]
 
+# the input list's inner field is carried through to the output, so that the
+# returned type matches the one promised at planning time
+query ???TTT
+select
+  array_replace(arrow_cast(column1, 'List(Int64, field: ''element'')'), 2, 9),
+  array_replace_n(arrow_cast(column1, 'List(Int64, field: ''element'')'), 2, 9, 1),
+  array_replace_all(arrow_cast(column1, 'List(Int64, field: ''element'')'), 2, 9),
+  arrow_typeof(array_replace(arrow_cast(column1, 'List(Int64, field: ''element'')'), 2, 9)),
+  arrow_typeof(array_replace_n(arrow_cast(column1, 'List(Int64, field: ''element'')'), 2, 9, 1)),
+  arrow_typeof(array_replace_all(arrow_cast(column1, 'List(Int64, field: ''element'')'), 2, 9))
+from values (make_array(1, 2, 2));
+----
+[1, 9, 2] [1, 9, 2] [1, 9, 9] List(Int64, field: 'element') List(Int64, field: 'element') List(Int64, field: 'element')
+
+query ???TTT
+select
+  array_replace(arrow_cast(column1, 'LargeList(Int64, field: ''element'')'), 2, 9),
+  array_replace_n(arrow_cast(column1, 'LargeList(Int64, field: ''element'')'), 2, 9, 1),
+  array_replace_all(arrow_cast(column1, 'LargeList(Int64, field: ''element'')'), 2, 9),
+  arrow_typeof(array_replace(arrow_cast(column1, 'LargeList(Int64, field: ''element'')'), 2, 9)),
+  arrow_typeof(array_replace_n(arrow_cast(column1, 'LargeList(Int64, field: ''element'')'), 2, 9, 1)),
+  arrow_typeof(array_replace_all(arrow_cast(column1, 'LargeList(Int64, field: ''element'')'), 2, 9))
+from values (make_array(1, 2, 2));
+----
+[1, 9, 2] [1, 9, 2] [1, 9, 9] LargeList(Int64, field: 'element') LargeList(Int64, field: 'element') LargeList(Int64, field: 'element')
+
+# nested from/to values fall back to the generic comparison path
+query ?T
+select
+  array_replace(arrow_cast(column1, 'List(List(Int64), field: ''element'')'), make_array(2), make_array(9)),
+  arrow_typeof(array_replace(arrow_cast(column1, 'List(List(Int64), field: ''element'')'), make_array(2), make_array(9)))
+from values (make_array(make_array(1), make_array(2)));
+----
+[[1], [9]] List(List(Int64), field: 'element')
+
+# a non-nullable inner field stays non-nullable when the replacement cannot be null
+query ???TTT
+select
+  array_replace(column1, 2, 9),
+  array_replace_n(column1, 2, 9, 1),
+  array_replace_all(arrow_cast(column1, 'LargeList(non-null Int64)'), 2, 9),
+  arrow_typeof(array_replace(column1, 2, 9)),
+  arrow_typeof(array_replace_n(column1, 2, 9, 1)),
+  arrow_typeof(array_replace_all(arrow_cast(column1, 'LargeList(non-null Int64)'), 2, 9))
+from values
+  (arrow_cast(make_array(), 'List(non-null Int64)')),
+  (arrow_cast(NULL, 'List(non-null Int64)')),
+  (arrow_cast(make_array(1, 2, 2), 'List(non-null Int64)'))
+;
+----
+[] [] [] List(non-null Int64) List(non-null Int64) LargeList(non-null Int64)
+NULL NULL NULL List(non-null Int64) List(non-null Int64) LargeList(non-null Int64)
+[1, 9, 2] [1, 9, 2] [1, 9, 9] List(non-null Int64) List(non-null Int64) LargeList(non-null Int64)
+
+# ... and is widened when the replacement is nullable, since the result
+# genuinely contains a null element
+query ???TTT
+select
+  array_replace(arrow_cast(column1, 'List(non-null Int64)'), 2, NULL),
+  array_replace_n(arrow_cast(column1, 'List(non-null Int64)'), 2, NULL, 1),
+  array_replace_all(arrow_cast(column1, 'List(non-null Int64)'), 2, NULL),
+  arrow_typeof(array_replace(arrow_cast(column1, 'List(non-null Int64)'), 2, NULL)),
+  arrow_typeof(array_replace_n(arrow_cast(column1, 'List(non-null Int64)'), 2, NULL, 1)),
+  arrow_typeof(array_replace_all(arrow_cast(column1, 'List(non-null Int64)'), 2, NULL))
+from values (make_array(1, 2, 2));
+----
+[1, NULL, 2] [1, NULL, 2] [1, NULL, NULL] List(Int64) List(Int64) List(Int64)
+
+# a max of 0 short circuits without replacing anything, but must still return
+# the promised (widened) type
+query ?T
+select
+  array_replace_n(arrow_cast(column1, 'List(non-null Int64)'), 2, NULL, 0),
+  arrow_typeof(array_replace_n(arrow_cast(column1, 'List(non-null Int64)'), 2, NULL, 0))
+from values (make_array(1, 2, 2));
+----
+[1, 2, 2] List(Int64)
+
+# a NULL max yields a NULL row of the promised type
+query ?T
+select
+  array_replace_n(arrow_cast(column1, 'List(non-null Int64)'), 2, 9, NULL),
+  arrow_typeof(array_replace_n(arrow_cast(column1, 'List(non-null Int64)'), 2, 9, NULL))
+from values (make_array(1, 2, 2));
+----
+NULL List(non-null Int64)
+
 
 
 statement ok

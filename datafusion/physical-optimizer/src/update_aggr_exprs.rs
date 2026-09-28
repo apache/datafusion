@@ -89,20 +89,35 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
                 let input = aggr_exec.input();
                 let mut aggr_exprs = aggr_exec.aggr_expr().to_vec();
 
-                let groupby_exprs = aggr_exec.group_expr().input_exprs();
                 // If the existing ordering satisfies a prefix of the GROUP BY
                 // expressions, prefix requirements with this section. In this
                 // case, aggregation will work more efficiently.
-                let indices = get_ordered_partition_by_indices(&groupby_exprs, input)?;
-                let requirement = indices
-                    .iter()
-                    .map(|&idx| {
-                        PhysicalSortRequirement::new(
-                            Arc::clone(&groupby_exprs[idx]),
-                            None,
-                        )
-                    })
-                    .collect::<Vec<_>>();
+                //
+                // Only do this for a single grouping set. With grouping sets
+                // (e.g. ROLLUP), the stream feeds the same rows once per
+                // grouping set, and within a coarser set's group the rows are
+                // ordered by the *full* group-by prefix, not by the
+                // aggregate's own ORDER BY. Proving the prefixed requirement
+                // there would mark first/last aggregates as pre-ordered when
+                // their groups are not, producing wrong results in positional
+                // paths. Without the prefix, a globally satisfied ORDER BY
+                // still holds within every group of every grouping set.
+                let requirement = if aggr_exec.group_expr().is_single() {
+                    let groupby_exprs = aggr_exec.group_expr().input_exprs();
+                    let indices =
+                        get_ordered_partition_by_indices(&groupby_exprs, input)?;
+                    indices
+                        .iter()
+                        .map(|&idx| {
+                            PhysicalSortRequirement::new(
+                                Arc::clone(&groupby_exprs[idx]),
+                                None,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    vec![]
+                };
 
                 aggr_exprs = try_convert_aggregate_if_better(
                     aggr_exprs,

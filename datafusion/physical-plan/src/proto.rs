@@ -66,6 +66,12 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::physical_planning_context::ScalarSubqueryResults;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::physical_expr::proto_decode::{
+    PhysicalExprDecode, PhysicalExprDecodeCtx,
+};
+use datafusion_physical_expr_common::physical_expr::proto_encode::{
+    PhysicalExprEncode, PhysicalExprEncodeCtx,
+};
 use datafusion_proto_models::protobuf::{PhysicalExprNode, PhysicalPlanNode};
 
 use crate::ExecutionPlan;
@@ -210,6 +216,25 @@ impl<'a> ExecutionPlanEncodeCtx<'a> {
     pub fn encode_udwf(&self, udwf: &WindowUDF) -> Result<Option<Vec<u8>>> {
         self.encoder.encode_udwf(udwf)
     }
+
+    /// An expression-level encode context backed by this plan context.
+    ///
+    /// Lets a plan hand `ctx` to expression-level conversions that own their own
+    /// wire logic — e.g.
+    /// [`Partitioning::try_to_proto`](datafusion_physical_expr::Partitioning::try_to_proto)
+    /// and
+    /// [`PhysicalSortExpr::try_to_proto`](datafusion_physical_expr::PhysicalSortExpr::try_to_proto).
+    pub fn expr_ctx(&self) -> PhysicalExprEncodeCtx<'_> {
+        PhysicalExprEncodeCtx::new(self)
+    }
+}
+
+/// Lets [`ExecutionPlanEncodeCtx`] back a [`PhysicalExprEncodeCtx`], so
+/// expression-level conversions can be reused from plan hooks.
+impl PhysicalExprEncode for ExecutionPlanEncodeCtx<'_> {
+    fn encode(&self, expr: &Arc<dyn PhysicalExpr>) -> Result<PhysicalExprNode> {
+        self.encode_expr(expr)
+    }
 }
 
 /// Context handed to a plan's `try_from_proto` associated function.
@@ -316,6 +341,28 @@ impl<'a> ExecutionPlanDecodeCtx<'a> {
         payload: Option<&[u8]>,
     ) -> Result<Arc<WindowUDF>> {
         self.decoder.decode_udwf(name, payload)
+    }
+
+    /// An expression-level decode context backed by this plan context, bound to
+    /// `input_schema`.
+    ///
+    /// The decode counterpart of
+    /// [`ExecutionPlanEncodeCtx::expr_ctx`], for calling conversions such as
+    /// [`Partitioning::try_from_proto`](datafusion_physical_expr::Partitioning::try_from_proto).
+    pub fn expr_ctx<'s>(&'s self, input_schema: &'s Schema) -> PhysicalExprDecodeCtx<'s> {
+        PhysicalExprDecodeCtx::new(input_schema, self)
+    }
+}
+
+/// Lets [`ExecutionPlanDecodeCtx`] back a [`PhysicalExprDecodeCtx`], so
+/// expression-level conversions can be reused from plan hooks.
+impl PhysicalExprDecode for ExecutionPlanDecodeCtx<'_> {
+    fn decode(
+        &self,
+        node: &PhysicalExprNode,
+        schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        self.decode_expr(node, schema)
     }
 }
 

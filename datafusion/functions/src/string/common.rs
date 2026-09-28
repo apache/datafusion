@@ -31,6 +31,7 @@ use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
+use datafusion_common::utils::{offset_span, offset_span_len};
 use datafusion_common::{ScalarValue, exec_err};
 use datafusion_expr::ColumnarValue;
 
@@ -228,7 +229,7 @@ fn string_view_trim<Tr: Trimmer>(args: &[ArrayRef]) -> Result<ArrayRef> {
     unsafe {
         let array = StringViewArray::new_unchecked(
             views_buf,
-            string_view_array.data_buffers().to_vec(),
+            Arc::clone(string_view_array.data_buffers()),
             nulls_buf,
         );
         Ok(Arc::new(array) as ArrayRef)
@@ -282,11 +283,7 @@ where
     F: for<'a> FnMut(usize, &'a str) -> &'a str,
 {
     let len = string_array.len();
-    let input_offsets = string_array.value_offsets();
-    let start = input_offsets.first().unwrap().as_usize();
-    let end = input_offsets.last().unwrap().as_usize();
-
-    let mut values: Vec<u8> = Vec::with_capacity(end - start);
+    let mut values: Vec<u8> = Vec::with_capacity(offset_span_len(string_array.offsets()));
     let mut offsets: Vec<T> = Vec::with_capacity(len + 1);
     offsets.push(T::usize_as(0));
 
@@ -540,10 +537,7 @@ fn case_conversion_array<O: OffsetSizeTrait>(
 
     // Values contain non-ASCII.
     let item_len = string_array.len();
-    let offsets = string_array.value_offsets();
-    let start = offsets.first().unwrap().as_usize();
-    let end = offsets.last().unwrap().as_usize();
-    let capacity = (end - start) + PRE_ALLOC_BYTES;
+    let capacity = offset_span_len(string_array.offsets()) + PRE_ALLOC_BYTES;
     // Null-preserving: reuse the input null buffer as the output null buffer.
     let nulls = string_array.nulls().cloned();
     let mut builder = GenericStringArrayBuilder::<O>::with_capacity(item_len, capacity);
@@ -624,7 +618,6 @@ fn case_conversion_utf8view_ascii_inner<F: Fn(&u8) -> u8>(
             for b in &mut bytes[4..4 + len] {
                 *b = convert(b);
             }
-            new_views.push(u128::from_le_bytes(bytes));
         } else {
             // Long: input view points into shared `data_buffers` we can't
             // mutate, so copy-convert into our own buffer and rewrite the
@@ -676,8 +669,8 @@ fn case_conversion_utf8view_ascii_inner<F: Fn(&u8) -> u8>(
             bytes[4..8].copy_from_slice(&prefix);
             bytes[8..12].copy_from_slice(&buffer_index.to_le_bytes());
             bytes[12..16].copy_from_slice(&new_offset.to_le_bytes());
-            new_views.push(u128::from_le_bytes(bytes));
         }
+        new_views.push(u128::from_le_bytes(bytes));
     }
 
     if !in_progress.is_empty() {
@@ -692,7 +685,7 @@ fn case_conversion_utf8view_ascii_inner<F: Fn(&u8) -> u8>(
     unsafe {
         StringViewArray::new_unchecked(
             ScalarBuffer::from(new_views),
-            completed,
+            completed.into(),
             array.nulls().cloned(),
         )
     }
@@ -706,10 +699,8 @@ fn case_conversion_ascii_array<O: OffsetSizeTrait>(
     string_array: &GenericStringArray<O>,
     lower: bool,
 ) -> Result<ArrayRef> {
-    let value_offsets = string_array.value_offsets();
-    let start = value_offsets.first().unwrap().as_usize();
-    let end = value_offsets.last().unwrap().as_usize();
-    let relevant = &string_array.value_data()[start..end];
+    let (start, len) = offset_span(string_array.offsets());
+    let relevant = &string_array.value_data()[start..start + len];
 
     let converted: Vec<u8> = if lower {
         relevant.iter().map(u8::to_ascii_lowercase).collect()

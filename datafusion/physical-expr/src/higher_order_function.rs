@@ -353,6 +353,7 @@ impl PhysicalExpr for HigherOrderFunctionExpr {
                         } else {
                             Some(batch.project(&projection)?)
                         },
+                        lambda.used_param_indices(),
                     )))
                 }
                 ArgSlot::Value => {
@@ -509,15 +510,18 @@ mod tests {
 
     use super::*;
     use crate::HigherOrderFunctionExpr;
+    use crate::create_physical_expr;
     use crate::expressions::Column;
     use crate::expressions::NoOp;
     use crate::expressions::lambda;
     use crate::expressions::not;
-    use arrow::array::NullArray;
     use arrow::array::RecordBatchOptions;
+    use arrow::array::{ArrayRef, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Result;
     use datafusion_common::assert_contains;
+    use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
     use datafusion_expr::{
         HigherOrderFunctionArgs, HigherOrderSignature, HigherOrderUDF, HigherOrderUDFImpl,
     };
@@ -545,9 +549,11 @@ mod tests {
             _step: usize,
             _fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
         ) -> Result<LambdaParametersProgress> {
-            Ok(LambdaParametersProgress::Complete(vec![vec![Arc::new(
-                Field::new("", DataType::Null, true),
-            )]]))
+            // Offer two params; single-param lambdas just ignore the second.
+            Ok(LambdaParametersProgress::Complete(vec![vec![
+                Arc::new(Field::new("", DataType::Int32, true)),
+                Arc::new(Field::new("", DataType::Int32, true)),
+            ]]))
         }
 
         fn return_field_from_args(
@@ -567,7 +573,18 @@ mod tests {
         ) -> Result<ColumnarValue> {
             match &args.args[0] {
                 ValueOrLambda::Lambda(lambda) => lambda.evaluate(
-                    &[&|| Ok(Arc::new(NullArray::new(args.number_rows)))],
+                    &[
+                        // Sentinel for the first param, distinct from the second's value.
+                        &|| {
+                            Ok(Arc::new(Int32Array::from(vec![-1000; args.number_rows]))
+                                as ArrayRef)
+                        },
+                        &|| {
+                            Ok(Arc::new(Int32Array::from_iter_values(
+                                (0..args.number_rows as i32).map(|i| 10 * (i + 1)),
+                            )) as ArrayRef)
+                        },
+                    ],
                     |arrays| Ok(arrays.to_vec()),
                 ),
                 ValueOrLambda::Value(value) => Ok(value.clone()),
@@ -714,5 +731,55 @@ mod tests {
             result.to_string(),
             "mock_function received a lambda via with_new_children at position 0 that wasn't a lambda before"
         );
+    }
+
+    /// Exercises the real planner end to end (not hand-picked indices) to
+    /// check the "captures before own-params" layout invariant.
+    #[test]
+    fn test_higher_order_function_two_lambda_params_capture_and_unused_param() {
+        use datafusion_common::DFSchema;
+        use datafusion_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion_expr::{Expr, col, lambda as logical_lambda};
+
+        let fun = Arc::new(HigherOrderUDF::new_from_impl(MockHigherOrderUDF {
+            signature: HigherOrderSignature::variadic_any(Volatility::Stable),
+        }));
+
+        // Body uses capture "a" and param "v"; param "k" is left unused.
+        let v = Expr::LambdaVariable(LambdaVariable::new(
+            "v".to_string(),
+            Some(Arc::new(Field::new("v", DataType::Int32, true))),
+        ));
+        let body = col("a") + v;
+        let lambda_expr = logical_lambda(["k", "v"], body);
+
+        let schema = DFSchema::from_unqualified_fields(
+            vec![Field::new("a", DataType::Int32, false)].into(),
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        let physical_expr = create_physical_expr(
+            &Expr::HigherOrderFunction(HigherOrderFunction::new(fun, vec![lambda_expr])),
+            &schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )
+        .unwrap();
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(schema.inner()),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+        )
+        .unwrap();
+
+        let result = physical_expr.evaluate(&batch).unwrap();
+        let ColumnarValue::Array(result) = result else {
+            unreachable!()
+        };
+
+        // a + v; k's sentinel (-1000) must not leak into the result.
+        let expected = Int32Array::from(vec![11, 22, 33]);
+        assert_eq!(result.as_ref(), &expected);
     }
 }

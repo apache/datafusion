@@ -18,7 +18,10 @@
 mod kernels;
 
 use crate::PhysicalExpr;
+use crate::expressions::SqlSimilarToPattern;
+use crate::expressions::translate_scalar;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
+use std::cmp::Ordering;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -33,7 +36,7 @@ use datafusion_common::{Result, ScalarValue, internal_err, not_impl_err};
 
 use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{Interval, apply_operator};
-use datafusion_expr::sort_properties::ExprProperties;
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 #[expect(deprecated)]
 use datafusion_expr::statistics::Distribution::{Bernoulli, Gaussian};
 #[expect(deprecated)]
@@ -118,6 +121,85 @@ impl BinaryExpr {
     pub fn op(&self) -> &Operator {
         &self.op
     }
+
+    /// Mathematical intervals do not cover values produced by wrapping arithmetic.
+    fn integer_arithmetic_may_wrap(
+        &self,
+        left: &Interval,
+        right: &Interval,
+        result: &Interval,
+    ) -> bool {
+        !self.fail_on_overflow
+            && result.data_type().is_integer()
+            && matches!(
+                self.op,
+                Operator::Plus | Operator::Minus | Operator::Multiply
+            )
+            && (result.is_unbounded()
+                || unsigned_subtraction_may_underflow(self.op, left, right, result))
+    }
+
+    /// Wrapping on overflow breaks monotonicity (e.g. the sum of two
+    /// ascending `UInt8` columns can wrap back to small values), so the
+    /// derived ordering is kept only when overflow is impossible. `time ±
+    /// interval` wraps around the 24-hour clock even in checked mode, so it
+    /// never preserves ordering.
+    fn arithmetic_sort_properties(
+        &self,
+        sort_properties: SortProperties,
+        l_range: &Interval,
+        r_range: &Interval,
+        range: &Interval,
+    ) -> SortProperties {
+        if sort_properties == SortProperties::Singleton {
+            return sort_properties;
+        }
+        let wraps_in_domain = match self.op {
+            Operator::Plus => {
+                is_time_plus_interval(&l_range.data_type(), &r_range.data_type())
+            }
+            Operator::Minus => {
+                is_time_minus_interval(&l_range.data_type(), &r_range.data_type())
+            }
+            _ => false,
+        };
+        let cannot_overflow = !range.is_unbounded()
+            && !unsigned_subtraction_may_underflow(self.op, l_range, r_range, range);
+        if !wraps_in_domain && (self.fail_on_overflow || cannot_overflow) {
+            sort_properties
+        } else {
+            SortProperties::Unordered
+        }
+    }
+}
+
+/// Returns `true` unless `l_range - r_range` provably stays within an unsigned
+/// domain.
+///
+/// [`Interval`] standardizes an underflowed (i.e. `null`) lower bound of an
+/// unsigned type back to zero, so an apparently bounded result range is not
+/// enough to rule out wrapping here -- e.g. `[0, 10] - [0, 10]` over `UInt32`
+/// yields `[0, 10]` even though `0 - 10` wraps to `u32::MAX`. Compare the
+/// endpoints that produce the smallest difference instead.
+fn unsigned_subtraction_may_underflow(
+    op: Operator,
+    l_range: &Interval,
+    r_range: &Interval,
+    range: &Interval,
+) -> bool {
+    if op != Operator::Minus || !range.data_type().is_unsigned_integer() {
+        return false;
+    }
+    let (smallest_lhs, largest_rhs) = (l_range.lower(), r_range.upper());
+    if smallest_lhs.is_null() || largest_rhs.is_null() {
+        return true;
+    }
+    // Operands of differing types compare as incomparable, in which case we
+    // conservatively assume an underflow is possible.
+    !matches!(
+        smallest_lhs.partial_cmp(largest_rhs),
+        Some(Ordering::Greater | Ordering::Equal)
+    )
 }
 
 impl std::fmt::Display for BinaryExpr {
@@ -465,7 +547,13 @@ impl PhysicalExpr for BinaryExpr {
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
-        Ok(self.left.nullable(input_schema)? || self.right.nullable(input_schema)?)
+        match self.op {
+            Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => Ok(false),
+            _ => {
+                Ok(self.left.nullable(input_schema)?
+                    || self.right.nullable(input_schema)?)
+            }
+        }
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
@@ -629,7 +717,12 @@ impl PhysicalExpr for BinaryExpr {
         let left_interval = children[0];
         let right_interval = children[1];
         // Calculate current node's interval:
-        apply_operator(&self.op, left_interval, right_interval)
+        let result = apply_operator(&self.op, left_interval, right_interval)?;
+        if self.integer_arithmetic_may_wrap(left_interval, right_interval, &result) {
+            Interval::make_unbounded(&result.data_type())
+        } else {
+            Ok(result)
+        }
     }
 
     fn propagate_constraints(
@@ -640,6 +733,36 @@ impl PhysicalExpr for BinaryExpr {
         // Get children intervals.
         let left_interval = children[0];
         let right_interval = children[1];
+
+        if left_interval.data_type().is_integer()
+            && right_interval.data_type().is_integer()
+            && matches!(
+                self.op,
+                Operator::Plus | Operator::Minus | Operator::Multiply | Operator::Divide
+            )
+        {
+            // Integer division truncates: a / 2 = 1 permits both 2 and 3.
+            // Wrapping arithmetic is likewise not invertible over mathematical
+            // intervals. Keep the input domains rather than exclude valid rows.
+            let contains_zero = |range: &Interval| -> Result<bool> {
+                range.contains_value(ScalarValue::new_zero(&range.data_type())?)
+            };
+            // If an operand can be zero, a zero product does not constrain
+            // the other operand. Dividing the parent interval loses that case.
+            let zero_product = self.op == Operator::Multiply
+                && contains_zero(interval)?
+                && (contains_zero(left_interval)? || contains_zero(right_interval)?);
+            if self.op == Operator::Divide
+                || zero_product
+                || self.integer_arithmetic_may_wrap(
+                    left_interval,
+                    right_interval,
+                    &apply_operator(&self.op, left_interval, right_interval)?,
+                )
+            {
+                return Ok(Some(vec![]));
+            }
+        }
 
         if self.op.eq(&Operator::And) {
             if interval.eq(&Interval::TRUE) {
@@ -760,18 +883,34 @@ impl PhysicalExpr for BinaryExpr {
         let (l_order, l_range) = (children[0].sort_properties, &children[0].range);
         let (r_order, r_range) = (children[1].sort_properties, &children[1].range);
         match self.op() {
-            Operator::Plus => Ok(ExprProperties {
-                sort_properties: l_order.add(&r_order),
-                range: l_range.add(r_range)?,
-                preserves_lex_ordering: false,
-                strictly_order_preserving: false,
-            }),
-            Operator::Minus => Ok(ExprProperties {
-                sort_properties: l_order.sub(&r_order),
-                range: l_range.sub(r_range)?,
-                preserves_lex_ordering: false,
-                strictly_order_preserving: false,
-            }),
+            Operator::Plus => {
+                let range = self.evaluate_bounds(&[l_range, r_range])?;
+                Ok(ExprProperties {
+                    sort_properties: self.arithmetic_sort_properties(
+                        l_order.add(&r_order),
+                        l_range,
+                        r_range,
+                        &range,
+                    ),
+                    range,
+                    preserves_lex_ordering: false,
+                    strictly_order_preserving: false,
+                })
+            }
+            Operator::Minus => {
+                let range = self.evaluate_bounds(&[l_range, r_range])?;
+                Ok(ExprProperties {
+                    sort_properties: self.arithmetic_sort_properties(
+                        l_order.sub(&r_order),
+                        l_range,
+                        r_range,
+                        &range,
+                    ),
+                    range,
+                    preserves_lex_ordering: false,
+                    strictly_order_preserving: false,
+                })
+            }
             Operator::Gt => Ok(ExprProperties {
                 sort_properties: l_order.gt_or_gteq(&r_order),
                 range: l_range.gt(r_range)?,
@@ -797,13 +936,13 @@ impl PhysicalExpr for BinaryExpr {
                 strictly_order_preserving: false,
             }),
             Operator::And => Ok(ExprProperties {
-                sort_properties: r_order.and_or(&l_order),
+                sort_properties: l_order.and(&r_order),
                 range: l_range.and(r_range)?,
                 preserves_lex_ordering: false,
                 strictly_order_preserving: false,
             }),
             Operator::Or => Ok(ExprProperties {
-                sort_properties: r_order.and_or(&l_order),
+                sort_properties: l_order.or(&r_order),
                 range: l_range.or(r_range)?,
                 preserves_lex_ordering: false,
                 strictly_order_preserving: false,
@@ -845,19 +984,27 @@ impl PhysicalExpr for BinaryExpr {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
-        // Linearize a nested binary expression tree of the same operator
-        // into a flat vector of operands to avoid deep recursion in proto.
-        let op = self.op;
-        let mut operand_refs: Vec<&Arc<dyn PhysicalExpr>> = vec![&self.right];
-        let mut current_expr: &BinaryExpr = self;
+        let Self {
+            left,
+            op,
+            right,
+            fail_on_overflow,
+        } = self;
+
+        // Linearize a nested binary expression tree with the same operator and
+        // overflow policy into flat operands to avoid deep recursion in proto.
+        let mut operand_refs: Vec<&Arc<dyn PhysicalExpr>> = vec![right];
+        let mut current_left = left;
         loop {
-            match current_expr.left.downcast_ref::<BinaryExpr>() {
-                Some(bin) if bin.op == op => {
+            match current_left.downcast_ref::<BinaryExpr>() {
+                Some(bin)
+                    if bin.op == *op && bin.fail_on_overflow == *fail_on_overflow =>
+                {
                     operand_refs.push(&bin.right);
-                    current_expr = bin;
+                    current_left = &bin.left;
                 }
                 _ => {
-                    operand_refs.push(&current_expr.left);
+                    operand_refs.push(current_left);
                     break;
                 }
             }
@@ -875,6 +1022,7 @@ impl PhysicalExpr for BinaryExpr {
                     r: None,
                     op: format!("{op:?}"),
                     operands,
+                    fail_on_overflow: *fail_on_overflow,
                 }),
             )),
         }))
@@ -906,17 +1054,23 @@ impl BinaryExpr {
             protobuf::physical_expr_node::ExprType::BinaryExpr,
             "BinaryExpr",
         );
-        let op = Operator::from_proto_name(&node.op).ok_or_else(|| {
+        let protobuf::PhysicalBinaryExprNode {
+            l,
+            r,
+            op,
+            operands,
+            fail_on_overflow,
+        } = node.as_ref();
+        let op = Operator::from_proto_name(op).ok_or_else(|| {
             datafusion_common::DataFusionError::Internal(format!(
-                "Unsupported binary operator '{}'",
-                node.op
+                "Unsupported binary operator '{op}'"
             ))
         })?;
 
-        if !node.operands.is_empty() {
+        if !operands.is_empty() {
             // New linearized format: reduce the flat operands list back into
             // a nested binary expression tree.
-            let operands = ctx.decode_children_expressions(&node.operands)?;
+            let operands = ctx.decode_children_expressions(operands)?;
 
             if operands.len() < 2 {
                 return internal_err!(
@@ -927,16 +1081,21 @@ impl BinaryExpr {
             Ok(operands
                 .into_iter()
                 .reduce(|left, right| {
-                    Arc::new(BinaryExpr::new(left, op, right)) as Arc<dyn PhysicalExpr>
+                    Arc::new(
+                        BinaryExpr::new(left, op, right)
+                            .with_fail_on_overflow(*fail_on_overflow),
+                    ) as Arc<dyn PhysicalExpr>
                 })
                 .expect("Binary expression could not be reduced to a single expression."))
         } else {
             // Legacy format with l/r fields.
             let left =
-                ctx.decode_required_expression(node.l.as_deref(), "BinaryExpr", "left")?;
+                ctx.decode_required_expression(l.as_deref(), "BinaryExpr", "left")?;
             let right =
-                ctx.decode_required_expression(node.r.as_deref(), "BinaryExpr", "right")?;
-            Ok(Arc::new(BinaryExpr::new(left, op, right)))
+                ctx.decode_required_expression(r.as_deref(), "BinaryExpr", "right")?;
+            Ok(Arc::new(
+                BinaryExpr::new(left, op, right).with_fail_on_overflow(*fail_on_overflow),
+            ))
         }
     }
 }
@@ -1292,7 +1451,19 @@ pub fn similar_to(
         (true, false) => Operator::RegexNotMatch,
         (true, true) => Operator::RegexNotIMatch,
     };
-    Ok(Arc::new(BinaryExpr::new(expr, binary_op, pattern)))
+
+    let translated_pattern = match pattern.downcast_ref::<crate::expressions::Literal>() {
+        Some(literal) => Arc::new(crate::expressions::Literal::new(translate_scalar(
+            literal.value(),
+        )?)) as Arc<dyn PhysicalExpr>,
+        None => Arc::new(SqlSimilarToPattern::new(pattern)) as Arc<dyn PhysicalExpr>,
+    };
+
+    Ok(Arc::new(BinaryExpr::new(
+        expr,
+        binary_op,
+        translated_pattern,
+    )))
 }
 
 #[cfg(test)]
@@ -1306,7 +1477,176 @@ mod tests {
 
     use crate::planner::logical2physical;
     use arrow::array::BooleanArray;
+    use arrow::compute::SortOptions;
     use datafusion_expr::col as logical_col;
+
+    #[test]
+    fn test_arithmetic_ordering_overflow() -> Result<()> {
+        let asc = SortProperties::Ordered(Default::default());
+        let ordered = |range: Interval| ExprProperties {
+            sort_properties: asc,
+            range,
+            preserves_lex_ordering: false,
+            strictly_order_preserving: false,
+        };
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let a_plus_b =
+            BinaryExpr::new(col("a", &schema)?, Operator::Plus, col("b", &schema)?);
+        let unbounded = [
+            ordered(Interval::make_unbounded(&DataType::Int32)?),
+            ordered(Interval::make_unbounded(&DataType::Int32)?),
+        ];
+        let bounded = [
+            ordered(Interval::make(Some(0), Some(10))?),
+            ordered(Interval::make(Some(0), Some(10))?),
+        ];
+
+        // Unknown ranges: the sum may overflow and wrap, so it is unordered.
+        assert_eq!(
+            a_plus_b.get_properties(&unbounded)?.sort_properties,
+            SortProperties::Unordered
+        );
+        // Bounded ranges that cannot overflow keep the ordering, as does
+        // checked arithmetic, which errors instead of wrapping.
+        assert_eq!(a_plus_b.get_properties(&bounded)?.sort_properties, asc);
+        let checked = a_plus_b.with_fail_on_overflow(true);
+        assert_eq!(checked.get_properties(&unbounded)?.sort_properties, asc);
+
+        // `time + interval` wraps around the 24-hour clock even in checked
+        // mode, so it never preserves ordering.
+        let time = DataType::Time64(TimeUnit::Nanosecond);
+        let interval = DataType::Interval(IntervalUnit::MonthDayNano);
+        let schema = Schema::new(vec![
+            Field::new("t", time.clone(), false),
+            Field::new("i", interval.clone(), false),
+        ]);
+        let time_plus_interval =
+            BinaryExpr::new(col("t", &schema)?, Operator::Plus, col("i", &schema)?)
+                .with_fail_on_overflow(true);
+        let time_props = [
+            ordered(Interval::make_unbounded(&time)?),
+            ordered(Interval::make_unbounded(&interval)?),
+        ];
+        assert_eq!(
+            time_plus_interval
+                .get_properties(&time_props)?
+                .sort_properties,
+            SortProperties::Unordered
+        );
+
+        Ok(())
+    }
+
+    /// `a - b` only derives an ordering when `a` and `b` are ordered in
+    /// opposite directions, so every case below pairs an ascending left-hand
+    /// side with a descending right-hand side.
+    #[test]
+    fn test_subtraction_ordering_overflow() -> Result<()> {
+        let asc = SortProperties::Ordered(SortOptions {
+            descending: false,
+            nulls_first: true,
+        });
+        let desc = SortProperties::Ordered(SortOptions {
+            descending: true,
+            nulls_first: true,
+        });
+        let props = |sort_properties, range| ExprProperties {
+            sort_properties,
+            range,
+            preserves_lex_ordering: false,
+            strictly_order_preserving: false,
+        };
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let a_minus_b =
+            BinaryExpr::new(col("a", &schema)?, Operator::Minus, col("b", &schema)?);
+
+        // Signed minimum: the difference can underflow past `i32::MIN` and
+        // wrap around to large positive values.
+        let signed_underflow = [
+            props(asc, Interval::make(Some(i32::MIN), Some(0))?),
+            props(desc, Interval::make(Some(0), Some(i32::MAX))?),
+        ];
+        assert_eq!(
+            a_minus_b.get_properties(&signed_underflow)?.sort_properties,
+            SortProperties::Unordered
+        );
+        // The very same ranges keep the ordering under checked arithmetic,
+        // which errors instead of wrapping.
+        let checked = a_minus_b.clone().with_fail_on_overflow(true);
+        assert_eq!(
+            checked.get_properties(&signed_underflow)?.sort_properties,
+            asc
+        );
+        // Ranges whose difference stays inside `Int32` are safe.
+        let signed_safe = [
+            props(asc, Interval::make(Some(0), Some(10))?),
+            props(desc, Interval::make(Some(0), Some(10))?),
+        ];
+        assert_eq!(a_minus_b.get_properties(&signed_safe)?.sort_properties, asc);
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::UInt32, false),
+        ]);
+        let a_minus_b =
+            BinaryExpr::new(col("a", &schema)?, Operator::Minus, col("b", &schema)?);
+
+        // Unsigned underflow: the ranges overlap, so `0 - 1` wraps to
+        // `u32::MAX` even though both operands are bounded.
+        let unsigned_underflow = [
+            props(asc, Interval::make(Some(0_u32), Some(10_u32))?),
+            props(desc, Interval::make(Some(0_u32), Some(10_u32))?),
+        ];
+        assert_eq!(
+            a_minus_b
+                .get_properties(&unsigned_underflow)?
+                .sort_properties,
+            SortProperties::Unordered
+        );
+        // A left-hand range that always dominates the right-hand one cannot
+        // underflow.
+        let unsigned_safe = [
+            props(asc, Interval::make(Some(10_u32), Some(20_u32))?),
+            props(desc, Interval::make(Some(0_u32), Some(5_u32))?),
+        ];
+        assert_eq!(
+            a_minus_b.get_properties(&unsigned_safe)?.sort_properties,
+            asc
+        );
+
+        // `time - interval` wraps around the 24-hour clock even in checked
+        // mode, so it never preserves ordering.
+        let time = DataType::Time64(TimeUnit::Nanosecond);
+        let interval = DataType::Interval(IntervalUnit::MonthDayNano);
+        let schema = Schema::new(vec![
+            Field::new("t", time.clone(), false),
+            Field::new("i", interval.clone(), false),
+        ]);
+        let time_minus_interval =
+            BinaryExpr::new(col("t", &schema)?, Operator::Minus, col("i", &schema)?)
+                .with_fail_on_overflow(true);
+        let time_props = [
+            props(asc, Interval::make_unbounded(&time)?),
+            props(desc, Interval::make_unbounded(&interval)?),
+        ];
+        assert_eq!(
+            time_minus_interval
+                .get_properties(&time_props)?
+                .sort_properties,
+            SortProperties::Unordered
+        );
+
+        Ok(())
+    }
+
     /// Performs a binary operation, applying any type coercion necessary
     fn binary_op(
         left: Arc<dyn PhysicalExpr>,
@@ -3932,6 +4272,27 @@ mod tests {
     }
 
     #[test]
+    fn distinct_from_op_nullability() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("nullable", DataType::Boolean, true),
+            Field::new("non_nullable", DataType::Boolean, false),
+        ]);
+        let cases = [
+            (Operator::IsDistinctFrom, "nullable", false),
+            (Operator::IsNotDistinctFrom, "nullable", false),
+            (Operator::Eq, "nullable", true),
+            (Operator::Eq, "non_nullable", false),
+        ];
+
+        for (op, column, expected) in cases {
+            let expr = BinaryExpr::new(col(column, &schema)?, op, lit(true));
+            assert_eq!(expr.nullable(&schema)?, expected, "{op} with {column}");
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn is_not_distinct_from_op_bool() {
         let (schema, a, b) = bool_test_arrays();
         let expected = [
@@ -5079,25 +5440,17 @@ mod tests {
         Ok(())
     }
 
-    /// Test helper for SIMILAR TO binary operation
     fn apply_similar_to(
         schema: &SchemaRef,
         va: Vec<&str>,
-        vb: Vec<&str>,
+        pattern: &str,
         negated: bool,
         case_insensitive: bool,
         expected: &BooleanArray,
     ) -> Result<()> {
         let a = StringArray::from(va);
-        let b = StringArray::from(vb);
-        let op = similar_to(
-            negated,
-            case_insensitive,
-            col("a", schema)?,
-            col("b", schema)?,
-        )?;
-        let batch =
-            RecordBatch::try_new(Arc::clone(schema), vec![Arc::new(a), Arc::new(b)])?;
+        let op = similar_to(negated, case_insensitive, col("a", schema)?, lit(pattern))?;
+        let batch = RecordBatch::try_new(Arc::clone(schema), vec![Arc::new(a)])?;
         let result = op
             .evaluate(&batch)?
             .into_array(batch.num_rows())
@@ -5109,32 +5462,237 @@ mod tests {
 
     #[test]
     fn test_similar_to() {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Utf8, false),
-            Field::new("b", DataType::Utf8, false),
-        ]));
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
 
+        // `%` matches any sequence; case-sensitive
         let expected = [Some(true), Some(false)].iter().collect();
-        // case-sensitive
         apply_similar_to(
             &schema,
             vec!["hello world", "Hello World"],
-            vec!["hello.*", "hello.*"],
+            "hello%",
             false,
             false,
             &expected,
         )
         .unwrap();
-        // case-insensitive
+
+        // `%` matches any sequence; case-insensitive
+        let expected = [Some(true), Some(false)].iter().collect();
         apply_similar_to(
             &schema,
             vec!["hello world", "bye"],
-            vec!["hello.*", "hello.*"],
+            "hello%",
             false,
             true,
             &expected,
         )
         .unwrap();
+
+        // `_` matches exactly one character
+        let expected = [Some(true), Some(false), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["x", "xy", ""], "_", false, false, &expected)
+            .unwrap();
+
+        // Match must cover the entire string (no implicit substring match)
+        let expected = [Some(false), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["abc", "a"], "a", false, false, &expected)
+            .unwrap();
+
+        // `%` matches zero or more, so the empty string matches.
+        let expected = [Some(true), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["", "anything"], "%", false, false, &expected)
+            .unwrap();
+
+        // `_` requires exactly one character, so the empty string does not
+        // match.
+        let expected = [Some(false), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["", "x"], "_", false, false, &expected).unwrap();
+
+        // `%` at the start of the pattern is still anchored: the string
+        // must end where the trailing literal begins.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["abc", "abd"], "%c", false, false, &expected)
+            .unwrap();
+
+        // `%` and `_` together: `%` matches zero or more (including the
+        // empty string), `_` matches exactly one character.
+        let expected = [Some(true), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["a", "abc"], "a%", false, false, &expected)
+            .unwrap();
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["axb", "abc"], "a_b", false, false, &expected)
+            .unwrap();
+    }
+
+    // Regression: regex metacharacters that are NOT SIMILAR TO metacharacters
+    // (`. ^ $ \`) must be treated as SQL literals. Without escaping, `a.`
+    // would match any `a` followed by any character (`ab`, `a1`, ...).
+    #[test]
+    fn test_similar_to_sql_literal_metachars() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+
+        // `.` is a literal, not the regex "any character" operator.
+        let expected = [Some(true), Some(false), Some(false)].iter().collect();
+        apply_similar_to(
+            &schema,
+            vec!["a.", "ab", "a"],
+            "a.",
+            false,
+            false,
+            &expected,
+        )
+        .unwrap();
+
+        // `^` and `$` are literals and only match the literal `^` and `$`.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["^x$", "x"], r"^x$", false, false, &expected)
+            .unwrap();
+
+        // `\` is a literal backslash (we don't support the ESCAPE clause).
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec![r"a\b", "ab"], r"a\b", false, false, &expected)
+            .unwrap();
+    }
+
+    // SIMILAR TO borrows POSIX metacharacters from regular expressions:
+    // `| * + ? ( ) { } [ ]`. The translator passes them through to the
+    // underlying regex engine.
+    #[test]
+    fn test_similar_to_posix_metachars() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+
+        // `|` alternation.
+        let expected = [Some(true), Some(false), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["a", "c", "b"], "a|b", false, false, &expected)
+            .unwrap();
+
+        // `*` zero or more.
+        let expected = [Some(true), Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["", "aa", "ab"], "a*", false, false, &expected)
+            .unwrap();
+
+        // `+` one or more.
+        let expected = [Some(false), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["", "aa"], "a+", false, false, &expected).unwrap();
+
+        // `?` zero or one.
+        let expected = [Some(true), Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["", "a", "aa"], "a?", false, false, &expected)
+            .unwrap();
+
+        // `()` grouping.
+        let expected = [Some(true), Some(true), Some(false)].iter().collect();
+        apply_similar_to(
+            &schema,
+            vec!["ab", "abc", "ac"],
+            "(ab)c?",
+            false,
+            false,
+            &expected,
+        )
+        .unwrap();
+
+        // `{m}` exact count.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["aaa", "aa"], "a{3}", false, false, &expected)
+            .unwrap();
+
+        // `[...]` character class.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["a", "c"], "[ab]", false, false, &expected)
+            .unwrap();
+
+        // `[^...]` negated character class.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["c", "a"], "[^ab]", false, false, &expected)
+            .unwrap();
+
+        // `[a-z]` range inside a character class.
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["m", "1"], "[a-z]", false, false, &expected)
+            .unwrap();
+    }
+
+    // Regression: `%` and `_` must match newlines, matching SQL semantics
+    // where these wildcards match "any character".
+    #[test]
+    fn test_similar_to_wildcards_match_newlines() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+
+        // `%` crosses a newline. (`%` also matches zero characters, so `ab`
+        // matches `a%b` as well.)
+        let expected = [Some(true), Some(true)].iter().collect();
+        apply_similar_to(&schema, vec!["a\nb", "ab"], "a%b", false, false, &expected)
+            .unwrap();
+
+        // `_` matches a single newline. (`_` requires exactly one character,
+        // so `ab` does not match `a_b`.)
+        let expected = [Some(true), Some(false)].iter().collect();
+        apply_similar_to(&schema, vec!["a\nb", "ab"], "a_b", false, false, &expected)
+            .unwrap();
+    }
+
+    #[test]
+    fn test_similar_to_non_literal_pattern_errors() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+        // Non-string literal patterns still error.
+        let err = similar_to(false, false, col("a", &schema).unwrap(), lit(1i32))
+            .expect_err("non-string literal pattern should error");
+        assert!(
+            err.to_string()
+                .contains("SIMILAR TO pattern must be a string type, got Int32(1)"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn test_similar_to_dynamic_pattern() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("text", DataType::Utf8, false),
+            Field::new("pattern", DataType::Utf8, false),
+        ]));
+        let text = StringArray::from(vec!["abc", "ab", "x"]);
+        let pattern = StringArray::from(vec!["a%", "a.", "_"]);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(text), Arc::new(pattern)],
+        )
+        .unwrap();
+
+        let op = similar_to(
+            false,
+            false,
+            col("text", &schema).unwrap(),
+            col("pattern", &schema).unwrap(),
+        )
+        .unwrap();
+        let result = op.evaluate(&batch).unwrap();
+        let result_array = result.into_array(batch.num_rows()).unwrap();
+        let result = as_boolean_array(&result_array).unwrap();
+        assert!(result.value(0)); // "abc" ~ ^(?:a(?s:.*))$
+        assert!(!result.value(1)); // "ab"  ~ ^(?:a\.)$
+        assert!(result.value(2)); // "x"   ~ ^(?:(?s:.))$
+    }
+
+    #[test]
+    fn test_similar_to_null_pattern() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+        let a = StringArray::from(vec!["hello"]);
+        let op = similar_to(
+            false,
+            false,
+            col("a", &schema).unwrap(),
+            lit(ScalarValue::Utf8(None)),
+        )
+        .unwrap();
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(a)]).unwrap();
+        let result = op
+            .evaluate(&batch)
+            .unwrap()
+            .into_array(batch.num_rows())
+            .unwrap();
+        let expected: BooleanArray = std::iter::once(&None).collect();
+        assert_eq!(result.as_ref(), &expected);
     }
 
     pub fn binary_expr(
@@ -5865,6 +6423,246 @@ mod tests {
                 "OR pre-selection must match Kleene OR for d = {d:?}"
             );
         }
+    }
+
+    #[test]
+    fn test_integer_interval_propagation_covers_runtime_values() {
+        // Enumerate small domains and both ends of Int8, including zero divisors,
+        // truncation, signed overflow and checked arithmetic. Every successful
+        // runtime evaluation must remain possible after interval propagation.
+        let batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
+        let domains = [
+            (-3i8, 3i8),
+            (0, 1),
+            (1, 3),
+            (-3, -1),
+            (-128, -127),
+            (126, 127),
+        ];
+        for checked in [false, true] {
+            for op in [
+                Operator::Plus,
+                Operator::Minus,
+                Operator::Multiply,
+                Operator::Divide,
+            ] {
+                let expr = BinaryExpr::new(lit(0i8), op, lit(0i8))
+                    .with_fail_on_overflow(checked);
+                for (lo, hi) in domains {
+                    for (rlo, rhi) in
+                        domains.into_iter().chain([(-1, -1), (0, 0), (2, 2)])
+                    {
+                        let left = Interval::make(Some(lo), Some(hi)).unwrap();
+                        let right = Interval::make(Some(rlo), Some(rhi)).unwrap();
+                        let bounds = expr.evaluate_bounds(&[&left, &right]).unwrap();
+                        if matches!(op, Operator::Plus | Operator::Minus) {
+                            let children = [left.clone(), right.clone()].map(|range| {
+                                ExprProperties {
+                                    range,
+                                    ..ExprProperties::new_unknown()
+                                }
+                            });
+                            assert_eq!(
+                                expr.get_properties(&children).unwrap().range,
+                                bounds
+                            );
+                        }
+                        for a in lo..=hi {
+                            for b in rlo..=rhi {
+                                // Use the execution kernel as the oracle rather than
+                                // duplicating its checked and wrapping arithmetic.
+                                let runtime = BinaryExpr::new(lit(a), op, lit(b))
+                                    .with_fail_on_overflow(checked);
+                                let result = match runtime.evaluate(&batch) {
+                                    Ok(value) => value.into_array(1).unwrap(),
+                                    Err(error) => {
+                                        assert!(
+                                            checked || op == Operator::Divide,
+                                            "wrapping {a} {op} {b} failed: {error}"
+                                        );
+                                        continue;
+                                    }
+                                };
+                                let result = result.as_primitive::<Int8Type>().value(0);
+                                let result =
+                                    Interval::make(Some(result), Some(result)).unwrap();
+                                assert_eq!(
+                                    bounds.contains(&result).unwrap(),
+                                    Interval::TRUE,
+                                    "forward {a} {op} {b}, checked={checked}, bounds={bounds:?}"
+                                );
+                                let propagated = expr
+                                    .propagate_constraints(&result, &[&left, &right])
+                                    .unwrap();
+                                let propagated = propagated
+                                    .expect("successful runtime result must be feasible");
+                                if !propagated.is_empty() {
+                                    assert_eq!(
+                                        propagated[0]
+                                            .contains(
+                                                Interval::make(Some(a), Some(a)).unwrap()
+                                            )
+                                            .unwrap(),
+                                        Interval::TRUE,
+                                        "left input excluded for {a} {op} {b}, checked={checked}: {propagated:?}"
+                                    );
+                                    assert_eq!(
+                                        propagated[1]
+                                            .contains(
+                                                Interval::make(Some(b), Some(b)).unwrap()
+                                            )
+                                            .unwrap(),
+                                        Interval::TRUE,
+                                        "right input excluded for {a} {op} {b}, checked={checked}: {propagated:?}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_integer_interval_error_propagation() {
+        // Compare error messages without backtraces, which differ by call path.
+        let integer = Interval::make(Some(1i32), Some(2i32)).unwrap();
+        let boolean = Interval::TRUE;
+        for op in [Operator::Plus, Operator::Minus] {
+            let expr = BinaryExpr::new(lit(1i32), op, lit(true));
+            let expected = apply_operator(&op, &integer, &boolean)
+                .unwrap_err()
+                .strip_backtrace();
+            assert_eq!(
+                expr.evaluate_bounds(&[&integer, &boolean])
+                    .unwrap_err()
+                    .strip_backtrace(),
+                expected
+            );
+            let children =
+                [integer.clone(), boolean.clone()].map(|range| ExprProperties {
+                    range,
+                    ..ExprProperties::new_unknown()
+                });
+            assert_eq!(
+                expr.get_properties(&children)
+                    .unwrap_err()
+                    .strip_backtrace(),
+                expected
+            );
+        }
+
+        // A nonnumeric parent cannot describe an integer product. Preserve
+        // the error from constructing zero for its unsupported type.
+        let parent = Interval::make_unbounded(&DataType::Utf8).unwrap();
+        let expr = BinaryExpr::new(lit(1i32), Operator::Multiply, lit(2i32));
+        assert_eq!(
+            expr.propagate_constraints(&parent, &[&integer, &integer])
+                .unwrap_err()
+                .strip_backtrace(),
+            ScalarValue::new_zero(&DataType::Utf8)
+                .unwrap_err()
+                .strip_backtrace()
+        );
+    }
+
+    #[test]
+    fn test_unsigned_subtraction_interval_underflow() {
+        let expr = BinaryExpr::new(lit(0u8), Operator::Minus, lit(1u8));
+        let left = Interval::make(Some(0u8), Some(2u8)).unwrap();
+        let right = Interval::make(Some(1u8), Some(1u8)).unwrap();
+        let wrapped = Interval::make(Some(255u8), Some(255u8)).unwrap();
+        assert_eq!(
+            expr.evaluate_bounds(&[&left, &right])
+                .unwrap()
+                .contains(&wrapped)
+                .unwrap(),
+            Interval::TRUE
+        );
+        assert_eq!(
+            expr.propagate_constraints(&wrapped, &[&left, &right])
+                .unwrap(),
+            Some(vec![])
+        );
+    }
+
+    #[test]
+    fn test_nested_wrapping_arithmetic_properties() {
+        let difference = Arc::new(BinaryExpr::new(lit(0u8), Operator::Minus, lit(1u8)));
+        let singleton = |value: u8| ExprProperties {
+            sort_properties: SortProperties::Singleton,
+            range: Interval::make(Some(value), Some(value)).unwrap(),
+            ..ExprProperties::new_unknown()
+        };
+        let difference_props = difference
+            .get_properties(&[singleton(0), singleton(1)])
+            .unwrap();
+        assert_eq!(difference_props.sort_properties, SortProperties::Singleton);
+        assert!(
+            difference_props
+                .range
+                .contains_value(ScalarValue::UInt8(Some(255)))
+                .unwrap()
+        );
+
+        // The inner constant wraps to 255. An incorrect range of [0, 0]
+        // would let the outer addition claim to preserve ascending order.
+        let expr =
+            BinaryExpr::new(Arc::new(Column::new("a", 0)), Operator::Plus, difference);
+        let properties = expr
+            .get_properties(&[
+                ExprProperties {
+                    sort_properties: SortProperties::Ordered(SortOptions::default()),
+                    range: Interval::make(Some(0u8), Some(1u8)).unwrap(),
+                    ..ExprProperties::new_unknown()
+                },
+                difference_props,
+            ])
+            .unwrap();
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("a", DataType::UInt8, false)])),
+            vec![Arc::new(UInt8Array::from(vec![0, 1]))],
+        )
+        .unwrap();
+        let actual = expr.evaluate(&batch).unwrap().into_array(2).unwrap();
+        assert_eq!(actual.as_ref(), &UInt8Array::from(vec![255, 0]));
+        assert_eq!(properties.sort_properties, SortProperties::Unordered);
+        for value in [0u8, 255] {
+            assert!(
+                properties
+                    .range
+                    .contains_value(ScalarValue::UInt8(Some(value)))
+                    .unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn test_integer_comparison_still_propagates() {
+        // Integer comparisons must bypass the arithmetic overflow guard and
+        // still narrow their inputs: a = 5 restricts a in [0, 10] to [5, 5].
+        let expr = BinaryExpr::new(lit(0i32), Operator::Eq, lit(5i32));
+        let left = Interval::make(Some(0i32), Some(10i32)).unwrap();
+        let right = Interval::make(Some(5i32), Some(5i32)).unwrap();
+        assert_eq!(
+            expr.propagate_constraints(&Interval::TRUE, &[&left, &right])
+                .unwrap(),
+            Some(vec![right.clone(), right])
+        );
+    }
+
+    #[test]
+    fn test_safe_integer_multiplication_still_propagates() {
+        let expr = BinaryExpr::new(lit(0i32), Operator::Multiply, lit(2i32));
+        let left = Interval::make(Some(0i32), Some(10i32)).unwrap();
+        let right = Interval::make(Some(2i32), Some(2i32)).unwrap();
+        let parent = Interval::make(Some(4i32), Some(4i32)).unwrap();
+        assert_eq!(
+            expr.propagate_constraints(&parent, &[&left, &right])
+                .unwrap(),
+            Some(vec![Interval::make(Some(2i32), Some(2i32)).unwrap(), right])
+        );
     }
 
     #[test]

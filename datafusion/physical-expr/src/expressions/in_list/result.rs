@@ -24,15 +24,21 @@
 use arrow::array::BooleanArray;
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 
-// Truth table for (needle_nulls, haystack_has_nulls, negated):
-// (Some, true,  false) => values: valid & contains,  nulls: valid & contains
-// (None, true,  false) => values: contains,          nulls: contains
-// (Some, true,  true)  => values: valid & !contains, nulls: valid & contains
-// (None, true,  true)  => values: !contains,         nulls: contains
-// (Some, false, false) => values: valid & contains,  nulls: valid
-// (Some, false, true)  => values: valid & !contains, nulls: valid
-// (None, false, false) => values: contains,          nulls: none
-// (None, false, true)  => values: !contains,         nulls: none
+// Truth table for `value [NOT] IN (set)` with SQL three-valued logic:
+// ("-" means the value does not affect the result)
+//
+// | needle null | set has null | negated | found in set | result |
+// |-------------|--------------|---------|--------------|--------|
+// | true        | -            | false   | -            | null   |
+// | true        | -            | true    | -            | null   |
+// | false       | true         | false   | true         | true   |
+// | false       | true         | false   | false        | null   |
+// | false       | true         | true    | true         | false  |
+// | false       | true         | true    | false        | null   |
+// | false       | false        | false   | true         | true   |
+// | false       | false        | false   | false        | false  |
+// | false       | false        | true    | true         | false  |
+// | false       | false        | true    | false        | true   |
 
 /// Builds a BooleanArray result for IN list operations.
 ///
@@ -44,7 +50,7 @@ use arrow::buffer::{BooleanBuffer, NullBuffer};
 /// This version computes contains for all positions, including nulls, then applies
 /// null masking via bitmap operations.
 #[inline]
-pub(crate) fn build_in_list_result<C>(
+pub(super) fn build_in_list_result<C>(
     len: usize,
     needle_nulls: Option<&NullBuffer>,
     haystack_has_nulls: bool,
@@ -63,7 +69,7 @@ where
 /// This version does not assume contains_buf is pre-masked at null positions.
 /// It handles nulls using bitmap operations.
 #[inline]
-pub(crate) fn build_result_from_contains(
+pub(super) fn build_result_from_contains(
     needle_nulls: Option<&NullBuffer>,
     haystack_has_nulls: bool,
     negated: bool,

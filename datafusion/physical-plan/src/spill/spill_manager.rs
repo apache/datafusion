@@ -20,13 +20,13 @@
 use super::{SpillReaderStream, in_progress_spill_file::InProgressSpillFile};
 use crate::coop::cooperative;
 use crate::{common::spawn_buffered, metrics::SpillMetrics};
-use arrow::array::{BinaryViewArray, GenericByteViewArray, StringViewArray};
-use arrow::datatypes::{ByteViewType, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result, config::SpillCompression};
 use datafusion_execution::SendableRecordBatchStream;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::spill_file::SpillFile;
+use log::debug;
 use std::borrow::Borrow;
 use std::sync::Arc;
 
@@ -150,18 +150,29 @@ impl SpillManager {
 
         let mut in_progress_file = self.create_in_progress_file(request_description)?;
 
-        let mut max_record_batch_size = 0;
+        let result = async {
+            let mut max_record_batch_size = 0;
 
-        while let Some(batch) = stream.next().await {
-            let batch = batch?;
-            let gc_sliced_size = in_progress_file.append_batch(&batch)?;
+            while let Some(batch) = stream.next().await {
+                let batch = batch?;
+                let gc_sliced_size = in_progress_file.append_batch_async(&batch).await?;
 
-            max_record_batch_size = max_record_batch_size.max(gc_sliced_size);
+                max_record_batch_size = max_record_batch_size.max(gc_sliced_size);
+            }
+
+            let file = in_progress_file.finish_async().await?;
+
+            Ok(file.map(|f| (f, max_record_batch_size)))
+        }
+        .await;
+
+        if result.is_err()
+            && let Err(error) = in_progress_file.abort_async().await
+        {
+            debug!("Failed to abort in-progress stream spill: {error}");
         }
 
-        let file = in_progress_file.finish()?;
-
-        Ok(file.map(|f| (f, max_record_batch_size)))
+        result
     }
 
     /// Reads a spill file as a stream. The file must be created by the current
@@ -220,33 +231,12 @@ impl GetSlicedSize for RecordBatch {
         let mut total = 0;
         for array in self.columns() {
             let data = array.to_data();
+            // Since https://github.com/apache/arrow-rs/issues/8230 this also
+            // accounts for the variadic data buffers retained by view arrays
             total += data.get_slice_memory_size()?;
-
-            // While StringViewArray holds large data buffer for non inlined string, the Arrow layout (BufferSpec)
-            // does not include any data buffers. Currently, ArrayData::get_slice_memory_size()
-            // under-counts memory size by accounting only views buffer although data buffer is cloned during slice()
-            //
-            // Therefore, we manually add the sum of the lengths used by all non inlined views
-            // on top of the sliced size for views buffer. This matches the intended semantics of
-            // "bytes needed if we materialized exactly this slice into fresh buffers".
-            // This is a workaround until https://github.com/apache/arrow-rs/issues/8230
-            if let Some(sv) = array.as_any().downcast_ref::<StringViewArray>() {
-                total += byte_view_data_buffer_size(sv);
-            }
-            if let Some(bv) = array.as_any().downcast_ref::<BinaryViewArray>() {
-                total += byte_view_data_buffer_size(bv);
-            }
         }
         Ok(total)
     }
-}
-
-fn byte_view_data_buffer_size<T: ByteViewType>(array: &GenericByteViewArray<T>) -> usize {
-    array
-        .data_buffers()
-        .iter()
-        .map(|buffer| buffer.capacity())
-        .sum()
 }
 
 #[cfg(test)]
@@ -255,14 +245,89 @@ mod tests {
     use crate::common::collect;
     use crate::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
     use crate::spill::{get_record_batch_memory_size, spill_manager::GetSlicedSize};
+    use crate::stream::RecordBatchStreamAdapter;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::{
         array::{ArrayRef, Int32Array, StringArray, StringViewArray},
         record_batch::RecordBatch,
     };
-    use datafusion_common::Result;
-    use datafusion_execution::runtime_env::RuntimeEnv;
+    use async_trait::async_trait;
+    use bytes::Bytes;
+    use datafusion_common::{DataFusionError, Result, not_impl_err};
+    use datafusion_execution::disk_manager::DiskManagerBuilder;
+    use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
+    use datafusion_execution::{
+        AsyncSpillWriter, SendableRecordBatchStream, SpillFile, SpillWriter,
+        TempFileFactory,
+    };
+    use futures::Stream;
+    use std::path::Path;
+    use std::pin::Pin;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct AbortTrackingTempFileFactory {
+        abort_count: Arc<AtomicUsize>,
+    }
+
+    impl TempFileFactory for AbortTrackingTempFileFactory {
+        fn create_temp_file(&self, _description: &str) -> Result<Arc<dyn SpillFile>> {
+            Ok(Arc::new(AbortTrackingSpillFile {
+                abort_count: Arc::clone(&self.abort_count),
+            }))
+        }
+    }
+
+    struct AbortTrackingSpillFile {
+        abort_count: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl SpillFile for AbortTrackingSpillFile {
+        fn path(&self) -> Option<&Path> {
+            None
+        }
+
+        fn size(&self) -> Option<u64> {
+            Some(0)
+        }
+
+        fn read_stream(
+            &self,
+        ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>> {
+            Ok(Box::pin(futures::stream::empty()))
+        }
+
+        fn open_writer(&self) -> Result<Box<dyn SpillWriter>> {
+            not_impl_err!("test backend only supports asynchronous writes")
+        }
+
+        async fn open_async_writer(&self) -> Result<Box<dyn AsyncSpillWriter>> {
+            Ok(Box::new(AbortTrackingWriter {
+                abort_count: Arc::clone(&self.abort_count),
+            }))
+        }
+    }
+
+    struct AbortTrackingWriter {
+        abort_count: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl AsyncSpillWriter for AbortTrackingWriter {
+        async fn write_all(&mut self, _data: Bytes) -> Result<()> {
+            Ok(())
+        }
+
+        async fn finish(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn abort(&mut self) -> Result<()> {
+            self.abort_count.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
 
     fn build_test_spill_manager(
         env: Arc<RuntimeEnv>,
@@ -357,6 +422,46 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_stream_spill_aborts_after_input_error() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("value", DataType::Utf8, false),
+        ]));
+        let abort_count = Arc::new(AtomicUsize::new(0));
+        let disk_manager_builder = DiskManagerBuilder::default().with_temp_file_factory(
+            Arc::new(AbortTrackingTempFileFactory {
+                abort_count: Arc::clone(&abort_count),
+            }),
+        );
+        let env = RuntimeEnvBuilder::new()
+            .with_disk_manager_builder(disk_manager_builder)
+            .build_arc()?;
+        let manager = build_test_spill_manager(env, Arc::clone(&schema));
+        let batch = build_writer_batch(Arc::clone(&schema))?;
+        let input = futures::stream::iter(vec![
+            Ok(batch),
+            Err(DataFusionError::Execution(
+                "injected input stream failure".to_string(),
+            )),
+        ]);
+        let mut stream: SendableRecordBatchStream =
+            Box::pin(RecordBatchStreamAdapter::new(schema, input));
+
+        let error = manager
+            .spill_record_batch_stream_and_return_max_batch_memory(
+                &mut stream,
+                "abort-test",
+            )
+            .await
+            .err()
+            .expect("the injected stream error should be returned");
+
+        assert!(error.to_string().contains("injected input stream failure"));
+        assert_eq!(abort_count.load(Ordering::Relaxed), 1);
+        Ok(())
+    }
+
     #[test]
     fn check_sliced_size_for_string_view_array() -> Result<()> {
         let array_length = 50;
@@ -399,10 +504,11 @@ mod tests {
             half_batch.get_sliced_size().unwrap()
                 < get_record_batch_memory_size(&half_batch)
         );
+        // `get_slice_memory_size` accounts for the retained
+        // variadic data buffers as well, so it matches `get_sliced_size`
         let data = arrow::array::Array::to_data(&half_batch.column(0));
         let views_sliced_size = data.get_slice_memory_size()?;
-        // The sliced size should be larger than sliced views buffer size
-        assert!(views_sliced_size < half_batch.get_sliced_size().unwrap());
+        assert_eq!(views_sliced_size, half_batch.get_sliced_size().unwrap());
 
         Ok(())
     }

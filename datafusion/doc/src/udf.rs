@@ -84,6 +84,14 @@ pub mod scalar_doc_sections {
             r#"Apache DataFusion uses a [PCRE-like](https://en.wikibooks.org/wiki/Regular_Expressions/Perl-Compatible_Regular_Expressions)
 regular expression [syntax](https://docs.rs/regex/latest/regex/#syntax)
 (minus support for several features including look-around and backreferences).
+
+The following flags are optionally supported in functions:
+  - **i**: case-insensitive: letters match both upper and lower case
+  - **m**: multi-line mode: `^` and `$` match begin/end of line
+  - **s**: allow `.` to match `\n`
+  - **R**: enables CRLF mode: when multi-line mode is enabled, `\r\n` is used
+  - **U**: swap the meaning of `x*` and `x*?`
+
 The following regular expression functions are supported:"#,
         ),
     };

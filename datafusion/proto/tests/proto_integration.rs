@@ -15,5 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// Test helpers take owned values for convenience, matching the `#![cfg_attr(test, ...)]`
+// exemption the DataFusion crates apply to their own unit tests.
+#![cfg_attr(test, allow(clippy::needless_pass_by_value))]
+
 /// Run all tests that are found in the `cases` directory
 mod cases;

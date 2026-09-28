@@ -20,9 +20,9 @@
 use arrow::{
     array::{
         Array, ArrayRef, AsArray, BooleanArray, LargeListArray, ListArray,
-        OffsetSizeTrait, new_empty_array,
+        OffsetSizeTrait,
     },
-    buffer::{OffsetBuffer, ScalarBuffer},
+    buffer::OffsetBuffer,
     compute::filter as arrow_filter,
     datatypes::{DataType, Field, FieldRef},
 };
@@ -34,6 +34,8 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 use std::sync::Arc;
+
+use crate::utils::empty_list_values;
 
 use crate::lambda_utils::{
     SingleListLambdaResult, coerce_single_list_arg, evaluate_single_list_predicate,
@@ -54,11 +56,11 @@ make_higher_order_function_expr_and_func!(
     syntax_example = "array_filter(array, x -> x > 2)",
     sql_example = r#"```sql
 > select array_filter([1, 2, 3, 4, 5], x -> x > 2);
-+--------------------------------------------+
++-------------------------------------------+
 | array_filter([1, 2, 3, 4, 5], x -> x > 2) |
-+--------------------------------------------+
-| [3, 4, 5]                                  |
-+--------------------------------------------+
++-------------------------------------------+
+| [3, 4, 5]                                 |
++-------------------------------------------+
 ```"#,
     argument(
         name = "array",
@@ -204,27 +206,9 @@ impl HigherOrderUDFImpl for ArrayFilter {
 /// Returns a list array with every non-null sublist emptied, preserving the null buffer.
 /// Used for the `x -> false` / `x -> null` scalar predicate short-circuit.
 fn empty_filtered_list(list_array: &ArrayRef, field: FieldRef) -> Result<ArrayRef> {
-    let n = list_array.len();
-    let empty_values = new_empty_array(field.data_type());
     Ok(match list_array.data_type() {
-        DataType::List(_) => {
-            let list = list_array.as_list::<i32>();
-            Arc::new(ListArray::new(
-                field,
-                OffsetBuffer::new(ScalarBuffer::from(vec![0i32; n + 1])),
-                empty_values,
-                list.nulls().cloned(),
-            ))
-        }
-        DataType::LargeList(_) => {
-            let list = list_array.as_list::<i64>();
-            Arc::new(LargeListArray::new(
-                field,
-                OffsetBuffer::new(ScalarBuffer::from(vec![0i64; n + 1])),
-                empty_values,
-                list.nulls().cloned(),
-            ))
-        }
+        DataType::List(_) => empty_list_values(list_array.as_list::<i32>(), field),
+        DataType::LargeList(_) => empty_list_values(list_array.as_list::<i64>(), field),
         other => return exec_err!("expected list, got {other}"),
     })
 }

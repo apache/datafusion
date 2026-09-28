@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
-use arrow::ipc::convert::fb_to_schema;
+use arrow::ipc::convert::try_fb_to_schema;
 use arrow::ipc::reader::{FileReader, StreamReader};
 use arrow::ipc::writer::IpcWriteOptions;
 use arrow::ipc::{CompressionType, root_as_message};
@@ -274,7 +274,7 @@ impl FileSink for ArrowFileSink {
         let ipc_options =
             IpcWriteOptions::try_new(64, false, arrow_ipc::MetadataVersion::V5)?
                 .try_with_compression(Some(CompressionType::LZ4_FRAME))?;
-        while let Some((path, mut rx)) = file_stream_rx.recv().await {
+        while let Some((file_metadata, mut rx)) = file_stream_rx.recv().await {
             let shared_buffer = SharedBuffer::new(INITIAL_BUFFER_BYTES);
             let mut arrow_writer = arrow_ipc::writer::FileWriter::try_new_with_options(
                 shared_buffer.clone(),
@@ -283,7 +283,7 @@ impl FileSink for ArrowFileSink {
             )?;
             let mut object_store_writer = ObjectWriterBuilder::new(
                 FileCompressionType::UNCOMPRESSED,
-                &path,
+                &file_metadata.path,
                 Arc::clone(&object_store),
             )
             .with_buffer_size(Some(
@@ -293,6 +293,7 @@ impl FileSink for ArrowFileSink {
                     .execution
                     .objectstore_writer_buffer_size,
             ))
+            .with_bytes_written_counter(file_metadata.size)
             .build()?;
             file_write_tasks.spawn(async move {
                 let mut row_count = 0;
@@ -350,7 +351,7 @@ impl DisplayAs for ArrowFileSink {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "ArrowFileSink(file_groups=",)?;
+                write!(f, "ArrowFileSink(file_groups=")?;
                 FileGroupDisplay(&self.config.file_group).fmt_as(t, f)?;
                 write!(f, ")")
             }
@@ -481,7 +482,9 @@ async fn infer_stream_schema(
     let fb_schema = message.header_as_schema().ok_or_else(|| {
         ArrowError::IpcError("Unable to read IPC message schema".to_string())
     })?;
-    let schema = fb_to_schema(fb_schema);
+    let schema = try_fb_to_schema(fb_schema).map_err(|err| {
+        ArrowError::IpcError(format!("Unable to convert IPC schema: {err:?}"))
+    })?;
 
     Ok(Arc::new(schema))
 }

@@ -33,20 +33,23 @@ use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::sink::DataSink;
-use datafusion_datasource::write::demux::DemuxedStreamReceiver;
+#[cfg(feature = "proto")]
+use datafusion_datasource::sink::DataSinkExec;
+use datafusion_datasource::write::demux::{DemuxedStreamReceiver, FileMetadata};
 use datafusion_datasource::write::{
     ObjectWriterBuilder, SharedBuffer, get_writer_schema,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+#[cfg(feature = "proto")]
+use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::metrics::{
     ElapsedComputeFutureExt, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
     MetricsSet, Time,
 };
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType};
 use object_store::ObjectStore;
-use object_store::buffered::BufWriter;
 use object_store::path::Path;
 use parquet::arrow::arrow_writer::{
     ArrowColumnChunk, ArrowColumnWriter, ArrowLeafColumn, ArrowRowGroupWriterFactory,
@@ -96,7 +99,7 @@ impl DisplayAs for ParquetSink {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "ParquetSink(file_groups=",)?;
+                write!(f, "ParquetSink(file_groups=")?;
                 FileGroupDisplay(&self.config.file_group).fmt_as(t, f)?;
                 write!(f, ")")
             }
@@ -173,20 +176,25 @@ impl ParquetSink {
     /// AsyncArrowWriters are used when individual parquet file serialization is not parallelized
     fn create_async_arrow_writer(
         &self,
-        location: &Path,
+        file_metadata: &FileMetadata,
         object_store: Arc<dyn ObjectStore>,
         context: &Arc<TaskContext>,
         parquet_props: WriterProperties,
-    ) -> Result<AsyncArrowWriter<BufWriter>> {
-        let buf_writer = BufWriter::with_capacity(
+    ) -> Result<AsyncArrowWriter<Box<dyn AsyncWrite + Send + Unpin>>> {
+        let buf_writer = ObjectWriterBuilder::new(
+            FileCompressionType::UNCOMPRESSED,
+            &file_metadata.path,
             object_store,
-            location.clone(),
+        )
+        .with_buffer_size(Some(
             context
                 .session_config()
                 .options()
                 .execution
                 .objectstore_writer_buffer_size,
-        );
+        ))
+        .with_bytes_written_counter(Arc::clone(&file_metadata.size))
+        .build()?;
         let options = ArrowWriterOptions::new()
             .with_properties(parquet_props)
             .with_skip_arrow_metadata(self.parquet_options.global.skip_arrow_metadata);
@@ -239,6 +247,7 @@ async fn set_writer_encryption_properties(
 }
 
 #[cfg(not(feature = "parquet_encryption"))]
+#[expect(clippy::unused_async)]
 async fn set_writer_encryption_properties(
     builder: WriterPropertiesBuilder,
     _runtime: &Arc<RuntimeEnv>,
@@ -268,9 +277,8 @@ impl FileSink for ParquetSink {
         // Note: bytes_written is the sum of compressed row group sizes, which
         // may differ slightly from the actual on-disk file size (excludes footer,
         // page indexes, and other Parquet metadata overhead).
-        let bytes_written_counter = MetricBuilder::new(&self.metrics)
-            .with_category(MetricCategory::Bytes)
-            .global_counter("bytes_written");
+        let bytes_written_counter =
+            MetricBuilder::new(&self.metrics).global_bytes_counter("bytes_written");
         let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(0);
 
         let parquet_opts = &self.parquet_options;
@@ -289,21 +297,24 @@ impl FileSink for ParquetSink {
                 .maximum_buffered_record_batches_per_stream,
         };
 
-        while let Some((path, mut rx)) = file_stream_rx.recv().await {
-            let parquet_props = self.create_writer_props(&runtime, &path).await?;
+        while let Some((file_metadata, mut rx)) = file_stream_rx.recv().await {
+            let parquet_props = self
+                .create_writer_props(&runtime, &file_metadata.path)
+                .await?;
             // CDC requires the sequential writer: the chunker state lives in ArrowWriter
             // and persists across row groups. The parallel path bypasses ArrowWriter entirely.
             if !parquet_opts.global.allow_single_file_parallelism
                 || parquet_opts.global.content_defined_chunking.enabled
             {
                 let mut writer = self.create_async_arrow_writer(
-                    &path,
+                    &file_metadata,
                     Arc::clone(&object_store),
                     context,
                     parquet_props.clone(),
                 )?;
-                let reservation = MemoryConsumer::new(format!("ParquetSink[{path}]"))
-                    .register(context.memory_pool());
+                let reservation =
+                    MemoryConsumer::new(format!("ParquetSink[{}]", file_metadata.path))
+                        .register(context.memory_pool());
                 file_write_tasks.spawn(
                     async move {
                         while let Some(batch) = rx.recv().await {
@@ -314,7 +325,7 @@ impl FileSink for ParquetSink {
                             .close()
                             .await
                             .map_err(|e| DataFusionError::ParquetError(Box::new(e)))?;
-                        Ok((path, parquet_meta_data))
+                        Ok((file_metadata.path, parquet_meta_data))
                     }
                     .with_elapsed_compute(elapsed_compute.clone()),
                 );
@@ -323,7 +334,7 @@ impl FileSink for ParquetSink {
                     // Parquet files as a whole are never compressed, since they
                     // manage compressed blocks themselves.
                     FileCompressionType::UNCOMPRESSED,
-                    &path,
+                    &file_metadata.path,
                     Arc::clone(&object_store),
                 )
                 .with_buffer_size(Some(
@@ -333,6 +344,7 @@ impl FileSink for ParquetSink {
                         .execution
                         .objectstore_writer_buffer_size,
                 ))
+                .with_bytes_written_counter(file_metadata.size)
                 .build()?;
                 let ctx = ParquetFileWriteContext {
                     schema: get_writer_schema(&self.config),
@@ -350,7 +362,7 @@ impl FileSink for ParquetSink {
                         encoding_time,
                     )
                     .await?;
-                    Ok((path, parquet_meta_data))
+                    Ok((file_metadata.path, parquet_meta_data))
                 });
             }
         }
@@ -408,6 +420,178 @@ impl DataSink for ParquetSink {
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
         FileSink::write_all(self, data, context).await
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        exec: &DataSinkExec,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        use protobuf::physical_plan_node::PhysicalPlanType;
+
+        // Keep the active hook exhaustive while centralizing field mapping in
+        // the exhaustive `TryFrom<&ParquetSink>` below.
+        let Self {
+            config: _,
+            parquet_options: _,
+            // Runtime output state, not part of the plan.
+            written: _,
+            sorting_columns: _,
+            // Runtime metrics are recreated on decode.
+            metrics: _,
+        } = self;
+
+        let input = ctx.encode_child(exec.input())?;
+        let sort_order = exec.encode_sort_order(ctx)?;
+        let sink = protobuf::ParquetSink::try_from(self)?;
+        let node = protobuf::ParquetSinkExecNode {
+            input: Some(Box::new(input)),
+            sink: Some(sink),
+            sink_schema: Some(exec.schema().as_ref().try_into()?),
+            sort_order,
+        };
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::ParquetSink(Box::new(node))),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl TryFrom<&ParquetSink> for datafusion_proto_models::protobuf::ParquetSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &ParquetSink) -> Result<Self> {
+        use datafusion_proto_models::protobuf;
+
+        let ParquetSink {
+            config,
+            parquet_options,
+            // Runtime output state, not part of the plan.
+            written: _,
+            sorting_columns,
+            // Runtime metrics are recreated on decode.
+            metrics: _,
+        } = value;
+        let sorting_columns =
+            sorting_columns
+                .as_ref()
+                .map(|columns| protobuf::ParquetSortingColumns {
+                    columns: columns
+                        .iter()
+                        .map(
+                            |&SortingColumn {
+                                 column_idx,
+                                 descending,
+                                 nulls_first,
+                             }| {
+                                protobuf::ParquetSortingColumn {
+                                    column_idx,
+                                    descending,
+                                    nulls_first,
+                                }
+                            },
+                        )
+                        .collect(),
+                });
+
+        Ok(Self {
+            config: Some(config.try_into()?),
+            parquet_options: Some(parquet_options.try_into()?),
+            sorting_columns,
+        })
+    }
+}
+
+#[cfg(feature = "proto")]
+impl TryFrom<&datafusion_proto_models::protobuf::ParquetSink> for ParquetSink {
+    type Error = DataFusionError;
+
+    fn try_from(value: &datafusion_proto_models::protobuf::ParquetSink) -> Result<Self> {
+        use datafusion_proto_models::protobuf;
+
+        let protobuf::ParquetSink {
+            config,
+            parquet_options,
+            sorting_columns,
+        } = value;
+        let config = FileSinkConfig::try_from(config.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "ParquetSink is missing required field 'config'"
+            )
+        })?)?;
+        let parquet_options = parquet_options
+            .as_ref()
+            .ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "ParquetSink is missing required field 'parquet_options'"
+                )
+            })?
+            .try_into()?;
+        let sorting_columns = sorting_columns.as_ref().map(
+            |protobuf::ParquetSortingColumns { columns }| {
+                columns
+                    .iter()
+                    .map(
+                        |&protobuf::ParquetSortingColumn {
+                             column_idx,
+                             descending,
+                             nulls_first,
+                         }| SortingColumn {
+                            column_idx,
+                            descending,
+                            nulls_first,
+                        },
+                    )
+                    .collect()
+            },
+        );
+
+        Ok(Self::new(config, parquet_options).with_sorting_columns(sorting_columns))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl ParquetSink {
+    /// Reconstructs a [`DataSinkExec`] containing a `ParquetSink` from protobuf.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let sink_node = datafusion_physical_plan::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::ParquetSink,
+            "ParquetSink",
+        );
+        let protobuf::ParquetSinkExecNode {
+            input,
+            sink,
+            // Recomputed by `DataSinkExec::new`.
+            sink_schema: _,
+            sort_order,
+        } = sink_node.as_ref();
+        let input =
+            ctx.decode_required_child(input.as_deref(), "ParquetSinkExecNode", "input")?;
+        let proto_sink = sink.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "ParquetSinkExecNode is missing required field 'sink'"
+            )
+        })?;
+        let data_sink = ParquetSink::try_from(proto_sink)?;
+        let sort_order = DataSinkExec::decode_sort_order(
+            sort_order.as_ref(),
+            ctx,
+            input.schema().as_ref(),
+        )?;
+
+        Ok(Arc::new(DataSinkExec::new(
+            input,
+            Arc::new(data_sink),
+            sort_order,
+        )))
     }
 }
 

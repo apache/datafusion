@@ -780,9 +780,10 @@ mod tests {
             }
         }
 
-        if part_0_name.is_empty() {
-            panic!("Did not find part_0 in csv output files!")
-        }
+        assert!(
+            !part_0_name.is_empty(),
+            "Did not find part_0 in csv output files!"
+        );
         // register each partition as well as the top level dir
         let csv_read_option = CsvReadOptions::new().schema(&schema).has_header(false);
         ctx.register_csv(

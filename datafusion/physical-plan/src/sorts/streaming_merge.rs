@@ -31,7 +31,7 @@ use datafusion_common::human_readable_size;
 use datafusion_common::{Result, assert_or_internal_err, internal_err};
 use datafusion_execution::SpillFile;
 use datafusion_execution::memory_pool::{
-    MemoryConsumer, MemoryPool, MemoryReservation, UnboundedMemoryPool,
+    MemoryConsumer, MemoryPool, MemoryReservation, MergeMemoryPool, UnboundedMemoryPool,
 };
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use std::sync::Arc;
@@ -95,6 +95,9 @@ pub struct StreamingMergeBuilder<'a> {
     batch_size: Option<usize>,
     fetch: Option<usize>,
     reservation: Option<MemoryReservation>,
+    merge_pool: Option<Arc<MergeMemoryPool>>,
+    /// Leave memory for the aggregate consuming the merged spill rows.
+    reserve_replay_headroom: bool,
     enable_round_robin_tie_breaker: bool,
 }
 
@@ -154,6 +157,19 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
+    /// Keep spill workspace until the final merge pass selects its buffer budget.
+    pub(super) fn with_merge_pool(mut self, pool: Arc<MergeMemoryPool>) -> Self {
+        self.merge_pool = Some(pool);
+        self
+    }
+
+    /// Leave room for aggregate replay by checking that the pool can admit
+    /// merge buffers plus equal headroom. Release the headroom before replay.
+    pub(crate) fn with_replay_headroom(mut self) -> Self {
+        self.reserve_replay_headroom = true;
+        self
+    }
+
     /// See [SortPreservingMergeExec::with_round_robin_repartition] for more
     /// information.
     ///
@@ -186,6 +202,8 @@ impl<'a> StreamingMergeBuilder<'a> {
             metrics,
             batch_size,
             reservation,
+            merge_pool,
+            reserve_replay_headroom,
             fetch,
             expressions,
             enable_round_robin_tie_breaker,
@@ -226,6 +244,8 @@ impl<'a> StreamingMergeBuilder<'a> {
                 fetch,
                 enable_round_robin_tie_breaker,
             )
+            .with_merge_pool(merge_pool)
+            .with_replay_headroom(reserve_replay_headroom)
             .create_spillable_merge_stream());
         }
 

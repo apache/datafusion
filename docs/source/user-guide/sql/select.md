@@ -279,6 +279,29 @@ SELECT id, UNNEST(items) FROM orders;
 items (implicit lateral references such as `FROM orders AS t, UNNEST(t.items)`
 are not currently supported).
 
+### `unnest_outer`
+
+`unnest_outer(col)` is the outer-unnest peer to `UNNEST(col)`. The two differ
+only in how `NULL` and empty input lists are handled:
+
+| Form                | `NULL` input list | Empty input list |
+| ------------------- | ----------------- | ---------------- |
+| `UNNEST(col)`       | dropped           | dropped          |
+| `unnest_outer(col)` | one `NULL` row    | one `NULL` row   |
+
+```sql
+SELECT id, unnest_outer(tags) AS tag FROM rows;
+```
+
+An input row with an empty `tags` array or `NULL` `tags` produces one output
+row whose `tag` is `NULL`, instead of being dropped. This is analogous to the
+outer variant offered by other engines (Spark `explode_outer`, Hive `EXPLODE OUTER`, Snowflake `FLATTEN(OUTER => true)`).
+
+`unnest_outer` cannot be mixed with `unnest` in the same `SELECT` — the
+unnest plan node carries a single null-handling mode for all its output
+columns, so a mix would be ambiguous. The planner returns an error in that
+case.
+
 ## WHERE clause
 
 ```text
@@ -296,6 +319,7 @@ SELECT a FROM table_name WHERE a > 10;
 
 ```text
 from_item [join_type] JOIN from_item [join_condition]
+from_item ASOF JOIN from_item MATCH_CONDITION (condition) [join_condition]
 from_item CROSS JOIN from_item
 from_item NATURAL JOIN from_item
 from_item [join_type] JOIN LATERAL (query) AS alias [join_condition]
@@ -376,6 +400,48 @@ SELECT * FROM x LEFT JOIN x AS y ON x.column_1 = y.column_2;
 | 1        | 2        |          |          |
 +----------+----------+----------+----------+
 ```
+
+### ASOF JOIN
+
+DataFusion follows the
+[Snowflake `ASOF JOIN` syntax](https://docs.snowflake.com/en/sql-reference/constructs/asof-join).
+An `ASOF JOIN` matches each left row with at most one right row according to an
+ordered comparison. It preserves every left row and fills the right columns
+with `NULL` when no right row matches.
+
+```sql
+SELECT t.*, p.price
+FROM trades AS t
+ASOF JOIN prices AS p
+MATCH_CONDITION (t.ts >= p.ts)
+ON t.symbol = p.symbol;
+```
+
+`MATCH_CONDITION` must compare an expression from the left input with an
+expression from the right input using one of the following operators. Operand
+order is significant: the left input expression must appear on the left.
+
+| Condition | Selected right row                        |
+| --------- | ----------------------------------------- |
+| `l >= r`  | Greatest `r` less than or equal to `l`    |
+| `l > r`   | Greatest `r` strictly less than `l`       |
+| `l <= r`  | Smallest `r` greater than or equal to `l` |
+| `l < r`   | Smallest `r` strictly greater than `l`    |
+
+An optional `ON` clause containing equality conditions combined with `AND`, or
+a `USING` clause, divides rows into equality groups before the ordered match.
+An unqualified `USING` key appears once in wildcard output, while both qualified
+input keys remain addressable.
+
+Without equality keys, all rows belong to one group. The initial execution
+strategy collects one ordered right partition and shares it across every left
+partition, so output partitioning follows the left input. The complete right
+input must fit in memory and may be scanned once per left partition; spilling
+and repartitioned ASOF execution are not yet supported.
+
+A `NULL` in either ordered expression or in any equality key does not match.
+Both inputs must be bounded. If multiple right rows have the same equality keys
+and ordered value, which tied row is selected is nondeterministic.
 
 ### RIGHT OUTER JOIN
 

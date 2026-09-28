@@ -426,9 +426,10 @@ mod tests {
             }
         }
 
-        if part_0_name.is_empty() {
-            panic!("Did not find part_0 in json output files!")
-        }
+        assert!(
+            !part_0_name.is_empty(),
+            "Did not find part_0 in json output files!"
+        );
 
         // register each partition as well as the top level dir
         let json_read_option = JsonReadOptions::default();

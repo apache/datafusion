@@ -31,8 +31,9 @@ use datafusion_common::hash_utils::RandomState;
 
 use datafusion_common::cast::as_list_array;
 use datafusion_common::{Result, ScalarValue, not_impl_err};
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
-use datafusion_expr::utils::format_state_name;
+use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Coercion, Documentation, GroupsAccumulator,
     ReversedUDAF, Signature, TypeSignatureClass, Volatility,
@@ -290,8 +291,9 @@ impl AggregateUDFImpl for BitwiseOperation {
         }
     }
 
-    fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
-        true
+    fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        // DISTINCT only changes the result of XOR; AND and OR are idempotent
+        !(args.is_distinct && self.operation == BitwiseOperationType::Xor)
     }
 
     fn create_groups_accumulator(
@@ -314,8 +316,24 @@ impl AggregateUDFImpl for BitwiseOperation {
         ReversedUDAF::Identical
     }
 
+    fn order_sensitivity(&self) -> AggregateOrderSensitivity {
+        AggregateOrderSensitivity::Insensitive
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         Some(self.documentation)
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        match self.operation {
+            // Bitwise AND/OR are idempotent: duplicates cannot change the
+            // result. Only XOR has a distinct accumulator.
+            BitwiseOperationType::And | BitwiseOperationType::Or => {
+                DistinctHandling::Insensitive
+            }
+            // XOR cancels duplicate pairs, so `DISTINCT` is meaningful.
+            BitwiseOperationType::Xor => DistinctHandling::Sensitive,
+        }
     }
 }
 

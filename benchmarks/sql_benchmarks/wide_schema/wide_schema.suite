@@ -1,0 +1,14 @@
+description = "Projection benchmarks over synthetic wide and narrow schemas"
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[path_replacements]
+DATA_DIR = "../../data"
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- wide_schema"
+description = "Run all wide-schema projection queries."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- wide_schema --query 2 --subgroup narrow"
+description = "Run query 2 with the narrow schema."
