@@ -74,6 +74,30 @@ cargo nextest run
 [the book]: https://doc.rust-lang.org/book/
 [cargo-nextest]: https://nexte.st/
 
+## Choosing What Kind of Test to Write
+
+When adding tests, prefer tests that exercise **user-visible behavior** over
+tests of internal implementation details. Doing so means your tests are more
+likely to keep working (and keep catching regressions) while the code is
+refactored. In rough order of preference:
+
+1. Use [sqllogictest](#sqllogictests-tests) (`.slt`) tests for any behavior that can
+   be expressed in SQL.
+
+2. End-to-end tests that use public APIs such as the DataFrame API, for behavior
+   that cannot be expressed in SQL. For example, DataFrame tests live in
+   [`datafusion/core/tests/dataframe`] and run as part of the `core_integration`
+   test binary:
+
+   ```shell
+   cargo test -p datafusion --test core_integration -- dataframe
+   ```
+
+3. Rust unit tests for logic that cannot practically be reached through
+   SQL or DataFrame public APIs.
+
+[`datafusion/core/tests/dataframe`]: https://github.com/apache/datafusion/tree/main/datafusion/core/tests/dataframe
+
 ## Unit tests
 
 Tests for code in an individual module are defined in the same source file with a `test` module, following Rust convention.
@@ -175,6 +199,20 @@ cargo test --doc
 
 As with other Rust projects, examples in doc comments in `.rs` files are
 automatically checked to ensure they work and evolve along with the code.
+
+Prefix a line with `# ` (a `#` followed by a space) to keep it compiled and
+run, but hidden from the rendered documentation. This is most useful for
+`use` statements, since readers care about the API being demonstrated, not
+its import boilerplate:
+
+````rust
+/// ```
+/// # use std::sync::Arc;
+/// let value = Arc::new(42);
+/// ```
+````
+
+Only the `let value = ...` line renders.
 
 ### User Guide Documentation
 

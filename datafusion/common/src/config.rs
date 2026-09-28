@@ -1038,12 +1038,13 @@ config_namespace! {
         /// SEMI, LEFT ANTI, LEFT MARK, FULL) when the right side has multiple
         /// partitions.
         ///
-        /// This fallback coordinates per-chunk left state (visited bitmap and
-        /// probe-thread counter) across all right-side partitions, which
-        /// assumes every partition runs in the same process. Distributed
-        /// engines that execute each output partition as an independent task
-        /// (e.g. Ballista, datafusion-distributed) build a separate coordinator
-        /// per task and poll only one partition, so the cross-partition
+        /// This fallback shares left-side state (the current left chunk, the
+        /// visited bitmap and the probe-thread counter) across all right-side
+        /// partitions, which assumes every partition runs in the same process.
+        /// Distributed engines that execute each output partition as an
+        /// independent task (e.g. Ballista, datafusion-distributed) give each
+        /// task its own copy
+        /// of this state and poll only one partition, so the cross-partition
         /// counter never reaches zero and the fallback would stall. Such
         /// engines should set this to `false`: the coordinated fallback is then
         /// disabled for left-emitting multi-partition joins, which instead fail
@@ -1058,7 +1059,7 @@ config_namespace! {
         /// Guarantees a minimum level of output files running in parallel.
         /// RecordBatches will be distributed in round robin fashion to each
         /// parallel writer. Each writer is closed and a new file opened once
-        /// soft_max_rows_per_output_file is reached.
+        /// soft_max_rows_per_output_file or soft_max_bytes_per_output_file is reached.
         pub minimum_parallel_output_files: ConfigNonZeroUsize, default = non_zero_usize_default(4)
 
         /// Target number of rows in output files when writing multiple.
@@ -1066,6 +1067,13 @@ config_namespace! {
         /// will be one file smaller than the limit if the total
         /// number of rows written is not roughly divisible by the soft max
         pub soft_max_rows_per_output_file: ConfigNonZeroUsize, default = non_zero_usize_default(50000000)
+
+        /// Target encoded size in bytes of output files when writing multiple.
+        /// Writers asynchronously report the cumulative encoded size as they
+        /// process RecordBatches. The final file size may exceed this limit due
+        /// to batches buffered before the limit is observed, the size of a batch,
+        /// and file metadata written when the file is finalized.
+        pub soft_max_bytes_per_output_file: ConfigNonZeroUsize, default = non_zero_usize_default(4294967295)
 
         /// This is the maximum number of RecordBatches buffered
         /// for each output file being worked. Higher values can potentially
