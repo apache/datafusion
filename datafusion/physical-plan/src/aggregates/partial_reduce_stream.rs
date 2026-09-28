@@ -21,9 +21,9 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
-use datafusion_execution::{async_try_stream, TaskContext, TryEmitter};
+use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
@@ -159,11 +159,10 @@ impl PartialReduceHashAggregateStream {
     }
 
     /// Entry point for the partial reduce hash aggregate.
-    fn create_stream(
-        mut self,
-    ) -> impl Stream<Item = Result<RecordBatch>> {
+    fn create_stream(mut self) -> impl Stream<Item = Result<RecordBatch>> {
         async_try_stream(|mut emitter| async move {
-            let mut hash_table: AggregateHashTable<PartialReduceMarker> = self.hash_table.take().expect("must have hash table");
+            let mut hash_table: AggregateHashTable<PartialReduceMarker> =
+                self.hash_table.take().expect("must have hash table");
 
             debug_assert!(hash_table.is_building());
             let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
@@ -190,7 +189,7 @@ impl PartialReduceHashAggregateStream {
                             &mut emitter,
                             hash_table.memory_size(),
                         )
-                          .await?;
+                        .await?;
                     }
                 }
             }
@@ -207,7 +206,6 @@ impl PartialReduceHashAggregateStream {
             Ok(())
         })
     }
-
 
     /// Aggregate partial state batch into the hash table
     fn handle_input_batch(
@@ -248,8 +246,8 @@ impl PartialReduceHashAggregateStream {
         // We account here for the remaining groups memory to see if we can return batch size states
         // if there is not enough memory, fallback to emit large batch
         match self
-          .reservation
-          .try_resize(hash_table_mem_size + remaining_groups_memory)
+            .reservation
+            .try_resize(hash_table_mem_size + remaining_groups_memory)
         {
             Ok(_) => {
                 // Continue with slicing
@@ -261,8 +259,8 @@ impl PartialReduceHashAggregateStream {
                 self.reservation.try_resize(hash_table_mem_size)?;
 
                 emitter
-                  .emit(remaining_groups.record_output(&self.baseline_metrics))
-                  .await;
+                    .emit(remaining_groups.record_output(&self.baseline_metrics))
+                    .await;
 
                 return Ok(());
             }
@@ -273,15 +271,16 @@ impl PartialReduceHashAggregateStream {
 
         while index + self.batch_size < remaining_groups.num_rows() {
             // More batch to output
-            let output = remaining_groups.slice(index, index + self.batch_size);
+            let output = remaining_groups.slice(index, self.batch_size);
             index += self.batch_size;
 
             emitter
-              .emit(output.record_output(&self.baseline_metrics))
-              .await;
+                .emit(output.record_output(&self.baseline_metrics))
+                .await;
         }
 
-        let last_batch = remaining_groups.slice(index, remaining_groups.num_rows() - index);
+        let last_batch =
+            remaining_groups.slice(index, remaining_groups.num_rows() - index);
 
         debug_assert!(last_batch.num_rows() > 0);
         debug_assert!(last_batch.num_rows() <= self.batch_size);
@@ -291,8 +290,8 @@ impl PartialReduceHashAggregateStream {
         self.reservation.try_shrink(remaining_groups_memory)?;
 
         emitter
-          .emit(remaining_groups.record_output(&self.baseline_metrics))
-          .await;
+            .emit(last_batch.record_output(&self.baseline_metrics))
+            .await;
 
         Ok(())
     }
@@ -329,38 +328,38 @@ impl PartialReduceHashAggregateStream {
 
             timer.done();
             emitter
-              .emit(batch.record_output(&self.baseline_metrics))
-              .await;
+                .emit(batch.record_output(&self.baseline_metrics))
+                .await;
             timer = elapsed_compute.timer();
-        };
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::time::Duration;
+    use crate::ExecutionPlan;
+    use crate::aggregates::partial_reduce_stream::PartialReduceHashAggregateStream;
+    use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
+    use crate::test::exec::BarrierExec;
     use arrow::array::{AsArray, Int32Array, Int64Array, RecordBatch};
     use arrow::datatypes::Int32Type;
     use arrow_schema::{DataType, Field, Schema};
-    use futures::StreamExt;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_execution::{SendableRecordBatchStream, TaskContext};
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::col;
-    use crate::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
-    use crate::aggregates::hash_stream::PartialHashAggregateStream;
-    use crate::ExecutionPlan;
-    use crate::test::exec::BarrierExec;
+    use futures::StreamExt;
+    use std::sync::Arc;
+    use std::time::Duration;
 
-    /// Builds a partial hash aggregate stream over a single input batch of
+    /// Builds a partial reduce hash aggregate stream over a single input batch of
     /// `num_groups` distinct groups, running under `memory_limit` bytes.
     ///
     /// The input does not signal end-of-stream until `wait_finish` is called
     /// on the returned [`BarrierExec`], so any output produced before that can
     /// only come from the memory pressure emission path (normal output waits
-    /// for all input). Skip partial aggregation is disabled for the same reason.
+    /// for all input).
     fn partial_reduce_stream_under_memory_limit(
         memory_limit: usize,
         batch_size: usize,
@@ -388,34 +387,34 @@ mod tests {
         let input_partitions = vec![vec![batch]];
 
         let runtime = RuntimeEnvBuilder::default()
-          .with_memory_limit(memory_limit, 1.0)
-          .build_arc()?;
+            .with_memory_limit(memory_limit, 1.0)
+            .build_arc()?;
 
         let mut task_ctx = TaskContext::default().with_runtime(Arc::clone(&runtime));
-        let session_config = task_ctx
-          .session_config()
-          .clone()
-          .set(
-              "datafusion.execution.batch_size",
-              &datafusion_common::ScalarValue::UInt64(Some(batch_size as u64)),
-          );
+        let session_config = task_ctx.session_config().clone().set(
+            "datafusion.execution.batch_size",
+            &datafusion_common::ScalarValue::UInt64(Some(batch_size as u64)),
+        );
         task_ctx = task_ctx.with_session_config(session_config);
         let task_ctx = Arc::new(task_ctx);
 
         // Create aggregate: COUNT(*) GROUP BY group_col
         let group_expr = vec![(col("group_col", &schema)?, "group_col".to_string())];
         let aggr_expr = vec![Arc::new(
-            AggregateExprBuilder::new(count_udaf(), vec![col("value_col_state", &schema)?])
-              .schema(Arc::clone(&schema))
-              .alias("count_value")
-              .build()?,
+            AggregateExprBuilder::new(
+                count_udaf(),
+                vec![col("value_col_state", &schema)?],
+            )
+            .schema(Arc::clone(&schema))
+            .alias("count_value")
+            .build()?,
         )];
 
         let input = Arc::new(
             BarrierExec::new(input_partitions, Arc::clone(&schema))
-              .without_start_barrier()
-              .with_finish_barrier()
-              .with_log(false),
+                .without_start_barrier()
+                .with_finish_barrier()
+                .with_log(false),
         );
 
         let aggregate_exec = AggregateExec::try_new(
@@ -428,14 +427,15 @@ mod tests {
         )?;
 
         let stream =
-          PartialHashAggregateStream::new(&aggregate_exec, &task_ctx, 0)?.into_stream();
+            PartialReduceHashAggregateStream::new(&aggregate_exec, &task_ctx, 0)?
+                .into_stream();
 
         Ok((stream, input, runtime))
     }
 
     #[tokio::test]
     async fn test_partial_reduce_hash_stream_accounts_held_batch_on_memory_pressure_while_slicing()
-        -> datafusion_common::Result<()> {
+    -> datafusion_common::Result<()> {
         // When memory pressure triggers early emission, the materialized state
         // batch is held while it is sliced into `batch_size` outputs. The
         // stream must keep that held batch accounted for in its memory
@@ -450,18 +450,21 @@ mod tests {
         // Smaller than the building hash table (so pressure triggers) but large
         // enough to hold the materialized state batch (so slicing can proceed)
         let memory_limit = 100 * 1024;
-        let (mut stream, input, runtime) =
-          partial_reduce_stream_under_memory_limit(memory_limit, batch_size, num_groups)?;
+        let (mut stream, input, runtime) = partial_reduce_stream_under_memory_limit(
+            memory_limit,
+            batch_size,
+            num_groups,
+        )?;
 
         // The first output batch must be a pressure-emitted slice, with the rest
         // of the materialized state batch still held by the stream
         let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
-          .await
-          .expect(
-              "did not get early emit due to OOM, this probably means that the \
+            .await
+            .expect(
+                "did not get early emit due to OOM, this probably means that the \
                  memory limit is too high to trigger the OOM",
-          )
-          .expect("stream ended early")?;
+            )
+            .expect("stream ended early")?;
         assert_eq!(first.num_rows(), batch_size);
 
         // The emitted slice shares buffers with the held state batch, so its
@@ -485,17 +488,17 @@ mod tests {
         // - you only take batch size from the hash table, you can remove the test
         assert_eq!(
             first
-              .column(0)
-              .as_primitive::<Int32Type>()
-              .values()
-              .inner()
-              .data_ptr(),
+                .column(0)
+                .as_primitive::<Int32Type>()
+                .values()
+                .inner()
+                .data_ptr(),
             second
-              .column(0)
-              .as_primitive::<Int32Type>()
-              .values()
-              .inner()
-              .data_ptr(),
+                .column(0)
+                .as_primitive::<Int32Type>()
+                .values()
+                .inner()
+                .data_ptr(),
             "both batches should be slices of the same materialized state batch"
         );
 
@@ -512,7 +515,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_partial_reduce_hash_stream_emits_whole_batch_when_held_batch_does_not_fit()
-        -> datafusion_common::Result<()> {
+    -> datafusion_common::Result<()> {
         // When memory pressure triggers early emission but the materialized
         // state batch itself does not fit in the reservation, the stream must
         // not fail with a resources exhausted error. Instead it gives up on
@@ -526,16 +529,19 @@ mod tests {
         // hash table  held batch fails. The emptied hash table itself is tiny
         // and still fits.
         let memory_limit = 32 * 1024;
-        let (mut stream, input, runtime) =
-          partial_reduce_stream_under_memory_limit(memory_limit, batch_size, num_groups)?;
+        let (mut stream, input, runtime) = partial_reduce_stream_under_memory_limit(
+            memory_limit,
+            batch_size,
+            num_groups,
+        )?;
 
         let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
-          .await
-          .expect(
-              "did not get early emit due to OOM, this probably means that the \
+            .await
+            .expect(
+                "did not get early emit due to OOM, this probably means that the \
                  memory limit is too high to trigger the OOM",
-          )
-          .expect("stream ended early")?;
+            )
+            .expect("stream ended early")?;
 
         // The whole state batch is emitted at once instead of `batch_size` slices
         assert_eq!(first.num_rows(), num_groups);
@@ -567,8 +573,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_partial_reduce_hash_stream_releases_held_batch_after_last_slice() -> datafusion_common::Result<()>
-    {
+    async fn test_partial_reduce_hash_stream_releases_held_batch_after_last_slice()
+    -> datafusion_common::Result<()> {
         // While the pressure-emitted state batch is sliced, the stream holds
         // the remaining groups and keeps them reserved. Once the last slice is
         // handed out nothing is held anymore, so the reservation must drop
@@ -579,20 +585,23 @@ mod tests {
         let num_groups = num_slices * batch_size;
 
         let memory_limit = 100 * 1024;
-        let (mut stream, input, runtime) =
-          partial_reduce_stream_under_memory_limit(memory_limit, batch_size, num_groups)?;
+        let (mut stream, input, runtime) = partial_reduce_stream_under_memory_limit(
+            memory_limit,
+            batch_size,
+            num_groups,
+        )?;
 
         // The input has not finished, so all of these are pressure-emitted slices
         let mut held_size = 0;
         for slice_idx in 0..num_slices {
             let slice = if slice_idx == 0 {
                 tokio::time::timeout(Duration::from_secs(5), stream.next())
-                  .await
-                  .expect(
-                      "did not get early emit due to OOM, this probably means that the \
+                    .await
+                    .expect(
+                        "did not get early emit due to OOM, this probably means that the \
                          memory limit is too high to trigger the OOM",
-                  )
-                  .expect("stream ended early")?
+                    )
+                    .expect("stream ended early")?
             } else {
                 stream.next().await.expect("stream ended early")?
             };
