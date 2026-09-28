@@ -976,11 +976,6 @@ pub(crate) fn sort_merge_join_stream(
             on_buffered,
             filter,
             join_type,
-            context
-                .session_config()
-                .options()
-                .execution
-                .enable_sort_merge_join_existence_summary,
             batch_size,
             partition,
             metrics,

@@ -21,12 +21,12 @@ pub use exec::SortMergeJoinExec;
 
 pub(crate) mod bitwise_stream;
 mod exec;
-mod existence_summary;
-#[cfg(test)]
-mod existence_summary_tests;
 mod filter;
 pub(crate) mod materializing_stream;
 mod metrics;
+mod semi_anti_summary;
+#[cfg(test)]
+mod semi_anti_summary_tests;
 
 #[cfg(test)]
 mod tests;

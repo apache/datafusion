@@ -29,10 +29,14 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use criterion::{
     BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
 };
-use datafusion_common::{JoinSide, JoinType, NullEquality};
-use datafusion_execution::{TaskContext, config::SessionConfig};
+use datafusion_common::{JoinSide, JoinType, NullEquality, ScalarValue};
+use datafusion_common_runtime::SpawnedTask;
+use datafusion_execution::{
+    TaskContext, config::SessionConfig, memory_pool::FairSpillPool,
+    runtime_env::RuntimeEnvBuilder,
+};
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{BinaryExpr, Column, col};
+use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal, col};
 use datafusion_physical_plan::joins::{
     SortMergeJoinExec,
     utils::{ColumnIndex, JoinFilter, JoinOn},
@@ -251,23 +255,18 @@ fn bench_smj(c: &mut Criterion) {
     group.finish();
 }
 
-/// Compare execution with summaries enabled and disabled in the same binary.
-/// Inputs are already sorted: SQL versions of these EXISTS/NOT EXISTS queries
-/// also measure sorting and depend on the optimizer's choice of join algorithm.
-/// These cases isolate the residual semi/anti join, including output collection.
-fn bench_existence_summary(c: &mut Criterion) {
-    let rt = Runtime::new().unwrap();
-    let mut group = c.benchmark_group("sort_merge_join_existence_summary");
-    group.sample_size(10);
-    group.warm_up_time(std::time::Duration::from_millis(500));
-    group.measurement_time(std::time::Duration::from_secs(2));
+/// Compare exact base and candidate builds with identical pre-sorted inputs.
+/// SQL versions also measure sorting and the optimizer's join selection; these
+/// cases isolate residual semi/anti joins, including output collection.
+fn bench_semi_anti_filter(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sort_merge_join_semi_anti_filter");
 
-    // Vary group count, rows per side, residual selectivity, and join type.
-    // The early-witness case controls for the generic join's short circuit;
-    // the small-group case measures the cost of repeatedly resetting summaries.
-    for (name, groups, probe_rows, inner_rows, distinct, op, kind) in [
+    // Vary group count, rows per side, selectivity, and value type. Early-match
+    // cases measure the cost of summarizing when the first inner row suffices;
+    // the one-probe case gives the summary no reuse within the group.
+    for (name, groups, probe_rows, inner_rows, early_match, op, kind) in [
         (
-            "not_equal_no_witness",
+            "not_equal_no_match",
             1,
             256,
             4096,
@@ -276,7 +275,7 @@ fn bench_existence_summary(c: &mut Criterion) {
             JoinType::LeftAnti,
         ),
         (
-            "not_equal_early_witness",
+            "not_equal_early_match",
             16,
             64,
             128,
@@ -284,8 +283,19 @@ fn bench_existence_summary(c: &mut Criterion) {
             Operator::NotEq,
             JoinType::LeftSemi,
         ),
+        // The first probe fails, but the second inner row matches every
+        // outer row. This exposes unnecessary full-group work after a miss.
         (
-            "small_group_no_witness",
+            "not_equal_second_witness",
+            16,
+            64,
+            4096,
+            true,
+            Operator::NotEq,
+            JoinType::LeftSemi,
+        ),
+        (
+            "small_group_no_match",
             4096,
             2,
             3,
@@ -294,7 +304,34 @@ fn bench_existence_summary(c: &mut Criterion) {
             JoinType::LeftAnti,
         ),
         (
-            "range_no_witness",
+            "small_group_four_no_match",
+            4096,
+            4,
+            4,
+            false,
+            Operator::NotEq,
+            JoinType::LeftAnti,
+        ),
+        (
+            "small_group_seven_no_match",
+            4096,
+            7,
+            7,
+            false,
+            Operator::NotEq,
+            JoinType::LeftAnti,
+        ),
+        (
+            "singleton_early_match",
+            8192,
+            1,
+            1,
+            true,
+            Operator::Lt,
+            JoinType::LeftSemi,
+        ),
+        (
+            "range_no_match",
             1,
             256,
             4096,
@@ -302,116 +339,278 @@ fn bench_existence_summary(c: &mut Criterion) {
             Operator::Gt,
             JoinType::LeftSemi,
         ),
+        (
+            "range_early_match_one_probe",
+            16,
+            1,
+            4096,
+            true,
+            Operator::Lt,
+            JoinType::LeftSemi,
+        ),
+        (
+            "range_early_match_many_probes",
+            16,
+            64,
+            4096,
+            true,
+            Operator::Lt,
+            JoinType::LeftSemi,
+        ),
+        // An OR residual remains on the pairwise path and controls for the
+        // eligibility check rather than measuring the min/max optimization.
+        (
+            "unsupported_or_no_match",
+            16,
+            64,
+            128,
+            false,
+            Operator::Or,
+            JoinType::LeftAnti,
+        ),
+        (
+            "unsupported_guard_no_match",
+            16,
+            64,
+            128,
+            false,
+            Operator::And,
+            JoinType::LeftAnti,
+        ),
     ] {
-        let input = |rows_per_group: usize, distinct: bool| {
-            let rows = groups * rows_per_group;
-            let batch = RecordBatch::try_from_iter(vec![
-                (
-                    "key",
-                    Arc::new(Int64Array::from_iter_values(
-                        (0..rows).map(|row| (row / rows_per_group) as i64),
-                    )) as ArrayRef,
-                ),
-                (
-                    "value",
-                    Arc::new(Int64Array::from_iter_values(
-                        (0..rows).map(|row| 7 + i64::from(distinct && row % 2 == 1)),
-                    )),
-                ),
-            ])
-            .unwrap();
-            // Exercise groups spanning batches as well as boundaries inside a batch.
-            let batches = (0..rows)
-                .step_by(127)
-                .map(|offset| batch.slice(offset, 127.min(rows - offset)))
-                .collect::<Vec<_>>();
-            make_exec(&batches, &batch.schema())
-        };
-        let left = input(probe_rows, false);
-        let right = input(inner_rows, distinct);
-        let make_plan = || {
-            let filter = JoinFilter::new(
-                Arc::new(BinaryExpr::new(
-                    Arc::new(Column::new("left_value", 0)),
-                    op,
-                    Arc::new(Column::new("right_value", 1)),
-                )),
-                vec![
-                    ColumnIndex {
-                        index: 1,
-                        side: JoinSide::Left,
-                    },
-                    ColumnIndex {
-                        index: 1,
-                        side: JoinSide::Right,
-                    },
-                ],
-                Arc::new(Schema::new(vec![
-                    Field::new("left_value", DataType::Int64, false),
-                    Field::new("right_value", DataType::Int64, false),
-                ])),
-            );
-            Arc::new(
-                SortMergeJoinExec::try_new(
-                    Arc::clone(&left),
-                    Arc::clone(&right),
-                    vec![(
-                        Arc::new(Column::new("key", 0)),
-                        Arc::new(Column::new("key", 0)),
-                    )],
-                    Some(filter),
-                    kind,
-                    vec![SortOptions::default()],
-                    NullEquality::NullEqualsNothing,
-                )
-                .unwrap(),
-            ) as Arc<dyn ExecutionPlan>
-        };
-        let expected = if op == Operator::Gt {
-            0
-        } else {
-            groups * probe_rows
-        };
-        // Input rows, not hypothetical pair comparisons, are the throughput unit.
-        group.throughput(Throughput::Elements(
-            (groups * (probe_rows + inner_rows)) as u64,
-        ));
-        for enabled in [false, true] {
-            let mut config = SessionConfig::new().with_batch_size(512);
-            config
-                .options_mut()
-                .execution
-                .enable_sort_merge_join_existence_summary = enabled;
-            let context = Arc::new(TaskContext::default().with_session_config(config));
-            let execute = |plan| {
-                rt.block_on(async {
-                    let batches = collect(plan, Arc::clone(&context)).await.unwrap();
-                    // Keep output destruction inside the measured execution.
-                    batches.iter().map(RecordBatch::num_rows).sum::<usize>()
-                })
+        for value_type in [DataType::Int64, DataType::Utf8] {
+            let expected = if op == Operator::Gt {
+                0
+            } else {
+                groups * probe_rows
             };
-            let verification = make_plan();
-            assert_eq!(execute(Arc::clone(&verification)), expected);
-            let counter = |name| {
-                verification
-                    .metrics()
-                    .unwrap()
-                    .iter()
-                    .filter(|metric| metric.value().name() == name)
-                    .map(|metric| metric.value().as_usize())
-                    .sum::<usize>()
+            let modes: &[&str] = if name.starts_with("small_group") {
+                &[
+                    "single",
+                    "shared_fair_pool_4_tasks",
+                    "isolated_fair_pools_4_tasks",
+                ]
+            } else {
+                &["single"]
             };
-            assert_eq!(counter("existence_summary_enabled"), usize::from(enabled));
-            group.bench_function(
-                BenchmarkId::new(name, if enabled { "on" } else { "off" }),
-                |b| {
-                    b.iter_batched(make_plan, execute, BatchSize::PerIteration);
-                },
-            );
+            for mode in modes {
+                let tasks = if *mode == "single" { 1 } else { 4 };
+                // Input rows, not hypothetical pair comparisons, are the throughput unit.
+                group.throughput(Throughput::Elements(
+                    (tasks * groups * (probe_rows + inner_rows)) as u64,
+                ));
+                let parameter = if tasks == 1 {
+                    value_type.to_string()
+                } else {
+                    format!("{value_type}_{mode}")
+                };
+                group.bench_function(BenchmarkId::new(name, parameter), |b| {
+                    // Build and verify only the selected fixture. Criterion may
+                    // invoke this callback repeatedly, outside its timed iterations.
+                    let rt = tokio::runtime::Builder::new_multi_thread()
+                        .worker_threads(4)
+                        .enable_all()
+                        .build()
+                        .unwrap();
+                    let input = |rows_per_group: usize, early_match: bool| {
+                        let rows = groups * rows_per_group;
+                        let values = (0..rows).map(|row| {
+                            7 + if early_match {
+                                row % rows_per_group
+                                    + usize::from(name != "not_equal_second_witness")
+                            } else {
+                                0
+                            }
+                        });
+                        let values: ArrayRef = if value_type == DataType::Utf8 {
+                            // Wide owned strings make the min/max pass more expensive
+                            // than Int64; creation stays outside the timed region.
+                            Arc::new(StringArray::from_iter_values(
+                                values.map(|value| format!("{:x>120}{value:08}", "")),
+                            ))
+                        } else {
+                            Arc::new(Int64Array::from_iter_values(
+                                values.map(|v| v as i64),
+                            ))
+                        };
+                        let batch = RecordBatch::try_from_iter(vec![
+                            (
+                                "key",
+                                Arc::new(Int64Array::from_iter_values(
+                                    (0..rows).map(|row| (row / rows_per_group) as i64),
+                                )) as ArrayRef,
+                            ),
+                            ("value", values),
+                        ])
+                        .unwrap();
+                        // Exercise groups spanning batches and boundaries within a batch.
+                        let batches = (0..rows)
+                            .step_by(127)
+                            .map(|offset| batch.slice(offset, 127.min(rows - offset)))
+                            .collect::<Vec<_>>();
+                        make_exec(&batches, &batch.schema())
+                    };
+                    let left = input(probe_rows, false);
+                    let right = input(inner_rows, early_match);
+                    let make_plan = || {
+                        let comparison = |op| {
+                            Arc::new(BinaryExpr::new(
+                                Arc::new(Column::new("left_value", 0)),
+                                op,
+                                Arc::new(Column::new("right_value", 1)),
+                            ))
+                        };
+                        let mut columns = vec![
+                            ColumnIndex {
+                                index: 1,
+                                side: JoinSide::Left,
+                            },
+                            ColumnIndex {
+                                index: 1,
+                                side: JoinSide::Right,
+                            },
+                        ];
+                        let mut fields = vec![
+                            Field::new("left_value", value_type.clone(), false),
+                            Field::new("right_value", value_type.clone(), false),
+                        ];
+                        let expression = match op {
+                            Operator::Or => Arc::new(BinaryExpr::new(
+                                comparison(Operator::NotEq),
+                                Operator::Or,
+                                comparison(Operator::Gt),
+                            )),
+                            Operator::And => {
+                                columns.push(ColumnIndex {
+                                    index: 0,
+                                    side: JoinSide::Right,
+                                });
+                                fields.push(Field::new(
+                                    "right_key",
+                                    DataType::Int64,
+                                    false,
+                                ));
+                                Arc::new(BinaryExpr::new(
+                                    comparison(Operator::NotEq),
+                                    Operator::And,
+                                    Arc::new(BinaryExpr::new(
+                                        Arc::new(Column::new("right_key", 2)),
+                                        Operator::GtEq,
+                                        Arc::new(Literal::new(ScalarValue::Int64(Some(
+                                            0,
+                                        )))),
+                                    )),
+                                ))
+                            }
+                            _ => comparison(op),
+                        };
+                        let filter = JoinFilter::new(
+                            expression,
+                            columns,
+                            Arc::new(Schema::new(fields)),
+                        );
+                        Arc::new(
+                            SortMergeJoinExec::try_new(
+                                Arc::clone(&left),
+                                Arc::clone(&right),
+                                vec![(
+                                    Arc::new(Column::new("key", 0)),
+                                    Arc::new(Column::new("key", 0)),
+                                )],
+                                Some(filter),
+                                kind,
+                                vec![SortOptions::default()],
+                                NullEquality::NullEqualsNothing,
+                            )
+                            .unwrap(),
+                        ) as Arc<dyn ExecutionPlan>
+                    };
+                    let make_context = || {
+                        TaskContext::default().with_session_config(
+                            SessionConfig::new().with_batch_size(512),
+                        )
+                    };
+                    let contexts = if tasks == 1 {
+                        vec![Arc::new(make_context())]
+                    } else {
+                        let new_runtime = || {
+                            RuntimeEnvBuilder::new()
+                                .with_memory_pool(Arc::new(FairSpillPool::new(
+                                    256 * 1024 * 1024,
+                                )))
+                                .build_arc()
+                                .unwrap()
+                        };
+                        let shared = new_runtime();
+                        (0..tasks)
+                            .map(|_| {
+                                Arc::new(make_context().with_runtime(
+                                    if *mode == "shared_fair_pool_4_tasks" {
+                                        Arc::clone(&shared)
+                                    } else {
+                                        new_runtime()
+                                    },
+                                ))
+                            })
+                            .collect::<Vec<_>>()
+                    };
+                    let make_plans =
+                        || (0..tasks).map(|_| make_plan()).collect::<Vec<_>>();
+                    let execute = |plans: Vec<Arc<dyn ExecutionPlan>>| {
+                        rt.block_on(async {
+                            if tasks == 1 {
+                                let batches = collect(
+                                    Arc::clone(&plans[0]),
+                                    Arc::clone(&contexts[0]),
+                                )
+                                .await
+                                .unwrap();
+                                return batches
+                                    .iter()
+                                    .map(RecordBatch::num_rows)
+                                    .sum::<usize>();
+                            }
+                            // Actually spawn onto runtime workers; joining futures on this
+                            // thread would not exercise contention on the shared pool mutex.
+                            let barrier = Arc::new(tokio::sync::Barrier::new(tasks));
+                            let handles = plans
+                                .into_iter()
+                                .zip(&contexts)
+                                .map(|(plan, context)| {
+                                    let context = Arc::clone(context);
+                                    let barrier = Arc::clone(&barrier);
+                                    SpawnedTask::spawn(async move {
+                                        barrier.wait().await;
+                                        let batches =
+                                            collect(plan, context).await.unwrap();
+                                        batches
+                                            .iter()
+                                            .map(RecordBatch::num_rows)
+                                            .sum::<usize>()
+                                    })
+                                })
+                                .collect::<Vec<_>>();
+                            let mut rows = 0;
+                            for handle in handles {
+                                rows += handle.await.unwrap();
+                            }
+                            rows
+                        })
+                    };
+                    let verification = make_plans();
+                    assert_eq!(execute(verification.clone()), tasks * expected);
+                    for plan in verification {
+                        assert_eq!(plan.metrics().unwrap().spill_count(), Some(0));
+                    }
+                    // Execution, task overhead, collection and output destruction
+                    // are timed. Input and fresh plan construction are excluded.
+                    b.iter_batched(make_plans, execute, BatchSize::PerIteration);
+                });
+            }
         }
     }
     group.finish();
 }
 
-criterion_group!(benches, bench_smj, bench_existence_summary);
+criterion_group!(benches, bench_smj, bench_semi_anti_filter);
 criterion_main!(benches);

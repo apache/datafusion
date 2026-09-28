@@ -70,12 +70,10 @@
 //! outer key group as a batch. Results are OR'd into the matched bitset. A
 //! short-circuit exits early when all outer rows in the group are matched.
 //!
-//! **With an eligible existence summary**: Ordinary semi/anti joins can instead
-//! consume the inner group once into an exact bounded summary, then evaluate
-//! the outer rows against that summary. Inequality retains a representative
-//! and a second-distinct-value flag; range comparisons retain an extremum.
-//! This opt-in path avoids buffering the inner group. Unsupported predicates
-//! and mark joins use the ordinary filter path described above.
+//! **With one cross-side column comparison**: Ordinary semi/anti joins can
+//! summarize an in-memory inner group using min/max kernels. The summary is
+//! computed lazily after initial probes, then reused across outer batches.
+//! Spilled groups, complex predicates, and mark joins use ordinary evaluation.
 //!
 //! ```text
 //!   matched bitset:  [0, 0, 1, 0, 0, ...]
@@ -105,8 +103,8 @@
 //! - Inner key group buffer: only for filtered joins, one key group at a time.
 //!   Tracked via `MemoryReservation`; spilled to disk when the memory pool
 //!   limit is exceeded.
-//! - Eligible summaries replace this group buffer with at most one owned value
-//!   per compiled clause, charged to a separate non-spillable reservation.
+//! - Optional summaries and their temporary scalar copies use the same
+//!   reservation. Failed admission falls back to ordinary filter evaluation.
 //! - `BatchCoalescer`: output buffering to target batch size
 //!
 //! # Degenerate cases
@@ -131,7 +129,7 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use super::existence_summary::ExistenceSummary;
+use super::semi_anti_summary::{GroupSummary, SemiAntiComparison};
 use crate::EmptyRecordBatchStream;
 use crate::joins::utils::{JoinFilter, JoinKeyComparator, compare_join_arrays};
 use crate::metrics::{
@@ -149,7 +147,7 @@ use datafusion_common::instant::Instant;
 use datafusion_common::{
     DataFusionError, JoinSide, JoinType, NullEquality, Result, ScalarValue, internal_err,
 };
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::{
     SendableRecordBatchStream, SpillFile, TryEmitter, async_try_stream,
 };
@@ -249,10 +247,6 @@ pub(crate) struct BitwiseSortMergeJoinStream {
     // per-group spill file (see [`Self::buffer_inner_key_group`]).
     inner_key_buffer: Vec<RecordBatch>,
 
-    // Eligible semi/anti filters retain exact owned summary values instead of
-    // inner payload batches. Reused across outer batch boundaries.
-    existence_summary: Option<Box<ExistenceSummaryState>>,
-
     // Join ON expressions, evaluated against each new batch to produce
     // the key arrays used for sorted key comparisons.
     on_outer: Vec<PhysicalExprRef>,
@@ -298,18 +292,11 @@ pub(crate) struct BitwiseSortMergeJoinStream {
     inner_self_cmp: Option<JoinKeyComparator>,
 }
 
-/// Keep optional summary state out of the ordinary stream's inline layout.
-struct ExistenceSummaryState {
-    summary: ExistenceSummary,
-    reservation: MemoryReservation,
-    groups: Count,
-    inner_rows: Count,
-    probe_rows: Count,
-    rows_until_yield: usize,
+/// Keep the comparison with the owned extrema once a group is summarized.
+struct CachedSummary {
+    comparison: SemiAntiComparison,
+    values: GroupSummary,
 }
-
-// Bound synchronous predicate work even for large batches or many small groups.
-const SUMMARY_WORK_BUDGET: usize = 1024;
 
 impl BitwiseSortMergeJoinStream {
     #[expect(clippy::too_many_arguments)]
@@ -323,7 +310,6 @@ impl BitwiseSortMergeJoinStream {
         on_inner: Vec<PhysicalExprRef>,
         filter: Option<JoinFilter>,
         join_type: JoinType,
-        enable_existence_summary: bool,
         batch_size: usize,
         partition: usize,
         metrics: &ExecutionPlanMetricsSet,
@@ -356,53 +342,7 @@ impl BitwiseSortMergeJoinStream {
         let peak_mem_used =
             MetricBuilder::new(metrics).peak_memory_usage("peak_mem_used", partition);
 
-        // Expose eligibility when requested, without allocating metric atomics
-        // or a summary reservation while the optimization is disabled.
-        let existence_summary = if enable_existence_summary {
-            let summary = if matches!(
-                join_type,
-                JoinType::LeftSemi
-                    | JoinType::RightSemi
-                    | JoinType::LeftAnti
-                    | JoinType::RightAnti
-            ) && let Some(filter) = &filter
-            {
-                ExistenceSummary::try_new(
-                    filter,
-                    outer_is_left,
-                    outer.schema().as_ref(),
-                    inner.schema().as_ref(),
-                )?
-            } else {
-                None
-            };
-            let count = |name| MetricBuilder::new(metrics).counter(name, partition);
-            let enabled = count("existence_summary_enabled");
-            let fallback = count("existence_summary_fallback");
-            if let Some(summary) = summary {
-                enabled.add(1);
-                Some(Box::new(ExistenceSummaryState {
-                    summary,
-                    // Owned representatives cannot spill. Do not classify them
-                    // as part of the spillable inner group buffer.
-                    reservation: MemoryConsumer::new(format!(
-                        "SMJExistenceSummary[{partition}]"
-                    ))
-                    .register(&runtime_env.memory_pool),
-                    groups: count("existence_summary_groups"),
-                    inner_rows: count("existence_summary_inner_rows"),
-                    probe_rows: count("existence_summary_probe_rows"),
-                    rows_until_yield: SUMMARY_WORK_BUDGET,
-                }))
-            } else {
-                fallback.add(1);
-                None
-            }
-        } else {
-            None
-        };
-
-        let state = Self {
+        let mut state = Self {
             join_type,
             outer,
             inner,
@@ -414,7 +354,6 @@ impl BitwiseSortMergeJoinStream {
             inner_key_arrays: vec![],
             matched: BooleanBufferBuilder::new(0),
             inner_key_buffer: vec![],
-            existence_summary,
             on_outer,
             on_inner,
             filter,
@@ -438,32 +377,19 @@ impl BitwiseSortMergeJoinStream {
             inner_self_cmp: None,
         };
 
-        // Choose the specialized loop once; ordinary joins keep their existing
-        // hot path without testing summary eligibility for each matching key.
-        Ok(if state.existence_summary.is_some() {
-            state.into_stream::<true>(schema, baseline_metrics)
-        } else {
-            state.into_stream::<false>(schema, baseline_metrics)
-        })
-    }
-
-    fn into_stream<const USE_SUMMARY: bool>(
-        mut self,
-        schema: SchemaRef,
-        baseline_metrics: BaselineMetrics,
-    ) -> SendableRecordBatchStream {
         let stream = async_try_stream(|mut emitter| async move {
-            self.start_join_time();
-            let result = self.join::<USE_SUMMARY>(&mut emitter).await;
-            self.stop_join_time();
+            state.start_join_time();
+            let result = state.join(&mut emitter).await;
+            state.stop_join_time();
             result
         });
-        // ObservedStream records output rows/batches and end time.
-        Box::pin(ObservedStream::new(
+        // ObservedStream records the baseline metrics (output rows/batches,
+        // end time) exactly as the former hand-written poll_next did.
+        Ok(Box::pin(ObservedStream::new(
             Box::pin(RecordBatchStreamAdapter::new(schema, stream)),
             baseline_metrics,
             None,
-        ))
+        )))
     }
 
     /// Start (resume) the `join_time` clock.
@@ -795,6 +721,127 @@ impl BitwiseSortMergeJoinStream {
         }
     }
 
+    /// Try initial probes or an exact summary, updating the matched bits.
+    /// Return true when this outer slice needs no ordinary filter evaluation.
+    /// Keep this work separate from the asynchronous spill and batch traversal.
+    #[inline(never)]
+    fn try_apply_summary(
+        &mut self,
+        outer_slice: &RecordBatch,
+        summary: &mut Option<Box<CachedSummary>>,
+        allow_summary: &mut Option<bool>,
+    ) -> Result<bool> {
+        let outer_group_start = self.outer_offset;
+        let outer_group_len = outer_slice.num_rows();
+        let filter = self.filter.as_ref().unwrap();
+
+        // Probe a small prefix before paying for min/max. This cost heuristic
+        // preserves early witnesses without adding an unconditional inner
+        // scan. A single outer row also stays on the ordinary path, which
+        // already visits each inner row at most once.
+        if summary.is_none()
+            && outer_group_len > 1
+            && *allow_summary.get_or_insert_with(|| {
+                self.inner_key_buffer
+                    .iter()
+                    .map(RecordBatch::num_rows)
+                    .sum::<usize>()
+                    >= 7
+            })
+        {
+            if let Some(comparison) = SemiAntiComparison::try_new(
+                filter,
+                self.outer_is_left,
+                self.outer.schema().as_ref(),
+                self.inner.schema().as_ref(),
+            )? {
+                let mut remaining = 2;
+                // A NULL outer operand cannot match any inner value.
+                let matchable = outer_group_len
+                    - outer_slice.column(comparison.outer_column).null_count();
+                if matchable == 0 {
+                    return Ok(true);
+                }
+                for inner_batch in &self.inner_key_buffer {
+                    let len = remaining.min(inner_batch.num_rows());
+                    for row in 0..len {
+                        let result = comparison.evaluate_inner_row(
+                            inner_batch,
+                            row,
+                            outer_slice,
+                        )?;
+                        let values = result.values();
+                        apply_bitwise_binary_op(
+                            self.matched.as_slice_mut(),
+                            outer_group_start,
+                            values.inner().as_slice(),
+                            values.offset(),
+                            outer_group_len,
+                            |a, b| a | b,
+                        );
+                        let matched_count = UnalignedBitChunk::new(
+                            self.matched.as_slice(),
+                            outer_group_start,
+                            outer_group_len,
+                        )
+                        .count_ones();
+                        if matched_count == matchable {
+                            return Ok(true);
+                        }
+                    }
+                    remaining -= len;
+                    if remaining == 0 {
+                        break;
+                    }
+                }
+                let bytes = comparison
+                    .memory_size(&self.inner_key_buffer)
+                    .saturating_add(size_of::<SemiAntiComparison>());
+                if self.reservation.try_grow(bytes).is_ok() {
+                    self.peak_mem_used.set_max(self.reservation.size());
+                    // Keep scalar state out of the surrounding async futures.
+                    // Admit the comparison descriptor alongside its scalars.
+                    let values = comparison.summarize(&self.inner_key_buffer)?;
+                    let retained = values
+                        .memory_size()
+                        .saturating_add(size_of::<SemiAntiComparison>());
+                    debug_assert!(retained <= bytes);
+                    let cached = Box::new(CachedSummary { comparison, values });
+                    // Extrema own their values. Once reduction succeeds, the
+                    // original group is no longer needed, including for outer
+                    // rows arriving in later batches. Release it before any
+                    // further child awaits and keep only the probe allowance.
+                    self.inner_key_buffer.clear();
+                    self.inner_buffer_size = 0;
+                    self.reservation.shrink(self.reservation.size() - retained);
+                    *summary = Some(cached);
+                } else {
+                    // Input is still buffered, so refused summary admission
+                    // does not add a memory error or disable existing spilling.
+                    *allow_summary = Some(false);
+                }
+            } else {
+                // An unsupported filter will remain unsupported for this key.
+                *allow_summary = Some(false);
+            }
+        }
+        if let Some(summary) = summary {
+            let result = summary.comparison.evaluate(&summary.values, outer_slice)?;
+            let values = result.values();
+            apply_bitwise_binary_op(
+                self.matched.as_slice_mut(),
+                outer_group_start,
+                values.inner().as_slice(),
+                values.offset(),
+                outer_group_len,
+                |a, b| a | b,
+            );
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
     /// Process a key match with a filter. For each inner row in the buffered
     /// key group — the spilled slices in `spill` plus the in-memory
     /// `inner_key_buffer` — evaluates the filter against the outer key group
@@ -803,12 +850,14 @@ impl BitwiseSortMergeJoinStream {
     async fn process_key_match_with_filter(
         &mut self,
         spill: Option<&Arc<dyn SpillFile>>,
+        summary: &mut Option<Box<CachedSummary>>,
+        allow_summary: &mut Option<bool>,
     ) -> Result<()> {
         let num_outer = self.outer_batch.as_ref().unwrap().num_rows();
 
         // buffer_inner_key_group must be called before this function
         debug_assert!(
-            !self.inner_key_buffer.is_empty() || spill.is_some(),
+            !self.inner_key_buffer.is_empty() || spill.is_some() || summary.is_some(),
             "process_key_match_with_filter called with no inner key data"
         );
         debug_assert!(
@@ -825,9 +874,19 @@ impl BitwiseSortMergeJoinStream {
             find_key_group_end(self.get_outer_self_cmp()?, outer_group_start, num_outer);
         let outer_group_len = outer_group_end - outer_group_start;
 
-        let filter = self.filter.as_ref().unwrap();
         let outer_batch = self.outer_batch.as_ref().unwrap();
         let outer_slice = outer_batch.slice(outer_group_start, outer_group_len);
+
+        // Cached summaries also serve later singleton slices. Already rejected
+        // keys and other singleton slices stay on the ordinary path.
+        if (summary.is_some() || (outer_group_len > 1 && *allow_summary != Some(false)))
+            && self.try_apply_summary(&outer_slice, summary, allow_summary)?
+        {
+            self.outer_offset = outer_group_end;
+            return Ok(());
+        }
+
+        let filter = self.filter.as_ref().unwrap();
 
         // Count already-matched bits using popcnt on u64 chunks (zero-copy).
         let mut matched_count = UnalignedBitChunk::new(
@@ -911,8 +970,20 @@ impl BitwiseSortMergeJoinStream {
         spill: Option<Arc<dyn SpillFile>>,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
+        let mut summary = None;
+        // Delay the group-size check until an outer slice can use a summary,
+        // then cache eligibility across batches. Spilled and mark joins never
+        // qualify, regardless of their filter or group size.
+        let mut allow_summary = (spill.is_some()
+            || matches!(self.join_type, JoinType::LeftMark | JoinType::RightMark))
+        .then_some(false);
         loop {
-            self.process_key_match_with_filter(spill.as_ref()).await?;
+            self.process_key_match_with_filter(
+                spill.as_ref(),
+                &mut summary,
+                &mut allow_summary,
+            )
+            .await?;
 
             let outer_batch = self.outer_batch.as_ref().unwrap();
             if self.outer_offset < outer_batch.num_rows() {
@@ -940,6 +1011,7 @@ impl BitwiseSortMergeJoinStream {
             }
         }
 
+        drop(summary);
         self.clear_inner_key_group();
         Ok(())
     }
@@ -982,14 +1054,11 @@ impl BitwiseSortMergeJoinStream {
 
     /// Keys at both cursors are equal: determine which outer rows in the key
     /// group have a match. Both key groups may span batch boundaries.
-    async fn process_key_match<const USE_SUMMARY: bool>(
+    async fn process_key_match(
         &mut self,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
-        if USE_SUMMARY {
-            self.summarize_inner_key_group().await?;
-            self.process_summary_match_loop(emitter).await
-        } else if self.filter.is_some() {
+        if self.filter.is_some() {
             // Buffer the inner key group so each inner row can be evaluated
             // against the outer key group, OR-ing filter results into the
             // matched bitset.
@@ -1001,122 +1070,6 @@ impl BitwiseSortMergeJoinStream {
             self.advance_inner_past_key_group().await?;
             self.process_unfiltered_match_loop(emitter).await
         }
-    }
-
-    /// Return a bounded slice length, yielding periodically even if every
-    /// child batch is immediately ready. Pausing the timer excludes scheduling
-    /// time from the join's own work.
-    async fn summary_slice_len(&mut self, remaining: usize) -> usize {
-        if self.existence_summary.as_ref().unwrap().rows_until_yield == 0 {
-            self.stop_join_time();
-            tokio::task::yield_now().await;
-            self.start_join_time();
-            self.existence_summary.as_mut().unwrap().rows_until_yield =
-                SUMMARY_WORK_BUDGET;
-        }
-        let state = self.existence_summary.as_mut().unwrap();
-        let len = remaining.min(state.rows_until_yield);
-        state.rows_until_yield -= len;
-        len
-    }
-
-    /// Consume the whole inner key group into owned summary state. Continue
-    /// draining after saturation so input errors and group boundaries retain
-    /// their ordinary behavior.
-    async fn summarize_inner_key_group(&mut self) -> Result<()> {
-        while self.inner_batch.is_some() {
-            let num_inner = self.inner_batch.as_ref().unwrap().num_rows();
-            let from = self.inner_offset;
-            let group_end =
-                find_key_group_end(self.get_inner_self_cmp()?, from, num_inner);
-
-            let mut offset = from;
-            while offset < group_end {
-                let len = self.summary_slice_len(group_end - offset).await;
-                let batch = self.inner_batch.as_ref().unwrap().slice(offset, len);
-                let state = self.existence_summary.as_mut().unwrap();
-                state.summary.update(&batch, &state.reservation)?;
-                state.inner_rows.add(len);
-                self.peak_mem_used.set_max(state.summary.peak_size());
-                offset += len;
-            }
-
-            if group_end < num_inner {
-                self.inner_offset = group_end;
-                break;
-            }
-
-            let saved_keys = slice_keys(&self.inner_key_arrays, num_inner - 1);
-            if !self.next_inner_batch().await? {
-                self.inner_batch = None;
-                break;
-            }
-            if !keys_match(
-                &saved_keys,
-                &self.inner_key_arrays,
-                &self.sort_options,
-                self.null_equality,
-            )? {
-                break;
-            }
-        }
-        self.existence_summary.as_ref().unwrap().groups.add(1);
-        Ok(())
-    }
-
-    /// Reuse a completed summary for all outer rows of its key. Existing
-    /// semi/anti emission preserves the outer rows and their multiplicity.
-    async fn process_summary_match_loop(
-        &mut self,
-        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
-    ) -> Result<()> {
-        loop {
-            let num_outer = self.outer_batch.as_ref().unwrap().num_rows();
-            let from = self.outer_offset;
-            let group_end =
-                find_key_group_end(self.get_outer_self_cmp()?, from, num_outer);
-
-            let mut offset = from;
-            while offset < group_end {
-                let len = self.summary_slice_len(group_end - offset).await;
-                let batch = self.outer_batch.as_ref().unwrap().slice(offset, len);
-                let state = self.existence_summary.as_ref().unwrap();
-                let result = state.summary.evaluate(&batch)?;
-                let values = result.values();
-                apply_bitwise_binary_op(
-                    self.matched.as_slice_mut(),
-                    offset,
-                    values.inner().as_slice(),
-                    values.offset(),
-                    len,
-                    |a, b| a | b,
-                );
-                state.probe_rows.add(len);
-                offset += len;
-            }
-            self.outer_offset = group_end;
-            if group_end < num_outer {
-                break;
-            }
-
-            let saved_keys = slice_keys(&self.outer_key_arrays, num_outer - 1);
-            self.emit_outer_batch()?;
-            self.emit_completed_batches(emitter).await;
-            if !self.next_outer_batch().await? {
-                break;
-            }
-            if !keys_match(
-                &saved_keys,
-                &self.outer_key_arrays,
-                &self.sort_options,
-                self.null_equality,
-            )? {
-                break;
-            }
-        }
-        let state = self.existence_summary.as_mut().unwrap();
-        state.summary.reset(&state.reservation);
-        Ok(())
     }
 
     /// Compare the join keys at the outer and inner cursors, returning the
@@ -1288,7 +1241,7 @@ impl BitwiseSortMergeJoinStream {
 
     /// Main loop: a classic merge-scan over the two sorted inputs, emitting
     /// output batches as they complete.
-    async fn join<const USE_SUMMARY: bool>(
+    async fn join(
         &mut self,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
@@ -1313,7 +1266,7 @@ impl BitwiseSortMergeJoinStream {
                 }
                 Ordering::Equal => {
                     if !self.try_process_key_match()? {
-                        self.process_key_match::<USE_SUMMARY>(emitter).await?;
+                        self.process_key_match(emitter).await?;
                     }
                 }
             }
