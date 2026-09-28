@@ -641,6 +641,23 @@ mod tests {
     struct RowCursorHarness {
         stream: RowCursorStream,
         pool: Arc<dyn MemoryPool>,
+        schema: SchemaRef,
+        rows: usize,
+        str_width: usize,
+    }
+
+    /// Every batch has the same row count and string width, so each converts to
+    /// a `Rows` buffer of the same size regardless of `seq`.
+    fn make_batch(
+        schema: &SchemaRef,
+        seq: usize,
+        rows: usize,
+        str_width: usize,
+    ) -> RecordBatch {
+        let base = (seq * rows) as i32;
+        let a = Int32Array::from_iter_values((0..rows as i32).map(|i| base + i));
+        let b = StringArray::from_iter_values((0..rows).map(|_| "x".repeat(str_width)));
+        RecordBatch::try_new(Arc::clone(schema), vec![Arc::new(a), Arc::new(b)]).unwrap()
     }
 
     impl RowCursorHarness {
@@ -653,25 +670,16 @@ mod tests {
             rows: usize,
             str_width: usize,
         ) -> Result<Self> {
-            let schema = Arc::new(Schema::new(vec![
+            let schema: SchemaRef = Arc::new(Schema::new(vec![
                 Field::new("a", DataType::Int32, false),
                 Field::new("b", DataType::Utf8, false),
             ]));
 
-            let make_batch = |seq: usize| {
-                let base = (seq * rows) as i32;
-                let a = Int32Array::from_iter_values((0..rows as i32).map(|i| base + i));
-                let b = StringArray::from_iter_values(
-                    (0..rows).map(|_| "x".repeat(str_width)),
-                );
-                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(a), Arc::new(b)])
-                    .unwrap()
-            };
-
             let streams: Vec<SendableRecordBatchStream> = (0..partitions)
                 .map(|_| {
-                    let batches: Vec<RecordBatch> =
-                        (0..batches_per_partition).map(make_batch).collect();
+                    let batches: Vec<RecordBatch> = (0..batches_per_partition)
+                        .map(|seq| make_batch(&schema, seq, rows, str_width))
+                        .collect();
                     Box::pin(
                         MemoryStream::try_new(batches, Arc::clone(&schema), None)
                             .unwrap(),
@@ -692,11 +700,32 @@ mod tests {
             let stream =
                 RowCursorStream::try_new(&schema, &expressions, streams, reservation)?;
 
-            Ok(Self { stream, pool })
+            Ok(Self {
+                stream,
+                pool,
+                schema,
+                rows,
+                str_width,
+            })
         }
 
         fn reserved(&self) -> usize {
             self.pool.reserved()
+        }
+
+        /// Converts one batch with a standalone converter over the same sort
+        /// key, returning `(converter size, size of one retained Rows buffer)`.
+        /// These are what the stream should reserve for its converter and for
+        /// each partition's cached buffer.
+        fn expected_sizes(&self) -> Result<(usize, usize)> {
+            let converter = RowConverter::new(vec![
+                SortField::new(DataType::Int32),
+                SortField::new(DataType::Utf8),
+            ])?;
+            let batch = make_batch(&self.schema, 0, self.rows, self.str_width);
+            let mut rows = converter.empty_rows(0, 0);
+            converter.append(&mut rows, batch.columns())?;
+            Ok((converter.size(), rows.size()))
         }
 
         /// Polls `stream_idx`, handing back the cursor so the caller controls when
@@ -741,25 +770,16 @@ mod tests {
     #[test]
     fn dropping_a_cursor_does_not_unaccount_its_retained_buffer() -> Result<()> {
         let mut harness = RowCursorHarness::new(1, 4, 512, 64)?;
+        let (converter_size, rows_size) = harness.expected_sizes()?;
+        assert_eq!(harness.reserved(), 0);
 
         let cursor = harness.poll_cursor(0)?.expect("first batch");
-        let with_cursor_alive = harness.reserved();
+        assert_eq!(harness.reserved(), converter_size + rows_size);
 
+        // The cached `Rows` buffer outlives the cursor, so dropping the cursor
+        // must not release its bytes.
         drop(cursor);
-        let after_drop = harness.reserved();
-
-        assert_eq!(
-            with_cursor_alive, after_drop,
-            "the cached `Rows` buffer outlives the cursor, so dropping the cursor \
-             must not release its bytes (before {with_cursor_alive}, after {after_drop})"
-        );
-
-        // And the buffer is genuinely on the books, not merely unchanged at zero.
-        let baseline = RowCursorHarness::new(1, 4, 512, 64)?.reserved();
-        assert!(
-            after_drop > baseline,
-            "retained buffer should be reserved (baseline {baseline}, now {after_drop})"
-        );
+        assert_eq!(harness.reserved(), converter_size + rows_size);
 
         Ok(())
     }
@@ -769,25 +789,19 @@ mod tests {
     // whichever batch happens to be in flight.
     #[test]
     fn retained_row_buffer_reservation_scales_with_partitions() -> Result<()> {
-        let measure = |partitions: usize| -> Result<usize> {
+        for partitions in [2, 16] {
             let mut harness = RowCursorHarness::new(partitions, 4, 512, 64)?;
+            let (converter_size, rows_size) = harness.expected_sizes()?;
             for stream_idx in 0..partitions {
                 assert!(harness.poll_and_drop_cursor(stream_idx)?);
             }
-            Ok(harness.reserved())
-        };
-
-        let few = measure(2)?;
-        let many = measure(16)?;
-
-        // 8x the partitions. The converter reservation is shared and does not
-        // scale, so this is deliberately loose - the point is that it grows with
-        // the number of cached buffers, not that it grows by an exact factor.
-        assert!(
-            many > few * 4,
-            "reservation should scale with the number of retained buffers, \
-             but 2 partitions reserved {few} and 16 reserved {many}"
-        );
+            // One shared converter, plus one cached buffer per partition.
+            assert_eq!(
+                harness.reserved(),
+                converter_size + partitions * rows_size,
+                "{partitions} partitions"
+            );
+        }
 
         Ok(())
     }
@@ -801,31 +815,30 @@ mod tests {
         let batches_per_partition = 3;
         let mut harness =
             RowCursorHarness::new(partitions, batches_per_partition, 512, 64)?;
-
-        let baseline = harness.reserved();
+        let (converter_size, rows_size) = harness.expected_sizes()?;
+        assert_eq!(harness.reserved(), 0);
 
         for stream_idx in 0..partitions {
             for _ in 0..batches_per_partition {
                 assert!(harness.poll_and_drop_cursor(stream_idx)?);
             }
         }
-        let peak = harness.reserved();
-        assert!(
-            peak > baseline,
-            "expected the cached buffers to be reserved"
-        );
+        // Reusing a buffer for later batches of the same shape does not grow it.
+        assert_eq!(harness.reserved(), converter_size + partitions * rows_size);
 
-        // Poll each partition once more so it reports exhaustion.
+        // Poll each partition once more so it reports exhaustion, releasing
+        // one buffer at a time.
         for stream_idx in 0..partitions {
             assert!(!harness.poll_and_drop_cursor(stream_idx)?);
+            let still_retained = partitions - stream_idx - 1;
+            assert_eq!(
+                harness.reserved(),
+                converter_size + still_retained * rows_size
+            );
         }
 
-        let after_release = harness.reserved();
-        assert!(
-            after_release < peak,
-            "exhausted partitions should release their buffers \
-             (peak {peak}, after {after_release})"
-        );
+        // Only the converter is left.
+        assert_eq!(harness.reserved(), converter_size);
 
         Ok(())
     }
