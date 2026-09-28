@@ -665,6 +665,36 @@ the previous fail-fast behaviour for the affected join types.</p></li>
 </pre></div>
 </div>
 </section>
+<section id="executionoptions-has-a-new-soft-max-bytes-per-output-file-field">
+<h3><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> has a new <code class="docutils literal notranslate"><span class="pre">soft_max_bytes_per_output_file</span></code> field<a class="headerlink" href="#executionoptions-has-a-new-soft-max-bytes-per-output-file-field" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> gained a public <code class="docutils literal notranslate"><span class="pre">soft_max_bytes_per_output_file:</span> <span class="pre">ConfigNonZeroUsize</span></code>
+field (default 4 GiB minus one byte, or 4,294,967,295 bytes). When writing
+multiple output files, DataFusion starts a new file once a writer reports that
+the encoded size has reached this target or the existing
+<code class="docutils literal notranslate"><span class="pre">soft_max_rows_per_output_file</span></code> target has been reached. The byte limit is soft:
+buffered batches, in-flight batch serialization, individual batch sizes, and
+file metadata can make a completed file larger than the target. It does not
+apply to single-file output.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Users constructing <code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> (or <code class="docutils literal notranslate"><span class="pre">ConfigOptions</span></code>) with an exhaustive
+struct literal must provide the new field.</p></li>
+<li><p>Users writing multiple output files can set a smaller byte target to rotate
+files before they reach the default size.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Set the field explicitly, or fill it from <code class="docutils literal notranslate"><span class="pre">Default</span></code> as shown above. For example,
+to target 128 MiB output files in Rust:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">config</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionConfig</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="n">config</span><span class="p">.</span><span class="n">options_mut</span><span class="p">().</span><span class="n">execution</span><span class="p">.</span><span class="n">soft_max_bytes_per_output_file</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="n">ConfigNonZeroUsize</span><span class="p">::</span><span class="n">try_new</span><span class="p">(</span><span class="mi">128</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">1024</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">1024</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>The same setting can be changed with SQL:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">soft_max_bytes_per_output_file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">134217728</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
 <section id="datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored">
 <h3><code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> is deprecated and ignored<a class="headerlink" href="#datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored" title="Link to this heading">#</a></h3>
 <p>The <code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> config flag is deprecated and
@@ -1079,6 +1109,7 @@ conjuncts when <code class="docutils literal notranslate"><span class="pre">push
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupcolumn-now-requires-values-preserving"><code class="docutils literal notranslate"><span class="pre">GroupColumn</span></code> now requires <code class="docutils literal notranslate"><span class="pre">values_preserving</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-proto-common-option-and-constraint-conversions-are-fallible"><code class="docutils literal notranslate"><span class="pre">datafusion-proto</span></code>: common option and constraint conversions are fallible</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionoptions-has-a-new-enable-nlj-coordinated-fallback-field"><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> has a new <code class="docutils literal notranslate"><span class="pre">enable_nlj_coordinated_fallback</span></code> field</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionoptions-has-a-new-soft-max-bytes-per-output-file-field"><code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> has a new <code class="docutils literal notranslate"><span class="pre">soft_max_bytes_per_output_file</span></code> field</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-optimizer-use-statistics-registry-is-deprecated-and-ignored"><code class="docutils literal notranslate"><span class="pre">datafusion.optimizer.use_statistics_registry</span></code> is deprecated and ignored</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#generated-protobuf-jsonwriteroptions-gained-a-compression-level-field">Generated protobuf <code class="docutils literal notranslate"><span class="pre">JsonWriterOptions</span></code> gained a <code class="docutils literal notranslate"><span class="pre">compression_level</span></code> field</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#generated-protobuf-parquet-structs-gained-state-fields">Generated protobuf Parquet structs gained state fields</a></li>
