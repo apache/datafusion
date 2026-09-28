@@ -99,7 +99,7 @@ impl ScalarUDFImpl for NVL2Func {
         // field metadata (e.g. Arrow extension types) from them. The first
         // argument is only tested for NULL and does not contribute a value.
         let metadata =
-            coerced_fields_metadata(args.arg_fields[1..3].iter().map(|f| f.as_ref()));
+            coerced_fields_metadata(args.arg_fields[1..3].iter().map(|f| f.as_ref()))?;
         Ok(metadata
             .add_to_field(Field::new(self.name(), return_type, nullable))
             .into())
@@ -196,16 +196,20 @@ mod tests {
     }
 
     #[test]
-    fn first_value_argument_metadata_wins_when_they_disagree() {
-        let ret = return_field(&[
+    fn errors_when_value_arguments_have_conflicting_extension_types() {
+        let arg_fields = [
             Arc::new(Field::new("test", DataType::Boolean, true)),
             ext_field("if_non_null", DataType::Binary, "geoarrow.wkb"),
             ext_field("if_null", DataType::Binary, "unrelated.type"),
-        ]);
-        assert_eq!(ret.data_type(), &DataType::Binary);
-        assert_eq!(
-            ret.metadata().get(EXTENSION_KEY).map(String::as_str),
-            Some("geoarrow.wkb")
-        );
+        ];
+        let scalars = vec![None; arg_fields.len()];
+        let err = NVL2Func::new()
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &arg_fields,
+                scalar_arguments: &scalars,
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("geoarrow.wkb"), "{err}");
+        assert!(err.to_string().contains("unrelated.type"), "{err}");
     }
 }

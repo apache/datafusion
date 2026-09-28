@@ -89,9 +89,9 @@ impl ScalarUDFImpl for CoalesceFunc {
             .clone();
         // Propagate field metadata (e.g. Arrow extension types) from the
         // arguments that can supply a value; see `coerced_fields_metadata`
-        // for why the arguments are not required to agree on it.
+        // for the merge semantics.
         let metadata =
-            coerced_fields_metadata(args.arg_fields.iter().map(|f| f.as_ref()));
+            coerced_fields_metadata(args.arg_fields.iter().map(|f| f.as_ref()))?;
         Ok(metadata
             .add_to_field(Field::new(self.name(), return_type, nullable))
             .into())
@@ -214,16 +214,20 @@ mod tests {
     }
 
     #[test]
-    fn first_metadata_wins_when_arguments_disagree() {
-        let ret = return_field(&[
+    fn errors_on_conflicting_extension_types() {
+        let arg_fields = [
             ext_field("a", DataType::Binary, "geoarrow.wkb"),
             ext_field("b", DataType::Binary, "unrelated.type"),
-        ]);
-        assert_eq!(ret.data_type(), &DataType::Binary);
-        assert_eq!(
-            ret.metadata().get(EXTENSION_KEY).map(String::as_str),
-            Some("geoarrow.wkb")
-        );
+        ];
+        let scalars = vec![None; arg_fields.len()];
+        let err = CoalesceFunc::new()
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &arg_fields,
+                scalar_arguments: &scalars,
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("geoarrow.wkb"), "{err}");
+        assert!(err.to_string().contains("unrelated.type"), "{err}");
     }
 
     #[test]
