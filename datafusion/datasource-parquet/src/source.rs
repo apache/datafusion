@@ -50,6 +50,7 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_functions::core::file_row_index::FileRowIndexFunc;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
 use datafusion_physical_expr::projection::ProjectionExprs;
+use datafusion_physical_expr::utils::split_conjunction;
 use datafusion_physical_expr::{EquivalenceProperties, conjunction};
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_adapter::rewrite::{
@@ -706,6 +707,30 @@ impl FileSource for ParquetSource {
 
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
         self.predicate.clone()
+    }
+
+    /// The scan applies each conjunct of its predicate to every row: as a
+    /// `RowFilter` predicate when filter pushdown is enabled, else (and for
+    /// the conjuncts that the `RowFilter` cannot evaluate) in the post-scan
+    /// filter. Only the conjuncts that can be pushed down are returned, the
+    /// same test that `try_pushdown_filters` uses before it replies
+    /// `PushedDown::Yes`.
+    ///
+    /// A pruning-only predicate (see
+    /// [`FileSource::try_pushdown_pruning_filters`]) is used only to prune:
+    /// a `FilterExec` above the scan applies it. Thus it is not exact.
+    fn exact_filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        if self.pruning_only_predicate {
+            return None;
+        }
+        let predicate = self.predicate.as_ref()?;
+        let pushable_schema = self.table_schema.schema_without_virtual_columns();
+        let exact = split_conjunction(predicate)
+            .into_iter()
+            .filter(|expr| can_expr_be_pushed_down_with_schemas(expr, pushable_schema))
+            .cloned()
+            .collect::<Vec<_>>();
+        (!exact.is_empty()).then(|| conjunction(exact))
     }
 
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
@@ -2192,6 +2217,9 @@ mod tests {
             pruning.predicate.as_ref().unwrap().to_string(),
             "value@0 > 1"
         );
+        // A pruning-only predicate is not exact: a `FilterExec` above the
+        // scan applies it.
+        assert!(pruning.exact_filter().is_none());
 
         // It uses later filters only to prune too.
         let prop = pruning
@@ -2213,6 +2241,10 @@ mod tests {
         assert!(matches!(prop.filters[..], [PushedDown::Yes]));
         let applied = downcast(&prop.updated_node.unwrap());
         assert!(!applied.pruning_only_predicate);
+        // The scan applies the accepted filter to every row, also with
+        // `pushdown_filters = false` (in the post-scan filter).
+        assert!(!applied.pushdown_filters());
+        assert_eq!(applied.exact_filter().unwrap().to_string(), "value@0 > 1");
         assert!(
             applied
                 .try_pushdown_pruning_filters(&[filter(2)], &config)
