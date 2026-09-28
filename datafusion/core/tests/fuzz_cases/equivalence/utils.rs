@@ -305,6 +305,34 @@ pub fn is_table_same_after_sort(
     Ok(sorted_indices == original_indices)
 }
 
+/// Sorts `exprs` with random [`SortOptions`] and asserts that `eq_properties`
+/// never claims an ordering that `batch` does not have.
+///
+/// Only this direction is checked: a single batch cannot tell an underivable
+/// ordering from one that is sorted by coincidence, e.g. when NULLs of
+/// independently sorted columns end up in the same rows.
+pub fn assert_random_ordering_satisfy_is_sound(
+    eq_properties: &EquivalenceProperties,
+    exprs: &[&Arc<dyn PhysicalExpr>],
+    batch: &RecordBatch,
+    rng: &mut StdRng,
+    context: &str,
+) -> Result<()> {
+    let sort_exprs = exprs
+        .iter()
+        .map(|expr| PhysicalSortExpr::new(Arc::clone(expr), random_sort_options(rng)));
+    let Some(ordering) = LexOrdering::new(sort_exprs) else {
+        unreachable!("Test should always produce non-degenerate orderings");
+    };
+    if eq_properties.ordering_satisfy(ordering.clone())? {
+        assert!(
+            is_table_same_after_sort(ordering.clone(), batch)?,
+            "{context}, random requirement: {ordering:?}, eq_properties: {eq_properties}"
+        );
+    }
+    Ok(())
+}
+
 // If we already generated a random result for one of the
 // expressions in the equivalence classes. For other expressions in the same
 // equivalence class use same result. This util gets already calculated result, when available.

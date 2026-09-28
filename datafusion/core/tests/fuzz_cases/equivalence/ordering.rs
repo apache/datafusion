@@ -16,9 +16,10 @@
 // under the License.
 
 use crate::fuzz_cases::equivalence::utils::{
-    NULL_PCTS, TestScalarUDF, contains_overflowable_arithmetic, create_random_schema,
-    create_test_params, create_test_schema_2, generate_table_for_eq_properties,
-    generate_table_for_orderings, is_table_same_after_sort,
+    NULL_PCTS, TestScalarUDF, assert_random_ordering_satisfy_is_sound,
+    contains_overflowable_arithmetic, create_random_schema, create_test_params,
+    create_test_schema_2, generate_table_for_eq_properties, generate_table_for_orderings,
+    is_table_same_after_sort,
 };
 use arrow::compute::SortOptions;
 use datafusion_common::Result;
@@ -32,6 +33,8 @@ use datafusion_physical_expr::expressions::{BinaryExpr, col};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use itertools::Itertools;
+use rand::SeedableRng;
+use rand::rngs::StdRng;
 use std::sync::Arc;
 
 #[test]
@@ -63,8 +66,16 @@ fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
             col("f", &test_schema)?,
         ];
 
+        let mut options_rng = StdRng::seed_from_u64(seed as u64);
         for n_req in 1..=col_exprs.len() {
             for exprs in col_exprs.iter().combinations(n_req) {
+                assert_random_ordering_satisfy_is_sound(
+                    &eq_properties,
+                    &exprs,
+                    &table_data_with_properties,
+                    &mut options_rng,
+                    &format!("seed: {seed}, null_pct: {null_pct}"),
+                )?;
                 let sort_exprs = exprs
                     .into_iter()
                     .map(|expr| PhysicalSortExpr::new(Arc::clone(expr), SORT_OPTIONS));
@@ -137,8 +148,16 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
             a_plus_b,
         ];
 
+        let mut options_rng = StdRng::seed_from_u64(seed as u64);
         for n_req in 1..=exprs.len() {
             for exprs in exprs.iter().combinations(n_req) {
+                assert_random_ordering_satisfy_is_sound(
+                    &eq_properties,
+                    &exprs,
+                    &table_data_with_properties,
+                    &mut options_rng,
+                    &format!("seed: {seed}, null_pct: {null_pct}"),
+                )?;
                 let sort_exprs = exprs
                     .into_iter()
                     .map(|expr| PhysicalSortExpr::new(Arc::clone(expr), SORT_OPTIONS));

@@ -16,8 +16,9 @@
 // under the License.
 
 use crate::fuzz_cases::equivalence::utils::{
-    NULL_PCTS, TestScalarUDF, apply_projection, contains_overflowable_arithmetic,
-    create_random_schema, generate_table_for_eq_properties, is_table_same_after_sort,
+    NULL_PCTS, TestScalarUDF, apply_projection, assert_random_ordering_satisfy_is_sound,
+    contains_overflowable_arithmetic, create_random_schema,
+    generate_table_for_eq_properties, is_table_same_after_sort,
 };
 use arrow::compute::SortOptions;
 use datafusion_common::Result;
@@ -29,6 +30,8 @@ use datafusion_physical_expr::{PhysicalExprRef, ScalarFunctionExpr};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use itertools::Itertools;
+use rand::SeedableRng;
+use rand::rngs::StdRng;
 use std::sync::Arc;
 
 #[test]
@@ -151,6 +154,7 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
             (a_plus_b, "a+b"),
         ];
 
+        let mut options_rng = StdRng::seed_from_u64(seed as u64);
         for n_req in 0..=proj_exprs.len() {
             for proj_exprs in proj_exprs.iter().combinations(n_req) {
                 let proj_exprs = proj_exprs
@@ -174,6 +178,13 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
 
                 for n_req in 1..=projected_exprs.len() {
                     for exprs in projected_exprs.iter().combinations(n_req) {
+                        assert_random_ordering_satisfy_is_sound(
+                            &projected_eq,
+                            &exprs,
+                            &projected_batch,
+                            &mut options_rng,
+                            &format!("seed: {seed}, null_pct: {null_pct}"),
+                        )?;
                         let sort_exprs = exprs.into_iter().map(|expr| {
                             PhysicalSortExpr::new(Arc::clone(expr), SORT_OPTIONS)
                         });
