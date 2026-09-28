@@ -135,6 +135,7 @@ impl ReusableRows {
         debug_assert!(retained >= self.reservation.size());
         if let Err(e) = self.reservation.try_resize(retained) {
             self.inner[stream_idx] = None;
+            self.reservation.try_resize(self.retained_size())?;
             return Err(e);
         }
         Ok(())
