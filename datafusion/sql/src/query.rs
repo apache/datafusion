@@ -27,9 +27,9 @@ use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, ExprWithAliasAndOrderBy, LimitClause, Offset, OffsetRows, OrderBy,
-    OrderByExpr, OrderByKind, PipeOperator, Query, SelectInto, SetExpr, SetOperator,
-    SetQuantifier, TableAlias, Value,
+    Expr as SQLExpr, ExprWithAliasAndOrderBy, LimitClause, ObjectName, Offset,
+    OffsetRows, OrderBy, OrderByExpr, OrderByKind, PipeOperator, Query, SelectInto,
+    SetExpr, SetOperator, SetQuantifier, TableAlias, Value,
 };
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
@@ -362,17 +362,30 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         select_into: Option<SelectInto>,
     ) -> Result<LogicalPlan> {
         match select_into {
-            Some(into) => Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
-                CreateMemoryTable {
-                    name: self.object_name_to_table_reference(into.name)?,
-                    constraints: Constraints::default(),
-                    input: Arc::new(plan),
-                    if_not_exists: false,
-                    or_replace: false,
-                    temporary: false,
-                    column_defaults: vec![],
-                },
-            ))),
+            Some(into) => {
+                let name = match into.targets.as_slice() {
+                    [SQLExpr::Identifier(ident)] => ObjectName::from(vec![ident.clone()]),
+                    [SQLExpr::CompoundIdentifier(idents)] => {
+                        ObjectName::from(idents.clone())
+                    }
+                    _ => {
+                        return not_impl_err!(
+                            "SELECT INTO only supports a single table name target"
+                        );
+                    }
+                };
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                    CreateMemoryTable {
+                        name: self.object_name_to_table_reference(name)?,
+                        constraints: Constraints::default(),
+                        input: Arc::new(plan),
+                        if_not_exists: false,
+                        or_replace: false,
+                        temporary: false,
+                        column_defaults: vec![],
+                    },
+                )))
+            }
             _ => Ok(plan),
         }
     }
@@ -393,7 +406,7 @@ fn to_order_by_exprs(
         OrderByKind::All(options) => Ok((1..=order_by_all_column_count)
             .map(|position| OrderByExpr {
                 expr: SQLExpr::value(Value::Number(position.to_string(), false)),
-                options,
+                options: options.clone(),
                 with_fill: None,
             })
             .collect()),
