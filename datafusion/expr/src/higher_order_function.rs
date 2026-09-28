@@ -1219,24 +1219,25 @@ fn resolve_higher_order_function(
     // a map of lambda variable name => a never empty stack of fields [ [..shadowed], in_scope ]
     vars: &mut HashMap<String, Vec<FieldRef>>,
 ) -> Result<Transformed<Expr>> {
-    let args = if !vars.is_empty() {
-        /*  if this is a nested lambda, we must resolve non-lambda args before invoking
-            lambda_parameters because it will invoke ExprSchemable::to_field for every
-            non-lambda parameter, and if one them contains a lambda variable, it will fail
-            due to it being unresolved. Example query:
+    /*  non-lambda args are resolved before invoking lambda_parameters because it will
+        invoke ExprSchemable::to_field for every non-lambda parameter, and if one of them
+        contains a lambda variable, it will fail due to it being unresolved. Example query:
 
-            array_transform([[1, 2]], a -> array_transform(a, b -> b+1))
+        array_transform([[1, 2]], a -> array_transform(a, b -> b+1))
 
-            the nested array_transform's lambda_parameters will call Lambdavariable::to_field
-            on it's first argument, the variable `a`, which must be resolved
-        */
-        args.map_elements(|arg| match arg {
-            Expr::Lambda(_) => Ok(Transformed::no(arg)),
-            _ => resolve_lambda_variables(arg, schema, vars),
-        })?
-    } else {
-        Transformed::no(args)
-    };
+        the nested array_transform's lambda_parameters will call Lambdavariable::to_field
+        on it's first argument, the variable `a`, which must be resolved
+
+        They are also resolved when no variable is in scope yet, as an argument can be a
+        higher order function of its own, whose variables this is the only chance to
+        resolve: the traversal jumps over the arguments once this returns. Example query:
+
+        array_any_match(array_transform(tags, x -> x), y -> y = 'c')
+    */
+    let args = args.map_elements(|arg| match arg {
+        Expr::Lambda(_) => Ok(Transformed::no(arg)),
+        _ => resolve_lambda_variables(arg, schema, vars),
+    })?;
 
     let transformed = args.transformed;
     let mut args = args.data;
