@@ -334,11 +334,9 @@ impl BatchBuilder {
             return Ok(None);
         }
 
-        let Some((target_batch_bytes, mut estimated_bytes)) =
-            self.target_batch_bytes.and_then(|target| {
-                self.estimated_prefix_bytes(self.indices.len())
-                    .map(|estimated| (target, estimated))
-            })
+        let Some((mut rows_to_emit, mut estimated_bytes)) = self
+            .target_batch_bytes
+            .and_then(|target| self.prefix_under_target(target))
         else {
             let (rows_to_emit, columns) =
                 retry_interleave(self.indices.len(), |rows_to_emit| {
@@ -347,21 +345,6 @@ impl BatchBuilder {
 
             return Ok(Some(self.finish_record_batch(rows_to_emit, columns)?));
         };
-
-        let initial_rows_to_emit = self.indices.len();
-        let mut rows_to_emit =
-            if initial_rows_to_emit <= 1 || estimated_bytes <= target_batch_bytes {
-                initial_rows_to_emit
-            } else {
-                self.largest_prefix_under_target(target_batch_bytes)
-                    .unwrap_or(1)
-            };
-
-        if rows_to_emit != initial_rows_to_emit {
-            estimated_bytes = self
-                .estimated_prefix_bytes(rows_to_emit)
-                .expect("a smaller prefix has the same supported arrays");
-        }
 
         loop {
             match try_grow_reservation_to_at_least(
@@ -397,6 +380,33 @@ impl BatchBuilder {
         Ok(Some(self.finish_record_batch(rows_to_emit, columns)?))
     }
 
+    fn prefix_under_target(&self, target_batch_bytes: usize) -> Option<(usize, usize)> {
+        let has_byte_arrays = self.schema.fields.iter().any(|field| {
+            matches!(
+                field.data_type(),
+                DataType::Binary
+                    | DataType::LargeBinary
+                    | DataType::Utf8
+                    | DataType::LargeUtf8
+            )
+        });
+        if has_byte_arrays {
+            return self.variable_width_prefix_under_target(target_batch_bytes);
+        }
+
+        let mut estimated_bytes = self.estimated_prefix_bytes(self.indices.len())?;
+        let rows_to_emit =
+            if self.indices.len() <= 1 || estimated_bytes <= target_batch_bytes {
+                self.indices.len()
+            } else {
+                self.largest_prefix_under_target(target_batch_bytes)?
+            };
+        if rows_to_emit != self.indices.len() {
+            estimated_bytes = self.estimated_prefix_bytes(rows_to_emit)?;
+        }
+        Some((rows_to_emit, estimated_bytes))
+    }
+
     fn largest_prefix_under_target(&self, target_batch_bytes: usize) -> Option<usize> {
         if self.estimated_prefix_bytes(1)? > target_batch_bytes {
             return Some(1);
@@ -415,6 +425,92 @@ impl BatchBuilder {
         Some(low)
     }
 
+    fn variable_width_prefix_under_target(
+        &self,
+        target_batch_bytes: usize,
+    ) -> Option<(usize, usize)> {
+        let mut byte_array_values = vec![0usize; self.schema.fields.len()];
+        let has_nulls = (0..self.schema.fields.len())
+            .map(|column_idx| {
+                self.batches
+                    .iter()
+                    .any(|(_, batch)| batch.column(column_idx).null_count() > 0)
+            })
+            .collect::<Vec<_>>();
+        let mut previous_bytes = 0usize;
+
+        // Every supported estimate is monotonically non-decreasing with the
+        // prefix length, so the first prefix over the target identifies the
+        // same largest prefix as a binary search over full-prefix estimates.
+        for rows_to_emit in 1..=self.indices.len() {
+            let (batch_idx, row_idx) = self.indices[rows_to_emit - 1];
+            let bitmap_bytes = bitmap_buffer_bytes(rows_to_emit)?;
+            let mut total = 0usize;
+            for (column_idx, field) in self.schema.fields.iter().enumerate() {
+                let validity_bytes = if has_nulls[column_idx] {
+                    bitmap_bytes
+                } else {
+                    0
+                };
+                let column_bytes = match field.data_type() {
+                    DataType::Binary => self
+                        .incremental_byte_array_memory_upper_bound::<BinaryType>(
+                            column_idx,
+                            rows_to_emit,
+                            batch_idx,
+                            row_idx,
+                            &mut byte_array_values[column_idx],
+                            validity_bytes,
+                        )?,
+                    DataType::LargeBinary => self
+                        .incremental_byte_array_memory_upper_bound::<LargeBinaryType>(
+                            column_idx,
+                            rows_to_emit,
+                            batch_idx,
+                            row_idx,
+                            &mut byte_array_values[column_idx],
+                            validity_bytes,
+                        )?,
+                    DataType::Utf8 => self
+                        .incremental_byte_array_memory_upper_bound::<Utf8Type>(
+                            column_idx,
+                            rows_to_emit,
+                            batch_idx,
+                            row_idx,
+                            &mut byte_array_values[column_idx],
+                            validity_bytes,
+                        )?,
+                    DataType::LargeUtf8 => self
+                        .incremental_byte_array_memory_upper_bound::<LargeUtf8Type>(
+                            column_idx,
+                            rows_to_emit,
+                            batch_idx,
+                            row_idx,
+                            &mut byte_array_values[column_idx],
+                            validity_bytes,
+                        )?,
+                    _ => self.column_prefix_memory_upper_bound_with_validity(
+                        column_idx,
+                        rows_to_emit,
+                        validity_bytes,
+                    )?,
+                };
+                total = total.checked_add(column_bytes)?;
+            }
+
+            if total > target_batch_bytes {
+                return if rows_to_emit == 1 {
+                    Some((1, total))
+                } else {
+                    Some((rows_to_emit - 1, previous_bytes))
+                };
+            }
+            previous_bytes = total;
+        }
+
+        Some((self.indices.len(), previous_bytes))
+    }
+
     fn estimated_prefix_bytes(&self, rows_to_emit: usize) -> Option<usize> {
         let mut total = 0usize;
         for column_idx in 0..self.schema.fields.len() {
@@ -430,29 +526,48 @@ impl BatchBuilder {
         column_idx: usize,
         rows_to_emit: usize,
     ) -> Option<usize> {
+        let validity_bytes = self.validity_buffer_bytes(column_idx, rows_to_emit)?;
+        self.column_prefix_memory_upper_bound_with_validity(
+            column_idx,
+            rows_to_emit,
+            validity_bytes,
+        )
+    }
+
+    fn column_prefix_memory_upper_bound_with_validity(
+        &self,
+        column_idx: usize,
+        rows_to_emit: usize,
+        validity_bytes: usize,
+    ) -> Option<usize> {
         let data_type = self.schema.field(column_idx).data_type();
 
         match data_type {
             DataType::Null => Some(0),
-            DataType::Boolean => bitmap_buffer_bytes(rows_to_emit)?
-                .checked_add(self.validity_buffer_bytes(column_idx, rows_to_emit)?),
+            DataType::Boolean => {
+                bitmap_buffer_bytes(rows_to_emit)?.checked_add(validity_bytes)
+            }
             DataType::Binary => self.byte_array_prefix_memory_upper_bound::<BinaryType>(
                 column_idx,
                 rows_to_emit,
+                validity_bytes,
             ),
             DataType::LargeBinary => self
                 .byte_array_prefix_memory_upper_bound::<LargeBinaryType>(
                     column_idx,
                     rows_to_emit,
+                    validity_bytes,
                 ),
             DataType::Utf8 => self.byte_array_prefix_memory_upper_bound::<Utf8Type>(
                 column_idx,
                 rows_to_emit,
+                validity_bytes,
             ),
             DataType::LargeUtf8 => self
                 .byte_array_prefix_memory_upper_bound::<LargeUtf8Type>(
                     column_idx,
                     rows_to_emit,
+                    validity_bytes,
                 ),
             DataType::FixedSizeBinary(width) => usize::try_from(*width)
                 .ok()
@@ -461,15 +576,11 @@ impl BatchBuilder {
                         .checked_mul(width)
                         .and_then(aligned_buffer_bytes)
                 })
-                .and_then(|values| {
-                    self.validity_buffer_bytes(column_idx, rows_to_emit)?
-                        .checked_add(values)
-                }),
+                .and_then(|values| validity_bytes.checked_add(values)),
             _ => fixed_width(data_type).and_then(|width| {
-                rows_to_emit.checked_mul(width).and_then(|values| {
-                    self.validity_buffer_bytes(column_idx, rows_to_emit)?
-                        .checked_add(values)
-                })
+                rows_to_emit
+                    .checked_mul(width)
+                    .and_then(|values| validity_bytes.checked_add(values))
             }),
         }
     }
@@ -496,17 +607,59 @@ impl BatchBuilder {
         &self,
         column_idx: usize,
         rows_to_emit: usize,
+        validity_bytes: usize,
     ) -> Option<usize> {
         let mut values_len = 0usize;
         for (batch_idx, row_idx) in &self.indices[..rows_to_emit] {
-            let array = self.batches[*batch_idx].1.column(column_idx);
-            let array = array.as_any().downcast_ref::<GenericByteArray<T>>()?;
-            values_len =
-                values_len.checked_add(array.value_length(*row_idx).as_usize())?;
+            values_len = values_len.checked_add(
+                self.byte_array_value_length::<T>(column_idx, *batch_idx, *row_idx)?,
+            )?;
         }
 
-        self.validity_buffer_bytes(column_idx, rows_to_emit)?
-            .checked_add((rows_to_emit + 1).checked_mul(size_of::<T::Offset>())?)?
+        Self::byte_array_memory_upper_bound::<T>(rows_to_emit, values_len, validity_bytes)
+    }
+
+    fn incremental_byte_array_memory_upper_bound<T: ByteArrayType>(
+        &self,
+        column_idx: usize,
+        rows_to_emit: usize,
+        batch_idx: usize,
+        row_idx: usize,
+        values_len: &mut usize,
+        validity_bytes: usize,
+    ) -> Option<usize> {
+        *values_len = values_len.checked_add(
+            self.byte_array_value_length::<T>(column_idx, batch_idx, row_idx)?,
+        )?;
+        Self::byte_array_memory_upper_bound::<T>(
+            rows_to_emit,
+            *values_len,
+            validity_bytes,
+        )
+    }
+
+    fn byte_array_value_length<T: ByteArrayType>(
+        &self,
+        column_idx: usize,
+        batch_idx: usize,
+        row_idx: usize,
+    ) -> Option<usize> {
+        let array = self.batches[batch_idx].1.column(column_idx);
+        let array = array.as_any().downcast_ref::<GenericByteArray<T>>()?;
+        Some(array.value_length(row_idx).as_usize())
+    }
+
+    fn byte_array_memory_upper_bound<T: ByteArrayType>(
+        rows_to_emit: usize,
+        values_len: usize,
+        validity_bytes: usize,
+    ) -> Option<usize> {
+        validity_bytes
+            .checked_add(
+                rows_to_emit
+                    .checked_add(1)?
+                    .checked_mul(size_of::<T::Offset>())?,
+            )?
             .checked_add(values_len)
     }
 }
@@ -715,7 +868,7 @@ mod tests {
     use super::*;
     use arrow::array::{
         Array, ArrayDataBuilder, BinaryArray, BooleanArray, FixedSizeBinaryArray,
-        Int32Array, Int64Array, ListArray, StringViewArray, StructArray,
+        Int32Array, Int64Array, ListArray, StringArray, StringViewArray, StructArray,
     };
     use arrow::buffer::Buffer;
     use arrow::datatypes::{DataType, Field, Fields, Schema};
@@ -991,6 +1144,59 @@ mod tests {
         assert_int_output(&output, &[1, 2]);
         assert_eq!(builder.len(), 2);
         assert_eq!(builder.output_construction_reservation.size(), 0);
+    }
+
+    #[test]
+    fn test_forward_prefix_scan_matches_full_estimator() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("s", DataType::Utf8, true),
+            Field::new("i", DataType::Int32, false),
+        ]));
+        let batch0 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("a"), Some("longer")])),
+                Arc::new(Int32Array::from(vec![1, 2])),
+            ],
+        )
+        .unwrap();
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("xy"), Some("end")])),
+                Arc::new(Int32Array::from(vec![3, 4])),
+            ],
+        )
+        .unwrap();
+        let mut builder =
+            BatchBuilder::new(schema, 2, 4, reservation(), None, Some(usize::MAX));
+        builder.push_batch(0, batch0).unwrap();
+        push_n_rows(&mut builder, 0, 2);
+        builder.push_batch(1, batch1).unwrap();
+        push_n_rows(&mut builder, 1, 2);
+        let estimates = (1..=4)
+            .map(|rows| builder.estimated_prefix_bytes(rows).unwrap())
+            .collect::<Vec<_>>();
+
+        for target in [
+            0,
+            estimates[0],
+            estimates[1] - 1,
+            estimates[1],
+            estimates[2],
+            estimates[3],
+            usize::MAX,
+        ] {
+            let expected_rows = estimates
+                .iter()
+                .rposition(|bytes| *bytes <= target)
+                .map_or(1, |index| index + 1);
+            assert_eq!(
+                builder.prefix_under_target(target),
+                Some((expected_rows, estimates[expected_rows - 1])),
+                "target {target}"
+            );
+        }
     }
 
     #[test]
