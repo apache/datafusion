@@ -101,3 +101,83 @@ async fn test_create_table_with_order_writes_sorting_columns() -> Result<()> {
 
     Ok(())
 }
+
+/// Test that partition columns are removed and remaining column indices are
+/// remapped when writing sorting_columns to Parquet metadata.
+#[tokio::test]
+async fn test_partitioned_table_remaps_sorting_columns() -> Result<()> {
+    use parquet::file::reader::FileReader;
+    use parquet::file::serialized_reader::SerializedFileReader;
+    use std::fs::File;
+
+    let ctx = SessionContext::new();
+    let tmp_dir = tempdir()?;
+    let table_path = tmp_dir.path().join("sorted_partitioned_table");
+    std::fs::create_dir_all(&table_path)?;
+
+    let create_table_sql = format!(
+        "CREATE EXTERNAL TABLE sorted_partitioned_data (a INT, b VARCHAR, part VARCHAR) \
+         STORED AS PARQUET \
+         LOCATION '{}' \
+         PARTITIONED BY (part) \
+         WITH ORDER (part ASC NULLS FIRST, a ASC NULLS FIRST, b DESC NULLS LAST)",
+        table_path.display()
+    );
+    ctx.sql(&create_table_sql).await?;
+
+    ctx.sql(
+        "INSERT INTO sorted_partitioned_data VALUES \
+         (2, 'c', 'x'), (1, 'a', 'x'), (1, 'b', 'x')",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    let parquet_file = find_parquet_file(&table_path)?
+        .expect("expected a Parquet file in the partition directory");
+
+    let file = File::open(parquet_file)?;
+    let reader = SerializedFileReader::new(file)?;
+    let metadata = reader.metadata();
+    let parquet_schema = metadata.file_metadata().schema_descr();
+    assert_eq!(parquet_schema.num_columns(), 2);
+    assert_eq!(parquet_schema.column(0).name(), "a");
+    assert_eq!(parquet_schema.column(1).name(), "b");
+
+    let sorting = metadata
+        .row_group(0)
+        .sorting_columns()
+        .expect("expected sorting_columns in row group metadata");
+    assert_eq!(sorting.len(), 2);
+
+    assert_eq!(sorting[0].column_idx, 0);
+    assert!(!sorting[0].descending);
+    assert!(sorting[0].nulls_first);
+
+    assert_eq!(sorting[1].column_idx, 1);
+    assert!(sorting[1].descending);
+    assert!(!sorting[1].nulls_first);
+
+    Ok(())
+}
+
+fn find_parquet_file(
+    path: &std::path::Path,
+) -> std::io::Result<Option<std::path::PathBuf>> {
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(path) = find_parquet_file(&path)? {
+                return Ok(Some(path));
+            }
+        } else if path
+            .extension()
+            .is_some_and(|extension| extension == "parquet")
+        {
+            return Ok(Some(path));
+        }
+    }
+
+    Ok(None)
+}

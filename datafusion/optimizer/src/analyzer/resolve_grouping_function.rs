@@ -85,7 +85,7 @@ fn replace_grouping_exprs(
     let columns = schema.columns();
     let mut new_agg_expr = Vec::new();
     let mut projection_exprs = Vec::new();
-    let grouping_id_len = if is_grouping_set { 1 } else { 0 };
+    let grouping_id_len = usize::from(is_grouping_set);
     let group_expr_len = columns.len() - aggr_expr.len() - grouping_id_len;
     projection_exprs.extend(
         columns

@@ -43,7 +43,7 @@ impl<'a> PhysicalColumnRewriter<'a> {
     }
 }
 
-impl<'a> TreeNodeRewriter for PhysicalColumnRewriter<'a> {
+impl TreeNodeRewriter for PhysicalColumnRewriter<'_> {
     type Node = Arc<dyn PhysicalExpr>;
 
     fn f_down(

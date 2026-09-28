@@ -21,11 +21,12 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Float32Array, Float64Array, RecordBatch, UInt32Array};
 use arrow::compute::{SortColumn, SortOptions, lexsort_to_indices, take_record_batch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{Result, exec_err, internal_datafusion_err, plan_err};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Operator, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_physical_expr::equivalence::{
     EquivalenceClass, ProjectionMapping, convert_to_orderings,
@@ -33,7 +34,7 @@ use datafusion_physical_expr::equivalence::{
 use datafusion_physical_expr::{ConstExpr, EquivalenceProperties};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_plan::expressions::{Column, col};
+use datafusion_physical_plan::expressions::{BinaryExpr, Column, col};
 
 use itertools::izip;
 use rand::prelude::*;
@@ -207,6 +208,20 @@ fn add_equal_conditions_test() -> Result<()> {
     assert!(eq_groups.contains(&col_y));
 
     Ok(())
+}
+
+/// Returns `true` if `expr` contains a `+` or `-` anywhere in its tree.
+///
+/// The equivalence framework conservatively discards orderings derived from
+/// `+`/`-` expressions, because wrapping overflow can break them over the
+/// type's full domain even when a finite batch happens to remain sorted.
+pub fn contains_overflowable_arithmetic(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    expr.exists(|e| {
+        Ok(e.downcast_ref::<BinaryExpr>().is_some_and(|binary| {
+            matches!(binary.op(), Operator::Plus | Operator::Minus)
+        }))
+    })
+    .unwrap()
 }
 
 /// Checks if the table (RecordBatch) remains unchanged when sorted according to the provided `required_ordering`.

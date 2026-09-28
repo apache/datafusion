@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -185,3 +185,17 @@ NULL
 
 statement ok
 set datafusion.spark.map_key_dedup_policy = 'EXCEPTION';
+
+# Sliced input: OFFSET makes the function see list arrays whose first offset is
+# non-zero, so the child arrays still contain the skipped row's elements.
+query ?
+SELECT map_from_arrays(a, b)
+FROM (
+    SELECT * FROM values
+        (array[99, 98], array['x', 'y'], 1),
+        (array[1, 2], array['a', 'b'], 2)
+    AS tab(a, b, id)
+    ORDER BY id LIMIT 1 OFFSET 1
+);
+----
+{1: a, 2: b}

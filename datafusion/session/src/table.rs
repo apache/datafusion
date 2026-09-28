@@ -18,17 +18,19 @@
 use std::any::Any;
 use std::borrow::Cow;
 use std::fmt::Debug;
+use std::future::ready;
 use std::sync::Arc;
 
 use crate::session::Session;
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::{Constraints, Statistics, not_impl_err};
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{DFSchemaRef, Result, internal_err};
 use datafusion_expr::Expr;
 use datafusion_expr::statistics::StatisticsRequest;
+use futures::future::BoxFuture;
 
-use datafusion_expr::dml::InsertOp;
+use datafusion_expr::dml::{InsertOp, MergeIntoClause};
 use datafusion_expr::{
     CreateExternalTable, LogicalPlan, TableProviderFilterPushDown, TableType,
 };
@@ -148,8 +150,8 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     ///
     /// # Limit
     ///
-    /// If `limit` is specified, the scan must produce *at least* this many
-    /// rows, though it may return more. Like Projection Pushdown and Filter
+    /// If `limit` is specified, the scan must produce *at most* this many
+    /// rows, though it may return less. Like Projection Pushdown and Filter
     /// Pushdown, DataFusion pushes `LIMIT`s as far down in the plan as
     /// possible. This is called "Limit Pushdown", and some sources can use the
     /// information to improve performance.
@@ -185,7 +187,7 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     async fn scan(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
@@ -207,18 +209,26 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// A [`ScanResult`] containing the [`ExecutionPlan`] for scanning the table
     ///
     /// See [`Self::scan`] for detailed documentation about projection, filters, and limits.
-    async fn scan_with_args<'a>(
-        &self,
-        state: &dyn Session,
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814>.
+    fn scan_with_args<'a, 'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
         args: ScanArgs<'a>,
-    ) -> Result<ScanResult> {
-        let filters = args.filters().unwrap_or(&[]);
-        let projection = args.projection().map(|p| p.to_vec());
-        let limit = args.limit();
-        let plan = self
-            .scan(state, projection.as_ref(), filters, limit)
-            .await?;
-        Ok(plan.into())
+    ) -> BoxFuture<'async_trait, Result<ScanResult>>
+    where
+        'a: 'async_trait,
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        let plan = self.scan(
+            state,
+            args.projection(),
+            args.filters().unwrap_or(&[]),
+            args.limit(),
+        );
+        Box::pin(async move { Ok(plan.await?.into()) })
     }
 
     /// Specify if DataFusion should provide filter expressions to the
@@ -267,7 +277,7 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// impl TableProvider for TestDataSource {
     /// # fn schema(&self) -> SchemaRef { todo!() }
     /// # fn table_type(&self) -> TableType { todo!() }
-    /// # async fn scan(&self, s: &dyn Session, p: Option<&Vec<usize>>, f: &[Expr], l: Option<usize>) -> Result<Arc<dyn ExecutionPlan>> {
+    /// # async fn scan(&self, s: &dyn Session, p: Option<&[usize]>, f: &[Expr], l: Option<usize>) -> Result<Arc<dyn ExecutionPlan>> {
     ///         todo!()
     /// # }
     ///     // Override the supports_filters_pushdown to evaluate which expressions
@@ -325,11 +335,11 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// column called "count" such as the following
     ///
     /// ```text
-    /// +-------+,
-    /// | count |,
-    /// +-------+,
-    /// | 6     |,
-    /// +-------+,
+    /// +-------+
+    /// | count |
+    /// +-------+
+    /// | 6     |
+    /// +-------+
     /// ```
     ///
     /// # See Also
@@ -349,27 +359,112 @@ pub trait TableProvider: Any + Debug + Sync + Send {
 
     /// Delete rows matching the filter predicates.
     ///
-    /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
-    /// Empty `filters` deletes all rows.
-    async fn delete_from(
-        &self,
-        _state: &dyn Session,
+    /// Returns an [`ExecutionPlan`] producing one row in a single non-null
+    /// `UInt64` column named `count`, containing the number of deleted rows.
+    /// The default implementation returns a "not implemented" error.
+    ///
+    /// # Filters
+    ///
+    /// `filters` contains logical [`Expr`] predicates on the target table.
+    /// The planner collects them from filters and pushed-down table scan
+    /// predicates, splits `AND` conjunctions, removes table qualifiers, and
+    /// deduplicates them. For example, `t.id = 1 AND t.value > 15` becomes
+    /// separate `id = 1` and `value > 15` expressions.
+    ///
+    /// Delete a row only when every predicate evaluates to true. SQL
+    /// three-valued logic applies: a false or `NULL` predicate leaves the row
+    /// unchanged. Empty `filters` deletes all rows, as for `DELETE FROM t`
+    /// without a `WHERE` clause.
+    ///
+    /// # Execution
+    ///
+    /// This method is called during physical planning, including for `EXPLAIN`.
+    /// Perform mutations when the returned plan executes, rather than while
+    /// constructing it, so planning does not change the table.
+    ///
+    /// # Limitations
+    ///
+    /// The method receives no row limit ([#24998]). Subqueries in DML
+    /// expressions are not fully supported ([#24654]); in particular, a
+    /// subquery rewritten into a join can cause predicates to be lost before
+    /// this method is called.
+    ///
+    /// [#24998]: https://github.com/apache/datafusion/issues/24998
+    /// [#24654]: https://github.com/apache/datafusion/issues/24654
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn delete_from<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        _state: &'life1 dyn Session,
         _filters: Vec<Expr>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        not_impl_err!("DELETE not supported for {} table", self.table_type())
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(ready(not_impl_err!(
+            "DELETE not supported for {} table",
+            self.table_type()
+        )))
     }
 
     /// Update rows matching the filter predicates.
     ///
-    /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
-    /// Empty `filters` updates all rows.
-    async fn update(
-        &self,
-        _state: &dyn Session,
+    /// Returns an [`ExecutionPlan`] producing one row in a single non-null
+    /// `UInt64` column named `count`, containing the number of affected rows.
+    /// The default implementation returns a "not implemented" error.
+    ///
+    /// # Filters
+    ///
+    /// `filters` follows the same conventions as [`Self::delete_from`]:
+    /// predicates are combined with `AND`, table qualifiers are removed, and
+    /// only rows for which every predicate is true are updated. A false or
+    /// `NULL` predicate leaves the row unchanged. Empty `filters` updates all
+    /// rows.
+    ///
+    /// # Assignments
+    ///
+    /// `assignments` contains `(column_name, Expr)` pairs from the `SET`
+    /// clause. The planner removes identity assignments and strips table
+    /// qualifiers from the expressions. Leave columns without an assignment
+    /// unchanged.
+    ///
+    /// Evaluate every assignment against the row values from before the
+    /// statement, and only for matching rows. For example, `SET a = b, b = a`
+    /// exchanges the two values; an expression such as `100 / divisor` must
+    /// not be evaluated on rows excluded by the filters.
+    ///
+    /// # Execution
+    ///
+    /// Like [`Self::delete_from`], this method is called during physical
+    /// planning, including for `EXPLAIN`. Perform mutations when the returned
+    /// plan executes so planning does not change the table.
+    ///
+    /// # Limitations
+    ///
+    /// Subqueries have the same limitations as in [`Self::delete_from`]
+    /// ([#24654]). `UPDATE ... FROM` is not supported ([#19950]).
+    ///
+    /// [#24654]: https://github.com/apache/datafusion/issues/24654
+    /// [#19950]: https://github.com/apache/datafusion/issues/19950
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn update<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        _state: &'life1 dyn Session,
         _assignments: Vec<(String, Expr)>,
         _filters: Vec<Expr>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        not_impl_err!("UPDATE not supported for {} table", self.table_type())
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(ready(not_impl_err!(
+            "UPDATE not supported for {} table",
+            self.table_type()
+        )))
     }
 
     /// Remove all rows from the table.
@@ -378,6 +473,42 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// representing the number of rows removed.
     async fn truncate(&self, _state: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("TRUNCATE not supported for {} table", self.table_type())
+    }
+
+    /// Merge rows from a source into this table.
+    ///
+    /// The `source` is an [`ExecutionPlan`] representing the USING clause.
+    /// The `merge_schema` contains the target columns followed by the source
+    /// columns, preserving their logical qualifiers. Providers can use this
+    /// schema to resolve the logical expressions against the combined rows
+    /// they construct while executing the merge. Providers should identify
+    /// target fields by this leading field range rather than comparing their
+    /// qualifiers with the provider's catalog name.
+    /// The `on` condition is the join predicate from the ON clause.
+    /// The `clauses` describe the WHEN MATCHED / WHEN NOT MATCHED actions.
+    /// These logical expressions may contain residual subqueries. Providers
+    /// must either support those subqueries or return an explicit error.
+    ///
+    /// Returns an [`ExecutionPlan`] producing a single row with `count` (UInt64).
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn merge_into<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        _state: &'life1 dyn Session,
+        _source: Arc<dyn ExecutionPlan>,
+        _merge_schema: DFSchemaRef,
+        _on: Expr,
+        _clauses: Vec<MergeIntoClause>,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        Box::pin(ready(not_impl_err!(
+            "MERGE INTO not supported for {} table",
+            self.table_type()
+        )))
     }
 }
 

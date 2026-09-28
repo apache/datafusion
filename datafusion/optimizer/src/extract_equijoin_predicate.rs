@@ -174,7 +174,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
 ///
 /// According to the above rule, `expr1` is the equijoin predicate, while `expr2` and `expr3` are not.
 /// The function returns Ok(\[expr1\], Some(expr2 AND expr3))
-fn split_eq_and_noneq_join_predicate(
+pub(crate) fn split_eq_and_noneq_join_predicate(
     filter: Expr,
     left_schema: &DFSchema,
     right_schema: &DFSchema,

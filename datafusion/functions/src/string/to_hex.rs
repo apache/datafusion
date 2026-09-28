@@ -24,7 +24,7 @@ use arrow::datatypes::{
     Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::utils::hex::{HexCase, encode_u64};
+use datafusion_common::utils::hex::{HexCase, ToHex};
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -57,7 +57,7 @@ where
     // Process all values directly (including null slots - we write empty strings for nulls)
     // The null bitmap will mark which entries are actually null
     for value in integer_array.values() {
-        values.extend_from_slice(value.write_hex(&mut hex_buffer));
+        values.extend_from_slice(value.write_hex(HexCase::Lower, &mut hex_buffer));
         offsets.push(values.len() as i32);
     }
 
@@ -76,50 +76,10 @@ where
 #[inline]
 fn to_hex_scalar<T: ToHex>(value: T) -> String {
     let mut hex_buffer = [0u8; 16];
-    let hex = value.write_hex(&mut hex_buffer);
+    let hex = value.write_hex(HexCase::Lower, &mut hex_buffer);
     // SAFETY: hex holds only ASCII hex digits.
     unsafe { std::str::from_utf8_unchecked(hex).to_string() }
 }
-
-/// Trait for converting integer types to hexadecimal in a buffer
-trait ToHex: ArrowNativeType {
-    /// Writes the hex representation into `buf` and returns the written
-    /// subslice. Digits are right-aligned in `buf` with leading zeros trimmed.
-    fn write_hex(self, buf: &mut [u8; 16]) -> &[u8];
-}
-
-/// Signed values use their two's complement representation, matching a cast to
-/// the corresponding unsigned type.
-macro_rules! impl_to_hex_signed {
-    ($ty:ty) => {
-        impl ToHex for $ty {
-            #[inline]
-            fn write_hex(self, buf: &mut [u8; 16]) -> &[u8] {
-                encode_u64(self as i64 as u64, HexCase::Lower, buf)
-            }
-        }
-    };
-}
-
-macro_rules! impl_to_hex_unsigned {
-    ($ty:ty) => {
-        impl ToHex for $ty {
-            #[inline]
-            fn write_hex(self, buf: &mut [u8; 16]) -> &[u8] {
-                encode_u64(self as u64, HexCase::Lower, buf)
-            }
-        }
-    };
-}
-
-impl_to_hex_signed!(i8);
-impl_to_hex_signed!(i16);
-impl_to_hex_signed!(i32);
-impl_to_hex_signed!(i64);
-impl_to_hex_unsigned!(u8);
-impl_to_hex_unsigned!(u16);
-impl_to_hex_unsigned!(u32);
-impl_to_hex_unsigned!(u64);
 
 #[user_doc(
     doc_section(label = "String Functions"),

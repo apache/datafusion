@@ -45,7 +45,7 @@
 //! - `parquet_emb_idx`
 //!   (file: parquet_embedded_index.rs, desc: Store a custom index inside Parquet files)
 //!
-//! - `parquet_enc`  
+//! - `parquet_enc`
 //!   (file: parquet_encrypted.rs, desc: Read & write encrypted Parquet files)
 //!
 //! - `parquet_enc_with_kms`

@@ -63,6 +63,9 @@ mod tracing;
 /// Run all tests that are found in the `extension_types` directory
 mod extension_types;
 
+/// Run all tests that are found in the `function_docs` directory
+mod function_docs;
+
 /// Helper functions for tests.
 mod helper;
 

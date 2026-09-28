@@ -26,12 +26,21 @@ use datafusion_execution::memory_pool::MemoryReservation;
 use log::warn;
 use std::sync::Arc;
 
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone)]
 struct BatchCursor {
     /// The index into BatchBuilder::batches
     batch_idx: usize,
     /// The row index within the given batch
     row_idx: usize,
+}
+
+impl BatchCursor {
+    /// A cursor whose batch has been released. `push_row` must not be called
+    /// for the stream until `push_batch` installs a new cursor.
+    const RELEASED: Self = Self {
+        batch_idx: usize::MAX,
+        row_idx: 0,
+    };
 }
 
 /// Provides an API to incrementally build a [`RecordBatch`] from partitioned [`RecordBatch`]
@@ -81,7 +90,7 @@ impl BatchBuilder {
         Self {
             schema,
             batches: Vec::with_capacity(stream_count * 2),
-            cursors: vec![BatchCursor::default(); stream_count],
+            cursors: vec![BatchCursor::RELEASED; stream_count],
             indices: Vec::with_capacity(batch_size),
             reservation,
             batches_mem_used: 0,
@@ -108,6 +117,14 @@ impl BatchBuilder {
 
     /// Append the next row from `stream_idx`
     pub fn push_row(&mut self, stream_idx: usize) {
+        debug_assert!(
+            self.batches
+                .get(self.cursors[stream_idx].batch_idx)
+                .is_some_and(|(_, batch)| {
+                    self.cursors[stream_idx].row_idx < batch.num_rows()
+                }),
+            "push_row on stream {stream_idx} with no live batch"
+        );
         let cursor = &mut self.cursors[stream_idx];
         let row_idx = cursor.row_idx;
         cursor.row_idx += 1;
@@ -157,33 +174,10 @@ impl BatchBuilder {
         // Remove consumed indices, keeping any remaining for the next call.
         self.indices.drain(..rows_to_emit);
 
-        // Only clean up fully-consumed batches when all indices are drained,
-        // because remaining indices may still reference earlier batches.
-        // In the overflow/partial-emit case this may retain some extra memory
-        // across a few drain polls, but avoids costly index scanning on the
-        // hot path. The retention is bounded and short-lived since leftover
-        // rows are drained over subsequent polls.
         if self.indices.is_empty() {
-            // New cursors are only created once the previous cursor for the stream
-            // is finished. This means all remaining rows from all but the last batch
-            // for each stream have been yielded to the newly created record batch
-            //
-            // We can therefore drop all but the last batch for each stream
-            let mut batch_idx = 0;
-            let mut retained = 0;
-            self.batches.retain(|(stream_idx, batch)| {
-                let stream_cursor = &mut self.cursors[*stream_idx];
-                let retain = stream_cursor.batch_idx == batch_idx;
-                batch_idx += 1;
-
-                if retain {
-                    stream_cursor.batch_idx = retained;
-                    retained += 1;
-                } else {
-                    self.batches_mem_used -= get_record_batch_memory_size(batch);
-                }
-                retain
-            });
+            self.retain_cursor_batches();
+        } else {
+            self.retain_live_batches();
         }
 
         // Release excess memory back to the pool, but never shrink below
@@ -195,6 +189,75 @@ impl BatchBuilder {
         }
 
         RecordBatch::try_new(Arc::clone(&self.schema), columns).map_err(Into::into)
+    }
+
+    fn retain_cursor_batches(&mut self) {
+        // New cursors are only created once the previous cursor for the stream
+        // is finished. This means all remaining rows from all but the last batch
+        // for each stream have been yielded to the newly created record batch
+        //
+        // We can therefore drop all but the last live cursor batch for each stream
+        let mut batch_idx = 0;
+        let mut retained = 0;
+        self.batches.retain(|(stream_idx, batch)| {
+            let stream_cursor = &mut self.cursors[*stream_idx];
+            let is_cursor_batch = stream_cursor.batch_idx == batch_idx;
+            let retain = is_cursor_batch && stream_cursor.row_idx < batch.num_rows();
+            batch_idx += 1;
+
+            if retain {
+                stream_cursor.batch_idx = retained;
+                retained += 1;
+            } else {
+                if is_cursor_batch {
+                    *stream_cursor = BatchCursor::RELEASED;
+                }
+                self.batches_mem_used -= get_record_batch_memory_size(batch);
+            }
+            retain
+        });
+    }
+
+    fn retain_live_batches(&mut self) {
+        let mut retain_batch = vec![false; self.batches.len()];
+        for (batch_idx, _) in &self.indices {
+            retain_batch[*batch_idx] = true;
+        }
+
+        for cursor in &self.cursors {
+            if self
+                .batches
+                .get(cursor.batch_idx)
+                .is_some_and(|(_, batch)| cursor.row_idx < batch.num_rows())
+            {
+                retain_batch[cursor.batch_idx] = true;
+            }
+        }
+
+        let mut batch_idx = 0;
+        let mut retained = 0;
+        let mut remap = vec![usize::MAX; self.batches.len()];
+        self.batches.retain(|(_, batch)| {
+            let retain = retain_batch[batch_idx];
+            if retain {
+                remap[batch_idx] = retained;
+                retained += 1;
+            } else {
+                self.batches_mem_used -= get_record_batch_memory_size(batch);
+            }
+            batch_idx += 1;
+            retain
+        });
+
+        for (batch_idx, _) in &mut self.indices {
+            *batch_idx = remap[*batch_idx];
+        }
+        for cursor in &mut self.cursors {
+            if let Some(new_idx) = remap.get(cursor.batch_idx) {
+                // `usize::MAX` means the cursor's batch was released.
+                cursor.batch_idx = *new_idx;
+            }
+        }
     }
 
     /// Drains the in_progress row indexes, and builds a new RecordBatch from them
@@ -280,6 +343,7 @@ mod tests {
     use arrow::array::{Array, ArrayDataBuilder, Int32Array, ListArray};
     use arrow::buffer::Buffer;
     use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
     use datafusion_execution::memory_pool::{
         MemoryConsumer, MemoryPool, UnboundedMemoryPool,
     };
@@ -301,6 +365,96 @@ mod tests {
             true,
         )]));
         RecordBatch::try_new(schema, vec![Arc::new(list)]).unwrap()
+    }
+
+    fn reservation() -> MemoryReservation {
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        MemoryConsumer::new("test").register(&pool)
+    }
+
+    fn int_batch(values: Vec<i32>) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)]));
+        RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(values))]).unwrap()
+    }
+
+    fn push_n_rows(builder: &mut BatchBuilder, stream_idx: usize, n: usize) {
+        for _ in 0..n {
+            builder.push_row(stream_idx);
+        }
+    }
+
+    fn emit_n_rows(builder: &mut BatchBuilder, n: usize) -> RecordBatch {
+        let columns = builder
+            .try_interleave_columns(&builder.indices[..n])
+            .unwrap();
+        builder.finish_record_batch(n, columns).unwrap()
+    }
+
+    fn assert_int_output(batch: &RecordBatch, expected: &[i32]) {
+        let actual = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap()
+            .values();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_partial_emit_releases_unreferenced_and_retains_live_batches() {
+        let batch0 = int_batch(vec![10, 11]);
+        let batch1 = int_batch(vec![20, 21]);
+        let batch2 = int_batch(vec![30, 31]);
+        let batch1_size = get_record_batch_memory_size(&batch1);
+        let batch2_size = get_record_batch_memory_size(&batch2);
+        let schema = batch0.schema();
+        let mut builder = BatchBuilder::new(Arc::clone(&schema), 3, 6, reservation());
+
+        builder.push_batch(0, batch0).unwrap();
+        push_n_rows(&mut builder, 0, 2);
+        builder.push_batch(1, batch1).unwrap();
+        push_n_rows(&mut builder, 1, 2);
+        // Keep one stream empty so an unloaded cursor cannot retain consumed batches.
+        builder.push_batch(0, batch2).unwrap();
+
+        let output = emit_n_rows(&mut builder, 2);
+        assert_int_output(&output, &[10, 11]);
+
+        assert_eq!(builder.len(), 2);
+        assert_eq!(builder.batches.len(), 2);
+        assert_eq!(builder.batches_mem_used, batch1_size + batch2_size);
+        assert_eq!(builder.reservation.size(), batch1_size + batch2_size);
+
+        push_n_rows(&mut builder, 0, 2);
+        let output = emit_n_rows(&mut builder, 4);
+        assert_int_output(&output, &[20, 21, 30, 31]);
+
+        assert!(builder.is_empty());
+        assert!(builder.batches.is_empty());
+        assert_eq!(builder.batches_mem_used, 0);
+        assert_eq!(builder.reservation.size(), 0);
+    }
+
+    #[test]
+    fn test_released_cursor_accepts_new_batch_for_stream() {
+        let batch0 = int_batch(vec![10]);
+        let batch1 = int_batch(vec![20]);
+        let schema = batch0.schema();
+        let mut builder = BatchBuilder::new(Arc::clone(&schema), 1, 1, reservation());
+
+        builder.push_batch(0, batch0).unwrap();
+        builder.push_row(0);
+        let output = emit_n_rows(&mut builder, 1);
+        assert_int_output(&output, &[10]);
+        assert!(builder.batches.is_empty());
+
+        builder.push_batch(0, batch1).unwrap();
+        builder.push_row(0);
+        let output = emit_n_rows(&mut builder, 1);
+        assert_int_output(&output, &[20]);
+        assert!(builder.batches.is_empty());
+        assert_eq!(builder.batches_mem_used, 0);
+        assert_eq!(builder.reservation.size(), 0);
     }
 
     #[test]

@@ -232,9 +232,8 @@ impl BuiltinExprBuilder {
     }
 
     fn build_unary_expr(fn_name: &str, args: Vec<Expr>) -> Result<Expr> {
-        let [arg] = match args.try_into() {
-            Ok(args_arr) => args_arr,
-            Err(_) => return substrait_err!("Expected one argument for {fn_name} expr"),
+        let Ok([arg]) = <[Expr; 1]>::try_from(args) else {
+            return substrait_err!("Expected one argument for {fn_name} expr");
         };
         let arg = Box::new(arg);
 
@@ -305,11 +304,8 @@ impl BuiltinExprBuilder {
     }
 
     fn build_binary_expr(fn_name: &str, args: Vec<Expr>) -> Result<Expr> {
-        let [a, b] = match args.try_into() {
-            Ok(args_arr) => args_arr,
-            Err(_) => {
-                return substrait_err!("Expected two arguments for `{fn_name}` expr");
-            }
+        let Ok([a, b]) = <[Expr; 2]>::try_from(args) else {
+            return substrait_err!("Expected two arguments for `{fn_name}` expr");
         };
         match fn_name {
             "and_not" => Ok(Self::build_and_not_expr(a, b)),
@@ -329,11 +325,8 @@ impl BuiltinExprBuilder {
     }
 
     fn build_between_expr(fn_name: &str, args: Vec<Expr>) -> Result<Expr> {
-        let [expression, low, high] = match args.try_into() {
-            Ok(args_arr) => args_arr,
-            Err(_) => {
-                return substrait_err!("Expected three arguments for `{fn_name}` expr");
-            }
+        let Ok([expression, low, high]) = <[Expr; 3]>::try_from(args) else {
+            return substrait_err!("Expected three arguments for `{fn_name}` expr");
         };
 
         Ok(Expr::Between(Between {

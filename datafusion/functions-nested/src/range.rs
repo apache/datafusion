@@ -50,7 +50,6 @@ use datafusion_expr::{
     TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
-use std::cmp::Ordering;
 use std::iter::from_fn;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -63,6 +62,22 @@ make_udf_expr_and_func!(
     range_udf,
     Range::new
 );
+
+fn interval_step_is_negative(
+    name: &str,
+    months: i32,
+    days: i32,
+    nanoseconds: i64,
+) -> Result<bool> {
+    let has_positive_component = months > 0 || days > 0 || nanoseconds > 0;
+    let has_negative_component = months < 0 || days < 0 || nanoseconds < 0;
+
+    if has_positive_component && has_negative_component {
+        return exec_err!("Interval argument to {name} must not have mixed signs");
+    }
+
+    Ok(has_negative_component)
+}
 
 make_udf_expr_and_func!(
     GenSeries,
@@ -80,11 +95,11 @@ make_udf_expr_and_func!(
 range(start, stop[, step])",
     sql_example = r#"```sql
 > select range(2, 10, 3);
-+-----------------------------------+
-| range(Int64(2),Int64(10),Int64(3))|
-+-----------------------------------+
-| [2, 5, 8]                         |
-+-----------------------------------+
++------------------------------------+
+| range(Int64(2),Int64(10),Int64(3)) |
++------------------------------------+
+| [2, 5, 8]                          |
++------------------------------------+
 
 > select range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH);
 +--------------------------------------------------------------------------+
@@ -338,7 +353,7 @@ impl Range {
                     offsets.push(values.len() as i32);
                     valid.append_null();
                 }
-            };
+            }
         }
         let arr = Arc::new(ListArray::try_new(
             Arc::new(Field::new_list_field(DataType::Int64, true)),
@@ -374,10 +389,11 @@ impl Range {
             let stop = stop.value(idx);
             let step = step.value(idx);
 
-            let (months, days, _) = IntervalMonthDayNanoType::to_parts(step);
+            let (months, days, nanoseconds) = IntervalMonthDayNanoType::to_parts(step);
             if months == 0 && days == 0 {
                 return exec_err!("Cannot generate date range less than 1 day.");
             }
+            let neg = interval_step_is_negative(self.name(), months, days, nanoseconds)?;
 
             let stop = if !self.include_upper_bound {
                 Date32Type::subtract_month_day_nano_opt(stop, step).ok_or_else(|| {
@@ -390,7 +406,6 @@ impl Range {
                 stop
             };
 
-            let neg = months < 0 || days < 0;
             let mut new_date = Some(start);
 
             let values = from_fn(|| {
@@ -434,8 +449,8 @@ impl Range {
         let stop = cast_to_ns(stop)?;
         let stop = as_timestamp_nanosecond_array(&stop)?;
 
-        let start_tz = parse_tz(&start.timezone())?;
-        let stop_tz = parse_tz(&stop.timezone())?;
+        let start_tz = parse_tz(start.timezone())?;
+        let stop_tz = parse_tz(stop.timezone())?;
 
         // values are timestamps
         let values_builder = start
@@ -459,30 +474,28 @@ impl Range {
             if months == 0 && days == 0 && ns == 0 {
                 return exec_err!("Interval argument to {} must not be 0", self.name());
             }
-
-            let neg = TimestampNanosecondType::add_month_day_nano(start, step, start_tz)
-                .ok_or(exec_datafusion_err!(
-                    "Cannot generate timestamp range where start + step overflows"
-                ))?
-                .cmp(&start)
-                == Ordering::Less;
+            let neg = interval_step_is_negative(self.name(), months, days, ns)?;
 
             let stop_dt =
                 as_datetime_with_timezone::<TimestampNanosecondType>(stop, stop_tz)
-                    .ok_or(exec_datafusion_err!(
-                        "Cannot generate timestamp for stop: {}: {:?}",
-                        stop,
-                        stop_tz
-                    ))?;
+                    .ok_or_else(|| {
+                        exec_datafusion_err!(
+                            "Cannot generate timestamp for stop: {}: {:?}",
+                            stop,
+                            stop_tz
+                        )
+                    })?;
 
             let mut current = start;
             let mut current_dt =
                 as_datetime_with_timezone::<TimestampNanosecondType>(current, start_tz)
-                    .ok_or(exec_datafusion_err!(
-                    "Cannot generate timestamp for start: {}: {:?}",
-                    current,
-                    start_tz
-                ))?;
+                    .ok_or_else(|| {
+                    exec_datafusion_err!(
+                        "Cannot generate timestamp for start: {}: {:?}",
+                        current,
+                        start_tz
+                    )
+                })?;
 
             let values = from_fn(|| {
                 let generate_series_should_end = self.include_upper_bound
@@ -609,8 +622,8 @@ fn generate_range_values(
     Ok(())
 }
 
-fn parse_tz(tz: &Option<&str>) -> Result<Tz> {
-    let tz = tz.unwrap_or_else(|| "+00");
+fn parse_tz(tz: Option<&str>) -> Result<Tz> {
+    let tz = tz.unwrap_or("+00");
 
     Tz::from_str(tz)
         .map_err(|op| exec_datafusion_err!("failed to parse timezone {tz}: {:?}", op))

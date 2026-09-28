@@ -566,6 +566,7 @@ impl OptimizerRule for CommonSubexprEliminate {
             LogicalPlan::Window(window) => self.try_optimize_window(window, config)?,
             LogicalPlan::Aggregate(agg) => self.try_optimize_aggregate(agg, config)?,
             LogicalPlan::Join(_)
+            | LogicalPlan::AsOfJoin(_)
             | LogicalPlan::Repartition(_)
             | LogicalPlan::Union(_)
             | LogicalPlan::TableScan(_)
@@ -732,6 +733,7 @@ impl CSEController for ExprCSEController<'_> {
                 | Expr::Wildcard { .. }
                 | Expr::Lambda(_)
                 | Expr::LambdaVariable(_)
+                | Expr::WindowFunction(..)
         );
 
         let is_aggr = matches!(node, Expr::AggregateFunction(..));
@@ -826,6 +828,9 @@ fn extract_expressions(expr: &Expr, result: &mut Vec<Expr>) {
             let col = Column::new(qualifier, field_name);
             result.push(Expr::Column(col))
         }
+        result.push(Expr::Column(Column::from_name(
+            Aggregate::INTERNAL_GROUPING_ID,
+        )));
     } else {
         let (qualifier, field_name) = expr.qualified_name();
         let col = Column::new(qualifier, field_name);
@@ -853,6 +858,7 @@ mod test {
     use crate::test::udfs::leaf_udf_expr;
     use crate::test::*;
     use datafusion_expr::test::function_stub::{avg, sum};
+    use datafusion_functions_window::row_number::row_number_udwf;
 
     macro_rules! assert_optimized_plan_equal {
         (
@@ -1107,6 +1113,27 @@ mod test {
     }
 
     #[test]
+    fn common_aggregate_grouping_set_preserves_internal_id() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .aggregate(
+                vec![grouping_set(vec![vec![col("a")]])],
+                vec![avg(col("b")).alias("first"), avg(col("b")).alias("second")],
+            )?
+            .filter(col(Aggregate::INTERNAL_GROUPING_ID).eq(lit(0_u8)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: __grouping_id = UInt8(0)
+          Projection: test.a, __grouping_id, __common_expr_1 AS first, __common_expr_1 AS second
+            Aggregate: groupBy=[[GROUPING SETS ((test.a))]], aggr=[[avg(test.b) AS __common_expr_1]]
+              TableScan: test
+        "
+        )
+    }
+
+    #[test]
     fn subexpr_in_same_order() -> Result<()> {
         let table_scan = test_table_scan()?;
 
@@ -1288,20 +1315,31 @@ mod test {
 
     #[test]
     fn test_extract_expressions_from_grouping_set() -> Result<()> {
-        let mut result = Vec::with_capacity(3);
+        let mut result = Vec::with_capacity(4);
         let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("c")]]);
         extract_expressions(&grouping, &mut result);
 
-        assert!(result.len() == 3);
+        assert_eq!(
+            result,
+            vec![
+                col("a"),
+                col("b"),
+                col("c"),
+                col(Aggregate::INTERNAL_GROUPING_ID),
+            ]
+        );
         Ok(())
     }
 
     #[test]
     fn test_extract_expressions_from_grouping_set_with_identical_expr() -> Result<()> {
-        let mut result = Vec::with_capacity(2);
+        let mut result = Vec::with_capacity(3);
         let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("a")]]);
         extract_expressions(&grouping, &mut result);
-        assert!(result.len() == 2);
+        assert_eq!(
+            result,
+            vec![col("a"), col("b"), col(Aggregate::INTERNAL_GROUPING_ID),]
+        );
         Ok(())
     }
 
@@ -1369,7 +1407,7 @@ mod test {
     fn test_extract_expressions_from_col() -> Result<()> {
         let mut result = Vec::with_capacity(1);
         extract_expressions(&col("a"), &mut result);
-        assert!(result.len() == 1);
+        assert_eq!(result.len(), 1);
         Ok(())
     }
 
@@ -1894,6 +1932,23 @@ mod test {
         Projection: __common_expr_1 AS c1, __common_expr_1 AS c2
           Projection: leaf_udf(test.a) + test.b AS __common_expr_1, test.a, test.b, test.c
             TableScan: test
+        "
+        )
+    }
+
+    #[test]
+    fn test_window_function_is_not_extracted() -> Result<()> {
+        let wexpr = row_number_udwf().call(vec![]);
+
+        let plan = LogicalPlanBuilder::empty(true)
+            .window(vec![wexpr.clone(), wexpr.alias("aliased")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS aliased]]
+          EmptyRelation: rows=1
         "
         )
     }

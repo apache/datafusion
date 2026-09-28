@@ -93,20 +93,13 @@ impl Statement {
                     Statement::TransactionStart(TransactionStart {
                         access_mode,
                         isolation_level,
-                        ..
                     }) => {
                         write!(f, "TransactionStart: {access_mode:?} {isolation_level:?}")
                     }
-                    Statement::TransactionEnd(TransactionEnd {
-                        conclusion,
-                        chain,
-                        ..
-                    }) => {
+                    Statement::TransactionEnd(TransactionEnd { conclusion, chain }) => {
                         write!(f, "TransactionEnd: {conclusion:?} chain:={chain}")
                     }
-                    Statement::SetVariable(SetVariable {
-                        variable, value, ..
-                    }) => {
+                    Statement::SetVariable(SetVariable { variable, value }) => {
                         write!(f, "SetVariable: set {variable:?} to {value:?}")
                     }
                     Statement::ResetVariable(ResetVariable { variable }) => {
@@ -125,9 +118,7 @@ impl Statement {
                                 .join(", ")
                         )
                     }
-                    Statement::Execute(Execute {
-                        name, parameters, ..
-                    }) => {
+                    Statement::Execute(Execute { name, parameters }) => {
                         write!(
                             f,
                             "Execute: {} params=[{}]",

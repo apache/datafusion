@@ -423,7 +423,7 @@ impl DisplayAs for JsonSink {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "JsonSink(file_groups=",)?;
+                write!(f, "JsonSink(file_groups=")?;
                 FileGroupDisplay(&self.config.file_group).fmt_as(t, f)?;
                 write!(f, ")")
             }
@@ -490,6 +490,127 @@ impl DataSink for JsonSink {
     ) -> Result<u64> {
         FileSink::write_all(self, data, context).await
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+        exec: &DataSinkExec,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_proto_models::protobuf;
+        use protobuf::physical_plan_node::PhysicalPlanType;
+
+        // Keep an exhaustive guard in the active hook while centralizing the
+        // field mapping in the exhaustive `TryFrom<&JsonSink>` below.
+        let Self {
+            config: _,
+            writer_options: _,
+        } = self;
+
+        let input = ctx.encode_child(exec.input())?;
+        let sort_order = exec.encode_sort_order(ctx)?;
+        let sink = protobuf::JsonSink::try_from(self)?;
+        let node = protobuf::JsonSinkExecNode {
+            input: Some(Box::new(input)),
+            sink: Some(sink),
+            sink_schema: Some(exec.schema().as_ref().try_into()?),
+            sort_order,
+        };
+        Ok(Some(protobuf::PhysicalPlanNode {
+            physical_plan_type: Some(PhysicalPlanType::JsonSink(Box::new(node))),
+        }))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl TryFrom<&JsonSink> for datafusion_proto_models::protobuf::JsonSink {
+    type Error = datafusion_common::DataFusionError;
+
+    fn try_from(value: &JsonSink) -> Result<Self> {
+        // Keep this public conversion exhaustive like the active serde hook.
+        let JsonSink {
+            config,
+            writer_options,
+        } = value;
+        Ok(Self {
+            config: Some(config.try_into()?),
+            writer_options: Some(writer_options.try_into()?),
+        })
+    }
+}
+
+#[cfg(feature = "proto")]
+impl TryFrom<&datafusion_proto_models::protobuf::JsonSink> for JsonSink {
+    type Error = datafusion_common::DataFusionError;
+
+    fn try_from(value: &datafusion_proto_models::protobuf::JsonSink) -> Result<Self> {
+        // Exhaustive destructure: new wire fields must be explicitly restored.
+        let datafusion_proto_models::protobuf::JsonSink {
+            config,
+            writer_options,
+        } = value;
+        let config = FileSinkConfig::try_from(config.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "JsonSink is missing required field 'config'"
+            )
+        })?)?;
+        let writer_options = writer_options
+            .as_ref()
+            .ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!(
+                    "JsonSink is missing required field 'writer_options'"
+                )
+            })?
+            .try_into()?;
+
+        Ok(Self::new(config, writer_options))
+    }
+}
+
+#[cfg(feature = "proto")]
+impl JsonSink {
+    /// Reconstructs a [`DataSinkExec`] containing a `JsonSink` from protobuf.
+    pub fn try_from_proto(
+        node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion_proto_models::protobuf;
+
+        let sink_node = datafusion_physical_plan::expect_plan_variant!(
+            node,
+            protobuf::physical_plan_node::PhysicalPlanType::JsonSink,
+            "JsonSink",
+        );
+        // Exhaustive destructure: a new field on `JsonSinkExecNode` is a
+        // compile error here rather than a silently ignored wire field.
+        let protobuf::JsonSinkExecNode {
+            input,
+            sink,
+            // The output schema is recomputed by `DataSinkExec::new`.
+            sink_schema: _,
+            sort_order,
+        } = sink_node.as_ref();
+
+        let input =
+            ctx.decode_required_child(input.as_deref(), "JsonSinkExecNode", "input")?;
+        let proto_sink = sink.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "JsonSinkExecNode is missing required field 'sink'"
+            )
+        })?;
+        let data_sink = JsonSink::try_from(proto_sink)?;
+        let sort_order = DataSinkExec::decode_sort_order(
+            sort_order.as_ref(),
+            ctx,
+            input.schema().as_ref(),
+        )?;
+
+        Ok(Arc::new(DataSinkExec::new(
+            input,
+            Arc::new(data_sink),
+            sort_order,
+        )))
+    }
 }
 
 #[derive(Debug)]
@@ -514,5 +635,26 @@ impl Decoder for JsonDecoder {
 
     fn can_flush_early(&self) -> bool {
         false
+    }
+}
+
+/// Encode a [`JsonFormatFactory`]'s options as their protobuf form.
+///
+/// The reverse direction is `TryFrom<&protobuf::JsonOptions> for JsonOptions` in
+/// `datafusion-proto-models`: `JsonOptions` is a `datafusion-common` type, so
+/// that half cannot live here.
+#[cfg(feature = "proto")]
+impl From<&JsonFormatFactory> for datafusion_proto_models::protobuf::JsonOptions {
+    fn from(factory: &JsonFormatFactory) -> Self {
+        if let Some(options) = &factory.options {
+            datafusion_proto_models::protobuf::JsonOptions {
+                compression: options.compression as i32,
+                schema_infer_max_rec: options.schema_infer_max_rec.map(|v| v as u64),
+                compression_level: options.compression_level,
+                newline_delimited: Some(options.newline_delimited),
+            }
+        } else {
+            datafusion_proto_models::protobuf::JsonOptions::default()
+        }
     }
 }

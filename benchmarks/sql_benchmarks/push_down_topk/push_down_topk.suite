@@ -1,0 +1,21 @@
+description = "TopK pushdown benchmarks for ORDER BY LIMIT over TPC-H joins"
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[path_replacements]
+DATA_DIR = "../../data"
+
+[[options]]
+name = "scale-factor"
+env = "BENCH_SIZE"
+default = "1"
+values = ["1", "10", "..."]
+help = "Selects the TPC-H scale factor used by the TopK benchmarks."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- push_down_topk"
+description = "Run all TopK pushdown queries at scale factor 1."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- push_down_topk --query 3 --scale-factor 10"
+description = "Run TopK pushdown query 3 at scale factor 10."

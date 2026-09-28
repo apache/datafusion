@@ -120,6 +120,20 @@ SELECT array_filter(arrow_cast(list, 'ListView(Int32)'), v -> v > 2) from t;
 [4, 50]
 [7, 50]
 
+# large list works
+query ?
+SELECT array_filter(arrow_cast([1, 2, 3, 4, 5], 'LargeList(Int32)'), v -> v > 2);
+----
+[3, 4, 5]
+
+# FixedSizeList / LargeListView coercions during planning
+query ??
+SELECT
+  array_filter(arrow_cast([1, 2, 3, 4], 'FixedSizeList(4, Int32)'), v -> v > 2),
+  array_filter(arrow_cast([1, 2, 3, 4], 'LargeListView(Int32)'), v -> v > 2);
+----
+[3, 4] [3, 4]
+
 # null array argument returns null
 query ?
 SELECT array_filter(arrow_cast(NULL, 'List(Int32)'), v -> v > 0);
