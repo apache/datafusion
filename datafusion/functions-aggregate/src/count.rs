@@ -1092,6 +1092,27 @@ mod tests {
     }
 
     #[test]
+    fn count_nullary_value_from_stats() {
+        let statistics = datafusion_common::Statistics {
+            num_rows: Precision::Exact(42),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![],
+        };
+        let return_type = DataType::Int64;
+        let statistics_args = StatisticsArgs {
+            statistics: &statistics,
+            return_type: &return_type,
+            is_distinct: false,
+            exprs: &[],
+        };
+
+        assert_eq!(
+            Count::new().value_from_stats(&statistics_args),
+            Some(ScalarValue::Int64(Some(42)))
+        );
+    }
+
+    #[test]
     fn count_groups_accumulator_nullary() -> Result<()> {
         let mut accumulator = CountGroupsAccumulator::new();
         accumulator.update_batch(&[], &[0, 1, 0, 2], None, 3)?;
