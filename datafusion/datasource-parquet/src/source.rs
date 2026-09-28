@@ -53,7 +53,7 @@ use datafusion_functions::core::file_row_index::FileRowIndexFunc;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
 use datafusion_physical_expr::optional_filter_gate::OptionalFilterGateConfig;
 use datafusion_physical_expr::projection::ProjectionExprs;
-use datafusion_physical_expr::utils::split_conjunction;
+use datafusion_physical_expr::utils::{is_optional_filter, split_conjunction};
 use datafusion_physical_expr::{EquivalenceProperties, conjunction};
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_adapter::rewrite::{
@@ -738,6 +738,11 @@ impl FileSource for ParquetSource {
     /// The predicate is applied to every row only when filter pushdown is
     /// enabled, and then only the conjuncts that can become a `RowFilter`.
     /// Otherwise the predicate is used only for pruning.
+    ///
+    /// Optional conjuncts (see `split_optional`) are not exact: in the
+    /// `adaptive` mode the gate can skip them, in the `pruning_only` mode the
+    /// scan does not evaluate them, and the scan drops them when the
+    /// `RowFilter` cannot evaluate them.
     fn exact_filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
         if !self.pushdown_filters() {
             return None;
@@ -746,6 +751,7 @@ impl FileSource for ParquetSource {
         let pushable_schema = self.table_schema.schema_without_virtual_columns();
         let exact = split_conjunction(predicate)
             .into_iter()
+            .filter(|expr| !is_optional_filter(expr))
             .filter(|expr| can_expr_be_pushed_down_with_schemas(expr, pushable_schema))
             .cloned()
             .collect::<Vec<_>>();
@@ -2247,6 +2253,50 @@ mod tests {
             "file_row_index() rewrites to a virtual column and must not be \
              pushed down"
         );
+    }
+
+    /// An optional conjunct is not exact: in the `adaptive` mode its gate can
+    /// skip it, in the `pruning_only` mode the scan does not evaluate it, and
+    /// the scan drops it when the `RowFilter` cannot evaluate it. Thus it
+    /// must not give equivalences, in all modes.
+    #[test]
+    fn exact_filter_excludes_optional_conjuncts() {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_common::config::{ConfigOptions, OptionalFilterMode};
+        use datafusion_expr::{col, lit as logical_lit};
+        use datafusion_physical_expr::expressions::OptionalFilterPhysicalExpr;
+        use datafusion_physical_expr::planner::logical2physical;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]));
+        let required = logical2physical(&col("a").eq(logical_lit(1i64)), &schema);
+        let optional: Arc<dyn PhysicalExpr> = Arc::new(OptionalFilterPhysicalExpr::new(
+            logical2physical(&col("b").eq(logical_lit(2i64)), &schema),
+        ));
+        for mode in [
+            OptionalFilterMode::Always,
+            OptionalFilterMode::Adaptive,
+            OptionalFilterMode::PruningOnly,
+        ] {
+            let mut config = ConfigOptions::default();
+            config.execution.parquet.pushdown_filters = true;
+            config.execution.optional_filter_mode = mode;
+            let prop = ParquetSource::new(Arc::clone(&schema))
+                .try_pushdown_filters(
+                    vec![Arc::clone(&required), Arc::clone(&optional)],
+                    &config,
+                )
+                .unwrap();
+            let source = prop.updated_node.unwrap();
+            let source = source.downcast_ref::<ParquetSource>().unwrap();
+            assert_eq!(
+                source.exact_filter().unwrap().to_string(),
+                "a@0 = 1",
+                "mode {mode}"
+            );
+        }
     }
 
     #[test]
