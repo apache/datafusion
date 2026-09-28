@@ -227,15 +227,29 @@ fn add_equal_conditions_test() -> Result<()> {
     Ok(())
 }
 
-/// Returns `true` if `expr` contains a `+` or `-` anywhere in its tree.
+/// Returns `true` if `expr` contains, anywhere in its tree, an operator whose
+/// ordering rule is deliberately conservative.
 ///
-/// The equivalence framework conservatively discards orderings derived from
-/// `+`/`-` expressions, because wrapping overflow can break them over the
-/// type's full domain even when a finite batch happens to remain sorted.
-pub fn contains_overflowable_arithmetic(expr: &Arc<dyn PhysicalExpr>) -> bool {
+/// The equivalence framework discards orderings in cases where a finite batch
+/// can still happen to be sorted, so a rejection is not conclusive:
+/// - `+`/`-`: wrapping overflow can break the ordering over the type's full
+///   domain.
+/// - comparisons, `AND`, `OR`: the rules keep an ordering only for specific
+///   NULL placements, without checking whether the operands can be NULL.
+pub fn contains_conservative_ordering_op(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.exists(|e| {
         Ok(e.downcast_ref::<BinaryExpr>().is_some_and(|binary| {
-            matches!(binary.op(), Operator::Plus | Operator::Minus)
+            matches!(
+                binary.op(),
+                Operator::Plus
+                    | Operator::Minus
+                    | Operator::Gt
+                    | Operator::GtEq
+                    | Operator::Lt
+                    | Operator::LtEq
+                    | Operator::And
+                    | Operator::Or
+            )
         }))
     })
     .unwrap()

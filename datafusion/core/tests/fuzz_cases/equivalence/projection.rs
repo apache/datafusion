@@ -17,7 +17,7 @@
 
 use crate::fuzz_cases::equivalence::utils::{
     NULL_PCTS, TestScalarUDF, apply_projection, assert_random_ordering_satisfy_is_sound,
-    contains_overflowable_arithmetic, create_random_schema,
+    contains_conservative_ordering_op, create_random_schema,
     generate_table_for_eq_properties, is_table_same_after_sort,
 };
 use arrow::compute::SortOptions;
@@ -199,7 +199,8 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
                             "Error in test case seed: {seed}, null_pct: {null_pct}, requirement:{ordering:?}, expected: {expected:?}, eq_properties: {eq_properties}, projected_eq: {projected_eq}, projection_mapping: {projection_mapping:?}"
                         );
                         // Same reasoning as in `ordering.rs`: only keys from
-                        // the first `+`/`-` source onwards are inconclusive,
+                        // the first source with a conservative ordering rule
+                        // onwards are inconclusive,
                         // so assert on the longest prefix without one.
                         let conclusive_prefix = LexOrdering::new(
                             ordering
@@ -209,7 +210,7 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
                                         targets
                                             .iter()
                                             .any(|(target, _)| target.eq(&sort_expr.expr))
-                                            && contains_overflowable_arithmetic(source)
+                                            && contains_conservative_ordering_op(source)
                                     })
                                 })
                                 .cloned(),

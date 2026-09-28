@@ -17,7 +17,7 @@
 
 use crate::fuzz_cases::equivalence::utils::{
     NULL_PCTS, TestScalarUDF, assert_random_ordering_satisfy_is_sound,
-    contains_overflowable_arithmetic, create_random_schema, create_test_params,
+    contains_conservative_ordering_op, create_random_schema, create_test_params,
     create_test_schema_2, generate_table_for_eq_properties, generate_table_for_orderings,
     is_table_same_after_sort,
 };
@@ -137,6 +137,31 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
             Operator::Plus,
             col("b", &test_schema)?,
         )) as Arc<dyn PhysicalExpr>;
+        let binary = |lhs: Arc<dyn PhysicalExpr>, op, rhs: Arc<dyn PhysicalExpr>| {
+            Arc::new(BinaryExpr::new(lhs, op, rhs)) as Arc<dyn PhysicalExpr>
+        };
+        // Ordered when `a` and `b` lead orderings in opposite directions.
+        let a_gt_b = binary(
+            col("a", &test_schema)?,
+            Operator::Gt,
+            col("b", &test_schema)?,
+        );
+        // `e` is constant, so each operand has the ordering of its column.
+        // `a` and `b` lead separate orderings whose NULLs sit in different
+        // rows, which is where Kleene `AND`/`OR` can break an ordering.
+        let a_gt_e = binary(
+            col("a", &test_schema)?,
+            Operator::Gt,
+            col("e", &test_schema)?,
+        );
+        let b_gt_e = binary(
+            col("b", &test_schema)?,
+            Operator::Gt,
+            col("e", &test_schema)?,
+        );
+        let a_gt_e_and_b_gt_e =
+            binary(Arc::clone(&a_gt_e), Operator::And, Arc::clone(&b_gt_e));
+        let a_gt_e_or_b_gt_e = binary(a_gt_e, Operator::Or, b_gt_e);
         let exprs = [
             col("a", &test_schema)?,
             col("b", &test_schema)?,
@@ -146,6 +171,9 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
             col("f", &test_schema)?,
             floor_a,
             a_plus_b,
+            a_gt_b,
+            a_gt_e_and_b_gt_e,
+            a_gt_e_or_b_gt_e,
         ];
 
         let mut options_rng = StdRng::seed_from_u64(seed as u64);
@@ -171,17 +199,18 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
                 let err_msg = format!(
                     "Error in test case seed: {seed}, null_pct: {null_pct}, requirement:{ordering:?}, expected: {expected:?}, eq_properties: {eq_properties}",
                 );
-                // A rejection turns inconclusive only from the first `+`/`-`
-                // key onwards, since possible overflow makes an ordering
-                // underivable even when the sample happens to be sorted. A
-                // table sorted by the full ordering is sorted by every prefix
-                // of it, so a rejected arithmetic-free prefix still proves
-                // the rejection is genuine.
+                // A rejection turns inconclusive only from the first key with
+                // a conservative ordering rule onwards (see
+                // `contains_conservative_ordering_op`), since such a rule can
+                // make an ordering underivable even when the sample happens
+                // to be sorted. A table sorted by the full ordering is sorted
+                // by every prefix of it, so a rejected prefix without such
+                // keys still proves the rejection is genuine.
                 let conclusive_prefix = LexOrdering::new(
                     ordering
                         .iter()
                         .take_while(|sort_expr| {
-                            !contains_overflowable_arithmetic(&sort_expr.expr)
+                            !contains_conservative_ordering_op(&sort_expr.expr)
                         })
                         .cloned(),
                 );
