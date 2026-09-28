@@ -21,11 +21,9 @@ use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
 use datafusion_common::types::logical_string;
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    Cast, Coercion, ColumnarValue, Documentation, Expr, ReturnFieldArgs,
-    ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
+    Coercion, ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -34,17 +32,20 @@ use datafusion_macros::user_doc;
 ///
 /// The operator always returns the *other* kind of timestamp:
 ///
-/// | Input type (after coercion) | Result | Plan after simplification |
+/// | Input type | Result | Computed as |
 /// | --- | --- | --- |
 /// | `Timestamp(unit, Some(_))` (aware) | the wall clock of the instant in `zone`, as `Timestamp(unit, None)` | `to_local_time(CAST(expression AS Timestamp(unit, Some(zone))))` |
 /// | `Timestamp(unit, None)` (naive) | the value read as a wall clock in `zone`, as `Timestamp(unit, Some(zone))` | `CAST(expression AS Timestamp(unit, Some(zone)))` |
 /// | any other type | as for a naive input | `CAST(expression AS Timestamp(ns, Some(zone)))` |
 ///
-/// The choice needs the input type *after* type coercion. For example, a
-/// `CASE` with a naive arm and an aware arm is aware only after coercion. The
-/// SQL planner runs before coercion, so it plans `AT TIME ZONE` as a call to
-/// this function (see `DatetimeFunctionPlanner`), and [`Self::simplify`]
-/// lowers the call once the type is known.
+/// The choice depends only on the type of `expression`, and it is made every
+/// time that type is read: [`ScalarUDFImpl::return_field_from_args`] for the
+/// plan, and [`ScalarUDFImpl::invoke_with_args`] for the data. The function is
+/// deliberately never rewritten into the `CAST` form during planning. A rewrite
+/// would fix the choice from the type at that moment, and that type is not
+/// always final: the SQL planner runs before type coercion, `PREPARE` runs the
+/// optimizer without the analyzer, and an untyped placeholder has no type
+/// until `EXECUTE`.
 ///
 /// `zone` must be a constant, because it determines the result type.
 #[user_doc(
@@ -107,8 +108,8 @@ impl TimezoneFunc {
     }
 }
 
-/// The two steps that `timezone(zone, <input_type>)` lowers to: the target
-/// type of the `CAST`, and whether `to_local_time` follows it.
+/// The two steps that `timezone(zone, <input_type>)` does: the target type of
+/// the `CAST`, and whether `to_local_time` follows it.
 fn lowering(input_type: &DataType, zone: &str) -> (DataType, bool) {
     let (unit, input_is_aware) = match input_type {
         DataType::Timestamp(unit, tz) => (*unit, tz.is_some()),
@@ -174,31 +175,6 @@ impl ScalarUDFImpl for TimezoneFunc {
         )))
     }
 
-    /// Lower to `CAST`, or to `to_local_time(CAST)`, now that the input type
-    /// is the coerced one.
-    fn simplify(
-        &self,
-        args: Vec<Expr>,
-        info: &SimplifyContext,
-    ) -> Result<ExprSimplifyResult> {
-        let [zone_arg, input] = take_function_args(self.name(), args)?;
-        let Expr::Literal(zone, _) = &zone_arg else {
-            return Ok(ExprSimplifyResult::Original(vec![zone_arg, input]));
-        };
-        let zone = zone_from_scalar(self.name(), Some(zone))?;
-        let (cast_type, strip_timezone) = lowering(&info.get_data_type(&input)?, &zone);
-        let cast = Expr::Cast(Cast::new(Box::new(input), cast_type));
-        Ok(ExprSimplifyResult::Simplified(if strip_timezone {
-            Expr::ScalarFunction(ScalarFunction::new_udf(
-                super::to_local_time(),
-                vec![cast],
-            ))
-        } else {
-            cast
-        }))
-    }
-
-    /// Reached only when the plan was not simplified.
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let [zone, input] = take_function_args(self.name(), &args.args)?;
         let zone = match zone {
@@ -231,10 +207,8 @@ mod tests {
 
     use super::TimezoneFunc;
 
-    /// `invoke_with_args` must agree with the lowering that `simplify` does,
-    /// for a plan that the simplifier did not visit.
     #[test]
-    fn invoke_without_simplify() {
+    fn invoke() {
         // 2024-01-01T12:00:00Z
         let micros = 1_704_110_400_000_000;
         let cases = [

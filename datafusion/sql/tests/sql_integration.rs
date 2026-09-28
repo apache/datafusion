@@ -4070,33 +4070,16 @@ fn plan_at_time_zone_with_datetime_planner() {
     );
 }
 
-/// Without an `ExprPlanner` for `AT TIME ZONE`, an input that is not visibly
-/// timezone-aware keeps the historical lowering to a plain `CAST`.
+/// Without an `ExprPlanner` for `AT TIME ZONE`, planning fails for every input,
+/// as for `EXTRACT`. The SQL planner does not know the input type after type
+/// coercion, so it cannot choose a lowering on its own.
 #[test]
-fn plan_at_time_zone_on_naive_timestamp_without_planner() {
-    let plan =
-        logical_plan("SELECT birth_date AT TIME ZONE 'America/Denver' FROM person")
-            .unwrap();
-    assert_snapshot!(
-        plan,
-        @r#"
-    Projection: CAST(person.birth_date AS Timestamp(ns, "America/Denver"))
-      TableScan: person
-    "#
-    );
-}
-
-/// Without an `ExprPlanner` for `AT TIME ZONE`, a visibly timezone-aware input
-/// fails with a clear message, rather than silently taking the naive lowering.
-#[test]
-fn plan_at_time_zone_on_tz_aware_timestamp_without_planner() {
-    let err = logical_plan(
-        "SELECT (birth_date AT TIME ZONE 'UTC') AT TIME ZONE 'America/Denver' FROM person",
-    )
-    .unwrap_err();
+fn plan_at_time_zone_without_planner() {
+    let err = logical_plan("SELECT birth_date AT TIME ZONE 'America/Denver' FROM person")
+        .unwrap_err();
     assert!(
         err.strip_backtrace()
-            .contains("AT TIME ZONE on a timezone-aware timestamp"),
+            .contains("AT TIME ZONE needs an ExprPlanner"),
         "unexpected error: {err}"
     );
 }

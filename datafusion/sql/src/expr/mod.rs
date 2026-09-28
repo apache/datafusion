@@ -934,22 +934,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }
 
-        // No planner handles it, for example when `datafusion-sql` is used
-        // without `datafusion-functions`. Keep the historical lowering for an
-        // input that is not visibly timezone-aware, and refuse one that is,
-        // rather than return the wrong type for it.
-        let expr = args.swap_remove(1);
-        if let DataType::Timestamp(_, Some(_)) = expr.get_type(schema)? {
-            return not_impl_err!(
-                "AT TIME ZONE on a timezone-aware timestamp needs an ExprPlanner \
-                 that implements `plan_at_time_zone`, such as the \
-                 `DatetimeFunctionPlanner` of `datafusion-functions`"
-            );
-        }
-        Ok(Expr::Cast(Cast::new(
-            Box::new(expr),
-            DataType::Timestamp(TimeUnit::Nanosecond, Some(tz)),
-        )))
+        not_impl_err!(
+            "AT TIME ZONE needs an ExprPlanner that implements `plan_at_time_zone`, \
+             such as the `DatetimeFunctionPlanner` of `datafusion-functions`"
+        )
     }
 
     fn sql_position_to_expr(

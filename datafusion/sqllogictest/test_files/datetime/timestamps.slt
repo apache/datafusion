@@ -4442,7 +4442,7 @@ statement error DataFusion error: Error during planning: Function 'to_local_time
 select to_local_time('2024-04-01T00:00:20Z');
 
 # invalid timezone
-statement error DataFusion error: Optimizer rule 'simplify_expressions' failed[\s\S]*Arrow error: Parser error: Invalid timezone "Europe/timezone": failed to parse timezone
+statement error DataFusion error: Arrow error: Parser error: Invalid timezone "Europe/timezone": failed to parse timezone
 select to_local_time('2024-04-01T00:00:20Z'::timestamp AT TIME ZONE 'Europe/timezone');
 
 # valid query
@@ -4645,10 +4645,14 @@ SELECT column1 FROM t_utc WHERE column1 < '2024-02-01T00:00:00' AT TIME ZONE 'Am
 2024-01-01T00:00:01Z
 2024-02-01T00:00:01Z
 
+# No row matches: the row `2024-02-01T00:00:01+01:00` is 2024-01-31T23:00:01Z,
+# and the literal is 2024-02-01T00:00:01Z. DuckDB also returns no row. Before
+# `AT TIME ZONE` became the `timezone` function, it was a `CAST`, and
+# `unwrap_cast_in_comparison` relabelled the literal instead of converting it
+# (https://github.com/apache/datafusion/issues/25095), so this row matched.
 query P
 SELECT column1 FROM t_europe WHERE column1 = '2024-01-31T16:00:01' AT TIME ZONE 'America/Los_Angeles';
 ----
-2024-02-01T00:00:01+01:00
 
 query P
 SELECT column1 FROM t_europe WHERE column1 BETWEEN '2020-01-01T00:00:00' AT TIME ZONE 'Australia/Brisbane' AND '2024-02-01T00:00:00' AT TIME ZONE 'America/Los_Angeles';
@@ -5964,30 +5968,61 @@ FROM (SELECT arrow_cast(naive, 'Dictionary(Int32, Timestamp(Nanosecond, None))')
 ----
 Timestamp(ns, "America/Denver") 2024-01-01T12:00:00-07:00
 
-# An untyped placeholder has no type when the statement is prepared, so it
-# takes the naive branch, as it did before `AT TIME ZONE` looked at the input
-# type.
+# `PREPARE` runs the optimizer before type coercion, and an untyped placeholder
+# has no type until `EXECUTE`. The branch is still chosen from the final type.
 statement ok
 PREPARE at_tz_p AS SELECT arrow_typeof($1 AT TIME ZONE 'America/Denver'), $1 AT TIME ZONE 'America/Denver'
 
 query TP
 EXECUTE at_tz_p(arrow_cast('2024-01-01T12:00:00Z', 'Timestamp(Nanosecond, Some("UTC"))'))
 ----
-Timestamp(ns, "America/Denver") 2024-01-01T05:00:00-07:00
+Timestamp(ns) 2024-01-01T05:00:00
+
+query TP
+EXECUTE at_tz_p(arrow_cast('2024-01-01T12:00:00', 'Timestamp(Nanosecond, None)'))
+----
+Timestamp(ns, "America/Denver") 2024-01-01T12:00:00-07:00
 
 statement ok
 DEALLOCATE at_tz_p
 
-# The plan lowers to CAST / to_local_time after simplification. The column is
-# named with the operator syntax.
+statement ok
+PREPARE at_tz_case_p(boolean) AS
+SELECT arrow_typeof((CASE WHEN b THEN naive ELSE aware END) AT TIME ZONE 'America/Denver'),
+       (CASE WHEN b THEN naive ELSE aware END) AT TIME ZONE 'America/Denver'
+FROM at_tz_case WHERE b = $1
+
+query TP
+EXECUTE at_tz_case_p(true)
+----
+Timestamp(ns) 2024-01-01T05:00:00
+
+statement ok
+DEALLOCATE at_tz_case_p
+
+# A view over such a CASE
+statement ok
+CREATE VIEW at_tz_case_v AS SELECT CASE WHEN b THEN naive ELSE aware END AS x FROM at_tz_case
+
+query TP
+SELECT arrow_typeof(x AT TIME ZONE 'America/Denver'), x AT TIME ZONE 'America/Denver' FROM at_tz_case_v
+----
+Timestamp(ns) 2024-01-01T05:00:00
+
+statement ok
+DROP VIEW at_tz_case_v
+
+# `AT TIME ZONE` stays a `timezone` call in the plan. It is not rewritten into
+# a `CAST` during planning, because the type at that point is not always final.
+# The column is named with the operator syntax.
 query TT
 EXPLAIN SELECT (CASE WHEN b THEN naive ELSE aware END) AT TIME ZONE 'America/Denver', naive AT TIME ZONE 'America/Denver' FROM at_tz_case
 ----
 logical_plan
-01)Projection: to_local_time(CAST(CASE WHEN at_tz_case.b THEN CAST(at_tz_case.naive AS Timestamp(ns, "UTC")) ELSE at_tz_case.aware END AS Timestamp(ns, "America/Denver"))) AS CASE WHEN at_tz_case.b THEN at_tz_case.naive ELSE at_tz_case.aware END AT TIME ZONE 'America/Denver', CAST(at_tz_case.naive AS Timestamp(ns, "America/Denver")) AS at_tz_case.naive AT TIME ZONE 'America/Denver'
+01)Projection: timezone(Utf8("America/Denver"), CASE WHEN at_tz_case.b THEN CAST(at_tz_case.naive AS Timestamp(ns, "UTC")) ELSE at_tz_case.aware END), timezone(Utf8("America/Denver"), at_tz_case.naive)
 02)--TableScan: at_tz_case projection=[aware, naive, b]
 physical_plan
-01)ProjectionExec: expr=[to_local_time(CAST(CASE WHEN b@2 THEN CAST(naive@1 AS Timestamp(ns, "UTC")) ELSE aware@0 END AS Timestamp(ns, "America/Denver"))) as CASE WHEN at_tz_case.b THEN at_tz_case.naive ELSE at_tz_case.aware END AT TIME ZONE 'America/Denver', CAST(naive@1 AS Timestamp(ns, "America/Denver")) as at_tz_case.naive AT TIME ZONE 'America/Denver']
+01)ProjectionExec: expr=[timezone(America/Denver, CASE WHEN b@2 THEN CAST(naive@1 AS Timestamp(ns, "UTC")) ELSE aware@0 END) as CASE WHEN at_tz_case.b THEN at_tz_case.naive ELSE at_tz_case.aware END AT TIME ZONE 'America/Denver', timezone(America/Denver, naive@1) as at_tz_case.naive AT TIME ZONE 'America/Denver']
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # `timezone(zone, expression)` is the function form, as in PostgreSQL and DuckDB
