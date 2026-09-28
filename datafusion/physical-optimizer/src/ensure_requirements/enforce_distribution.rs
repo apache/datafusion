@@ -1192,11 +1192,9 @@ fn enforce_distribution_relationships(
                         })
                         .collect();
 
-                    // Only select a reference candidate if there is a unique, strictly
-                    // larger winner (`size_a > size_b`). If candidates have equal or
-                    // incomparable sizes (e.g. non-overlapping metrics), return None
-                    // so the optimizer avoids arbitrary tie-breaking and falls back to
-                    // standard distribution.
+                    // Prefer a unique, strictly larger winner (`size_a > size_b`).
+                    // Otherwise, fall back to standard distribution rather
+                    // than choosing an arbitrary reference.
                     candidates
                         .iter()
                         .find(|(size_a, idx_a, _)| {
@@ -1280,7 +1278,9 @@ fn enforce_distribution_relationships(
                         .map(|s| s.is_satisfied())
                         .unwrap_or(false)
                 }
-                (Partitioning::Range(r1), Partitioning::Range(r2)) if r1 == r2 => true,
+                (Partitioning::Range(r1), Partitioning::Range(r2)) => {
+                    r1.has_same_layout(r2)
+                }
                 _ => false,
             };
 
@@ -1549,8 +1549,7 @@ pub fn ensure_distribution_with_stats(
                 Distribution::SinglePartition => {
                     child = add_merge_on_top(child);
                 }
-                Distribution::HashPartitioned(exprs)
-                | Distribution::KeyPartitioned(exprs) => {
+                Distribution::HashPartitioned(_) | Distribution::KeyPartitioned(_) => {
                     let child_partitions =
                         child.plan.output_partitioning().partition_count();
                     let partitioning_satisfied = input_distributions
@@ -1568,21 +1567,54 @@ pub fn ensure_distribution_with_stats(
                             && target_partitions > child_partitions;
 
                     // When subset satisfaction is enabled, preserve an
-                    // already-satisfying partitioning. Otherwise, hash
+                    // already-satisfying partitioning. Otherwise,
                     // repartition may also increase parallelism.
-                    let needs_hash_repartition = if allow_subset_satisfy_partitioning {
+                    let needs_repartition = if allow_subset_satisfy_partitioning {
                         !partitioning_satisfied
                     } else {
                         !partitioning_satisfied
                             || (target_partitions > child_partitions
                                 && !preserve_satisfying_file_partitioning)
                     };
-                    let should_add_hash_repartition =
-                        hash_necessary && needs_hash_repartition;
+                    let should_add_repartition = hash_necessary && needs_repartition;
 
                     // See https://github.com/apache/datafusion/issues/18341#issuecomment-3503238325 for background
-                    // When inserting hash is necessary to satisfy hash requirement, insert hash repartition.
-                    if should_add_hash_repartition {
+                    // Enforce unmet requirements, or increase parallelism when beneficial.
+                    if should_add_repartition {
+                        let partitioning = match child.plan.output_partitioning() {
+                            Partitioning::Range(range) if partitioning_satisfied => {
+                                match range.scale(target_partitions) {
+                                    Some(range) => {
+                                        let scaled = Partitioning::Range(range);
+                                        // A single partition satisfies any key requirement,
+                                        // but scaling it must still use compatible keys.
+                                        if scaled
+                                            .satisfaction(
+                                                &requirement,
+                                                child.plan.equivalence_properties(),
+                                                false,
+                                            )
+                                            .is_satisfied()
+                                        {
+                                            scaled
+                                        } else {
+                                            requirement
+                                                .clone()
+                                                .create_partitioning(target_partitions)
+                                        }
+                                    }
+                                    // Insufficient samples are expected. Preserve
+                                    // main's policy by falling back to key
+                                    // repartitioning at the requested parallelism.
+                                    None => requirement
+                                        .clone()
+                                        .create_partitioning(target_partitions),
+                                }
+                            }
+                            _ => {
+                                requirement.clone().create_partitioning(target_partitions)
+                            }
+                        };
                         // When there is an existing ordering, we preserve ordering during
                         // repartition. This will be rolled back in the future if any of the
                         // following conditions is true:
@@ -1590,8 +1622,6 @@ pub fn ensure_distribution_with_stats(
                         //   requirements.
                         // - Usage of order preserving variants is not desirable (per the flag
                         //   `config.optimizer.prefer_existing_sort`).
-                        let partitioning = Distribution::KeyPartitioned(exprs.to_vec())
-                            .create_partitioning(target_partitions);
                         let repartition = RepartitionExec::try_new(
                             Arc::clone(&child.plan),
                             partitioning,
