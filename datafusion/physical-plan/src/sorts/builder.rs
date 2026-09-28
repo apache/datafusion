@@ -26,7 +26,7 @@ use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
-use log::warn;
+use log::{debug, warn};
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -340,11 +340,10 @@ impl BatchBuilder {
                     .map(|estimated| (target, estimated))
             })
         else {
-            let (rows_to_emit, columns) = retry_interleave(
-                self.indices.len(),
-                self.indices.len(),
-                |rows_to_emit| self.try_interleave_columns(&self.indices[..rows_to_emit]),
-            )?;
+            let (rows_to_emit, columns) =
+                retry_interleave(self.indices.len(), |rows_to_emit| {
+                    self.try_interleave_columns(&self.indices[..rows_to_emit])
+                })?;
 
             return Ok(Some(self.finish_record_batch(rows_to_emit, columns)?));
         };
@@ -376,7 +375,7 @@ impl BatchBuilder {
                     estimated_bytes = self
                         .estimated_prefix_bytes(rows_to_emit)
                         .expect("a smaller prefix has the same supported arrays");
-                    warn!(
+                    debug!(
                         "Could not reserve {failed_bytes} bytes for sort output, retrying with {rows_to_emit} rows requiring {estimated_bytes} bytes"
                     );
                 }
@@ -385,7 +384,7 @@ impl BatchBuilder {
         }
 
         let (rows_to_emit, columns) =
-            match retry_interleave(rows_to_emit, rows_to_emit, |rows_to_emit| {
+            match retry_interleave(rows_to_emit, |rows_to_emit| {
                 self.try_interleave_columns(&self.indices[..rows_to_emit])
             }) {
                 Ok(value) => value,
@@ -519,6 +518,93 @@ pub(super) fn schema_supports_byte_target(schema: &SchemaRef) -> bool {
         .all(|field| data_type_supports_byte_target(field.data_type()))
 }
 
+/// Return the output-construction target for a spilled run.
+///
+/// Spill metadata records the largest output-construction footprint inferred
+/// from the serialized input batches. For a wholly fixed-width schema, also
+/// reserve enough to emit the configured row batch size without an unnecessary
+/// byte cap.
+pub(super) fn spill_output_batch_targets(
+    schema: &SchemaRef,
+    max_batch_rows: usize,
+    max_record_batch_memory: usize,
+) -> Option<(usize, usize)> {
+    if !schema_supports_byte_target(schema) {
+        return None;
+    }
+
+    let preferred_target = fixed_width_schema_batch_bytes(schema, max_batch_rows)
+        .map_or(max_record_batch_memory, |fixed_width_target| {
+            max_record_batch_memory.max(fixed_width_target)
+        });
+    Some((max_record_batch_memory, preferred_target))
+}
+
+/// Adjust compact spill accounting to match the buffers Arrow interleave
+/// allocates for the same batch. Variable-width and ordinary fixed-width
+/// values use exact-capacity `Vec`s; bitmaps and fixed-size binary values use
+/// 64-byte-aligned buffers.
+pub(crate) fn interleave_memory_size_from_sliced(
+    batch: &RecordBatch,
+    sliced_size: usize,
+) -> Option<usize> {
+    if !schema_supports_byte_target(&batch.schema()) {
+        return None;
+    }
+
+    let rows = batch.num_rows();
+    batch
+        .columns()
+        .iter()
+        .try_fold(sliced_size, |total, array| {
+            let logical_values = match array.data_type() {
+                DataType::Boolean => validity_bytes(rows),
+                DataType::FixedSizeBinary(width) if *width >= 0 => {
+                    rows.checked_mul(usize::try_from(*width).ok()?)?
+                }
+                _ => 0,
+            };
+            let aligned_values = match array.data_type() {
+                DataType::Boolean => bitmap_buffer_bytes(rows)?,
+                DataType::FixedSizeBinary(_) => aligned_buffer_bytes(logical_values)?,
+                _ => logical_values,
+            };
+            let value_padding = aligned_values.checked_sub(logical_values)?;
+            let validity_padding = if !matches!(array.data_type(), DataType::Null)
+                && array.null_count() > 0
+            {
+                bitmap_buffer_bytes(rows)?.checked_sub(validity_bytes(rows))?
+            } else {
+                0
+            };
+
+            total
+                .checked_add(value_padding)?
+                .checked_add(validity_padding)
+        })
+}
+
+fn fixed_width_schema_batch_bytes(schema: &SchemaRef, rows: usize) -> Option<usize> {
+    schema.fields().iter().try_fold(0usize, |total, field| {
+        if matches!(field.data_type(), DataType::Null) {
+            return Some(total);
+        }
+        let values = match field.data_type() {
+            DataType::Boolean => bitmap_buffer_bytes(rows)?,
+            DataType::FixedSizeBinary(width) if *width >= 0 => rows
+                .checked_mul(usize::try_from(*width).ok()?)
+                .and_then(aligned_buffer_bytes)?,
+            data_type => rows.checked_mul(fixed_width(data_type)?)?,
+        };
+        let validity = if field.is_nullable() {
+            bitmap_buffer_bytes(rows)?
+        } else {
+            0
+        };
+        total.checked_add(values)?.checked_add(validity)
+    })
+}
+
 fn data_type_supports_byte_target(data_type: &DataType) -> bool {
     matches!(
         data_type,
@@ -600,7 +686,6 @@ fn offset_overflow_error() -> DataFusionError {
 
 fn retry_interleave<T, F>(
     mut rows_to_emit: usize,
-    total_rows: usize,
     mut interleave: F,
 ) -> Result<(usize, T)>
 where
@@ -611,12 +696,13 @@ where
             Ok(value) => return Ok((rows_to_emit, value)),
             // Only offset overflow is recoverable by emitting fewer rows.
             Err(e) if is_offset_overflow(&e) => {
+                let failed_rows = rows_to_emit;
                 rows_to_emit /= 2;
                 if rows_to_emit == 0 {
                     return Err(e);
                 }
                 warn!(
-                    "Interleave offset overflow with {total_rows} rows, retrying with {rows_to_emit}"
+                    "Interleave offset overflow with {failed_rows} rows, retrying with {rows_to_emit}"
                 );
             }
             Err(e) => return Err(e),
@@ -834,7 +920,7 @@ mod tests {
     fn test_retry_interleave_halves_rows_until_success() {
         let mut attempts = Vec::new();
 
-        let (rows_to_emit, result) = retry_interleave(4, 4, |rows_to_emit| {
+        let (rows_to_emit, result) = retry_interleave(4, |rows_to_emit| {
             attempts.push(rows_to_emit);
             if rows_to_emit > 1 {
                 Err(offset_overflow_error())
@@ -858,7 +944,7 @@ mod tests {
     fn test_retry_interleave_does_not_retry_non_offset_errors() {
         let mut attempts = Vec::new();
 
-        let error = retry_interleave(4, 4, |rows_to_emit| {
+        let error = retry_interleave(4, |rows_to_emit| {
             attempts.push(rows_to_emit);
             Err::<(), _>(DataFusionError::Execution("boom".into()))
         })
@@ -905,6 +991,83 @@ mod tests {
         assert_int_output(&output, &[1, 2]);
         assert_eq!(builder.len(), 2);
         assert_eq!(builder.output_construction_reservation.size(), 0);
+    }
+
+    #[test]
+    fn test_spill_output_target_aligns_validity_bitmap() {
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+        let rows = 1000;
+        let spill_bytes = rows * size_of::<i32>() + bitmap_buffer_bytes(rows).unwrap();
+
+        assert_eq!(
+            spill_output_batch_targets(&schema, rows, spill_bytes),
+            Some((spill_bytes, spill_bytes))
+        );
+    }
+
+    #[test]
+    fn test_interleave_memory_size_aligns_spill_buffers() {
+        let rows = 1000;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("i", DataType::Int32, true),
+            Field::new("b", DataType::Boolean, false),
+            Field::new("f", DataType::FixedSizeBinary(3), false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from_iter(
+                    (0..rows).map(|idx| (idx != 1).then_some(idx as i32)),
+                )),
+                Arc::new(BooleanArray::from(vec![true; rows])),
+                Arc::new(
+                    FixedSizeBinaryArray::try_from_iter((0..rows).map(|_| [1_u8, 2, 3]))
+                        .unwrap(),
+                ),
+            ],
+        )
+        .unwrap();
+        let compact_size = rows * size_of::<i32>()
+            + validity_bytes(rows)
+            + validity_bytes(rows)
+            + rows * 3;
+        let expected_size = rows * size_of::<i32>()
+            + bitmap_buffer_bytes(rows).unwrap()
+            + bitmap_buffer_bytes(rows).unwrap()
+            + aligned_buffer_bytes(rows * 3).unwrap();
+
+        assert_eq!(
+            interleave_memory_size_from_sliced(&batch, compact_size),
+            Some(expected_size)
+        );
+    }
+
+    #[test]
+    fn test_spill_output_target_keeps_fixed_width_row_batch_size() {
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int64, false)]));
+
+        assert_eq!(
+            spill_output_batch_targets(&schema, 100, size_of::<i64>()),
+            Some((size_of::<i64>(), 100 * size_of::<i64>()))
+        );
+    }
+
+    #[test]
+    fn test_fixed_width_batch_bytes_aligns_boolean_and_fixed_size_binary() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("null", DataType::Null, true),
+            Field::new("bool", DataType::Boolean, true),
+            Field::new("bytes", DataType::FixedSizeBinary(3), true),
+        ]));
+        let rows = 65;
+
+        assert_eq!(
+            fixed_width_schema_batch_bytes(&schema, rows),
+            Some(
+                bitmap_buffer_bytes(rows).unwrap() * 3
+                    + aligned_buffer_bytes(rows * 3).unwrap()
+            )
+        );
     }
 
     #[test]

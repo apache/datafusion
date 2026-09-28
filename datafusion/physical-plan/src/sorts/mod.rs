@@ -30,4 +30,5 @@ pub mod sort_preserving_merge;
 mod stream;
 pub mod streaming_merge;
 
+pub(crate) use builder::interleave_memory_size_from_sliced;
 pub(crate) use stream::IncrementalSortIterator;

@@ -31,7 +31,8 @@ use datafusion_common::{Result, internal_err, resources_err};
 use datafusion_execution::memory_pool::{MemoryReservation, MergeMemoryPool};
 
 use crate::sorts::builder::{
-    schema_supports_byte_target, try_grow_reservation_to_at_least,
+    interleave_memory_size_from_sliced, schema_supports_byte_target,
+    spill_output_batch_targets, try_grow_reservation_to_at_least,
 };
 use crate::sorts::sort::get_reserved_bytes_for_record_batch_size;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
@@ -559,9 +560,12 @@ impl MultiLevelMergeBuilder {
         let mut total_needed: usize = 0;
         let mut accepted_memory: usize = 0;
         let mut output_headroom: usize = 0;
+        let mut minimum_output_headroom: usize = 0;
+        let mut preferred_output_headroom: usize = 0;
+        let mut use_preferred_output_headroom = true;
         let supports_byte_target = schema_supports_byte_target(&self.schema);
 
-        for (spill, _) in &self.sorted_spill_files {
+        for (spill, max_batch_rows) in &self.sorted_spill_files {
             if number_of_spills_to_read_for_current_phase >= max_spill_files
                 || (allow_minimum_without_headroom
                     && number_of_spills_to_read_for_current_phase
@@ -576,11 +580,25 @@ impl MultiLevelMergeBuilder {
                 spill.max_record_batch_memory,
             ) * buffer_len;
             total_needed += per_spill;
-            let candidate_output_headroom = if supports_byte_target {
-                output_headroom.max(spill.max_record_batch_memory)
-            } else {
-                0
-            };
+            let (candidate_minimum_output_headroom, candidate_preferred_output_headroom) =
+                if supports_byte_target {
+                    let (minimum, preferred) = spill_output_batch_targets(
+                        &self.schema,
+                        *max_batch_rows,
+                        spill.max_record_batch_memory,
+                    )
+                    .ok_or_else(|| {
+                        datafusion_common::DataFusionError::ResourcesExhausted(
+                            "Spill merge output headroom exceeds usize::MAX".to_string(),
+                        )
+                    })?;
+                    (
+                        minimum_output_headroom.max(minimum),
+                        preferred_output_headroom.max(preferred),
+                    )
+                } else {
+                    (0, 0)
+                };
 
             // If a run cannot shrink, allow only the minimum merge without
             // replay headroom. Disable read-ahead and still ask the pool for
@@ -594,22 +612,39 @@ impl MultiLevelMergeBuilder {
             // Sort output retains it across batches. Aggregate replay releases it
             // after building each batch, so replay and construction can reuse the
             // larger of their two headroom requirements.
-            let required_headroom = if check_headroom {
-                total_needed.max(candidate_output_headroom)
+            let mut selected_output_headroom = if use_preferred_output_headroom {
+                candidate_preferred_output_headroom
             } else {
-                candidate_output_headroom
+                candidate_minimum_output_headroom
             };
-            let admission = match total_needed.checked_add(required_headroom) {
-                Some(with_headroom) => {
-                    try_grow_reservation_to_at_least(reservation, with_headroom)
+            let mut try_admission = |candidate_output_headroom: usize| {
+                let required_headroom = if check_headroom {
+                    total_needed.max(candidate_output_headroom)
+                } else {
+                    candidate_output_headroom
+                };
+                match total_needed.checked_add(required_headroom) {
+                    Some(with_headroom) => {
+                        try_grow_reservation_to_at_least(reservation, with_headroom)
+                    }
+                    None => resources_err!("Spill merge headroom exceeds usize::MAX"),
                 }
-                None => resources_err!("Spill merge headroom exceeds usize::MAX"),
             };
+            let mut admission = try_admission(selected_output_headroom);
+            if admission.is_err()
+                && selected_output_headroom > candidate_minimum_output_headroom
+            {
+                use_preferred_output_headroom = false;
+                selected_output_headroom = candidate_minimum_output_headroom;
+                admission = try_admission(selected_output_headroom);
+            }
             match admission {
                 Ok(_) => {
                     number_of_spills_to_read_for_current_phase += 1;
                     accepted_memory = total_needed;
-                    output_headroom = candidate_output_headroom;
+                    minimum_output_headroom = candidate_minimum_output_headroom;
+                    preferred_output_headroom = candidate_preferred_output_headroom;
+                    output_headroom = selected_output_headroom;
                 }
                 // If we can't grow the reservation, we need to stop
                 Err(_) => {
@@ -762,12 +797,21 @@ impl MultiLevelMergeBuilder {
                 let batch = batch?;
                 max_batch_rows = max_batch_rows.max(batch.num_rows());
                 all_singletons &= batch.num_rows() == 1;
-                decoded_max = decoded_max.max(batch.get_sliced_size()?);
-                if batch.num_rows() == 1
-                    && gc_view_arrays(&batch)?.get_sliced_size()? >= old_max
-                {
-                    max_is_singleton = true;
-                    break;
+                let sliced_size = batch.get_sliced_size()?;
+                let decoded_output_size =
+                    interleave_memory_size_from_sliced(&batch, sliced_size)
+                        .unwrap_or(sliced_size);
+                decoded_max = decoded_max.max(decoded_output_size);
+                if batch.num_rows() == 1 {
+                    let gc_batch = gc_view_arrays(&batch)?;
+                    let gc_sliced_size = gc_batch.get_sliced_size()?;
+                    let gc_output_size =
+                        interleave_memory_size_from_sliced(&gc_batch, gc_sliced_size)
+                            .unwrap_or(gc_sliced_size);
+                    if gc_output_size >= old_max {
+                        max_is_singleton = true;
+                        break;
+                    }
                 }
             }
             // IPC can discard spare view-buffer capacity included in `old_max`.
@@ -978,7 +1022,9 @@ mod tests {
 
     use crate::expressions::PhysicalSortExpr;
     use crate::spill::get_record_batch_memory_size;
-    use arrow::array::{Array, AsArray, BinaryArray, Int64Array, StringViewArray};
+    use arrow::array::{
+        Array, AsArray, BinaryArray, BooleanArray, Int64Array, StringViewArray,
+    };
     use arrow::compute::concat_batches;
     use arrow::datatypes::{DataType, Field, Int64Type, Schema};
     use datafusion_execution::memory_pool::{
@@ -1382,6 +1428,44 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn replay_headroom_keeps_aligned_singleton_memory() -> Result<()> {
+        let env = Arc::new(RuntimeEnv::default());
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("x", DataType::Boolean, false)]));
+        let spill_manager = build_spill_manager(&env, &schema);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(BooleanArray::from(vec![true]))],
+        )?;
+        let (file, max_record_batch_memory) = spill_manager
+            .spill_record_batch_iter_and_return_max_batch_memory(
+                std::iter::once(Ok::<_, datafusion_common::DataFusionError>(batch)),
+                "aligned singleton",
+            )?
+            .unwrap();
+        assert_eq!(max_record_batch_memory, 64);
+        let spill = SortedSpillFile {
+            file,
+            max_record_batch_memory,
+        };
+        let pool: Arc<dyn MemoryPool> =
+            Arc::new(GreedyMemoryPool::new(4 * max_record_batch_memory));
+        let mut builder =
+            build_merge_builder(spill_manager, schema, vec![spill], &pool, 8192)
+                .with_replay_headroom(true);
+
+        assert!(!builder.split_spill_file_in_half(0, true).await?);
+        assert_eq!(
+            builder.sorted_spill_files[0].0.max_record_batch_memory,
+            max_record_batch_memory
+        );
+        assert_eq!(builder.sorted_spill_files[0].1, 1);
+        drop(builder);
+        assert_eq!(pool.reserved(), 0);
+        Ok(())
+    }
+
     #[test]
     fn replay_headroom_is_released_after_rejected_candidate() -> Result<()> {
         let env = Arc::new(RuntimeEnv::default());
@@ -1415,6 +1499,39 @@ mod tests {
         assert_eq!(pool.reserved(), 0);
         assert_eq!(env.disk_manager.spilling_progress().current_bytes, 0);
         assert_eq!(env.disk_manager.spilling_progress().active_files_count, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn second_spill_can_lower_all_output_headroom_to_minimum() -> Result<()> {
+        let env = Arc::new(RuntimeEnv::default());
+        let schema = test_schema();
+        let spill_manager = build_spill_manager(&env, &schema);
+        let spills = vec![
+            make_sorted_spill_file(&spill_manager, &schema, vec![1]),
+            make_sorted_spill_file(&spill_manager, &schema, vec![2]),
+        ];
+        let minimum_output = spills[0].max_record_batch_memory;
+        let per_spill =
+            get_reserved_bytes_for_record_batch_size(minimum_output, minimum_output);
+        let preferred_output = 100 * size_of::<i64>();
+        let pool: Arc<dyn MemoryPool> =
+            Arc::new(GreedyMemoryPool::new(per_spill + preferred_output));
+        let mut builder = build_merge_builder(spill_manager, schema, spills, &pool, 100);
+        let mut reservation = builder.reservation.new_empty();
+
+        let SpillFilesToMerge::Ready(spills, buffer_len, output_headroom) =
+            builder.get_sorted_spill_files_to_merge(1, 2, &mut reservation, false)?
+        else {
+            panic!("both streams fit only after lowering all output headroom");
+        };
+
+        assert_eq!(buffer_len, 1);
+        assert_eq!(spills.len(), 2);
+        assert_eq!(output_headroom, minimum_output);
+        assert_eq!(reservation.size(), 2 * per_spill + minimum_output);
+        drop((spills, reservation, builder));
+        assert_eq!(pool.reserved(), 0);
         Ok(())
     }
 

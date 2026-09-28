@@ -88,7 +88,7 @@ async fn test_sort_with_limited_memory() -> Result<()> {
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |_| record_batch_size),
         memory_behavior: Default::default(),
-        assert_all_output_batches_roughly_match_batch_size_conf: false,
+        assert_all_output_batches_roughly_match_batch_size_conf: true,
     })
     .await?;
 
@@ -134,7 +134,7 @@ async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch() -> 
             }
         }),
         memory_behavior: Default::default(),
-        assert_all_output_batches_roughly_match_batch_size_conf: false,
+        assert_all_output_batches_roughly_match_batch_size_conf: true,
     })
     .await?;
 
@@ -173,7 +173,7 @@ async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch_and_c
             }
         }),
         memory_behavior: MemoryBehavior::TakeAllMemoryAndReleaseEveryNthBatch(10),
-        assert_all_output_batches_roughly_match_batch_size_conf: false,
+        assert_all_output_batches_roughly_match_batch_size_conf: true,
     })
     .await?;
 
@@ -212,7 +212,7 @@ async fn test_sort_with_limited_memory_and_different_sizes_of_record_batch_and_t
             }
         }),
         memory_behavior: MemoryBehavior::TakeAllMemoryAtTheBeginning,
-        assert_all_output_batches_roughly_match_batch_size_conf: false,
+        assert_all_output_batches_roughly_match_batch_size_conf: true,
     })
     .await?;
 
@@ -245,7 +245,7 @@ async fn test_sort_with_limited_memory_and_large_record_batch() -> Result<()> {
         number_of_record_batches: 100,
         get_size_of_record_batch_to_generate: Box::pin(move |_| pool_size / 6),
         memory_behavior: Default::default(),
-        assert_all_output_batches_roughly_match_batch_size_conf: false,
+        assert_all_output_batches_roughly_match_batch_size_conf: true,
     })
     .await?;
 

@@ -19,6 +19,7 @@
 
 use super::{SpillReaderStream, in_progress_spill_file::InProgressSpillFile};
 use crate::coop::cooperative;
+use crate::sorts::interleave_memory_size_from_sliced;
 use crate::{common::spawn_buffered, metrics::SpillMetrics};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -131,7 +132,10 @@ impl SpillManager {
                 return Ok(());
             }
             let gc_sliced_size = in_progress_file.append_batch(borrowed)?;
-            max_record_batch_size = max_record_batch_size.max(gc_sliced_size);
+            let output_size =
+                interleave_memory_size_from_sliced(borrowed, gc_sliced_size)
+                    .unwrap_or(gc_sliced_size);
+            max_record_batch_size = max_record_batch_size.max(output_size);
             Result::<_, DataFusionError>::Ok(())
         })?;
 
@@ -156,8 +160,11 @@ impl SpillManager {
             while let Some(batch) = stream.next().await {
                 let batch = batch?;
                 let gc_sliced_size = in_progress_file.append_batch_async(&batch).await?;
+                let output_size =
+                    interleave_memory_size_from_sliced(&batch, gc_sliced_size)
+                        .unwrap_or(gc_sliced_size);
 
-                max_record_batch_size = max_record_batch_size.max(gc_sliced_size);
+                max_record_batch_size = max_record_batch_size.max(output_size);
             }
 
             let file = in_progress_file.finish_async().await?;
@@ -510,6 +517,30 @@ mod tests {
         let views_sliced_size = data.get_slice_memory_size()?;
         assert_eq!(views_sliced_size, half_batch.get_sliced_size().unwrap());
 
+        Ok(())
+    }
+
+    #[test]
+    fn spill_batch_memory_matches_interleave_bitmap_alignment() -> Result<()> {
+        let rows = 1000;
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from_iter(
+                (0..rows).map(|idx| (idx != 1).then_some(idx)),
+            ))],
+        )?;
+        let manager = build_test_spill_manager(Arc::new(RuntimeEnv::default()), schema);
+
+        assert_eq!(batch.get_sliced_size()?, 4125);
+        let (_, max_record_batch_memory) = manager
+            .spill_record_batch_iter_and_return_max_batch_memory(
+                std::iter::once(Ok::<_, DataFusionError>(&batch)),
+                "bitmap alignment",
+            )?
+            .unwrap();
+
+        assert_eq!(max_record_batch_memory, 4128);
         Ok(())
     }
 }
