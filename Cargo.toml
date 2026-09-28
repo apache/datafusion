@@ -406,3 +406,8 @@ debug = false
 debug-assertions = false
 strip = "debuginfo"
 incremental = false
+
+# Execute benchmark tests with debug checks, without release-mode build costs.
+[profile.ci-bench]
+inherits = "ci"
+opt-level = 1

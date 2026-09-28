@@ -17,17 +17,15 @@
 
 //! Microbenchmark for `power(decimal_array, int_*)`.
 //!
-//! Covers both array- and scalar-shaped integer exponents on a Decimal
-//! base. Both shapes are dispatched to the native per-row decimal kernel;
-//! the bench guards against any future change that routes either shape
-//! through a Float64 round-trip, which is measurably slower than the
-//! decimal kernel for the cases the kernel can handle.
+//! Covers array- and scalar-shaped integer exponents on a Decimal base.
+//! Apply the planner's coercion to Float64 before timing the power kernel.
 
 use arrow::array::{Decimal128Array, Int64Array};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use criterion::{Criterion, criterion_group};
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
+use datafusion_expr::type_coercion::functions::fields_with_udf;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF};
 use datafusion_functions::math::power;
 use std::hint::black_box;
@@ -35,8 +33,6 @@ use std::sync::Arc;
 
 fn make_decimal_array(size: usize, precision: u8, scale: i8) -> Decimal128Array {
     // Use a fixed unscaled value (250) so the bench is independent of `scale`.
-    // The four-arm dispatch in `power` only cares about the Decimal variant
-    // and the exponent's shape, not the numeric value.
     let arr = Decimal128Array::from(vec![250i128; size]);
     arr.with_precision_and_scale(precision, scale).unwrap()
 }
@@ -73,23 +69,34 @@ fn criterion_benchmark(c: &mut Criterion) {
     let scale: i8 = 2;
     let decimal_ty = DataType::Decimal128(precision, scale);
 
-    // Exponents are bounded by what the native decimal kernel can handle
-    // without overflowing the i128 intermediate; see
-    // <https://github.com/apache/datafusion/issues/22480>
     let exponents = [2i64, 4, 8];
 
     for size in [1024usize, 8192] {
         let base_arr = Arc::new(make_decimal_array(size, precision, scale));
         let base_field: FieldRef = Field::new("base", decimal_ty.clone(), true).into();
         let exp_field: FieldRef = Field::new("exp", DataType::Int64, true).into();
-        let return_field: FieldRef = Field::new("r", decimal_ty.clone(), true).into();
-        let arg_fields = vec![base_field, exp_field];
+        let arg_fields =
+            fields_with_udf(&[base_field, exp_field], power_fn.as_ref()).unwrap();
+        let return_type = power_fn
+            .return_type(
+                &arg_fields
+                    .iter()
+                    .map(|field| field.data_type().clone())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        let return_field: FieldRef = Field::new("r", return_type, true).into();
+        let base = ColumnarValue::Array(base_arr)
+            .cast_to(arg_fields[0].data_type(), None)
+            .unwrap();
 
         for &exp in &exponents {
             let exp_arr = Arc::new(make_int_array(size, exp));
             let array_args = vec![
-                ColumnarValue::Array(base_arr.clone()),
-                ColumnarValue::Array(exp_arr),
+                base.clone(),
+                ColumnarValue::Array(exp_arr)
+                    .cast_to(arg_fields[1].data_type(), None)
+                    .unwrap(),
             ];
             c.bench_function(
                 &format!(
@@ -110,8 +117,10 @@ fn criterion_benchmark(c: &mut Criterion) {
             );
 
             let scalar_args = vec![
-                ColumnarValue::Array(base_arr.clone()),
-                ColumnarValue::Scalar(ScalarValue::Int64(Some(exp))),
+                base.clone(),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(exp)))
+                    .cast_to(arg_fields[1].data_type(), None)
+                    .unwrap(),
             ];
             c.bench_function(
                 &format!(

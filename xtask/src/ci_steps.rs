@@ -55,7 +55,7 @@ static CI_STEPS: &[StepInfo] = &[
     },
     StepInfo {
         command: "test",
-        help_usage: "test <workspace|cli|doctest|ffi|benchmark-plan|benchmark-sqllogic|postgres|substrait|extended|hash-collisions|sqlite> [--explain]",
+        help_usage: "test <workspace|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|extended|hash-collisions|sqlite> [--explain]",
         help_examples: &["test cli", "test workspace"],
         help_description: "Run a CI test suite",
         error_message: "Cargo test step failed",
@@ -286,6 +286,38 @@ impl StepContext {
                     "--tests",
                     "--features",
                     "integration-tests",
+                ]);
+            }
+            "microbenchmarks" => {
+                // The SQL benchmark harness needs separately generated datasets
+                // and is covered by the benchmark result verification job.
+                // Select only bench targets (not lib/bin unit tests), and tell
+                // Criterion to execute each benchmark once instead of timing it.
+                // Keep debug assertions and overflow checks enabled without the
+                // cost of unoptimized execution on the larger benchmark datasets.
+                command.env(
+                    "CLICKBENCH_DATA_PATH",
+                    self.root
+                        .join("datafusion/core/tests/data/clickbench_hits_10.parquet"),
+                );
+                command.args([
+                    "test",
+                    "--profile",
+                    "ci-bench",
+                    "--no-fail-fast",
+                    "--workspace",
+                    "--exclude",
+                    "datafusion-examples",
+                    "--exclude",
+                    "datafusion-benchmarks",
+                    "--exclude",
+                    "datafusion-cli",
+                    "--bench",
+                    "*",
+                    "--features",
+                    "datafusion-physical-plan/test_utils",
+                    "--",
+                    "--test",
                 ]);
             }
             "benchmark-plan" => {
@@ -610,7 +642,7 @@ fn required_env(name: &str) -> Result<String> {
 mod tests {
     use super::*;
 
-    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|cli|doctest|ffi|benchmark-plan|benchmark-sqllogic|postgres|substrait|extended|hash-collisions|sqlite> [--explain]";
+    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|extended|hash-collisions|sqlite> [--explain]";
 
     fn args(args: &[&str]) -> Vec<String> {
         args.iter().map(|arg| (*arg).to_string()).collect()
@@ -789,6 +821,25 @@ cargo test \
 --lib \
 --tests \
 --features integration-tests
+")
+                },
+            },
+            Cmd {
+                command: &["test", "microbenchmarks"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+cd /workspace && \
+CLICKBENCH_DATA_PATH=/workspace/datafusion/core/tests/data/clickbench_hits_10.parquet \
+cargo test \
+--profile ci-bench \
+--no-fail-fast \
+--workspace \
+--exclude datafusion-examples \
+--exclude datafusion-benchmarks \
+--exclude datafusion-cli \
+--bench '*' \
+--features datafusion-physical-plan/test_utils \
+-- --test
 ")
                 },
             },
