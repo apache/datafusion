@@ -1,0 +1,51 @@
+# Shared template for the `pwmj` suite: `PiecewiseMergeJoin`'s classic joins
+# (INNER / LEFT / RIGHT / FULL) over a single range predicate,
+# `lhs.key < rhs.key`.
+#
+# Parameters set by each qNN.benchmark:
+#   QPAD           zero-padded query id
+#   JOIN           SQL join keyword       (INNER, LEFT, RIGHT, FULL)
+#   JOIN_KIND      plan `join_type`       (Inner, Left, Right, Full)
+#   RIGHT_ROWS     streamed row count
+#   RIGHT_KEY      streamed key expression over `value` and its scramble `h`
+#   EXPECTED_ROWS  rows the join returns, asserted before measuring
+#
+# `lhs` (buffered) holds the keys 1..=100000; a streamed key `b` matches exactly
+# the buffered keys 1..b, so each subgroup is a different match regime (see
+# init/load.sql). There is no nested-loop arm: at these sizes it is 2 * 10^11
+# predicate evaluations.
+
+load sql_benchmarks/pwmj/init/load.sql
+
+init sql_benchmarks/pwmj/init/settings.sql
+
+name Q${QPAD}
+group pwmj
+
+# PWMJ is off by default. Without the flag every query plans as a nested-loop
+# join and the suite measures a different operator than its name claims.
+assert I
+SELECT value = 'true' FROM information_schema.df_settings WHERE name = 'datafusion.optimizer.enable_piecewise_merge_join';
+----
+true
+
+# The row count follows from the keys alone, so a wrong join result fails here
+# rather than showing up as a plausible timing.
+assert I
+SELECT count(*) FROM lhs ${JOIN} JOIN rhs ON lhs.key < rhs.key;
+----
+${EXPECTED_ROWS}
+
+# Pin the operator and the join type: the flag only permits PWMJ, and a planner
+# that swapped the inputs would measure the mirrored join. `expect_plan` matches
+# the plan's `Debug` output, so the fields are checked one at a time.
+expect_plan PiecewiseMergeJoinExec
+
+expect_plan operator: Lt,
+
+expect_plan join_type: ${JOIN_KIND},
+
+run
+SELECT lhs.payload, rhs.payload FROM lhs ${JOIN} JOIN rhs ON lhs.key < rhs.key;
+
+cleanup sql_benchmarks/pwmj/init/cleanup.sql
