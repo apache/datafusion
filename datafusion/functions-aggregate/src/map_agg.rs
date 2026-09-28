@@ -276,6 +276,7 @@ impl MapAggAccumulator {
     /// Keeps only the first occurrence of each key, preserving input order.
     ///
     /// Returns the surviving keys and values as two aligned vectors.
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
     fn dedup_first_wins(
         keys: Vec<ScalarValue>,
         values: Vec<ScalarValue>,
@@ -466,6 +467,7 @@ impl OrderSensitiveMapAggAccumulator {
     /// Sorts the accumulated pairs by their ordering values, then applies
     /// first-wins de-duplication. Returns the surviving keys, values, and
     /// ordering values, all aligned so they describe the same rows.
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
     fn sorted_deduped(&self) -> Result<OrderSensitiveMapAggRows> {
         let mut rows: Vec<usize> = (0..self.keys.len()).collect();
 

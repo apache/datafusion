@@ -3,7 +3,7 @@ SELECT array_agg(k ORDER BY v) FROM (VALUES ('a', 3), ('b', 1), ('c', 2)) t(k, v
 ----
 [b, c, a]
 
-query ?
+query T
 SELECT string_agg(k, ',' ORDER BY v) FROM (VALUES ('a', 3), ('b', 1), ('c', 2)) t(k, v)
 ----
 b,c,a
