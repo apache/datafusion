@@ -155,6 +155,16 @@ fn analyze_internal(
     // apply coercion rewrite all expressions in the plan individually
     plan.map_expressions(|expr| {
         let original_name = name_preserver.save(&expr);
+
+        // A lambda variable carries the field recorded when the plan was built, which
+        // need not be the one its function derives from the arguments. Resolve them
+        // before coercing, so lambda bodies are coerced against the types they receive.
+        let expr = if expr.exists(|e| Ok(matches!(e, Expr::HigherOrderFunction(_))))? {
+            expr.resolve_lambda_variables(&schema)?.data
+        } else {
+            expr
+        };
+
         expr.rewrite(&mut expr_rewrite)
             .map(|transformed| transformed.update_data(|e| original_name.restore(e)))
     })?
@@ -1200,7 +1210,14 @@ fn coerce_window_frame(
                 .transpose()?;
             if let Some(col_type) = current_types {
                 let target_type = match extract_window_frame_target_type(&col_type) {
-                    Some(target_type) => target_type,
+                    Some(target_type) => {
+                        if window_frame.free_range() {
+                            // The first key established the target type above, but
+                            // every later key also participates in peer comparison.
+                            check_free_range_order_by_types(&expressions[1..], schema)?;
+                        }
+                        target_type
+                    }
                     // A free range frame has no offsets to coerce, so ORDER BY
                     // types without arithmetic are fine as long as their peer
                     // comparison is sound (see `supports_free_range_frame`).

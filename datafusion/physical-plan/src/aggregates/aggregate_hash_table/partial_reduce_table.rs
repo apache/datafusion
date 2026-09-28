@@ -40,7 +40,7 @@ impl AggregateHashTable<PartialReduceMarker> {
             Arc::clone(&output_schema),
             output_schema,
             batch_size,
-            vec![None; agg.aggr_expr.len()],
+            vec![None; agg.aggr_expr().len()],
         )
     }
 
