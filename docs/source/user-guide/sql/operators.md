@@ -597,23 +597,25 @@ into account:
 +---------------------+---------------+
 ```
 
-The second form is equivalent to [`to_local_time`] applied to the timestamp
-after it has been relabelled into `tz`, and requires `to_local_time` to be
-registered with the session.
+`expression AT TIME ZONE tz` is the same as the function call
+[`timezone(tz, expression)`], as in PostgreSQL and DuckDB. The planner uses the
+input type _after_ type coercion. For example, `CASE WHEN c THEN naive ELSE aware END` has a timezone-aware type, so `AT TIME ZONE` returns a
+timezone-naive timestamp for it, whatever the order of the arms.
 
 Because the two forms return different types, applying `AT TIME ZONE` twice
 returns a timezone-aware timestamp again: the wall clock produced by the first
 application is re-read as a local time in the second timezone.
 
-`AT TIME ZONE` never changes the precision (`TimeUnit`) of its input. Inputs
-that are not timestamps at all (a string literal, for example) are cast to
+`AT TIME ZONE` never changes the precision (`TimeUnit`) of its input. A
+dictionary-encoded timestamp follows its value type. Inputs that are not
+timestamps at all (a string literal, for example) are cast to
 `Timestamp(Nanosecond, Some(tz))`.
 
 Note that a timezone written as a fixed offset string follows the ISO 8601
 convention, so `'+05:30'` is 5 hours 30 minutes _east_ of UTC. PostgreSQL
 applies the opposite (POSIX) convention to offsets spelled this way.
 
-[`to_local_time`]: scalar_functions.md#to_local_time
+[`timezone(tz, expression)`]: scalar_functions.md#timezone
 
 ## Literals
 

@@ -5877,21 +5877,18 @@ SELECT date_bin(NULL, TIMESTAMP '2023-01-01 12:30:00', TIMESTAMP '2023-01-01 12:
 ----
 NULL
 
-# KNOWN LIMITATION: `AT TIME ZONE` chooses its behaviour from the type that
-# `Expr::get_type` reports in the SQL planner, which runs BEFORE the type
-# coercion analyzer. For a `CASE` expression, `get_type` reports the type of the
-# first non-null `THEN` arm and ignores coercion. So the two queries below have
-# the same coerced input type, `Timestamp(ns, "UTC")`, but give different
-# results: the first still takes the timezone-naive path and keeps the old
-# aware-in aware-out shape.
-#
-# PostgreSQL gives `2024-01-01 05:00:00` as a naive timestamp for both.
-# A correct fix has to dispatch after coercion. Tracked here so the behaviour is
-# visible rather than silent.
+# `AT TIME ZONE` chooses its behaviour from the input type AFTER type
+# coercion. Each input below is `Timestamp(ns, "UTC")` once coerced, even when
+# the first CASE arm or the first UNION branch is naive. PostgreSQL 17 gives the
+# naive `2024-01-01 05:00:00` for all of them.
 statement ok
 CREATE TABLE at_tz_case AS
 SELECT arrow_cast('2024-01-01T12:00:00Z', 'Timestamp(Nanosecond, Some("UTC"))') AS aware,
        arrow_cast('2024-01-01T12:00:00', 'Timestamp(Nanosecond, None)') AS naive,
+       arrow_cast('2024-01-01T12:00:00.123456789Z', 'Timestamp(Nanosecond, Some("UTC"))') AS aware_frac,
+       arrow_cast('2024-01-01T12:00:00.123456789', 'Timestamp(Nanosecond, None)') AS naive_frac,
+       arrow_cast('2024-01-01T12:00:00Z', 'Timestamp(Second, Some("UTC"))') AS aware_s,
+       arrow_cast('2024-01-01T12:00:00', 'Timestamp(Second, None)') AS naive_s,
        true AS b
 
 # both CASE expressions have the same type
@@ -5902,7 +5899,7 @@ FROM at_tz_case
 ----
 Timestamp(ns, "UTC") Timestamp(ns, "UTC")
 
-# but AT TIME ZONE does not agree on them
+# so AT TIME ZONE agrees on them, whatever the order of the arms
 query TPTP
 SELECT arrow_typeof((CASE WHEN b THEN naive ELSE aware END) AT TIME ZONE 'America/Denver'),
        (CASE WHEN b THEN naive ELSE aware END) AT TIME ZONE 'America/Denver',
@@ -5910,7 +5907,100 @@ SELECT arrow_typeof((CASE WHEN b THEN naive ELSE aware END) AT TIME ZONE 'Americ
        (CASE WHEN b THEN aware ELSE naive END) AT TIME ZONE 'America/Denver'
 FROM at_tz_case
 ----
-Timestamp(ns, "America/Denver") 2024-01-01T05:00:00-07:00 Timestamp(ns) 2024-01-01T05:00:00
+Timestamp(ns) 2024-01-01T05:00:00 Timestamp(ns) 2024-01-01T05:00:00
+
+# CTE / derived-table column over such a CASE
+query TP
+WITH c AS (SELECT CASE WHEN b THEN naive ELSE aware END AS x FROM at_tz_case)
+SELECT arrow_typeof(x AT TIME ZONE 'America/Denver'), x AT TIME ZONE 'America/Denver' FROM c
+----
+Timestamp(ns) 2024-01-01T05:00:00
+
+# UNION ALL with the naive branch first
+query TP
+SELECT arrow_typeof(x AT TIME ZONE 'America/Denver'), x AT TIME ZONE 'America/Denver'
+FROM (SELECT naive AS x FROM at_tz_case UNION ALL SELECT aware FROM at_tz_case)
+----
+Timestamp(ns) 2024-01-01T05:00:00
+Timestamp(ns) 2024-01-01T05:00:00
+
+# aggregate over such a CASE
+query TP
+SELECT arrow_typeof(max(CASE WHEN b THEN naive ELSE aware END) AT TIME ZONE 'America/Denver'),
+       max(CASE WHEN b THEN naive ELSE aware END) AT TIME ZONE 'America/Denver'
+FROM at_tz_case
+----
+Timestamp(ns) 2024-01-01T05:00:00
+
+# The time unit also comes from the coerced type. Here the first arm or branch
+# has second precision, but the coerced type has nanosecond precision, so the
+# fraction of a second is kept.
+query TPTP
+SELECT arrow_typeof((CASE WHEN NOT b THEN naive_s ELSE aware_frac END) AT TIME ZONE 'UTC'),
+       (CASE WHEN NOT b THEN naive_s ELSE aware_frac END) AT TIME ZONE 'UTC',
+       arrow_typeof((CASE WHEN NOT b THEN aware_s ELSE naive_frac END) AT TIME ZONE 'UTC'),
+       (CASE WHEN NOT b THEN aware_s ELSE naive_frac END) AT TIME ZONE 'UTC'
+FROM at_tz_case
+----
+Timestamp(ns) 2024-01-01T12:00:00.123456789 Timestamp(ns) 2024-01-01T12:00:00.123456789
+
+query TP rowsort
+SELECT arrow_typeof(x AT TIME ZONE 'UTC'), x AT TIME ZONE 'UTC'
+FROM (SELECT naive_s AS x FROM at_tz_case UNION ALL SELECT naive_frac FROM at_tz_case)
+----
+Timestamp(ns, "UTC") 2024-01-01T12:00:00.123456789Z
+Timestamp(ns, "UTC") 2024-01-01T12:00:00Z
+
+# A dictionary-encoded timestamp follows its value type
+query TP
+SELECT arrow_typeof(d AT TIME ZONE 'America/Denver'), d AT TIME ZONE 'America/Denver'
+FROM (SELECT arrow_cast(aware, 'Dictionary(Int32, Timestamp(Nanosecond, Some("UTC")))') AS d FROM at_tz_case)
+----
+Timestamp(ns) 2024-01-01T05:00:00
+
+query TP
+SELECT arrow_typeof(d AT TIME ZONE 'America/Denver'), d AT TIME ZONE 'America/Denver'
+FROM (SELECT arrow_cast(naive, 'Dictionary(Int32, Timestamp(Nanosecond, None))') AS d FROM at_tz_case)
+----
+Timestamp(ns, "America/Denver") 2024-01-01T12:00:00-07:00
+
+# An untyped placeholder has no type when the statement is prepared, so it
+# takes the naive branch, as it did before `AT TIME ZONE` looked at the input
+# type.
+statement ok
+PREPARE at_tz_p AS SELECT arrow_typeof($1 AT TIME ZONE 'America/Denver'), $1 AT TIME ZONE 'America/Denver'
+
+query TP
+EXECUTE at_tz_p(arrow_cast('2024-01-01T12:00:00Z', 'Timestamp(Nanosecond, Some("UTC"))'))
+----
+Timestamp(ns, "America/Denver") 2024-01-01T05:00:00-07:00
+
+statement ok
+DEALLOCATE at_tz_p
+
+# The plan lowers to CAST / to_local_time after simplification. The column is
+# named with the operator syntax.
+query TT
+EXPLAIN SELECT (CASE WHEN b THEN naive ELSE aware END) AT TIME ZONE 'America/Denver', naive AT TIME ZONE 'America/Denver' FROM at_tz_case
+----
+logical_plan
+01)Projection: to_local_time(CAST(CASE WHEN at_tz_case.b THEN CAST(at_tz_case.naive AS Timestamp(ns, "UTC")) ELSE at_tz_case.aware END AS Timestamp(ns, "America/Denver"))) AS CASE WHEN at_tz_case.b THEN at_tz_case.naive ELSE at_tz_case.aware END AT TIME ZONE 'America/Denver', CAST(at_tz_case.naive AS Timestamp(ns, "America/Denver")) AS at_tz_case.naive AT TIME ZONE 'America/Denver'
+02)--TableScan: at_tz_case projection=[aware, naive, b]
+physical_plan
+01)ProjectionExec: expr=[to_local_time(CAST(CASE WHEN b@2 THEN CAST(naive@1 AS Timestamp(ns, "UTC")) ELSE aware@0 END AS Timestamp(ns, "America/Denver"))) as CASE WHEN at_tz_case.b THEN at_tz_case.naive ELSE at_tz_case.aware END AT TIME ZONE 'America/Denver', CAST(naive@1 AS Timestamp(ns, "America/Denver")) as at_tz_case.naive AT TIME ZONE 'America/Denver']
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# `timezone(zone, expression)` is the function form, as in PostgreSQL and DuckDB
+query TPTP
+SELECT arrow_typeof(timezone('America/Denver', aware)), timezone('America/Denver', aware),
+       arrow_typeof(timezone('America/Denver', naive)), timezone('America/Denver', naive)
+FROM at_tz_case
+----
+Timestamp(ns) 2024-01-01T05:00:00 Timestamp(ns, "America/Denver") 2024-01-01T12:00:00-07:00
+
+# The zone decides the result type, so it must be a constant
+statement error timezone requires its first argument \(the timezone\) to be a constant, non-empty string
+SELECT timezone(arrow_cast(b, 'Utf8'), aware) FROM at_tz_case
 
 statement ok
 DROP TABLE at_tz_case

@@ -218,20 +218,15 @@ pub trait ExprPlanner: Debug + Send + Sync {
         Ok(PlannerResult::Original(args))
     }
 
-    /// Plan `<expr> AT TIME ZONE '<tz>'` when `<expr>` is **already
-    /// timezone-aware**.
+    /// Plan `<expr> AT TIME ZONE '<tz>'`.
     ///
-    /// Following PostgreSQL, `<tz-aware timestamp> AT TIME ZONE zone` returns
-    /// the wall clock the instant has in `zone`, as a timezone-*naive*
-    /// timestamp. (The timezone-*naive* case is the plain
-    /// `CAST(<expr> AS Timestamp(unit, Some(tz)))` that the SQL planner
-    /// handles on its own and never reaches this method.)
+    /// `args` is `[Utf8 literal tz, expr]`, the argument order of the
+    /// PostgreSQL function form `timezone(zone, expr)`.
     ///
-    /// `args` holds a single expression: the input already cast to
-    /// `Timestamp(unit, Some(tz))`. That cast preserves the instant and only
-    /// relabels the timezone, so all an implementation has to do is drop the
-    /// timezone while keeping the displayed value — exactly what
-    /// `to_local_time` does.
+    /// The result type depends on whether the type of `expr` *after type
+    /// coercion* has a timezone, and the SQL planner runs before type
+    /// coercion. So an implementation must return an expression that decides
+    /// later, such as the `timezone` function of `datafusion-functions`.
     ///
     /// Returns original expression arguments if not possible
     fn plan_at_time_zone(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {

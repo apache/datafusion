@@ -896,26 +896,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     /// Plan `<timestamp> AT TIME ZONE '<tz>'`.
     ///
-    /// The meaning of `AT TIME ZONE` depends on whether its input carries a
-    /// timezone, and it always returns the *other* kind of timestamp. This
-    /// follows PostgreSQL (and DuckDB):
-    ///
-    /// * a timezone-**naive** input is read as a wall clock in `tz`, and the
-    ///   result is the corresponding timezone-**aware** instant. That is a
-    ///   plain `CAST(expr AS Timestamp(unit, Some(tz)))`, because arrow's
-    ///   `Timestamp(_, None) -> Timestamp(_, Some(tz))` cast interprets the
-    ///   naive value as local time in `tz`.
-    /// * a timezone-**aware** input is an instant, and the result is the wall
-    ///   clock that instant has in `tz`, as a timezone-**naive** timestamp.
-    ///   The same cast is still the first half of that (casting between two
-    ///   aware types preserves the instant and only relabels the zone); the
-    ///   second half — dropping the zone while keeping the displayed value —
-    ///   is delegated to [`ExprPlanner::plan_at_time_zone`], which
-    ///   `datafusion-functions` implements with `to_local_time`.
-    ///
-    /// Anything that is not a timestamp (a string literal, for instance) takes
-    /// the naive path, since a `CAST` to a timezone-aware timestamp is the
-    /// natural reading of `AT TIME ZONE` for it.
+    /// The result type depends on whether the input has a timezone *after
+    /// type coercion*, and type coercion runs after this planner. So this
+    /// method only builds `timezone('<tz>', <timestamp>)` through
+    /// [`ExprPlanner::plan_at_time_zone`], and that function decides once the
+    /// type is known. See `TimezoneFunc` in `datafusion-functions` for the
+    /// semantics.
     ///
     /// [`ExprPlanner::plan_at_time_zone`]: datafusion_expr::planner::ExprPlanner::plan_at_time_zone
     fn sql_at_time_zone_to_expr(
@@ -938,25 +924,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let expr =
             self.sql_expr_to_logical_expr_internal(timestamp, schema, planner_context)?;
 
-        // `AT TIME ZONE` does not change the precision of its input, so keep
-        // the input's `TimeUnit` when it has one.
-        let (unit, input_is_tz_aware) = match expr.get_type(schema)? {
-            DataType::Timestamp(unit, tz) => (unit, tz.is_some()),
-            _ => (TimeUnit::Nanosecond, false),
-        };
-
-        // Instant-preserving relabel into `tz` for an aware input; local-time
-        // interpretation for a naive one.
-        let relabeled = Expr::Cast(Cast::new(
-            Box::new(expr),
-            DataType::Timestamp(unit, Some(tz)),
-        ));
-
-        if !input_is_tz_aware {
-            return Ok(relabeled);
-        }
-
-        let mut args = vec![relabeled];
+        let mut args = vec![lit(tz.as_ref()), expr];
         for planner in self.context_provider.get_expr_planners() {
             match planner.plan_at_time_zone(args)? {
                 PlannerResult::Planned(expr) => return Ok(expr),
@@ -966,12 +934,22 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }
 
-        plan_err!(
-            "AT TIME ZONE on a timezone-aware timestamp is not supported by any \
-             ExprPlanner. It needs the `to_local_time` function; register \
-             `datafusion_functions::datetime` (or its `DatetimeFunctionPlanner`) \
-             with the session"
-        )
+        // No planner handles it, for example when `datafusion-sql` is used
+        // without `datafusion-functions`. Keep the historical lowering for an
+        // input that is not visibly timezone-aware, and refuse one that is,
+        // rather than return the wrong type for it.
+        let expr = args.swap_remove(1);
+        if let DataType::Timestamp(_, Some(_)) = expr.get_type(schema)? {
+            return not_impl_err!(
+                "AT TIME ZONE on a timezone-aware timestamp needs an ExprPlanner \
+                 that implements `plan_at_time_zone`, such as the \
+                 `DatetimeFunctionPlanner` of `datafusion-functions`"
+            );
+        }
+        Ok(Expr::Cast(Cast::new(
+            Box::new(expr),
+            DataType::Timestamp(TimeUnit::Nanosecond, Some(tz)),
+        )))
     }
 
     fn sql_position_to_expr(
