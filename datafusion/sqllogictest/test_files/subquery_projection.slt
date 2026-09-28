@@ -541,8 +541,9 @@ NULL 3 false
 # A grouping set above the correlated filter puts a NULL back. The grand-total
 # row of `ROLLUP` exists for every outer row, so a miss is UNKNOWN here, not
 # FALSE. The filter repeats the `IN` predicate, so the pull up drops it and the
-# aggregate needs no correlated column. Pinned to the current wrong result: the
-# three rows for `k = 3`, `k = 9` and `k = NULL` should be NULL.
+# aggregate needs no correlated column. The filter below the aggregate then
+# does not bound the subquery result, and the join stays null-aware. Expected
+# results verified with DuckDB.
 query IIB
 SELECT co.id, co.k, co.k IN (SELECT ci.k FROM ci WHERE ci.k = co.k GROUP BY ROLLUP(ci.k)) AS m FROM co ORDER BY k, id;
 ----
@@ -550,9 +551,36 @@ SELECT co.id, co.k, co.k IN (SELECT ci.k FROM ci WHERE ci.k = co.k GROUP BY ROLL
 2 1 true
 NULL 1 true
 2 2 true
-NULL 3 false
-9 9 false
-5 NULL false
+NULL 3 NULL
+9 9 NULL
+5 NULL NULL
+
+query TT
+EXPLAIN SELECT co.id, co.k, co.k IN (SELECT ci.k FROM ci WHERE ci.k = co.k GROUP BY ROLLUP(ci.k)) AS m FROM co;
+----
+logical_plan
+01)Projection: co.id, co.k, __correlated_sq_1.mark AS m
+02)--LeftMark Join: co.k = __correlated_sq_1.k null_aware
+03)----TableScan: co projection=[id, k]
+04)----SubqueryAlias: __correlated_sq_1
+05)------Projection: ci.k
+06)--------Aggregate: groupBy=[[ROLLUP (ci.k)]], aggr=[[]]
+07)----------TableScan: ci projection=[k]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, k@1 as k, mark@2 as m]
+02)--HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(k@1, k@0)], null_aware
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----ProjectionExec: expr=[k@0 as k]
+05)------AggregateExec: mode=FinalPartitioned, gby=[k@0 as k, __grouping_id@1 as __grouping_id], aggr=[]
+06)--------RepartitionExec: partitioning=Hash([k@0, __grouping_id@1], 4), input_partitions=1
+07)----------AggregateExec: mode=Partial, gby=[(NULL as k), (k@0 as k)], aggr=[]
+08)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The `NOT IN` filter form of the same subquery. Every row is either FALSE or
+# UNKNOWN, so no row is kept.
+query II
+SELECT co.id, co.k FROM co WHERE co.k NOT IN (SELECT ci.k FROM ci WHERE ci.k = co.k GROUP BY ROLLUP(ci.k)) ORDER BY k, id;
+----
 
 statement ok
 DROP TABLE co;

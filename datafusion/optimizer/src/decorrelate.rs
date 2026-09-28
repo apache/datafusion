@@ -30,7 +30,7 @@ use datafusion_common::{
     Column, DFSchemaRef, HashMap, Result, ScalarValue, assert_or_internal_err, plan_err,
 };
 use datafusion_expr::expr::{Alias, GroupingSet};
-use datafusion_expr::logical_plan::Join;
+use datafusion_expr::logical_plan::{Join, JoinType};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
     collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
@@ -87,6 +87,9 @@ pub struct PullUpCorrelatedExpr {
     /// uses it to tell if a join key can be NULL inside the scope of an outer
     /// row: `x IN (SELECT y FROM .. WHERE y = x)` keeps every NULL `y` out of
     /// its result, although `join_filters` no longer says so.
+    ///
+    /// The list is cleared when the pull up passes a node that can put a NULL
+    /// back into such a column: an outer join, a union or a grouping set.
     pub correlated_filters: Vec<Expr>,
 }
 
@@ -199,6 +202,12 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
     }
 
     fn f_up(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+        // A node that null-extends or regroups rows can put a NULL back into
+        // a column that a correlated filter below it rejected, so the filters
+        // recorded so far no longer bound what the subquery returns.
+        if !self.correlated_filters.is_empty() && may_reintroduce_nulls(&plan) {
+            self.correlated_filters.clear();
+        }
         let subquery_schema = plan.schema();
         match &plan {
             LogicalPlan::Filter(plan_filter) => {
@@ -563,6 +572,27 @@ impl PullUpCorrelatedExpr {
             }
         }
         Ok(missing_exprs)
+    }
+}
+
+/// Whether `plan` can output a NULL in a column that a filter below it keeps
+/// free of NULLs: an outer join fills the columns of its unmatched side with
+/// NULL, a union adds the rows of its other inputs, and a grouping set fills
+/// the columns it leaves out with NULL, such as the grand total row of `ROLLUP`.
+fn may_reintroduce_nulls(plan: &LogicalPlan) -> bool {
+    match plan {
+        LogicalPlan::Join(join) => {
+            matches!(
+                join.join_type,
+                JoinType::Left | JoinType::Right | JoinType::Full
+            )
+        }
+        LogicalPlan::Union(_) => true,
+        LogicalPlan::Aggregate(aggregate) => aggregate
+            .group_expr
+            .iter()
+            .any(|expr| matches!(expr, Expr::GroupingSet(_))),
+        _ => false,
     }
 }
 

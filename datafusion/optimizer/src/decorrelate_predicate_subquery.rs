@@ -2105,6 +2105,27 @@ mod tests {
         Ok(())
     }
 
+    /// A grouping set above the correlation puts a NULL back into the key: the
+    /// grand-total row of `ROLLUP` is a NULL for every outer row. The
+    /// correlation then no longer bounds the subquery result, and the mark
+    /// join stays null-aware.
+    #[test]
+    fn mark_join_for_in_predicate_correlation_below_rollup_is_null_aware() -> Result<()> {
+        let subquery = correlated_grouping_set_subquery("sq", rollup(vec![col("sq.c")]))?;
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![in_subquery(col("test.c"), subquery).alias("m")])?
+            .build()?;
+
+        let optimized = optimize_with_decorrelate(plan)?;
+        assert!(
+            has_null_aware_left_mark_join(&optimized),
+            "{}",
+            optimized.display_indent_schema()
+        );
+
+        Ok(())
+    }
+
     /// The same for the `LeftAnti` join that a `NOT IN` filter builds.
     #[test]
     fn anti_join_for_in_predicate_correlation_is_not_null_aware() -> Result<()> {
