@@ -1205,7 +1205,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             compression: value.compression_opt.as_ref().map(|opt| match opt {
                 protobuf::parquet_options::CompressionOpt::Compression(v) => v.parse(),
             }).transpose()?,
-            data_page_compression_ratio_threshold: None,
+            data_page_compression_ratio_threshold: value.data_page_compression_ratio_threshold_opt.as_ref().map(|protobuf::parquet_options::DataPageCompressionRatioThresholdOpt::DataPageCompressionRatioThreshold(v)| *v),
             dictionary_enabled: value.dictionary_enabled_opt.as_ref().map(|protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled(v)| *v),
             // Continuing from where we left off in the TryFrom implementation
             dictionary_page_size_limit: to_usize(
@@ -1320,7 +1320,7 @@ impl TryFrom<&protobuf::ParquetColumnOptions> for ParquetColumnOptions {
             compression: value.compression_opt.clone().map(|opt| match opt {
                 protobuf::parquet_column_options::CompressionOpt::Compression(v) => Some(v),
             }).unwrap_or(None),
-            data_page_compression_ratio_threshold: None,
+            data_page_compression_ratio_threshold: value.data_page_compression_ratio_threshold_opt.as_ref().map(|protobuf::parquet_column_options::DataPageCompressionRatioThresholdOpt::DataPageCompressionRatioThreshold(v)| *v),
             dictionary_enabled: value.dictionary_enabled_opt.as_ref().map(|protobuf::parquet_column_options::DictionaryEnabledOpt::DictionaryEnabled(v)| *v),
             statistics_enabled: value
                 .statistics_enabled_opt.clone()

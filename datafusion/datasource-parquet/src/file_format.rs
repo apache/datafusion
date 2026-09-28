@@ -672,6 +672,9 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             compression_opt: global_options.global.compression.map(|compression| {
                 parquet_options::CompressionOpt::Compression(compression.to_string())
             }),
+            data_page_compression_ratio_threshold_opt: global_options.global.data_page_compression_ratio_threshold.map(|threshold| {
+                parquet_options::DataPageCompressionRatioThresholdOpt::DataPageCompressionRatioThreshold(threshold)
+            }),
             dictionary_enabled_opt: global_options.global.dictionary_enabled.map(|enabled| {
                 parquet_options::DictionaryEnabledOpt::DictionaryEnabled(enabled)
             }),
@@ -740,6 +743,9 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
                     }),
                     compression_opt: options.compression.map(|compression| {
                         parquet_column_options::CompressionOpt::Compression(compression)
+                    }),
+                    data_page_compression_ratio_threshold_opt: options.data_page_compression_ratio_threshold.map(|threshold| {
+                        parquet_column_options::DataPageCompressionRatioThresholdOpt::DataPageCompressionRatioThreshold(threshold)
                     }),
                     statistics_enabled_opt: options.statistics_enabled.map(|enabled| {
                         parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled(enabled)
