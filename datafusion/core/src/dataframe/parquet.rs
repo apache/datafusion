@@ -189,7 +189,7 @@ mod tests {
             let ctx = &test_df.session_state;
             ctx.runtime_env().register_object_store(&local_url, local);
             let mut options = TableParquetOptions::default();
-            options.global.compression = Some(compression.to_string());
+            options.global.compression = Some(compression.parse()?);
             df.write_parquet(
                 output_path,
                 DataFrameWriteOptions::new().with_single_file_output(true),

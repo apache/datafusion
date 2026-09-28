@@ -185,8 +185,8 @@ impl SingleHashAggregateStream {
         let spill_metrics = SpillMetrics::new(&agg.metrics, partition);
         let state_schema = Arc::new(create_schema(
             input_schema.as_ref(),
-            &agg.group_by,
-            &agg.aggr_expr,
+            agg.group_by(),
+            agg.aggr_expr(),
             AggregateMode::Partial,
         )?);
 

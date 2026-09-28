@@ -156,12 +156,12 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         let input_schema = agg.input().schema();
         let metrics = AggregateTableMetrics::new(agg, partition);
         let aggregate_arguments = aggregate_expressions(
-            &agg.aggr_expr,
+            agg.aggr_expr(),
             &agg.mode,
-            agg.group_by.num_group_exprs(),
+            agg.group_by().num_group_exprs(),
         )?;
         let accumulators: Vec<_> = agg
-            .aggr_expr
+            .aggr_expr()
             .iter()
             .zip(aggregate_arguments)
             .zip(filters)
@@ -179,7 +179,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             })
             .collect::<Result<_>>()?;
 
-        let group_schema = agg.group_by.group_schema(&input_schema)?;
+        let group_schema = agg.group_by().group_schema(&input_schema)?;
         let group_values = new_group_values(group_schema, &GroupOrdering::None)?;
 
         Ok(Self {
@@ -192,7 +192,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
             state_schema,
             batch_size,
             state: AggregateHashTableState::Building(AggregateHashTableBuffer {
-                group_by: Arc::clone(&agg.group_by),
+                group_by: Arc::clone(agg.group_by()),
                 group_values,
                 batch_group_indices: Default::default(),
                 accumulators,

@@ -656,12 +656,18 @@ async fn case_without_base_expression() -> Result<()> {
 
 #[tokio::test]
 async fn case_with_base_expression() -> Result<()> {
-    roundtrip(
+    // Substrait has no base expression in `IfThen`, so a base `CASE` is emitted
+    // as conditions over `<base> = <value>` and comes back in that form. The
+    // projection keeps its original name, so the schema is unchanged.
+    assert_expected_plan(
         "SELECT (CASE a
                             WHEN 0 THEN 'zero'
                             WHEN 1 THEN 'one'
                             ELSE 'other'
                            END) FROM data",
+        "Projection: CASE WHEN data.a = Int64(0) THEN Utf8(\"zero\") WHEN data.a = Int64(1) THEN Utf8(\"one\") ELSE Utf8(\"other\") END AS CASE data.a WHEN Int64(0) THEN Utf8(\"zero\") WHEN Int64(1) THEN Utf8(\"one\") ELSE Utf8(\"other\") END\
+        \n  TableScan: data projection=[a]",
+        true,
     )
     .await
 }
