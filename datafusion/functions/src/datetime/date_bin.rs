@@ -273,16 +273,11 @@ impl ScalarUDFImpl for DateBinFunc {
         let date_value = &input[1];
         let reference = input.get(2);
 
-        // DATE_BIN preserves the order of its second argument. Values whose
-        // nanosecond form overflows i64 are binned in i128, so a non-null
-        // input only becomes NULL when its bin cannot be represented: a bin
-        // starting before the minimum value of the type, or a month bin
-        // outside the range of `DateTime<Utc>`. These extremes are accepted
-        // rather than giving up the ordering for all inputs.
+        // DATE_BIN preserves the order of its second argument.
         //
         // A negative month stride can move a bin past its source (see
         // `bin_months`), so its output is not monotonic, even for ordinary
-        // dates. Only propagate the ordering for strides known not to be one.
+        // dates.
         let monotonic_stride =
             matches!(step.range.lower(), ScalarValue::IntervalDayTime(Some(_)))
                 || matches!(

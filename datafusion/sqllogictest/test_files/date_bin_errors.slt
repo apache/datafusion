@@ -73,8 +73,7 @@ select date_bin(
 ----
 NULL
 
-# Extreme timestamp overflow: source - origin overflows i64, so the bin is
-# computed in i128 instead (previously NULL, and before that a panic)
+# source - origin overflows i64 nanoseconds
 query P
 select date_bin(
   interval '1 nanosecond',
@@ -94,27 +93,25 @@ select date_bin(
 ----
 NULL
 
-# Source timestamp scaling to nanoseconds overflows, so the bin is computed in
-# i128 instead (previously NULL, and before that a panic). The result cannot be
-# displayed as a date, so show its raw value.
-query I
-select arrow_cast(date_bin(
+# Scaling the source to nanoseconds overflows i64
+query P
+select date_bin(
   interval '1 nanosecond',
-  arrow_cast(9223372036854775807, 'Timestamp(Second, None)'),
+  arrow_cast(10000000000, 'Timestamp(Second, None)'),
   timestamp '1970-01-01 00:00:00'
-), 'Int64');
+);
 ----
-9223372036854775807
+2286-11-20T17:46:40
 
 # Same in the array path
-query I
-select arrow_cast(date_bin(
+query P
+select date_bin(
   interval '1 nanosecond',
   ts,
   timestamp '1970-01-01 00:00:00'
-), 'Int64')
+)
 from (
-  values (arrow_cast(9223372036854775807, 'Timestamp(Second, None)'))
+  values (arrow_cast(10000000000, 'Timestamp(Second, None)'))
 ) as t(ts);
 ----
-9223372036854775807
+2286-11-20T17:46:40

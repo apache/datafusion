@@ -1821,8 +1821,9 @@ ORDER BY b ASC NULLS LAST
 1970-01-01T00:00:00
 2286-11-20T17:46:40
 
-# A negative month stride can move a bin past its source, so date_bin keeps
-# the final sort for it.
+# A negative month stride does not shift every bin by the same amount: here
+# 2023-01-01 bins forward to 2023-02-28, while 2023-01-31 bins to itself. The
+# output is not sorted, so date_bin keeps the final sort for it.
 query TT
 EXPLAIN SELECT date_bin(INTERVAL '-1 month', ts, TIMESTAMP '2023-01-31 00:00:00') AS b
 FROM (
