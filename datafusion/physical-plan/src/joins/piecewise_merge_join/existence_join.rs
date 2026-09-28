@@ -86,7 +86,6 @@
 //!
 //! [`PiecewiseMergeJoinExec`]: super::PiecewiseMergeJoinExec
 
-use std::cmp::Ordering;
 use std::sync::Arc;
 use std::sync::atomic::Ordering as AtomicOrdering;
 use std::task::{Poll, ready};
@@ -103,6 +102,9 @@ use futures::{Stream, StreamExt};
 
 use crate::handle_state;
 use crate::joins::piecewise_merge_join::exec::{BufferedSide, BufferedSideReadyState};
+use crate::joins::piecewise_merge_join::utils::{
+    first_match, is_match, matches_on_equal,
+};
 use crate::joins::utils::{
     BuildProbeJoinMetrics, JoinKeyComparator, StatefulStreamResult,
 };
@@ -322,18 +324,8 @@ impl ExistencePWMJStream {
             // is 0 for a real key and 1 for an all-null batch, which skips the scan.
             let row_idx = stream_values.null_count();
 
-            // `<=`/`>=` also match on equality; validated once here rather than inside
-            // the search below.
-            let match_on_equal = match operator {
-                Operator::Gt | Operator::Lt => false,
-                Operator::GtEq | Operator::LtEq => true,
-                _ => {
-                    return internal_err!(
-                        "PiecewiseMergeJoin should not contain operator, {}",
-                        operator
-                    );
-                }
-            };
+            // Validated once here rather than inside the search below.
+            let match_on_equal = matches_on_equal(operator)?;
 
             if row_idx < stream_values.len() && first_non_null_buffered < scan_limit {
                 let cmp = JoinKeyComparator::new(
@@ -342,31 +334,16 @@ impl ExistencePWMJStream {
                     &[sort_option],
                     NullEquality::NullEqualsNothing,
                 )?;
-                let is_match = |buffer_idx: usize| {
-                    let compare = cmp.compare(row_idx, buffer_idx);
-                    compare == Ordering::Less
-                        || (match_on_equal && compare == Ordering::Equal)
+                let matches = |buffer_idx: usize| {
+                    is_match(cmp.compare(row_idx, buffer_idx), match_on_equal)
                 };
 
-                // Because the buffered side is sorted, `is_match` is monotone over it:
+                // Because the buffered side is sorted, `matches` is monotone over it:
                 // false while the buffered key has not yet passed the streamed key, true
-                // from there on. So the first match is a partition point and can be found
-                // by binary search instead of a walk -- `O(log buffered)` per batch rather
-                // than `O(buffered)`.
-                let mut lo = first_non_null_buffered;
-                let mut hi = scan_limit;
-                while lo < hi {
-                    let mid = lo + (hi - lo) / 2;
-                    if is_match(mid) {
-                        hi = mid;
-                    } else {
-                        lo = mid + 1;
-                    }
-                }
-
-                // `lo` is now the first matching buffered index, or `scan_limit` if this
-                // batch matches nothing new.
-                let buffer_idx = lo;
+                // from there on. `buffer_idx` is the first matching buffered index, or
+                // `scan_limit` if this batch matches nothing new.
+                let buffer_idx =
+                    first_match(first_non_null_buffered, scan_limit, matches);
                 if buffer_idx < scan_limit {
                     // Everything from `buffer_idx` on matches, so lowering the
                     // watermark to it records the match: the marked set is exactly
