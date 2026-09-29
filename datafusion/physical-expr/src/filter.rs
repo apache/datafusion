@@ -23,6 +23,11 @@
 //! that a consumer needs to decide how to apply it (for example, whether it
 //! is required for correctness).
 //!
+//! The expression of each conjunct must return a `Boolean` value. A row
+//! passes a conjunct only when the value is `true`: `false` and `NULL`
+//! remove the row. The type system does not enforce this rule. The code that
+//! makes a [`FilterConjunct`] must make sure that the expression is boolean.
+//!
 //! A [`PhysicalFilter`] is *not* a [`PhysicalExpr`]. Use
 //! [`PhysicalFilter::to_expr`] to get one expression (the `AND` of all
 //! conjuncts) for code that only accepts expressions.
@@ -41,6 +46,10 @@ use crate::utils::{conjunction, conjunction_opt, split_conjunction};
 /// consumer can skip an *optional* conjunct (for example, a dynamic filter
 /// from a hash join) without an effect on the result, because another
 /// operator removes the same rows again.
+///
+/// The expression must return a `Boolean` value. A row passes the conjunct
+/// only when the value is `true` (`NULL` removes the row, as `false` does).
+/// The constructors do not check the type. See the [module docs](self).
 #[derive(Debug, Clone)]
 pub struct FilterConjunct {
     expr: Arc<dyn PhysicalExpr>,
@@ -64,7 +73,7 @@ impl FilterConjunct {
         }
     }
 
-    /// The boolean expression of this conjunct.
+    /// The expression of this conjunct. It returns a `Boolean` value.
     pub fn expr(&self) -> &Arc<dyn PhysicalExpr> {
         &self.expr
     }
