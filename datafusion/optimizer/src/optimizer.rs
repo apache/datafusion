@@ -710,16 +710,16 @@ impl Optimizer {
                         if transformed {
                             // Only rescan for subqueries when this pass
                             // already saw one: none of the built-in rules
-                            // construct a subquery expression or
-                            // `LogicalPlan::Subquery` from scratch, so a
-                            // plan without subqueries is expected to stay
-                            // that way. A custom rule (added via
+                            // construct a subquery expression from scratch,
+                            // so a plan without subqueries is expected to
+                            // stay that way. A custom rule (added via
                             // `Optimizer::with_rules` or
                             // `SessionState::add_optimizer_rule`) that
-                            // breaks this assumption and introduces a
-                            // subquery into a plan that had none simply has
-                            // that subquery's inner plan picked up starting
-                            // from the next pass rather than this one.
+                            // introduces a subquery into a plan that had
+                            // none has that subquery's inner plan visited
+                            // by later rules from the next pass rather than
+                            // this one, and not at all if this is the last
+                            // pass.
                             if has_subqueries {
                                 // Refresh after changed rules so
                                 // decorrelation can move later rules onto
@@ -727,16 +727,6 @@ impl Optimizer {
                                 // parent schemas after child schemas
                                 // change.
                                 has_subqueries = plan_has_subqueries(&new_plan);
-                            } else {
-                                #[cfg(debug_assertions)]
-                                if plan_has_subqueries(&new_plan) {
-                                    debug!(
-                                        "optimizer rule '{}' introduced a subquery into a plan that had none (pass {})",
-                                        rule.name(),
-                                        i
-                                    );
-                                    has_subqueries = true;
-                                }
                             }
                             log_plan(rule.name(), &new_plan);
                         } else {
@@ -821,13 +811,13 @@ mod tests {
 
     use arrow::datatypes::Metadata;
 
-    use datafusion_common::tree_node::Transformed;
+    use datafusion_common::tree_node::{Transformed, TreeNode};
     use datafusion_common::{
         Column, DFSchema, DFSchemaRef, DataFusionError, Result, assert_contains, plan_err,
     };
-    use datafusion_expr::logical_plan::EmptyRelation;
+    use datafusion_expr::logical_plan::{EmptyRelation, Filter};
     use datafusion_expr::{
-        Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Projection, col, lit,
+        Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Projection, col, exists, lit,
     };
 
     use crate::optimizer::Optimizer;
@@ -1022,6 +1012,52 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn subquery_introduced_by_a_rule_is_visited_from_the_next_pass() -> Result<()> {
+        // Arrange: a plan with no subquery, a rule that adds one, and a later
+        // rule that records every table scan it is handed.
+        const END_OF_PASS: &str = "<end of pass>";
+        let visited_tables = Arc::new(Mutex::new(Vec::new()));
+        let opt = Optimizer::with_rules(vec![
+            Arc::new(IntroduceSubqueryRule {}),
+            Arc::new(RecordTableScansRule {
+                visited_tables: Arc::clone(&visited_tables),
+            }),
+        ]);
+        let config = OptimizerContext::new().with_max_passes(3);
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(col("a").eq(lit(1u32)))?
+            .build()?;
+        assert!(!super::plan_has_subqueries(&plan));
+
+        // Act: the recording rule runs last, so the observer seeing it marks
+        // the end of a pass.
+        let visited_tables_clone = Arc::clone(&visited_tables);
+        let optimized_plan = opt.optimize(plan, &config, move |_plan, rule| {
+            if rule.name() == "record_table_scans" {
+                visited_tables_clone
+                    .lock()
+                    .unwrap()
+                    .push(END_OF_PASS.to_string());
+            }
+        })?;
+
+        // Assert: the subquery's inner plan is reachable only through the
+        // subquery expression. Subquery presence is checked at the start of
+        // a pass, so the pass that adds the subquery does not recurse into
+        // it and the following one does.
+        assert!(super::plan_has_subqueries(&optimized_plan));
+        let visited_tables = visited_tables.lock().unwrap();
+        let passes: Vec<&[String]> = visited_tables.split(|t| t == END_OF_PASS).collect();
+        assert_eq!(passes[0], ["test"]);
+        assert!(
+            passes[1].iter().any(|t| t == SUBQUERY_ONLY_TABLE),
+            "expected a visit to {SUBQUERY_ONLY_TABLE}, got {visited_tables:?}"
+        );
+
+        Ok(())
+    }
+
     fn add_metadata_to_fields(schema: &DFSchema) -> DFSchemaRef {
         let new_fields = schema
             .iter()
@@ -1188,8 +1224,30 @@ mod tests {
             Some(ApplyOrder::TopDown)
         }
 
-        fn supports_rewrite(&self) -> bool {
-            true
+        fn rewrite(
+            &self,
+            plan: LogicalPlan,
+            _config: &dyn OptimizerConfig,
+        ) -> Result<Transformed<LogicalPlan>> {
+            Ok(Transformed::no(plan))
+        }
+    }
+
+    /// Table scanned only inside the subquery added by [`IntroduceSubqueryRule`].
+    const SUBQUERY_ONLY_TABLE: &str = "subquery_only";
+
+    /// Adds an uncorrelated `EXISTS` subquery to every filter predicate that
+    /// has no subquery yet, so a second application changes nothing.
+    #[derive(Default, Debug)]
+    struct IntroduceSubqueryRule {}
+
+    impl OptimizerRule for IntroduceSubqueryRule {
+        fn name(&self) -> &str {
+            "introduce_subquery"
+        }
+
+        fn apply_order(&self) -> Option<ApplyOrder> {
+            Some(ApplyOrder::TopDown)
         }
 
         fn rewrite(
@@ -1197,6 +1255,56 @@ mod tests {
             plan: LogicalPlan,
             _config: &dyn OptimizerConfig,
         ) -> Result<Transformed<LogicalPlan>> {
+            let LogicalPlan::Filter(filter) = plan else {
+                return Ok(Transformed::no(plan));
+            };
+            if filter
+                .predicate
+                .exists(|e| Ok(matches!(e, Expr::Exists(_))))?
+            {
+                return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+            }
+
+            let scan = test_table_scan_with_name(SUBQUERY_ONLY_TABLE)?;
+            let subquery = LogicalPlanBuilder::from(scan)
+                .project(vec![col("a")])?
+                .build()?;
+            let predicate = filter.predicate.and(exists(Arc::new(subquery)));
+
+            Ok(Transformed::yes(LogicalPlan::Filter(Filter::try_new(
+                predicate,
+                filter.input,
+            )?)))
+        }
+    }
+
+    /// Records the table name of every table scan it visits and never
+    /// transforms the plan.
+    #[derive(Default, Debug)]
+    struct RecordTableScansRule {
+        visited_tables: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl OptimizerRule for RecordTableScansRule {
+        fn name(&self) -> &str {
+            "record_table_scans"
+        }
+
+        fn apply_order(&self) -> Option<ApplyOrder> {
+            Some(ApplyOrder::TopDown)
+        }
+
+        fn rewrite(
+            &self,
+            plan: LogicalPlan,
+            _config: &dyn OptimizerConfig,
+        ) -> Result<Transformed<LogicalPlan>> {
+            if let LogicalPlan::TableScan(scan) = &plan {
+                self.visited_tables
+                    .lock()
+                    .unwrap()
+                    .push(scan.table_name.to_string());
+            }
             Ok(Transformed::no(plan))
         }
     }
