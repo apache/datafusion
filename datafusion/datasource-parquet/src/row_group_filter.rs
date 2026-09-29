@@ -100,9 +100,13 @@ impl RowGroupAccessPlanFilter {
         self.access_plan
     }
 
-    /// Returns a reference to the inner access plan.
     pub(crate) fn access_plan(&self) -> &ParquetAccessPlan {
         &self.access_plan
+    }
+
+    /// Returns a mutable reference to the inner access plan.
+    pub(crate) fn access_plan_mut(&mut self) -> &mut ParquetAccessPlan {
+        &mut self.access_plan
     }
 
     /// Returns the is_fully_matched vector.
