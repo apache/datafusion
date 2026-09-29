@@ -1,0 +1,45 @@
+name Q09
+group null_aware_join
+
+load sql_benchmarks/null_aware_join/init/load.sql
+
+# Correctness canary: the positive IN result must match a reference count that
+# does not use IN. It holds for every NAJ_ROWS. A row is TRUE when o.z > 900 or
+# when some in-scope subquery row equals its key; a NULL mark and a FALSE mark
+# keep the same rows here, which is what makes the plain mark join correct.
+assert I
+SELECT count(*) = (
+  SELECT count(*)
+  FROM small_outer o
+  WHERE o.z > 900
+     OR EXISTS (
+          SELECT 1 FROM small_inner i
+          WHERE i.k = o.k AND i.z < o.z AND i.id_n0 = o.id_n50
+        )
+)
+FROM small_outer o
+WHERE o.z > 900
+   OR o.id_n50 IN (
+        SELECT i.id_n0 FROM small_inner i WHERE i.k = o.k AND i.z < o.z
+      );
+----
+true
+
+expect_plan HashJoinExec
+
+run
+-- Q9: the same correlated shape as Q08, but a NON-negated IN. A Filter keeps a
+-- row only when the predicate is TRUE, and AND/OR make TRUE only out of TRUE,
+-- so a NULL mark behaves exactly like a FALSE mark and the mark join must NOT
+-- be null-aware. Every other query in this suite covers the direction where
+-- null-aware handling is required; this one covers the direction where taking
+-- it anyway is pure cost. Widening the "needs null-aware" test until this shape
+-- is included does not change any result, so only this timing shows it.
+SELECT count(*)
+FROM small_outer o
+WHERE o.z > 900
+   OR o.id_n50 IN (
+        SELECT i.id_n0 FROM small_inner i WHERE i.k = o.k AND i.z < o.z
+      );
+
+cleanup sql_benchmarks/null_aware_join/init/cleanup.sql

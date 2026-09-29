@@ -650,13 +650,28 @@ pub mod test {
     }
 
     use arrow::{
-        array::Int32Array,
+        array::{Int32Array, StringArray},
         datatypes::{DataType, Int32Type},
     };
     use itertools::Either;
     pub(crate) use test_function;
 
     use super::*;
+
+    /// Builds a string or binary array containing `visible`, with a nonzero
+    /// starting offset and a large retained values buffer for capacity tests.
+    pub(crate) fn sliced_byte_array(
+        visible: &[Option<&str>],
+        data_type: &DataType,
+    ) -> Result<ArrayRef> {
+        let padding = "x".repeat(65536);
+        let mut values = vec![Some(padding.as_str())];
+        values.extend_from_slice(visible);
+        values.push(Some(padding.as_str()));
+        let input = StringArray::from(values);
+        // Cast before slicing so every data type retains the padding.
+        Ok(cast(&input, data_type)?.slice(1, visible.len()))
+    }
 
     #[test]
     fn test_calculate_binary_math_scalar_null() {

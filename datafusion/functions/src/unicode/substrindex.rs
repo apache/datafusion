@@ -316,9 +316,9 @@ fn substr_index_view(
     }
 
     let data_buffers = if has_out_of_line {
-        string_array.data_buffers().to_vec()
+        Arc::clone(string_array.data_buffers())
     } else {
-        vec![]
+        Arc::from([])
     };
 
     // Safety: each appended view is either:
@@ -328,7 +328,7 @@ fn substr_index_view(
     unsafe {
         Ok(Arc::new(StringViewArray::new_unchecked(
             ScalarBuffer::from(views_buf),
-            data_buffers.into(),
+            data_buffers,
             nulls,
         )) as ArrayRef)
     }
@@ -448,9 +448,9 @@ fn substr_index_scalar_view(
     }
 
     let data_buffers = if has_out_of_line {
-        string_array.data_buffers().to_vec()
+        Arc::clone(string_array.data_buffers())
     } else {
-        vec![]
+        Arc::from([])
     };
 
     // Safety: each appended view is either:
@@ -461,7 +461,7 @@ fn substr_index_scalar_view(
     unsafe {
         Ok(Arc::new(StringViewArray::new_unchecked(
             ScalarBuffer::from(views_buf),
-            data_buffers.into(),
+            data_buffers,
             string_array.nulls().cloned(),
         )) as ArrayRef)
     }
