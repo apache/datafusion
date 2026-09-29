@@ -441,9 +441,8 @@ impl PhysicalOptimizerRule for FilterPushdown {
 }
 
 /// `parent_predicates` carry their [`FilterConjunct`] properties (for example
-/// the optional flag). Nodes only see the expressions: the properties travel
-/// by position, because every node must return one parent filter result for
-/// each input filter, in the same order.
+/// the optional flag). Nodes get and return [`FilterConjunct`]s, thus the
+/// properties travel with each filter.
 fn push_down_filters(
     node: &Arc<dyn ExecutionPlan>,
     parent_predicates: Vec<FilterConjunct>,
@@ -464,11 +463,7 @@ fn push_down_filters(
 
     let filter_description = node.gather_filters_for_pushdown(
         phase,
-        parent_filtered
-            .items()
-            .iter()
-            .map(|c| Arc::clone(c.expr()))
-            .collect(),
+        parent_filtered.items().to_vec(),
         config,
     )?;
 
@@ -523,17 +518,9 @@ fn push_down_filters(
         let num_self_filters = self_filtered.len();
         let mut all_predicates = self_filtered.items().to_vec();
 
-        // `parent_filters[i]` is `parent_filtered.items()[i]`, remapped by
-        // the node. Attach the properties of the original filter.
         let parent_conjuncts = parent_filters
             .into_iter()
-            .zip(parent_filtered.items())
-            .map(|(pushed, original)| {
-                (
-                    pushed.discriminant,
-                    original.clone().with_expr(pushed.predicate),
-                )
-            })
+            .map(|pushed| (pushed.discriminant, pushed.predicate))
             .collect_vec();
 
         // Apply second filter pass: collect indices of parent filters that can be pushed down
@@ -583,7 +570,7 @@ fn push_down_filters(
         let self_filter_results: Vec<_> = mapped_self_results
             .into_iter()
             .zip(self_filters)
-            .map(|(support, filter)| support.wrap_expression(filter.into_expr()))
+            .map(|(support, filter)| support.wrap_expression(filter))
             .collect();
 
         self_filters_pushdown_supports.push(self_filter_results);
@@ -620,12 +607,13 @@ fn push_down_filters(
             parent_filters: parent_predicates
                 .into_iter()
                 .enumerate()
-                .map(|(parent_filter_idx, parent_filter)| {
-                    ChildFilterPushdownResult::new(
-                        parent_filter,
-                        parent_filter_pushdown_supports[parent_filter_idx].clone(),
-                    )
-                })
+                .map(
+                    |(parent_filter_idx, parent_filter)| ChildFilterPushdownResult {
+                        filter: parent_filter,
+                        child_results: parent_filter_pushdown_supports[parent_filter_idx]
+                            .clone(),
+                    },
+                )
                 .collect(),
             self_filters: self_filters_pushdown_supports,
         },
@@ -639,8 +627,9 @@ fn push_down_filters(
     Ok(res)
 }
 
-/// Debug check for the order rule that the [`FilterConjunct`] properties rely
-/// on: result `i` of a node must describe input filter `i`.
+/// Debug check for the order rule: result `i` of a node must describe input
+/// filter `i`. The optimizer uses the position to map the result of each child
+/// back to the parent filter.
 ///
 /// A node can rewrite a filter (for example, remap its columns), thus this
 /// check cannot compare expressions. It finds results that are the same
@@ -654,11 +643,12 @@ fn check_parent_filter_order(
 ) -> Result<()> {
     let inputs = inputs.items();
     for (idx, result) in results.iter().enumerate() {
-        if Arc::ptr_eq(&result.predicate, inputs[idx].expr()) {
+        let result = result.predicate.expr();
+        if Arc::ptr_eq(result, inputs[idx].expr()) {
             continue;
         }
         let moved_from = inputs.iter().position(|input| {
-            Arc::ptr_eq(&result.predicate, input.expr())
+            Arc::ptr_eq(result, input.expr())
                 && !Arc::ptr_eq(input.expr(), inputs[idx].expr())
         });
         if let Some(moved_from) = moved_from {

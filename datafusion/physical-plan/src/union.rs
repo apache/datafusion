@@ -56,6 +56,7 @@ use datafusion_common::{
 };
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::{CastExpr, Column};
+use datafusion_physical_expr::filter::FilterConjunct;
 use datafusion_physical_expr::filter::PhysicalFilter;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, calculate_union};
 
@@ -485,7 +486,7 @@ impl ExecutionPlan for UnionExec {
     fn gather_filters_for_pushdown(
         &self,
         _phase: FilterPushdownPhase,
-        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        parent_filters: Vec<FilterConjunct>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         FilterDescription::from_children(parent_filters, &self.children())
@@ -528,7 +529,7 @@ impl ExecutionPlan for UnionExec {
             {
                 if matches!(child_result, PushedDown::No) {
                     unsupported_filters_per_child[child_idx]
-                        .push(parent_filter_result.conjunct());
+                        .push(parent_filter_result.filter.clone());
                 }
             }
         }

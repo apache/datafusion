@@ -93,6 +93,7 @@ use datafusion_physical_expr::equivalence::{
     ProjectionMapping, join_equivalence_properties,
 };
 use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::filter::FilterConjunct;
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalExprRef};
 
@@ -1956,7 +1957,7 @@ impl ExecutionPlan for HashJoinExec {
     fn gather_filters_for_pushdown(
         &self,
         phase: FilterPushdownPhase,
-        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        parent_filters: Vec<FilterConjunct>,
         config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         // This is the physical-plan equivalent of `push_down_all_join` in
@@ -2065,7 +2066,7 @@ impl ExecutionPlan for HashJoinExec {
         let right_child_self_filters = &child_pushdown_result.self_filters[1]; // We only push down filters to the right child
         // We expect 0 or 1 self filters
         if let Some(filter) = right_child_self_filters.first() {
-            let predicate = Arc::clone(&filter.predicate);
+            let predicate = Arc::clone(filter.predicate.expr());
             if let Ok(dynamic_filter) =
                 Arc::downcast::<DynamicFilterPhysicalExpr>(predicate)
             {
@@ -2667,7 +2668,7 @@ fn is_column_at(expr: &PhysicalExprRef, index: usize) -> bool {
 /// with no columns comes back unchanged and was already accepted, so
 /// rewriting it is a no-op.
 fn transfer_key_filters(
-    parent_filters: &[Arc<dyn PhysicalExpr>],
+    parent_filters: &[FilterConjunct],
     key_map: &KeyTransferMap,
     child: &mut ChildFilterDescription,
 ) -> Result<()> {
@@ -2675,8 +2676,9 @@ fn transfer_key_filters(
         return Ok(());
     }
     for (filter, pushed) in parent_filters.iter().zip(child.parent_filters.iter_mut()) {
-        if let Some(transferred) = transfer_filter_across_keys(filter, key_map)? {
-            *pushed = PushedDownPredicate::supported(transferred);
+        if let Some(transferred) = transfer_filter_across_keys(filter.expr(), key_map)? {
+            *pushed =
+                PushedDownPredicate::supported(filter.clone().with_expr(transferred));
         }
     }
     Ok(())

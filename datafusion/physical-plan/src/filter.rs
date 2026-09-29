@@ -374,7 +374,7 @@ impl FilterExec {
     /// position keeps same-named input columns distinct.
     fn parent_filters_for_input(
         &self,
-        parent_filters: &[Arc<dyn PhysicalExpr>],
+        parent_filters: &[FilterConjunct],
     ) -> Result<ChildFilterDescription> {
         if parent_filters.is_empty() {
             return Ok(ChildFilterDescription::empty());
@@ -770,7 +770,7 @@ impl ExecutionPlan for FilterExec {
     fn gather_filters_for_pushdown(
         &self,
         phase: FilterPushdownPhase,
-        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        parent_filters: Vec<FilterConjunct>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         let mut child = self.parent_filters_for_input(&parent_filters);
@@ -799,7 +799,7 @@ impl ExecutionPlan for FilterExec {
             .parent_filters
             .iter()
             .filter(|f| matches!(f.all(), PushedDown::No))
-            .map(|f| f.conjunct())
+            .map(|f| f.filter.clone())
             .collect();
 
         // If this FilterExec has a projection, the unsupported parent filters
@@ -828,17 +828,14 @@ impl ExecutionPlan for FilterExec {
                 .collect::<Result<Vec<_>>>()?;
         }
 
-        // The results are in the order of `self_filter_conjuncts`, so the
-        // properties of each self filter are found by position.
         let unsupported_self_filters = child_pushdown_result
             .self_filters
             .first()
             .expect("we have exactly one child")
             .iter()
-            .zip(self.self_filter_conjuncts())
-            .filter_map(|(f, conjunct)| match f.discriminant {
+            .filter_map(|f| match f.discriminant {
                 PushedDown::Yes => None,
-                PushedDown::No => Some(conjunct.with_expr(Arc::clone(&f.predicate))),
+                PushedDown::No => Some(f.predicate.clone()),
             });
 
         let new_filter: PhysicalFilter = unsupported_parent_filters
@@ -2992,7 +2989,7 @@ mod tests {
         let config = ConfigOptions::new();
         let desc = filter.gather_filters_for_pushdown(
             FilterPushdownPhase::Post,
-            vec![parent_filter],
+            vec![parent_filter.into()],
             &config,
         )?;
 

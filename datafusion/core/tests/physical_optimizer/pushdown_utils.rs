@@ -25,6 +25,7 @@ use datafusion_datasource::{
     file_scan_config::FileScanConfigBuilder, file_stream::FileOpenFuture,
     file_stream::FileOpener, source::DataSourceExec,
 };
+use datafusion_physical_expr::filter::FilterConjunct;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
@@ -536,7 +537,7 @@ impl ExecutionPlan for TestNode {
     fn gather_filters_for_pushdown(
         &self,
         _phase: FilterPushdownPhase,
-        mut parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        mut parent_filters: Vec<FilterConjunct>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         if self.reverse_parent_filters {
@@ -572,7 +573,7 @@ impl ExecutionPlan for TestNode {
                 PushedDown::No => {
                     // We have a filter to push down
                     let new_child = FilterExec::try_new(
-                        Arc::clone(&first_pushdown_result.predicate),
+                        Arc::clone(first_pushdown_result.predicate.expr()),
                         Arc::clone(&self.input),
                     )?;
                     let new_self =
