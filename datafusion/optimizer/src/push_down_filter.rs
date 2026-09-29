@@ -26,7 +26,9 @@ use itertools::Itertools;
 use log::{Level, debug, log_enabled};
 
 use datafusion_common::instant::Instant;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{
     Column, DFSchema, Result, assert_eq_or_internal_err, internal_err, plan_err,
     qualified_name,
@@ -1071,8 +1073,13 @@ impl OptimizerRule for PushDownFilter {
                 // multiple window functions, each with potentially different partition keys.
                 // Therefore, we need to ensure that any potential partition key returned is used in
                 // ALL window functions. Otherwise, filters cannot be pushed by through that column.
-                fn extract_partition_keys(func: &WindowFunction) -> HashSet<Column> {
-                    expr_columns(&func.params.partition_by)
+                // Keyed by the partition *expression*, not by a name synthesised
+                // from it. `PARTITION BY a + b` used to be mapped through
+                // `qualified_name()` to a column literally called "a + b", which no
+                // predicate's real column refs could ever match, so such a key was
+                // dead weight in this set.
+                fn extract_partition_keys(func: &WindowFunction) -> HashSet<Expr> {
+                    func.params.partition_by.iter().cloned().collect()
                 }
 
                 let potential_partition_keys = window
@@ -1108,7 +1115,6 @@ impl OptimizerRule for PushDownFilter {
                 let mut keep_predicates = vec![];
                 let mut push_predicates = vec![];
                 for expr in predicates {
-                    let cols = expr.column_refs();
                     // A volatile predicate has to stay above the window. Pushing it
                     // changes which rows the window function sees, and so the value
                     // it computes for the rows that do survive. Checking this first
@@ -1116,7 +1122,7 @@ impl OptimizerRule for PushDownFilter {
                     // such as `random() < 0.5`, which would otherwise satisfy the
                     // partition-key test vacuously.
                     if !expr.is_volatile()
-                        && cols.iter().all(|c| potential_partition_keys.contains(c))
+                        && reads_only_partition_keys(&expr, &potential_partition_keys)?
                     {
                         push_predicates.push(expr);
                     } else {
@@ -1125,12 +1131,11 @@ impl OptimizerRule for PushDownFilter {
                 }
 
                 // Unlike with aggregations, there are no cases where we have to replace, e.g.,
-                // `a+b` with Column(a)+Column(b). This is because partition expressions are not
-                // available as standalone columns to the user. For example, while an aggregation on
-                // `a+b` becomes Column(a + b), in a window partition it becomes
-                // `func() PARTITION BY [a + b] ...`. Thus, filters on expressions always remain in
-                // place, so we can use `push_predicates` directly. This is consistent with other
-                // optimizers, such as the one used by Postgres.
+                // `a+b` with Column(a+b). This is because partition expressions are not available
+                // as standalone columns to the user: while an aggregation on `a+b` becomes
+                // Column(a + b), in a window partition it stays `func() PARTITION BY [a + b] ...`.
+                // That is why the predicate is matched against the key expressions themselves and
+                // can be pushed unchanged.
 
                 // If we have a filter to push, we push it down to the input of the aggregate
                 let result = if let Some(predicate) = conjunction(push_predicates) {
@@ -1527,6 +1532,37 @@ fn with_filters(predicates: Vec<Expr>, plan: LogicalPlan) -> LogicalPlan {
     }
 }
 
+/// Does `expr` read nothing beyond the given window partition keys?
+///
+/// A subtree that is exactly one of the keys counts as read in full, so a
+/// predicate on an *expression* key, say `NULLIF(c, '') IS NOT NULL` against
+/// `PARTITION BY NULLIF(c, '')`, qualifies even though the column it ultimately
+/// reads (`c`) is not a key on its own. Such a predicate is constant within each
+/// partition, so applying it below the window drops whole partitions and leaves
+/// every surviving row's window value unchanged.
+///
+/// Matching is structural, which makes this conservative rather than wrong: a
+/// predicate written `b + a` does not match a key written `a + b`, and is simply
+/// left above the window.
+fn reads_only_partition_keys(
+    expr: &Expr,
+    partition_keys: &HashSet<Expr>,
+) -> Result<bool> {
+    let mut reads_something_else = false;
+    expr.apply(|node| {
+        Ok(if partition_keys.contains(node) {
+            // the whole key was matched, so whatever it reads is accounted for
+            TreeNodeRecursion::Jump
+        } else if matches!(node, Expr::Column(_)) {
+            reads_something_else = true;
+            TreeNodeRecursion::Stop
+        } else {
+            TreeNodeRecursion::Continue
+        })
+    })?;
+    Ok(!reads_something_else)
+}
+
 fn expr_columns(exprs: &[Expr]) -> HashSet<Column> {
     exprs
         .iter()
@@ -1898,10 +1934,10 @@ mod tests {
         )
     }
 
-    /// verifies that filters on partition expressions are not pushed, as the single expression
-    /// column is not available to the user, unlike with aggregations
+    /// verifies that a filter on an expression partition key is pushed, matched
+    /// against the key expression itself rather than against its column refs
     #[test]
-    fn filter_expression_keep_window() -> Result<()> {
+    fn filter_expression_move_window() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         let window = Expr::from(WindowFunction::new(
@@ -1917,15 +1953,81 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .window(vec![window])?
-            // unlike with aggregations, single partition column "test.a + test.b" is not available
-            // to the plan, so we use multiple columns when filtering
+            // the single partition column "test.a + test.b" is not available to the
+            // plan, so the predicate is written over the underlying columns
             .filter(add(col("a"), col("b")).gt(lit(10i64)))?
             .build()?;
 
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Filter: test.a + test.b > Int64(10)
+        WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+          TableScan: test, full_filters=[test.a + test.b > Int64(10)]
+        "
+        )
+    }
+
+    /// verifies that a single predicate spanning a column key and an expression
+    /// key is pushed: it is constant within every partition, but neither the old
+    /// column-name matching nor a rule that looked only at expression keys could
+    /// see that
+    #[test]
+    fn filter_move_window_mixed_column_and_expression_keys() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("a"), add(col("a"), col("b"))]) // PARTITION BY a, a + b
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            .filter(col("a").gt(lit(1i64)).or(add(col("a"), col("b")).gt(lit(10i64))))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        WindowAggr: windowExpr=[[rank() PARTITION BY [test.a, test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+          TableScan: test, full_filters=[test.a > Int64(1) OR test.a + test.b > Int64(10)]
+        "
+        )
+    }
+
+    /// verifies that an expression partition key does not make the columns it
+    /// reads pushable on their own: `a` alone is not constant within a partition
+    /// of `a + b`
+    #[test]
+    fn filter_keep_window_column_underlying_expression_key() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![add(col("a"), col("b"))]) // PARTITION BY a + b
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            .filter(col("a").gt(lit(10i64)))?
+            .build()?;
+        assert_plan_not_transformed!(plan.clone());
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.a > Int64(10)
           WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
             TableScan: test
         "
