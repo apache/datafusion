@@ -32,7 +32,7 @@ mod primitive;
 use primitive::BlockedGroupValuesPrimitive;
 
 /// Like [`GroupValues`], but the group keys are stored in blocks of
-/// [`Self::block_size`] groups, matching the blocks of the
+/// `block_size` groups, matching the blocks of the
 /// [`BlockedGroupsAccumulator`]s of the same hash table, so each block of
 /// groups can be emitted (and its memory freed) on its own.
 ///

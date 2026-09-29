@@ -121,6 +121,8 @@ pub(super) fn create_accumulator_storage(
 /// [`GroupsAccumulator`]. Both use columnar storage so aggregation can stay
 /// vectorized.
 ///
+/// [`GroupValues`]: crate::aggregates::group_values::GroupValues
+///
 /// # Marker Type
 /// `AggrMode` selects the aggregate semantics.
 ///
@@ -629,6 +631,8 @@ pub(super) struct EvaluatedAggregateBatch {
 ///
 /// [`GroupValues`] stores the physical group-key layout, while
 /// [`GroupsAccumulator`] stores per-group aggregate state.
+///
+/// [`GroupValues`]: crate::aggregates::group_values::GroupValues
 pub(super) struct AggregateHashTableBuffer {
     /// GROUP BY expressions evaluated for each input batch.
     pub(super) group_by: Arc<PhysicalGroupBy>,
