@@ -1172,6 +1172,7 @@ mod tests {
     use arrow::array::{AsArray, Int32Array, Int64Array, StringViewArray};
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use datafusion_common::Result;
+    use datafusion_common::instant::Instant;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::memory_pool::{GreedyMemoryPool, MemoryPool};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -1770,6 +1771,150 @@ mod tests {
             run_final_hash_aggregate(50_000, 3, 200_004, None).await?;
         assert_eq!(rows, expected);
         assert_eq!(splits, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn final_multi_column_bucket_index_matches_single_table() -> Result<()> {
+        async fn run(
+            threshold: usize,
+            num_groups: usize,
+            repeats: usize,
+            memory_limit: Option<usize>,
+        ) -> Result<(Vec<(i32, String, i64)>, usize, usize, Duration)> {
+            use datafusion_common::ScalarValue;
+
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("key_number", DataType::Int32, false),
+                Field::new("key_text", DataType::Utf8View, false),
+                Field::new("value", DataType::Int64, false),
+            ]));
+            let group_by = PhysicalGroupBy::new_single(vec![
+                (col("key_number", &schema)?, "key_number".to_string()),
+                (col("key_text", &schema)?, "key_text".to_string()),
+            ]);
+            let aggr_expr = vec![Arc::new(
+                AggregateExprBuilder::new(count_udaf(), vec![col("value", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("count_value")
+                    .build()?,
+            )];
+            let empty =
+                TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+            let state_schema = AggregateExec::try_new(
+                AggregateMode::Partial,
+                group_by.clone(),
+                aggr_expr.clone(),
+                vec![None],
+                empty,
+                Arc::clone(&schema),
+            )?
+            .schema();
+
+            let mut batches = Vec::new();
+            for _ in 0..repeats {
+                for start in (0..num_groups).step_by(1024) {
+                    let end = (start + 1024).min(num_groups);
+                    let text = (start..end)
+                        .map(|row| format!("group-key-{row:08x}-long"))
+                        .collect::<Vec<_>>();
+                    batches.push(RecordBatch::try_new(
+                        Arc::clone(&state_schema),
+                        vec![
+                            Arc::new(Int32Array::from(
+                                (start..end)
+                                    .map(|row| (row % 1_000) as i32)
+                                    .collect::<Vec<_>>(),
+                            )),
+                            Arc::new(StringViewArray::from_iter_values(
+                                text.iter().map(String::as_str),
+                            )),
+                            Arc::new(Int64Array::from(vec![1; end - start])),
+                        ],
+                    )?);
+                }
+            }
+            let input = TestMemoryExec::try_new_exec(
+                &[batches],
+                Arc::clone(&state_schema),
+                None,
+            )?;
+            let final_agg = Arc::new(AggregateExec::try_new(
+                AggregateMode::Final,
+                group_by.as_final(),
+                aggr_expr,
+                vec![None],
+                input,
+                Arc::clone(&schema),
+            )?);
+            let mut runtime = RuntimeEnvBuilder::default();
+            if let Some(limit) = memory_limit {
+                runtime = runtime.with_memory_limit(limit, 1.0);
+            }
+            let task_ctx = TaskContext::default().with_runtime(runtime.build_arc()?);
+            let config = task_ctx.session_config().clone().set(
+                "datafusion.execution.hash_aggregate_bucket_threshold",
+                &ScalarValue::UInt64(Some(threshold as u64)),
+            );
+            let context = Arc::new(task_ctx.with_session_config(config));
+            let start = Instant::now();
+            let output =
+                crate::collect(Arc::clone(&final_agg) as Arc<dyn ExecutionPlan>, context)
+                    .await?;
+            let elapsed = start.elapsed();
+            let mut rows = Vec::new();
+            for batch in output {
+                let numbers = batch.column(0).as_primitive::<Int32Type>();
+                let texts = batch.column(1).as_string_view();
+                let counts = batch
+                    .column(2)
+                    .as_primitive::<arrow::datatypes::Int64Type>();
+                for row in 0..batch.num_rows() {
+                    rows.push((
+                        numbers.value(row),
+                        texts.value(row).to_string(),
+                        counts.value(row),
+                    ));
+                }
+            }
+            rows.sort_unstable();
+            let splits = final_agg
+                .metrics()
+                .unwrap()
+                .sum_by_name("bucket_splits")
+                .map(|metric| metric.as_usize())
+                .unwrap_or(0);
+            let spills = final_agg.metrics().unwrap().spill_count().unwrap_or(0);
+            Ok((rows, splits, spills, elapsed))
+        }
+
+        let (expected, splits, _, _) = run(0, 20_000, 3, None).await?;
+        assert_eq!(splits, 0);
+        assert_eq!(expected.len(), 20_000);
+        assert!(expected.iter().all(|(_, _, count)| *count == 3));
+        let (actual, splits, _, _) = run(10_000, 20_000, 3, None).await?;
+        assert!(splits > 0);
+        assert_eq!(actual, expected);
+        let (recursive, splits, _, _) = run(100, 20_000, 3, None).await?;
+        assert!(splits > 1);
+        assert_eq!(recursive, expected);
+        let (spilled, splits, spills, _) =
+            run(10_000, 20_000, 3, Some(1024 * 1024)).await?;
+        assert!(splits > 0);
+        assert!(spills > 0);
+        assert_eq!(spilled, expected);
+        if std::env::var_os("DATAFUSION_BUCKET_PERF").is_some() {
+            let (off, off_splits, _, off_time) = run(0, 300_000, 2, None).await?;
+            let (on, on_splits, _, on_time) = run(262_144, 300_000, 2, None).await?;
+            assert_eq!(off_splits, 0);
+            assert!(on_splits > 0);
+            assert_eq!(on, off);
+            println!(
+                "bucket_final_aggregate groups=300000 rows=600000 off_ms={:.3} on_ms={:.3} splits={on_splits}",
+                off_time.as_secs_f64() * 1_000.0,
+                on_time.as_secs_f64() * 1_000.0,
+            );
+        }
         Ok(())
     }
 

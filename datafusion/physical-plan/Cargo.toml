@@ -184,6 +184,10 @@ required-features = ["test_utils"]
 
 [[bench]]
 harness = false
+name = "bucket_group_index"
+
+[[bench]]
+harness = false
 name = "bounded_window"
 
 [[bench]]

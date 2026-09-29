@@ -1,0 +1,16 @@
+mode,round,bucketing_off_ms,bucketing_on_ms,bucket_splits
+default,1,16.497,25.110,1
+default,2,14.807,22.880,1
+default,3,15.783,23.130,1
+default,4,15.185,23.041,1
+default,5,14.585,22.759,1
+hashbrown-half,1,16.106,24.945,1
+hashbrown-half,2,15.425,23.105,1
+hashbrown-half,3,14.212,22.614,1
+hashbrown-half,4,15.238,22.990,1
+hashbrown-half,5,15.124,22.724,1
+linear,1,14.001,23.732,1
+linear,2,14.315,23.766,1
+linear,3,14.287,23.817,1
+linear,4,14.386,23.770,1
+linear,5,14.193,23.755,1

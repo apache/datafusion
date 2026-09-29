@@ -18,6 +18,7 @@
 //! `GroupValues` implementations for multi group by cases
 
 mod boolean;
+mod bucket_index;
 mod bytes;
 pub mod bytes_view;
 mod dictionary;
@@ -26,7 +27,7 @@ mod list;
 pub mod primitive;
 pub mod row_backed;
 
-use std::mem::{self, size_of};
+use std::mem;
 use std::sync::Arc;
 
 use crate::aggregates::group_values::GroupValues;
@@ -52,11 +53,11 @@ use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::{has_float_leaf, normalize_float_zero};
 use datafusion_common::{Result, not_impl_err};
-use datafusion_execution::memory_pool::proxy::{HashTableAllocExt, VecAllocExt};
+use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{EmitTo, GroupSelection};
 use datafusion_physical_expr::binary_map::OutputType;
 
-use hashbrown::hash_table::HashTable;
+use crate::aggregates::group_values::multi_group_by::bucket_index::GroupIndexMap;
 
 const NON_INLINED_FLAG: u64 = 0x8000000000000000;
 const VALUE_MASK: u64 = 0x7FFFFFFFFFFFFFFF;
@@ -198,7 +199,7 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
     /// instead we store the `group indices` pointing to values in `GroupValues`.
     /// And we use [`GroupIndexView`] to represent such `group indices` in table.
     ///
-    map: HashTable<(u64, GroupIndexView)>,
+    map: GroupIndexMap,
 
     /// The size of `map` in bytes
     map_size: usize,
@@ -294,7 +295,7 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     /// `borrow_source`: see `ByteViewGroupValueBuilder::borrow_source`. Only
     /// for a table that is shorter lived than the batches it is given.
     pub fn try_new_with_borrow(schema: SchemaRef, borrow_source: bool) -> Result<Self> {
-        let map = HashTable::with_capacity(0);
+        let map = GroupIndexMap::new(borrow_source);
         let group_values = Self::build_group_columns(&schema, borrow_source)?;
         Ok(Self {
             schema,
@@ -1316,7 +1317,7 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
             .expect("schema previously validated in try_new");
         self.map.clear();
         self.map.shrink_to(num_rows, |_| 0); // hasher does not matter since the map is cleared
-        self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
+        self.map_size = self.map.allocated_size();
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(num_rows);
 
@@ -1354,7 +1355,7 @@ mod tests {
 
     use arrow::array::{
         Array, ArrayRef, DurationMicrosecondArray, FixedSizeBinaryArray, Float16Array,
-        Int32Array, Int64Array, PrimitiveArray, RecordBatch, StringArray,
+        Float64Array, Int32Array, Int64Array, PrimitiveArray, RecordBatch, StringArray,
         StringViewArray, UInt32Array,
     };
     use arrow::datatypes::{
@@ -1364,7 +1365,6 @@ mod tests {
         compute::{concat_batches, take},
         util::pretty::pretty_format_batches,
     };
-    use datafusion_common::utils::proxy::HashTableAllocExt;
     use datafusion_expr::{EmitTo, GroupSelection};
 
     use crate::aggregates::group_values::{
@@ -1372,8 +1372,78 @@ mod tests {
     };
 
     use super::{
-        GroupIndexView, group_column_supported_type, make_group_column, supported_schema,
+        GroupIndexMap, GroupIndexView, group_column_supported_type, make_group_column,
+        supported_schema,
     };
+
+    #[test]
+    fn bucket_index_variants_preserve_group_interning() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("number", DataType::Int64, true),
+            Field::new("text", DataType::Utf8View, true),
+            Field::new("float", DataType::Float64, true),
+        ]));
+        let numbers: ArrayRef = Arc::new(Int64Array::from(
+            (0..8192)
+                .map(|row| {
+                    if row % 19 == 0 {
+                        None
+                    } else {
+                        Some((row % 701) as i64)
+                    }
+                })
+                .collect::<Vec<_>>(),
+        ));
+        let strings: ArrayRef = Arc::new(StringViewArray::from(
+            (0..8192)
+                .map(|row| {
+                    if row % 23 == 0 {
+                        None
+                    } else if row % 2 == 0 {
+                        Some("short")
+                    } else {
+                        Some("a string longer than twelve bytes")
+                    }
+                })
+                .collect::<Vec<_>>(),
+        ));
+        let floats: ArrayRef = Arc::new(Float64Array::from(
+            (0..8192)
+                .map(|row| match row % 5 {
+                    0 => None,
+                    1 => Some(f64::NAN),
+                    2 => Some(-0.0),
+                    3 => Some(0.0),
+                    _ => Some((row % 7) as f64),
+                })
+                .collect::<Vec<_>>(),
+        ));
+        let cols = vec![numbers, strings, floats];
+        let mut expected = None;
+
+        for map in [
+            GroupIndexMap::new(false),
+            GroupIndexMap::hashbrown_half(),
+            GroupIndexMap::linear(),
+        ] {
+            let mut values = GroupValuesColumn::<false>::try_new_with_borrow(
+                Arc::clone(&schema),
+                true,
+            )
+            .unwrap();
+            values.map = map;
+            let mut groups = Vec::new();
+            values.intern(&cols, &mut groups).unwrap();
+            values.intern(&cols, &mut groups).unwrap();
+            let result = (groups, values.emit(EmitTo::All).unwrap());
+            if let Some((expected_groups, expected_keys)) = &expected {
+                assert_eq!(&result.0, expected_groups);
+                assert_eq!(&result.1, expected_keys);
+            } else {
+                expected = Some(result);
+            }
+        }
+    }
 
     /// A mixed group-by key of several native columns plus one nested column
     /// that has no type-specialized `GroupColumn`.
