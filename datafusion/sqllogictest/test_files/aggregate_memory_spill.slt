@@ -305,6 +305,38 @@ FROM (
 04)------AggregateExec: mode=Single, gby=[v@0 % 32 as t.v % Int64(32)], aggr=[<slt:ignore>], metrics=[<slt:ignore>spilled_bytes=<slt:ignore> MB, spilled_rows=<slt:ignore>]
 05)--------ProjectionExec: <slt:ignore>
 
+# 14 large groups, adjacent in key order, spilled together with 62,500 small
+# groups. The small groups must not make a batch take several large groups.
+query II
+SELECT count(*), sum(n)
+FROM (
+  SELECT k, cardinality(array_agg(p)) AS n
+  FROM (
+    SELECT CASE WHEN v % 8 = 0 THEN v + 1000000 ELSE v % 16 END AS k,
+           concat(CAST(v AS VARCHAR), repeat('x', 100)) AS p
+    FROM generate_series(1, 500000) AS t(v)
+  )
+  GROUP BY k
+)
+----
+62514 500000
+
+# Runs of large groups followed by a run of small groups. Replay must not
+# merge the large rows into one batch.
+query II
+SELECT count(*), sum(n)
+FROM (
+  SELECT k, cardinality(array_agg(s)) AS n
+  FROM (
+    SELECT CASE WHEN v <= 360000 THEN v % 32 ELSE v END AS k,
+           CASE WHEN v <= 360000 THEN concat(CAST(v AS VARCHAR), repeat('x', 100)) ELSE CAST(v AS VARCHAR) END AS s
+    FROM generate_series(1, 700000) AS t(v)
+  )
+  GROUP BY k
+)
+----
+340032 700000
+
 # Restore settings to slt runner defaults
 statement ok
 RESET datafusion.runtime.memory_limit

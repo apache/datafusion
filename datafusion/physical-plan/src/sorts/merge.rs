@@ -28,6 +28,7 @@ use crate::metrics::BaselineMetrics;
 use crate::sorts::builder::BatchBuilder;
 use crate::sorts::cursor::{Cursor, CursorValues};
 use crate::sorts::stream::PartitionedStream;
+use crate::spill::get_record_batch_memory_size;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 
 use arrow::datatypes::SchemaRef;
@@ -85,6 +86,17 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
 
     /// Target batch size
     batch_size: usize,
+
+    /// See [`Self::with_max_batch_bytes`]
+    max_batch_bytes: Option<usize>,
+
+    /// The average memory size of the rows of each input's current batch,
+    /// tracked when `max_batch_bytes` is set
+    row_bytes: Vec<usize>,
+
+    /// The estimated memory size of the in-progress rows, tracked when
+    /// `max_batch_bytes` is set
+    in_progress_bytes: usize,
 
     /// Cursors for each input partition. `None` means the input is exhausted
     cursors: Vec<Option<Cursor<C>>>,
@@ -146,9 +158,20 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             poll_reset_epochs: vec![0; stream_count],
             loser_tree: vec![],
             batch_size,
+            max_batch_bytes: None,
+            row_bytes: vec![0; stream_count],
+            in_progress_bytes: 0,
             fetch,
             produced: 0,
         }
+    }
+
+    /// Also emits a batch once its rows take about `max_batch_bytes`, as
+    /// estimated from the average row size of the batches they come from,
+    /// before it has `batch_size` rows.
+    pub(crate) fn with_max_batch_bytes(mut self, max_batch_bytes: Option<usize>) -> Self {
+        self.max_batch_bytes = max_batch_bytes;
+        self
     }
 
     pub(crate) fn into_stream(self) -> SendableRecordBatchStream
@@ -184,6 +207,10 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             Some(Err(e)) => Poll::Ready(Err(e)),
             Some(Ok((cursor, batch))) => {
                 self.cursors[idx] = Some(Cursor::new(cursor));
+                if self.max_batch_bytes.is_some() {
+                    self.row_bytes[idx] = get_record_batch_memory_size(&batch)
+                        .div_ceil(batch.num_rows().max(1));
+                }
                 Poll::Ready(self.in_progress.push_batch(idx, batch))
             }
         }
@@ -192,7 +219,10 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
     fn emit_in_progress_batch(&mut self) -> Result<Option<RecordBatch>> {
         let rows_before = self.in_progress.len();
         let result = self.in_progress.build_record_batch();
-        self.produced += rows_before - self.in_progress.len();
+        let rows_after = self.in_progress.len();
+        self.produced += rows_before - rows_after;
+        // Rows kept after an offset overflow are assumed to be of average size
+        self.in_progress_bytes = self.in_progress_bytes * rows_after / rows_before.max(1);
         result
     }
 
@@ -250,6 +280,9 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 // 3.1. add loser_tree[0] (minimum) stream to pending record batch
                 let winner_stream = self.loser_tree[0];
                 self.in_progress.push_row(winner_stream);
+                if self.max_batch_bytes.is_some() {
+                    self.in_progress_bytes += self.row_bytes[winner_stream];
+                }
 
                 // 3.2. If the new row reached the limit
                 if self.fetch_reached() {
@@ -257,7 +290,11 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 }
 
                 // 3.3. if there is enough to emit for a full record batch
-                if self.in_progress.len() >= self.batch_size {
+                if self.in_progress.len() >= self.batch_size
+                    || self
+                        .max_batch_bytes
+                        .is_some_and(|max_bytes| self.in_progress_bytes >= max_bytes)
+                {
                     // 3.3.1 build pending record batch and reset builder
                     let Some(batch) = self.emit_in_progress_batch()? else {
                         return internal_err!("must have batch in progress to emit");
