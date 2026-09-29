@@ -52,7 +52,7 @@ jobs:
           submodules: true
           fetch-depth: 1
       - name: Setup uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
       - name: Install doc dependencies
         run: uv sync --package datafusion-docs
       - name: Install Graphviz
@@ -61,7 +61,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y graphviz
       - name: Install cargo-depgraph
-        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3  # v2.87.16
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29  # v2.87.21
         with:
           tool: cargo-depgraph@1.6
       - name: Build docs html and check for warnings
