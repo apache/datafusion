@@ -416,10 +416,11 @@ impl FunctionalDependencies {
     fn downgrade_dependencies(&mut self) {
         // Delete nullable dependencies, since they are no longer valid:
         self.deps.retain(|item| !item.nullable);
-        // Survivors become nullable, and the new NULLs are not equal to one another:
+        // Survivors had a non-null determinant, so every new NULL comes from a
+        // padded row whose targets are all NULL too:
         self.deps.iter_mut().for_each(|item| {
             item.nullable = true;
-            item.null_equality = NullEquality::NullEqualsNothing;
+            item.null_equality = NullEquality::NullEqualsNull;
         });
     }
 
@@ -541,6 +542,9 @@ pub fn aggregate_functional_dependencies(
             // The following simple comparison is working well because
             // GROUP BY expressions come here as a prefix.
             item.source_indices.iter().all(|idx| idx < &count)
+                // A dependency that is not valid across NULLs cannot replace
+                // the whole GROUP BY key dependency:
+                && item.is_valid_across_nulls(aggr_schema)
         }) {
             // Add a new functional dependency associated with the whole table:
             // Use nullable property of the GROUP BY expression:
