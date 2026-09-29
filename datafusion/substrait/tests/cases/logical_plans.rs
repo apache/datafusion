@@ -21,8 +21,13 @@
 mod tests {
     use crate::cases::roundtrip_logical_plan::higher_order_function_ctx;
     use crate::utils::test::{add_plan_schemas_to_ctx, read_json};
+    use datafusion::arrow::array::{ArrayRef, Int64Array, RecordBatch};
+    use datafusion::arrow::datatypes::{Field, Schema, SchemaRef};
+    use datafusion::assert_batches_sorted_eq;
     use datafusion::common::test_util::format_batches;
-    use std::collections::HashSet;
+    use datafusion::datasource::MemTable;
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Arc;
 
     use datafusion::common::Result;
     use datafusion::dataframe::DataFrame;
@@ -225,6 +230,228 @@ mod tests {
 
         // Trigger execution to ensure plan validity
         DataFrame::new(ctx.state(), plan).show().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn intersect_nullability() -> Result<()> {
+        // Substrait's set operation rules derive an intersection's nullability from
+        // every input, not only the primary one. Each plan below intersects three
+        // tables carrying the same six columns, with these nullabilities (`?` marks
+        // a nullable column, `~` a column with unspecified nullability, which the
+        // consumer reads as nullable):
+        //
+        //   primary     a? b? c? d? e? f?
+        //   secondary   a  b  c? d? e~ f~
+        //   secondary   a  b? c  d? e? f
+        let rows: [(&str, &[[Option<i64>; 6]]); 3] = [
+            (
+                "data",
+                &[
+                    [Some(1), Some(1), Some(1), None, None, Some(1)],
+                    [Some(2), None, Some(2), Some(2), Some(2), Some(2)],
+                    [Some(3), Some(3), None, Some(3), Some(3), Some(3)],
+                    [None, Some(4), Some(4), Some(4), Some(4), Some(4)],
+                ],
+            ),
+            (
+                "data2",
+                &[
+                    [Some(1), Some(1), Some(1), None, None, Some(1)],
+                    [Some(3), Some(3), None, Some(3), Some(3), Some(3)],
+                ],
+            ),
+            (
+                "data3",
+                &[
+                    [Some(1), Some(1), Some(1), None, None, Some(1)],
+                    [Some(2), None, Some(2), Some(2), Some(2), Some(2)],
+                ],
+            ),
+        ];
+
+        // Schema and field metadata are no part of an input's nullability, so the
+        // result must not depend on whether the tables carry any. With metadata,
+        // every table describes itself and the secondary tables add keys the
+        // primary one lacks: the result has to keep the primary table's metadata
+        // where they disagree, including on the columns read from a secondary
+        // input, and the physical plan and the batches have to agree with it. The
+        // secondary tables share their metadata, as `INTERSECTION_PRIMARY` unions
+        // them, and a union of inputs with differing field metadata reports
+        // different metadata in its logical and in its physical schema.
+        let with_metadata = |schema: &SchemaRef, table: &str| -> SchemaRef {
+            let role = if table == "data" { "data" } else { "secondary" };
+            let tag = |mut metadata: HashMap<String, String>| {
+                if role == "secondary" {
+                    metadata.insert("only_in_secondary".to_string(), "yes".to_string());
+                }
+                metadata
+            };
+            let fields: Vec<Field> = schema
+                .fields()
+                .iter()
+                .map(|field| {
+                    let metadata = HashMap::from([(
+                        "column".to_string(),
+                        format!("{role}.{}", field.name()),
+                    )]);
+                    field.as_ref().clone().with_metadata(tag(metadata))
+                })
+                .collect();
+            let metadata = HashMap::from([("table".to_string(), role.to_string())]);
+            Arc::new(Schema::new_with_metadata(fields, tag(metadata)))
+        };
+
+        let cases = [
+            // Nullable in the primary input and in at least one secondary input.
+            (
+                "intersect_primary_mixed_nullability",
+                "a, b?, c?, d?, e?, f?",
+                &[
+                    "+---+---+---+---+---+---+",
+                    "| a | b | c | d | e | f |",
+                    "+---+---+---+---+---+---+",
+                    "| 1 | 1 | 1 |   |   | 1 |",
+                    "| 2 |   | 2 | 2 | 2 | 2 |",
+                    "| 3 | 3 |   | 3 | 3 | 3 |",
+                    "+---+---+---+---+---+---+",
+                ][..],
+            ),
+            // Required as soon as any input requires it.
+            (
+                "intersect_multiset_mixed_nullability",
+                "a, b, c, d?, e?, f",
+                &[
+                    "+---+---+---+---+---+---+",
+                    "| a | b | c | d | e | f |",
+                    "+---+---+---+---+---+---+",
+                    "| 1 | 1 | 1 |   |   | 1 |",
+                    "+---+---+---+---+---+---+",
+                ][..],
+            ),
+            (
+                "intersect_multiset_all_mixed_nullability",
+                "a, b, c, d?, e?, f",
+                &[
+                    "+---+---+---+---+---+---+",
+                    "| a | b | c | d | e | f |",
+                    "+---+---+---+---+---+---+",
+                    "| 1 | 1 | 1 |   |   | 1 |",
+                    "+---+---+---+---+---+---+",
+                ][..],
+            ),
+        ];
+
+        for ((file, expected_nullability, expected_rows), tagged) in cases
+            .into_iter()
+            .flat_map(|case| [(case, false), (case, true)])
+        {
+            let proto_plan =
+                read_json(&format!("tests/testdata/test_plans/{file}.substrait.json"));
+            let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+            // Give each table rows, so the batch schemas below come from real batches
+            for (table, rows) in rows {
+                let schema = ctx.table_provider(table).await?.schema();
+                let schema = if tagged {
+                    with_metadata(&schema, table)
+                } else {
+                    schema
+                };
+                let columns = (0..schema.fields().len())
+                    .map(|i| {
+                        Arc::new(rows.iter().map(|row| row[i]).collect::<Int64Array>())
+                            as ArrayRef
+                    })
+                    .collect();
+                let batch = RecordBatch::try_new(Arc::clone(&schema), columns)?;
+                ctx.deregister_table(table)?;
+                ctx.register_table(
+                    table,
+                    Arc::new(MemTable::try_new(schema, vec![vec![batch]])?),
+                )?;
+            }
+            let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+            let nullability = plan
+                .schema()
+                .fields()
+                .iter()
+                .map(|field| {
+                    format!(
+                        "{}{}",
+                        field.name(),
+                        if field.is_nullable() { "?" } else { "" }
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            assert_eq!(
+                nullability, expected_nullability,
+                "nullability of {file} (tagged: {tagged})"
+            );
+
+            if tagged {
+                // Schema-level metadata is a join of both inputs' maps, per
+                // `intersect_rel`'s doc comment, so a secondary-only key
+                // ("only_in_secondary") can appear alongside the primary
+                // table's own keys; only that a conflicting key resolves to
+                // the primary table's value is asserted here. Per-field
+                // metadata has no such leak and is checked exactly below,
+                // and again on the optimized, physical and batch schemas.
+                assert_eq!(
+                    plan.schema().metadata().get("table"),
+                    Some(&"data".to_string()),
+                    "schema metadata of {file}"
+                );
+                for field in plan.schema().fields() {
+                    let expected_metadata = HashMap::from([(
+                        "column".to_string(),
+                        format!("data.{}", field.name()),
+                    )]);
+                    assert_eq!(
+                        field.metadata(),
+                        &expected_metadata,
+                        "metadata of column {} of {file}",
+                        field.name()
+                    );
+                }
+            }
+
+            // The physical plan and the batches it produces must carry the same
+            // schema as the *optimized* logical plan, since physical planning
+            // runs on the optimizer's output, not on `plan` as
+            // `from_substrait_plan` returned it.
+            let optimized = ctx.state().optimize(&plan)?;
+            let logical_schema = Arc::clone(optimized.schema().inner());
+            if tagged {
+                for field in logical_schema.fields() {
+                    let expected_metadata = HashMap::from([(
+                        "column".to_string(),
+                        format!("data.{}", field.name()),
+                    )]);
+                    assert_eq!(
+                        field.metadata(),
+                        &expected_metadata,
+                        "optimized metadata of column {} of {file}",
+                        field.name()
+                    );
+                }
+            }
+            let df = DataFrame::new(ctx.state(), optimized);
+            let physical_plan = df.clone().create_physical_plan().await?;
+            assert_eq!(
+                physical_plan.schema(),
+                logical_schema,
+                "physical schema of {file}"
+            );
+            let batches = df.collect().await?;
+            assert!(!batches.is_empty(), "no batches for {file}");
+            for batch in &batches {
+                assert_eq!(batch.schema(), logical_schema, "batch schema of {file}");
+            }
+            assert_batches_sorted_eq!(expected_rows, &batches);
+        }
 
         Ok(())
     }
