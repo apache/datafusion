@@ -19,6 +19,41 @@
 //! access `user['status']`) closer to data sources, enabling early data reduction
 //! and source-level optimizations (e.g., Parquet column pruning). See
 //! [`ExtractLeafExpressions`] (pass 1) and [`PushDownLeafProjections`] (pass 2).
+//!
+//! # Precedence over [`PushDownFilter`]
+//!
+//! [`PushDownLeafProjections`] and [`PushDownFilter`] both move nodes towards
+//! the leaves, and for an adjacent filter and *pure extraction projection* (a
+//! projection whose expressions are only `__datafusion_extracted_N` aliases and
+//! pass-through columns) they want the opposite order:
+//!
+//! ```text
+//! Filter: t.date = '2025-01-03'                                  <-- (A)
+//!   Projection: get_field(t.ids, 'id1') AS __datafusion_extracted_1, t.date   <-- (B)
+//!     TableScan: t
+//! ```
+//!
+//! `PushDownFilter` wants (A) below (B). `PushDownLeafProjections` wants (B)
+//! below (A). Before <https://github.com/apache/datafusion/issues/14540> was
+//! decided the two rules undid each other on every optimizer pass, and the rule
+//! that runs later in the list won.
+//!
+//! **Invariant: pure extraction projections win.** `PushDownFilter` does not
+//! move a filter below a pure extraction projection, so the plan above is the
+//! final plan. `PushDownLeafProjections` keeps moving such a projection through
+//! a filter, which is how the projection reaches the scan.
+//!
+//! The reason is that the extraction projection is the node a source absorbs.
+//! A Parquet scan merges it into the file projection and reads only the struct
+//! leaf. With the opposite precedence the scan reads the whole struct whenever
+//! `datafusion.execution.parquet.pushdown_filters` is `false`, which is the
+//! default. The filter loses nothing by staying one node higher, because
+//! `PushDownFilter` records the predicate in
+//! [`TableScan::filters`](datafusion_expr::logical_plan::TableScan) in the pass
+//! that runs before the extraction projection exists, so row group pruning and
+//! source level filtering still happen.
+//!
+//! [`PushDownFilter`]: crate::push_down_filter::PushDownFilter
 
 use indexmap::{IndexMap, IndexSet};
 use std::collections::{BTreeSet, HashMap};
@@ -1136,15 +1171,18 @@ fn split_and_push_projection(
     }
 }
 
-/// Returns true if the plan is a Projection where ALL expressions are either
-/// `Alias(EXTRACTED_EXPR_PREFIX, ...)` or `Column`, with at least one extraction.
+/// Returns true if `exprs` are the expressions of a *pure extraction
+/// projection*: every expression is either `Alias(EXTRACTED_EXPR_PREFIX, ...)`
+/// or a bare `Column`, and there is at least one extraction alias.
+///
 /// Such projections can safely be pushed further without re-extraction.
-fn is_pure_extraction_projection(plan: &LogicalPlan) -> bool {
-    let LogicalPlan::Projection(proj) = plan else {
-        return false;
-    };
+///
+/// [`PushDownFilter`](crate::push_down_filter::PushDownFilter) uses the same
+/// predicate to keep a filter above such a projection. See the module
+/// documentation for the precedence rule.
+pub(crate) fn is_pure_extraction_projection(exprs: &[Expr]) -> bool {
     let mut has_extraction = false;
-    for expr in &proj.expr {
+    for expr in exprs {
         match expr {
             Expr::Alias(alias) if alias.name.starts_with(EXTRACTED_EXPR_PREFIX) => {
                 has_extraction = true;
@@ -1181,6 +1219,7 @@ fn push_extraction_pairs(
                 proj_input,
                 target_schema.as_ref(),
             )?;
+            let merged_is_pure = is_pure_extraction_projection(&merged.expr);
             let merged_plan = LogicalPlan::Projection(merged);
 
             // After merging, try to push the result further down, but ONLY
@@ -1191,7 +1230,7 @@ fn push_extraction_pairs(
             // the (None, true) fallback can't find the original aliases.
             // This handles: Extraction → Recovery(cols) → Filter → ... → TableScan
             // by pushing through the recovery projection AND the filter in one pass.
-            if is_pure_extraction_projection(&merged_plan)
+            if merged_is_pure
                 && let Some(pushed) = try_push_input(&merged_plan, alias_generator)?
             {
                 return Ok(Some(pushed));

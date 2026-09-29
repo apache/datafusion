@@ -162,6 +162,16 @@ individual operators or expressions.
 Sometimes there is an initial pass that visits the plan and builds state that is used in a second pass that performs
 the actual optimization. This approach is used in projection push down and filter push down.
 
+### Rule Precedence
+
+Two rules can want the opposite order for the same pair of adjacent plan nodes. Each rule then undoes the work of the other one on every optimizer pass. The loop stops at `datafusion.optimizer.max_passes`, and the position of the two rules in the rule list decides the plan. This wastes a pass and makes the plan depend on the rule list.
+
+Do not let two rules compete. Give one rule precedence, make that rule yield, and record the decision in the module documentation of both rules.
+
+There is one such decision today:
+
+- `PushDownFilter` yields to a _pure extraction projection_. A pure extraction projection is a projection whose expressions are only `__datafusion_extracted_N` aliases and pass-through columns. `ExtractLeafExpressions` creates it, and `PushDownLeafProjections` moves it towards the leaves. `PushDownFilter` does not move a filter below such a projection, so the projection stays next to the scan. A Parquet scan then merges the projection into the file projection and reads only the struct leaf. The filter loses nothing, because `PushDownFilter` records the predicate in `TableScan::filters` in the pass that runs before the extraction projection exists. See [issue #14540](https://github.com/apache/datafusion/issues/14540).
+
 ### Expression Naming
 
 Every expression in DataFusion has a name, which is used as the column name. For example, in this example the output
