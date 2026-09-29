@@ -75,6 +75,14 @@ pub fn check_arg_count(
                 );
             }
         }
+        TypeSignature::Nullary => {
+            if !input_fields.is_empty() {
+                return plan_err!(
+                    "The function {func_name} expects 0 arguments, but {} were provided",
+                    input_fields.len()
+                );
+            }
+        }
         TypeSignature::OneOf(variants) => {
             let ok = variants
                 .iter()
@@ -104,4 +112,27 @@ pub fn check_arg_count(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::Field;
+    use std::sync::Arc;
+
+    #[test]
+    fn nullary_signature_accepts_only_empty_arguments() {
+        assert!(check_arg_count("inputless", &[], &TypeSignature::Nullary).is_ok());
+
+        let fields: Vec<FieldRef> =
+            vec![Arc::new(Field::new("a", DataType::Int32, true))];
+        let error =
+            check_arg_count("inputless", &fields, &TypeSignature::Nullary).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("inputless expects 0 arguments, but 1 were provided"),
+            "{error}"
+        );
+    }
 }

@@ -138,6 +138,44 @@ impl<'a> GroupSelection<'a> {
     }
 }
 
+/// Arguments for converting raw aggregate inputs to intermediate state.
+#[derive(Debug, Clone, Copy)]
+pub struct ConvertToStateArgs<'a> {
+    values: &'a [ArrayRef],
+    opt_filter: Option<&'a BooleanArray>,
+    num_rows: usize,
+}
+
+impl<'a> ConvertToStateArgs<'a> {
+    /// Creates arguments for converting raw aggregate inputs to state.
+    pub fn new(
+        values: &'a [ArrayRef],
+        opt_filter: Option<&'a BooleanArray>,
+        num_rows: usize,
+    ) -> Self {
+        Self {
+            values,
+            opt_filter,
+            num_rows,
+        }
+    }
+
+    /// Returns the evaluated arguments to the aggregate function.
+    pub fn values(&self) -> &'a [ArrayRef] {
+        self.values
+    }
+
+    /// Returns the optional aggregate filter.
+    pub fn filter(&self) -> Option<&'a BooleanArray> {
+        self.opt_filter
+    }
+
+    /// Returns the number of row-aligned input rows before filtering.
+    pub fn num_rows(&self) -> usize {
+        self.num_rows
+    }
+}
+
 /// `GroupsAccumulator` implements a single aggregate (e.g. AVG) and
 /// stores the state for *all* groups internally.
 ///
@@ -372,6 +410,18 @@ pub trait GroupsAccumulator: Send + std::any::Any {
         values: &[ArrayRef],
         opt_filter: Option<&BooleanArray>,
     ) -> Result<Vec<ArrayRef>>;
+
+    /// Converts raw inputs to intermediate state with their row-aligned count.
+    ///
+    /// The explicit row count supports aggregate functions without arguments,
+    /// which receive an empty [`ConvertToStateArgs::values`] slice. The default
+    /// implementation delegates to [`Self::convert_to_state`].
+    fn convert_to_state_with_args(
+        &self,
+        args: ConvertToStateArgs<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        self.convert_to_state(args.values(), args.filter())
+    }
 
     /// Amount of memory used to store the state of this accumulator,
     /// in bytes.

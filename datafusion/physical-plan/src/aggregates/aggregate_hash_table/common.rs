@@ -28,7 +28,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, internal_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_expr::{AggregateMetrics, EmitTo, GroupsAccumulator};
+use datafusion_expr::{AggregateMetrics, ConvertToStateArgs, EmitTo, GroupsAccumulator};
 use datafusion_physical_expr::GroupsAccumulatorAdapter;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use log::debug;
@@ -583,6 +583,8 @@ pub(super) struct RowAlignedAccumulatorArgs {
     pub(super) arguments: Vec<ArrayRef>,
     /// Original row-aligned filter passed through to state conversion.
     pub(super) filter: Option<BooleanArray>,
+    /// Number of row-aligned input rows before applying the filter.
+    pub(super) num_rows: usize,
 }
 
 /// Evaluated all group by keys and accumulator args.
@@ -813,7 +815,11 @@ impl HashAggregateAccumulator {
             })
             .collect::<Result<_>>()?;
 
-        Ok(RowAlignedAccumulatorArgs { arguments, filter })
+        Ok(RowAlignedAccumulatorArgs {
+            arguments,
+            filter,
+            num_rows: batch.num_rows(),
+        })
     }
 
     fn evaluate_filter(&self, batch: &RecordBatch) -> Result<Option<BooleanArray>> {
@@ -889,7 +895,11 @@ impl HashAggregateAccumulator {
         values: &RowAlignedAccumulatorArgs,
     ) -> Result<Vec<ArrayRef>> {
         self.accumulator
-            .convert_to_state(&values.arguments, values.filter.as_ref())
+            .convert_to_state_with_args(ConvertToStateArgs::new(
+                &values.arguments,
+                values.filter.as_ref(),
+                values.num_rows,
+            ))
     }
 
     pub(super) fn null_arguments(

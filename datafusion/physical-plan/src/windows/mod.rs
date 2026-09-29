@@ -33,7 +33,7 @@ use crate::{
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow_schema::{FieldRef, SortOptions};
-use datafusion_common::{Result, assert_or_internal_err, exec_err};
+use datafusion_common::{Result, assert_or_internal_err, exec_err, not_impl_err};
 use datafusion_expr::{
     LimitEffect, PartitionEvaluator, ReversedUDWF, SetMonotonicity, WindowFrame,
     WindowFunctionDefinition, WindowUDF,
@@ -103,6 +103,12 @@ pub fn create_window_expr(
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
         WindowFunctionDefinition::AggregateUDF(fun) => {
+            if args.is_empty() {
+                return not_impl_err!(
+                    "Aggregate window function {} without arguments is not supported",
+                    fun.name()
+                );
+            }
             let aggregate = if distinct {
                 AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
                     .schema(input_schema)
@@ -927,6 +933,29 @@ mod tests {
             assert_eq!(calc_requirements(partitionbys, orderbys), expected);
         }
         Ok(())
+    }
+
+    #[test]
+    fn create_window_expr_rejects_aggregate_without_args() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let err = create_window_expr(
+            &WindowFunctionDefinition::AggregateUDF(count_udaf()),
+            "count".to_owned(),
+            &[],
+            &[],
+            &[],
+            Arc::new(WindowFrame::new(None)),
+            schema,
+            false,
+            false,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("without arguments is not supported"),
+            "{err}"
+        );
     }
 
     #[tokio::test]
