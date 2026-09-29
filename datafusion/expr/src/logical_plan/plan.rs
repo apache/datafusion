@@ -55,7 +55,7 @@ use crate::{
 
 use crate::statistics::StatisticsRequest;
 use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Metadata, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
 use datafusion_common::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use datafusion_common::metadata::check_metadata_with_storage_equal;
@@ -3460,8 +3460,7 @@ impl Union {
         inputs: &[Arc<LogicalPlan>],
         loose_types: bool,
     ) -> Result<DFSchemaRef> {
-        type FieldData<'a> =
-            (&'a DataType, bool, Vec<&'a HashMap<String, String>>, usize);
+        type FieldData<'a> = (&'a DataType, bool, Vec<&'a Metadata>, usize);
         let mut cols: Vec<(&str, FieldData)> = Vec::new();
         for input in inputs.iter() {
             for field in input.schema().fields() {
@@ -5126,7 +5125,7 @@ impl Unnest {
                                 ));
                                 Ok(get_unnested_columns(
                                     &r.output_column.name,
-                                    original_field.data_type(),
+                                    original_field,
                                     r.depth,
                                 )?
                                 .into_iter()
@@ -5137,7 +5136,7 @@ impl Unnest {
                         if transformed_columns.is_empty() {
                             transformed_columns = get_unnested_columns(
                                 &column_to_unnest.name,
-                                original_field.data_type(),
+                                original_field,
                                 1,
                             )?;
                             match original_field.data_type() {
@@ -5217,9 +5216,10 @@ impl Unnest {
 // the recursion level
 fn get_unnested_columns(
     col_name: &String,
-    data_type: &DataType,
+    field: &Field,
     depth: usize,
 ) -> Result<Vec<(Column, Arc<Field>)>> {
+    let data_type = field.data_type();
     let mut qualified_columns = Vec::with_capacity(1);
 
     match data_type {
@@ -5243,7 +5243,11 @@ fn get_unnested_columns(
             qualified_columns.extend(fields.iter().map(|f| {
                 let new_name = format!("{}.{}", col_name, f.name());
                 let column = Column::from_name(&new_name);
-                let new_field = f.as_ref().clone().with_name(new_name);
+                let new_field = f
+                    .as_ref()
+                    .clone()
+                    .with_name(new_name)
+                    .with_nullable(field.is_nullable() || f.is_nullable());
                 // let column = Column::from((None, &f));
                 (column, Arc::new(new_field))
             }))
@@ -6067,7 +6071,7 @@ mod tests {
         let schema_with_metadata = || {
             DFSchema::from_unqualified_fields(
                 vec![Field::new("count", DataType::Int64, false)].into(),
-                [("key".to_string(), "value".to_string())].into(),
+                Metadata::new().with("key", "value"),
             )
             .unwrap()
         };

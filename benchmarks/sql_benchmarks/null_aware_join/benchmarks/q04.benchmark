@@ -19,7 +19,7 @@ WHERE o.id_n0 NOT IN (SELECT i.id_n0 FROM small_inner i WHERE i.z < o.z);
 true
 
 expect_plan HashJoinExec
-expect_plan null_aware: true
+expect_plan null_aware
 
 run
 -- Q4: non-equality-correlated NOT IN, nullable keys that hold no NULL.

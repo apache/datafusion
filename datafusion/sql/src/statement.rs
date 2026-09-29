@@ -21,15 +21,15 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::parser::{
-    CopyToSource, CopyToStatement, CreateExternalTable, DFParser, ExplainStatement,
-    LexOrdering, ResetStatement, Statement as DFStatement,
+    CopyToSource, CopyToStatement, CreateExternalCatalog, CreateExternalTable, DFParser,
+    ExplainStatement, LexOrdering, ResetStatement, Statement as DFStatement,
 };
 use crate::planner::{
     ContextProvider, PlannerContext, SqlToRel, object_name_to_qualifier,
 };
 use crate::utils::normalize_ident;
 
-use arrow::datatypes::{Field, FieldRef, Fields};
+use arrow::datatypes::{Field, FieldRef, Fields, Metadata};
 use datafusion_common::error::_plan_err;
 use datafusion_common::format::ExplainStatementOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -48,6 +48,7 @@ use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     Analyze, Cast, CreateCatalog, CreateCatalogSchema,
+    CreateExternalCatalog as PlanCreateExternalCatalog,
     CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
     CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, Deallocate,
     DescribeTable, DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView,
@@ -234,6 +235,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub fn statement_to_plan(&self, statement: DFStatement) -> Result<LogicalPlan> {
         let plan = match statement {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s)?,
+            DFStatement::CreateExternalCatalog(s) => self.external_catalog_to_plan(s)?,
             DFStatement::Statement(s) => self.sql_statement_to_plan(*s)?,
             DFStatement::CopyTo(s) => self.copy_to_plan(s)?,
             DFStatement::Explain(ExplainStatement { options, statement }) => {
@@ -788,31 +790,32 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // We don't support cascade and purge for now.
                 // nor do we support multiple object names
                 let name = match names.len() {
-                    0 => Err(ParserError("Missing table name.".to_string()).into()),
-                    1 => self.object_name_to_table_reference(names.pop().unwrap()),
-                    _ => {
-                        Err(ParserError("Multiple objects not supported".to_string())
-                            .into())
-                    }
+                    0 => Err::<_, DataFusionError>(
+                        ParserError("Missing table name.".to_string()).into(),
+                    ),
+                    1 => Ok(names.pop().unwrap()),
+                    _ => Err::<_, DataFusionError>(
+                        ParserError("Multiple objects not supported".to_string()).into(),
+                    ),
                 }?;
 
                 match object_type {
                     ObjectType::Table => {
                         Ok(LogicalPlan::Ddl(DdlStatement::DropTable(DropTable {
-                            name,
+                            name: self.object_name_to_table_reference(name)?,
                             if_exists,
                             schema: DFSchemaRef::new(DFSchema::empty()),
                         })))
                     }
                     ObjectType::View => {
                         Ok(LogicalPlan::Ddl(DdlStatement::DropView(DropView {
-                            name,
+                            name: self.object_name_to_table_reference(name)?,
                             if_exists,
                             schema: DFSchemaRef::new(DFSchema::empty()),
                         })))
                     }
                     ObjectType::Schema => {
-                        let name = match name {
+                        let name = match self.object_name_to_table_reference(name)? {
                             TableReference::Bare { table } => {
                                 Ok(SchemaReference::Bare { schema: table })
                             }
@@ -839,8 +842,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             },
                         )))
                     }
+                    ObjectType::Database => Ok(LogicalPlan::Ddl(
+                        DdlStatement::DropCatalog(datafusion_expr::DropCatalog {
+                            name: object_name_to_string(&name),
+                            if_exists,
+                            cascade,
+                            schema: DFSchemaRef::new(DFSchema::empty()),
+                        }),
+                    )),
                     _ => not_impl_err!(
-                        "Only `DROP TABLE/VIEW/SCHEMA  ...` statement is supported currently"
+                        "Only `DROP TABLE/VIEW/SCHEMA/CATALOG/DATABASE  ...` statement is supported currently"
                     ),
                 }
             }
@@ -1919,6 +1930,43 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         )))
     }
 
+    fn external_catalog_to_plan(
+        &self,
+        statement: CreateExternalCatalog,
+    ) -> Result<LogicalPlan> {
+        let CreateExternalCatalog {
+            catalog_name,
+            catalog_type,
+            location,
+            if_not_exists,
+            or_replace,
+            options,
+        } = statement;
+
+        let mut options_map = HashMap::with_capacity(options.len());
+        for (key, value) in options {
+            if options_map.contains_key(&key) {
+                return plan_err!("Option {key} is specified multiple times");
+            }
+            let Some(value_string) = crate::utils::value_to_string(&value) else {
+                return plan_err!("Unsupported Value {}", value);
+            };
+            options_map.insert(key, value_string);
+        }
+
+        Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalCatalog(
+            Box::new(PlanCreateExternalCatalog {
+                catalog_name: object_name_to_string(&catalog_name),
+                catalog_type,
+                location,
+                if_not_exists,
+                or_replace,
+                options: options_map,
+                schema: Arc::new(DFSchema::empty()),
+            }),
+        )))
+    }
+
     /// Get the indices of the constraint columns in the schema.
     /// If any column is not found, return an error.
     fn get_constraint_column_indices(
@@ -2867,7 +2915,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut planner_context =
             PlannerContext::new().with_prepare_param_data_types(prepare_param_data_types);
         planner_context.set_table_schema(Some(DFSchemaRef::new(
-            DFSchema::from_unqualified_fields(fields.clone(), Default::default())?,
+            DFSchema::from_unqualified_fields(fields.clone(), Metadata::new())?,
         )));
         let source = self.query_to_plan(*source, &mut planner_context)?;
         if fields.len() != source.schema().fields().len() {

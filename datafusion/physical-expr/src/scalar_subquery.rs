@@ -96,10 +96,6 @@ impl ScalarSubqueryExpr {
     }
 
     /// Returns the index of this subquery in the shared results container.
-    #[deprecated(
-        since = "55.0.0",
-        note = "was only used for proto serialization, which no longer needs it. It will be removed in 61.0.0 or 6 months after 55.0.0 is released, whichever is longer."
-    )]
     pub fn index(&self) -> SubqueryIndex {
         self.index
     }
@@ -189,7 +185,7 @@ impl PhysicalExpr for ScalarSubqueryExpr {
                         "ScalarSubqueryExpr",
                         "index",
                     )?,
-                    metadata: field.metadata().clone(),
+                    metadata: field.metadata().into(),
                 },
             )),
         }))
