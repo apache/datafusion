@@ -96,6 +96,12 @@ use datafusion_expr_common::groups_accumulator::{
 pub struct GroupsAccumulatorAdapter {
     factory: Box<dyn Fn() -> Result<Box<dyn Accumulator>> + Send>,
 
+    /// Number of aggregate function arguments.
+    ///
+    /// `None` preserves the behavior of the original constructor, which treats
+    /// the aggregate as having arguments.
+    num_arguments: Option<usize>,
+
     /// state for each group, stored in group_index order
     states: Vec<AccumulatorState>,
 
@@ -206,8 +212,28 @@ impl GroupsAccumulatorAdapter {
     where
         F: Fn() -> Result<Box<dyn Accumulator>> + Send + 'static,
     {
+        Self::new_inner(factory, None)
+    }
+
+    /// Create a new adapter with the aggregate function's argument count.
+    ///
+    /// Use this constructor for functions without arguments. Evaluated input
+    /// arrays may still contain ORDER BY expressions, so their count cannot be
+    /// used to determine whether a function is inputless.
+    pub fn new_with_num_arguments<F>(factory: F, num_arguments: usize) -> Self
+    where
+        F: Fn() -> Result<Box<dyn Accumulator>> + Send + 'static,
+    {
+        Self::new_inner(factory, Some(num_arguments))
+    }
+
+    fn new_inner<F>(factory: F, num_arguments: Option<usize>) -> Self
+    where
+        F: Fn() -> Result<Box<dyn Accumulator>> + Send + 'static,
+    {
         Self {
             factory: Box::new(factory),
+            num_arguments,
             states: vec![],
             allocation_bytes: 0,
             metrics: None,
@@ -572,13 +598,19 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
+        let is_inputless = self.num_arguments == Some(0);
         self.invoke_per_accumulator(
             values,
             group_indices,
             opt_filter,
             total_num_groups,
             |accumulator, values_to_accumulate, num_rows| {
-                update_accumulator(accumulator, values_to_accumulate, num_rows)
+                update_accumulator(
+                    accumulator,
+                    values_to_accumulate,
+                    num_rows,
+                    is_inputless,
+                )
             },
         )?;
         Ok(())
@@ -714,6 +746,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         let values = args.values();
         let opt_filter = args.filter();
         let num_rows = args.num_rows();
+        let is_inputless = self.num_arguments == Some(0);
         if !values.iter().all(|value| value.len() == num_rows) {
             return internal_err!(
                 "Aggregate argument array length must match the state conversion row count"
@@ -772,6 +805,7 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
                             accumulator.as_mut(),
                             values_to_accumulate,
                             *num_rows,
+                            is_inputless,
                         )
                     },
                 )
@@ -846,8 +880,9 @@ fn update_accumulator(
     accumulator: &mut dyn Accumulator,
     values: &[ArrayRef],
     num_rows: usize,
+    is_inputless: bool,
 ) -> Result<()> {
-    if values.is_empty() {
+    if is_inputless {
         accumulator.update_batch_with_args(AccumulatorUpdateArgs::new(values, num_rows))
     } else {
         accumulator.update_batch_grouped(values)
@@ -910,7 +945,6 @@ mod tests {
             &mut self,
             args: AccumulatorUpdateArgs<'_>,
         ) -> Result<()> {
-            assert!(args.values().is_empty());
             self.count += args.num_rows() as i64;
             Ok(())
         }
@@ -938,13 +972,30 @@ mod tests {
     }
 
     fn inputless_adapter() -> GroupsAccumulatorAdapter {
-        GroupsAccumulatorAdapter::new(|| Ok(Box::new(RowCountAccumulator::default())))
+        GroupsAccumulatorAdapter::new_with_num_arguments(
+            || Ok(Box::new(RowCountAccumulator::default())),
+            0,
+        )
     }
 
     #[test]
     fn adapter_updates_inputless_accumulators_by_group() -> Result<()> {
         let mut adapter = inputless_adapter();
         adapter.update_batch(&[], &[0, 1, 0, 2], None, 3)?;
+
+        let result = adapter.evaluate(EmitTo::All)?;
+        assert_eq!(
+            result.as_primitive::<Int64Type>(),
+            &Int64Array::from(vec![2, 1, 1])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn adapter_identifies_inputless_accumulator_with_additional_values() -> Result<()> {
+        let values: ArrayRef = Arc::new(Int64Array::from(vec![10, 20, 30, 40]));
+        let mut adapter = inputless_adapter();
+        adapter.update_batch(&[values], &[0, 1, 0, 2], None, 3)?;
 
         let result = adapter.evaluate(EmitTo::All)?;
         assert_eq!(
@@ -978,6 +1029,18 @@ mod tests {
             4,
         ))?;
 
+        assert_eq!(
+            state[0].as_primitive::<Int64Type>(),
+            &Int64Array::from(vec![1, 0, 0, 1])
+        );
+
+        let values: Vec<ArrayRef> =
+            vec![Arc::new(Int64Array::from(vec![10, 20, 30, 40]))];
+        let state = adapter.convert_to_state_with_args(ConvertToStateArgs::new(
+            &values,
+            Some(&filter),
+            4,
+        ))?;
         assert_eq!(
             state[0].as_primitive::<Int64Type>(),
             &Int64Array::from(vec![1, 0, 0, 1])

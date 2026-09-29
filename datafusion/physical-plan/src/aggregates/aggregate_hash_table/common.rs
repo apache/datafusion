@@ -72,9 +72,12 @@ pub(in crate::aggregates) fn create_group_accumulator(
             "Creating GroupsAccumulatorAdapter for {}: {agg_expr:?}",
             agg_expr.name()
         );
+        let num_arguments = agg_expr.expressions().len();
         let agg_expr = Arc::clone(agg_expr);
-        let mut adapter =
-            GroupsAccumulatorAdapter::new(move || agg_expr.create_accumulator());
+        let mut adapter = GroupsAccumulatorAdapter::new_with_num_arguments(
+            move || agg_expr.create_accumulator(),
+            num_arguments,
+        );
         adapter.set_metrics(metrics);
         Ok(Box::new(adapter))
     }
