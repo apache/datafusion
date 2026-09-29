@@ -787,23 +787,29 @@ fn infer_join_predicates_impl<
 
 /// Whether `expr` depends on any of the columns named in `names`.
 ///
-/// This is `Expr::column_refs` plus the outer columns that any subquery inside
-/// `expr` correlates on. A subquery records those in
+/// This is the columns `Expr::column_refs` would collect plus the outer columns
+/// that any subquery inside `expr` correlates on. A subquery records those in
 /// `Subquery::outer_ref_columns` rather than as an `Expr::Column` in the
 /// predicate, and `Expr`'s own traversal does not descend into that field, so
 /// looking only at `column_refs` would report such a predicate as depending on
 /// nothing and let it be pushed past a node that asked to keep those columns.
 fn references_any_column(expr: &Expr, names: &HashSet<String>) -> bool {
-    if expr.column_refs().iter().any(|c| names.contains(&c.name)) {
-        return true;
-    }
-
     let mut found = false;
     expr.apply(|e| {
         let outer_refs = match e {
+            Expr::Column(col) => {
+                if names.contains(&col.name) {
+                    found = true;
+                    return Ok(TreeNodeRecursion::Stop);
+                }
+                return Ok(TreeNodeRecursion::Continue);
+            }
             Expr::Exists(exists) => &exists.subquery.outer_ref_columns,
             Expr::InSubquery(in_subquery) => &in_subquery.subquery.outer_ref_columns,
             Expr::ScalarSubquery(subquery) => &subquery.outer_ref_columns,
+            Expr::SetComparison(set_comparison) => {
+                &set_comparison.subquery.outer_ref_columns
+            }
             _ => return Ok(TreeNodeRecursion::Continue),
         };
         if outer_refs.iter().any(|outer_ref| {
@@ -1553,14 +1559,14 @@ mod tests {
     use arrow::datatypes::{Field, Metadata, Schema, SchemaRef};
     use async_trait::async_trait;
 
-    use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
-    use datafusion_expr::expr::ScalarFunction;
+    use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue, Spans};
+    use datafusion_expr::expr::{ScalarFunction, SetComparison, SetQuantifier};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
         ColumnarValue, ExprFunctionExt, Extension, LogicalPlanBuilder,
-        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableScan, TableSource,
-        TableType, UserDefinedLogicalNodeCore, Volatility, WindowFunctionDefinition, col,
-        exists, in_list, in_subquery, lit, out_ref_col,
+        ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Subquery, TableScan,
+        TableSource, TableType, UserDefinedLogicalNodeCore, Volatility,
+        WindowFunctionDefinition, col, exists, in_list, in_subquery, lit, out_ref_col,
     };
 
     use crate::OptimizerContext;
@@ -2243,6 +2249,53 @@ mod tests {
             plan,
             @r"
         Filter: EXISTS (<subquery>)
+          Subquery:
+            Projection: sq.a
+              TableScan: sq, full_filters=[outer_ref(test.c) = sq.a]
+          NoopPlan
+            TableScan: test
+        "
+        )
+    }
+
+    #[test]
+    fn user_defined_plan_outer_referenced_column_set_comparison() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // `test.a > ANY (SELECT sq.a FROM sq WHERE test.c = sq.a)`: the
+        // comparison expression names only `test.a`, so the dependency on
+        // `test.c` exists solely in the subquery's `outer_ref_columns`.
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+            .filter(out_ref_col(DataType::UInt32, "test.c").eq(col("sq.a")))?
+            .project(vec![col("sq.a")])?
+            .build()?;
+        let outer_ref_columns = subquery.all_out_ref_exprs();
+        let set_comparison = Expr::SetComparison(SetComparison::new(
+            Box::new(col("test.a")),
+            Subquery {
+                subquery: Arc::new(subquery),
+                outer_ref_columns,
+                spans: Spans::new(),
+            },
+            Operator::Gt,
+            SetQuantifier::Any,
+        ));
+
+        let custom_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(NoopPlan {
+                input: vec![table_scan.clone()],
+                schema: Arc::clone(table_scan.schema()),
+            }),
+        });
+        let plan = LogicalPlanBuilder::from(custom_plan)
+            .filter(set_comparison)?
+            .build()?;
+
+        // The predicate depends on `test.c`, so it must stay above NoopPlan.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.a > ANY (<subquery>)
           Subquery:
             Projection: sq.a
               TableScan: sq, full_filters=[outer_ref(test.c) = sq.a]
