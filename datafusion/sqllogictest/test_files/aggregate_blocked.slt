@@ -1,0 +1,160 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Blocked hash aggregation: `GROUP BY <primitive>` where every aggregate is
+# `count` keeps its state in blocks of 2^18 groups and emits block by block.
+#
+# 600000 groups span 3 blocks. Keys are scrambled with `(v * 7) % 600000`
+# (gcd(7, 600000) = 1, so still 600000 distinct keys) because generate_series
+# is sorted, which would take the ordered path instead of the hash path.
+#
+# Each query summarizes the grouped result into one row.
+
+statement ok
+SET datafusion.execution.target_partitions = 1
+
+statement ok
+CREATE TABLE t AS
+SELECT (v * 7) % 600000 AS k, CASE WHEN v % 5 = 0 THEN NULL ELSE v END AS v,
+  CAST(v AS DOUBLE) / 4 AS f
+FROM generate_series(0, 1799999) AS s(v)
+
+# count per group across several blocks
+query IIII
+SELECT count(*), sum(c), min(c), max(c)
+FROM (SELECT k, count(v) AS c FROM t GROUP BY k)
+----
+600000 1440000 0 3
+
+# count(*) per group
+query II
+SELECT count(*), sum(c)
+FROM (SELECT k, count(*) AS c FROM t GROUP BY k)
+----
+600000 1800000
+
+# NULL group key, interned after the first block is full
+query III
+SELECT count(*), sum(c), sum(CASE WHEN k2 IS NULL THEN c END)
+FROM (
+  SELECT CASE WHEN k >= 599990 THEN NULL ELSE k END AS k2, count(v) AS c
+  FROM t GROUP BY k2
+)
+----
+599991 1440000 24
+
+# FILTER on count across blocks
+query II
+SELECT count(*), sum(c)
+FROM (SELECT k, count(v) FILTER (WHERE v % 2 = 0) AS c FROM t GROUP BY k)
+----
+600000 720000
+
+# count together with a non-blocked aggregate takes today's path
+query III
+SELECT count(*), sum(c), sum(s)
+FROM (SELECT k, count(v) AS c, sum(v) AS s FROM t GROUP BY k)
+----
+600000 1440000 1296000000000
+
+# blocked sum
+query IIII
+SELECT count(*), sum(s), min(s), max(s)
+FROM (SELECT k, sum(v) AS s FROM t GROUP BY k)
+----
+600000 1296000000000 1800003 3599997
+
+# blocked avg
+query IRRR
+SELECT count(*), sum(a), min(a), max(a)
+FROM (SELECT k, avg(f) AS a FROM t GROUP BY k)
+----
+600000 134999925000 150000 299999.75
+
+# count, sum and avg, all blocked
+query IIIR
+SELECT count(*), sum(c), sum(s), sum(a)
+FROM (SELECT k, count(v) AS c, sum(v) AS s, avg(f) AS a FROM t GROUP BY k)
+----
+600000 1440000 1296000000000 134999925000
+
+# blocked count(DISTINCT): one set of distinct values per block
+query IIII
+SELECT count(*), sum(d), min(d), max(d)
+FROM (SELECT k, count(DISTINCT v % 2) AS d FROM t GROUP BY k)
+----
+600000 480000 0 1
+
+# blocked min / max on strings, both inline (short) and heap (long) values
+query ITTI
+SELECT count(*), min(mn), max(mx), sum(length(mx))
+FROM (
+  SELECT k, min(CAST(v AS VARCHAR)) AS mn, max(repeat(CAST(v AS VARCHAR), 5)) AS mx
+  FROM t GROUP BY k
+)
+----
+600000 1 999999999999999999999999999999 14229605
+
+# flat (string) keys with a blocked accumulator
+query II
+SELECT count(*), sum(s)
+FROM (SELECT CAST(k AS VARCHAR) AS ks, sum(v) AS s FROM t GROUP BY ks)
+----
+600000 1296000000000
+
+# multiple partitions: partial + final aggregation both blocked
+statement ok
+SET datafusion.execution.target_partitions = 4
+
+query II
+SELECT count(*), sum(c)
+FROM (SELECT k, count(v) AS c FROM t GROUP BY k)
+----
+600000 1440000
+
+statement ok
+SET datafusion.execution.target_partitions = 1
+
+# ordered input (generate_series is sorted on v) with more groups than a block
+query II
+SELECT count(*), sum(c)
+FROM (SELECT v, count(*) AS c FROM generate_series(0, 599999) AS s(v) GROUP BY v)
+----
+600000 600000
+
+# spill with more groups than a block
+statement ok
+SET datafusion.runtime.memory_limit = '8M'
+
+query II
+SELECT count(*), sum(c)
+FROM (SELECT k, count(v) AS c FROM t GROUP BY k)
+----
+600000 1440000
+
+statement ok
+RESET datafusion.runtime.memory_limit
+
+statement ok
+DROP TABLE t
+
+# Restore settings to slt runner defaults
+statement ok
+SET datafusion.execution.target_partitions = 4
+
+statement ok
+RESET datafusion.catalog.create_default_catalog_and_schema

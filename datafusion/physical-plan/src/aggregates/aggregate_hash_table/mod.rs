@@ -24,6 +24,7 @@ mod ordered_single_table;
 mod partial_reduce_table;
 mod partial_table;
 mod single_table;
+mod storage;
 
 use std::sync::Arc;
 
@@ -102,6 +103,7 @@ pub(super) use common::{
     PartialSkipMarker, SingleMarker, create_group_accumulator,
 };
 pub(super) use common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetrics};
+pub(super) use storage::MaterializedBatch;
 
 #[cfg(test)]
 mod tests {

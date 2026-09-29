@@ -20,7 +20,6 @@
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryReservation;
@@ -28,7 +27,7 @@ use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
-use super::aggregate_hash_table::OrderedAggregateTableMetrics;
+use super::aggregate_hash_table::{MaterializedBatch, OrderedAggregateTableMetrics};
 use super::ordered_final_stream::OrderedFinalAggregateStream;
 use super::{AggregateExec, AggregateMode};
 use crate::metrics::{BaselineMetrics, SpillMetrics};
@@ -41,7 +40,7 @@ use crate::{InputOrderMode, SendableRecordBatchStream};
 ///
 /// Every aggregation stream that spills does so the same way. Each spill event
 /// drains all currently buffered groups as intermediate state (see
-/// `take_state_batch` on the aggregate tables), sorts them by the full group
+/// `take_state_batches` on the aggregate tables), sorts them by the full group
 /// key, and writes them to one spill file. After the original input ends, all
 /// files are merged and replayed through an [`OrderedFinalAggregateStream`],
 /// which merges the states and evaluates the final aggregate values.
@@ -208,37 +207,41 @@ impl AggregateSpill {
         !self.spills.is_empty()
     }
 
-    /// Sorts `state_batch`, the intermediate state of all currently buffered
-    /// groups (`None` if there are no groups), and writes it as one spill file.
-    /// Memory reservation should be updated by the caller.
+    /// Sorts `state_batches`, the intermediate state of all currently buffered
+    /// groups (empty if there are no groups), and writes each batch as one
+    /// spill file. Memory reservation should be updated by the caller.
+    ///
+    /// Flat aggregate storage produces one batch; blocked storage produces one
+    /// batch per block.
     pub(super) fn sort_and_spill(
         &mut self,
-        state_batch: Option<RecordBatch>,
+        state_batches: Vec<MaterializedBatch>,
     ) -> Result<()> {
-        let Some(state_batch) = state_batch else {
-            return Ok(());
-        };
+        // TODO: sort across multiple arrays without concat (see #24928
+        //  sort.rs/rank.rs) so all blocks are written as one sorted run instead
+        //  of one run per block.
+        for state_batch in state_batches {
+            let sorted_iter = IncrementalSortIterator::new(
+                state_batch.batch,
+                self.spill_expr.clone(),
+                self.batch_size,
+            );
+            let spill_file = self
+                .spill_manager
+                .spill_record_batch_iter_and_return_max_batch_memory(
+                    sorted_iter,
+                    self.label,
+                )?;
 
-        let sorted_iter = IncrementalSortIterator::new(
-            state_batch,
-            self.spill_expr.clone(),
-            self.batch_size,
-        );
-        let spill_file = self
-            .spill_manager
-            .spill_record_batch_iter_and_return_max_batch_memory(
-                sorted_iter,
-                self.label,
-            )?;
+            let Some((file, max_record_batch_memory)) = spill_file else {
+                return internal_err!("{}: produced an empty spill", self.label);
+            };
 
-        let Some((file, max_record_batch_memory)) = spill_file else {
-            return internal_err!("{}: produced an empty spill", self.label);
-        };
-
-        self.spills.push(SortedSpillFile {
-            file,
-            max_record_batch_memory,
-        });
+            self.spills.push(SortedSpillFile {
+                file,
+                max_record_batch_memory,
+            });
+        }
 
         Ok(())
     }

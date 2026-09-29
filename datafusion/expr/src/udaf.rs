@@ -44,6 +44,7 @@ use crate::udf_eq::UdfEq;
 use crate::utils::{AggregateOrderSensitivity, format_state_name, ordering_state_fields};
 use crate::{Accumulator, Expr, expr_vec_fmt};
 use crate::{Documentation, Signature};
+use datafusion_expr_common::blocked_groups_accumulator::BlockedGroupsAccumulator;
 
 /// Logical representation of a user-defined [aggregate function] (UDAF).
 ///
@@ -268,6 +269,21 @@ impl AggregateUDF {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         self.inner.create_groups_accumulator(args)
+    }
+
+    /// See [`AggregateUDFImpl::blocked_groups_accumulator_supported`] for more details.
+    pub fn blocked_groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        self.inner.blocked_groups_accumulator_supported(args)
+    }
+
+    /// See [`AggregateUDFImpl::create_blocked_groups_accumulator`] for more details.
+    pub fn create_blocked_groups_accumulator(
+        &self,
+        args: AccumulatorArgs,
+        block_size: usize,
+    ) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+        self.inner
+            .create_blocked_groups_accumulator(args, block_size)
     }
 
     pub fn create_sliding_accumulator(
@@ -667,6 +683,25 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         _args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         not_impl_err!("GroupsAccumulator hasn't been implemented for {self:?} yet")
+    }
+
+    /// If this aggregate has a [`BlockedGroupsAccumulator`]. When every
+    /// aggregate in a hash aggregation returns `true` (and the group key is
+    /// supported), group state is stored in blocks and released block by
+    /// block. Defaults to `false`.
+    fn blocked_groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
+        false
+    }
+
+    /// Creates a [`BlockedGroupsAccumulator`] storing `block_size` groups per
+    /// block. Only called when [`Self::blocked_groups_accumulator_supported`]
+    /// returned `true`.
+    fn create_blocked_groups_accumulator(
+        &self,
+        _args: AccumulatorArgs,
+        _block_size: usize,
+    ) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+        not_impl_err!("BlockedGroupsAccumulator hasn't been implemented for {self:?} yet")
     }
 
     /// Sliding accumulator is an alternative accumulator that can be used for
@@ -1620,6 +1655,19 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
         self.inner.create_groups_accumulator(args)
+    }
+
+    fn blocked_groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        self.inner.blocked_groups_accumulator_supported(args)
+    }
+
+    fn create_blocked_groups_accumulator(
+        &self,
+        args: AccumulatorArgs,
+        block_size: usize,
+    ) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+        self.inner
+            .create_blocked_groups_accumulator(args, block_size)
     }
 
     fn create_sliding_accumulator(

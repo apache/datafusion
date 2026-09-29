@@ -211,30 +211,39 @@ where
         values: &[ArrayRef],
         opt_filter: Option<&BooleanArray>,
     ) -> datafusion_common::Result<Vec<ArrayRef>> {
-        debug_assert_eq!(values.len(), 1);
-        let arr = values[0].as_primitive::<T>();
-
-        let values_builder = PrimitiveBuilder::<T>::with_capacity(arr.len());
-        let mut builder = ListBuilder::new(values_builder)
-            .with_field(Arc::new(Field::new_list_field(T::DATA_TYPE, true)));
-
-        for row in 0..arr.len() {
-            let included = arr.is_valid(row)
-                && opt_filter
-                    .is_none_or(|filter| filter.is_valid(row) && filter.value(row));
-            if included {
-                builder.values().append_value(arr.value(row));
-            }
-            builder.append(true);
-        }
-
-        Ok(vec![Arc::new(builder.finish())])
+        distinct_convert_to_state::<T>(values, opt_filter)
     }
     fn size(&self) -> usize {
         size_of::<Self>()
             + self.seen.capacity() * (size_of::<(usize, T::Native)>() + size_of::<u64>())
             + self.counts.capacity() * size_of::<i64>()
     }
+}
+
+/// Converts an input batch directly to state: a list per row with the row's
+/// value, or an empty list for null or filtered rows. Shared by the flat and
+/// blocked distinct count accumulators.
+pub(super) fn distinct_convert_to_state<T: ArrowPrimitiveType>(
+    values: &[ArrayRef],
+    opt_filter: Option<&BooleanArray>,
+) -> datafusion_common::Result<Vec<ArrayRef>> {
+    debug_assert_eq!(values.len(), 1);
+    let arr = values[0].as_primitive::<T>();
+
+    let values_builder = PrimitiveBuilder::<T>::with_capacity(arr.len());
+    let mut builder = ListBuilder::new(values_builder)
+        .with_field(Arc::new(Field::new_list_field(T::DATA_TYPE, true)));
+
+    for row in 0..arr.len() {
+        let included = arr.is_valid(row)
+            && opt_filter.is_none_or(|filter| filter.is_valid(row) && filter.value(row));
+        if included {
+            builder.values().append_value(arr.value(row));
+        }
+        builder.append(true);
+    }
+
+    Ok(vec![Arc::new(builder.finish())])
 }
 
 #[cfg(test)]

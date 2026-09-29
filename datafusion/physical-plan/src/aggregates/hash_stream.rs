@@ -34,8 +34,8 @@ use futures::stream::{Stream, StreamExt};
 
 use super::AggregateExec;
 use super::aggregate_hash_table::{
-    AggregateHashTable, FinalMarker, OrderedAggregateTableMetrics, PartialMarker,
-    PartialSkipMarker,
+    AggregateHashTable, FinalMarker, MaterializedBatch, OrderedAggregateTableMetrics,
+    PartialMarker, PartialSkipMarker,
 };
 use super::skip_partial::SkipAggregationProbe;
 use super::spill::AggregateSpill;
@@ -313,20 +313,32 @@ impl PartialHashAggregateStream {
                         break;
                     }
                     HandleInputResult::OOM => {
-                        let materialized_group_states = hash_table.take_state_batch()?.ok_or_else(|| {
-                            internal_datafusion_err!(
+                        let materialized_group_states =
+                            hash_table.take_state_batches()?;
+                        if materialized_group_states.is_empty() {
+                            return Err(internal_datafusion_err!(
                                 "Partial hash aggregate ran out of memory with no aggregated groups"
-                            )
-                        })?;
+                            ));
+                        }
 
                         self.early_emit_count.add(1);
                         timer.done();
-                        self.emit_on_memory_pressure(
-                            materialized_group_states,
-                            &mut emitter,
-                            hash_table.memory_size(),
-                        )
-                        .await?;
+                        // Blocked storage returns one batch per block, moved out of
+                        // the table without copying. Emit them in turn, keeping the
+                        // batches not emitted yet in the reservation.
+                        let mut pending_memory: usize = materialized_group_states
+                            .iter()
+                            .map(|b| b.memory_size)
+                            .sum();
+                        for batch in materialized_group_states {
+                            pending_memory -= batch.memory_size;
+                            self.emit_on_memory_pressure(
+                                batch,
+                                &mut emitter,
+                                hash_table.memory_size() + pending_memory,
+                            )
+                            .await?;
+                        }
                     }
                 }
             }
@@ -431,11 +443,14 @@ impl PartialHashAggregateStream {
         &mut self,
         // After each incremental emitting step, the `remaining_groups` will be updated
         // with batch slicing.
-        mut remaining_groups: RecordBatch,
+        remaining_groups: MaterializedBatch,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
         hash_table_mem_size: usize,
     ) -> Result<()> {
-        let remaining_groups_memory = remaining_groups.get_array_memory_size();
+        let MaterializedBatch {
+            batch: mut remaining_groups,
+            memory_size: remaining_groups_memory,
+        } = remaining_groups;
 
         // Emitting clears the aggregate table and releases its
         // accumulated memory. Update the reservation accordingly.
@@ -751,7 +766,7 @@ impl FinalHashAggregateStream {
                     // Go to the next state to perform spilling the aggregated
                     // groups so far.
                     let result = hash_table
-                        .take_state_batch()
+                        .take_state_batches()
                         .and_then(|batch| spill_context.sort_and_spill(batch));
 
                     // Spilling shrinks the aggregate table and releases its accumulated
@@ -790,7 +805,7 @@ impl FinalHashAggregateStream {
 
         // Input was exhausted after spilling. Spill the last in-memory run
         hash_table
-            .take_state_batch()
+            .take_state_batches()
             .and_then(|batch| spill_context.sort_and_spill(batch))?;
 
         // Construct the ordered input used to merge all spill files.

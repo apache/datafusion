@@ -42,7 +42,9 @@ use arrow::datatypes::{
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 
-use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
+use crate::min_max::min_max_bytes::{
+    BlockedMinMaxBytesAccumulator, MinMaxBytesAccumulator,
+};
 use crate::min_max::min_max_struct::MinMaxStructAccumulator;
 use datafusion_common::ScalarValue;
 use datafusion_expr::DistinctHandling;
@@ -50,7 +52,7 @@ use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, SetMonotonicity, Signature, Volatility,
     function::AccumulatorArgs,
 };
-use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
+use datafusion_expr::{BlockedGroupsAccumulator, GroupsAccumulator, StatisticsArgs};
 use datafusion_macros::user_doc;
 use half::f16;
 use std::collections::VecDeque;
@@ -276,6 +278,25 @@ impl AggregateUDFImpl for Max {
                 | Duration(_)
                 | Struct(_)
         )
+    }
+
+    fn blocked_groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        use DataType::*;
+        matches!(
+            args.return_field.data_type(),
+            Utf8 | LargeUtf8 | Utf8View | Binary | LargeBinary | BinaryView
+        )
+    }
+
+    fn create_blocked_groups_accumulator(
+        &self,
+        args: AccumulatorArgs,
+        block_size: usize,
+    ) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+        Ok(Box::new(BlockedMinMaxBytesAccumulator::new_max(
+            args.return_field.data_type().clone(),
+            block_size,
+        )))
     }
 
     fn create_groups_accumulator(
@@ -575,6 +596,25 @@ impl AggregateUDFImpl for Min {
                 | Duration(_)
                 | Struct(_)
         )
+    }
+
+    fn blocked_groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        use DataType::*;
+        matches!(
+            args.return_field.data_type(),
+            Utf8 | LargeUtf8 | Utf8View | Binary | LargeBinary | BinaryView
+        )
+    }
+
+    fn create_blocked_groups_accumulator(
+        &self,
+        args: AccumulatorArgs,
+        block_size: usize,
+    ) -> Result<Box<dyn BlockedGroupsAccumulator>> {
+        Ok(Box::new(BlockedMinMaxBytesAccumulator::new_min(
+            args.return_field.data_type().clone(),
+            block_size,
+        )))
     }
 
     fn create_groups_accumulator(

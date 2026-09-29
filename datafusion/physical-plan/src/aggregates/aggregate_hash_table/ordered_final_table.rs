@@ -31,6 +31,7 @@ use crate::aggregates::{AggregateExec, AggregateMode, group_values::AccumulatorP
 
 use super::common::HashAggregateAccumulator;
 use super::common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetrics};
+use super::storage::MaterializedBatch;
 
 /// Implementation specific to final aggregation, where the table stores partial
 /// aggregate states and the input rows are also partial states.
@@ -83,21 +84,21 @@ impl OrderedAggregateTable<FinalMarker> {
     /// Materializes final results for all groups proven complete by the input
     /// ordering, leaving the active ordered-key range in the table.
     ///
-    /// Returns None if there are no completed groups.
-    pub(in crate::aggregates) fn take_completed_result_batch(
+    /// Returns no batch if there are no completed groups, and one batch per
+    /// emitted chunk for blocked storage.
+    pub(in crate::aggregates) fn take_completed_result_batches(
         &mut self,
-    ) -> Result<Option<RecordBatch>> {
+    ) -> Result<Vec<MaterializedBatch>> {
         if self.is_empty() {
-            return Ok(None);
+            return Ok(vec![]);
         }
         let Some(emit_to) = self.group_ordering().emit_to() else {
-            return Ok(None);
+            return Ok(vec![]);
         };
         self.materialize_groups(
             emit_to,
             HashAggregateAccumulator::evaluate_to_columns,
             AccumulatorPhase::Evaluate,
         )
-        .map(Some)
     }
 }

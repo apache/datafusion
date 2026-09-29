@@ -25,6 +25,7 @@ use arrow::datatypes::ArrowPrimitiveType;
 
 use crate::aggregate::groups_accumulator::nulls::filter_to_validity;
 use datafusion_common::Result;
+use datafusion_expr_common::blocked_groups_accumulator::BlocksIndex;
 use datafusion_expr_common::groups_accumulator::{EmitTo, GroupSelection};
 
 /// If the input has nulls, then the accumulator must potentially
@@ -422,10 +423,38 @@ pub fn accumulate<T, F>(
     group_indices: &[usize],
     values: &PrimitiveArray<T>,
     opt_filter: Option<&BooleanArray>,
-    mut value_fn: F,
+    value_fn: F,
 ) where
     T: ArrowPrimitiveType + Send,
     F: FnMut(usize, T::Native) + Send,
+{
+    accumulate_values(group_indices, values, opt_filter, value_fn)
+}
+
+/// [`accumulate`] for blocked group indices.
+pub fn accumulate_blocked<T, F>(
+    group_indices: &[BlocksIndex],
+    values: &PrimitiveArray<T>,
+    opt_filter: Option<&BooleanArray>,
+    value_fn: F,
+) where
+    T: ArrowPrimitiveType,
+    F: FnMut(BlocksIndex, T::Native),
+{
+    accumulate_values(group_indices, values, opt_filter, value_fn)
+}
+
+/// Shared implementation of [`accumulate`] and [`accumulate_blocked`].
+#[inline(always)]
+fn accumulate_values<I, T, F>(
+    group_indices: &[I],
+    values: &PrimitiveArray<T>,
+    opt_filter: Option<&BooleanArray>,
+    mut value_fn: F,
+) where
+    I: Copy,
+    T: ArrowPrimitiveType,
+    F: FnMut(I, T::Native),
 {
     let data: &[T::Native] = values.values();
     assert_eq!(data.len(), group_indices.len());
@@ -592,9 +621,39 @@ pub fn accumulate_indices<F>(
     group_indices: &[usize],
     nulls: Option<&NullBuffer>,
     opt_filter: Option<&BooleanArray>,
-    mut index_fn: F,
+    index_fn: F,
 ) where
     F: FnMut(usize) + Send,
+{
+    accumulate_group_indices(group_indices, nulls, opt_filter, index_fn)
+}
+
+/// [`accumulate_indices`] for blocked group indices.
+///
+/// `F`: Invoked like `value_fn(group_index)` for all non null values
+/// passing the filter.
+pub fn accumulate_blocked_indices<F>(
+    group_indices: &[BlocksIndex],
+    nulls: Option<&NullBuffer>,
+    opt_filter: Option<&BooleanArray>,
+    index_fn: F,
+) where
+    F: FnMut(BlocksIndex),
+{
+    accumulate_group_indices(group_indices, nulls, opt_filter, index_fn)
+}
+
+/// Shared implementation of [`accumulate_indices`] and
+/// [`accumulate_blocked_indices`].
+#[inline(always)]
+fn accumulate_group_indices<I, F>(
+    group_indices: &[I],
+    nulls: Option<&NullBuffer>,
+    opt_filter: Option<&BooleanArray>,
+    mut index_fn: F,
+) where
+    I: Copy,
+    F: FnMut(I),
 {
     match (nulls, opt_filter) {
         (None, None) => {
