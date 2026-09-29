@@ -3314,9 +3314,10 @@ async fn collect_left_input(
 
     let map = Arc::new(join_hash_map);
 
-    // Nothing reads the strategy unless the dynamic filter accumulator exists,
-    // and that exists only when the pushdown is enabled.
-    let membership = if num_rows == 0 || !should_compute_dynamic_filters {
+    // For an ordinary build, nothing reads the strategy unless this join's own
+    // dynamic filter accumulator exists. A prepared build is shared with joins
+    // decided later, so it must always be ready to serve one.
+    let membership = if num_rows == 0 || (!prepared && !should_compute_dynamic_filters) {
         PushdownStrategy::Empty
     } else {
         // If the build side is small enough we can use IN list pushdown.
