@@ -522,7 +522,7 @@ physical_plan
 01)FilterExec: NOT mark@1 OR value@0 = zzz, projection=[value@0]
 02)--HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(id@0, id@0), (grp@1, grp@1)], projection=[value@2, mark@3], null_aware
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/null_aware_mark_join/outer.parquet]]}, projection=[id, grp, value], file_type=parquet
-04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/null_aware_mark_join/inner.parquet]]}, projection=[id, grp], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+04)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/null_aware_mark_join/inner.parquet]]}, projection=[id, grp], file_type=parquet, predicate=Optional(DynamicFilter [ empty ]), dynamic_rg_pruning=eligible
 
 # `a` (grp 1 = {2, NULL}) is UNKNOWN and `b` matches, so only `c` (no match in
 # grp 2) and `d` (empty grp 3) pass. A dropped NULL probe row would wrongly

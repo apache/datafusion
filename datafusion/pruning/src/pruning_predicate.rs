@@ -3448,6 +3448,47 @@ mod tests {
         assert_eq!(result, expected);
     }
 
+    /// Pruning sees through `OptionalFilterPhysicalExpr`: an optional filter
+    /// prunes the same as the inner filter.
+    #[test]
+    fn prune_optional_filter_same_as_inner() {
+        let (schema, statistics) = int32_setup();
+        let expected = &[true, true, false, true, true];
+
+        let required = logical2physical(&col("i").gt(lit(0)), &schema);
+        let optional = Arc::new(phys_expr::OptionalFilterPhysicalExpr::new(Arc::clone(
+            &required,
+        ))) as Arc<dyn PhysicalExpr>;
+        let dynamic = Arc::new(DynamicFilterPhysicalExpr::new(
+            collect_columns(&required)
+                .into_iter()
+                .map(|c| Arc::new(c) as Arc<dyn PhysicalExpr>)
+                .collect(),
+            Arc::clone(&required),
+        )) as Arc<dyn PhysicalExpr>;
+        let optional_dynamic =
+            Arc::new(phys_expr::OptionalFilterPhysicalExpr::new(dynamic))
+                as Arc<dyn PhysicalExpr>;
+
+        let build = |expr: Arc<dyn PhysicalExpr>| {
+            PruningPredicateBuilder::new()
+                .with_file_schema(Arc::clone(&schema))
+                .try_build(expr)
+                .unwrap()
+        };
+        let baseline = build(required);
+        assert_eq!(baseline.prune(&statistics).unwrap(), expected);
+
+        for expr in [optional, optional_dynamic] {
+            let p = build(expr);
+            assert_eq!(
+                p.predicate_expr().to_string(),
+                baseline.predicate_expr().to_string()
+            );
+            assert_eq!(p.prune(&statistics).unwrap(), expected);
+        }
+    }
+
     #[test]
     fn row_group_predicate_lt_bool() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Boolean, false)]);

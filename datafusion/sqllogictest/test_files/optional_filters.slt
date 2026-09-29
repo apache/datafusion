@@ -1,0 +1,135 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for `datafusion.execution.optional_filter_mode` with a Parquet scan
+# and row level filter pushdown.
+#
+# Optional filters are filters that are not needed for correctness, such as
+# the dynamic filters that hash joins and TopK push down into the scan. The
+# queries below must give the same results in each mode.
+#
+# The Rust integration tests in `datafusion/core/tests/parquet/optional_filters.rs`
+# examine the metrics (`optional_filter_rows_skipped` and
+# `optional_filter_pauses`) of each mode, because SQL cannot make an optional
+# filter directly.
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+COPY (SELECT value AS k, value % 100 AS a FROM generate_series(1, 20000) AS t(value))
+TO 'test_files/scratch/optional_filters/probe.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '2000');
+
+statement ok
+COPY (SELECT value AS k, value * 10 AS b FROM generate_series(1, 20000, 7) AS t(value))
+TO 'test_files/scratch/optional_filters/build.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE probe
+STORED AS PARQUET
+LOCATION 'test_files/scratch/optional_filters/probe.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE build
+STORED AS PARQUET
+LOCATION 'test_files/scratch/optional_filters/build.parquet';
+
+# The mode can be set, and an invalid mode is an error.
+statement error Invalid optional filter mode: sometimes\. Expected one of: always, adaptive, pruning_only
+set datafusion.execution.optional_filter_mode = 'sometimes';
+
+#######
+# always
+#######
+
+statement ok
+set datafusion.execution.optional_filter_mode = 'always';
+
+query IIII
+SELECT count(*), sum(probe.k), sum(probe.a), sum(build.b)
+FROM probe JOIN build ON probe.k = build.k
+WHERE probe.a < 90;
+----
+2572 25717303 114403 257173030
+
+query II
+SELECT k, a FROM probe WHERE a > 50 ORDER BY k DESC LIMIT 3;
+----
+19999 99
+19998 98
+19997 97
+
+#######
+# adaptive (the default)
+#######
+
+statement ok
+set datafusion.execution.optional_filter_mode = 'adaptive';
+
+query IIII
+SELECT count(*), sum(probe.k), sum(probe.a), sum(build.b)
+FROM probe JOIN build ON probe.k = build.k
+WHERE probe.a < 90;
+----
+2572 25717303 114403 257173030
+
+query II
+SELECT k, a FROM probe WHERE a > 50 ORDER BY k DESC LIMIT 3;
+----
+19999 99
+19998 98
+19997 97
+
+#######
+# pruning_only
+#######
+
+statement ok
+set datafusion.execution.optional_filter_mode = 'pruning_only';
+
+query IIII
+SELECT count(*), sum(probe.k), sum(probe.a), sum(build.b)
+FROM probe JOIN build ON probe.k = build.k
+WHERE probe.a < 90;
+----
+2572 25717303 114403 257173030
+
+query II
+SELECT k, a FROM probe WHERE a > 50 ORDER BY k DESC LIMIT 3;
+----
+19999 99
+19998 98
+19997 97
+
+#######
+# Clean up
+#######
+
+statement ok
+reset datafusion.execution.optional_filter_mode;
+
+statement ok
+reset datafusion.execution.parquet.pushdown_filters;
+
+statement ok
+DROP TABLE probe;
+
+statement ok
+DROP TABLE build;
