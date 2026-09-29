@@ -301,10 +301,14 @@ mod file_scan_config_serde {
             Column::new("value", 0),
         ))])
         .expect("single expression ordering");
-        Partitioning::Range(RangePartitioning::new(
-            ordering,
-            vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
-        ))
+        Partitioning::Range(
+            RangePartitioning::try_new_with_samples(
+                ordering,
+                vec![SplitPoint::new(vec![ScalarValue::Int32(Some(10))])],
+                2,
+            )
+            .unwrap(),
+        )
     }
 
     fn decode_source(conf: &protobuf::FileScanExecConf) -> Result<Arc<dyn FileSource>> {

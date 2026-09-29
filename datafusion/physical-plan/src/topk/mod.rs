@@ -393,20 +393,10 @@ impl TopK {
 
     /// Insert `batch`, remembering if any of its values are among
     /// the top k seen so far.
-    #[expect(clippy::needless_pass_by_value)]
     pub fn insert_batch(&mut self, batch: RecordBatch) -> Result<()> {
         // Updates on drop
-        let baseline = self.metrics.baseline.clone();
-        let _timer = baseline.elapsed_compute().timer();
-
-        let mut sort_keys: Vec<ArrayRef> = self
-            .expr
-            .iter()
-            .map(|expr| {
-                let value = expr.expr.evaluate(&batch)?;
-                value.into_array(batch.num_rows())
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
+        let _timer = elapsed_compute.timer();
 
         let mut selected_rows = None;
 
@@ -422,6 +412,17 @@ impl TopK {
             self.attempt_early_completion(&batch)?;
             return Ok(());
         }
+
+        // Sort keys are only needed once some row passes the threshold
+        let mut sort_keys: Vec<ArrayRef> = self
+            .expr
+            .iter()
+            .map(|expr| {
+                let value = expr.expr.evaluate(&batch)?;
+                value.into_array(num_rows)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         // only update the keys / rows if the filter does not match all rows
         if filter.null_count() > 0 || filter.has_false() {
             // Indices in `set_indices` should be correct if filter contains nulls
@@ -449,7 +450,7 @@ impl TopK {
         rows.clear();
         self.row_converter.append(rows, &sort_keys)?;
 
-        let mut batch_entry = self.heap.register_batch(batch.clone());
+        let mut batch_entry = self.heap.register_batch(batch);
 
         let replacements = match selected_rows {
             Some(filter) => {
@@ -460,6 +461,10 @@ impl TopK {
 
         if replacements > 0 {
             self.metrics.row_replacements.add(replacements);
+
+            // The heap takes ownership of the batch (and compaction may drop
+            // it), so encode its last row's prefix while it is still at hand.
+            let last_row_prefix = self.last_row_common_prefix(&batch_entry.batch)?;
 
             self.heap.insert_batch_entry(batch_entry);
 
@@ -472,14 +477,14 @@ impl TopK {
             // flag the topK as finished if we know that all
             // subsequent batches are guaranteed to be greater (by byte order, after row conversion) than the top K,
             // which means the top K won't change and the computation can be finished early.
-            self.attempt_early_completion(&batch)?;
+            self.finish_if_prefix_past_boundary(last_row_prefix.as_ref())?;
 
             // update the filter representation of our TopK heap
             self.update_filter()?;
         } else {
             // The heap did not change, but this batch's prefix may still prove
             // that no later rows can enter the TopK.
-            self.attempt_early_completion(&batch)?;
+            self.attempt_early_completion(&batch_entry.batch)?;
         }
 
         Ok(())
@@ -685,15 +690,24 @@ impl TopK {
     /// greater than either the shared dynamic-filter threshold prefix or the max
     /// row in the local heap, comparing only on the shared prefix columns.
     fn attempt_early_completion(&mut self, batch: &RecordBatch) -> Result<()> {
+        let last_row_prefix = self.last_row_common_prefix(batch)?;
+        self.finish_if_prefix_past_boundary(last_row_prefix.as_ref())
+    }
+
+    /// Encodes the shared sort prefix of the last row of `batch`.
+    ///
+    /// Returns `None` when the batch is empty (there is no last row) or when
+    /// the input ordering shares no prefix with the TopK.
+    fn last_row_common_prefix(&self, batch: &RecordBatch) -> Result<Option<Rows>> {
         // Early exit if the batch is empty as there is no last row to extract from it.
         if batch.num_rows() == 0 {
-            return Ok(());
+            return Ok(None);
         }
 
         // common_prefix_row_converter is only `Some` if the input ordering has a common prefix with the TopK,
         // so early exit if it is `None`.
         let Some(prefix_converter) = &self.common_sort_prefix_converter else {
-            return Ok(());
+            return Ok(None);
         };
 
         // Evaluate the prefix for the last row of the current batch.
@@ -707,7 +721,19 @@ impl TopK {
             last_row_idx,
             &mut batch_prefix_scratch,
         )?;
-        let batch_common_prefix_row = batch_prefix_scratch.row(0);
+        Ok(Some(batch_prefix_scratch))
+    }
+
+    /// Marks the TopK finished when a batch's last-row prefix, as produced by
+    /// [`Self::last_row_common_prefix`], lies past the shared or local boundary.
+    fn finish_if_prefix_past_boundary(
+        &mut self,
+        last_row_prefix: Option<&Rows>,
+    ) -> Result<()> {
+        let Some(batch_prefix_rows) = last_row_prefix else {
+            return Ok(());
+        };
+        let batch_common_prefix_row = batch_prefix_rows.row(0);
         let batch_common_prefix = batch_common_prefix_row.as_ref();
 
         let finished_by_shared_threshold = self
@@ -1338,8 +1364,8 @@ impl PartitionedTopK {
     /// columns once for the whole batch, and feed each partition's
     /// rows into its dedicated [`TopKHeap`].
     pub(crate) fn insert_batch(&mut self, batch: &RecordBatch) -> Result<()> {
-        let baseline = self.metrics.baseline.clone();
-        let _timer = baseline.elapsed_compute().timer();
+        let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
+        let _timer = elapsed_compute.timer();
 
         let num_rows = batch.num_rows();
         if num_rows == 0 {
@@ -1655,8 +1681,8 @@ impl PartitionedTopKRank {
     /// rows through the rank classifier into its dedicated heap and
     /// ties Vec.
     pub(crate) fn insert_batch(&mut self, batch: &RecordBatch) -> Result<()> {
-        let baseline = self.metrics.baseline.clone();
-        let _timer = baseline.elapsed_compute().timer();
+        let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
+        let _timer = elapsed_compute.timer();
 
         let num_rows = batch.num_rows();
         if num_rows == 0 {
@@ -1876,7 +1902,6 @@ impl PartitionedTopKRank {
                 coalescer.push_batch(batch)?;
             }
             for tie in ties {
-                (&tie.batch).record_output(&metrics.baseline);
                 coalescer.push_batch(tie.batch)?;
             }
         }
@@ -1952,29 +1977,75 @@ struct DenseRankPartitionState {
     /// INVARIANT: `keys` and `groups.keys()` hold the same set. Every
     /// insertion into / removal from `groups` must mirror into `keys`.
     keys: BinaryHeap<Vec<u8>>,
+    /// Running total of the heap allocations owned by the *contents* of
+    /// `groups` and `keys`: the key bytes, the per-key `Vec<GroupEntry>`
+    /// buffers, and each entry's `row_indices`. Excludes the two
+    /// containers' own tables, which `capacity()` reports in O(1).
+    ///
+    /// INVARIANT: equals `recompute_contents_bytes` (test-only, so not
+    /// linkable from rustdoc). Every mutation of `groups` or `keys` must
+    /// adjust it; the
+    /// `test_partitioned_topk_dense_rank_contents_bytes_tracks_recompute`
+    /// test checks this against a full recompute after a randomized
+    /// workload.
+    contents_bytes: usize,
 }
 
 impl DenseRankPartitionState {
     fn size(&self) -> usize {
         let table_overhead = self.groups.capacity()
             * (size_of::<Vec<u8>>() + size_of::<Vec<GroupEntry>>());
-        let contents: usize = self
+        // The heap's backing Vec: one `Vec<u8>` slot per reserved element.
+        let keys_overhead = self.keys.capacity() * size_of::<Vec<u8>>();
+        table_overhead + self.contents_bytes + keys_overhead
+    }
+
+    /// Bytes owned by one entry's `row_indices` buffer.
+    fn entry_bytes(entry: &GroupEntry) -> usize {
+        entry.row_indices.capacity() * size_of::<u32>()
+    }
+
+    /// Track a previously unseen ob value, holding `run_indices` as its
+    /// first (and so far only) entry, and charge everything it allocates.
+    ///
+    /// `keys` and `groups` each own a copy of the key bytes; the clone's
+    /// capacity is read after the fact rather than assumed equal to the
+    /// original's, so the charge matches what was really allocated.
+    fn insert_new_group(
+        &mut self,
+        ob_key: Vec<u8>,
+        run_indices: Vec<u32>,
+        batch_id: u32,
+    ) {
+        let key_copy = ob_key.clone();
+        self.contents_bytes += key_copy.capacity() + ob_key.capacity();
+        self.keys.push(key_copy);
+
+        let entry = GroupEntry {
+            row_indices: run_indices,
+            batch_id,
+        };
+        self.contents_bytes += Self::entry_bytes(&entry);
+        let entries = vec![entry];
+        self.contents_bytes += entries.capacity() * size_of::<GroupEntry>();
+        self.groups.insert(ob_key, entries);
+    }
+
+    /// The value [`Self::contents_bytes`] must hold, computed the slow
+    /// way. Used to assert the incremental accounting in tests.
+    #[cfg(test)]
+    fn recompute_contents_bytes(&self) -> usize {
+        let groups: usize = self
             .groups
             .iter()
             .map(|(key, entries)| {
                 key.capacity()
                     + entries.capacity() * size_of::<GroupEntry>()
-                    + entries
-                        .iter()
-                        .map(|e| e.row_indices.capacity() * size_of::<u32>())
-                        .sum::<usize>()
+                    + entries.iter().map(Self::entry_bytes).sum::<usize>()
             })
             .sum();
-        // `keys` duplicates every key's bytes; charge for them plus the
-        // heap's backing Vec (one `Vec<u8>` slot per reserved element).
-        let keys_overhead: usize = self.keys.capacity() * size_of::<Vec<u8>>()
-            + self.keys.iter().map(|k| k.capacity()).sum::<usize>();
-        table_overhead + contents + keys_overhead
+        // `keys` duplicates every key's bytes.
+        groups + self.keys.iter().map(|k| k.capacity()).sum::<usize>()
     }
 }
 
@@ -2107,8 +2178,8 @@ impl PartitionedTopKDenseRank {
     /// by distinct ob value and merge each bucket into the partition
     /// state as one [`GroupEntry`].
     pub(crate) fn insert_batch(&mut self, batch: &RecordBatch) -> Result<()> {
-        let baseline = self.metrics.baseline.clone();
-        let _timer = baseline.elapsed_compute().timer();
+        let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
+        let _timer = elapsed_compute.timer();
 
         let num_rows = batch.num_rows();
         if num_rows == 0 {
@@ -2208,24 +2279,23 @@ impl PartitionedTopKDenseRank {
                 // new `GroupEntry` (one entry per contributing batch).
                 if let Some(entries) = state.groups.get_mut(&ob_key) {
                     batch_entry.uses += 1;
-                    entries.push(GroupEntry {
+                    let before = entries.capacity() * size_of::<GroupEntry>();
+                    let entry = GroupEntry {
                         row_indices: run_indices,
                         batch_id,
-                    });
+                    };
+                    state.contents_bytes += DenseRankPartitionState::entry_bytes(&entry);
+                    entries.push(entry);
+                    // The push may have grown the buffer.
+                    state.contents_bytes +=
+                        entries.capacity() * size_of::<GroupEntry>() - before;
                     continue;
                 }
 
                 // Case B: new ob, room available.
                 if state.groups.len() < k {
                     batch_entry.uses += 1;
-                    state.keys.push(ob_key.clone());
-                    state.groups.insert(
-                        ob_key,
-                        vec![GroupEntry {
-                            row_indices: run_indices,
-                            batch_id,
-                        }],
-                    );
+                    state.insert_new_group(ob_key, run_indices, batch_id);
                     continue;
                 }
 
@@ -2234,12 +2304,23 @@ impl PartitionedTopKDenseRank {
                 let max_key = state.keys.peek().expect("state.groups has k >= 1 keys");
                 if ob_key.as_slice() < max_key.as_slice() {
                     // Evict the entire max-key group, from both the map
-                    // and its ordered mirror.
+                    // and its ordered mirror. `keys` and `groups` own
+                    // separate copies of the key bytes, so both are
+                    // uncharged — with their own capacities, which is why
+                    // `remove_entry` is used to recover the map's copy
+                    // rather than assuming it matches the popped one.
                     let evicted_key = state.keys.pop().expect("max key present");
-                    let evicted = state
+                    let (map_key, evicted) = state
                         .groups
-                        .remove(&evicted_key)
+                        .remove_entry(&evicted_key)
                         .expect("keys mirrors groups");
+                    state.contents_bytes -= evicted_key.capacity()
+                        + map_key.capacity()
+                        + evicted.capacity() * size_of::<GroupEntry>()
+                        + evicted
+                            .iter()
+                            .map(DenseRankPartitionState::entry_bytes)
+                            .sum::<usize>();
                     for e in &evicted {
                         replacements += e.row_indices.len();
                         if e.batch_id == batch_id {
@@ -2253,14 +2334,7 @@ impl PartitionedTopKDenseRank {
                         }
                     }
                     batch_entry.uses += 1;
-                    state.keys.push(ob_key.clone());
-                    state.groups.insert(
-                        ob_key,
-                        vec![GroupEntry {
-                            row_indices: run_indices,
-                            batch_id,
-                        }],
-                    );
+                    state.insert_new_group(ob_key, run_indices, batch_id);
                 }
                 // else: ob >= max — drop the whole run.
             }
@@ -2312,11 +2386,41 @@ impl PartitionedTopKDenseRank {
         let mut sorted_pks: Vec<Vec<u8>> = states.keys().cloned().collect();
         sorted_pks.sort();
 
-        let mut coalescer = BatchCoalescer::new(Arc::clone(&schema), batch_size);
+        let mut out: Vec<Result<RecordBatch>> = Vec::new();
 
+        // Gather every retained row with a single `interleave_record_batch`
+        // per output batch rather than one `take_record_batch` per
+        // `GroupEntry`. A group entry holds only the rows one source batch
+        // contributed at one ob value, so entries are numerous and tiny —
+        // with P partitions, K distinct ob values and B contributing
+        // batches there are up to P × K × B of them, and gathering each
+        // one separately builds and tears down that many `RecordBatch`es.
+        // `interleave` takes `(batch_pos, row)` pairs across *different*
+        // source batches in one call, which is exactly the shape here.
+        //
+        // The pairs are pushed in emit order — partitions in sorted key
+        // order, ob values ascending within a partition, entries in
+        // insertion order within an ob value — so the interleaved output
+        // is already ordered and needs no post-sort.
+        //
+        // `batch_refs` holds only the batches the current chunk references
+        // and is rebuilt per chunk: for Dictionary columns `interleave`
+        // does work for every input array it is handed, referenced or not,
+        // so passing the whole store to each chunk made emit
+        // O(chunks × store batches). A batch's slot is resolved once per
+        // entry, not per row.
+        let mut batch_refs: Vec<&RecordBatch> = Vec::new();
+        let mut batch_id_pos: HashMap<u32, usize> = HashMap::new();
+        let mut indices: Vec<(usize, usize)> = Vec::with_capacity(batch_size);
+
+        // Chunk at `batch_size` so the operator emits the same batch sizes
+        // as before and no single `interleave` output exceeds `batch_size`.
         for pk in sorted_pks {
-            let DenseRankPartitionState { groups, keys: _ } =
-                states.remove(&pk).expect("key from states.keys()");
+            let DenseRankPartitionState {
+                groups,
+                keys: _,
+                contents_bytes: _,
+            } = states.remove(&pk).expect("key from states.keys()");
             // Sort the <= K distinct ob keys so rows emit ascending
             // (byte-comparable encoding == sort order).
             let mut sorted_obs: Vec<(Vec<u8>, Vec<GroupEntry>)> =
@@ -2328,16 +2432,32 @@ impl PartitionedTopKDenseRank {
                         .get(entry.batch_id)
                         .expect("retained batch_id present in store")
                         .batch;
-                    let indices = UInt32Array::from(entry.row_indices);
-                    let sub = take_record_batch(batch, &indices)?;
-                    coalescer.push_batch(sub)?;
+                    // Resolved lazily so a chunk boundary inside the entry
+                    // re-registers its batch in the next chunk's slice.
+                    let mut array_pos = None;
+                    for row in entry.row_indices {
+                        let pos = *array_pos.get_or_insert_with(|| {
+                            *batch_id_pos.entry(entry.batch_id).or_insert_with(|| {
+                                batch_refs.push(batch);
+                                batch_refs.len() - 1
+                            })
+                        });
+                        indices.push((pos, row as usize));
+                        if indices.len() == batch_size {
+                            let b = interleave_record_batch(&batch_refs, &indices)?;
+                            (&b).record_output(&metrics.baseline);
+                            out.push(Ok(b));
+                            indices.clear();
+                            batch_refs.clear();
+                            batch_id_pos.clear();
+                            array_pos = None;
+                        }
+                    }
                 }
             }
         }
-        coalescer.finish_buffered_batch()?;
-
-        let mut out: Vec<Result<RecordBatch>> = Vec::new();
-        while let Some(b) = coalescer.next_completed_batch() {
+        if !indices.is_empty() {
+            let b = interleave_record_batch(&batch_refs, &indices)?;
             (&b).record_output(&metrics.baseline);
             out.push(Ok(b));
         }
@@ -2383,8 +2503,11 @@ impl PartitionedTopKDenseRank {
 mod tests {
     use super::*;
     use crate::metrics::MetricValue;
-    use arrow::array::{BooleanArray, Float64Array, Int32Array, StringArray};
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::{
+        AsArray, BooleanArray, Float64Array, Int32Array, StringArray,
+        StringDictionaryBuilder,
+    };
+    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use arrow_schema::SortOptions;
     use datafusion_common::{assert_batches_eq, exec_datafusion_err};
     use datafusion_execution::memory_pool::GreedyMemoryPool;
@@ -2673,6 +2796,187 @@ mod tests {
                 "+---+------+",
             ],
             &results
+        );
+
+        Ok(())
+    }
+
+    /// An empty batch has no last row to prove early completion with, so it
+    /// must leave the TopK unchanged, both with an empty heap and a full one.
+    #[tokio::test]
+    async fn test_empty_batch_with_prefix_does_not_finish() -> Result<()> {
+        let schema = make_ab_schema();
+        let mut topk = make_ab_topk(Arc::clone(&schema), make_topk_filter())?;
+        let empty = RecordBatch::new_empty(Arc::clone(&schema));
+
+        topk.insert_batch(empty.clone())?;
+        assert!(!topk.finished);
+        assert_eq!(topk.heap.store.len(), 0);
+
+        topk.insert_batch(make_ab_batch(
+            Arc::clone(&schema),
+            &[Some(1), Some(1), Some(2)],
+            &[20.0, 15.0, 30.0],
+        )?)?;
+        let heap_before = heap_snapshot(&topk);
+        let store_len_before = topk.heap.store.len();
+
+        topk.insert_batch(empty)?;
+        assert!(!topk.finished);
+        assert_eq!(heap_snapshot(&topk), heap_before);
+        assert_eq!(topk.heap.store.len(), store_len_before);
+
+        let results: Vec<_> = topk.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+---+------+",
+                "| a | b    |",
+                "+---+------+",
+                "| 1 | 15.0 |",
+                "| 1 | 20.0 |",
+                "| 2 | 30.0 |",
+                "+---+------+",
+            ],
+            &results
+        );
+
+        Ok(())
+    }
+
+    /// Builds a `k = 3` TopK over `(a, b)` sorted by the single key `expr`,
+    /// with no input sort prefix.
+    fn make_single_key_topk(
+        schema: SchemaRef,
+        expr: Arc<dyn PhysicalExpr>,
+        metrics: &ExecutionPlanMetricsSet,
+    ) -> Result<TopK> {
+        TopK::try_new(
+            0,
+            schema,
+            vec![],
+            LexOrdering::from([PhysicalSortExpr {
+                expr,
+                options: SortOptions::default(),
+            }]),
+            3,
+            2,
+            Arc::new(RuntimeEnv::default()),
+            metrics,
+            make_topk_filter(),
+        )
+    }
+
+    fn heap_snapshot(topk: &TopK) -> Vec<(Vec<u8>, u32, usize)> {
+        topk.heap
+            .inner
+            .iter()
+            .map(|r| (r.row.clone(), r.batch_id, r.index))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_batch_rejected_by_threshold_leaves_heap_untouched() -> Result<()> {
+        let schema = make_ab_schema();
+        let metrics = ExecutionPlanMetricsSet::new();
+        let mut topk =
+            make_single_key_topk(Arc::clone(&schema), col("a", &schema)?, &metrics)?;
+
+        topk.insert_batch(make_ab_batch(
+            Arc::clone(&schema),
+            &[Some(3), Some(1), Some(2)],
+            &[0.0, 1.0, 2.0],
+        )?)?;
+
+        let rejected = make_ab_batch(
+            Arc::clone(&schema),
+            &[Some(7), Some(5), Some(9)],
+            &[3.0, 4.0, 5.0],
+        )?;
+        // The heap is full, so the threshold must now reject every row.
+        let threshold = topk.filter.read().expr.current()?;
+        let passing = threshold
+            .evaluate(&rejected)?
+            .into_array(rejected.num_rows())?;
+        assert!(!passing.as_boolean().has_true());
+
+        let heap_before = heap_snapshot(&topk);
+        let store_len_before = topk.heap.store.len();
+        let replacements_before = topk.metrics.row_replacements.value();
+
+        topk.insert_batch(rejected)?;
+
+        assert_eq!(heap_snapshot(&topk), heap_before);
+        assert_eq!(topk.heap.store.len(), store_len_before);
+        assert_eq!(topk.metrics.row_replacements.value(), replacements_before);
+
+        let results: Vec<_> = topk.emit()?.try_collect().await?;
+        assert_batches_eq!(
+            &[
+                "+---+-----+",
+                "| a | b   |",
+                "+---+-----+",
+                "| 1 | 1.0 |",
+                "| 2 | 2.0 |",
+                "| 3 | 0.0 |",
+                "+---+-----+",
+            ],
+            &results
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_expression_sort_key_matches_column_sort_key() -> Result<()> {
+        let schema = make_ab_schema();
+        let column_metrics = ExecutionPlanMetricsSet::new();
+        let expr_metrics = ExecutionPlanMetricsSet::new();
+        let mut by_column = make_single_key_topk(
+            Arc::clone(&schema),
+            col("a", &schema)?,
+            &column_metrics,
+        )?;
+        let a_plus_one = Arc::new(BinaryExpr::new(
+            col("a", &schema)?,
+            Operator::Plus,
+            lit(1i32),
+        ));
+        let mut by_expr =
+            make_single_key_topk(Arc::clone(&schema), a_plus_one, &expr_metrics)?;
+
+        let inputs: [&[Option<i32>]; 4] = [
+            &[Some(8), Some(5), Some(9)],
+            &[Some(4), Some(10), Some(2)],
+            &[Some(11), Some(12)],
+            &[Some(6), Some(1), Some(7)],
+        ];
+        for a in inputs {
+            let b: Vec<f64> = a.iter().map(|v| f64::from(v.unwrap()) / 2.0).collect();
+            let batch = make_ab_batch(Arc::clone(&schema), a, &b)?;
+            by_column.insert_batch(batch.clone())?;
+            by_expr.insert_batch(batch)?;
+            assert_eq!(
+                by_expr.metrics.row_replacements.value(),
+                by_column.metrics.row_replacements.value()
+            );
+        }
+
+        let column_results: Vec<_> = by_column.emit()?.try_collect().await?;
+        let expr_results: Vec<_> = by_expr.emit()?.try_collect().await?;
+        let expected = [
+            "+---+-----+",
+            "| a | b   |",
+            "+---+-----+",
+            "| 1 | 0.5 |",
+            "| 2 | 1.0 |",
+            "| 4 | 2.0 |",
+            "+---+-----+",
+        ];
+        assert_batches_eq!(expected, &column_results);
+        assert_batches_eq!(expected, &expr_results);
+        assert_eq!(
+            output_batches_and_rows(&expr_metrics),
+            output_batches_and_rows(&column_metrics)
         );
 
         Ok(())
@@ -3393,16 +3697,26 @@ mod tests {
 
     /// Drain an operator's output into sorted `(pk, val)` pairs, ready to
     /// compare against [`DiffShape::expected`].
+    ///
+    /// Asserts the rows arrived already in `(pk ASC, val ASC)` order before
+    /// sorting them. That order is load-bearing rather than cosmetic — it is
+    /// what `PartitionedTopKExec::compute_properties` advertises, and so what
+    /// lets the window above it run `mode=Sorted` with no `SortExec` — and
+    /// the content comparison this feeds would otherwise sort it away.
     async fn sorted_pk_val(stream: SendableRecordBatchStream) -> Result<Vec<(i32, i32)>> {
         let batches: Vec<RecordBatch> = stream.try_collect().await?;
         let mut rows: Vec<(i32, i32)> = Vec::new();
         for b in &batches {
-            let pk = b.column(0).as_primitive::<arrow::datatypes::Int32Type>();
-            let val = b.column(1).as_primitive::<arrow::datatypes::Int32Type>();
+            let pk = b.column(0).as_primitive::<Int32Type>();
+            let val = b.column(1).as_primitive::<Int32Type>();
             for i in 0..b.num_rows() {
                 rows.push((pk.value(i), val.value(i)));
             }
         }
+        assert!(
+            rows.windows(2).all(|w| w[0] <= w[1]),
+            "emitted rows are not in (pk, val) order: {rows:?}"
+        );
         rows.sort_unstable();
         Ok(rows)
     }
@@ -3462,6 +3776,42 @@ mod tests {
 
             assert_eq!(sorted_pk_val(state.emit()?).await?, expected, "{shape}");
         }
+        Ok(())
+    }
+
+    /// `DenseRankPartitionState::contents_bytes` is maintained
+    /// incrementally at four mutation sites (append to an existing ob
+    /// group, insert a new one with room, evict-then-insert, and the
+    /// key/entry buffer growth each can trigger). Drift there would
+    /// silently give the reservation a wrong total, so check it against a
+    /// recompute over the same randomized workload the correctness
+    /// differential test uses — its shapes are tuned to exercise
+    /// eviction, which is the case with the most bookkeeping.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_contents_bytes_tracks_recompute()
+    -> Result<()> {
+        let mut saw_eviction = false;
+        for seed in 0..64u64 {
+            let shape = DiffShape::new(seed, 8);
+            let (schema, mut state) = build_partitioned_topk_dense_rank(shape.k)?;
+            for (pks, vals) in &shape.batches {
+                state.insert_batch(&pk_val_batch(&schema, pks.clone(), vals.clone())?)?;
+                // Check after every batch, not just at the end: a
+                // compensating pair of errors within one batch would
+                // survive an end-only assertion.
+                for (pk, partition) in &state.states {
+                    assert_eq!(
+                        partition.contents_bytes,
+                        partition.recompute_contents_bytes(),
+                        "seed {seed}, partition {pk:?}: {shape}"
+                    );
+                }
+            }
+            saw_eviction |= state.metrics.row_replacements.value() > 0;
+        }
+        // Guards the guard: if the shapes stopped evicting, case C would
+        // go unchecked and this test would still pass.
+        assert!(saw_eviction, "workload never evicted a group");
         Ok(())
     }
 
@@ -4138,6 +4488,48 @@ mod tests {
         Ok(())
     }
 
+    /// Tie rows are emitted through the same coalescer as heap rows, so they
+    /// must be counted in `output_rows` once, not once as a tie batch and
+    /// again as part of the coalesced output batch.
+    #[tokio::test]
+    async fn test_partitioned_topk_rank_output_rows_counts_ties_once() -> Result<()> {
+        let schema = pk_val_schema(false);
+        let pk_expr: Arc<dyn PhysicalExpr> = col("pk", schema.as_ref())?;
+        let pk_sort_expr = PhysicalSortExpr {
+            expr: Arc::clone(&pk_expr),
+            options: SortOptions::default(),
+        };
+        let val_sort_expr = PhysicalSortExpr {
+            expr: col("val", schema.as_ref())?,
+            options: SortOptions::default(),
+        };
+        let metrics = ExecutionPlanMetricsSet::new();
+        let mut state = PartitionedTopKRank::try_new(
+            0,
+            Arc::clone(&schema),
+            vec![pk_expr],
+            build_sort_fields(&[pk_sort_expr], &schema)?,
+            LexOrdering::from([val_sort_expr]),
+            2,
+            8, // batch_size
+            &Arc::new(RuntimeEnv::default()),
+            &metrics,
+        )?;
+
+        // Two 5s fill the heap, the third 5 is retained as a tie.
+        let batch = pk_val_batch(&schema, vec![1, 1, 1, 1], vec![5, 5, 10, 5])?;
+        state.insert_batch(&batch)?;
+
+        let results: Vec<RecordBatch> = state.emit()?.try_collect().await?;
+        let emitted_rows: usize = results.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(emitted_rows, 3);
+        assert_eq!(
+            output_batches_and_rows(&metrics),
+            (results.len(), emitted_rows)
+        );
+        Ok(())
+    }
+
     /// RANK-specific: heap fills with K rows tied at value V, equal_indices
     /// accumulate at V, then a strictly-better row arrives whose admission
     /// shifts the boundary strictly below V. The boundary-changed branch
@@ -4409,6 +4801,97 @@ mod tests {
             ],
             &results
         );
+        Ok(())
+    }
+
+    /// `emit` rebuilds the `interleave` batch slice per chunk, so a
+    /// Dictionary column must survive chunk boundaries that change which
+    /// source batches are in the slice — including a boundary that falls
+    /// *inside* one group entry (the four `v06` rows), whose batch must be
+    /// re-registered in the next chunk's slice. `batch_size` is 8, so the
+    /// 20 retained rows emit as 8 + 8 + 4, with the second chunk starting
+    /// mid-entry and mixing both source batches.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_emit_dictionary_spans_chunks() -> Result<()>
+    {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("pk", DataType::Int32, false),
+            Field::new(
+                "val",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                false,
+            ),
+        ]));
+
+        let pk_expr: Arc<dyn PhysicalExpr> = col("pk", schema.as_ref())?;
+        let partition_sort_fields = build_sort_fields(
+            &[PhysicalSortExpr {
+                expr: Arc::clone(&pk_expr),
+                options: SortOptions::default(),
+            }],
+            &schema,
+        )?;
+        let order_expr = LexOrdering::from([PhysicalSortExpr {
+            expr: col("val", schema.as_ref())?,
+            options: SortOptions::default(),
+        }]);
+
+        let mut state = PartitionedTopKDenseRank::try_new(
+            0,
+            Arc::clone(&schema),
+            vec![pk_expr],
+            partition_sort_fields,
+            order_expr,
+            20, // k: large enough to retain every distinct value below
+            8,  // batch_size
+            &Arc::new(RuntimeEnv::default()),
+            &ExecutionPlanMetricsSet::new(),
+        )?;
+
+        let dict_batch = |vals: &[&str]| -> Result<RecordBatch> {
+            let mut builder = StringDictionaryBuilder::<Int32Type>::new();
+            for v in vals {
+                builder.append_value(v);
+            }
+            Ok(RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(vec![1; vals.len()])),
+                    Arc::new(builder.finish()),
+                ],
+            )?)
+        };
+
+        // Two source batches (two distinct `batch_id`s), all under a single
+        // partition key; `v06` is one entry of four rows at batch 1.
+        state.insert_batch(&dict_batch(&[
+            "v00", "v01", "v02", "v03", "v04", "v05", "v06", "v06", "v06", "v06",
+        ])?)?;
+        state.insert_batch(&dict_batch(&[
+            "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19",
+        ])?)?;
+
+        let results: Vec<_> = state.emit()?.try_collect().await?;
+        assert_eq!(
+            results.iter().map(|b| b.num_rows()).collect::<Vec<_>>(),
+            vec![8, 8, 4]
+        );
+        let mut emitted = Vec::new();
+        for b in &results {
+            let val_col = b.column(1).as_dictionary::<Int32Type>();
+            let dict_values = val_col.values().as_string::<i32>();
+            for key in val_col.keys().values() {
+                emitted.push(dict_values.value(*key as usize).to_string());
+            }
+        }
+        let expected: Vec<String> = [
+            "v00", "v01", "v02", "v03", "v04", "v05", "v06", "v06", "v06", "v06", "v10",
+            "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(emitted, expected, "rows must emit in ob-sorted order");
         Ok(())
     }
 

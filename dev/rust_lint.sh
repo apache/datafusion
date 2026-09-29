@@ -130,6 +130,7 @@ declare -a WRITE_STEPS=(
   "ci/scripts/typos_check.sh|true"
   "ci/scripts/doc_prettier_check.sh|true"
   "ci/scripts/check_examples_docs.sh|true"
+  "ci/scripts/check_generated_docs.sh|true"
 )
 
 declare -a READONLY_STEPS=(
@@ -141,6 +142,7 @@ declare -a READONLY_STEPS=(
   "ci/scripts/check_circular_dependencies.sh|false"
   "ci/scripts/check_unused_dependencies.sh|false"
   "ci/scripts/rust_docs.sh|false"
+  "ci/scripts/check_docs_html.sh|false"
 )
 
 for entry in "${WRITE_STEPS[@]}" "${READONLY_STEPS[@]}"; do
