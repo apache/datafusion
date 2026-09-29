@@ -188,26 +188,6 @@ impl GroupKeys {
         }
     }
 
-    /// Tells `group_ordering` about the groups added by the last interned
-    /// batch `cols`, see [`GroupOrdering::new_groups`].
-    pub(super) fn record_new_groups(
-        &self,
-        group_ordering: &mut GroupOrdering,
-        cols: &[ArrayRef],
-    ) -> Result<()> {
-        match &self.storage {
-            KeyStorage::Flat(_) => {
-                group_ordering.new_groups(cols, &self.flat_indices, self.len())
-            }
-            KeyStorage::Blocked(_) => group_ordering.new_blocked_groups(
-                cols,
-                &self.blocked_indices,
-                self.block_size,
-                self.len(),
-            ),
-        }
-    }
-
     pub(super) fn len(&self) -> usize {
         match &self.storage {
             KeyStorage::Flat(group_values) => group_values.len(),

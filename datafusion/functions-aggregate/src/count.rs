@@ -35,10 +35,10 @@ use datafusion_common::{
     stats::Precision, utils::expr::COUNT_STAR_EXPANSION,
 };
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, BlockedEmitTo, BlockedGroupSelection,
-    BlockedGroupsAccumulator, BlocksIndex, Documentation, EmitTo, Expr, GroupSelection,
-    GroupsAccumulator, ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs,
-    TypeSignature, Volatility, WindowFunctionDefinition,
+    Accumulator, AggregateUDFImpl, BlockedEmitTo, BlockedGroupsAccumulator, BlocksIndex,
+    Documentation, EmitTo, Expr, GroupSelection, GroupsAccumulator, ReversedUDAF,
+    SetMonotonicity, Signature, StatisticsArgs, TypeSignature, Volatility,
+    WindowFunctionDefinition,
     expr::WindowFunction,
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::{AggregateOrderSensitivity, format_state_name},
@@ -934,56 +934,12 @@ impl BlockedGroupsAccumulator for BlockedCountGroupsAccumulator {
         Ok(self.take(emit_to))
     }
 
-    fn evaluate_preserving(
-        &mut self,
-        selection: BlockedGroupSelection<'_>,
-    ) -> Result<Vec<ArrayRef>> {
-        selection.validate_num_groups(self.counts.len())?;
-        // Build each output chunk in its own `Vec`, which becomes the array's
-        // buffer without copying
-        let block_size = self.counts.block_size();
-        let mut remaining = selection.len();
-        let mut arrays = Vec::with_capacity(remaining.div_ceil(block_size));
-        let mut chunk = Vec::with_capacity(remaining.min(block_size));
-        for index in selection.iter() {
-            chunk.push(self.counts.get(index));
-            if chunk.len() == block_size {
-                remaining -= block_size;
-                let next = Vec::with_capacity(remaining.min(block_size));
-                arrays.push(Self::counts_to_array(std::mem::replace(&mut chunk, next)));
-            }
-        }
-        if !chunk.is_empty() {
-            arrays.push(Self::counts_to_array(chunk));
-        }
-        Ok(arrays)
-    }
-
-    fn supports_evaluate_preserving(&self) -> bool {
-        true
-    }
-
     fn state(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<Vec<ArrayRef>>> {
         Ok(self
             .take(emit_to)
             .into_iter()
             .map(|counts| vec![counts])
             .collect())
-    }
-
-    fn state_preserving(
-        &mut self,
-        selection: BlockedGroupSelection<'_>,
-    ) -> Result<Vec<Vec<ArrayRef>>> {
-        Ok(self
-            .evaluate_preserving(selection)?
-            .into_iter()
-            .map(|counts| vec![counts])
-            .collect())
-    }
-
-    fn supports_state_preserving(&self) -> bool {
-        true
     }
 
     fn convert_to_state(
@@ -1309,29 +1265,6 @@ mod tests {
         assert_eq!(
             blocked_values(&acc.evaluate(BlockedEmitTo::All)?),
             vec![vec![5, 5, 6, 7], vec![8, 9, 10]]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn blocked_count_preserving_reads_keep_state() -> Result<()> {
-        let mut acc = BlockedCountGroupsAccumulator::new(4);
-        let values: ArrayRef = Arc::new(Int32Array::from(vec![1; 7]));
-        acc.update_batch(&[values], &blocks_index(&[0, 1, 1, 5, 5, 5, 6], 4), None, 7)?;
-
-        let all = acc.evaluate_preserving(BlockedGroupSelection::all(7, 4))?;
-        assert_eq!(blocked_values(&all), vec![vec![1, 2, 0, 0], vec![0, 3, 1]]);
-
-        let indices = blocks_index(&[5, 0, 5], 4);
-        let selected = BlockedGroupSelection::try_from_indices(&indices, 7, 4)?;
-        let state = acc.state_preserving(selected)?;
-        assert_eq!(state.len(), 1);
-        assert_eq!(blocked_values(&state[0]), vec![vec![3, 1, 3]]);
-
-        // state is unchanged
-        assert_eq!(
-            blocked_values(&acc.evaluate(BlockedEmitTo::All)?),
-            vec![vec![1, 2, 0, 0], vec![0, 3, 1]]
         );
         Ok(())
     }

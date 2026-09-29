@@ -441,7 +441,7 @@ impl SingleHashAggregateStream {
         let timer = elapsed_compute.timer();
         let mut result = hash_table
             .take_state_batches()
-            .and_then(|batch| spill_context.sort_and_spill(batch));
+            .and_then(|batch| spill_context.sort_and_spill_batches(batch));
 
         // Spilling shrinks the aggregate table and releases its accumulated
         // memory. Update the reservation accordingly.
@@ -489,7 +489,7 @@ impl SingleHashAggregateStream {
         let timer = elapsed_compute.timer();
         let replay = match hash_table
             .take_state_batches()
-            .and_then(|batch| spill_context.sort_and_spill(batch))
+            .and_then(|batch| spill_context.sort_and_spill_batches(batch))
         {
             Ok(()) => {
                 let metrics = OrderedAggregateTableMetrics::from_hash_table(&hash_table);

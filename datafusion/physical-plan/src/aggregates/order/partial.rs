@@ -25,7 +25,7 @@ use arrow_ord::partition::partition;
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_expr::{BlocksIndex, EmitTo};
+use datafusion_expr::EmitTo;
 
 /// Tracks grouping state when the data is ordered by some subset of
 /// the group keys.
@@ -217,34 +217,6 @@ impl GroupOrderingPartial {
         group_indices: &[usize],
         total_num_groups: usize,
     ) -> Result<()> {
-        self.new_groups_with(batch_group_values, total_num_groups, |row| {
-            group_indices[row]
-        })
-    }
-
-    /// [`Self::new_groups`] for blocked group indices, with `block_size`
-    /// groups per block.
-    pub(crate) fn new_blocked_groups(
-        &mut self,
-        batch_group_values: &[ArrayRef],
-        group_indices: &[BlocksIndex],
-        block_size: usize,
-        total_num_groups: usize,
-    ) -> Result<()> {
-        self.new_groups_with(batch_group_values, total_num_groups, |row| {
-            group_indices[row].flat(block_size)
-        })
-    }
-
-    /// Shared implementation of [`Self::new_groups`] and
-    /// [`Self::new_blocked_groups`]. `group_position(row)` is the position,
-    /// counting from the first group, of the group of `row`.
-    fn new_groups_with(
-        &mut self,
-        batch_group_values: &[ArrayRef],
-        total_num_groups: usize,
-        group_position: impl Fn(usize) -> usize,
-    ) -> Result<()> {
         assert!(total_num_groups > 0);
         assert!(!batch_group_values.is_empty());
 
@@ -270,7 +242,7 @@ impl GroupOrderingPartial {
         let ranges = partition(&sort_keys)?.ranges();
         let last_range = ranges.last().unwrap();
 
-        let range_current_sort = group_position(last_range.start);
+        let range_current_sort = group_indices[last_range.start];
         let range_sort_key = get_row_at_idx(&sort_keys, last_range.start)?;
 
         let (current_sort, sort_key) = if last_range.start == 0 {

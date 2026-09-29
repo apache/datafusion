@@ -19,7 +19,7 @@ use std::mem::size_of;
 
 use arrow::array::ArrayRef;
 use datafusion_common::Result;
-use datafusion_expr::{BlocksIndex, EmitTo};
+use datafusion_expr::EmitTo;
 
 mod full;
 mod partial;
@@ -137,32 +137,6 @@ impl GroupOrdering {
                 partial.new_groups(
                     batch_group_values,
                     group_indices,
-                    total_num_groups,
-                )?;
-            }
-            GroupOrdering::Full(full) => {
-                full.new_groups(total_num_groups);
-            }
-        }
-        Ok(())
-    }
-
-    /// [`Self::new_groups`] for blocked group indices, with `block_size`
-    /// groups per block.
-    pub(crate) fn new_blocked_groups(
-        &mut self,
-        batch_group_values: &[ArrayRef],
-        group_indices: &[BlocksIndex],
-        block_size: usize,
-        total_num_groups: usize,
-    ) -> Result<()> {
-        match self {
-            GroupOrdering::None => {}
-            GroupOrdering::Partial(partial) => {
-                partial.new_blocked_groups(
-                    batch_group_values,
-                    group_indices,
-                    block_size,
                     total_num_groups,
                 )?;
             }

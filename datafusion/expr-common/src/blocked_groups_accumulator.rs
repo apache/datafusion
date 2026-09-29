@@ -28,7 +28,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray};
-use datafusion_common::{Result, exec_err, not_impl_err};
+use datafusion_common::Result;
 
 use crate::accumulator::AggregateMetrics;
 use crate::groups_accumulator::EmitTo;
@@ -144,97 +144,6 @@ impl BlockedEmitTo {
     }
 }
 
-/// Selects groups for a non-destructive read of blocked state, like
-/// [`GroupSelection`] for flat state.
-///
-/// Selections created by [`Self::try_from_indices`] preserve the requested
-/// order and support duplicate indices.
-///
-/// [`GroupSelection`]: crate::groups_accumulator::GroupSelection
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BlockedGroupSelection<'a> {
-    total_num_groups: usize,
-    block_size: usize,
-    indices: Option<&'a [BlocksIndex]>,
-}
-
-impl<'a> BlockedGroupSelection<'a> {
-    /// Selects all `total_num_groups` groups, stored in blocks of
-    /// `block_size` groups, in group order.
-    pub fn all(total_num_groups: usize, block_size: usize) -> Self {
-        Self {
-            total_num_groups,
-            block_size,
-            indices: None,
-        }
-    }
-
-    /// Selects groups in the order specified by `indices`.
-    ///
-    /// Returns an error if an index is not one of the first
-    /// `total_num_groups` groups. Empty selections are valid, and duplicate
-    /// indices are preserved.
-    pub fn try_from_indices(
-        indices: &'a [BlocksIndex],
-        total_num_groups: usize,
-        block_size: usize,
-    ) -> Result<Self> {
-        if let Some(index) = indices
-            .iter()
-            .find(|index| index.flat(block_size) >= total_num_groups)
-        {
-            return exec_err!(
-                "Group index {index:?} is out of bounds for {total_num_groups} groups"
-            );
-        }
-        Ok(Self {
-            total_num_groups,
-            block_size,
-            indices: Some(indices),
-        })
-    }
-
-    /// Returns the group count against which this selection was constructed.
-    pub fn total_num_groups(self) -> usize {
-        self.total_num_groups
-    }
-
-    /// Ensures this selection is being applied to the same number of groups
-    /// against which it was constructed, see
-    /// `GroupSelection::validate_num_groups`.
-    pub fn validate_num_groups(self, actual_num_groups: usize) -> Result<()> {
-        if actual_num_groups != self.total_num_groups {
-            return exec_err!(
-                "Group selection was constructed for {} groups but applied to {actual_num_groups} groups",
-                self.total_num_groups
-            );
-        }
-        Ok(())
-    }
-
-    /// Returns the number of selected groups.
-    pub fn len(self) -> usize {
-        self.indices
-            .map_or(self.total_num_groups, |indices| indices.len())
-    }
-
-    /// Returns `true` if no groups are selected.
-    pub fn is_empty(self) -> bool {
-        self.len() == 0
-    }
-
-    /// Returns the selected groups in output order.
-    pub fn iter(self) -> impl Iterator<Item = BlocksIndex> + 'a {
-        let block_size = self.block_size;
-        let (all, indices): (_, &'a [BlocksIndex]) = match self.indices {
-            None => (0..self.total_num_groups, &[]),
-            Some(indices) => (0..0, indices),
-        };
-        all.map(move |flat| BlocksIndex::from_flat(flat, block_size))
-            .chain(indices.iter().copied())
-    }
-}
-
 /// Like [`GroupsAccumulator`], but the per-group state is stored in blocks of
 /// [`Self::block_size`] groups, and emitting returns one array per block
 /// instead of one large array.
@@ -281,45 +190,11 @@ pub trait BlockedGroupsAccumulator: Send + Any {
     /// * [`BlockedEmitTo::First`]: exactly one array
     fn evaluate(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<ArrayRef>>;
 
-    /// Returns final values without changing the state or the group indices,
-    /// see `GroupsAccumulator::evaluate_preserving`.
-    ///
-    /// Rows are returned in the order of `selection`, in arrays of at most
-    /// [`Self::block_size`] rows. An empty selection returns no arrays.
-    fn evaluate_preserving(
-        &mut self,
-        _selection: BlockedGroupSelection<'_>,
-    ) -> Result<Vec<ArrayRef>> {
-        not_impl_err!("Preserving grouped evaluation is not implemented")
-    }
-
-    /// Returns `true` if [`Self::evaluate_preserving`] is implemented.
-    fn supports_evaluate_preserving(&self) -> bool {
-        false
-    }
-
     /// Returns the intermediate state of the groups selected by `emit_to`,
     /// indexed `[block][state column]`, and removes their state.
     ///
     /// Blocks follow the same rules as [`Self::evaluate`].
     fn state(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<Vec<ArrayRef>>>;
-
-    /// Returns intermediate state without changing the state or the group
-    /// indices, see `GroupsAccumulator::state_preserving`.
-    ///
-    /// Indexed `[chunk][state column]`, where chunks follow the same rules as
-    /// [`Self::evaluate_preserving`].
-    fn state_preserving(
-        &mut self,
-        _selection: BlockedGroupSelection<'_>,
-    ) -> Result<Vec<Vec<ArrayRef>>> {
-        not_impl_err!("Preserving grouped state is not implemented")
-    }
-
-    /// Returns `true` if [`Self::state_preserving`] is implemented.
-    fn supports_state_preserving(&self) -> bool {
-        false
-    }
 
     /// Converts an input batch directly to intermediate state.
     ///

@@ -27,9 +27,7 @@ use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::StreamExt;
 
 use super::AggregateExec;
-use super::aggregate_hash_table::{
-    MaterializedBatch, OrderedAggregateTable, PartialMarker,
-};
+use super::aggregate_hash_table::{OrderedAggregateTable, PartialMarker};
 use crate::aggregates::AggregateMode;
 use crate::aggregates::order::GroupOrdering;
 use crate::metrics::{BaselineMetrics, MetricBuilder, SpillMetrics};
@@ -124,10 +122,9 @@ struct Aggregating {
 }
 
 struct Outputting {
-    /// Materialized aggregate states: one batch for flat storage, one per
-    /// block or chunk for blocked storage. Each batch is emitted in slices of
-    /// `batch_size` rows.
-    batches: Vec<MaterializedBatch>,
+    /// Materialized aggregate states. Each iteration emits the first `batch_size`
+    /// rows and replaces this batch with the remaining slice.
+    batch: RecordBatch,
     /// Aggregation stage to resume after output; `None` after EOF.
     resume: Option<Aggregating>,
 }
@@ -313,32 +310,31 @@ impl Aggregating {
             let timer = elapsed_compute.timer();
             self.table.aggregate_batch(&batch)?;
 
-            let batches = match reservation.try_resize(self.table.memory_size()) {
-                Ok(()) => self.table.take_completed_state_batches()?,
+            let output = match reservation.try_resize(self.table.memory_size()) {
+                Ok(()) => self.table.take_completed_state_batch()?,
                 Err(oom @ DataFusionError::ResourcesExhausted(_)) => {
                     // Partial ordering may have an unbounded active key range.
                     // The final stage can merge incomplete states emitted here.
                     if matches!(self.table.group_ordering(), GroupOrdering::Full(_)) {
                         return Err(oom);
                     }
-                    let batches = self.table.take_state_batches()?;
-                    if batches.is_empty() {
+                    let Some(batch) = self.table.take_state_batch()? else {
                         return Err(oom);
-                    }
-                    batches
+                    };
+                    Some(batch)
                 }
                 Err(e) => return Err(e),
             };
-            if batches.is_empty() {
+            let Some(batch) = output else {
                 continue;
-            }
+            };
 
             timer.done();
 
             // OOM, do early emit next, and go back to the current state to continue
             // aggregating
             return Ok(Some(ExecutionStage::Outputting(Outputting {
-                batches,
+                batch,
                 resume: Some(self),
             })));
         }
@@ -347,23 +343,23 @@ impl Aggregating {
         drop(self.input);
         self.table.input_done();
         let timer = elapsed_compute.timer();
-        let batches = self.table.take_completed_state_batches()?;
+        let output = self.table.take_completed_state_batch()?;
         drop(self.table);
         timer.done();
 
-        if batches.is_empty() {
+        let Some(batch) = output else {
             reservation.try_resize(0)?;
             return Ok(None);
-        }
+        };
         Ok(Some(ExecutionStage::Outputting(Outputting {
-            batches,
+            batch,
             resume: None,
         })))
     }
 }
 
 impl Outputting {
-    /// Emits slices of the materialized batches without touching the hash table.
+    /// Emits slices of one materialized batch without touching the hash table.
     ///
     /// See [`OrderedPartialAggregateStream::into_stream`] for stage transitions
     /// and output memory accounting.
@@ -373,7 +369,7 @@ impl Outputting {
         reservation: &MemoryReservation,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<Option<ExecutionStage>> {
-        let Self { batches, resume } = self;
+        let Self { mut batch, resume } = self;
         let elapsed_compute = context.baseline_metrics.elapsed_compute();
         let mut timer = elapsed_compute.timer();
         let (table_memory, next_stage) = match resume {
@@ -383,49 +379,38 @@ impl Outputting {
             ),
             None => (0, None),
         };
-        let batches_memory: usize = batches.iter().map(|b| b.memory_size).sum();
-        match reservation.try_resize(table_memory + batches_memory) {
+        let batch_memory = batch.get_array_memory_size();
+        match reservation.try_resize(table_memory + batch_memory) {
             Ok(()) => {}
             Err(DataFusionError::ResourcesExhausted(_)) => {
-                // If we cannot hold the batches while slicing, hand them off whole.
+                // If we cannot hold the batch while slicing, hand it off whole.
                 // Only the retained table needs to remain reserved.
                 reservation.try_resize(table_memory)?;
+                context.reduction_factor.add_part(batch.num_rows());
                 timer.done();
-                for MaterializedBatch { batch, .. } in batches {
-                    context.reduction_factor.add_part(batch.num_rows());
-                    emitter.emit(batch).await;
-                }
+                emitter.emit(batch).await;
                 return Ok(next_stage);
             }
             Err(e) => return Err(e),
         }
 
-        for MaterializedBatch {
-            mut batch,
-            memory_size: batch_memory,
-        } in batches
-        {
-            while batch.num_rows() > context.batch_size {
-                // 1. Emit first `batch_size` rows from `batch`
-                // 2. Update `batch`` with the remaining tail
-                let output = batch.slice(0, context.batch_size);
-                batch = batch
-                    .slice(context.batch_size, batch.num_rows() - context.batch_size);
-                context.reduction_factor.add_part(output.num_rows());
-                timer.done();
-                emitter.emit(output).await;
-                timer = elapsed_compute.timer();
-            }
-
-            // The final slice transfers ownership of the buffers to the
-            // consumer, so this batch's memory is released batch by batch.
-            reservation.try_shrink(batch_memory)?;
-            context.reduction_factor.add_part(batch.num_rows());
+        while batch.num_rows() > context.batch_size {
+            // 1. Emit first `batch_size` rows from `batch`
+            // 2. Update `batch`` with the remaining tail
+            let output = batch.slice(0, context.batch_size);
+            batch =
+                batch.slice(context.batch_size, batch.num_rows() - context.batch_size);
+            context.reduction_factor.add_part(output.num_rows());
             timer.done();
-            emitter.emit(batch).await;
+            emitter.emit(output).await;
             timer = elapsed_compute.timer();
         }
+
+        // The final slice transfers ownership of the buffers to the consumer.
+        reservation.try_shrink(batch_memory)?;
+        context.reduction_factor.add_part(batch.num_rows());
         timer.done();
+        emitter.emit(batch).await;
         Ok(next_stage)
     }
 }
