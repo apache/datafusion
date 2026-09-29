@@ -199,21 +199,12 @@ pub trait FileSource: Any + Send + Sync {
 
     /// Try to push down filters into this FileSource.
     ///
-    /// `filters` must be in terms of the unprojected table schema (file schema
-    /// plus partition columns), before any projection is applied.
-    ///
-    /// Any filters that this FileSource chooses to evaluate itself should be
-    /// returned as `PushedDown::Yes` in the result, along with a FileSource
-    /// instance that incorporates those filters. Such filters are logically
-    /// applied "during" the file scan, meaning they may refer to columns not
-    /// included in the final output projection.
-    ///
-    /// Filters that cannot be pushed down should be marked as `PushedDown::No`,
-    /// and will be evaluated by an execution plan after the file source.
-    ///
-    /// See [`ExecutionPlan::handle_child_pushdown_result`] for more details.
-    ///
-    /// [`ExecutionPlan::handle_child_pushdown_result`]: datafusion_physical_plan::ExecutionPlan::handle_child_pushdown_result
+    /// Deprecated: use [`Self::try_pushdown_filter`], which gets the
+    /// properties of each filter conjunct.
+    #[deprecated(
+        since = "56.0.0",
+        note = "implement and call `try_pushdown_filter`, which keeps the properties of each filter conjunct"
+    )]
     fn try_pushdown_filters(
         &self,
         filters: Vec<Arc<dyn PhysicalExpr>>,
@@ -226,12 +217,32 @@ pub trait FileSource: Any + Send + Sync {
 
     /// Try to push down a [`PhysicalFilter`] into this file source.
     ///
-    /// The same as [`Self::try_pushdown_filters`], but each conjunct carries
-    /// its properties (for example [`FilterConjunct::is_optional`]). The
-    /// result has one [`PushedDown`] for each conjunct, in order.
+    /// `filter` must be in terms of the unprojected table schema (file schema
+    /// plus partition columns), before any projection is applied.
     ///
-    /// The default implementation calls [`Self::try_pushdown_filters`] with
-    /// the expressions. Thus a source that does not override this method
+    /// Each conjunct carries its properties (for example
+    /// [`FilterConjunct::is_optional`]). The result has one [`PushedDown`] for
+    /// each conjunct, in order.
+    ///
+    /// Any conjuncts that this FileSource chooses to evaluate itself should be
+    /// returned as `PushedDown::Yes` in the result, along with a FileSource
+    /// instance that incorporates those conjuncts. Such conjuncts are logically
+    /// applied "during" the file scan, meaning they may refer to columns not
+    /// included in the final output projection.
+    ///
+    /// Conjuncts that cannot be pushed down should be marked as
+    /// `PushedDown::No`, and will be evaluated by an execution plan after the
+    /// file source.
+    ///
+    /// See [`ExecutionPlan::handle_child_pushdown_result`] for more details.
+    ///
+    /// [`ExecutionPlan::handle_child_pushdown_result`]: datafusion_physical_plan::ExecutionPlan::handle_child_pushdown_result
+    ///
+    /// A source that accepts filters must override this method.
+    ///
+    /// The default implementation calls the deprecated
+    /// [`Self::try_pushdown_filters`] with the expressions, so that a source
+    /// that only overrides that method continues to work. Such a source
     /// applies optional conjuncts as required conjuncts, which is correct.
     fn try_pushdown_filter(
         &self,
@@ -243,6 +254,7 @@ pub trait FileSource: Any + Send + Sync {
             .into_iter()
             .map(FilterConjunct::into_expr)
             .collect();
+        #[expect(deprecated)]
         self.try_pushdown_filters(filters, config)
     }
 

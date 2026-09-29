@@ -378,7 +378,7 @@ impl ParquetSource {
     /// Set predicate information.
     ///
     /// Predicates referencing virtual columns must go through
-    /// [`Self::try_pushdown_filters`]. Passing them here with pushdown
+    /// [`FileSource::try_pushdown_filter`]. Passing them here with pushdown
     /// enabled trips a debug assert in the opener.
     #[expect(clippy::needless_pass_by_value)]
     pub fn with_predicate(&self, predicate: Arc<dyn PhysicalExpr>) -> Self {
@@ -2192,7 +2192,7 @@ mod tests {
     #[test]
     fn test_try_pushdown_filters_rejects_virtual_column_refs() {
         // Virtual columns are produced by the reader and cannot be referenced
-        // inside a RowFilter. `try_pushdown_filters` must report such filters
+        // inside a RowFilter. `try_pushdown_filter` must report such filters
         // as `PushedDown::No` so the FilterExec above the scan stays in
         // place — otherwise the scan would silently drop the predicate and
         // produce wrong results.
@@ -2241,9 +2241,12 @@ mod tests {
         .expect("file_row_index should rewrite to the row_number virtual column");
 
         let config = ConfigOptions::default();
+        let filter = PhysicalFilter::new(
+            [pushable, virtual_only, mixed, row_index].map(FilterConjunct::required),
+        );
         let prop = source
-            .try_pushdown_filters(vec![pushable, virtual_only, mixed, row_index], &config)
-            .expect("try_pushdown_filters must not error");
+            .try_pushdown_filter(filter, &config)
+            .expect("try_pushdown_filter must not error");
 
         assert_eq!(prop.filters.len(), 4);
         assert!(
@@ -2306,7 +2309,8 @@ mod tests {
             .collect();
         assert_eq!(optional_conjuncts, vec!["b@1 < 9"]);
 
-        // Same predicate as the expression-only entry point.
+        // Same predicate as the deprecated expression-only entry point.
+        #[expect(deprecated)]
         let legacy = source
             .try_pushdown_filters(vec![required, optional], &config)
             .unwrap()

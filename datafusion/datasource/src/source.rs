@@ -186,13 +186,12 @@ pub trait DataSource: Any + Send + Sync + Debug {
 
     /// Try to push down filters into this DataSource.
     ///
-    /// These filters are in terms of the output schema of this DataSource (e.g.
-    /// [`Self::eq_properties`] and output of any projections pushed into the
-    /// source), not the original table schema.
-    ///
-    /// See [`ExecutionPlan::handle_child_pushdown_result`] for more details.
-    ///
-    /// [`ExecutionPlan::handle_child_pushdown_result`]: datafusion_physical_plan::ExecutionPlan::handle_child_pushdown_result
+    /// Deprecated: use [`Self::try_pushdown_filter`], which gets the
+    /// properties of each filter conjunct.
+    #[deprecated(
+        since = "56.0.0",
+        note = "implement and call `try_pushdown_filter`, which keeps the properties of each filter conjunct"
+    )]
     fn try_pushdown_filters(
         &self,
         filters: Vec<Arc<dyn PhysicalExpr>>,
@@ -205,12 +204,23 @@ pub trait DataSource: Any + Send + Sync + Debug {
 
     /// Try to push down a [`PhysicalFilter`] into this DataSource.
     ///
-    /// The same as [`Self::try_pushdown_filters`], but each conjunct carries
-    /// its properties (for example [`FilterConjunct::is_optional`]). The
-    /// result has one [`PushedDown`] for each conjunct, in order.
+    /// The filter is in terms of the output schema of this DataSource (e.g.
+    /// [`Self::eq_properties`] and output of any projections pushed into the
+    /// source), not the original table schema.
     ///
-    /// The default implementation calls [`Self::try_pushdown_filters`] with
-    /// the expressions. Thus a source that does not override this method
+    /// Each conjunct carries its properties (for example
+    /// [`FilterConjunct::is_optional`]). The result has one [`PushedDown`] for
+    /// each conjunct, in order.
+    ///
+    /// See [`ExecutionPlan::handle_child_pushdown_result`] for more details.
+    ///
+    /// [`ExecutionPlan::handle_child_pushdown_result`]: datafusion_physical_plan::ExecutionPlan::handle_child_pushdown_result
+    ///
+    /// A source that accepts filters must override this method.
+    ///
+    /// The default implementation calls the deprecated
+    /// [`Self::try_pushdown_filters`] with the expressions, so that a source
+    /// that only overrides that method continues to work. Such a source
     /// applies optional conjuncts as required conjuncts, which is correct.
     fn try_pushdown_filter(
         &self,
@@ -222,6 +232,7 @@ pub trait DataSource: Any + Send + Sync + Debug {
             .into_iter()
             .map(FilterConjunct::into_expr)
             .collect();
+        #[expect(deprecated)]
         self.try_pushdown_filters(filters, config)
     }
 
