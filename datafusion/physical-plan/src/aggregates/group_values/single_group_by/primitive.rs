@@ -349,8 +349,7 @@ mod tests {
 
         // Hashbrown's layout contains entry slots, control bytes, and trailing group bytes.
         // It must strictly exceed the naive entry-only size
-        let entry_only_bytes =
-            group_values.map.capacity() * std::mem::size_of::<(usize, u64)>();
+        let entry_only_bytes = group_values.map.capacity() * size_of::<(usize, u64)>();
         assert!(
             table_bytes > entry_only_bytes,
             "allocation_size ({table_bytes}) must exceed entry-only capacity ({entry_only_bytes})"
