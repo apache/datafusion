@@ -218,9 +218,9 @@ pub trait FileSource: Any + Send + Sync {
         filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn FileSource>>> {
-        Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-            vec![PushedDown::No; filters.len()],
-        ))
+        Ok(FilterPushdownPropagation::from_filters(&filters, |_| {
+            PushedDown::No
+        }))
     }
 
     /// Try to create a new FileSource that can produce data in the specified sort order.

@@ -1057,26 +1057,15 @@ impl DataSource for FileScanConfig {
             .map(|filter| reassign_expr_columns(filter, table_schema))
             .collect::<Result<Vec<_>>>()?;
 
-        let result = self
-            .file_source
-            .try_pushdown_filters(remapped_filters, config)?;
-        match result.updated_node {
-            Some(new_file_source) => {
+        // If the file source does not support filter pushdown, there is no
+        // updated node and the original config is kept
+        self.file_source
+            .try_pushdown_filters(remapped_filters, config)?
+            .map_node(|new_file_source| {
                 let mut new_file_scan_config = self.clone();
                 new_file_scan_config.file_source = new_file_source;
-                Ok(FilterPushdownPropagation {
-                    filters: result.filters,
-                    updated_node: Some(Arc::new(new_file_scan_config) as _),
-                })
-            }
-            None => {
-                // If the file source does not support filter pushdown, return the original config
-                Ok(FilterPushdownPropagation {
-                    filters: result.filters,
-                    updated_node: None,
-                })
-            }
-        }
+                Ok(Arc::new(new_file_scan_config) as Arc<dyn DataSource>)
+            })
     }
 
     /// Push sort requirements into file-based data sources.

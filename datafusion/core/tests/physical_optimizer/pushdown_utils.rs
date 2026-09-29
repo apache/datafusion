@@ -199,14 +199,14 @@ impl FileSource for TestSource {
                 ),
                 ..self.clone()
             });
-            Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-                vec![PushedDown::Yes; filters.len()],
+            Ok(
+                FilterPushdownPropagation::from_filters(&filters, |_| PushedDown::Yes)
+                    .with_updated_node(new_node),
             )
-            .with_updated_node(new_node))
         } else {
-            Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-                vec![PushedDown::No; filters.len()],
-            ))
+            Ok(FilterPushdownPropagation::from_filters(&filters, |_| {
+                PushedDown::No
+            }))
         }
     }
 

@@ -198,9 +198,9 @@ pub trait DataSource: Any + Send + Sync + Debug {
         filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
-        Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-            vec![PushedDown::No; filters.len()],
-        ))
+        Ok(FilterPushdownPropagation::from_filters(&filters, |_| {
+            PushedDown::No
+        }))
     }
 
     /// Try to create a new DataSource that produces data in the specified sort order.
@@ -549,27 +549,16 @@ impl ExecutionPlan for DataSourceExec {
             .into_iter()
             .map(|f| f.filter)
             .collect_vec();
-        let res = self
-            .data_source
-            .try_pushdown_filters(parent_filters, config)?;
-        match res.updated_node {
-            Some(data_source) => {
+        self.data_source
+            .try_pushdown_filters(parent_filters, config)?
+            .map_node(|data_source| {
                 let mut new_node = self.clone();
                 new_node.data_source = data_source;
                 // Re-compute properties since we have new filters which will impact equivalence info
                 new_node.cache =
                     Arc::new(Self::compute_properties(&new_node.data_source));
-
-                Ok(FilterPushdownPropagation {
-                    filters: res.filters,
-                    updated_node: Some(Arc::new(new_node)),
-                })
-            }
-            None => Ok(FilterPushdownPropagation {
-                filters: res.filters,
-                updated_node: None,
-            }),
-        }
+                Ok(Arc::new(new_node) as Arc<dyn ExecutionPlan>)
+            })
     }
 
     fn try_pushdown_sort(

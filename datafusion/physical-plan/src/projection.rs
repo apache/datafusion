@@ -527,24 +527,20 @@ impl ExecutionPlan for ProjectionExec {
         // expand alias column to original expr in parent filters
         let output_schema = self.schema();
         let remapper = FilterRemapper::new(output_schema);
-        let mut child_parent_filters = Vec::with_capacity(parent_filters.len());
 
-        for filter in parent_filters {
+        let child = ChildFilterDescription::from_filters(&parent_filters, |filter| {
             // Check that every column is a valid output column of this
             // projection, then replace each one with the expression at that
             // output position.
-            if let Some(reassigned) = remapper.try_remap(&filter)? {
-                let rewritten = self.projection_expr().unproject_expr(&reassigned)?;
-                child_parent_filters.push(PushedDownPredicate::supported(rewritten));
-            } else {
-                child_parent_filters.push(PushedDownPredicate::unsupported(filter));
-            }
-        }
+            Ok(match remapper.try_remap(filter)? {
+                Some(reassigned) => PushedDownPredicate::supported(
+                    self.projection_expr().unproject_expr(&reassigned)?,
+                ),
+                None => PushedDownPredicate::unsupported(Arc::clone(filter)),
+            })
+        })?;
 
-        Ok(FilterDescription::new().with_child(ChildFilterDescription {
-            parent_filters: child_parent_filters,
-            self_filters: vec![],
-        }))
+        Ok(FilterDescription::new().with_child(child))
     }
 
     fn handle_child_pushdown_result(

@@ -1684,10 +1684,10 @@ impl ExecutionPlan for SortExec {
                 .with_preserve_partitioning(self.preserve_partitioning()),
         ) as Arc<dyn ExecutionPlan>;
 
-        Ok(FilterPushdownPropagation {
-            filters: vec![PushedDown::Yes; child_pushdown_result.parent_filters.len()],
-            updated_node: Some(new_sort),
-        })
+        Ok(
+            FilterPushdownPropagation::all_supported(&child_pushdown_result)
+                .with_updated_node(new_sort),
+        )
     }
     #[cfg(feature = "proto")]
     fn try_to_proto(

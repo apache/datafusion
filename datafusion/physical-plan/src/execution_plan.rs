@@ -914,10 +914,11 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// lost if a node does not override this behavior.
     ///
     /// **Notes for Implementation:**
-    /// When returning filters via [`FilterPushdownPropagation`], the order of
-    /// filters need not match the order they were passed in via
-    /// `child_pushdown_result`. However, preserving the order is recommended for
-    /// debugging and ease of reasoning about the resulting plans.
+    /// The [`FilterPushdownPropagation`] returned must contain exactly one
+    /// result per parent filter in `child_pushdown_result`, in the same order:
+    /// the optimizer maps results back to filters by position, so reordering
+    /// them would mark the wrong filters as handled and produce incorrect
+    /// results. The helper methods below preserve that order by construction.
     ///
     /// **Helper Methods for Customization:**
     /// There are various helper methods to simplify implementing this method:
@@ -925,9 +926,13 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     ///   supported as long as at least one child supports them.
     /// - [`FilterPushdownPropagation::if_all`]: Marks all parent filters as
     ///   supported as long as all children support them.
-    /// - [`FilterPushdownPropagation::with_parent_pushdown_result`]: Allows adding filters
-    ///   to the propagation result, indicating which filters are supported by
-    ///   the current node.
+    /// - [`FilterPushdownPropagation::all_supported`]: Marks all parent filters
+    ///   as supported, e.g. when the node applies any filters its children
+    ///   could not handle itself.
+    /// - [`FilterPushdownPropagation::from_filters`]: Decides, filter by filter,
+    ///   which parent filters are supported by the current node.
+    /// - [`FilterPushdownPropagation::map_node`]: Wraps the updated node of a
+    ///   delegate's result (e.g. a data source) in the current node's type.
     /// - [`FilterPushdownPropagation::with_updated_node`]: Allows updating the
     ///   current node in the propagation result, used if the node
     ///   has modified its plan based on the pushdown results.

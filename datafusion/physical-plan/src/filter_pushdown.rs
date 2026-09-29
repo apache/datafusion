@@ -288,8 +288,53 @@ impl<T> FilterPushdownPropagation<T> {
         }
     }
 
+    /// Create a new [`FilterPushdownPropagation`] that tells the parent node that
+    /// every parent filter is handled by this node, regardless of the child results.
+    ///
+    /// Use this when the node itself takes responsibility for evaluating any
+    /// filters its children could not handle (e.g. by inserting a `FilterExec`).
+    pub fn all_supported(child_pushdown_result: &ChildPushdownResult) -> Self {
+        Self {
+            filters: vec![PushedDown::Yes; child_pushdown_result.parent_filters.len()],
+            updated_node: None,
+        }
+    }
+
+    /// Create a new [`FilterPushdownPropagation`] by deciding, for each filter
+    /// in `filters`, whether it was pushed down.
+    ///
+    /// The result is built by mapping over `filters`, so it always has one
+    /// entry per filter, in the same order. Prefer this over
+    /// [`Self::with_parent_pushdown_result`], which requires the caller to
+    /// preserve that order by hand.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use datafusion_physical_expr::expressions::lit;
+    /// # use datafusion_physical_plan::filter_pushdown::{FilterPushdownPropagation, PushedDown};
+    /// let filters = vec![lit(true), lit(false)];
+    /// // e.g. a source that cannot handle any filter
+    /// let result: FilterPushdownPropagation<()> =
+    ///     FilterPushdownPropagation::from_filters(&filters, |_| PushedDown::No);
+    /// assert_eq!(result.filters.len(), 2);
+    /// ```
+    pub fn from_filters(
+        filters: &[Arc<dyn PhysicalExpr>],
+        f: impl FnMut(&Arc<dyn PhysicalExpr>) -> PushedDown,
+    ) -> Self {
+        Self {
+            filters: filters.iter().map(f).collect(),
+            updated_node: None,
+        }
+    }
+
     /// Create a new [`FilterPushdownPropagation`] with the specified filter support.
     /// This transmits up to our parent node what the result of pushing down the filters into our node and possibly our subtree was.
+    ///
+    /// `filters` must contain exactly one entry per parent filter, in the same
+    /// order the filters were received. Prefer [`Self::from_filters`],
+    /// [`Self::if_all`], [`Self::if_any`] or [`Self::all_supported`], which
+    /// preserve that order by construction.
     pub fn with_parent_pushdown_result(filters: Vec<PushedDown>) -> Self {
         Self {
             filters,
@@ -303,6 +348,21 @@ impl<T> FilterPushdownPropagation<T> {
     pub fn with_updated_node(mut self, updated_node: T) -> Self {
         self.updated_node = Some(updated_node);
         self
+    }
+
+    /// Transform the updated node (if any), keeping the filter results unchanged.
+    ///
+    /// Useful when a node delegates pushdown to an inner component (e.g. a
+    /// `DataSourceExec` delegating to its `DataSource`) and needs to wrap the
+    /// inner component's updated node in its own type.
+    pub fn map_node<U>(
+        self,
+        f: impl FnOnce(T) -> Result<U>,
+    ) -> Result<FilterPushdownPropagation<U>> {
+        Ok(FilterPushdownPropagation {
+            filters: self.filters,
+            updated_node: self.updated_node.map(f).transpose()?,
+        })
     }
 }
 
@@ -517,6 +577,25 @@ impl ChildFilterDescription {
             parent_filters: vec![],
             self_filters: vec![],
         }
+    }
+
+    /// Build a description by deciding, for each parent filter, whether (and
+    /// in what rewritten form) it can be pushed down to this child.
+    ///
+    /// The description is built by mapping over `parent_filters`, so it always
+    /// has one entry per parent filter, in the same order.
+    ///
+    /// Use this when the pushed-down filter must be rewritten in a way
+    /// [`Self::from_child`] does not cover, such as expanding aliases in a
+    /// projection.
+    pub fn from_filters(
+        parent_filters: &[Arc<dyn PhysicalExpr>],
+        f: impl FnMut(&Arc<dyn PhysicalExpr>) -> Result<PushedDownPredicate>,
+    ) -> Result<Self> {
+        Ok(Self {
+            parent_filters: parent_filters.iter().map(f).collect::<Result<_>>()?,
+            self_filters: vec![],
+        })
     }
 
     /// Mark all parent filters as unsupported for this child.

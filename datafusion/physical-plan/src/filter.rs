@@ -859,10 +859,10 @@ impl ExecutionPlan for FilterExec {
             Some(Arc::new(new) as _)
         };
 
-        Ok(FilterPushdownPropagation {
-            filters: vec![PushedDown::Yes; child_pushdown_result.parent_filters.len()],
-            updated_node,
-        })
+        let mut propagation =
+            FilterPushdownPropagation::all_supported(&child_pushdown_result);
+        propagation.updated_node = updated_node;
+        Ok(propagation)
     }
 
     fn fetch(&self) -> Option<usize> {

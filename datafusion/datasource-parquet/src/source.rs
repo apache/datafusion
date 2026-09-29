@@ -64,10 +64,7 @@ use datafusion_physical_expr_common::sort_expr::{
 };
 use datafusion_physical_plan::DisplayFormatType;
 use datafusion_physical_plan::SortOrderPushdownResult;
-use datafusion_physical_plan::filter_pushdown::PushedDown;
-use datafusion_physical_plan::filter_pushdown::{
-    FilterPushdownPropagation, PushedDownPredicate,
-};
+use datafusion_physical_plan::filter_pushdown::{FilterPushdownPropagation, PushedDown};
 use datafusion_physical_plan::metrics::Count;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use log::warn;
@@ -877,34 +874,22 @@ impl FileSource for ParquetSource {
         let table_pushdown_enabled = self.pushdown_filters();
         let pushdown_filters = table_pushdown_enabled || config_pushdown_enabled;
 
-        let mut source = self.clone();
-        let filters: Vec<PushedDownPredicate> = filters
-            .into_iter()
-            .map(|filter| {
-                if can_expr_be_pushed_down_with_schemas(&filter, pushable_schema) {
-                    PushedDownPredicate::supported(filter)
-                } else {
-                    PushedDownPredicate::unsupported(filter)
-                }
-            })
-            .collect();
-        if filters
-            .iter()
-            .all(|f| matches!(f.discriminant, PushedDown::No))
-        {
-            // No filters can be pushed down, so we can just return the remaining filters
-            // and avoid replacing the source in the physical plan.
-            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-                vec![PushedDown::No; filters.len()],
-            ));
-        }
+        let can_push = |filter: &Arc<dyn PhysicalExpr>| {
+            can_expr_be_pushed_down_with_schemas(filter, pushable_schema)
+        };
         let allowed_filters = filters
             .iter()
-            .filter_map(|f| match f.discriminant {
-                PushedDown::Yes => Some(Arc::clone(&f.predicate)),
-                PushedDown::No => None,
-            })
+            .filter(|f| can_push(f))
+            .cloned()
             .collect_vec();
+        if allowed_filters.is_empty() {
+            // No filters can be pushed down, so we can just return the remaining filters
+            // and avoid replacing the source in the physical plan.
+            return Ok(FilterPushdownPropagation::from_filters(&filters, |_| {
+                PushedDown::No
+            }));
+        }
+        let mut source = self.clone();
         let predicate = match source.predicate {
             Some(predicate) => {
                 conjunction(std::iter::once(predicate).chain(allowed_filters))
@@ -916,15 +901,13 @@ impl FileSource for ParquetSource {
         let source = Arc::new(source);
         // If pushdown_filters is false we tell our parents that they still have to handle the filters,
         // even if we updated the predicate to include the filters (they will only be used for stats pruning).
-        if !pushdown_filters {
-            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-                vec![PushedDown::No; filters.len()],
-            )
-            .with_updated_node(source));
-        }
-        Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-            filters.iter().map(|f| f.discriminant).collect(),
-        )
+        Ok(FilterPushdownPropagation::from_filters(&filters, |f| {
+            if pushdown_filters && can_push(f) {
+                PushedDown::Yes
+            } else {
+                PushedDown::No
+            }
+        })
         .with_updated_node(source))
     }
 

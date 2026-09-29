@@ -555,13 +555,12 @@ impl ExecutionPlan for UnionExec {
             .any(|(new, old)| !Arc::ptr_eq(new, old));
 
         let all_filters_pushed =
-            vec![PushedDown::Yes; child_pushdown_result.parent_filters.len()];
+            FilterPushdownPropagation::all_supported(&child_pushdown_result);
         let propagation = if children_modified {
             let updated_node = UnionExec::try_new(new_children)?;
-            FilterPushdownPropagation::with_parent_pushdown_result(all_filters_pushed)
-                .with_updated_node(updated_node)
+            all_filters_pushed.with_updated_node(updated_node)
         } else {
-            FilterPushdownPropagation::with_parent_pushdown_result(all_filters_pushed)
+            all_filters_pushed
         };
 
         // Report all parent filters as supported since we've ensured they're applied
