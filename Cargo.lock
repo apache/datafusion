@@ -1987,6 +1987,7 @@ dependencies = [
  "log",
  "object_store",
  "parking_lot",
+ "pin-project-lite",
  "rand 0.9.4",
  "tempfile",
  "tokio",
@@ -2138,11 +2139,7 @@ dependencies = [
  "bytes",
  "dashmap",
  "datafusion",
- "datafusion-common",
- "datafusion-expr",
- "datafusion-physical-expr-adapter",
  "datafusion-proto",
- "datafusion-sql",
  "env_logger",
  "futures",
  "insta",
@@ -2472,6 +2469,7 @@ name = "datafusion-physical-expr-adapter"
 version = "55.1.0"
 dependencies = [
  "arrow",
+ "criterion",
  "datafusion-common",
  "datafusion-expr",
  "datafusion-functions",
