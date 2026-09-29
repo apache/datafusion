@@ -714,6 +714,11 @@ impl GroupsAccumulator for GroupsAccumulatorAdapter {
         let values = args.values();
         let opt_filter = args.filter();
         let num_rows = args.num_rows();
+        if !values.iter().all(|value| value.len() == num_rows) {
+            return internal_err!(
+                "Aggregate argument array length must match the state conversion row count"
+            );
+        }
         if opt_filter.is_some_and(|filter| filter.len() != num_rows) {
             return internal_err!(
                 "Aggregate filter length must match the state conversion row count"
@@ -983,6 +988,26 @@ mod tests {
         assert_eq!(empty.len(), 1);
         assert!(empty[0].is_empty());
         Ok(())
+    }
+
+    #[test]
+    fn adapter_rejects_mismatched_state_conversion_row_count() {
+        let adapter = inputless_adapter();
+        let values: Vec<ArrayRef> = vec![Arc::new(Int64Array::from(vec![1]))];
+
+        for num_rows in [0, 2] {
+            let error = adapter
+                .convert_to_state_with_args(ConvertToStateArgs::new(
+                    &values, None, num_rows,
+                ))
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("Aggregate argument array length must match"),
+                "{error}"
+            );
+        }
     }
 
     #[derive(Debug)]
