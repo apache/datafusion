@@ -16,9 +16,11 @@
 // under the License.
 
 use arrow::array::StructArray;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::{Result, exec_err, internal_err};
-use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnFieldArgs, ScalarFunctionArgs,
+};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::sync::Arc;
@@ -112,6 +114,18 @@ impl ScalarUDFImpl for StructFunc {
             .into();
 
         Ok(DataType::Struct(fields))
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect::<Vec<_>>();
+        // The constructed struct row is never NULL: `invoke_with_args` builds
+        // the `StructArray` without a null buffer, so the output field is
+        // non-nullable and `struct(...) IS NOT NULL` folds to `true`.
+        Ok(Field::new(self.name(), self.return_type(&arg_types)?, false).into())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

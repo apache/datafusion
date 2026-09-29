@@ -739,6 +739,20 @@ FROM t1, LATERAL (
 ) AS sub
 ORDER BY t1.id;
 
+# --- Correlated filter on the nullable side of an outer join ---
+# https://github.com/apache/datafusion/issues/25507
+# Pulling `t2.t1_id = t1.id` above the LEFT JOIN would drop the t3 rows that
+# have no match instead of extending them with NULLs.
+# Expected result once supported: every t3 row for every t1 row (9 rows),
+# with y set only where t2.t1_id = t1.id.
+statement error OuterReferenceColumn
+SELECT t1.id, sub.x, sub.y
+FROM t1, LATERAL (
+    SELECT t3.id AS x, t2.t1_id AS y
+    FROM t3 LEFT JOIN (SELECT * FROM t2 WHERE t2.t1_id = t1.id) AS t2 ON t3.t2_id = t2.id
+) AS sub
+ORDER BY t1.id, sub.x;
+
 # --- Implicit LATERAL (comma without LATERAL keyword) ---
 # DuckDB auto-detects lateral correlation; DataFusion requires
 # the explicit LATERAL keyword.

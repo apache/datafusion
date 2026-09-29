@@ -766,22 +766,23 @@ select get_field(CAST(NULL AS STRUCT(a STRUCT(b INT))), 'a', 'b');
 ----
 NULL
 
-# Null handling: null in middle of chain
+# Null parents at either level make a non-nullable child nullable.
 statement ok
-create table null_mid_test (s STRUCT(a STRUCT(b INT)));
-
-statement ok
-insert into null_mid_test values ({'a': NULL});
+create table null_mid_test as
+select arrow_cast(NULL, 'Struct("a": non-null Struct("b": non-null Int32))') as null_base,
+       arrow_cast({'a': NULL}, 'Struct("a": Struct("b": non-null Int32))') as s;
 
 query I
 select s['a']['b'] from null_mid_test;
 ----
 NULL
 
-query I
-select get_field(s, 'a', 'b') from null_mid_test;
+query IBIB
+select get_field(null_base, 'a', 'b'), arrow_field(null_base['a']['b'])['nullable'],
+       get_field(s, 'a', 'b'), arrow_field(s['a']['b'])['nullable']
+from null_mid_test;
 ----
-NULL
+NULL true NULL true
 
 statement ok
 drop table null_mid_test;
@@ -1752,3 +1753,53 @@ limit 2;
 
 statement ok
 drop table list_cast_limit;
+
+# named_struct() and struct() never produce a NULL row, so their return field
+# is non-nullable and `IS NOT NULL` on the constructor folds to `true`. A guard
+# on a struct built by a view then no longer keeps the whole struct alive, and
+# the scan is pruned to the fields that are actually read.
+statement ok
+create table struct_ctor_null (a int, b int, c int) as values (1, 2, 3), (NULL, 5, 6);
+
+statement ok
+create view struct_ctor_view as select named_struct('a', a, 'b', b, 'c', c) as s from struct_ctor_null;
+
+query BB
+select named_struct('a', a) is not null, struct(a) is null from struct_ctor_null;
+----
+true false
+true false
+
+query TT
+explain select s['b'] from struct_ctor_view where s is not null;
+----
+logical_plan
+01)Projection: __datafusion_extracted_1 AS struct_ctor_view.s[b]
+02)--SubqueryAlias: struct_ctor_view
+03)----Projection: struct_ctor_null.b AS __datafusion_extracted_1
+04)------TableScan: struct_ctor_null projection=[b]
+physical_plan
+01)ProjectionExec: expr=[b@0 as struct_ctor_view.s[b]]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+select s['b'] from struct_ctor_view where s is not null;
+----
+2
+5
+
+query TT
+explain select case when named_struct('a', a) is not null then b end from struct_ctor_null;
+----
+logical_plan
+01)Projection: struct_ctor_null.b AS CASE WHEN named_struct(Utf8("a"),struct_ctor_null.a) IS NOT NULL THEN struct_ctor_null.b END
+02)--TableScan: struct_ctor_null projection=[b]
+physical_plan
+01)ProjectionExec: expr=[b@0 as CASE WHEN named_struct(Utf8("a"),struct_ctor_null.a) IS NOT NULL THEN struct_ctor_null.b END]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop view struct_ctor_view;
+
+statement ok
+drop table struct_ctor_null;
