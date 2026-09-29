@@ -20,7 +20,7 @@
 use std::fmt::Formatter;
 use std::ops::{BitOr, ControlFlow};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::Poll;
 
 use super::utils::{
@@ -29,11 +29,15 @@ use super::utils::{
 };
 use crate::common::can_project;
 use crate::execution_plan::{EmissionType, boundedness_from_children};
+use crate::filter_pushdown::{
+    ChildFilterDescription, FilterDescription, FilterPushdownPhase, PushedDownPredicate,
+};
 use crate::joins::SharedBitmapBuilder;
+use crate::joins::logical_batch::{BatchRow, LogicalBatch};
 use crate::joins::utils::{
     BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
-    build_join_schema, check_join_is_valid, estimate_join_statistics,
-    need_produce_right_in_final,
+    boolean_mask_from_filter, build_join_schema, check_join_is_valid,
+    estimate_join_statistics, need_produce_right_in_final,
 };
 use crate::metrics::{
     Count, ExecutionPlanMetricsSet, MetricBuilder, MetricType, MetricsSet, RatioMetrics,
@@ -55,28 +59,30 @@ use arrow::array::{
     UInt64Array, new_null_array,
 };
 use arrow::buffer::BooleanBuffer;
-use arrow::compute::{
-    BatchCoalescer, concat_batches, filter, filter_record_batch, not, take,
-};
+use arrow::compute::{BatchCoalescer, filter, filter_record_batch, not, take};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow::util::bit_iterator::BitIndexIterator;
 use arrow_schema::DataType;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    JoinSide, NullEquality, Result, ScalarValue, Statistics, arrow_err,
-    assert_eq_or_internal_err, internal_datafusion_err, internal_err, project_schema,
-    unwrap_or_internal_err,
+    DataFusionError, JoinSide, NullEquality, Result, ScalarValue, SharedResult,
+    Statistics, arrow_err, assert_eq_or_internal_err, internal_datafusion_err,
+    internal_err, project_schema, unwrap_or_internal_err,
 };
-use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::{SpillFile, TaskContext};
 use datafusion_expr::JoinType;
+use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::equivalence::{
     ProjectionMapping, join_equivalence_properties,
 };
+use datafusion_physical_expr::expressions::DynamicFilterPhysicalExpr;
 
 use datafusion_physical_expr::projection::{ProjectionRef, combine_projections};
-use futures::future::BoxFuture;
+use futures::future::{BoxFuture, Shared};
 use futures::{FutureExt, Stream, StreamExt};
 use log::debug;
 use parking_lot::Mutex;
@@ -128,7 +134,9 @@ use crate::spill::spill_manager::SpillManager;
 ///
 /// ## 1. Buffering Left Input
 /// - The operator eagerly buffers all left-side input batches into memory,
-///   util a memory limit is reached.
+///   util a memory limit is reached. The batches are kept as they arrive and
+///   addressed as one contiguous batch (see `LogicalBatch`), so buffering
+///   does not copy them into a merged batch.
 ///   Currently, an out-of-memory error will be thrown if all the left-side input batches
 ///   cannot fit into memory at once.
 ///   In the future, it's possible to make this case finish execution. (see
@@ -176,15 +184,28 @@ use crate::spill::spill_manager::SpillManager;
 /// 3. For each subsequent left chunk, the right side is re-read from the spill file
 ///
 /// The fallback is triggered automatically when the initial in-memory load
-/// fails with `ResourcesExhausted` and disk spilling is available. Each
-/// output partition independently re-executes the left child and manages
-/// its own spill state.
+/// fails with `ResourcesExhausted` and disk spilling is available. The left
+/// child is executed once and spilled to one file during that same load, and
+/// each output partition spills its own right input.
 ///
-/// All join types are supported. For RIGHT/FULL/RIGHT SEMI/RIGHT ANTI/
-/// RIGHT MARK joins, a global right-side bitmap (indexed by right batch
-/// sequence number) accumulates matches across all left chunks. After the
-/// last left chunk is processed, the right side is replayed one more time
-/// to emit unmatched right rows using the accumulated bitmap.
+/// Re-reading the right side once per left chunk is the cost of the fallback,
+/// so chunks should be as large as memory allows. All output partitions
+/// therefore share one chunk at a time, which is as large as it gets, and move
+/// on to the next one together (see [`LeftChunkBarrier`]).
+///
+/// All join types are supported, and both sides defer their unmatched rows
+/// until every chunk has been probed:
+/// - For RIGHT/FULL/RIGHT SEMI/RIGHT ANTI/RIGHT MARK joins, each partition
+///   keeps a global right-side bitmap (indexed by right batch sequence number)
+///   that accumulates matches across all left chunks. After the last left
+///   chunk, the right side is replayed one more time to emit unmatched right
+///   rows using the accumulated bitmap.
+/// - For LEFT/FULL/LEFT SEMI/LEFT ANTI/LEFT MARK joins, one global left-side
+///   bitmap (one bit per spilled left row, see [`LeftSpillData`]) is shared by
+///   all partitions. Each partition merges a chunk's matches into it when it
+///   finishes the chunk, and the last partition to finish streams the left
+///   spill file once more to emit the final left rows, the same way the
+///   in-memory path elects a single partition for that step.
 ///
 /// Tracking issue: <https://github.com/apache/datafusion/issues/15760>
 ///
@@ -212,13 +233,9 @@ pub struct NestedLoopJoinExec {
     /// Each output stream waits on the `OnceAsync` to signal the completion of
     /// the build(left) side data, and buffer them all for later joining.
     build_side_data: OnceAsync<LeftLoad>,
-    /// Coordinator that, in the memory-limited fallback path, shares
-    /// per-chunk `JoinLeftData` (visited bitmap + probe-thread counter)
-    /// across all right-side output partitions. This makes the fallback
-    /// path's left-side tracking consistent with the single-pass path
-    /// (where `collect_left_input(..., probe_threads_count)` initializes
-    /// the counter to `right_partition_count`).
-    fallback_coordinator: Arc<FallbackCoordinator>,
+    /// Paces the output streams through the left chunks when the left side is
+    /// spilled. *Shared* across all output streams, like `build_side_data`.
+    left_chunk_barrier: Arc<LeftChunkBarrier>,
     /// Information of index and left / right placement of columns
     column_indices: Vec<ColumnIndex>,
     /// Projection to apply to the output of the join
@@ -295,8 +312,9 @@ impl NestedLoopJoinExecBuilder {
             join_type,
             projection.as_deref(),
         )?;
-        let right_partition_count = right.output_partitioning().partition_count().max(1);
-        let with_visited_bitmap = need_produce_result_in_final(join_type);
+        let left_chunk_barrier = Arc::new(LeftChunkBarrier::new(
+            right.output_partitioning().partition_count(),
+        ));
         Ok(NestedLoopJoinExec {
             left,
             right,
@@ -304,10 +322,7 @@ impl NestedLoopJoinExecBuilder {
             join_type,
             join_schema,
             build_side_data: Default::default(),
-            fallback_coordinator: Arc::new(FallbackCoordinator::new(
-                right_partition_count,
-                with_visited_bitmap,
-            )),
+            left_chunk_barrier,
             column_indices,
             projection,
             metrics: Default::default(),
@@ -390,28 +405,31 @@ impl NestedLoopJoinExec {
         let mut output_partitioning =
             asymmetric_join_output_partitioning(left, right, &join_type)?;
 
-        let emission_type = if left.boundedness().is_unbounded() {
-            EmissionType::Final
-        } else if right.pipeline_behavior() == EmissionType::Incremental {
-            match join_type {
-                // If we only need to generate matched rows from the probe side,
-                // we can emit rows incrementally.
-                JoinType::Inner
-                | JoinType::LeftSemi
-                | JoinType::RightSemi
-                | JoinType::Right
-                | JoinType::RightAnti
-                | JoinType::RightMark => EmissionType::Incremental,
-                // If we need to generate unmatched rows from the *build side*,
-                // we need to emit them at the end.
-                JoinType::Left
-                | JoinType::LeftAnti
-                | JoinType::LeftMark
-                | JoinType::Full => EmissionType::Both,
-            }
-        } else {
-            right.pipeline_behavior()
-        };
+        let emission_type =
+            // LeftSemi does not emit rows during probing. It records matching build-side
+            // rows in a bitmap and can only emit them after the probe side is exhausted.
+            if left.boundedness().is_unbounded() || join_type == JoinType::LeftSemi {
+                EmissionType::Final
+            } else if right.pipeline_behavior() == EmissionType::Incremental {
+                match join_type {
+                    // If we only need to generate matched rows from the probe side,
+                    // we can emit rows incrementally.
+                    JoinType::Inner
+                    | JoinType::LeftSemi
+                    | JoinType::RightSemi
+                    | JoinType::Right
+                    | JoinType::RightAnti
+                    | JoinType::RightMark => EmissionType::Incremental,
+                    // If we need to generate unmatched rows from the *build side*,
+                    // we need to emit them at the end.
+                    JoinType::Left
+                    | JoinType::LeftAnti
+                    | JoinType::LeftMark
+                    | JoinType::Full => EmissionType::Both,
+                }
+            } else {
+                right.pipeline_behavior()
+            };
 
         if let Some(projection) = projection {
             // construct a map from the input expressions to the output expression of the Projection
@@ -573,7 +591,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
 
     fn apply_expressions(
         &self,
-        f: &mut dyn FnMut(&Arc<dyn crate::PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
     ) -> Result<TreeNodeRecursion> {
         // Apply to join filter expressions if present
         crate::apply_expression_roots(
@@ -592,19 +610,17 @@ impl ExecutionPlan for NestedLoopJoinExec {
             ChildrenPropertiesMode::Keep => {
                 let left = children.swap_remove(0);
                 let right = children.swap_remove(0);
-                // The coordinator seeds each chunk's probe-thread counter from
-                // the right child's partition count, so it must be rebuilt for
-                // the new child rather than cloned from `self`.
-                let fallback_coordinator = Arc::new(FallbackCoordinator::new(
-                    right.output_partitioning().partition_count().max(1),
-                    need_produce_result_in_final(self.join_type),
+                // Counts the partitions of the right child, so it is built for
+                // the new one rather than shared with `self`.
+                let left_chunk_barrier = Arc::new(LeftChunkBarrier::new(
+                    right.output_partitioning().partition_count(),
                 ));
                 Ok(Arc::new(Self {
                     left,
                     right,
                     metrics: ExecutionPlanMetricsSet::new(),
                     build_side_data: Default::default(),
-                    fallback_coordinator,
+                    left_chunk_barrier,
                     cache: Arc::clone(&self.cache),
                     filter: self.filter.clone(),
                     join_type: self.join_type,
@@ -640,9 +656,6 @@ impl ExecutionPlan for NestedLoopJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        // Rebuild rather than `replace_children(.., Keep)`: the fallback
-        // coordinator's `right_partition_count` must match the *new* right
-        // child, since it seeds each chunk's probe-thread counter.
         self.replace_children(
             children,
             ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
@@ -687,22 +700,21 @@ impl ExecutionPlan for NestedLoopJoinExec {
         // 2. Join types whose final emission reads the visited-left bitmap
         //    (LEFT, LEFT SEMI, LEFT ANTI, LEFT MARK, FULL) need that bitmap
         //    complete across every probe partition. The memory-limited path
-        //    shares each chunk's `JoinLeftData` (visited bitmap plus
-        //    probe-thread counter) across all right-side partitions through
-        //    [`FallbackCoordinator`], seeding the counter with
-        //    `right_partition_count`, so left-side tracking matches the
-        //    single-pass path and every partition emits from the same bitmap.
+        //    shares one global bitmap and one probe-thread counter, seeded
+        //    with `right_partition_count`, through [`LeftSpillData`], exactly
+        //    as the single-pass path does through [`JoinLeftData`].
         //
-        //    That coordination assumes all right partitions run in the same
+        //    That sharing assumes all right partitions run in the same
         //    process. A distributed engine executes each partition as an
-        //    independent task with its own coordinator, so the shared
-        //    probe-thread counter would never reach zero and the fallback
-        //    would stall. Such engines set
+        //    independent task with its own copy of the shared state, so the
+        //    counter would never reach zero, and the partitions it never
+        //    runs would be waited for at every left chunk (see
+        //    [`LeftChunkBarrier`]). Such engines set
         //    `enable_nlj_coordinated_fallback = false` to opt out for the
         //    affected join types (left-emitting joins over a multi-partition
         //    right side), which then fail with resource exhaustion under
-        //    memory pressure instead of deadlocking. Single-partition and
-        //    non-left-emitting joins are always safe and keep the fallback.
+        //    memory pressure instead of stalling. Single-partition joins
+        //    always keep the fallback, as do non-left-emitting ones.
         let coordinated_fallback_disabled = !context
             .session_config()
             .options()
@@ -734,44 +746,17 @@ impl ExecutionPlan for NestedLoopJoinExec {
                 need_produce_result_in_final(self.join_type),
                 right_partition_count,
                 left_spill_manager,
+                Arc::clone(&self.left_chunk_barrier),
             ))
         })?;
 
         let probe_side_data = self.right.execute(partition, Arc::clone(&context))?;
 
-        // Determine if OOM fallback to memory-limited mode is possible.
-        // Condition: disk manager supports temp files (needed for spilling).
-        //
-        // For join types that emit unmatched left rows in the final output
-        // (LEFT, LEFT SEMI, LEFT ANTI, LEFT MARK, FULL), the fallback path
-        // shares per-chunk `JoinLeftData` (visited bitmap + probe-thread
-        // counter) across all right-side partitions via
-        // [`FallbackCoordinator`], so left-side tracking is coordinated
-        // exactly as in the single-pass path.
-        //
-        // That coordination assumes all right partitions run in the same
-        // process. Distributed engines run each partition as an independent
-        // task with its own coordinator, so the shared probe-thread counter
-        // would never reach zero and the fallback would stall. When
-        // `enable_nlj_coordinated_fallback` is disabled, such engines opt
-        // out of the coordinated fallback for the affected join types
-        // (left-emitting joins with a multi-partition right side); those cases
-        // use `SpillState::Disabled` and fail with resource exhaustion under
-        // memory pressure instead of deadlocking. Single-partition and
-        // non-left-emitting joins are always safe and keep the fallback.
-        let coordinated_fallback_disabled = !context
-            .session_config()
-            .options()
-            .execution
-            .enable_nlj_coordinated_fallback
-            && need_produce_result_in_final(self.join_type)
-            && right_partition_count > 1;
-        let spill_state = if context.runtime_env().disk_manager.tmp_files_enabled()
-            && !coordinated_fallback_disabled
-        {
+        let spill_state = if can_spill {
             SpillState::Pending {
                 task_context: Arc::clone(&context),
-                fallback_coordinator: Arc::clone(&self.fallback_coordinator),
+                partition,
+                left_chunk_barrier: Arc::clone(&self.left_chunk_barrier),
             }
         } else {
             SpillState::Disabled
@@ -827,6 +812,77 @@ impl ExecutionPlan for NestedLoopJoinExec {
         )?;
 
         Ok(Arc::new(stats.project(self.projection.as_ref())))
+    }
+
+    fn gather_filters_for_pushdown(
+        &self,
+        phase: FilterPushdownPhase,
+        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        config: &ConfigOptions,
+    ) -> Result<FilterDescription> {
+        if phase != FilterPushdownPhase::Post
+            || !config.optimizer.enable_join_dynamic_filter_pushdown
+        {
+            return Ok(FilterDescription::new()
+                .with_child(ChildFilterDescription::all_unsupported(&parent_filters))
+                .with_child(ChildFilterDescription::all_unsupported(&parent_filters)));
+        }
+
+        // Removing rows from the non-preserved side of an outer or anti join
+        // can create new unmatched rows. Only route filters to output-preserving
+        // inputs; unlike a hash join, an NLJ has no equijoin keys to translate
+        // filters onto the other input of a semi join.
+        let (left_preserved, right_preserved) = match self.join_type {
+            JoinType::Inner => (true, true),
+            JoinType::Left
+            | JoinType::LeftSemi
+            | JoinType::LeftAnti
+            | JoinType::LeftMark => (true, false),
+            JoinType::Right
+            | JoinType::RightSemi
+            | JoinType::RightAnti
+            | JoinType::RightMark => (false, true),
+            JoinType::Full => (false, false),
+        };
+        let output_indices: Vec<_> = match &self.projection {
+            Some(projection) => projection.to_vec(),
+            None => (0..self.column_indices.len()).collect(),
+        };
+        let mut description = FilterDescription::new();
+        for (side, preserved, child) in [
+            (JoinSide::Left, left_preserved, self.left()),
+            (JoinSide::Right, right_preserved, self.right()),
+        ] {
+            // Map positions explicitly: names can repeat within an input as
+            // well as across the two sides of the join.
+            let column_mapping = output_indices
+                .iter()
+                .enumerate()
+                .filter_map(|(output, input)| {
+                    let column = &self.column_indices[*input];
+                    (column.side == side).then_some((output, column.index))
+                })
+                .collect();
+            let mut child_description = if preserved {
+                ChildFilterDescription::from_child_with_column_mapping(
+                    &parent_filters,
+                    column_mapping,
+                    child,
+                )?
+            } else {
+                ChildFilterDescription::all_unsupported(&parent_filters)
+            };
+            for (filter, pushed) in parent_filters
+                .iter()
+                .zip(&mut child_description.parent_filters)
+            {
+                if !filter.is::<DynamicFilterPhysicalExpr>() {
+                    *pushed = PushedDownPredicate::unsupported(Arc::clone(filter));
+                }
+            }
+            description = description.with_child(child_description);
+        }
+        Ok(description)
     }
 
     /// Tries to push `projection` down through `nested_loop_join`. If possible, performs the
@@ -888,9 +944,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             join_schema: _,
             // runtime build-side state, not part of the plan
             build_side_data: _,
-            // runtime fallback coordination state, not part of the plan;
-            // rebuilt from the right child's partition count on decode
-            fallback_coordinator: _,
+            left_chunk_barrier: _,
             // recomputed by `try_new` on decode
             column_indices: _,
             // runtime metrics, not part of the plan
@@ -1084,8 +1138,9 @@ impl EmbeddedProjection for NestedLoopJoinExec {
 
 /// Left (build-side) data
 pub(crate) struct JoinLeftData {
-    /// Build-side data collected to single batch
-    batch: RecordBatch,
+    /// Build-side rows. See [`LogicalBatch`] for details on this layout
+    /// and why it is used.
+    batch: LogicalBatch,
     /// Shared bitmap builder for visited left indices
     bitmap: SharedBitmapBuilder,
     /// Counter of running probe-threads, potentially able to update `bitmap`
@@ -1099,7 +1154,7 @@ pub(crate) struct JoinLeftData {
 
 impl JoinLeftData {
     pub(crate) fn new(
-        batch: RecordBatch,
+        batch: LogicalBatch,
         bitmap: SharedBitmapBuilder,
         probe_threads_counter: AtomicUsize,
         reservation: MemoryReservation,
@@ -1112,7 +1167,7 @@ impl JoinLeftData {
         }
     }
 
-    pub(crate) fn batch(&self) -> &RecordBatch {
+    pub(crate) fn batch(&self) -> &LogicalBatch {
         &self.batch
     }
 
@@ -1141,6 +1196,7 @@ async fn collect_left_input(
     with_visited_left_side: bool,
     probe_threads_count: usize,
     spill_manager: Option<SpillManager>,
+    left_chunk_barrier: Arc<LeftChunkBarrier>,
 ) -> Result<LeftLoad> {
     let schema = stream.schema();
     let metrics = join_metrics;
@@ -1164,7 +1220,6 @@ async fn collect_left_input(
                 let spill_manager = spill_manager.expect("checked by is_spillable_oom");
                 let spilled = spill_left_input(
                     spill_manager,
-                    Arc::clone(&schema),
                     batches,
                     Some(batch),
                     stream,
@@ -1175,8 +1230,10 @@ async fn collect_left_input(
                 return Ok(left_load_from_spill(
                     spilled,
                     schema,
+                    with_visited_left_side,
                     probe_threads_count,
                     reservation,
+                    &left_chunk_barrier,
                 ));
             }
             Err(e) => return Err(e),
@@ -1187,11 +1244,11 @@ async fn collect_left_input(
     // polling the child stream above.
     let build_timer = metrics.build_time.timer();
 
-    let merged_batch = concat_batches(&schema, &batches)?;
+    let buffered_build_batch = LogicalBatch::new(Arc::clone(&schema), batches)?;
 
     // Reserve memory for visited_left_side bitmap if required by join type
     let visited_left_side = if with_visited_left_side {
-        let n_rows = merged_batch.num_rows();
+        let n_rows = buffered_build_batch.num_rows();
         let buffer_size = n_rows.div_ceil(8);
         match reservation.try_grow(buffer_size) {
             Ok(()) => {}
@@ -1200,11 +1257,9 @@ async fn collect_left_input(
                 // outside that timer.
                 build_timer.done();
                 let spill_manager = spill_manager.expect("checked by is_spillable_oom");
-                drop(batches);
                 let spilled = spill_left_input(
                     spill_manager,
-                    Arc::clone(&schema),
-                    vec![merged_batch],
+                    buffered_build_batch.into_batches(),
                     None,
                     stream,
                     metrics,
@@ -1214,8 +1269,10 @@ async fn collect_left_input(
                 return Ok(left_load_from_spill(
                     spilled,
                     schema,
+                    with_visited_left_side,
                     probe_threads_count,
                     reservation,
+                    &left_chunk_barrier,
                 ));
             }
             Err(e) => return Err(e),
@@ -1230,7 +1287,7 @@ async fn collect_left_input(
     };
 
     Ok(LeftLoad::InMemory(Arc::new(JoinLeftData::new(
-        merged_batch,
+        buffered_build_batch,
         Mutex::new(visited_left_side),
         AtomicUsize::new(probe_threads_count),
         reservation,
@@ -1239,16 +1296,28 @@ async fn collect_left_input(
 
 /// A left side with no rows needs no spill file, so it stays on the in-memory path.
 fn left_load_from_spill(
-    spilled: Option<LeftSpillData>,
+    spilled: Option<SpilledLeftFile>,
     schema: SchemaRef,
+    with_visited_left_side: bool,
     probe_threads_count: usize,
     reservation: MemoryReservation,
+    left_chunk_barrier: &LeftChunkBarrier,
 ) -> LeftLoad {
     match spilled {
-        Some(data) => LeftLoad::Spilled(Arc::new(data)),
+        Some(spilled) => {
+            let left_spill = Arc::new(LeftSpillData::new(
+                spilled,
+                schema,
+                with_visited_left_side,
+                probe_threads_count,
+                reservation,
+            ));
+            left_chunk_barrier.register_left_spill(&left_spill);
+            LeftLoad::Spilled(left_spill)
+        }
         // No rows means no bitmap either, whatever the join type.
         None => LeftLoad::InMemory(Arc::new(JoinLeftData::new(
-            RecordBatch::new_empty(schema),
+            LogicalBatch::new_empty(schema),
             Mutex::new(BooleanBufferBuilder::new(0)),
             AtomicUsize::new(probe_threads_count),
             reservation,
@@ -1258,33 +1327,31 @@ fn left_load_from_spill(
 
 /// Whether a failed reservation is an exhausted pool that the caller can spill its way out of.
 fn is_spillable_oom(
-    error: &datafusion_common::DataFusionError,
+    error: &DataFusionError,
     spill_manager: Option<&SpillManager>,
 ) -> bool {
     spill_manager.is_some()
-        && matches!(
-            error.find_root(),
-            datafusion_common::DataFusionError::ResourcesExhausted(_)
-        )
+        && matches!(error.find_root(), DataFusionError::ResourcesExhausted(_))
 }
 
 /// Write the already-buffered left batches plus the remainder of the same stream to one spill file.
 /// Returns `None` when the left side carried no rows at all, which needs no spill file.
 async fn spill_left_input(
     spill_manager: SpillManager,
-    schema: SchemaRef,
     buffered: Vec<RecordBatch>,
     pending: Option<RecordBatch>,
     mut stream: SendableRecordBatchStream,
     metrics: BuildProbeJoinMetrics,
     reservation: &MemoryReservation,
-) -> Result<Option<LeftSpillData>> {
+) -> Result<Option<SpilledLeftFile>> {
     let build_timer = metrics.build_time.timer();
     let mut spill_file =
         spill_manager.create_in_progress_file("NestedLoopJoin left spill")?;
+    let mut num_rows = 0;
 
     for batch in buffered {
         if batch.num_rows() > 0 {
+            num_rows += batch.num_rows();
             spill_file.append_batch(&batch)?;
         }
     }
@@ -1296,6 +1363,7 @@ async fn spill_left_input(
         if batch.num_rows() > 0 {
             metrics.build_input_batches.add(1);
             metrics.build_input_rows.add(batch.num_rows());
+            num_rows += batch.num_rows();
             spill_file.append_batch(&batch)?;
         }
     }
@@ -1307,15 +1375,16 @@ async fn spill_left_input(
         if batch.num_rows() > 0 {
             metrics.build_input_batches.add(1);
             metrics.build_input_rows.add(batch.num_rows());
+            num_rows += batch.num_rows();
             spill_file.append_batch(&batch)?;
         }
     }
 
     let _build_timer = metrics.build_time.timer();
-    Ok(spill_file.finish()?.map(|file| LeftSpillData {
+    Ok(spill_file.finish()?.map(|spill_file| SpilledLeftFile {
         spill_manager,
-        spill_file: file,
-        schema,
+        spill_file,
+        num_rows,
     }))
 }
 
@@ -1327,28 +1396,17 @@ enum NLJState {
     FetchingRight,
     ProbeRight,
     EmitRightUnmatched,
-    /// Entered exactly once per left chunk, when the probe (right) side is
-    /// exhausted and probing for the current chunk is finished. This state
-    /// owns the single [`JoinLeftData::report_probe_completed`] call that
-    /// decrements the shared probe-threads counter, and records in
-    /// `is_unmatched_left_emitter` whether this stream is the one responsible
-    /// for emitting unmatched-left rows. Splitting this decision out of
-    /// `EmitLeftUnmatched` makes "decrement exactly once" a structural
-    /// property of the state graph, so the (re-enterable) emit state no longer
-    /// has to guard against decrementing twice.
+    /// Entered exactly once per stream, when it has finished probing the whole
+    /// left side: the probe (right) side is exhausted or, in memory-limited
+    /// mode, every left chunk has been probed. This state owns the single
+    /// `report_probe_completed` call that decrements the shared probe-threads
+    /// counter, and records in `is_unmatched_left_emitter` whether this stream
+    /// is the one responsible for emitting unmatched-left rows. Splitting this
+    /// decision out of `EmitLeftUnmatched` makes "decrement exactly once" a
+    /// structural property of the state graph, so the (re-enterable) emit state
+    /// no longer has to guard against decrementing twice.
     ProbeEnd,
     EmitLeftUnmatched,
-    /// Drives the final chunk's `release_chunk` future to completion.
-    ///
-    /// Non-final chunks get released on the way back through
-    /// `BufferingLeft`, but after the last chunk the stream goes straight to
-    /// `Done` or `EmitGlobalRightUnmatched`, and neither polls
-    /// `chunk_release_in_flight`. Since the coordinator hangs off the exec
-    /// rather than off this stream, leaving that future unpolled keeps the
-    /// final chunk's batch, bitmap and reservation accounted for as long as
-    /// the plan is alive. This state exists to poll it exactly once, then
-    /// continue to whichever state would have followed.
-    ReleasingFinalChunk,
     /// Emit unmatched right rows using the global bitmap accumulated across
     /// all left chunks. Only used in memory-limited mode for join types that
     /// require tracking right-side matches in the final output (RIGHT, FULL,
@@ -1361,11 +1419,30 @@ pub(crate) enum LeftLoad {
     /// The left side fit the memory budget and is buffered as one batch.
     InMemory(Arc<JoinLeftData>),
     /// The budget ran out, so the left side was spilled during that same pass. Every partition
-    /// shares this handle, and each left chunk pass re-opens the file.
+    /// shares this handle, and the chunks that are read back from the file.
     Spilled(Arc<LeftSpillData>),
 }
 
+/// The spill file [`spill_left_input`] wrote, before it is wrapped in a [`LeftSpillData`].
+struct SpilledLeftFile {
+    spill_manager: SpillManager,
+    spill_file: Arc<dyn SpillFile>,
+    /// Total number of rows written to `spill_file`
+    num_rows: usize,
+}
+
 /// The spilled left side, shared by every output partition.
+///
+/// This is the memory-limited counterpart of [`JoinLeftData`]: the rows live in
+/// a spill file instead of memory, but the visited bitmap and the probe-threads
+/// counter cover the whole left side and are shared by all partitions in the
+/// same way.
+///
+/// The rows come back one chunk at a time (see [`LeftChunkBarrier`]), while the
+/// bitmap spans all of them: bits are addressed by the row's position in the
+/// file. Keeping match tracking apart from the chunks is what lets a chunk be
+/// dropped as soon as it has been probed, with the final left rows emitted in
+/// one pass at the very end.
 pub(crate) struct LeftSpillData {
     /// SpillManager used to read the spill file (has the left schema)
     spill_manager: SpillManager,
@@ -1373,383 +1450,383 @@ pub(crate) struct LeftSpillData {
     spill_file: Arc<dyn SpillFile>,
     /// Left-side schema
     schema: SchemaRef,
+    /// Total number of rows in `spill_file`
+    num_rows: usize,
+    /// The pass over `spill_file` that chunks are read from. Each chunk load
+    /// takes it and hands it back for the load of the following chunk.
+    reader: Arc<Mutex<Option<LeftChunkReader>>>,
+    /// Visited bitmap over every row of `spill_file`. Empty when the join type
+    /// does not need it.
+    visited: SharedBitmapBuilder,
+    /// Counter of partitions that have neither finished probing every chunk
+    /// nor gone away
+    probe_threads_counter: AtomicUsize,
+    /// Set when a partition went away before it finished probing. The final
+    /// left rows are then not emitted, as on the in-memory path.
+    incomplete: AtomicBool,
+    /// Memory reservation for `visited`
+    reservation: MemoryReservation,
 }
 
-/// Per-chunk shared state in the memory-limited fallback path.
-///
-/// Each chunk's `JoinLeftData` is loaded once by a "leader" partition and
-/// shared (via `Arc`) with every right-side output partition. The
-/// `probe_threads_counter` inside the `JoinLeftData` is initialized to
-/// `right_partition_count`, so `report_probe_completed` returns `true`
-/// only when the *last* partition has finished probing the chunk. That
-/// last partition is then responsible for emitting unmatched left rows
-/// for the chunk, mirroring the single-pass path's coordination via
-/// `collect_left_input(..., probe_threads_count)`.
-struct CurrentChunk {
-    /// 0-based monotonically increasing chunk index.
-    chunk_index: usize,
-    /// Shared per-chunk left data. Cloned by every partition that probes
-    /// this chunk; the last to call `report_probe_completed` emits
-    /// unmatched left rows.
-    data: Arc<JoinLeftData>,
-    /// True if the left stream was exhausted while loading this chunk —
-    /// no further chunks will be produced after it.
-    is_last: bool,
+impl LeftSpillData {
+    fn new(
+        spilled: SpilledLeftFile,
+        schema: SchemaRef,
+        with_visited_left_side: bool,
+        probe_threads_count: usize,
+        reservation: MemoryReservation,
+    ) -> Self {
+        let SpilledLeftFile {
+            spill_manager,
+            spill_file,
+            num_rows,
+        } = spilled;
+        let visited = if with_visited_left_side {
+            // Use infallible `grow`: one bit per row is all that stays in
+            // memory, and the fallback path has no other recourse.
+            reservation.grow(num_rows.div_ceil(8));
+            let mut buffer = BooleanBufferBuilder::new(num_rows);
+            buffer.append_n(num_rows, false);
+            buffer
+        } else {
+            BooleanBufferBuilder::new(0)
+        };
+        Self {
+            spill_manager,
+            spill_file,
+            schema,
+            num_rows,
+            reader: Arc::new(Mutex::new(None)),
+            visited: Mutex::new(visited),
+            probe_threads_counter: AtomicUsize::new(probe_threads_count),
+            incomplete: AtomicBool::new(false),
+            reservation,
+        }
+    }
+
+    /// Open a new pass over the spilled left rows
+    fn open_pass(&self) -> Result<SendableRecordBatchStream> {
+        self.spill_manager
+            .read_spill_as_stream(Arc::clone(&self.spill_file), None)
+    }
+
+    /// Load the next chunk, accounting for it in `reservation`.
+    ///
+    /// The load is a shared future, the way the whole left side is a shared
+    /// [`OnceFut`]: every partition waiting for the chunk holds a clone, and
+    /// whichever of them is polled drives it. So it does not matter which
+    /// partition started the load, or whether that one is still around.
+    fn load_chunk(
+        &self,
+        reservation: MemoryReservation,
+        build_time: &Time,
+    ) -> LeftChunkFut {
+        load_left_chunk(
+            Arc::clone(&self.reader),
+            self.spill_manager.clone(),
+            Arc::clone(&self.spill_file),
+            Arc::clone(&self.schema),
+            reservation,
+            build_time.clone(),
+        )
+        .map(|chunk| chunk.map(Arc::new).map_err(Arc::new))
+        .boxed()
+        .shared()
+    }
+
+    /// Record the matches of a finished chunk, whose first row is the
+    /// `row_offset`-th row of the spill file.
+    fn merge_visited(&self, row_offset: usize, chunk_visited: &BooleanBufferBuilder) {
+        let mut visited = self.visited.lock();
+        for idx in BitIndexIterator::new(chunk_visited.as_slice(), 0, chunk_visited.len())
+        {
+            visited.set_bit(row_offset + idx, true);
+        }
+    }
+
+    /// Decrements counter of running threads. If the caller is the last
+    /// running thread and no partition went away unfinished, it is the emitter
+    /// and gets the complete visited bitmap, which it must account for.
+    fn report_probe_completed(&self) -> Option<BooleanBuffer> {
+        if self.probe_threads_counter.fetch_sub(1, Ordering::AcqRel) != 1 {
+            return None;
+        }
+        let visited = self.take_visited();
+        if self.incomplete.load(Ordering::Acquire) {
+            // Nobody will emit, so nobody needs the bitmap
+            return None;
+        }
+        Some(visited)
+    }
+
+    /// `count` partitions went away before they finished probing.
+    ///
+    /// They are taken out of the probe-threads counter, like a report of probe
+    /// completion, so that the bitmap is released by whichever partition is
+    /// the last to finish or go away, while the plan may live on. But the final
+    /// left rows are then not emitted.
+    fn depart_unfinished(&self, count: usize) {
+        if count == 0 {
+            return;
+        }
+        self.incomplete.store(true, Ordering::Release);
+        if self
+            .probe_threads_counter
+            .fetch_sub(count, Ordering::AcqRel)
+            == count
+        {
+            drop(self.take_visited());
+        }
+    }
+
+    /// Take the visited bitmap for the final emission, or to release it when
+    /// there is none. Only the last partition to finish or go away may call
+    /// this, after which no partition updates the bitmap.
+    ///
+    /// The bitmap's memory is no longer accounted for here afterwards, so that
+    /// a plan that outlives its execution does not keep it reserved. The
+    /// caller accounts for the returned buffer instead.
+    fn take_visited(&self) -> BooleanBuffer {
+        self.reservation.free();
+        self.visited.lock().finish()
+    }
 }
 
-/// Inner state of [`FallbackCoordinator`], guarded by an async mutex.
-struct FallbackCoordinatorInner {
-    /// Reservation owned by the coordinator. Holds the memory for the
-    /// currently-loaded chunk. Reset (`resize(0)`) between chunks.
-    /// Lazily registered by the first leader, after the runtime context
-    /// becomes available via `initiate_fallback`.
-    reservation: Option<MemoryReservation>,
-    /// The shared left spill stream from which chunks are read. Owned by
-    /// the coordinator so only one partition reads it at a time.
-    left_stream: Option<SendableRecordBatchStream>,
-    /// Left schema. Set after the first leader resolves the spill future.
-    left_schema: Option<SchemaRef>,
-    /// One batch carried over from the previous chunk's load: when
-    /// reservation `try_grow` failed for chunk N, the offending batch is
-    /// recorded here and becomes the first batch of chunk N+1.
+/// One chunk of the spilled left side, shared by the partitions probing it.
+struct LeftChunk {
+    batch: LogicalBatch,
+    /// Memory reservation for `batch`, cleared on drop
+    #[expect(dead_code)]
+    reservation: MemoryReservation,
+}
+
+/// A load of a [`LeftChunk`] that several partitions can wait on
+type LeftChunkFut = Shared<BoxFuture<'static, SharedResult<Arc<LeftChunk>>>>;
+
+/// The pass over the left spill file that chunks are read from
+struct LeftChunkReader {
+    stream: SendableRecordBatchStream,
+    /// The batch that did not fit the previous chunk, which starts the next
     carryover: Option<RecordBatch>,
-    /// True once the left spill stream has produced `None`.
-    left_exhausted: bool,
-    /// Index of the next chunk to be loaded.
-    next_chunk_index: usize,
-    /// The currently-loaded chunk, or `None` if no chunk is currently
-    /// loaded (initial state, or the last partition has just released
-    /// chunk `next_chunk_index - 1` and the next leader hasn't taken
-    /// over yet).
-    current: Option<CurrentChunk>,
-    /// True while a partition has claimed leader role for the next
-    /// chunk and is loading it; prevents two partitions from racing.
-    loader_in_flight: bool,
 }
 
-/// Plan-level shared coordinator for the memory-limited fallback path.
+/// Load the next chunk: as many batches as `reservation` accepts, and always at
+/// least one so that the join makes progress.
+async fn load_left_chunk(
+    reader_slot: Arc<Mutex<Option<LeftChunkReader>>>,
+    spill_manager: SpillManager,
+    spill_file: Arc<dyn SpillFile>,
+    schema: SchemaRef,
+    reservation: MemoryReservation,
+    build_time: Time,
+) -> Result<LeftChunk> {
+    // Chunks are loaded one after another, so the reader the previous load
+    // handed back is where this chunk starts. The first load opens it.
+    let reader = reader_slot.lock().take();
+    let mut reader = match reader {
+        Some(reader) => reader,
+        None => LeftChunkReader {
+            stream: spill_manager.read_spill_as_stream(spill_file, None)?,
+            carryover: None,
+        },
+    };
+
+    let mut batches = vec![];
+    // The batch that did not fit the previous chunk is already in memory, so it
+    // is accounted for infallibly.
+    if let Some(batch) = reader.carryover.take() {
+        reservation.grow(batch.get_array_memory_size());
+        batches.push(batch);
+    }
+    while let Some(batch) = reader.stream.next().await {
+        let batch = batch?;
+        // Times only the work this operator does on the batch, not the wait
+        // for the spill stream to produce it.
+        let _build_timer = build_time.timer();
+        if batch.num_rows() == 0 {
+            continue;
+        }
+        let batch_size = batch.get_array_memory_size();
+        if reservation.try_grow(batch_size).is_err() {
+            if !batches.is_empty() {
+                // Chunk is full, defer this batch to the next chunk.
+                reader.carryover = Some(batch);
+                break;
+            }
+            // No batches yet -- accept the batch even over budget so we make
+            // progress.
+            reservation.grow(batch_size);
+        }
+        batches.push(batch);
+    }
+
+    let _build_timer = build_time.timer();
+    let batch = LogicalBatch::new(schema, batches)?;
+    *reader_slot.lock() = Some(reader);
+    Ok(LeftChunk { batch, reservation })
+}
+
+/// Lets the partitions of a memory-limited join share one left chunk at a time.
 ///
-/// All right-side output partitions share one of these. It serializes
-/// access to the left spill stream (so each chunk is read exactly once),
-/// publishes the loaded chunk as an `Arc<JoinLeftData>` for every
-/// partition to clone, and uses a `Notify` so partitions waiting for the
-/// next chunk can sleep without busy-looping.
-pub(crate) struct FallbackCoordinator {
-    /// Number of right-side partitions; equals the
-    /// `probe_threads_counter` initial value for each chunk.
-    right_partition_count: usize,
-    /// Whether `JoinLeftData` should carry a left visited bitmap (for
-    /// join types that emit unmatched left rows in the final output).
-    with_visited_bitmap: bool,
-    inner: tokio::sync::Mutex<FallbackCoordinatorInner>,
-    /// Notified when a new chunk becomes available, when the left stream
-    /// is exhausted, or when a chunk is released.
+/// Re-reading the right side once per left chunk is what the fallback costs, so
+/// chunks should be as large as memory allows. One chunk shared by every
+/// partition is as large as it gets, but it means the next chunk can only be
+/// loaded once every partition is done with the current one. That is all this
+/// type arranges: it counts the partitions that have finished the current
+/// chunk, and moves on when all of them have.
+///
+/// It lives on the plan, next to the shared left load, because partitions take
+/// part before it is known whether the left side spills at all. A partition
+/// that goes away unfinished is taken out of the count, so the others carry on
+/// without it, as they do when the left side fits in memory.
+#[derive(Debug)]
+pub(crate) struct LeftChunkBarrier {
+    inner: Mutex<LeftChunkBarrierInner>,
+    /// Signalled when the barrier moves on to the next chunk
     notify: tokio::sync::Notify,
 }
 
-impl FallbackCoordinator {
-    fn new(right_partition_count: usize, with_visited_bitmap: bool) -> Self {
+struct LeftChunkBarrierInner {
+    /// Index of the chunk the partitions are on
+    chunk_index: usize,
+    /// The load of that chunk, once a partition has asked for it. Holding it
+    /// keeps the chunk in memory for partitions that get to it later.
+    chunk: Option<LeftChunkFut>,
+    /// Partitions that have not gone away
+    live: usize,
+    /// How many of them have finished the current chunk
+    finished: usize,
+    /// Accounts for the chunks. Registered by the first load, because partitions
+    /// take part before it is known that there will be one.
+    reservation: Option<MemoryReservation>,
+    /// The spilled left side, once the load has spilled it. Partitions that go
+    /// away before they finished probing are taken out of its probe-threads
+    /// counter through here, since a partition may not have seen it yet.
+    left_spill: Option<Arc<LeftSpillData>>,
+    /// Partitions that went away unfinished before the left side was spilled,
+    /// to take out of its counter once it is.
+    departed_before_spill: usize,
+}
+
+impl std::fmt::Debug for LeftChunkBarrierInner {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LeftChunkBarrierInner")
+            .field("chunk_index", &self.chunk_index)
+            .field("live", &self.live)
+            .field("finished", &self.finished)
+            .finish()
+    }
+}
+
+impl LeftChunkBarrierInner {
+    /// Move on if every remaining partition has finished the current chunk.
+    /// Returns whether it did.
+    fn advance_if_all_finished(&mut self) -> bool {
+        if self.live > 0 && self.finished < self.live {
+            return false;
+        }
+        // Letting go of the load is what frees the chunk: by now no partition
+        // holds it either.
+        self.chunk = None;
+        self.chunk_index += 1;
+        self.finished = 0;
+        true
+    }
+}
+
+impl LeftChunkBarrier {
+    fn new(right_partition_count: usize) -> Self {
         Self {
-            right_partition_count,
-            with_visited_bitmap,
-            inner: tokio::sync::Mutex::new(FallbackCoordinatorInner {
+            inner: Mutex::new(LeftChunkBarrierInner {
+                chunk_index: 0,
+                chunk: None,
+                live: right_partition_count,
+                finished: 0,
                 reservation: None,
-                left_stream: None,
-                left_schema: None,
-                carryover: None,
-                left_exhausted: false,
-                next_chunk_index: 0,
-                current: None,
-                loader_in_flight: false,
+                left_spill: None,
+                departed_before_spill: 0,
             }),
             notify: tokio::sync::Notify::new(),
         }
     }
 
-    /// After the last partition finishes processing chunk
-    /// `released_chunk_index`, drop the slot so the next leader can
-    /// load chunk `released_chunk_index + 1`.
-    async fn release_chunk(self: &Arc<Self>, released_chunk_index: usize) {
-        let mut inner = self.inner.lock().await;
-        if let Some(cur) = &inner.current
-            && cur.chunk_index == released_chunk_index
-        {
-            inner.current = None;
-            inner.next_chunk_index = released_chunk_index + 1;
-        }
-        // Always notify: waiters may be blocked because they couldn't
-        // become leader while a previous chunk was current.
-        drop(inner);
-        self.notify.notify_waiters();
-    }
-
-    /// Fetch `expected_chunk_index`, becoming leader to load it from the
-    /// left spill stream if no other partition has done so. Returns
-    /// `Ok(None)` when the left stream is exhausted and no chunk with
-    /// the requested index exists.
-    async fn next_chunk(
+    /// The chunk with index `chunk_index`, once every partition has finished
+    /// the one before it.
+    async fn chunk(
         self: Arc<Self>,
-        expected_chunk_index: usize,
-        spill_data: Arc<LeftSpillData>,
-        task_context: Arc<TaskContext>,
+        chunk_index: usize,
+        left_spill: Arc<LeftSpillData>,
+        memory_pool: Arc<dyn MemoryPool>,
         build_time: Time,
-    ) -> Result<Option<(Arc<JoinLeftData>, bool)>> {
-        // `spill_data` is already resolved: every partition receives the
-        // same `Arc<LeftSpillData>` from the shared `OnceAsync<LeftLoad>`,
-        // so the left child is executed and spilled exactly once.
-
+    ) -> Result<Arc<LeftChunk>> {
         loop {
-            let mut inner = self.inner.lock().await;
-
-            // Case 1: requested chunk is already loaded.
-            if let Some(cur) = &inner.current
-                && cur.chunk_index == expected_chunk_index
-            {
-                return Ok(Some((Arc::clone(&cur.data), cur.is_last)));
-            }
-
-            // Case 2: left stream exhausted and no current chunk to
-            // deliver — caller is past the last chunk.
-            if inner.left_exhausted
-                && inner.current.is_none()
-                && inner.carryover.is_none()
-            {
-                return Ok(None);
-            }
-
-            // Case 3: no chunk loaded and no leader yet — claim leader.
-            if inner.current.is_none() && !inner.loader_in_flight {
-                inner.loader_in_flight = true;
-                // Lazily initialize the shared left stream, schema, and
-                // chunk reservation. Only the leader does this (under the
-                // `loader_in_flight` guard), so waiters never open a
-                // throwaway spill stream that the leader would overwrite.
-                let mut left_stream = match inner.left_stream.take() {
-                    Some(stream) => stream,
-                    None => {
-                        // Construct the spill stream. If this ever fails,
-                        // clear the leader flag and wake waiters before
-                        // returning, so they don't block forever on a
-                        // release that the failed leader will never make.
-                        match spill_data.spill_manager.read_spill_as_stream(
-                            Arc::clone(&spill_data.spill_file),
-                            None,
-                        ) {
-                            Ok(stream) => {
-                                inner.left_schema = Some(Arc::clone(&spill_data.schema));
-                                stream
-                            }
-                            Err(e) => {
-                                inner.loader_in_flight = false;
-                                drop(inner);
-                                self.notify.notify_waiters();
-                                return Err(e);
-                            }
-                        }
-                    }
-                };
-                let mut reservation = match inner.reservation.take() {
-                    Some(reservation) => reservation,
-                    None => {
-                        MemoryConsumer::new("NestedLoopJoinFallbackChunk".to_string())
+            // Created under the lock, so that it cannot miss the signal of an
+            // advance that happens right after the lock is released.
+            let advanced = {
+                let mut inner = self.inner.lock();
+                if chunk_index == inner.chunk_index {
+                    let inner = &mut *inner;
+                    let reservation = inner.reservation.get_or_insert_with(|| {
+                        MemoryConsumer::new("NestedLoopJoinFallbackChunk")
                             .with_can_spill(true)
-                            .register(task_context.memory_pool())
-                    }
-                };
-                let left_schema = Arc::clone(
-                    inner
-                        .left_schema
-                        .as_ref()
-                        .expect("left_schema installed above"),
-                );
-                let carryover = inner.carryover.take();
-                let chunk_index_to_load = inner.next_chunk_index;
-                debug_assert_eq!(chunk_index_to_load, expected_chunk_index);
-                drop(inner);
-
-                let load_result = Arc::clone(&self)
-                    .load_one_chunk(
-                        chunk_index_to_load,
-                        &mut left_stream,
-                        &mut reservation,
-                        carryover,
-                        Arc::clone(&left_schema),
-                        build_time.clone(),
-                    )
-                    .await;
-
-                // Re-acquire lock and publish the result.
-                let mut inner = self.inner.lock().await;
-                inner.left_stream = Some(left_stream);
-                inner.reservation = Some(reservation);
-                inner.loader_in_flight = false;
-
-                match load_result {
-                    Ok(LoadOutcome::Chunk {
-                        data,
-                        is_last,
-                        carryover,
-                    }) => {
-                        inner.carryover = carryover;
-                        if is_last {
-                            inner.left_exhausted = true;
-                        }
-                        let arc_data = Arc::new(data);
-                        inner.current = Some(CurrentChunk {
-                            chunk_index: chunk_index_to_load,
-                            data: Arc::clone(&arc_data),
-                            is_last,
-                        });
-                        drop(inner);
-                        self.notify.notify_waiters();
-                        return Ok(Some((arc_data, is_last)));
-                    }
-                    Ok(LoadOutcome::Empty) => {
-                        // No data at all. Mark exhausted; let other
-                        // partitions observe and exit.
-                        inner.left_exhausted = true;
-                        drop(inner);
-                        self.notify.notify_waiters();
-                        return Ok(None);
-                    }
-                    Err(e) => {
-                        drop(inner);
-                        self.notify.notify_waiters();
-                        return Err(e);
-                    }
+                            .register(&memory_pool)
+                    });
+                    let chunk = inner.chunk.get_or_insert_with(|| {
+                        left_spill.load_chunk(reservation.new_empty(), &build_time)
+                    });
+                    Err(chunk.clone())
+                } else {
+                    Ok(self.notify.notified())
                 }
+            };
+            match advanced {
+                Ok(advanced) => advanced.await,
+                Err(chunk) => return chunk.await.map_err(DataFusionError::Shared),
             }
+        }
+    }
 
-            // Case 4: another partition is loading the next chunk, or
-            // the current chunk is for a previous index we've already
-            // moved past — wait to be notified.
-            let notified = self.notify.notified();
+    /// A partition has finished the current chunk
+    fn finish_chunk(&self) {
+        let mut inner = self.inner.lock();
+        inner.finished += 1;
+        if inner.advance_if_all_finished() {
             drop(inner);
-            notified.await;
+            self.notify.notify_waiters();
         }
     }
 
-    /// Read one chunk worth of left batches into a `JoinLeftData`,
-    /// honoring the coordinator's reservation as the memory budget.
-    async fn load_one_chunk(
-        self: Arc<Self>,
-        _chunk_index: usize,
-        left_stream: &mut SendableRecordBatchStream,
-        reservation: &mut MemoryReservation,
-        carryover: Option<RecordBatch>,
-        left_schema: SchemaRef,
-        build_time: Time,
-    ) -> Result<LoadOutcome> {
-        // The previous chunk's bytes were moved into its `JoinLeftData`, so
-        // this reservation is already back to zero; resize defensively in case
-        // a load bailed out after growing it (an error path, or `Empty`).
-        reservation.resize(0);
+    /// The load has spilled the left side
+    fn register_left_spill(&self, left_spill: &Arc<LeftSpillData>) {
+        let mut inner = self.inner.lock();
+        left_spill.depart_unfinished(inner.departed_before_spill);
+        inner.left_spill = Some(Arc::clone(left_spill));
+    }
 
-        let mut pending_batches: Vec<RecordBatch> = Vec::new();
-        let mut left_stream_exhausted = false;
-        let mut next_carryover: Option<RecordBatch> = None;
-
-        // First, account for any carryover batch from the previous
-        // chunk's load attempt. Its memory is already in-flight, so we
-        // grow the reservation infallibly.
-        if let Some(batch) = carryover {
-            let bytes = batch.get_array_memory_size();
-            reservation.grow(bytes);
-            pending_batches.push(batch);
+    /// A partition has gone away before finishing.
+    ///
+    /// `chunk_index` is the index the partition had advanced to: that of the
+    /// chunk it was probing or waiting for, or one past the last chunk once it
+    /// has probed them all. `probe_reported` is whether it had already reported
+    /// probe completion, in which case the left side's counter already
+    /// accounts for it.
+    fn depart(&self, chunk_index: usize, probe_reported: bool) {
+        let mut inner = self.inner.lock();
+        inner.live = inner.live.saturating_sub(1);
+        if chunk_index > inner.chunk_index {
+            // It had finished the current chunk and was waiting for the next
+            inner.finished = inner.finished.saturating_sub(1);
         }
-
-        loop {
-            match left_stream.next().await {
-                Some(Ok(batch)) => {
-                    // Times only the work this operator does on the batch, not
-                    // the wait for the child stream to produce it.
-                    let _build_timer = build_time.timer();
-                    if batch.num_rows() == 0 {
-                        continue;
-                    }
-                    let bytes = batch.get_array_memory_size();
-                    let can_grow = reservation.try_grow(bytes).is_ok();
-                    if !can_grow && !pending_batches.is_empty() {
-                        // Defer this batch to the next chunk.
-                        next_carryover = Some(batch);
-                        break;
-                    } else if !can_grow {
-                        // No pending batches — accept the batch even
-                        // over budget so we make progress.
-                        reservation.grow(bytes);
-                    }
-                    pending_batches.push(batch);
-                }
-                Some(Err(e)) => return Err(e),
-                None => {
-                    left_stream_exhausted = true;
-                    break;
-                }
+        if !probe_reported {
+            match &inner.left_spill {
+                Some(left_spill) => left_spill.depart_unfinished(1),
+                None => inner.departed_before_spill += 1,
             }
         }
-
-        if pending_batches.is_empty() {
-            debug_assert!(left_stream_exhausted);
-            return Ok(LoadOutcome::Empty);
+        if inner.advance_if_all_finished() {
+            drop(inner);
+            self.notify.notify_waiters();
         }
-
-        let _build_timer = build_time.timer();
-        let merged_batch = concat_batches(&left_schema, &pending_batches)?;
-        let n_rows = merged_batch.num_rows();
-        let visited_left_side = if self.with_visited_bitmap {
-            let buffer_size = n_rows.div_ceil(8);
-            reservation.grow(buffer_size);
-            let mut buffer = BooleanBufferBuilder::new(n_rows);
-            buffer.append_n(n_rows, false);
-            buffer
-        } else {
-            BooleanBufferBuilder::new(0)
-        };
-
-        // Move the bytes accounted for this chunk out of the coordinator's
-        // reservation and into the chunk's `JoinLeftData`, whose reservation is
-        // released on drop. The coordinator elects the unmatched-left emitter
-        // from the probe-threads counter, but that is the last stream to finish
-        // *probing* -- not necessarily the last to drop its `Arc` to the chunk,
-        // since a stream can flush a completed output batch and return while
-        // still holding one. Tying the reservation to the data means the bytes
-        // stay accounted until the final reference goes away, whichever stream
-        // holds it, instead of being released when the slot is freed.
-        //
-        // `take` keeps the same `MemoryConsumer`, so this is a transfer of
-        // ownership rather than a new registration, and it leaves the
-        // coordinator's reservation at zero for the next chunk.
-        let chunk_reservation = reservation.take();
-
-        let data = JoinLeftData::new(
-            merged_batch,
-            Mutex::new(visited_left_side),
-            AtomicUsize::new(self.right_partition_count),
-            chunk_reservation,
-        );
-
-        Ok(LoadOutcome::Chunk {
-            data,
-            is_last: left_stream_exhausted,
-            carryover: next_carryover,
-        })
-    }
-}
-
-enum LoadOutcome {
-    Chunk {
-        data: JoinLeftData,
-        is_last: bool,
-        carryover: Option<RecordBatch>,
-    },
-    Empty,
-}
-
-impl std::fmt::Debug for FallbackCoordinator {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FallbackCoordinator")
-            .field("right_partition_count", &self.right_partition_count)
-            .finish()
     }
 }
 
@@ -1769,9 +1846,11 @@ pub(crate) enum SpillState {
     Pending {
         /// TaskContext for reservations and SpillManager creation
         task_context: Arc<TaskContext>,
-        /// Shared coordinator that publishes per-chunk `JoinLeftData` to
-        /// every right-side partition.
-        fallback_coordinator: Arc<FallbackCoordinator>,
+        /// Output partition of this stream, used to name its reservations
+        partition: usize,
+        /// Paces this stream through the left chunks, together with the
+        /// streams of the other partitions.
+        left_chunk_barrier: Arc<LeftChunkBarrier>,
     },
 
     /// Memory-limited mode is running. Left data is read back in chunks
@@ -1779,32 +1858,33 @@ pub(crate) enum SpillState {
     Active(Box<SpillStateActive>),
 }
 
-/// Result of a single chunk fetch from the [`FallbackCoordinator`]:
-/// either the chunk itself with a flag indicating whether it is the
-/// final chunk, or `None` if the left input is fully consumed.
-type ChunkFetchOutput = Option<(Arc<JoinLeftData>, bool)>;
-/// In-flight future for a chunk fetch.
-type ChunkFetchFuture = BoxFuture<'static, Result<ChunkFetchOutput>>;
-
 /// State for active memory-limited spill execution.
 /// Boxed inside [`SpillState::Active`] to reduce enum size.
 pub(crate) struct SpillStateActive {
     /// The spilled left side, shared by every partition.
     left_spill: Arc<LeftSpillData>,
-    /// Left-side schema, set from the first chunk the coordinator delivers.
-    /// Used by `EmitGlobalRightUnmatched` to build NULL-padded left columns.
-    left_schema: Option<SchemaRef>,
-    /// Plan-level coordinator that publishes per-chunk `JoinLeftData`
-    /// shared across all right-side partitions.
-    coordinator: Arc<FallbackCoordinator>,
-    /// Index of the next chunk this partition expects from the
-    /// coordinator. Increments after the partition finishes processing
-    /// a chunk (regardless of whether it was the one that emitted
-    /// unmatched left rows).
-    next_chunk_index: usize,
-    /// Captured `TaskContext` so that the first leader can register the
-    /// coordinator's reservation against the runtime's memory pool.
-    task_context: Arc<TaskContext>,
+    /// Paces this stream through the left chunks, together with the streams of
+    /// the other partitions.
+    left_chunk_barrier: Arc<LeftChunkBarrier>,
+    /// Index of the chunk being probed, or of the next one while none is
+    chunk_index: usize,
+    /// The wait for the next chunk, while it is in flight
+    chunk_fetch: Option<BoxFuture<'static, Result<Arc<LeftChunk>>>>,
+    /// The chunk being probed, held to keep its memory accounted for
+    current_chunk: Option<Arc<LeftChunk>>,
+    /// Memory pool the chunks are accounted in
+    memory_pool: Arc<dyn MemoryPool>,
+    /// Accounts for what this partition keeps beside the shared chunk: its
+    /// visited bitmap for the chunk and, for the emitter, the global one.
+    chunk_reservation: MemoryReservation,
+    /// Position in the left spill file of the current chunk's first row. See
+    /// [`LeftSpillData`] for why bits are addressed this way.
+    chunk_row_offset: usize,
+    /// Final pass over the left spill file that emits the unmatched-left rows.
+    /// Only the elected emitter has one, from `ProbeEnd` on.
+    left_unmatched_pass: Option<LeftUnmatchedPass>,
+    /// Right-side schema, used to build NULL-padded right columns.
+    right_schema: SchemaRef,
     /// Right input that spills on the first pass and replays from spill later.
     right_input: ReplayableStreamSource,
     /// Per-batch accumulated right bitmaps across all left chunks.
@@ -1816,14 +1896,19 @@ pub(crate) struct SpillStateActive {
     global_right_bitmaps_reservation: MemoryReservation,
     /// Current right batch sequence index within the current pass.
     right_batch_index: usize,
-    /// In-flight chunk fetch future. Created by `BufferingLeft` when a
-    /// new chunk is needed; polled across iterations of `poll_next`
-    /// until it resolves to either the next chunk or `None` (left side
-    /// exhausted with no chunk to deliver).
-    chunk_fetch_in_flight: Option<ChunkFetchFuture>,
-    /// In-flight chunk release future. Created by `EmitLeftUnmatched`
-    /// when the last partition for a chunk has finished its work.
-    chunk_release_in_flight: Option<BoxFuture<'static, ()>>,
+}
+
+/// The emitter's final pass over the left spill file. See
+/// [`NestedLoopJoinStream::handle_emit_left_unmatched_memory_limited`].
+struct LeftUnmatchedPass {
+    /// Opened on the first entry to `EmitLeftUnmatched`
+    stream: Option<SendableRecordBatchStream>,
+    /// The complete global visited bitmap, taken from [`LeftSpillData`] and
+    /// accounted for in the stream's `chunk_reservation`, so it is released
+    /// with the stream whichever way the pass ends.
+    visited: BooleanBuffer,
+    /// Position in the left spill file of the next batch's first row
+    row_offset: usize,
 }
 
 impl SpillStateActive {
@@ -1905,6 +1990,7 @@ pub(crate) struct NestedLoopJoinStream {
     // ========================================================================
     /// State Tracking
     state: NLJState,
+
     /// Output buffer holds the join result to output. It will emit eagerly when
     /// the threshold is reached.
     output_buffer: Box<BatchCoalescer>,
@@ -1922,8 +2008,6 @@ pub(crate) struct NestedLoopJoinStream {
     /// Should we go back to `BufferingLeft` state again after `EmitLeftUnmatched`
     /// state is over.
     left_exhausted: bool,
-    /// If we can buffer all left data in one pass (false means memory-limited multi-pass)
-    left_buffered_in_one_pass: bool,
 
     // Probe(right) side
     // -----------------
@@ -1937,9 +2021,10 @@ pub(crate) struct NestedLoopJoinStream {
     spill_state: SpillState,
 
     /// Whether this stream is the one responsible for emitting unmatched-left
-    /// rows for the current left chunk. Set in the [`NLJState::ProbeEnd`] state,
-    /// which is entered exactly once per chunk and owns the single
-    /// [`JoinLeftData::report_probe_completed`] call: the stream that drives the
+    /// rows. Set in the [`NLJState::ProbeEnd`] state, which is entered exactly
+    /// once per stream and owns the single `report_probe_completed` call (on
+    /// [`JoinLeftData`], or on [`LeftSpillData`] in memory-limited mode): the
+    /// stream that drives the
     /// shared probe-threads counter to zero (the last to finish probing) becomes
     /// the emitter. Because the decrement happens once in `ProbeEnd` rather than
     /// in the re-enterable `EmitLeftUnmatched` state, the counter can never be
@@ -2006,6 +2091,15 @@ impl Stream for NestedLoopJoinStream {
     /// EmitLeftUnmatched → Done (if finished)
     /// ----------------------------
     /// Done → (end)
+    ///
+    /// Memory-limited mode (see 'Memory-limited Execution' in
+    /// [`NestedLoopJoinExec`]) loops over left chunks before reaching `ProbeEnd`:
+    ///
+    /// BufferingLeft → FetchingRight (next left chunk loaded)
+    /// FetchingRight → BufferingLeft (right pass exhausted, more chunks remain)
+    /// FetchingRight → EmitGlobalRightUnmatched → ProbeEnd (after the last chunk,
+    /// for join types tracking unmatched right rows)
+    /// FetchingRight → ProbeEnd (after the last chunk, otherwise)
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -2031,7 +2125,9 @@ impl Stream for NestedLoopJoinStream {
                 //    Start processing the join for the newly fetched right
                 //    batch.
                 // 2. --> ProbeEnd: When the right side input is exhausted,
-                //    probing for the current left chunk is finished.
+                //    probing for the buffered left data is finished.
+                //    (Memory-limited mode moves on to the next left chunk
+                //    first, see `finish_left_chunk`.)
                 //
                 // After fetching a new batch from the right side, it will
                 // process all rows from the buffered left data:
@@ -2110,7 +2206,7 @@ impl Stream for NestedLoopJoinStream {
 
                 // NLJState transitions:
                 // 1. --> EmitLeftUnmatched
-                //    Probing for the current left chunk is finished. Report
+                //    Probing for the whole left side is finished. Report
                 //    probe completion exactly once (decrementing the shared
                 //    probe-threads counter) and record whether this stream is
                 //    the unmatched-left emitter, then always advance to
@@ -2142,9 +2238,19 @@ impl Stream for NestedLoopJoinStream {
                 // 3. --> Done
                 //    It has processed all data, go to the final state and ready
                 //    to exit.
-                // 4. --> BufferingLeft (memory-limited mode only)
-                //    When left data was loaded in chunks and more chunks remain,
-                //    go back to BufferingLeft to load the next chunk.
+                //
+                // In memory-limited mode the left rows are no longer buffered,
+                // so the emitter streams them from the left spill file instead.
+                NLJState::EmitLeftUnmatched if self.is_memory_limited() => {
+                    debug!("[NLJState] Entering: {:?}", self.state);
+
+                    match self.handle_emit_left_unmatched_memory_limited(cx) {
+                        ControlFlow::Continue(()) => {}
+                        ControlFlow::Break(poll) => {
+                            return self.metrics.join_metrics.baseline.record_poll(poll);
+                        }
+                    }
+                }
                 NLJState::EmitLeftUnmatched => {
                     debug!("[NLJState] Entering: {:?}", self.state);
 
@@ -2152,17 +2258,7 @@ impl Stream for NestedLoopJoinStream {
                     let join_metric = self.metrics.join_metrics.join_time.clone();
                     let _join_timer = join_metric.timer();
 
-                    match self.handle_emit_left_unmatched(cx) {
-                        ControlFlow::Continue(()) => {}
-                        ControlFlow::Break(poll) => {
-                            return self.metrics.join_metrics.baseline.record_poll(poll);
-                        }
-                    }
-                }
-
-                // Release the final chunk before finishing the stream.
-                NLJState::ReleasingFinalChunk => {
-                    match self.handle_releasing_final_chunk(cx) {
+                    match self.handle_emit_left_unmatched() {
                         ControlFlow::Continue(()) => {}
                         ControlFlow::Break(poll) => {
                             return self.metrics.join_metrics.baseline.record_poll(poll);
@@ -2210,6 +2306,37 @@ impl RecordBatchStream for NestedLoopJoinStream {
     }
 }
 
+/// A stream that goes away before it has finished stops being waited for.
+///
+/// The partitions of a memory-limited join move through the left chunks
+/// together (see [`LeftChunkBarrier`]), so the others would otherwise wait for
+/// it forever. They carry on without it, the same as when the left side fits in
+/// memory: there the streams share nothing but the visited bitmap, and a stream
+/// that never reports probe completion only means that the final left rows are
+/// not emitted. That holds here too. What differs is the bitmap's memory: with
+/// no emitter to take it, it is released by the last partition to finish or go
+/// away rather than kept for as long as the plan.
+impl Drop for NestedLoopJoinStream {
+    fn drop(&mut self) {
+        if matches!(self.state, NLJState::Done) {
+            return;
+        }
+        // `ProbeEnd` is the only way into `EmitLeftUnmatched`
+        let probe_reported = matches!(self.state, NLJState::EmitLeftUnmatched);
+        match &self.spill_state {
+            SpillState::Active(active) => active
+                .left_chunk_barrier
+                .depart(active.chunk_index, probe_reported),
+            // Not known yet whether the left side spills. If it does not, the
+            // barrier is never used and this has no effect.
+            SpillState::Pending {
+                left_chunk_barrier, ..
+            } => left_chunk_barrier.depart(0, probe_reported),
+            SpillState::Disabled => {}
+        }
+    }
+}
+
 impl NestedLoopJoinStream {
     #[expect(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -2240,7 +2367,6 @@ impl NestedLoopJoinStream {
             left_probe_idx: 0,
             left_emit_idx: 0,
             left_exhausted: false,
-            left_buffered_in_one_pass: true,
             handled_empty_output: false,
             should_track_unmatched_right: need_produce_right_in_final(join_type),
             spill_state,
@@ -2264,13 +2390,18 @@ impl NestedLoopJoinStream {
     ) -> Result<()> {
         let SpillState::Pending {
             task_context: context,
-            fallback_coordinator,
+            partition,
+            left_chunk_barrier,
         } = std::mem::replace(&mut self.spill_state, SpillState::Disabled)
         else {
             return internal_err!(
                 "enter_memory_limited_mode called in non-Pending spill state"
             );
         };
+
+        let chunk_reservation =
+            MemoryConsumer::new(format!("NestedLoopJoinLeftVisited[{partition}]"))
+                .register(context.memory_pool());
 
         // Separate reservation for the global right bitmaps. These buffers
         // are per-partition (each partition tracks matches against its own
@@ -2292,16 +2423,21 @@ impl NestedLoopJoinStream {
         let right_spill_manager = SpillManager::new(
             context.runtime_env(),
             self.metrics.spill_metrics.clone(),
-            right_schema,
+            Arc::clone(&right_schema),
         )
         .with_compression_type(context.session_config().spill_compression());
 
         self.spill_state = SpillState::Active(Box::new(SpillStateActive {
             left_spill,
-            left_schema: None,
-            coordinator: fallback_coordinator,
-            next_chunk_index: 0,
-            task_context: Arc::clone(&context),
+            left_chunk_barrier,
+            chunk_index: 0,
+            chunk_fetch: None,
+            current_chunk: None,
+            memory_pool: Arc::clone(context.memory_pool()),
+            chunk_reservation,
+            chunk_row_offset: 0,
+            left_unmatched_pass: None,
+            right_schema,
             right_input: ReplayableStreamSource::new(
                 right_data,
                 right_spill_manager,
@@ -2310,8 +2446,6 @@ impl NestedLoopJoinStream {
             global_right_bitmaps: Vec::new(),
             global_right_bitmaps_reservation,
             right_batch_index: 0,
-            chunk_fetch_in_flight: None,
-            chunk_release_in_flight: None,
         }));
 
         // State stays BufferingLeft — next poll will enter
@@ -2363,98 +2497,145 @@ impl NestedLoopJoinStream {
 
     /// Memory-limited path for handle_buffering_left.
     ///
-    /// Drives an in-flight `next_chunk` future on the coordinator, which
-    /// loads (or re-uses) the next per-chunk shared `JoinLeftData`.
+    /// Gets the next left chunk, which every partition shares (see
+    /// [`LeftChunkBarrier`]).
     fn handle_buffering_left_memory_limited(
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
-        let build_metric_for_chunk = self.metrics.join_metrics.build_time.clone();
+        let build_time = self.metrics.join_metrics.build_time.clone();
         let SpillState::Active(active) = &mut self.spill_state else {
             unreachable!(
                 "handle_buffering_left_memory_limited called without Active spill state"
             );
         };
 
-        // Drain any pending chunk-release future before fetching the next
-        // chunk. The coordinator slot must be released so the next leader
-        // can load the following chunk.
-        if let Some(fut) = active.chunk_release_in_flight.as_mut() {
-            match fut.poll_unpin(cx) {
-                Poll::Ready(()) => {
-                    active.chunk_release_in_flight = None;
-                }
-                Poll::Pending => return ControlFlow::Break(Poll::Pending),
-            }
+        let row_offset = active.chunk_row_offset;
+        if row_offset >= active.left_spill.num_rows {
+            // Only an empty spill file ends up here, and the load does not
+            // write one. Handled anyway: there is nothing left to probe.
+            self.left_exhausted = true;
+            self.enter_state_after_last_left_chunk();
+            return ControlFlow::Continue(());
         }
 
-        // Lazily start a chunk-fetch future for `active.next_chunk_index`.
-        if active.chunk_fetch_in_flight.is_none() {
-            let coordinator = Arc::clone(&active.coordinator);
-            let spill_data = Arc::clone(&active.left_spill);
-            let task_context = Arc::clone(&active.task_context);
-            let expected = active.next_chunk_index;
-            let build_metric = build_metric_for_chunk.clone();
-            active.chunk_fetch_in_flight = Some(
-                coordinator
-                    .next_chunk(expected, spill_data, task_context, build_metric)
+        if active.chunk_fetch.is_none() {
+            active.chunk_fetch = Some(
+                Arc::clone(&active.left_chunk_barrier)
+                    .chunk(
+                        active.chunk_index,
+                        Arc::clone(&active.left_spill),
+                        Arc::clone(&active.memory_pool),
+                        build_time.clone(),
+                    )
                     .boxed(),
             );
         }
-
-        let fut = active
-            .chunk_fetch_in_flight
+        let chunk_fetch = active
+            .chunk_fetch
             .as_mut()
-            .expect("chunk_fetch_in_flight installed above");
-        let result = match fut.poll_unpin(cx) {
-            Poll::Ready(r) => r,
+            .expect("chunk_fetch installed above");
+        let chunk = match chunk_fetch.poll_unpin(cx) {
+            Poll::Ready(Ok(chunk)) => chunk,
+            Poll::Ready(Err(e)) => return ControlFlow::Break(Poll::Ready(Some(Err(e)))),
             Poll::Pending => return ControlFlow::Break(Poll::Pending),
         };
-        active.chunk_fetch_in_flight = None;
+        active.chunk_fetch = None;
 
-        match result {
-            Err(e) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
-            Ok(None) => {
-                // No chunk to deliver: left side fully consumed.
-                self.left_exhausted = true;
-                if self.is_memory_limited() && self.should_track_unmatched_right {
-                    self.right_data = None;
-                    self.state = NLJState::EmitGlobalRightUnmatched;
-                } else {
-                    self.state = NLJState::Done;
-                }
-                ControlFlow::Continue(())
+        let _build_timer = build_time.timer();
+        let batch = chunk.batch.clone();
+        let n_rows = batch.num_rows();
+        self.left_exhausted = row_offset + n_rows >= active.left_spill.num_rows;
+
+        // Matches are tracked per partition while probing, so the probe path
+        // never contends with other partitions, and merged into the global
+        // bitmap once in `finish_left_chunk`.
+        let visited_left_side = if need_produce_result_in_final(self.join_type) {
+            // Use infallible `grow` for the bitmap -- it's small
+            active.chunk_reservation.grow(n_rows.div_ceil(8));
+            let mut buffer = BooleanBufferBuilder::new(n_rows);
+            buffer.append_n(n_rows, false);
+            buffer
+        } else {
+            BooleanBufferBuilder::new(0)
+        };
+
+        // This `JoinLeftData` is private to the partition: it shares the
+        // chunk's rows but has its own bitmap, so its probe-threads counter is
+        // not used. Probe completion is reported once for the whole left side,
+        // on `LeftSpillData`.
+        self.buffered_left_data = Some(Arc::new(JoinLeftData::new(
+            batch,
+            Mutex::new(visited_left_side),
+            AtomicUsize::new(1),
+            active.chunk_reservation.take(),
+        )));
+        active.current_chunk = Some(chunk);
+
+        active.right_batch_index = 0;
+        match active.right_input.open_pass() {
+            Ok(stream) => {
+                self.right_data = Some(stream);
             }
-            Ok(Some((data, is_last))) => {
-                // The operator's own work on the delivered chunk: recording
-                // metrics, caching the schema and opening the right-side pass.
-                // `load_one_chunk` times the reading it does, but a chunk can
-                // also be served straight from the coordinator's slot, in which
-                // case this is the only build work there is.
-                let _build_timer = build_metric_for_chunk.timer();
-                let n_rows = data.batch().num_rows();
-                self.metrics.join_metrics.build_input_batches.add(1);
-                self.metrics.join_metrics.build_input_rows.add(n_rows);
-                if active.left_schema.is_none() {
-                    active.left_schema = Some(data.batch().schema());
-                }
-                self.buffered_left_data = Some(data);
-                self.left_exhausted = is_last;
-                self.left_buffered_in_one_pass = is_last && active.next_chunk_index == 0;
-
-                active.right_batch_index = 0;
-                match active.right_input.open_pass() {
-                    Ok(stream) => {
-                        self.right_data = Some(stream);
-                    }
-                    Err(e) => {
-                        return ControlFlow::Break(Poll::Ready(Some(Err(e))));
-                    }
-                }
-
-                self.state = NLJState::FetchingRight;
-                ControlFlow::Continue(())
+            Err(e) => {
+                return ControlFlow::Break(Poll::Ready(Some(Err(e))));
             }
+        }
+
+        self.state = NLJState::FetchingRight;
+        ControlFlow::Continue(())
+    }
+
+    /// Record the matches of the chunk that was just probed and move on to the
+    /// next one. Memory-limited mode only.
+    ///
+    /// Unmatched-left rows are not emitted here, which would mean holding on to
+    /// the chunk until every partition had probed it and one of them had gone
+    /// through its rows again. Emission is deferred until every partition has
+    /// probed every chunk, see
+    /// [`Self::handle_emit_left_unmatched_memory_limited`].
+    fn finish_left_chunk(&mut self) -> Result<()> {
+        let Some(left_data) = self.buffered_left_data.take() else {
+            return internal_err!("LeftData should be available");
+        };
+        let SpillState::Active(active) = &mut self.spill_state else {
+            return internal_err!("finish_left_chunk called without Active spill state");
+        };
+
+        if need_produce_result_in_final(self.join_type) {
+            active
+                .left_spill
+                .merge_visited(active.chunk_row_offset, &left_data.bitmap().lock());
+        }
+        active.chunk_row_offset += left_data.batch().num_rows();
+        // Let go of the chunk before reporting, so that its memory is free by
+        // the time the last partition has reported and the next one is loaded.
+        drop(left_data);
+        active.current_chunk = None;
+        // These two go together: `LeftChunkBarrier::depart` tells a stream that
+        // has finished the current chunk from one still probing it by
+        // `chunk_index` being past the barrier's.
+        active.chunk_index += 1;
+        active.left_chunk_barrier.finish_chunk();
+
+        self.left_probe_idx = 0;
+        if self.left_exhausted {
+            self.enter_state_after_last_left_chunk();
+        } else {
+            self.state = NLJState::BufferingLeft;
+        }
+        Ok(())
+    }
+
+    /// Every left chunk has been probed. Memory-limited mode only.
+    fn enter_state_after_last_left_chunk(&mut self) {
+        if self.should_track_unmatched_right {
+            // Drop the exhausted right stream so that EmitGlobalRightUnmatched
+            // opens a fresh replay pass from the spill file.
+            self.right_data = None;
+            self.state = NLJState::EmitGlobalRightUnmatched;
+        } else {
+            self.state = NLJState::ProbeEnd;
         }
     }
 
@@ -2505,10 +2686,18 @@ impl NestedLoopJoinStream {
                 ControlFlow::Continue(())
             }
             Some(Err(e)) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
+            None if self.is_memory_limited() => {
+                // Right pass exhausted: probing for the current left chunk
+                // is finished, but more chunks may remain.
+                match self.finish_left_chunk() {
+                    Ok(()) => ControlFlow::Continue(()),
+                    Err(e) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
+                }
+            }
             None => {
-                // Right side exhausted: probing for the current left chunk
-                // is finished. `ProbeEnd` reports probe completion before
-                // emitting unmatched-left rows.
+                // Right side exhausted: probing is finished. `ProbeEnd`
+                // reports probe completion before emitting unmatched-left
+                // rows.
                 self.state = NLJState::ProbeEnd;
                 ControlFlow::Continue(())
             }
@@ -2620,11 +2809,11 @@ impl NestedLoopJoinStream {
         }
     }
 
-    /// Handle ProbeEnd state - record probe completion for the current chunk.
+    /// Handle ProbeEnd state - record probe completion for this stream.
     ///
-    /// Entered exactly once per left chunk, when the right side is exhausted.
+    /// Entered exactly once per stream, when it has probed the whole left side.
     /// This is the single place that decrements the shared probe-threads counter
-    /// via [`JoinLeftData::report_probe_completed`]: the stream that drives the
+    /// via `report_probe_completed`: the stream that drives the
     /// counter to zero (the last to finish probing) is the one responsible for
     /// emitting unmatched-left rows, recorded in `is_unmatched_left_emitter`.
     ///
@@ -2636,12 +2825,31 @@ impl NestedLoopJoinStream {
     ///
     /// Always transitions to `EmitLeftUnmatched`.
     fn handle_probe_end(&mut self) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
-        // Decrement the shared counter exactly once for this stream/chunk. The
+        // Decrement the shared counter exactly once for this stream. The
         // last stream to finish probing (the one that drives the counter to
         // zero) becomes the unmatched-left emitter.
-        let is_emitter = match self.get_left_data() {
-            Ok(left_data) => left_data.report_probe_completed(),
-            Err(e) => return ControlFlow::Break(Poll::Ready(Some(Err(e)))),
+        let is_emitter = if let SpillState::Active(active) = &mut self.spill_state {
+            match active.left_spill.report_probe_completed() {
+                Some(visited) => {
+                    if need_produce_result_in_final(self.join_type) {
+                        // Every chunk is done, which leaves `chunk_reservation`
+                        // free to account for the bitmap this stream now owns.
+                        active.chunk_reservation.grow(visited.len().div_ceil(8));
+                        active.left_unmatched_pass = Some(LeftUnmatchedPass {
+                            stream: None,
+                            visited,
+                            row_offset: 0,
+                        });
+                    }
+                    true
+                }
+                None => false,
+            }
+        } else {
+            match self.get_left_data() {
+                Ok(left_data) => left_data.report_probe_completed(),
+                Err(e) => return ControlFlow::Break(Poll::Ready(Some(Err(e)))),
+            }
         };
         self.is_unmatched_left_emitter = is_emitter;
         self.state = NLJState::EmitLeftUnmatched;
@@ -2649,31 +2857,12 @@ impl NestedLoopJoinStream {
     }
 
     /// Handle EmitLeftUnmatched state - emit unmatched left rows.
-    ///
-    /// In memory-limited mode, after processing all unmatched rows for the
-    /// current left chunk, transitions back to `BufferingLeft` to load the
-    /// next chunk (if the left stream is not yet exhausted).
     fn handle_emit_left_unmatched(
         &mut self,
-        cx: &mut std::task::Context<'_>,
     ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
         // Return any completed batches first
         if let Some(poll) = self.maybe_flush_ready_batch() {
             return ControlFlow::Break(poll);
-        }
-
-        // First, drive any pending chunk-release future to completion so
-        // we don't transition to the next state while another partition
-        // is waiting for the slot to be freed.
-        if let SpillState::Active(active) = &mut self.spill_state
-            && let Some(fut) = active.chunk_release_in_flight.as_mut()
-        {
-            match fut.poll_unpin(cx) {
-                Poll::Ready(()) => {
-                    active.chunk_release_in_flight = None;
-                }
-                Poll::Pending => return ControlFlow::Break(Poll::Pending),
-            }
         }
 
         // Process current unmatched state
@@ -2681,76 +2870,11 @@ impl NestedLoopJoinStream {
             // State unchanged (EmitLeftUnmatched)
             // Continue processing until we have processed all unmatched rows
             Ok(true) => ControlFlow::Continue(()),
-            // We have finished processing all unmatched rows for this chunk
+            // We have finished processing all unmatched rows
             Ok(false) => match self.output_buffer.finish_buffered_batch() {
                 Ok(()) => {
-                    // Flush any completed batch before transitioning.
-                    // This is critical for the memory-limited path: the
-                    // ProbeRight results must be emitted before we discard
-                    // the current chunk and load the next one.
-                    if let Some(poll) = self.maybe_flush_ready_batch() {
-                        return ControlFlow::Break(poll);
-                    }
-
-                    // Drop our reference to the current chunk's
-                    // `JoinLeftData` before releasing the slot. Once the
-                    // last partition does this, the `Arc` reaches zero
-                    // refcount and the per-chunk reservation is freed.
                     self.buffered_left_data = None;
-
-                    if self.is_memory_limited() {
-                        let is_emitter = self.is_unmatched_left_emitter;
-                        if let SpillState::Active(active) = &mut self.spill_state {
-                            // The last partition for this chunk (the
-                            // unmatched-left emitter elected in `ProbeEnd`)
-                            // releases the coordinator slot so the next
-                            // leader can load the following chunk.
-                            if is_emitter {
-                                let coordinator = Arc::clone(&active.coordinator);
-                                let released_index = active.next_chunk_index;
-                                active.chunk_release_in_flight = Some(
-                                    async move {
-                                        coordinator.release_chunk(released_index).await
-                                    }
-                                    .boxed(),
-                                );
-                            }
-                            active.next_chunk_index += 1;
-                        }
-                        // `is_unmatched_left_emitter` is recomputed when
-                        // `ProbeEnd` is re-entered for the next chunk, so it
-                        // does not need to be reset here.
-                    }
-
-                    if self.is_memory_limited()
-                        && self.left_exhausted
-                        && matches!(
-                            &self.spill_state,
-                            SpillState::Active(active)
-                                if active.chunk_release_in_flight.is_some()
-                        )
-                    {
-                        // Final chunk: hand off to `ReleasingFinalChunk`, which
-                        // drives the release future before moving on.
-                        self.state = NLJState::ReleasingFinalChunk;
-                    } else if !self.left_exhausted && self.is_memory_limited() {
-                        // More left data to process — go back to
-                        // BufferingLeft for the next chunk.
-                        self.left_probe_idx = 0;
-                        self.left_emit_idx = 0;
-                        self.state = NLJState::BufferingLeft;
-                    } else if self.is_memory_limited()
-                        && self.should_track_unmatched_right
-                    {
-                        // All left chunks done — emit global right unmatched.
-                        // Drop the exhausted right stream so that
-                        // EmitGlobalRightUnmatched opens a fresh replay pass
-                        // from the spill file.
-                        self.right_data = None;
-                        self.state = NLJState::EmitGlobalRightUnmatched;
-                    } else {
-                        self.state = NLJState::Done;
-                    }
+                    self.state = NLJState::Done;
                     ControlFlow::Continue(())
                 }
                 Err(e) => ControlFlow::Break(Poll::Ready(Some(arrow_err!(e)))),
@@ -2759,37 +2883,96 @@ impl NestedLoopJoinStream {
         }
     }
 
-    /// Handle ReleasingFinalChunk state.
+    /// Memory-limited path for handle_emit_left_unmatched.
     ///
-    /// Polls the final chunk's `release_chunk` future to completion, then
-    /// moves on to whichever state would have followed `EmitLeftUnmatched`.
-    /// Releasing the slot drops the coordinator's `Arc<JoinLeftData>` and lets
-    /// the coordinator reservation be reclaimed, which otherwise would not
-    /// happen until the whole plan is dropped.
-    fn handle_releasing_final_chunk(
+    /// The global visited bitmap is complete once the last stream has reported
+    /// probe completion, and that stream is the emitter. It streams the left
+    /// spill file one more time and emits the final left rows batch by batch,
+    /// so no left chunk has to be held in memory for it. This mirrors
+    /// `EmitGlobalRightUnmatched` on the right side.
+    fn handle_emit_left_unmatched_memory_limited(
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
-        if let SpillState::Active(active) = &mut self.spill_state
-            && let Some(fut) = active.chunk_release_in_flight.as_mut()
+        // Return any completed batches first
+        if let Some(poll) = self.maybe_flush_ready_batch() {
+            return ControlFlow::Break(poll);
+        }
+
+        let SpillState::Active(active) = &mut self.spill_state else {
+            unreachable!("memory-limited EmitLeftUnmatched without Active spill state");
+        };
+
+        // On first entry, the emitter opens its pass over the left spill file
+        if let Some(pass) = active.left_unmatched_pass.as_mut()
+            && pass.stream.is_none()
         {
-            match fut.poll_unpin(cx) {
-                Poll::Ready(()) => {
-                    active.chunk_release_in_flight = None;
-                }
-                Poll::Pending => return ControlFlow::Break(Poll::Pending),
+            let join_metric = self.metrics.join_metrics.join_time.clone();
+            let _join_timer = join_metric.timer();
+            match active.left_spill.open_pass() {
+                Ok(stream) => pass.stream = Some(stream),
+                Err(e) => return ControlFlow::Break(Poll::Ready(Some(Err(e)))),
             }
         }
 
-        self.state = if self.should_track_unmatched_right {
-            // Drop the exhausted right stream so that
-            // EmitGlobalRightUnmatched opens a fresh replay pass.
-            self.right_data = None;
-            NLJState::EmitGlobalRightUnmatched
-        } else {
-            NLJState::Done
+        // Poll the spill stream for the next left batch. Streams that are not
+        // the emitter have nothing to read.
+        let result = match active.left_unmatched_pass.as_mut() {
+            Some(pass) => match pass
+                .stream
+                .as_mut()
+                .expect("the pass was opened above")
+                .poll_next_unpin(cx)
+            {
+                Poll::Ready(result) => result,
+                Poll::Pending => return ControlFlow::Break(Poll::Pending),
+            },
+            None => None,
         };
-        ControlFlow::Continue(())
+
+        let join_metric = self.metrics.join_metrics.join_time.clone();
+        let _join_timer = join_metric.timer();
+        match result {
+            Some(Ok(left_batch)) => {
+                let pass = active
+                    .left_unmatched_pass
+                    .as_mut()
+                    .expect("a left batch was read from the pass");
+                let n_rows = left_batch.num_rows();
+                let bitmap =
+                    BooleanArray::new(pass.visited.slice(pass.row_offset, n_rows), None);
+                pass.row_offset += n_rows;
+
+                match build_unmatched_batch(
+                    &self.output_schema,
+                    &left_batch,
+                    bitmap,
+                    &active.right_schema,
+                    &self.column_indices,
+                    self.join_type,
+                    JoinSide::Left,
+                ) {
+                    Ok(Some(batch)) => match self.output_buffer.push_batch(batch) {
+                        Ok(()) => ControlFlow::Continue(()),
+                        Err(e) => ControlFlow::Break(Poll::Ready(Some(arrow_err!(e)))),
+                    },
+                    Ok(None) => ControlFlow::Continue(()),
+                    Err(e) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
+                }
+            }
+            Some(Err(e)) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
+            None => {
+                active.left_unmatched_pass = None;
+                active.chunk_reservation.free();
+                match self.output_buffer.finish_buffered_batch() {
+                    Ok(()) => {
+                        self.state = NLJState::Done;
+                        ControlFlow::Continue(())
+                    }
+                    Err(e) => ControlFlow::Break(Poll::Ready(Some(arrow_err!(e)))),
+                }
+            }
+        }
     }
 
     /// Handle EmitGlobalRightUnmatched state.
@@ -2859,18 +3042,11 @@ impl NestedLoopJoinStream {
                     )
                 };
 
-                let left_schema = Arc::clone(
-                    active
-                        .left_schema
-                        .as_ref()
-                        .expect("left_schema must be set"),
-                );
-
                 match build_unmatched_batch(
                     &self.output_schema,
                     &right_batch,
                     bitmap,
-                    &left_schema,
+                    &active.left_spill.schema,
                     &self.column_indices,
                     self.join_type,
                     JoinSide::Right,
@@ -2885,14 +3061,11 @@ impl NestedLoopJoinStream {
             }
             Some(Err(e)) => ControlFlow::Break(Poll::Ready(Some(Err(e)))),
             None => {
-                // All right batches replayed
-                match self.output_buffer.finish_buffered_batch() {
-                    Ok(()) => {
-                        self.state = NLJState::Done;
-                        ControlFlow::Continue(())
-                    }
-                    Err(e) => ControlFlow::Break(Poll::Ready(Some(arrow_err!(e)))),
-                }
+                // All right batches replayed. This stream has now probed the
+                // whole left side, which `ProbeEnd` reports.
+                self.right_data = None;
+                self.state = NLJState::ProbeEnd;
+                ControlFlow::Continue(())
             }
         }
     }
@@ -3022,14 +3195,15 @@ impl NestedLoopJoinStream {
         // materializes the intermediate batch, and finally applies the join filter
         // to it.
         // -----------------------------------------------------------
+        let left_batch = left_data.batch();
         let right_rows = right_batch.num_rows();
         let total_rows = l_row_count * right_rows;
 
         // Build index arrays for cartesian product: left_range X right_batch
-        let left_indices: UInt32Array =
-            UInt32Array::from_iter_values((0..l_row_count).flat_map(|i| {
-                std::iter::repeat_n((l_start_index + i) as u32, right_rows)
-            }));
+        let left_indices = left_batch.row_indices(
+            (0..l_row_count)
+                .flat_map(|i| std::iter::repeat_n(l_start_index + i, right_rows)),
+        )?;
         let right_indices: UInt32Array = UInt32Array::from_iter_values(
             (0..l_row_count).flat_map(|_| 0..right_rows as u32),
         );
@@ -3055,8 +3229,7 @@ impl NestedLoopJoinStream {
                     Vec::with_capacity(filter.column_indices().len());
                 for column_index in filter.column_indices() {
                     let array = if column_index.side == JoinSide::Left {
-                        let col = left_data.batch().column(column_index.index);
-                        take(col.as_ref(), &left_indices, None)?
+                        left_batch.take_column(column_index.index, &left_indices)?
                     } else {
                         let col = right_batch.column(column_index.index);
                         take(col.as_ref(), &right_indices, None)?
@@ -3176,8 +3349,7 @@ impl NestedLoopJoinStream {
             Vec::with_capacity(self.output_schema.fields().len());
         for column_index in &self.column_indices {
             let array = if column_index.side == JoinSide::Left {
-                let col = left_data.batch().column(column_index.index);
-                take(col.as_ref(), &left_indices, None)?
+                left_batch.take_column(column_index.index, &left_indices)?
             } else {
                 let col = right_batch.column(column_index.index);
                 take(col.as_ref(), &right_indices, None)?
@@ -3206,13 +3378,9 @@ impl NestedLoopJoinStream {
             return Ok(None);
         }
 
+        let left_row = left_data.batch().row(l_index)?;
         let cur_right_bitmap = if let Some(filter) = &self.join_filter {
-            apply_filter_to_row_join_batch(
-                left_data.batch(),
-                l_index,
-                right_batch,
-                filter,
-            )?
+            apply_filter_to_row_join_batch(left_row, right_batch, filter)?
         } else {
             BooleanArray::from(vec![true; right_row_count])
         };
@@ -3240,8 +3408,7 @@ impl NestedLoopJoinStream {
             // Use the optimized approach similar to build_intermediate_batch_for_single_left_row
             let join_batch = build_row_join_batch(
                 &self.output_schema,
-                left_data.batch(),
-                l_index,
+                left_row,
                 right_batch,
                 Some(cur_right_bitmap),
                 &self.column_indices,
@@ -3319,21 +3486,16 @@ impl NestedLoopJoinStream {
 
         // Slice both left batch, and bitmap to range [start_idx, end_idx)
         // The range is bit index (not byte)
-        let left_batch = left_data.batch();
-        let left_batch_sliced = left_batch.slice(start_idx, end_idx - start_idx);
+        let left_batch_sliced =
+            left_data.batch().slice(start_idx, end_idx - start_idx)?;
 
-        // Can this be more efficient?
-        let mut bitmap_sliced = BooleanBufferBuilder::new(end_idx - start_idx);
-        bitmap_sliced.append_n(end_idx - start_idx, false);
-        let bitmap = left_data.bitmap().lock();
-        for i in start_idx..end_idx {
-            assert!(
-                i - start_idx < bitmap_sliced.capacity(),
-                "DBG: {start_idx}, {end_idx}"
-            );
-            bitmap_sliced.set_bit(i - start_idx, bitmap.get_bit(i));
-        }
-        let bitmap_sliced = BooleanArray::new(bitmap_sliced.finish(), None);
+        let bitmap_sliced = {
+            let bitmap = left_data.bitmap().lock();
+            BooleanBuffer::collect_bool(end_idx - start_idx, |i| {
+                bitmap.get_bit(start_idx + i)
+            })
+        };
+        let bitmap_sliced = BooleanArray::new(bitmap_sliced, None);
 
         let right_schema = self
             .right_data
@@ -3458,15 +3620,14 @@ impl NestedLoopJoinStream {
 // ==== Utilities ====
 
 /// Apply the join filter between:
-/// (l_index th row in left buffer) x (right batch)
+/// (left_row in left buffer) x (right batch)
 /// Returns a bitmap, with successfully joined indices set to true
 fn apply_filter_to_row_join_batch(
-    left_batch: &RecordBatch,
-    l_index: usize,
+    left_row: BatchRow<'_>,
     right_batch: &RecordBatch,
     filter: &JoinFilter,
 ) -> Result<BooleanArray> {
-    debug_assert!(left_batch.num_rows() != 0 && right_batch.num_rows() != 0);
+    debug_assert!(right_batch.num_rows() != 0);
 
     let intermediate_batch = if filter.schema.fields().is_empty() {
         // If filter is constant (e.g. literal `true`), empty batch can be used
@@ -3478,8 +3639,7 @@ fn apply_filter_to_row_join_batch(
     } else {
         build_row_join_batch(
             &filter.schema,
-            left_batch,
-            l_index,
+            left_row,
             right_batch,
             None,
             &filter.column_indices,
@@ -3500,37 +3660,22 @@ fn apply_filter_to_row_join_batch(
     Ok(bitmap_combined)
 }
 
-/// Convert a boolean filter array into a unified mask bitmap.
-///
-/// Caution: The filter result is NOT a bitmap; it contains true/false/null values.
-/// For example, `1 < NULL` evaluates to NULL. Therefore, we must combine (AND)
-/// the boolean array with its null bitmap to construct a unified bitmap.
-#[inline]
-fn boolean_mask_from_filter(filter_arr: &BooleanArray) -> BooleanArray {
-    let (values, nulls) = filter_arr.clone().into_parts();
-    match nulls {
-        Some(nulls) => BooleanArray::new(nulls.inner() & &values, None),
-        None => BooleanArray::new(values, None),
-    }
-}
-
 /// This function performs the following steps:
 /// 1. Apply filter to probe-side batch
-/// 2. Broadcast the left row (build_side_batch\[build_side_index\]) to the
-///    filtered probe-side batch
+/// 2. Broadcast the build row (`build_row`) to the filtered probe-side batch
 /// 3. Concat them together according to `col_indices`, and return the result
 ///    (None if the result is empty)
 ///
 /// Example:
-/// build_side_batch:
+/// build side batch:
 /// a
 /// ----
 /// 1
 /// 2
 /// 3
 ///
-/// # 0 index element in the build_side_batch (that is `1`) will be used
-/// build_side_index: 0
+/// # 0 index row of the build side batch (that is `1`) will be used
+/// build_row: row 0
 ///
 /// probe_side_batch:
 /// b
@@ -3563,8 +3708,7 @@ fn boolean_mask_from_filter(filter_arr: &BooleanArray) -> BooleanArray {
 /// 1 40
 fn build_row_join_batch(
     output_schema: &Schema,
-    build_side_batch: &RecordBatch,
-    build_side_index: usize,
+    build_row: BatchRow<'_>,
     probe_side_batch: &RecordBatch,
     probe_side_filter: Option<BooleanArray>,
     // See [`NLJStream`] struct's `column_indices` field for more detail
@@ -3608,7 +3752,7 @@ fn build_row_join_batch(
         let array = if column_index.side == build_side {
             // Broadcast the single build-side row to match the filtered
             // probe-side batch length
-            let original_left_array = build_side_batch.column(column_index.index);
+            let original_left_array = build_row.column(column_index.index)?;
 
             // Use `arrow::compute::take` directly for `List(Utf8View)` rather
             // than going through `ScalarValue::to_array_of_size()`, which
@@ -3620,7 +3764,7 @@ fn build_row_join_batch(
                     if field.data_type() == &DataType::Utf8View =>
                 {
                     let indices_iter = std::iter::repeat_n(
-                        build_side_index as u64,
+                        build_row.index() as u64,
                         filtered_probe_batch.num_rows(),
                     );
                     let indices_array = UInt64Array::from_iter_values(indices_iter);
@@ -3629,7 +3773,7 @@ fn build_row_join_batch(
                 _ => {
                     let scalar_value = ScalarValue::try_from_array(
                         original_left_array.as_ref(),
-                        build_side_index,
+                        build_row.index(),
                     )?;
                     scalar_value.to_array_of_size(filtered_probe_batch.num_rows())?
                 }
@@ -3784,9 +3928,9 @@ fn build_unmatched_batch(
                     .collect::<Vec<_>>(),
             ));
             let left_null_batch = if nullable_left_schema.fields.is_empty() {
-                // Left input can be an empty relation, in this case left relation
-                // won't be used to construct the result batch (i.e. not in `col_indices`)
-                create_record_batch_with_empty_schema(nullable_left_schema, 0)?
+                // Keep the placeholder row even when no columns from this
+                // side are projected, so BatchRow can address row 0.
+                create_record_batch_with_empty_schema(nullable_left_schema, 1)?
             } else {
                 RecordBatch::try_new(nullable_left_schema, left_null_columns)?
             };
@@ -3796,8 +3940,7 @@ fn build_unmatched_batch(
 
             build_row_join_batch(
                 output_schema,
-                &left_null_batch,
-                0,
+                BatchRow::new(&left_null_batch, 0)?,
                 batch,
                 Some(flipped_bitmap),
                 col_indices,
@@ -3920,6 +4063,145 @@ pub(crate) mod tests {
     use insta::allow_duplicates;
     use insta::assert_snapshot;
     use rstest::rstest;
+
+    #[test]
+    fn test_nlj_dynamic_filter_pushdown() -> Result<()> {
+        use crate::filter_pushdown::PushedDown;
+        use arrow::array::record_batch;
+        use datafusion_physical_expr::expressions::lit;
+
+        // Identical names within and across inputs must not affect routing.
+        // Reordered outputs also exercise the NLJ's embedded projection.
+        let batch = record_batch!(("key", Int32, [1, 2]), ("key", Int32, [2, 1]))?;
+        let input: Arc<dyn ExecutionPlan> =
+            TestMemoryExec::try_new_exec(&[vec![batch.clone()]], batch.schema(), None)?;
+        for join_type in [
+            JoinType::Inner,
+            JoinType::Left,
+            JoinType::Right,
+            JoinType::Full,
+            JoinType::LeftSemi,
+            JoinType::RightSemi,
+            JoinType::LeftAnti,
+            JoinType::RightAnti,
+            JoinType::LeftMark,
+            JoinType::RightMark,
+        ] {
+            let join = NestedLoopJoinExec::try_new(
+                Arc::clone(&input),
+                Arc::clone(&input),
+                None,
+                &join_type,
+                None,
+            )?;
+            for reorder in [false, true] {
+                let projection =
+                    reorder.then(|| (0..join.schema().fields().len()).rev().collect());
+                let join = join.with_projection(projection)?;
+                for output in 0..join.schema().fields().len() {
+                    let column: Arc<dyn PhysicalExpr> =
+                        Arc::new(Column::new(join.schema().field(output).name(), output));
+                    let source = Arc::new(DynamicFilterPhysicalExpr::new(
+                        vec![Arc::clone(&column)],
+                        lit(true),
+                    ));
+                    let filters = join
+                        .gather_filters_for_pushdown(
+                            FilterPushdownPhase::Post,
+                            vec![Arc::clone(&source) as _],
+                            &ConfigOptions::default(),
+                        )?
+                        .parent_filters();
+                    let unprojected =
+                        join.projection.as_ref().map_or(output, |p| p[output]);
+                    let side = join.column_indices[unprojected].side;
+                    let expected = match join_type {
+                        JoinType::Inner => {
+                            [side == JoinSide::Left, side == JoinSide::Right]
+                        }
+                        JoinType::Left
+                        | JoinType::LeftSemi
+                        | JoinType::LeftAnti
+                        | JoinType::LeftMark => [side == JoinSide::Left, false],
+                        JoinType::Right
+                        | JoinType::RightSemi
+                        | JoinType::RightAnti
+                        | JoinType::RightMark => [false, side == JoinSide::Right],
+                        JoinType::Full => [false, false],
+                    };
+                    // Update after routing to prove the remapped consumer stays live.
+                    source.update(Arc::new(BinaryExpr::new(
+                        column,
+                        Operator::Eq,
+                        lit(2i32),
+                    )))?;
+                    for (child, accepted) in filters.iter().zip(expected) {
+                        assert_eq!(
+                            matches!(child[0].discriminant, PushedDown::Yes),
+                            accepted,
+                            "{join_type:?}, reorder={reorder}, output={output}"
+                        );
+                        if accepted {
+                            assert_eq!(
+                                child[0].predicate.expression_id(),
+                                source.expression_id()
+                            );
+                            let values = child[0]
+                                .predicate
+                                .evaluate(&batch)?
+                                .into_array(batch.num_rows())?;
+                            assert_eq!(
+                                as_boolean_array(&values)?.iter().collect::<Vec<_>>(),
+                                if join.column_indices[unprojected].index == 0 {
+                                    vec![Some(false), Some(true)]
+                                } else {
+                                    vec![Some(true), Some(false)]
+                                }
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        let join = NestedLoopJoinExec::try_new(
+            Arc::clone(&input),
+            input,
+            None,
+            &JoinType::Inner,
+            None,
+        )?;
+        let left: Arc<dyn PhysicalExpr> = Arc::new(Column::new("key", 0));
+        let right: Arc<dyn PhysicalExpr> = Arc::new(Column::new("key", 2));
+        let whole: Arc<dyn PhysicalExpr> = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&left)],
+            lit(true),
+        ));
+        let mixed: Arc<dyn PhysicalExpr> = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&left), right],
+            lit(true),
+        ));
+        let static_filter: Arc<dyn PhysicalExpr> =
+            Arc::new(BinaryExpr::new(left, Operator::Eq, lit(2i32)));
+        for (phase, enabled, filters) in [
+            (FilterPushdownPhase::Pre, true, vec![Arc::clone(&whole)]),
+            (FilterPushdownPhase::Post, false, vec![whole]),
+            (FilterPushdownPhase::Post, true, vec![mixed, static_filter]),
+        ] {
+            let mut config = ConfigOptions::default();
+            config.optimizer.enable_join_dynamic_filter_pushdown = enabled;
+            let description =
+                join.gather_filters_for_pushdown(phase, filters, &config)?;
+            assert!(
+                description
+                    .parent_filters()
+                    .iter()
+                    .flatten()
+                    .all(|f| matches!(f.discriminant, PushedDown::No))
+            );
+        }
+        Ok(())
+    }
 
     fn delayed_stream(batch: RecordBatch, delay: Duration) -> SendableRecordBatchStream {
         let schema = batch.schema();
@@ -4218,72 +4500,41 @@ pub(crate) mod tests {
             let left_spill_file = left_spill_file
                 .finish()?
                 .expect("the test left spill contains one batch");
-            // Two tests share this helper and need different things from it.
-            //
-            // `join_time_excludes_global_right_unmatched_replay_poll` runs a
-            // RIGHT join with `spill_read_delay` and asserts the run performs
-            // exactly one spill read, the final right replay. Preloading the
-            // left chunk into the coordinator's slot gives it that.
-            //
-            // `build_time_excludes_spill_stream_poll` runs an INNER join with no
-            // `spill_read_delay`; its delay lives in the stream wrapping the
-            // left input, and it must be paid while the join is being polled
-            // (the helper starts its wall clock at `common::collect` below).
-            // Handing that stream to the coordinator keeps the delay on the
-            // build side and inside the measured window. An INNER join never
-            // reaches `EmitGlobalRightUnmatched`, so the extra left read does
-            // not disturb the other test's count.
-            let coordinator = Arc::new(FallbackCoordinator::new(
-                1,
-                need_produce_result_in_final(join_type),
-            ));
-            let preload_left_chunk = need_produce_result_in_final(join_type)
-                || matches!(join_type, JoinType::Right);
-            if preload_left_chunk {
-                let n_rows = left_batch.num_rows();
-                let visited = if need_produce_result_in_final(join_type) {
-                    let mut buffer = BooleanBufferBuilder::new(n_rows);
-                    buffer.append_n(n_rows, false);
-                    buffer
-                } else {
-                    BooleanBufferBuilder::new(0)
-                };
-                let chunk = Arc::new(JoinLeftData::new(
-                    left_batch.clone(),
-                    Mutex::new(visited),
-                    AtomicUsize::new(1),
-                    MemoryConsumer::new("NestedLoopJoinFallbackChunk[test]".to_string())
-                        .register(task_ctx.memory_pool()),
-                ));
-                let mut inner = coordinator.inner.lock().await;
-                inner.left_exhausted = true;
-                inner.current = Some(CurrentChunk {
-                    chunk_index: 0,
-                    data: chunk,
-                    is_last: true,
-                });
-            } else {
-                let mut inner = coordinator.inner.lock().await;
-                inner.left_schema = Some(Arc::clone(&left_schema));
-                inner.left_stream = Some(left_stream);
-            }
-            let active = SpillStateActive {
-                left_spill: Arc::new(LeftSpillData {
+            let left_spill = LeftSpillData::new(
+                SpilledLeftFile {
                     spill_manager: left_spill_manager,
                     spill_file: left_spill_file,
-                    schema: Arc::clone(&left_schema),
-                }),
-                left_schema: Some(Arc::clone(&left_schema)),
-                // Preload the single left chunk into the coordinator's slot so
-                // `next_chunk` serves it from `current` without reading the
-                // spill file. That keeps this helper's premise intact: the left
-                // side is supplied directly, so the only spill read is the
-                // final right replay in `EmitGlobalRightUnmatched`, which is
-                // what `join_time_excludes_global_right_unmatched_replay_poll`
-                // counts.
-                coordinator,
-                next_chunk_index: 0,
-                task_context: Arc::clone(&task_ctx),
+                    num_rows: left_batch.num_rows(),
+                },
+                Arc::clone(&left_schema),
+                need_produce_result_in_final(join_type),
+                1,
+                MemoryConsumer::new("NestedLoopJoinLoad[test]".to_string())
+                    .register(task_ctx.memory_pool()),
+            );
+            // The left chunk is read from the delayed stream rather than from
+            // the spill file. `build_time_excludes_spill_stream_poll` needs
+            // that delay on the build side, and it keeps the final right replay
+            // the only spill read, which is what
+            // `join_time_excludes_global_right_unmatched_replay_poll` counts.
+            *left_spill.reader.lock() = Some(LeftChunkReader {
+                stream: left_stream,
+                carryover: None,
+            });
+            let active = SpillStateActive {
+                left_spill: Arc::new(left_spill),
+                left_chunk_barrier: Arc::new(LeftChunkBarrier::new(1)),
+                chunk_index: 0,
+                chunk_fetch: None,
+                current_chunk: None,
+                memory_pool: Arc::clone(task_ctx.memory_pool()),
+                chunk_reservation: MemoryConsumer::new(
+                    "NestedLoopJoinLeftVisited[test]".to_string(),
+                )
+                .register(task_ctx.memory_pool()),
+                chunk_row_offset: 0,
+                left_unmatched_pass: None,
+                right_schema: Arc::clone(&right_schema),
                 right_input: ReplayableStreamSource::new(
                     right_stream,
                     spill_manager,
@@ -4292,8 +4543,6 @@ pub(crate) mod tests {
                 global_right_bitmaps: Vec::new(),
                 global_right_bitmaps_reservation,
                 right_batch_index: 0,
-                chunk_fetch_in_flight: None,
-                chunk_release_in_flight: None,
             };
             (
                 OnceFut::new(async { internal_err!("unused left data was polled") }),
@@ -4313,6 +4562,7 @@ pub(crate) mod tests {
                     false,
                     1,
                     None,
+                    Arc::new(LeftChunkBarrier::new(1)),
                 )),
                 right_stream,
                 SpillState::Disabled,
@@ -4656,6 +4906,18 @@ pub(crate) mod tests {
         "));
 
         assert_join_metrics!(metrics, 5);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_left_semi_join_reports_final_emission() -> Result<()> {
+        let left = build_left_table();
+        let right = build_right_table();
+        let join =
+            NestedLoopJoinExec::try_new(left, right, None, &JoinType::LeftSemi, None)?;
+
+        assert_eq!(join.properties().emission_type, EmissionType::Final);
 
         Ok(())
     }
@@ -5408,9 +5670,31 @@ pub(crate) mod tests {
         )
     }
 
+    /// A left table with one batch per row, spanning enough rows that the
+    /// memory-limited fallback must split it across MULTIPLE chunks. Only
+    /// `(5,5,50)` matches the right side under `prepare_join_filter`
+    /// (`b1 != 8`); every other row has `b1 = 8` and is therefore an
+    /// unmatched left row.
+    fn build_left_table_multi_chunk() -> Arc<dyn ExecutionPlan> {
+        build_table(
+            ("a1", &vec![5, 9, 11, 13, 15, 17, 19, 21]),
+            ("b1", &vec![5, 8, 8, 8, 8, 8, 8, 8]),
+            ("c1", &vec![50, 90, 110, 130, 150, 170, 190, 210]),
+            // One row per batch, so the tight per-chunk memory budget forces
+            // each row to be loaded as a separate chunk.
+            Some(1),
+            Vec::new(),
+        )
+    }
+
     /// Run a NLJ across 4 right partitions under a tight memory limit, so
     /// every output partition takes the memory-limited fallback path. The
     /// right side is shuffled via `RepartitionExec(RoundRobinBatch(4))`.
+    ///
+    /// The partitions are collected concurrently, which mirrors how they run
+    /// under the runtime. They have to be: they share one left chunk at a
+    /// time, so the next chunk is only loaded once every partition has
+    /// finished the current one (see [`LeftChunkBarrier`]).
     async fn multi_partition_memory_limited_join_collect(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -5428,21 +5712,32 @@ pub(crate) mod tests {
             NestedLoopJoinExec::try_new(left, right, join_filter, join_type, None)?;
         let columns = columns(&nested_loop_join.schema());
 
-        let mut batches = vec![];
+        let mut handles = vec![];
         for i in 0..partition_count {
             let stream = nested_loop_join.execute(i, Arc::clone(&context))?;
-            let more = common::collect(stream).await?;
-            batches.extend(more.into_iter().filter(|b| b.num_rows() > 0));
+            handles.push(SpawnedTask::spawn(
+                async move { common::collect(stream).await },
+            ));
         }
+        let mut batches = vec![];
+        for handle in handles {
+            batches.extend(handle.join().await.expect("partition task panicked")?);
+        }
+        batches.retain(|b| b.num_rows() > 0);
 
         let metrics = nested_loop_join.metrics().unwrap();
         Ok((columns, batches, metrics))
     }
 
-    #[tokio::test]
+    /// The left side is split into multiple chunks, and every partition reads
+    /// its own. Every left row must appear exactly once: duplicates would
+    /// indicate that the visited-left bitmap was not shared across right
+    /// partitions, and missing rows that a chunk's matches were merged at the
+    /// wrong offset.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_nlj_memory_limited_multi_partition_left_join() -> Result<()> {
         let task_ctx = task_ctx_with_memory_limit(50, 16)?;
-        let left = build_left_table();
+        let left = build_left_table_multi_chunk();
         let right = build_right_table_one_batch_per_row();
         let filter = prepare_join_filter();
 
@@ -5461,15 +5756,18 @@ pub(crate) mod tests {
             "Expected spilling under tight memory limit"
         );
 
-        // Expected output is identical to the single-partition spill path
-        // and the multi-partition non-spill path. Each left row appears
-        // exactly once: the matched (5,5,50)+(2,2,80) row, plus the two
-        // left rows filtered out by `b1 != 8` as unmatched.
+        // (5,5,50) matches (2,2,80); all other left rows (b1 = 8) are
+        // unmatched and appear exactly once.
         allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
         +----+----+-----+----+----+----+
         | a1 | b1 | c1  | a2 | b2 | c2 |
         +----+----+-----+----+----+----+
         | 11 | 8  | 110 |    |    |    |
+        | 13 | 8  | 130 |    |    |    |
+        | 15 | 8  | 150 |    |    |    |
+        | 17 | 8  | 170 |    |    |    |
+        | 19 | 8  | 190 |    |    |    |
+        | 21 | 8  | 210 |    |    |    |
         | 5  | 5  | 50  | 2  | 2  | 80 |
         | 9  | 8  | 90  |    |    |    |
         +----+----+-----+----+----+----+
@@ -5477,10 +5775,16 @@ pub(crate) mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    /// In addition to the global left bitmap exercised by the LEFT case, this
+    /// covers the global right-unmatched bitmap accumulated ACROSS all left
+    /// chunks and emitted once in `EmitGlobalRightUnmatched`. The two right
+    /// rows with `b2 = 10` are filtered out of every match and must appear
+    /// exactly once as unmatched-right rows, regardless of how many left
+    /// chunks were processed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_nlj_memory_limited_multi_partition_full_join() -> Result<()> {
         let task_ctx = task_ctx_with_memory_limit(50, 16)?;
-        let left = build_left_table();
+        let left = build_left_table_multi_chunk();
         let right = build_right_table_one_batch_per_row();
         let filter = prepare_join_filter();
 
@@ -5499,7 +5803,9 @@ pub(crate) mod tests {
             "Expected spilling under tight memory limit"
         );
 
-        // Expected: 1 matched + 2 left-unmatched + 2 right-unmatched.
+        // Matched: (5,5,50)+(2,2,80). Unmatched left: the seven b1 = 8 rows.
+        // Unmatched right: (12,10,40) and (10,10,100), each emitted once from
+        // the global right bitmap accumulated across all left chunks.
         allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
         +----+----+-----+----+----+-----+
         | a1 | b1 | c1  | a2 | b2 | c2  |
@@ -5507,6 +5813,11 @@ pub(crate) mod tests {
         |    |    |     | 10 | 10 | 100 |
         |    |    |     | 12 | 10 | 40  |
         | 11 | 8  | 110 |    |    |     |
+        | 13 | 8  | 130 |    |    |     |
+        | 15 | 8  | 150 |    |    |     |
+        | 17 | 8  | 170 |    |    |     |
+        | 19 | 8  | 190 |    |    |     |
+        | 21 | 8  | 210 |    |    |     |
         | 5  | 5  | 50  | 2  | 2  | 80  |
         | 9  | 8  | 90  |    |    |     |
         +----+----+-----+----+----+-----+
@@ -5514,10 +5825,10 @@ pub(crate) mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_nlj_memory_limited_multi_partition_left_semi_join() -> Result<()> {
         let task_ctx = task_ctx_with_memory_limit(50, 16)?;
-        let left = build_left_table();
+        let left = build_left_table_multi_chunk();
         // Two right rows that both match the same left row (5,5,50). Without
         // shared left-visited state across partitions, each matching partition
         // emits the left row once, producing duplicates.
@@ -5557,10 +5868,10 @@ pub(crate) mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_nlj_memory_limited_multi_partition_left_anti_join() -> Result<()> {
         let task_ctx = task_ctx_with_memory_limit(50, 16)?;
-        let left = build_left_table();
+        let left = build_left_table_multi_chunk();
         let right = build_right_table_one_batch_per_row();
         let filter = prepare_join_filter();
 
@@ -5586,16 +5897,21 @@ pub(crate) mod tests {
         | a1 | b1 | c1  |
         +----+----+-----+
         | 11 | 8  | 110 |
+        | 13 | 8  | 130 |
+        | 15 | 8  | 150 |
+        | 17 | 8  | 170 |
+        | 19 | 8  | 190 |
+        | 21 | 8  | 210 |
         | 9  | 8  | 90  |
         +----+----+-----+
         "));
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_nlj_memory_limited_multi_partition_left_mark_join() -> Result<()> {
         let task_ctx = task_ctx_with_memory_limit(50, 16)?;
-        let left = build_left_table();
+        let left = build_left_table_multi_chunk();
         let right = build_right_table_one_batch_per_row();
         let filter = prepare_join_filter();
 
@@ -5621,6 +5937,11 @@ pub(crate) mod tests {
         | a1 | b1 | c1  | mark  |
         +----+----+-----+-------+
         | 11 | 8  | 110 | false |
+        | 13 | 8  | 130 | false |
+        | 15 | 8  | 150 | false |
+        | 17 | 8  | 170 | false |
+        | 19 | 8  | 190 | false |
+        | 21 | 8  | 210 | false |
         | 5  | 5  | 50  | true  |
         | 9  | 8  | 90  | false |
         +----+----+-----+-------+
@@ -5628,128 +5949,11 @@ pub(crate) mod tests {
         Ok(())
     }
 
-    /// A left table with one batch per row, spanning enough rows that the
-    /// memory-limited fallback must split it across MULTIPLE chunks. Only
-    /// `(5,5,50)` matches the right side under `prepare_join_filter`
-    /// (`b1 != 8`); every other row has `b1 = 8` and is therefore an
-    /// unmatched left row.
-    fn build_left_table_multi_chunk() -> Arc<dyn ExecutionPlan> {
-        build_table(
-            ("a1", &vec![5, 9, 11, 13, 15, 17, 19, 21]),
-            ("b1", &vec![5, 8, 8, 8, 8, 8, 8, 8]),
-            ("c1", &vec![50, 90, 110, 130, 150, 170, 190, 210]),
-            // One row per batch, so the tight per-chunk memory budget forces
-            // the coordinator to load each row as a separate chunk.
-            Some(1),
-            Vec::new(),
-        )
-    }
-
-    /// Run a NLJ across 4 right partitions, collecting every output
-    /// partition CONCURRENTLY. This is required for the multi-chunk
-    /// coordinator path: a chunk is not released until all partitions
-    /// finish probing it, and a partition cannot advance to the next chunk
-    /// until the current one is released. Collecting partitions
-    /// sequentially would therefore deadlock; concurrent collection mirrors
-    /// how partitions actually run under the runtime.
-    /// Spills a plan's single partition to a `LeftSpillData`, so a test can hand
-    /// the coordinator the same input the fallback path would.
-    async fn spill_left_for_test(
-        left: Arc<dyn ExecutionPlan>,
-        task_ctx: Arc<TaskContext>,
-    ) -> Result<Arc<LeftSpillData>> {
-        let mut stream = left.execute(0, Arc::clone(&task_ctx))?;
-        let schema = stream.schema();
-        let spill_manager = SpillManager::new(
-            task_ctx.runtime_env(),
-            SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
-            Arc::clone(&schema),
-        );
-        let mut spill_file =
-            spill_manager.create_in_progress_file("NLJ left spill (test)")?;
-        while let Some(batch) = stream.next().await {
-            let batch = batch?;
-            if batch.num_rows() > 0 {
-                spill_file.append_batch(&batch)?;
-            }
-        }
-        let file = spill_file
-            .finish()?
-            .expect("the fixture has rows, so a spill file must exist");
-        Ok(Arc::new(LeftSpillData {
-            spill_manager,
-            spill_file: file,
-            schema,
-        }))
-    }
-
-    /// The chunk's memory must be owned by the chunk's `JoinLeftData`, so it
-    /// stays accounted while *any* holder still references it.
-    ///
-    /// The emitter elected in `ProbeEnd` is the last stream to finish probing,
-    /// which is not necessarily the last to drop its `Arc<JoinLeftData>`: a
-    /// non-emitter can flush a completed output batch from
-    /// `maybe_flush_ready_batch` and return while still holding one, since that
-    /// return happens before `buffered_left_data = None`. Freeing the bytes when
-    /// the coordinator slot is released would therefore under-account memory
-    /// that is still live.
-    ///
-    /// This drives the coordinator directly so the check does not depend on
-    /// scheduling: after releasing the slot, the pool must still account for the
-    /// chunk while a reference is held, and drop to zero only once it is gone.
-    #[tokio::test]
-    async fn test_nlj_chunk_memory_is_owned_by_the_chunk_data() -> Result<()> {
-        let runtime = RuntimeEnvBuilder::new().build_arc()?;
-        let pool = Arc::clone(&runtime.memory_pool);
-        let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
-
-        // One chunk, tracked bitmap, two nominal probe partitions.
-        let coordinator = Arc::new(FallbackCoordinator::new(2, true));
-        let left = build_left_table();
-        let spill = spill_left_for_test(Arc::clone(&left), Arc::clone(&task_ctx)).await?;
-
-        let (chunk, is_last) = Arc::clone(&coordinator)
-            .next_chunk(0, Arc::clone(&spill), Arc::clone(&task_ctx), Time::new())
-            .await?
-            .expect("the left side has rows, so a chunk must be produced");
-        assert!(is_last, "the fixture fits in a single chunk");
-
-        let accounted_while_held = pool.reserved();
-        assert!(
-            accounted_while_held > 0,
-            "loading a chunk must account for its batch and bitmap"
-        );
-
-        // Release the coordinator slot while still holding the chunk. This is
-        // the emitter's release: the slot is freed, but the data is alive.
-        coordinator.release_chunk(0).await;
-        assert_eq!(
-            pool.reserved(),
-            accounted_while_held,
-            "releasing the slot must not release memory that is still referenced"
-        );
-
-        // Dropping the last reference is what returns the bytes.
-        drop(chunk);
-        assert_eq!(
-            pool.reserved(),
-            0,
-            "dropping the last chunk reference must release its memory"
-        );
-        Ok(())
-    }
-
-    /// The final chunk must be released before the stream finishes.
-    ///
-    /// `release_chunk` is what drops the coordinator's `Arc<JoinLeftData>` and
-    /// lets the next load `resize(0)` the coordinator reservation. For every
-    /// non-final chunk that happens on the way back to `BufferingLeft`, but the
-    /// final chunk used to create the release future and then transition
-    /// straight to `Done` (LEFT) or `EmitGlobalRightUnmatched` (FULL), neither
-    /// of which polls it. Because the coordinator hangs off the *plan*, not the
-    /// stream, the final chunk's batch, bitmap and reservation stayed accounted
-    /// against the pool for as long as the plan was alive.
-    async fn assert_final_chunk_released(join_type: JoinType) -> Result<()> {
+    /// A finished execution must not keep memory accounted, even while the plan
+    /// itself is still alive, as a cached or still-referenced physical plan
+    /// would be. The barrier lives on the plan and holds the load of the current
+    /// chunk, so it has to let go of the last one as well.
+    async fn assert_memory_released_after_completion(join_type: JoinType) -> Result<()> {
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(50, 1.0)
             .build_arc()?;
@@ -5772,16 +5976,22 @@ pub(crate) mod tests {
         // Held for the whole test, exactly as a cached or still-referenced
         // physical plan would be after its query finished.
         let nested_loop_join = Arc::new(NestedLoopJoinExec::try_new(
-            build_left_table(),
+            build_left_table_multi_chunk(),
             right,
             Some(prepare_join_filter()),
             &join_type,
             None,
         )?);
 
+        let mut handles = vec![];
         for i in 0..partition_count {
             let stream = nested_loop_join.execute(i, Arc::clone(&task_ctx))?;
-            let _ = common::collect(stream).await?;
+            handles.push(SpawnedTask::spawn(
+                async move { common::collect(stream).await },
+            ));
+        }
+        for handle in handles {
+            handle.join().await.expect("partition task panicked")?;
         }
         assert!(
             nested_loop_join
@@ -5796,172 +6006,467 @@ pub(crate) mod tests {
         assert_eq!(
             pool.reserved(),
             0,
-            "{join_type}: the coordinator still holds the final chunk's memory \
-             while the plan is alive"
+            "{join_type}: memory is still reserved after every partition finished"
         );
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_nlj_memory_limited_releases_final_chunk_left_join() -> Result<()> {
-        assert_final_chunk_released(JoinType::Left).await
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_nlj_memory_limited_releases_memory_left_join() -> Result<()> {
+        assert_memory_released_after_completion(JoinType::Left).await
     }
 
-    #[tokio::test]
-    async fn test_nlj_memory_limited_releases_final_chunk_full_join() -> Result<()> {
-        assert_final_chunk_released(JoinType::Full).await
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_nlj_memory_limited_releases_memory_full_join() -> Result<()> {
+        assert_memory_released_after_completion(JoinType::Full).await
     }
 
-    async fn multi_partition_memory_limited_join_collect_concurrent(
-        left: Arc<dyn ExecutionPlan>,
+    /// The join types that emit final left rows, which are the ones whose
+    /// partitions share the visited bitmap
+    const LEFT_EMITTING_JOIN_TYPES: [JoinType; 5] = [
+        JoinType::Left,
+        JoinType::LeftSemi,
+        JoinType::LeftAnti,
+        JoinType::LeftMark,
+        JoinType::Full,
+    ];
+
+    /// The final left rows among `batches`: for LEFT and FULL the rows with a
+    /// left row and NULL right columns, and for the other left-emitting types
+    /// every row, as they emit nothing else.
+    fn count_final_left_rows(join_type: JoinType, batches: &[RecordBatch]) -> usize {
+        batches
+            .iter()
+            .map(|batch| match join_type {
+                JoinType::Left | JoinType::Full => {
+                    let left = batch.column(0);
+                    let right = batch.column(3);
+                    (0..batch.num_rows())
+                        .filter(|&i| left.is_valid(i) && right.is_null(i))
+                        .count()
+                }
+                _ => batch.num_rows(),
+            })
+            .sum()
+    }
+
+    /// A two-partition join over a left side of several chunks, under a memory
+    /// limit that makes it spill.
+    fn dropped_partition_test_plan(
         right: Arc<dyn ExecutionPlan>,
-        join_type: &JoinType,
-        join_filter: Option<JoinFilter>,
-        context: Arc<TaskContext>,
-    ) -> Result<(Vec<String>, Vec<RecordBatch>, MetricsSet)> {
-        let partition_count = 4;
+        join_type: JoinType,
+    ) -> Result<(Arc<NestedLoopJoinExec>, Arc<TaskContext>)> {
+        let task_ctx = task_ctx_with_memory_limit(50, 1)?;
         let right = Arc::new(RepartitionExec::try_new(
             right,
-            Partitioning::RoundRobinBatch(partition_count),
+            Partitioning::RoundRobinBatch(2),
         )?) as Arc<dyn ExecutionPlan>;
-
-        let nested_loop_join = Arc::new(NestedLoopJoinExec::try_new(
-            left,
+        let plan = Arc::new(NestedLoopJoinExec::try_new(
+            build_left_table_multi_chunk(),
             right,
-            join_filter,
-            join_type,
+            Some(prepare_join_filter()),
+            &join_type,
             None,
         )?);
-        let columns = columns(&nested_loop_join.schema());
+        Ok((plan, task_ctx))
+    }
 
+    /// The partitions move through the left chunks together, so one that is
+    /// dropped before it finishes (as a `LIMIT` above the join may do) has to
+    /// stop being waited for. The others then carry on without it, and neither
+    /// stall nor fail. As on the in-memory path, the dropped partition never
+    /// reports probe completion, so the final left rows are not emitted.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_nlj_memory_limited_dropped_partition_does_not_stall_peers() -> Result<()>
+    {
+        let (plan, task_ctx) = dropped_partition_test_plan(
+            build_right_table_one_batch_per_row(),
+            JoinType::Left,
+        )?;
+
+        // Every partition is dropped as soon as it returns rows. The only match
+        // comes from the first left chunk, so the partition that finds it goes
+        // away with most chunks still to probe, and the other one runs to the
+        // end.
         let mut handles = vec![];
-        for i in 0..partition_count {
-            let stream = nested_loop_join.execute(i, Arc::clone(&context))?;
-            handles.push(SpawnedTask::spawn(
-                async move { common::collect(stream).await },
-            ));
+        for i in 0..2 {
+            let mut stream = plan.execute(i, Arc::clone(&task_ctx))?;
+            handles.push(SpawnedTask::spawn(async move {
+                while let Some(batch) = stream.next().await {
+                    let batch = batch?;
+                    if batch.num_rows() > 0 {
+                        return Ok(Some(batch));
+                    }
+                }
+                Ok::<_, DataFusionError>(None)
+            }));
         }
-
         let mut batches = vec![];
         for handle in handles {
-            let more = handle.join().await.expect("partition task panicked")?;
-            batches.extend(more.into_iter().filter(|b| b.num_rows() > 0));
+            let batch = tokio::time::timeout(Duration::from_secs(30), handle.join())
+                .await
+                .expect("a partition stalled after its peer was dropped")
+                .expect("partition task panicked")?;
+            batches.extend(batch);
+        }
+        assert!(
+            plan.metrics().unwrap().spill_count().unwrap_or(0) > 0,
+            "Expected spilling under tight memory limit"
+        );
+
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+----+----+----+----+----+
+        | a1 | b1 | c1 | a2 | b2 | c2 |
+        +----+----+----+----+----+----+
+        | 5  | 5  | 50 | 2  | 2  | 80 |
+        +----+----+----+----+----+----+
+        "));
+        // Nothing stays reserved, although the plan is still alive
+        assert_eq!(
+            task_ctx.memory_pool().reserved(),
+            0,
+            "a dropped partition must not strand the chunk's or the bitmap's memory"
+        );
+        drop(plan);
+        Ok(())
+    }
+
+    /// A partition that has finished the current chunk and is waiting for the
+    /// others is counted among the finished ones. When it is dropped it must
+    /// come out of that count as well, or the barrier would move on before the
+    /// remaining partition has probed the chunk.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_nlj_memory_limited_partition_dropped_while_waiting_for_peers()
+    -> Result<()> {
+        for join_type in LEFT_EMITTING_JOIN_TYPES {
+            assert_partition_dropped_while_waiting_for_peers(join_type).await?;
+        }
+        Ok(())
+    }
+
+    async fn assert_partition_dropped_while_waiting_for_peers(
+        join_type: JoinType,
+    ) -> Result<()> {
+        // No right row matches, so the join returns nothing until the very end
+        let right = build_table(
+            ("a2", &vec![12, 10]),
+            ("b2", &vec![10, 10]),
+            ("c2", &vec![40, 100]),
+            Some(1),
+            Vec::new(),
+        );
+        let (plan, task_ctx) = dropped_partition_test_plan(right, join_type)?;
+        let mut waiting = plan.execute(0, Arc::clone(&task_ctx))?;
+        let survivor = plan.execute(1, Arc::clone(&task_ctx))?;
+
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while plan.left_chunk_barrier.inner.lock().finished == 0 {
+                assert!(
+                    futures::poll!(waiting.next()).is_pending(),
+                    "the partition cannot get past the first chunk on its own"
+                );
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("the partition never finished the first chunk");
+        drop(waiting);
+        {
+            let barrier = plan.left_chunk_barrier.inner.lock();
+            assert_eq!(
+                (barrier.chunk_index, barrier.live, barrier.finished),
+                (0, 1, 0)
+            );
         }
 
-        let metrics = nested_loop_join.metrics().unwrap();
-        Ok((columns, batches, metrics))
-    }
-
-    /// Regression test for the multi-chunk coordinator path of a LEFT join.
-    ///
-    /// Unlike the other multi-partition tests, the left side here is split
-    /// into multiple chunks (one row per batch under a tight memory limit),
-    /// so this exercises `carryover` between chunks, `release_chunk`
-    /// advancing `next_chunk_index`, waiter notification, and re-entering
-    /// `BufferingLeft` for each subsequent chunk. Every left row must appear
-    /// exactly once: duplicates would indicate the per-chunk `JoinLeftData`
-    /// (visited bitmap + probe-thread counter) was not shared across right
-    /// partitions.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_nlj_memory_limited_multi_partition_multi_chunk_left_join() -> Result<()>
-    {
-        let task_ctx = task_ctx_with_memory_limit(50, 16)?;
-        let left = build_left_table_multi_chunk();
-        let right = build_right_table_one_batch_per_row();
-        let filter = prepare_join_filter();
-
-        let (columns, batches, metrics) =
-            multi_partition_memory_limited_join_collect_concurrent(
-                left,
-                right,
-                &JoinType::Left,
-                Some(filter),
-                task_ctx,
-            )
-            .await?;
-
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        assert!(
-            metrics.spill_count().unwrap_or(0) > 0,
-            "Expected spilling under tight memory limit"
+        let batches =
+            tokio::time::timeout(Duration::from_secs(30), common::collect(survivor))
+                .await
+                .expect("the remaining partition stalled")?;
+        // No final left rows, as the dropped partition never reported. A FULL
+        // join still emits the survivor's own unmatched right row.
+        let expected_rows = usize::from(join_type == JoinType::Full);
+        assert_eq!(
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            expected_rows,
+            "{join_type}"
         );
+        assert_eq!(plan.left_chunk_barrier.inner.lock().chunk_index, 8);
 
-        // (5,5,50) matches (2,2,80); all other left rows (b1 = 8) are
-        // unmatched and appear exactly once.
-        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
-        +----+----+-----+----+----+----+
-        | a1 | b1 | c1  | a2 | b2 | c2 |
-        +----+----+-----+----+----+----+
-        | 11 | 8  | 110 |    |    |    |
-        | 13 | 8  | 130 |    |    |    |
-        | 15 | 8  | 150 |    |    |    |
-        | 17 | 8  | 170 |    |    |    |
-        | 19 | 8  | 190 |    |    |    |
-        | 21 | 8  | 210 |    |    |    |
-        | 5  | 5  | 50  | 2  | 2  | 80 |
-        | 9  | 8  | 90  |    |    |    |
-        +----+----+-----+----+----+----+
-        "));
+        // Nothing stays reserved, although the plan is still alive
+        assert_eq!(task_ctx.memory_pool().reserved(), 0, "{join_type}");
         Ok(())
     }
 
-    /// Regression test for the multi-chunk coordinator path of a FULL join.
-    ///
-    /// In addition to the per-chunk left sharing exercised by the LEFT case,
-    /// this covers the global right-unmatched bitmap accumulated ACROSS all
-    /// left chunks and emitted once in `EmitGlobalRightUnmatched`. The two
-    /// right rows with `b2 = 10` are filtered out of every match and must
-    /// appear exactly once as unmatched-right rows, regardless of how many
-    /// left chunks were processed.
+    /// The load of a chunk is not tied to the partition that started it, so
+    /// dropping that partition right away leaves the chunk to the others.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_nlj_memory_limited_multi_partition_multi_chunk_full_join() -> Result<()>
-    {
-        let task_ctx = task_ctx_with_memory_limit(50, 16)?;
-        let left = build_left_table_multi_chunk();
-        let right = build_right_table_one_batch_per_row();
-        let filter = prepare_join_filter();
+    async fn test_nlj_memory_limited_partition_dropped_while_loading() -> Result<()> {
+        let (plan, task_ctx) = dropped_partition_test_plan(
+            build_right_table_one_batch_per_row(),
+            JoinType::Left,
+        )?;
+        let mut loading = plan.execute(0, Arc::clone(&task_ctx))?;
+        let survivor = plan.execute(1, Arc::clone(&task_ctx))?;
 
-        let (columns, batches, metrics) =
-            multi_partition_memory_limited_join_collect_concurrent(
-                left,
-                right,
-                &JoinType::Full,
-                Some(filter),
-                task_ctx,
-            )
-            .await?;
+        // Far enough to spill the left side and ask for the first chunk
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while plan.left_chunk_barrier.inner.lock().chunk.is_none() {
+                let _ = futures::poll!(loading.next());
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("the partition never asked for the first chunk");
+        drop(loading);
 
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
-        assert!(
-            metrics.spill_count().unwrap_or(0) > 0,
-            "Expected spilling under tight memory limit"
-        );
+        tokio::time::timeout(Duration::from_secs(30), common::collect(survivor))
+            .await
+            .expect("the remaining partition stalled")?;
+        assert_eq!(plan.left_chunk_barrier.inner.lock().chunk_index, 8);
 
-        // Matched: (5,5,50)+(2,2,80). Unmatched left: the seven b1 = 8 rows.
-        // Unmatched right: (12,10,40) and (10,10,100), each emitted once from
-        // the global right bitmap accumulated across all left chunks.
-        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
-        +----+----+-----+----+----+-----+
-        | a1 | b1 | c1  | a2 | b2 | c2  |
-        +----+----+-----+----+----+-----+
-        |    |    |     | 10 | 10 | 100 |
-        |    |    |     | 12 | 10 | 40  |
-        | 11 | 8  | 110 |    |    |     |
-        | 13 | 8  | 130 |    |    |     |
-        | 15 | 8  | 150 |    |    |     |
-        | 17 | 8  | 170 |    |    |     |
-        | 19 | 8  | 190 |    |    |     |
-        | 21 | 8  | 210 |    |    |     |
-        | 5  | 5  | 50  | 2  | 2  | 80  |
-        | 9  | 8  | 90  |    |    |     |
-        +----+----+-----+----+----+-----+
-        "));
+        // Nothing stays reserved, although the plan is still alive
+        assert_eq!(task_ctx.memory_pool().reserved(), 0);
         Ok(())
     }
 
-    /// Like `task_ctx_with_memory_limit`, but also disables the coordinated
-    /// memory-limited fallback via `enable_nlj_coordinated_fallback = false`
-    /// (the opt-out a distributed engine would use).
+    /// Fails every `read_stream` of the left spill file after the first, which
+    /// is the one the chunks are read from. The final pass is the second.
+    struct FailFinalPassSpillFile {
+        inner: Arc<dyn SpillFile>,
+        reads: AtomicUsize,
+    }
+
+    impl SpillFile for FailFinalPassSpillFile {
+        fn path(&self) -> Option<&std::path::Path> {
+            self.inner.path()
+        }
+
+        fn size(&self) -> Option<u64> {
+            self.inner.size()
+        }
+
+        fn read_stream(
+            &self,
+        ) -> Result<Pin<Box<dyn Stream<Item = Result<Bytes>> + Send>>> {
+            if self.reads.fetch_add(1, Ordering::Relaxed) > 0 {
+                return internal_err!("final pass cannot be opened");
+            }
+            self.inner.read_stream()
+        }
+
+        fn open_writer(&self) -> Result<Box<dyn SpillWriter>> {
+            self.inner.open_writer()
+        }
+    }
+
+    #[derive(Debug)]
+    struct FailFinalPassTempFileFactory {
+        inner: Arc<DiskManager>,
+    }
+
+    impl TempFileFactory for FailFinalPassTempFileFactory {
+        fn create_temp_file(&self, description: &str) -> Result<Arc<dyn SpillFile>> {
+            let file = self.inner.create_tmp_file(description)?;
+            if description != "NestedLoopJoin left spill" {
+                return Ok(file);
+            }
+            Ok(Arc::new(FailFinalPassSpillFile {
+                inner: file,
+                reads: AtomicUsize::new(0),
+            }))
+        }
+    }
+
+    /// The emitter owns the global bitmap from `ProbeEnd` on, so an error
+    /// opening the final pass does not leave it reserved on a live plan.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_nlj_memory_limited_final_pass_open_error_releases_bitmap() -> Result<()>
+    {
+        let inner = Arc::new(
+            DiskManagerBuilder::default()
+                .with_mode(DiskManagerMode::OsTmpDirectory)
+                .build()?,
+        );
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(50, 1.0)
+            .with_disk_manager_builder(DiskManagerBuilder::default().with_mode(
+                DiskManagerMode::Custom(Arc::new(FailFinalPassTempFileFactory { inner })),
+            ))
+            .build_arc()?;
+        let cfg = TaskContext::default()
+            .session_config()
+            .clone()
+            .with_batch_size(1);
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_runtime(runtime)
+                .with_session_config(cfg),
+        );
+        let right = Arc::new(RepartitionExec::try_new(
+            build_right_table_one_batch_per_row(),
+            Partitioning::RoundRobinBatch(2),
+        )?) as Arc<dyn ExecutionPlan>;
+        let plan = Arc::new(NestedLoopJoinExec::try_new(
+            build_left_table_multi_chunk(),
+            right,
+            Some(prepare_join_filter()),
+            &JoinType::Left,
+            None,
+        )?);
+
+        let streams = (0..2)
+            .map(|i| plan.execute(i, Arc::clone(&task_ctx)))
+            .collect::<Result<Vec<_>>>()?;
+        let results = tokio::time::timeout(
+            Duration::from_secs(30),
+            futures::future::join_all(streams.into_iter().map(common::collect)),
+        )
+        .await
+        .expect("the join stalled");
+        let err = results
+            .into_iter()
+            .find_map(Result::err)
+            .expect("the emitter fails to open the final pass");
+        assert_contains!(err.to_string(), "final pass cannot be opened");
+
+        // Nothing stays reserved, although the plan is still alive
+        assert_eq!(task_ctx.memory_pool().reserved(), 0);
+        Ok(())
+    }
+
+    /// A partition dropped before it was ever polled has not seen the spilled
+    /// left side, whether or not it exists yet. It must still stop counting as
+    /// a partition that will report probe completion, or the bitmap would stay
+    /// reserved for as long as the plan.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_nlj_memory_limited_unpolled_partition_dropped() -> Result<()> {
+        for join_type in LEFT_EMITTING_JOIN_TYPES {
+            for after_spill in [false, true] {
+                let (plan, task_ctx) = dropped_partition_test_plan(
+                    build_right_table_one_batch_per_row(),
+                    join_type,
+                )?;
+                let unpolled = plan.execute(0, Arc::clone(&task_ctx))?;
+                let mut survivor = plan.execute(1, Arc::clone(&task_ctx))?;
+                let mut batches = vec![];
+                if after_spill {
+                    // The survivor finishes the first chunk, then waits for
+                    // the unpolled partition
+                    tokio::time::timeout(Duration::from_secs(30), async {
+                        while plan.left_chunk_barrier.inner.lock().finished == 0 {
+                            if let Poll::Ready(Some(batch)) =
+                                futures::poll!(survivor.next())
+                            {
+                                batches.push(batch?);
+                            }
+                            tokio::time::sleep(Duration::from_millis(1)).await;
+                        }
+                        Ok::<_, DataFusionError>(())
+                    })
+                    .await
+                    .expect("the survivor never finished the first chunk")?;
+                    assert!(plan.left_chunk_barrier.inner.lock().left_spill.is_some());
+                }
+                drop(unpolled);
+
+                batches.extend(
+                    tokio::time::timeout(
+                        Duration::from_secs(30),
+                        common::collect(survivor),
+                    )
+                    .await
+                    .expect("the remaining partition stalled")?,
+                );
+                assert!(
+                    plan.metrics().unwrap().spill_count().unwrap_or(0) > 0,
+                    "{join_type}: expected spilling under tight memory limit"
+                );
+                // No final left rows, as the dropped partition never reported
+                assert_eq!(
+                    count_final_left_rows(join_type, &batches),
+                    0,
+                    "{join_type} after_spill={after_spill}"
+                );
+                assert_eq!(
+                    task_ctx.memory_pool().reserved(),
+                    0,
+                    "{join_type} after_spill={after_spill}: memory still reserved \
+                     while the plan is alive"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// A FULL partition that has probed every chunk goes on to replay its right
+    /// spill file for the unmatched right rows, and only reports probe
+    /// completion after that. Dropping it during the replay leaves it past the
+    /// barrier's last chunk but unreported.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_nlj_memory_limited_full_join_dropped_during_right_replay() -> Result<()>
+    {
+        let (plan, task_ctx) = dropped_partition_test_plan(
+            build_right_table_one_batch_per_row(),
+            JoinType::Full,
+        )?;
+        let mut streams = vec![
+            plan.execute(0, Arc::clone(&task_ctx))?,
+            plan.execute(1, Arc::clone(&task_ctx))?,
+        ];
+
+        // Poll both until one of them emits an unmatched right row (NULL left
+        // columns), which only happens in the final right replay. With a batch
+        // size of 1 it has not reported probe completion by then.
+        let replaying = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                for (i, stream) in streams.iter_mut().enumerate() {
+                    if let Poll::Ready(Some(batch)) = futures::poll!(stream.next()) {
+                        let batch = batch?;
+                        if batch.num_rows() > 0 && batch.column(0).null_count() > 0 {
+                            return Ok::<_, DataFusionError>(i);
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("no partition reached the right replay")?;
+        let left_spill = Arc::clone(
+            plan.left_chunk_barrier
+                .inner
+                .lock()
+                .left_spill
+                .as_ref()
+                .expect("the left side spilled"),
+        );
+        assert!(
+            left_spill.probe_threads_counter.load(Ordering::Acquire) >= 1,
+            "the replaying partition has not reported"
+        );
+        drop(streams.remove(replaying));
+        let survivor = streams.pop().unwrap();
+
+        let batches =
+            tokio::time::timeout(Duration::from_secs(30), common::collect(survivor))
+                .await
+                .expect("the remaining partition stalled")?;
+        // The survivor emits its own unmatched right rows, but the final left
+        // rows are not emitted
+        assert_eq!(count_final_left_rows(JoinType::Full, &batches), 0);
+        assert!(left_spill.incomplete.load(Ordering::Acquire));
+        assert_eq!(left_spill.probe_threads_counter.load(Ordering::Acquire), 0);
+        drop(left_spill);
+
+        // Nothing stays reserved, although the plan is still alive
+        assert_eq!(task_ctx.memory_pool().reserved(), 0);
+        Ok(())
+    }
+
+    /// Like `task_ctx_with_memory_limit`, but also sets
+    /// `enable_nlj_coordinated_fallback = false` (the opt-out a distributed
+    /// engine would use).
     fn task_ctx_with_memory_limit_no_coordinated_fallback(
         memory_limit: usize,
         batch_size: usize,
@@ -5981,9 +6486,9 @@ pub(crate) mod tests {
     }
 
     /// Collect a multi-partition NLJ under a tight memory limit and return the
-    /// first error, if any. Used to assert that disabling the coordinated
-    /// fallback makes a left-emitting multi-partition join fail with resource
-    /// exhaustion (rather than spill, or — in a distributed setting — hang).
+    /// first error, if any. Used to assert that the opt-out makes a
+    /// left-emitting multi-partition join fail with resource exhaustion (rather
+    /// than spill, or -- in a distributed setting -- lose its final left rows).
     async fn multi_partition_join_collect_err(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -6018,10 +6523,10 @@ pub(crate) mod tests {
     }
 
     /// When `enable_nlj_coordinated_fallback` is disabled, a LEFT join with
-    /// a multi-partition right side must NOT take the coordinated fallback: it
-    /// fails with resource exhaustion under a tight memory limit instead. This
-    /// is the distributed-safe opt-out (the coordinated fallback would
-    /// otherwise deadlock across processes).
+    /// a multi-partition right side must NOT take the fallback: it fails with
+    /// resource exhaustion under a tight memory limit instead. This is the
+    /// distributed-safe opt-out (across processes, the partitions would not
+    /// share the visited-left bitmap the fallback relies on).
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_nlj_memory_limited_fallback_disabled_left_join_oom() -> Result<()> {
         let task_ctx = task_ctx_with_memory_limit_no_coordinated_fallback(50, 16)?;
@@ -6042,10 +6547,9 @@ pub(crate) mod tests {
         Ok(())
     }
 
-    /// FULL join counterpart of the above: the opt-out disables the coordinated
-    /// fallback for FULL (also a left-emitting join) with a multi-partition
-    /// right side, so it fails with resource exhaustion rather than
-    /// coordinating.
+    /// FULL join counterpart of the above: the opt-out disables the fallback
+    /// for FULL (also a left-emitting join) with a multi-partition right side,
+    /// so it fails with resource exhaustion rather than spilling.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_nlj_memory_limited_fallback_disabled_full_join_oom() -> Result<()> {
         let task_ctx = task_ctx_with_memory_limit_no_coordinated_fallback(50, 16)?;
@@ -6067,22 +6571,18 @@ pub(crate) mod tests {
     }
 
     /// The opt-out is scoped to *left-emitting* joins. A RIGHT join over a
-    /// multi-partition right side is unaffected by the missing coordination —
-    /// each partition owns its right rows exclusively — so disabling the
-    /// coordinated fallback must still leave it spilling rather than failing.
-    /// This pins the scope of the guard so a future change cannot quietly turn
-    /// off the spill fallback for join types that never needed coordination.
+    /// multi-partition right side needs no visited-left bitmap -- each
+    /// partition owns its right rows exclusively -- so the opt-out must still
+    /// leave it spilling rather than failing. This pins the scope of the guard
+    /// so a future change cannot quietly turn off the spill fallback for join
+    /// types that never needed the shared bitmap.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_nlj_memory_limited_fallback_disabled_right_join_still_spills()
     -> Result<()> {
         for join_type in [JoinType::Right, JoinType::Inner] {
             let task_ctx = task_ctx_with_memory_limit_no_coordinated_fallback(50, 16)?;
-            // Must drain the partitions concurrently: the coordinator seeds
-            // every chunk's probe counter with `right_partition_count`
-            // regardless of join type, so a multi-chunk left side cannot
-            // advance if the partitions are collected one after another.
             let (_columns, _batches, metrics) =
-                multi_partition_memory_limited_join_collect_concurrent(
+                multi_partition_memory_limited_join_collect(
                     build_left_table_multi_chunk(),
                     build_right_table_one_batch_per_row(),
                     &join_type,

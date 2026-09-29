@@ -30,7 +30,7 @@ use datafusion_expr::{BinaryExpr, Operator, lit, utils};
 
 use arrow::{
     array::AsArray,
-    datatypes::{DataType, Field},
+    datatypes::{DataType, Field, Metadata},
     record_batch::RecordBatch,
 };
 use datafusion_expr::execution_props::ExecutionProps;
@@ -423,7 +423,7 @@ pub async fn pruned_partition_list<'a>(
                 .iter()
                 .map(|(n, d)| Field::new(n, d.clone(), true))
                 .collect(),
-            Default::default(),
+            Metadata::new(),
         )?;
 
         Ok(objects

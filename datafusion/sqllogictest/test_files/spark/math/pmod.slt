@@ -5,9 +5,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -142,10 +142,10 @@ SELECT arrow_typeof(pmod(2.5::decimal(3,1), NULL));
 ----
 Decimal128(3, 1)
 
-# An untyped NULL beside a typed non-decimal argument takes the Numeric path,
-# which cannot coerce the pair. `mod` rejects it the same way.
-statement error DataFusion error: Error during planning: Internal error: Function 'pmod' failed to match any signature
+query I
 SELECT pmod(NULL, 3::int);
+----
+NULL
 
 # PMOD tests with large integers
 query I

@@ -445,6 +445,7 @@ impl RepartitionExecState {
         name: &str,
         context: &Arc<TaskContext>,
         spill_manager: SpillManager,
+        coalescer_batch_size: usize,
     ) -> Result<&mut ConsumingInputStreamsState> {
         let streams_and_metrics = match self {
             RepartitionExecState::NotInitialized => {
@@ -544,7 +545,7 @@ impl RepartitionExecState {
             let shared_coalescer = coalesce_batches.then(|| {
                 SharedCoalescer::new(
                     input.schema(),
-                    context.session_config().batch_size(),
+                    coalescer_batch_size,
                     num_input_partitions,
                 )
             });
@@ -848,17 +849,16 @@ impl PhysicalExpr for RangeExpr {
         &self,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx<'_>,
     ) -> Result<Option<protobuf::PhysicalExprNode>> {
+        let Self { on_columns, router } = self;
         // Encode the raw ordered children: rebuilding a `LexOrdering` would
         // deduplicate equivalent children after dynamic-filter remapping.
-        let sort_exprs = self
-            .on_columns
+        let sort_exprs = on_columns
             .iter()
-            .zip(self.router.sort_options())
+            .zip(router.sort_options())
             .map(|(expr, options)| PhysicalSortExpr::new(Arc::clone(expr), *options))
             .collect::<Vec<_>>();
         let sort_expr = sort_exprs_try_to_proto(&sort_exprs, ctx)?;
-        let split_point = self
-            .router
+        let split_point = router
             .split_points()
             .iter()
             .map(|split_point| {
@@ -889,24 +889,31 @@ impl RangeExpr {
         node: &protobuf::PhysicalExprNode,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<PhysicalExprRef> {
+        let protobuf::PhysicalExprNode {
+            expr_id: _,
+            expr_type,
+        } = node;
         // Decode the raw ordered children for the same reason as `try_to_proto`.
         let Some(protobuf::physical_expr_node::ExprType::RangeExpr(range_expr)) =
-            &node.expr_type
+            expr_type
         else {
             return internal_err!("PhysicalExprNode is not a RangeExpr");
         };
-        let sort_exprs = sort_exprs_try_from_proto(&range_expr.sort_expr, ctx)?;
+        let protobuf::PhysicalRangeExprNode {
+            sort_expr,
+            split_point,
+        } = range_expr;
+        let sort_exprs = sort_exprs_try_from_proto(sort_expr, ctx)?;
         let (on_columns, sort_options): (Vec<PhysicalExprRef>, Vec<SortOptions>) =
             sort_exprs
                 .into_iter()
                 .map(|sort_expr| (sort_expr.expr, sort_expr.options))
                 .unzip();
-        let split_points = range_expr
-            .split_point
+        let split_points = split_point
             .iter()
             .map(|split_point| {
-                let values = split_point
-                    .value
+                let protobuf::PhysicalRangeSplitPoint { value } = split_point;
+                let values = value
                     .iter()
                     .map(|value| ScalarValue::try_from(value).map_err(Into::into))
                     .collect::<Result<Vec<_>>>()?;
@@ -1522,6 +1529,9 @@ pub struct RepartitionExec {
     preserve_order: bool,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: Arc<PlanProperties>,
+    /// Optional override for the batch size used by the output coalescer.
+    /// When `None`, falls back to `SessionConfig::batch_size`.
+    batch_size: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -1741,6 +1751,9 @@ impl ExecutionPlan for RepartitionExec {
         let name = self.name().to_owned();
         let schema = self.schema();
         let schema_captured = Arc::clone(&schema);
+        let coalescer_batch_size = self
+            .batch_size
+            .unwrap_or_else(|| context.session_config().batch_size());
 
         let spill_manager = SpillManager::new(
             Arc::clone(&context.runtime_env()),
@@ -1776,6 +1789,7 @@ impl ExecutionPlan for RepartitionExec {
                     &name,
                     &context,
                     spill_manager.clone(),
+                    coalescer_batch_size,
                 )?;
 
                 // now return stream for the specified *output* partition which will
@@ -1975,9 +1989,10 @@ impl ExecutionPlan for RepartitionExec {
                     );
                 };
 
-                Partitioning::Range(RangePartitioning::try_new(
+                Partitioning::Range(RangePartitioning::try_new_with_samples(
                     ordering,
-                    range_partitioning.split_points().to_vec(),
+                    range_partitioning.samples().to_vec(),
+                    range_partitioning.partition_count(),
                 )?)
             }
             others => others.clone(),
@@ -2038,9 +2053,18 @@ impl ExecutionPlan for RepartitionExec {
         new_properties.partitioning = match new_properties.partitioning {
             RoundRobinBatch(_) => RoundRobinBatch(target_partitions),
             Hash(hash, _) => Hash(hash, target_partitions),
-            Range(_) => {
-                // Number of partitions is constrained by the split points and cannot be changed
-                return Ok(None);
+            Range(range) => {
+                let Some(range) = range.scale(target_partitions) else {
+                    return Ok(None);
+                };
+                // A different layout needs its own channels, router, and metrics.
+                let mut repartition =
+                    Self::try_new(Arc::clone(&self.input), Range(range))?;
+                if self.preserve_order {
+                    repartition = repartition.with_preserve_order();
+                }
+                repartition.batch_size = self.batch_size;
+                return Ok(Some(Arc::new(repartition)));
             }
             UnknownPartitioning(_) => UnknownPartitioning(target_partitions),
         };
@@ -2050,6 +2074,7 @@ impl ExecutionPlan for RepartitionExec {
             metrics: self.metrics.clone(),
             preserve_order: self.preserve_order,
             cache: new_properties.into(),
+            batch_size: self.batch_size,
         })))
     }
 
@@ -2058,9 +2083,6 @@ impl ExecutionPlan for RepartitionExec {
         &self,
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<protobuf::PhysicalPlanNode>> {
-        // Destructure exhaustively (no `..`) so that adding a field to
-        // `RepartitionExec` is a compile error here until it is either
-        // serialized or explicitly documented as not needing to be.
         let Self {
             input,
             // Execution-time channel state, created on `execute()`.
@@ -2072,6 +2094,8 @@ impl ExecutionPlan for RepartitionExec {
             // the plan's own `partitioning`) and *is* serialized below; the rest
             // is recomputed on decode.
             cache,
+            // User-configurable output batch size, recomputed on decode from session config.
+            batch_size: _,
         } = self;
 
         let input = ctx.encode_child(input)?;
@@ -2104,9 +2128,6 @@ impl RepartitionExec {
             protobuf::physical_plan_node::PhysicalPlanType::Repartition,
             "RepartitionExec",
         );
-        // Destructure exhaustively so that a new field on
-        // `RepartitionExecNode` is a compile error here rather than a silently
-        // dropped field.
         let protobuf::RepartitionExecNode {
             input,
             partitioning,
@@ -2156,6 +2177,7 @@ impl RepartitionExec {
             metrics: ExecutionPlanMetricsSet::new(),
             preserve_order,
             cache: Arc::new(cache),
+            batch_size: None,
         })
     }
 
@@ -2218,6 +2240,21 @@ impl RepartitionExec {
         let eq_properties = Self::eq_properties_helper(&self.input, self.preserve_order);
         Arc::make_mut(&mut self.cache).set_eq_properties(eq_properties);
         self
+    }
+
+    /// Override the target batch size used by the output coalescer.
+    ///
+    /// By default the coalescer targets the session batch size. Use
+    /// this method when you need a different batch size for a specific
+    /// `RepartitionExec` node without changing the global session config.
+    ///
+    /// Returns an error if `batch_size` is zero.
+    pub fn with_batch_size(mut self, batch_size: usize) -> Result<Self> {
+        if batch_size == 0 {
+            return internal_err!("batch_size must be greater than zero");
+        }
+        self.batch_size = Some(batch_size);
+        Ok(self)
     }
 
     /// Return the sort expressions that are used to merge
@@ -3057,6 +3094,112 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn range_repartitioned_scales_with_fresh_execution_state() -> Result<()> {
+        let schema = test_schema(false);
+        let ordering =
+            LexOrdering::new([PhysicalSortExpr::new_default(col("c0", &schema)?)])
+                .unwrap();
+        let samples = [10, 20, 30]
+            .into_iter()
+            .map(|value| SplitPoint::new(vec![ScalarValue::UInt32(Some(value))]))
+            .collect::<Vec<_>>();
+        let partitions = [vec![5, 15, 25, 35], vec![6, 16, 26, 36]]
+            .into_iter()
+            .map(|values| -> Result<_> {
+                Ok(vec![RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(UInt32Array::from(values))],
+                )?])
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        for preserve_order in [false, true] {
+            let source = TestMemoryExec::try_new(&partitions, Arc::clone(&schema), None)?
+                .try_with_sort_information(vec![ordering.clone()])?;
+            let source = Arc::new(TestMemoryExec::update_cache(&Arc::new(source)));
+            let mut exec = Arc::new(
+                RepartitionExec::try_new(
+                    source,
+                    Partitioning::Range(RangePartitioning::try_new_with_samples(
+                        ordering.clone(),
+                        samples.clone(),
+                        2,
+                    )?),
+                )?
+                .with_batch_size(2)?,
+            );
+            if preserve_order {
+                exec = Arc::new(Arc::unwrap_or_clone(exec).with_preserve_order());
+            }
+            let context = Arc::new(TaskContext::default());
+
+            // Initialize the old exchange before resizing: its channels and router
+            // must not be reused for a different set of output boundaries.
+            let initial = crate::collect_partitioned(
+                Arc::<RepartitionExec>::clone(&exec),
+                Arc::clone(&context),
+            )
+            .await?;
+            assert_eq!(
+                initial
+                    .iter()
+                    .map(|p| partition_row_count(p))
+                    .sum::<usize>(),
+                8
+            );
+
+            for target in [4, 1, 4] {
+                let scaled = exec
+                    .repartitioned(target, &ConfigOptions::default())?
+                    .expect("retained samples support the requested partition count");
+                let repartition = scaled.downcast_ref::<RepartitionExec>().unwrap();
+                let range = expect_range_partitioning(repartition.partitioning());
+                assert_eq!(range.partition_count(), target);
+                assert_eq!(range.samples(), samples);
+                assert_eq!(range.ordering(), &ordering);
+                assert_eq!(repartition.preserve_order, preserve_order);
+                assert_eq!(repartition.batch_size, Some(2));
+                assert_eq!(
+                    repartition.properties().output_ordering(),
+                    exec.properties().output_ordering()
+                );
+                assert!(!Arc::ptr_eq(&repartition.state, &exec.state));
+                assert!(Arc::ptr_eq(&repartition.input, &exec.input));
+                assert_eq!(repartition.metrics().unwrap().output_rows(), None);
+
+                let output =
+                    crate::collect_partitioned(Arc::clone(&scaled), Arc::clone(&context))
+                        .await?;
+                assert_eq!(output.len(), target);
+                for (index, batches) in output.iter().enumerate() {
+                    let mut values = collect_partition_u32_values(batches);
+                    if !preserve_order {
+                        values.sort_unstable();
+                    }
+                    let expected = if target == 1 {
+                        vec![5, 6, 15, 16, 25, 26, 35, 36]
+                    } else {
+                        vec![index as u32 * 10 + 5, index as u32 * 10 + 6]
+                    };
+                    assert_eq!(
+                        values,
+                        expected.into_iter().map(Some).collect::<Vec<_>>()
+                    );
+                }
+                assert_eq!(repartition.metrics().unwrap().output_rows(), Some(8));
+                exec = Arc::new(repartition.clone());
+            }
+            for unsupported in [0, 5] {
+                assert!(
+                    exec.repartitioned(unsupported, &ConfigOptions::default())?
+                        .is_none()
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn range_repartition_routes_rows_desc() -> Result<()> {
         let schema = test_schema(false);
         let batch = RecordBatch::try_new(
@@ -3421,9 +3564,18 @@ mod tests {
             Field::new("region", DataType::Utf8, false),
             Field::new("payload", DataType::UInt32, false),
         ]));
+        let ordering =
+            LexOrdering::new([PhysicalSortExpr::new_default(col("id", &schema)?)])
+                .expect("non-empty ordering");
+        let samples = [10, 20, 30, 40, 50]
+            .into_iter()
+            .map(|value| SplitPoint::new(vec![ScalarValue::UInt32(Some(value))]))
+            .collect();
         let repartition = Arc::new(RepartitionExec::try_new(
             Arc::new(EmptyExec::new(Arc::clone(&schema))),
-            range_partitioning_on_columns(&schema, &["id"], vec![vec![10]])?,
+            Partitioning::Range(RangePartitioning::try_new_with_samples(
+                ordering, samples, 2,
+            )?),
         )?);
 
         let projection =
@@ -3439,9 +3591,10 @@ mod tests {
         assert!(swapped_repartition.input().is::<ProjectionExec>());
         let range = expect_range_partitioning(swapped_repartition.partitioning());
         assert_eq!(range.ordering()[0].to_string(), "id@1 ASC");
+        assert_eq!(range.max_partition_count(), 6);
         assert_eq!(
             range.split_points(),
-            &[SplitPoint::new(vec![ScalarValue::UInt32(Some(10))])]
+            &[SplitPoint::new(vec![ScalarValue::UInt32(Some(30))])]
         );
 
         Ok(())
@@ -3727,6 +3880,30 @@ mod tests {
                 let batch = result?;
                 assert_eq!(200, batch.num_rows());
             }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_with_batch_size_overrides_session_config() -> Result<()> {
+        let schema = test_schema(false);
+        // 2 partitions × 50 batches of 8 rows each = 800 rows total funnelled into 1 output partition.
+        let partition = create_vec_batches(50);
+        let partitions = vec![partition.clone(), partition.clone()];
+        let partitioning = Partitioning::RoundRobinBatch(1);
+
+        // Session config says batch_size = 200, but with_batch_size overrides to 100.
+        let session_config = SessionConfig::new().with_batch_size(200);
+        let task_ctx =
+            Arc::new(TaskContext::default().with_session_config(session_config));
+
+        let exec = TestMemoryExec::try_new_exec(&partitions, Arc::clone(&schema), None)?;
+        let exec = RepartitionExec::try_new(exec, partitioning)?.with_batch_size(100)?;
+
+        let mut stream = exec.execute(0, Arc::clone(&task_ctx))?;
+        while let Some(result) = stream.next().await {
+            let batch = result?;
+            assert_eq!(100, batch.num_rows());
         }
         Ok(())
     }
@@ -4952,12 +5129,11 @@ mod test {
         })?;
         assert_eq!(expressions, ["c0@0"]);
 
-        // Range partition count is fixed by split points, so repartitioned()
-        // cannot change it to an arbitrary target.
+        // Scaling cannot exceed the retained sample capacity.
         let result = exec.repartitioned(10, &Default::default())?;
         assert!(
             result.is_none(),
-            "range repartitioning should not support changing partition count"
+            "range repartitioning should reject counts above sample capacity"
         );
         Ok(())
     }
@@ -5030,6 +5206,83 @@ mod test {
              actual rows collected ({total_rows}), not double-count"
         );
 
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "proto"))]
+mod range_expr_proto_tests {
+    use std::sync::Arc;
+
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::{Result, ScalarValue, SplitPoint};
+    use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+
+    use super::*;
+    use crate::proto::{ExecutionPlanDecodeCtx, ExecutionPlanEncodeCtx};
+    use crate::proto_test_util::{StubPlanDecoder, StubPlanEncoder};
+
+    fn schema() -> Schema {
+        Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ])
+    }
+
+    fn split_points() -> Vec<SplitPoint> {
+        vec![SplitPoint::new(vec![
+            ScalarValue::Int32(Some(10)),
+            ScalarValue::Int32(Some(20)),
+        ])]
+    }
+
+    fn sort_options() -> [SortOptions; 2] {
+        [
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+            SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        ]
+    }
+
+    #[test]
+    fn range_expr_round_trip_preserves_sort_options_and_split_points() -> Result<()> {
+        let schema = schema();
+        let sort_opts = sort_options();
+        let split_pts = split_points();
+        let on_columns = vec![col("a", &schema)?, col("b", &schema)?];
+        let range_partitioning = RangePartitioning::try_new(
+            [
+                PhysicalSortExpr::new(Arc::clone(&on_columns[0]), sort_opts[0]),
+                PhysicalSortExpr::new(Arc::clone(&on_columns[1]), sort_opts[1]),
+            ]
+            .into(),
+            split_pts.clone(),
+        )?;
+        let expr =
+            RangeExpr::try_new_with_schema(on_columns, &range_partitioning, &schema)?;
+
+        let encoder = StubPlanEncoder::ok();
+        let encode_ctx = ExecutionPlanEncodeCtx::new(&encoder);
+        let node = PhysicalExpr::try_to_proto(&expr, &encode_ctx.expr_ctx())
+            .unwrap()
+            .expect("RangeExpr should encode to Some(node)");
+
+        let decoder = StubPlanDecoder::ok();
+        let decode_ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        let decoded = RangeExpr::try_from_proto(&node, &decode_ctx.expr_ctx(&schema))?;
+        let decoded = decoded
+            .downcast_ref::<RangeExpr>()
+            .expect("decoded expression should be a RangeExpr");
+
+        assert_eq!(decoded.sort_options(), sort_opts);
+        assert_eq!(decoded.split_points(), split_pts);
         Ok(())
     }
 }

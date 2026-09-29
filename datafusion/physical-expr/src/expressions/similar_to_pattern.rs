@@ -136,11 +136,13 @@ impl PhysicalExpr for SqlSimilarToPattern {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
+        let Self { expr } = self;
+
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::SqlSimilarToPattern(
                 Box::new(protobuf::PhysicalSqlSimilarToPatternNode {
-                    expr: Some(Box::new(ctx.encode_child(&self.expr)?)),
+                    expr: Some(Box::new(ctx.encode_child(expr)?)),
                 }),
             )),
         }))
@@ -169,9 +171,11 @@ impl SqlSimilarToPattern {
             "SqlSimilarToPattern",
         );
 
+        let protobuf::PhysicalSqlSimilarToPatternNode { expr } = pattern.as_ref();
+
         Ok(Arc::new(SqlSimilarToPattern::new(
             ctx.decode_required_expression(
-                pattern.expr.as_deref(),
+                expr.as_deref(),
                 "SqlSimilarToPattern",
                 "expr",
             )?,

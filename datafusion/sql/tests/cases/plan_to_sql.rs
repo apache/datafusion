@@ -17,6 +17,7 @@
 
 use arrow::datatypes::{DataType, Field, Schema};
 
+use datafusion_common::tree_node::{Transformed, TransformedResult};
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, Result, TableReference,
     assert_contains,
@@ -109,6 +110,25 @@ fn roundtrip_expr(table: TableReference, sql: &str) -> Result<String> {
     let ast = expr_to_sql(&expr)?;
 
     Ok(ast.to_string())
+}
+
+fn remove_column_self_aliases(plan: LogicalPlan) -> Result<LogicalPlan> {
+    plan.transform_up_with_subqueries(|plan| {
+        plan.map_expressions(|expr| {
+            if let Expr::Alias(alias) = &expr
+                && alias.relation.is_none()
+                && alias.metadata.is_none()
+                && let Expr::Column(column) = alias.expr.as_ref()
+                && column.relation.is_none()
+                && column.name == alias.name
+            {
+                Ok(Transformed::yes(*alias.expr.clone()))
+            } else {
+                Ok(Transformed::no(expr))
+            }
+        })
+    })
+    .data()
 }
 
 #[test]
@@ -221,7 +241,14 @@ fn roundtrip_statement() -> Result<()> {
             "SELECT left[1] FROM array",
             "SELECT {a:1, b:2}",
             "SELECT s.a FROM (SELECT {a:1, b:2} AS s)",
-            "SELECT MAP {'a': 1, 'b': 2}"
+            "SELECT MAP {'a': 1, 'b': 2}",
+            // Ordered aggregates, both spellings of the ordering.
+            "SELECT first_name, last_value(age ORDER BY salary) FROM person GROUP BY first_name",
+            "SELECT first_name, first_value(age ORDER BY salary DESC) FROM person GROUP BY first_name",
+            "SELECT first_name, array_agg(age ORDER BY salary) FROM person GROUP BY first_name",
+            "SELECT first_name, array_agg(DISTINCT age ORDER BY salary, id) FROM person GROUP BY first_name",
+            "SELECT first_name, string_agg(CAST(age AS VARCHAR), ',' ORDER BY salary) FROM person GROUP BY first_name",
+            "SELECT first_name, percentile_cont(0.5) WITHIN GROUP (ORDER BY age) FROM person GROUP BY first_name",
     ];
 
     // For each test sql string, we transform as follows:
@@ -241,6 +268,21 @@ fn roundtrip_statement() -> Result<()> {
             .with_aggregate_function(sum_udaf())
             .with_aggregate_function(count_udaf())
             .with_aggregate_function(max_udaf())
+            .with_aggregate_function(
+                datafusion_functions_aggregate::array_agg::array_agg_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::first_last::first_value_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::first_last::last_value_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::string_agg::string_agg_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::percentile_cont::percentile_cont_udaf(),
+            )
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
             .with_expr_planner(Arc::new(NestedFunctionPlanner))
             .with_expr_planner(Arc::new(FieldAccessPlanner));
@@ -254,7 +296,11 @@ fn roundtrip_statement() -> Result<()> {
             .sql_statement_to_plan(roundtrip_statement.clone())
             .unwrap();
 
-        assert_eq!(plan, plan_roundtrip);
+        // Explicit output names can add unqualified self-aliases without changing the plan's meaning.
+        assert_eq!(
+            remove_column_self_aliases(plan)?,
+            remove_column_self_aliases(plan_roundtrip)?,
+        );
     }
 
     Ok(())
@@ -318,6 +364,18 @@ macro_rules! roundtrip_statement_with_dialect_helper {
             )
             .with_aggregate_function(
                 datafusion_functions_aggregate::percentile_cont::percentile_cont_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::array_agg::array_agg_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::first_last::first_value_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::first_last::last_value_udaf(),
+            )
+            .with_aggregate_function(
+                datafusion_functions_aggregate::string_agg::string_agg_udaf(),
             )
             .with_expr_planner(Arc::new(CoreFunctionPlanner::default()))
             .with_expr_planner(Arc::new(NestedFunctionPlanner))
@@ -388,6 +446,37 @@ fn roundtrip_statement_with_dialect_4() -> Result<(), DataFusionError> {
         parser_dialect: MySqlDialect {},
         unparser_dialect: UnparserMySqlDialect {},
         expected: @"SELECT `j1_id` FROM (SELECT 1 AS `j1_id`) AS `derived_projection`",
+    );
+    Ok(())
+}
+
+#[test]
+fn unparse_preserves_derived_aggregate_output_name() -> Result<()> {
+    let schema = Schema::new(vec![Field::new("j1_id", DataType::Int32, false)]);
+    let aggregate = sum(col("j1.j1_id"));
+    let output = Expr::Column(Column::from_name(aggregate.schema_name().to_string()));
+    let plan = table_scan(Some("j1"), &schema, None)?
+        .aggregate(Vec::<Expr>::new(), vec![aggregate])?
+        .project(vec![output.clone().alias("visible"), output.clone()])?
+        .project(vec![output])?
+        .build()?;
+
+    let sql = Unparser::new(&UnparserPostgreSqlDialect {})
+        .plan_to_sql(&plan)?
+        .to_string();
+    println!("UNPARSED_SQL={sql}");
+    assert_snapshot!(
+        sql,
+        @r#"SELECT "sum(j1.j1_id)" FROM (SELECT sum("j1"."j1_id") AS "visible", sum("j1"."j1_id") AS "sum(j1.j1_id)" FROM "j1") AS "derived_projection""#
+    );
+
+    let sql = Unparser::new(&BigQueryDialect {})
+        .plan_to_sql(&plan)?
+        .to_string();
+    println!("BIGQUERY_SQL={sql}");
+    assert_snapshot!(
+        sql,
+        @r#"SELECT `sum_40j1_46j1_id_41` FROM (SELECT sum(`j1`.`j1_id`) AS `visible`, sum(`j1`.`j1_id`) AS `sum_40j1_46j1_id_41` FROM `j1`)"#
     );
     Ok(())
 }
@@ -4552,6 +4641,45 @@ fn roundtrip_approx_percentile_cont_within_group_with_centroids()
         parser_dialect: GenericDialect {},
         unparser_dialect: UnparserDefaultDialect {},
         expected: @"SELECT approx_percentile_cont(0.9, 200) WITHIN GROUP (ORDER BY (person.salary * 2) DESC NULLS FIRST) FROM person",
+    );
+    Ok(())
+}
+
+/// Ordered aggregates spell their ordering in one of two ways: an argument-list
+/// clause (`array_agg(x ORDER BY y)`) or a `WITHIN GROUP` clause. The
+/// `roundtrip_*_within_group` tests above cover the `WITHIN GROUP` variant;
+/// this covers the argument-list variant.
+#[test]
+fn roundtrip_ordered_aggregate_order_by() -> Result<(), DataFusionError> {
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, last_value(age ORDER BY salary) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, last_value(person.age ORDER BY person.salary ASC NULLS LAST) FROM person GROUP BY person.first_name",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, first_value(age ORDER BY salary DESC) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, first_value(person.age ORDER BY person.salary DESC NULLS FIRST) FROM person GROUP BY person.first_name",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, array_agg(age ORDER BY salary) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, array_agg(person.age ORDER BY person.salary ASC NULLS LAST) FROM person GROUP BY person.first_name",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, string_agg(CAST(age AS VARCHAR), ',' ORDER BY salary) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, string_agg(CAST(person.age AS VARCHAR), ',' ORDER BY person.salary ASC NULLS LAST) FROM person GROUP BY person.first_name",
+    );
+    roundtrip_statement_with_dialect_helper!(
+        sql: "SELECT first_name, array_agg(DISTINCT age ORDER BY salary, id) FROM person GROUP BY first_name",
+        parser_dialect: GenericDialect {},
+        unparser_dialect: UnparserDefaultDialect {},
+        expected: @"SELECT person.first_name, array_agg(DISTINCT person.age ORDER BY person.salary ASC NULLS LAST, person.id ASC NULLS LAST) FROM person GROUP BY person.first_name",
     );
     Ok(())
 }

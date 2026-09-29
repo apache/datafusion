@@ -426,7 +426,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                 json!({
                     "Node Type": "CopyTo",
                     "Output URL": output_url,
-                    "File Type": format!("{}", file_type.get_ext()),
+                    "File Type": file_type.get_ext(),
                     "Options": op_str
                 })
             }
@@ -490,7 +490,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Node Type": format!("{} Join", join_type),
                     "Join Constraint": format!("{:?}", join_constraint),
                     "Join Keys": join_expr.join(", "),
-                    "Filter": format!("{}", filter_expr)
+                    "Filter": filter_expr.to_string()
                 })
             }
             LogicalPlan::AsOfJoin(AsOfJoin {

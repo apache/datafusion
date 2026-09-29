@@ -33,7 +33,7 @@ use crate::common::can_project;
 use crate::execution_plan::{CardinalityEffect, replace_children_if_necessary};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
-    FilterPushdownPropagation, PushedDown,
+    FilterPushdownPropagation, FilterRemapper, PushedDown,
 };
 use crate::limit::LocalLimitExec;
 use crate::metrics::{MetricBuilder, MetricType};
@@ -57,7 +57,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    DataFusionError, Result, ScalarValue, internal_err, plan_err, project_schema,
+    DataFusionError, Result, ScalarValue, internal_datafusion_err, internal_err,
+    plan_err, project_schema,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
@@ -66,7 +67,7 @@ use datafusion_physical_expr::expressions::{
     BinaryExpr, Column, InListExpr, IsNotNullExpr, Literal, lit,
 };
 use datafusion_physical_expr::intervals::utils::check_support;
-use datafusion_physical_expr::utils::{collect_columns, reassign_expr_columns};
+use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
     AcrossPartitions, AnalysisContext, ConstExpr, ExprBoundaries, PhysicalExpr, analyze,
     conjunction, split_conjunction,
@@ -314,6 +315,29 @@ impl FilterExec {
     /// The default selectivity
     pub fn default_selectivity(&self) -> u8 {
         self.default_selectivity
+    }
+
+    /// Describe which parent filters (in this node's output coordinates) can
+    /// be forwarded to the input, remapped into input coordinates.
+    ///
+    /// With an embedded projection the output position `i` reads input column
+    /// `projection[i]`; without one the positions are identical. Mapping by
+    /// position keeps same-named input columns distinct.
+    fn parent_filters_for_input(
+        &self,
+        parent_filters: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<ChildFilterDescription> {
+        if parent_filters.is_empty() {
+            return Ok(ChildFilterDescription::empty());
+        }
+        match self.projection.as_ref() {
+            Some(projection) => ChildFilterDescription::from_child_with_column_mapping(
+                parent_filters,
+                projection.iter().copied().enumerate().collect(),
+                self.input(),
+            ),
+            None => ChildFilterDescription::from_child(parent_filters, self.input()),
+        }
     }
 
     /// Projection
@@ -697,21 +721,18 @@ impl ExecutionPlan for FilterExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        if phase != FilterPushdownPhase::Pre {
-            let child =
-                ChildFilterDescription::from_child(&parent_filters, self.input())?;
-            return Ok(FilterDescription::new().with_child(child));
+        let mut child = self.parent_filters_for_input(&parent_filters);
+        if phase == FilterPushdownPhase::Pre {
+            child = child.map(|child| {
+                child.with_self_filters(
+                    split_conjunction(&self.predicate)
+                        .into_iter()
+                        .cloned()
+                        .collect(),
+                )
+            });
         }
-
-        let child = ChildFilterDescription::from_child(&parent_filters, self.input())?
-            .with_self_filters(
-                split_conjunction(&self.predicate)
-                    .into_iter()
-                    .cloned()
-                    .collect(),
-            );
-
-        Ok(FilterDescription::new().with_child(child))
+        child.map(|child| FilterDescription::new().with_child(child))
     }
 
     fn handle_child_pushdown_result(
@@ -735,12 +756,25 @@ impl ExecutionPlan for FilterExec {
 
         // If this FilterExec has a projection, the unsupported parent filters
         // are in the output schema (after projection) coordinates. We need to
-        // remap them to the input schema coordinates before combining with self filters.
-        if self.projection.is_some() {
-            let input_schema = self.input().schema();
+        // remap them to the input schema coordinates before combining with self
+        // filters. Map by position through the projection: the input may
+        // contain several columns with the same name.
+        if let Some(projection) = self.projection.as_ref()
+            && !unsupported_parent_filters.is_empty()
+        {
+            let remapper = FilterRemapper::with_column_mapping(
+                self.input().schema(),
+                projection.iter().copied().enumerate().collect(),
+            );
             unsupported_parent_filters = unsupported_parent_filters
                 .into_iter()
-                .map(|expr| reassign_expr_columns(expr, &input_schema))
+                .map(|expr| {
+                    remapper.try_remap(&expr)?.ok_or_else(|| {
+                        internal_datafusion_err!(
+                            "Parent filter {expr} references a column that is not in the FilterExec projection {projection:?}"
+                        )
+                    })
+                })
                 .collect::<Result<Vec<_>>>()?;
         }
 
@@ -1220,9 +1254,9 @@ fn scale_byte_size_at_rows(
 
 /// Returns the NDV for a column constrained to one non-null value (e.g.
 /// `column = literal` or a singleton interval), derived from the filtered row
-/// estimate: zero rows means zero distinct values, a known positive row count
-/// means exactly one, and an unknown row count means an inexact one (the column
-/// could still be empty).
+/// estimate: zero rows means zero distinct values, an exact positive row count
+/// means exactly one, and an estimated or unknown row count means an inexact
+/// one (the column could still be empty).
 ///
 /// The caller is responsible for proving the singleton domain.
 fn distinct_count_for_singleton_domain(
@@ -1230,10 +1264,10 @@ fn distinct_count_for_singleton_domain(
 ) -> Precision<usize> {
     match filtered_num_rows {
         Precision::Exact(0) | Precision::Inexact(0) => filtered_num_rows,
-        // The row count is unknown, so the column could still be empty (zero
-        // distinct values); report an inexact one rather than overstating it.
-        Precision::Absent => Precision::Inexact(1),
-        _ => Precision::Exact(1),
+        Precision::Exact(_) => Precision::Exact(1),
+        // The row count is not known exactly, so the column could still be
+        // empty (zero distinct values); report an inexact one.
+        Precision::Inexact(_) | Precision::Absent => Precision::Inexact(1),
     }
 }
 
@@ -1432,9 +1466,7 @@ impl Stream for FilterExecStream {
                             match as_boolean_array(&array) {
                                 Ok(filter_array) => {
                                     self.metrics.selectivity.add_total(batch.num_rows());
-                                    // TODO: support push_batch_with_filter in LimitedBatchCoalescer
-                                    let batch = filter_record_batch(&batch, filter_array)?;
-                                    let state = self.batch_coalescer.push_batch(batch)?;
+                                    let state = self.batch_coalescer.push_batch_with_filter(batch, filter_array)?;
                                     Ok(state)
                                 }
                                 Err(_) => {
@@ -1537,12 +1569,50 @@ pub type EqualAndNonEqual<'a> =
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::collect;
     use crate::empty::EmptyExec;
     use crate::expressions::*;
     use crate::statistics::{StatisticsArgs, StatisticsContext};
     use crate::test;
     use crate::test::exec::StatisticsExec;
+    use arrow::array::Int32Array;
     use arrow::datatypes::{Field, Schema, UnionFields, UnionMode};
+
+    #[tokio::test]
+    async fn test_filter_exec_fetch_truncates_within_selected_rows() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from_iter_values(0..10))],
+        )?;
+        let input = test::TestMemoryExec::try_new_exec(
+            &[vec![batch]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let predicate = binary(col("i", &schema)?, Operator::GtEq, lit(2i32), &schema)?;
+        let filter = Arc::new(
+            FilterExecBuilder::new(predicate, input)
+                .with_fetch(Some(3))
+                .build()?,
+        );
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let batches = collect(filter.execute(0, task_ctx)?).await?;
+        let values: Vec<i32> = batches
+            .iter()
+            .flat_map(|b| {
+                b.column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        assert_eq!(values, vec![2, 3, 4]);
+        Ok(())
+    }
 
     #[test]
     fn filter_rejects_zero_batch_size() -> Result<()> {
@@ -2310,6 +2380,18 @@ mod tests {
                 )),
             )),
         ));
+        // i32::MIN also satisfies this predicate because subtracting 5 wraps.
+        // A mathematical lower bound of 5 would exclude a valid input value.
+        let batch = RecordBatch::try_new(
+            input.schema(),
+            vec![Arc::new(Int32Array::from(vec![i32::MIN]))],
+        )
+        .unwrap();
+        let result = predicate.evaluate(&batch).unwrap().into_array(1).unwrap();
+        assert_eq!(
+            result.as_ref(),
+            &arrow::array::BooleanArray::from(vec![true])
+        );
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input)?);
         let filter_statistics =
@@ -2322,7 +2404,7 @@ mod tests {
                 // `a <= 10` rejects nulls, so `a` has no surviving nulls even
                 // though the input statistics are entirely unknown.
                 null_count: Precision::Exact(0),
-                min_value: Precision::Inexact(ScalarValue::Int32(Some(5))),
+                min_value: Precision::Absent,
                 max_value: Precision::Inexact(ScalarValue::Int32(Some(10))),
                 sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
@@ -2908,7 +2990,7 @@ mod tests {
                     Operator::Eq,
                     Arc::new(Literal::new(ScalarValue::Utf8(Some("hello".to_string())))),
                 )),
-                vec![Precision::Exact(1)],
+                vec![Precision::Inexact(1)],
             ),
             (
                 "utf8view equality",
@@ -2924,7 +3006,7 @@ mod tests {
                         "hello".to_string(),
                     )))),
                 )),
-                vec![Precision::Exact(1)],
+                vec![Precision::Inexact(1)],
             ),
             (
                 "largeutf8 equality",
@@ -2940,7 +3022,7 @@ mod tests {
                         "hello".to_string(),
                     )))),
                 )),
-                vec![Precision::Exact(1)],
+                vec![Precision::Inexact(1)],
             ),
             (
                 "utf8 reversed (literal = column)",
@@ -2954,7 +3036,7 @@ mod tests {
                     Operator::Eq,
                     Arc::new(Column::new("name", 0)),
                 )),
-                vec![Precision::Exact(1)],
+                vec![Precision::Inexact(1)],
             ),
             (
                 "OR is not collapsed to NDV=1, but NDV is capped at filtered rows",
@@ -3011,7 +3093,7 @@ mod tests {
                         Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
                     )),
                 )),
-                vec![Precision::Exact(1), Precision::Exact(1)],
+                vec![Precision::Inexact(1), Precision::Inexact(1)],
             ),
             (
                 "numeric equality with min/max bounds (interval analysis path)",
@@ -3027,7 +3109,7 @@ mod tests {
                     Operator::Eq,
                     Arc::new(Literal::new(ScalarValue::Int32(Some(42)))),
                 )),
-                vec![Precision::Exact(1)],
+                vec![Precision::Inexact(1)],
             ),
             (
                 "timestamp equality",
@@ -3048,7 +3130,7 @@ mod tests {
                         None,
                     ))),
                 )),
-                vec![Precision::Exact(1)],
+                vec![Precision::Inexact(1)],
             ),
             (
                 "contradictory numeric equality (infeasible)",
@@ -3084,7 +3166,7 @@ mod tests {
                     Operator::Eq,
                     Arc::new(Literal::new(ScalarValue::Utf8(Some("hello".to_string())))),
                 )),
-                vec![Precision::Exact(1)],
+                vec![Precision::Inexact(1)],
             ),
             (
                 "contradictory utf8 equality (infeasible)",
@@ -3149,7 +3231,7 @@ mod tests {
                         Arc::new(Literal::new(ScalarValue::Int32(Some(2)))),
                     )),
                 )),
-                vec![Precision::Exact(1), Precision::Exact(1)],
+                vec![Precision::Inexact(1), Precision::Inexact(1)],
             ),
         ];
 
@@ -3447,7 +3529,7 @@ mod tests {
         // Equality predicates collapse NDV and reject nulls for their columns.
         assert_eq!(
             statistics.column_statistics[0].distinct_count,
-            Precision::Exact(1)
+            Precision::Inexact(1)
         );
         assert_eq!(
             statistics.column_statistics[0].null_count,
@@ -3462,7 +3544,7 @@ mod tests {
         );
         assert_eq!(
             statistics.column_statistics[2].distinct_count,
-            Precision::Exact(1)
+            Precision::Inexact(1)
         );
         assert_eq!(
             statistics.column_statistics[2].null_count,
@@ -3500,7 +3582,7 @@ mod tests {
             StatisticsContext::new().compute(filter.as_ref(), &StatisticsArgs::new())?;
         assert_eq!(
             statistics.column_statistics[0].distinct_count,
-            Precision::Exact(1)
+            Precision::Inexact(1)
         );
         Ok(())
     }
@@ -3534,7 +3616,7 @@ mod tests {
             StatisticsContext::new().compute(filter.as_ref(), &StatisticsArgs::new())?;
         assert_eq!(
             statistics.column_statistics[0].distinct_count,
-            Precision::Exact(1)
+            Precision::Inexact(1)
         );
         Ok(())
     }
@@ -3568,7 +3650,7 @@ mod tests {
             StatisticsContext::new().compute(filter.as_ref(), &StatisticsArgs::new())?;
         assert_eq!(
             statistics.column_statistics[0].distinct_count,
-            Precision::Exact(1)
+            Precision::Inexact(1)
         );
         Ok(())
     }
@@ -3602,7 +3684,7 @@ mod tests {
             StatisticsContext::new().compute(filter.as_ref(), &StatisticsArgs::new())?;
         assert_eq!(
             statistics.column_statistics[0].distinct_count,
-            Precision::Exact(1)
+            Precision::Inexact(1)
         );
         Ok(())
     }
@@ -3637,7 +3719,7 @@ mod tests {
             StatisticsContext::new().compute(filter.as_ref(), &StatisticsArgs::new())?;
         assert_eq!(
             statistics.column_statistics[0].distinct_count,
-            Precision::Exact(1)
+            Precision::Inexact(1)
         );
         Ok(())
     }
@@ -3684,7 +3766,7 @@ mod tests {
             StatisticsContext::new().compute(filter.as_ref(), &StatisticsArgs::new())?;
         assert_eq!(
             statistics.column_statistics[0].distinct_count,
-            Precision::Exact(1)
+            Precision::Inexact(1)
         );
         Ok(())
     }
@@ -4089,6 +4171,39 @@ mod tests {
             statistics.column_statistics[0].distinct_count,
             Precision::Inexact(20)
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_statistics_singleton_precision() -> Result<()> {
+        use Precision::{Exact, Inexact};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        // The bounds include 5, but no row contains it.
+        let values = Int32Array::from_iter_values(
+            (0..1000).map(|i| if i % 2 == 0 { 1 } else { 100 }),
+        );
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(values)])?;
+        let input = test::TestMemoryExec::try_new_exec(
+            &[vec![batch]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let mut input_stats = StatisticsContext::new()
+            .compute(input.as_ref(), &StatisticsArgs::new())?
+            .as_ref()
+            .clone();
+        // Supply the bounds a file scan could report for these rows.
+        input_stats.column_statistics[0].min_value = Exact(ScalarValue::Int32(Some(1)));
+        input_stats.column_statistics[0].max_value = Exact(ScalarValue::Int32(Some(100)));
+        let predicate = binary(col("a", &schema)?, Operator::Eq, lit(5i32), &schema)?;
+        let filter = FilterExecBuilder::new(predicate, input).build()?;
+        let stats = filter
+            .statistics_from_inputs(&[Arc::new(input_stats)], &StatisticsArgs::new())?;
+        let batches =
+            collect(filter.execute(0, Arc::new(TaskContext::default()))?).await?;
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 0);
+        assert_eq!(stats.column_statistics[0].distinct_count, Inexact(1));
         Ok(())
     }
 

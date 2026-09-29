@@ -380,11 +380,15 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
             )?,
             write_batch_size: to_usize(proto.write_batch_size, "write_batch_size")?,
             writer_version,
-            compression: proto.compression_opt.as_ref().map(|opt| match opt {
-                parquet_options::CompressionOpt::Compression(compression) => {
-                    compression.clone()
-                }
-            }),
+            compression: proto
+                .compression_opt
+                .as_ref()
+                .map(|opt| match opt {
+                    parquet_options::CompressionOpt::Compression(compression) => {
+                        compression.parse()
+                    }
+                })
+                .transpose()?,
             dictionary_enabled: proto.dictionary_enabled_opt.as_ref().map(|opt| {
                 match opt {
                     parquet_options::DictionaryEnabledOpt::DictionaryEnabled(
@@ -396,13 +400,15 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                 proto.dictionary_page_size_limit,
                 "dictionary_page_size_limit",
             )?,
-            statistics_enabled: proto.statistics_enabled_opt.as_ref().map(
-                |opt| match opt {
+            statistics_enabled: proto
+                .statistics_enabled_opt
+                .as_ref()
+                .map(|opt| match opt {
                     parquet_options::StatisticsEnabledOpt::StatisticsEnabled(
                         statistics,
-                    ) => statistics.clone(),
-                },
-            ),
+                    ) => statistics.parse(),
+                })
+                .transpose()?,
             max_row_group_size: to_usize(proto.max_row_group_size, "max_row_group_size")?,
             max_in_list_size: to_usize(proto.max_in_list_size, "max_in_list_size")?,
             created_by: proto.created_by.clone(),
@@ -559,5 +565,28 @@ impl TryFrom<&TableParquetOptionsProto> for TableParquetOptions {
                 .collect(),
             ..Default::default()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_invalid_parquet_statistics() {
+        let proto = ParquetOptionsProto {
+            statistics_enabled_opt: Some(
+                parquet_options::StatisticsEnabledOpt::StatisticsEnabled(
+                    "invalid".to_string(),
+                ),
+            ),
+            ..Default::default()
+        };
+
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid parquet statistics setting: invalid")
+        );
     }
 }

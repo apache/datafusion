@@ -161,7 +161,7 @@ impl Completer for CliHelper {
         if is_open_quote_for_location(line, pos) {
             self.completer.complete(line, pos, ctx)
         } else {
-            Ok((0, Vec::with_capacity(0)))
+            Ok((0, Vec::new()))
         }
     }
 }
