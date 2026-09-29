@@ -36,7 +36,7 @@ use datafusion_common::assert_batches_eq;
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource_csv::CsvFormat;
 use datafusion_datasource_json::JsonFormat;
-use datafusion_execution::cache::TableScopedPath;
+use datafusion_execution::cache::{StoreScopedPath, TableScopedPath};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use futures::stream::BoxStream;
 use insta::assert_snapshot;
@@ -270,8 +270,10 @@ async fn insert_invalidates_overlapping_unscoped_listings() {
             .unwrap();
         let key = TableScopedPath {
             table: None,
-            object_store_url: ObjectStoreUrl::parse(store_url).unwrap(),
-            path: Path::from(path),
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::parse(store_url).unwrap(),
+                Path::from(path),
+            ),
         };
         assert!(cache.get(&key).is_some());
     }
@@ -286,8 +288,10 @@ async fn insert_invalidates_overlapping_unscoped_listings() {
     for (name, store_url, path) in tables {
         let key = TableScopedPath {
             table: None,
-            object_store_url: ObjectStoreUrl::parse(store_url).unwrap(),
-            path: Path::from(path),
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::parse(store_url).unwrap(),
+                Path::from(path),
+            ),
         };
         let cached = cache.get(&key);
         assert_eq!(

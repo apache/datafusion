@@ -86,6 +86,8 @@ the meaning of these fields.
 The `metadata_cache` function shows information about the default File Metadata Cache that is used by the
 [`ListingTable`] implementation in DataFusion. This cache is used to speed up
 reading metadata from files when scanning directories with many files.
+The `path` column is relative to the object store; `object_store_url` identifies
+the store. Together they distinguish files with the same path in different stores.
 
 For example, after creating a table with the [CREATE EXTERNAL TABLE](../sql/ddl.md#create-external-table)
 command:
@@ -100,15 +102,14 @@ You can inspect the metadata cache by querying the `metadata_cache` function:
 
 ```sql
 > select * from metadata_cache();
-+----------------------------------------------------+---------------------+-----------------+---------------------------------------+---------+---------------------+------+------------------+
-| path                                               | file_modified       | file_size_bytes | e_tag                                 | version | metadata_size_bytes | hits | extra            |
-+----------------------------------------------------+---------------------+-----------------+---------------------------------------+---------+---------------------+------+------------------+
-| hits_compatible/athena_partitioned/hits_61.parquet | 2022-07-03T15:40:34 | 117270944       | "5db11cad1ca0d80d748fc92c914b010a-6"  | NULL    | 212949              | 0    | page_index=false |
-| hits_compatible/athena_partitioned/hits_32.parquet | 2022-07-03T15:37:17 | 94506004        | "2f7db49a9fe242179590b615b94a39d2-5"  | NULL    | 278157              | 0    | page_index=false |
-| hits_compatible/athena_partitioned/hits_40.parquet | 2022-07-03T15:38:07 | 142508647       | "9e5852b45a469d5a05bf270a286eab8a-8"  | NULL    | 212917              | 0    | page_index=false |
-| hits_compatible/athena_partitioned/hits_93.parquet | 2022-07-03T15:44:07 | 127987774       | "751100bf0dac7d489b9836abf3108b99-7"  | NULL    | 278318              | 0    | page_index=false |
-| .                                                                                                                                                                                            |
-+----------------------------------------------------+---------------------+-----------------+---------------------------------------+---------+---------------------+------+------------------+
++----------------------------------------------------+----------------------------------+---------------------+-----------------+--------------------------------------+---------+---------------------+------+------------------+
+| path                                               | object_store_url                 | file_modified       | file_size_bytes | e_tag                                | version | metadata_size_bytes | hits | extra            |
++----------------------------------------------------+----------------------------------+---------------------+-----------------+--------------------------------------+---------+---------------------+------+------------------+
+| hits_compatible/athena_partitioned/hits_61.parquet | s3://clickhouse-public-datasets/ | 2022-07-03T15:40:34 | 117270944       | "5db11cad1ca0d80d748fc92c914b010a-6" | NULL    | 212949              | 0    | page_index=false |
+| hits_compatible/athena_partitioned/hits_32.parquet | s3://clickhouse-public-datasets/ | 2022-07-03T15:37:17 | 94506004        | "2f7db49a9fe242179590b615b94a39d2-5" | NULL    | 278157              | 0    | page_index=false |
+| hits_compatible/athena_partitioned/hits_40.parquet | s3://clickhouse-public-datasets/ | 2022-07-03T15:38:07 | 142508647       | "9e5852b45a469d5a05bf270a286eab8a-8" | NULL    | 212917              | 0    | page_index=false |
+| hits_compatible/athena_partitioned/hits_93.parquet | s3://clickhouse-public-datasets/ | 2022-07-03T15:44:07 | 127987774       | "751100bf0dac7d489b9836abf3108b99-7" | NULL    | 278318              | 0    | page_index=false |
++----------------------------------------------------+----------------------------------+---------------------+-----------------+--------------------------------------+---------+---------------------+------+------------------+
 ```
 
 Since `metadata_cache` is a normal table function, you can use it in most places you can use
@@ -130,6 +131,7 @@ The columns of the returned table are:
 | column_name         | data_type | Description                                                                               |
 | ------------------- | --------- | ----------------------------------------------------------------------------------------- |
 | path                | Utf8      | File path relative to the object store / filesystem root                                  |
+| object_store_url    | Utf8      | URL identifying the object store, such as `s3://bucket/` or `file:///`                    |
 | file_modified       | Timestamp | Last modified time of the file                                                            |
 | file_size_bytes     | UInt64    | Size of the file in bytes                                                                 |
 | e_tag               | Utf8      | [Entity Tag] (ETag) of the file if available                                              |
@@ -149,11 +151,11 @@ You can inspect the statistics cache by querying the `statistics_cache` function
 
 ```sql
 > select * from statistics_cache();
-+------------------+---------------------+-----------------+------------------------+---------+-----------------+-------------+--------------------+-----------------------+
-| path             | file_modified       | file_size_bytes | e_tag                  | version | num_rows        | num_columns | table_size_bytes   | statistics_size_bytes |
-+------------------+---------------------+-----------------+------------------------+---------+-----------------+-------------+--------------------+-----------------------+
-| .../hits.parquet | 2022-06-25T22:22:22 | 14779976446     | 0-5e24d1ee16380-370f48 | NULL    | Exact(99997497) | 105         | Exact(36445943240) | 0                     |
-+------------------+---------------------+-----------------+------------------------+---------+-----------------+-------------+--------------------+-----------------------+
++--------------+----------------------------------+-------+---------------------+-----------------+------------------------+---------+-----------------+-------------+--------------------+-----------------------+------+
+| path         | object_store_url                 | table | file_modified       | file_size_bytes | e_tag                  | version | num_rows        | num_columns | table_size_bytes   | statistics_size_bytes | hits |
++--------------+----------------------------------+-------+---------------------+-----------------+------------------------+---------+-----------------+-------------+--------------------+-----------------------+------+
+| hits.parquet | s3://clickhouse-public-datasets/ | hits  | 2022-06-25T22:22:22 | 14779976446     | 0-5e24d1ee16380-370f48 | NULL    | Exact(99997497) | 105         | Exact(36445943240) | 0                     | 0    |
++--------------+----------------------------------+-------+---------------------+-----------------+------------------------+---------+-----------------+-------------+--------------------+-----------------------+------+
 ```
 
 The columns of the returned table are:
@@ -161,6 +163,8 @@ The columns of the returned table are:
 | column_name           | data_type | Description                                                                  |
 | --------------------- | --------- | ---------------------------------------------------------------------------- |
 | path                  | Utf8      | File path relative to the object store / filesystem root                     |
+| object_store_url      | Utf8      | URL identifying the object store, such as `s3://bucket/` or `file:///`       |
+| table                 | Utf8      | Name of the table, or an empty string for an anonymous read                  |
 | file_modified         | Timestamp | Last modified time of the file                                               |
 | file_size_bytes       | UInt64    | Size of the file in bytes                                                    |
 | e_tag                 | Utf8      | [Entity Tag] (ETag) of the file if available                                 |
@@ -173,7 +177,7 @@ The columns of the returned table are:
 
 ## `list_files_cache`
 
-The `list_files_cache` function shows information about the `ListFilesCache` that is used by the [`ListingTable`] implementation in DataFusion. When creating a [`ListingTable`], DataFusion lists the files in the table's location and caches results in the `ListFilesCache`. Subsequent queries against the same table can reuse this cached information instead of re-listing the files. Cache entries are scoped to tables.
+The `list_files_cache` function shows information about the `ListFilesCache` that is used by the [`ListingTable`] implementation in DataFusion. When creating a [`ListingTable`], DataFusion lists the files in the table's location and caches results in the `ListFilesCache`. Subsequent queries against the same table can reuse this cached information instead of re-listing the files. Cache entries are scoped to the object store and, when available, the table.
 
 You can inspect the cache by querying the `list_files_cache` function. For example,
 
@@ -183,33 +187,34 @@ You can inspect the cache by querying the `list_files_cache` function. For examp
 stored as parquet
 location 's3://overturemaps-us-west-2/release/2025-12-17.0/theme=base/type=infrastructure';
 0 row(s) fetched.
-> select table, path, metadata_size_bytes, expires_in, unnest(metadata_list)['file_size_bytes'] as file_size_bytes, unnest(metadata_list)['e_tag'] as e_tag from list_files_cache() limit 10;
-+--------------+-----------------------------------------------------+---------------------+-----------------------------------+-----------------+---------------------------------------+
-| table        | path                                                | metadata_size_bytes | expires_in                        | file_size_bytes | e_tag                                 |
-+--------------+-----------------------------------------------------+---------------------+-----------------------------------+-----------------+---------------------------------------+
-| overturemaps | release/2025-12-17.0/theme=base/type=infrastructure | 2750                | 0 days 0 hours 0 mins 25.264 secs | 999055952       | "35fc8fbe8400960b54c66fbb408c48e8-60" |
-| overturemaps | release/2025-12-17.0/theme=base/type=infrastructure | 2750                | 0 days 0 hours 0 mins 25.264 secs | 975592768       | "8a16e10b722681cdc00242564b502965-59" |
-| overturemaps | release/2025-12-17.0/theme=base/type=infrastructure | 2750                | 0 days 0 hours 0 mins 25.264 secs | 1082925747      | "24cd13ddb5e0e438952d2499f5dabe06-65" |
-| overturemaps | release/2025-12-17.0/theme=base/type=infrastructure | 2750                | 0 days 0 hours 0 mins 25.264 secs | 1008425557      | "37663e31c7c64d4ef355882bcd47e361-61" |
-| overturemaps | release/2025-12-17.0/theme=base/type=infrastructure | 2750                | 0 days 0 hours 0 mins 25.264 secs | 1065561905      | "4e7c50d2d1b3c5ed7b82b4898f5ac332-64" |
-| overturemaps | release/2025-12-17.0/theme=base/type=infrastructure | 2750                | 0 days 0 hours 0 mins 25.264 secs | 1045655427      | "8fff7e6a72d375eba668727c55d4f103-63" |
-| overturemaps | release/2025-12-17.0/theme=base/type=infrastructure | 2750                | 0 days 0 hours 0 mins 25.264 secs | 1086822683      | "b67167d8022d778936c330a52a5f1922-65" |
-| overturemaps | release/2025-12-17.0/theme=base/type=infrastructure | 2750                | 0 days 0 hours 0 mins 25.264 secs | 1016732378      | "6d70857a0473ed9ed3fc6e149814168b-61" |
-| overturemaps | release/2025-12-17.0/theme=base/type=infrastructure | 2750                | 0 days 0 hours 0 mins 25.264 secs | 991363784       | "c9cafb42fcbb413f851691c895dd7c2b-60" |
-| overturemaps | release/2025-12-17.0/theme=base/type=infrastructure | 2750                | 0 days 0 hours 0 mins 25.264 secs | 1032469715      | "7540252d0d67158297a67038a3365e0f-62" |
-+--------------+-----------------------------------------------------+---------------------+-----------------------------------+-----------------+---------------------------------------+
+> select table, path, object_store_url, metadata_size_bytes, expires_in, unnest(metadata_list)['file_size_bytes'] as file_size_bytes, unnest(metadata_list)['e_tag'] as e_tag from list_files_cache() limit 10;
++--------------+-----------------------------------------------------+------------------------------+---------------------+-----------------------------------+-----------------+---------------------------------------+
+| table        | path                                                | object_store_url             | metadata_size_bytes | expires_in                        | file_size_bytes | e_tag                                 |
++--------------+-----------------------------------------------------+------------------------------+---------------------+-----------------------------------+-----------------+---------------------------------------+
+| overturemaps | release/2025-12-17.0/theme=base/type=infrastructure | s3://overturemaps-us-west-2/ | 2750                | 0 days 0 hours 0 mins 25.264 secs | 999055952       | "35fc8fbe8400960b54c66fbb408c48e8-60" |
+| overturemaps | release/2025-12-17.0/theme=base/type=infrastructure | s3://overturemaps-us-west-2/ | 2750                | 0 days 0 hours 0 mins 25.264 secs | 975592768       | "8a16e10b722681cdc00242564b502965-59" |
+| overturemaps | release/2025-12-17.0/theme=base/type=infrastructure | s3://overturemaps-us-west-2/ | 2750                | 0 days 0 hours 0 mins 25.264 secs | 1082925747      | "24cd13ddb5e0e438952d2499f5dabe06-65" |
+| overturemaps | release/2025-12-17.0/theme=base/type=infrastructure | s3://overturemaps-us-west-2/ | 2750                | 0 days 0 hours 0 mins 25.264 secs | 1008425557      | "37663e31c7c64d4ef355882bcd47e361-61" |
+| overturemaps | release/2025-12-17.0/theme=base/type=infrastructure | s3://overturemaps-us-west-2/ | 2750                | 0 days 0 hours 0 mins 25.264 secs | 1065561905      | "4e7c50d2d1b3c5ed7b82b4898f5ac332-64" |
+| overturemaps | release/2025-12-17.0/theme=base/type=infrastructure | s3://overturemaps-us-west-2/ | 2750                | 0 days 0 hours 0 mins 25.264 secs | 1045655427      | "8fff7e6a72d375eba668727c55d4f103-63" |
+| overturemaps | release/2025-12-17.0/theme=base/type=infrastructure | s3://overturemaps-us-west-2/ | 2750                | 0 days 0 hours 0 mins 25.264 secs | 1086822683      | "b67167d8022d778936c330a52a5f1922-65" |
+| overturemaps | release/2025-12-17.0/theme=base/type=infrastructure | s3://overturemaps-us-west-2/ | 2750                | 0 days 0 hours 0 mins 25.264 secs | 1016732378      | "6d70857a0473ed9ed3fc6e149814168b-61" |
+| overturemaps | release/2025-12-17.0/theme=base/type=infrastructure | s3://overturemaps-us-west-2/ | 2750                | 0 days 0 hours 0 mins 25.264 secs | 991363784       | "c9cafb42fcbb413f851691c895dd7c2b-60" |
+| overturemaps | release/2025-12-17.0/theme=base/type=infrastructure | s3://overturemaps-us-west-2/ | 2750                | 0 days 0 hours 0 mins 25.264 secs | 1032469715      | "7540252d0d67158297a67038a3365e0f-62" |
++--------------+-----------------------------------------------------+------------------------------+---------------------+-----------------------------------+-----------------+---------------------------------------+
 ```
 
 The columns of the returned table are:
 
-| column_name         | data_type    | Description                                                         |
-| ------------------- | ------------ | ------------------------------------------------------------------- |
-| table               | Utf8         | Name of the table                                                   |
-| path                | Utf8         | File path relative to the object store / filesystem root            |
-| metadata_size_bytes | UInt64       | Size of the cached metadata in memory (not its thrift encoded form) |
-| expires_in          | Duration(ms) | Last modified time of the file                                      |
-| hits                | UInt64       | Number of times the cached metadata has been accessed               |
-| metadata_list       | List(Struct) | List of metadatas, one for each file under the path.                |
+| column_name         | data_type    | Description                                                            |
+| ------------------- | ------------ | ---------------------------------------------------------------------- |
+| table               | Utf8         | Name of the table                                                      |
+| path                | Utf8         | File path relative to the object store / filesystem root               |
+| object_store_url    | Utf8         | URL identifying the object store, such as `s3://bucket/` or `file:///` |
+| metadata_size_bytes | UInt64       | Size of the cached metadata in memory (not its thrift encoded form)    |
+| expires_in          | Duration(ms) | Last modified time of the file                                         |
+| hits                | UInt64       | Number of times the cached metadata has been accessed                  |
+| metadata_list       | List(Struct) | List of metadatas, one for each file under the path.                   |
 
 A metadata struct in the metadata_list contains the following fields:
 

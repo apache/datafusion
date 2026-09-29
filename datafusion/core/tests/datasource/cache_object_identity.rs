@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::prelude::{ParquetReadOptions, SessionContext, col, lit};
 use datafusion_common::assert_batches_eq;
-use datafusion_execution::cache::{ObjectStorePath, TableScopedPath};
+use datafusion_execution::cache::{StoreScopedPath, TableScopedPath};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_functions_aggregate::expr_fn::{count, max, min};
 use futures::stream::BoxStream;
@@ -152,7 +152,7 @@ async fn parquet_caches_separate_object_stores() {
         let object_store_url = ObjectStoreUrl::parse(url).unwrap();
         assert!(
             metadata
-                .get(&ObjectStorePath::new(
+                .get(&StoreScopedPath::new(
                     object_store_url.clone(),
                     path.clone()
                 ))
@@ -162,8 +162,10 @@ async fn parquet_caches_separate_object_stores() {
             statistics
                 .get(&TableScopedPath {
                     table: None,
-                    object_store_url: object_store_url.clone(),
-                    path: path.clone(),
+                    store_path: StoreScopedPath::new(
+                        object_store_url.clone(),
+                        path.clone()
+                    ),
                 })
                 .is_some()
         );
@@ -171,8 +173,10 @@ async fn parquet_caches_separate_object_stores() {
             listings
                 .get(&TableScopedPath {
                     table: None,
-                    object_store_url,
-                    path: Path::from("data"),
+                    store_path: StoreScopedPath::new(
+                        object_store_url,
+                        Path::from("data")
+                    ),
                 })
                 .is_some()
         );
@@ -227,7 +231,7 @@ async fn parquet_caches_refresh_changed_etag() {
     let caches = &ctx.runtime_env().cache_manager;
     let metadata = caches
         .get_file_metadata_cache()
-        .get(&ObjectStorePath::new(
+        .get(&StoreScopedPath::new(
             object_store_url.clone(),
             path.clone(),
         ))
@@ -237,8 +241,7 @@ async fn parquet_caches_refresh_changed_etag() {
         .unwrap()
         .get(&TableScopedPath {
             table: None,
-            object_store_url,
-            path,
+            store_path: StoreScopedPath::new(object_store_url, path),
         })
         .unwrap();
     assert_eq!(metadata.meta.e_tag, after.e_tag);

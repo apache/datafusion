@@ -31,7 +31,7 @@ use datafusion_common::{
     internal_datafusion_err,
 };
 use datafusion_execution::cache::cache_manager::{
-    CachedFileMetadataEntry, FileMetadata, FileMetadataCache, ObjectStorePath,
+    CachedFileMetadataEntry, FileMetadata, FileMetadataCache, StoreScopedPath,
 };
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumulator};
@@ -277,7 +277,7 @@ impl<'a> DFParquetMetadata<'a> {
         if cache_metadata
             && let Some((file_metadata_cache, object_store_url)) =
                 self.file_metadata_cache.as_ref()
-            && let Some(cached) = file_metadata_cache.get(&ObjectStorePath::new(
+            && let Some(cached) = file_metadata_cache.get(&StoreScopedPath::new(
                 object_store_url.clone(),
                 self.object_meta.location.clone(),
             ))
@@ -345,7 +345,7 @@ impl<'a> DFParquetMetadata<'a> {
     fn cache_metadata(&self, metadata: Arc<ParquetMetaData>) -> Result<()> {
         if let Some((file_metadata_cache, object_store_url)) = &self.file_metadata_cache {
             file_metadata_cache.put(
-                &ObjectStorePath::new(
+                &StoreScopedPath::new(
                     object_store_url.clone(),
                     self.object_meta.location.clone(),
                 ),

@@ -17,7 +17,7 @@
 
 use crate::cache::default_cache::DefaultCache;
 pub use crate::cache::{
-    Cache, CacheValue, ObjectStorePath, SchemaFingerprint, TableScopedPath,
+    Cache, CacheValue, SchemaFingerprint, StoreScopedPath, TableScopedPath,
 };
 use datafusion_common::HashMap;
 use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
@@ -90,7 +90,7 @@ pub type ListFilesCache = dyn Cache<TableScopedPath, CachedFileList>;
 /// See [`crate::runtime_env::RuntimeEnv`] for more details.
 ///
 /// [`ListingTable`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
-pub type FileMetadataCache = dyn Cache<ObjectStorePath, CachedFileMetadataEntry>;
+pub type FileMetadataCache = dyn Cache<StoreScopedPath, CachedFileMetadataEntry>;
 
 /// Cached metadata for a file, including statistics and ordering.
 ///
@@ -126,8 +126,8 @@ impl CachedFileMetadata {
 
     /// Check if this cached entry is still valid for the given metadata.
     ///
-    /// Returns true if the file size, last modified time, and schema match.
-    /// ETag and version must also match when present in both metadata values.
+    /// Validates the file using a shared strong ETag, otherwise a shared version,
+    /// otherwise size and last modified time. The schema must always match.
     pub fn is_valid_for(
         &self,
         current_meta: &ObjectMeta,
@@ -140,21 +140,26 @@ impl CachedFileMetadata {
     }
 }
 
-/// Size and modification time must always match. Some stores or requests omit
-/// object identifiers, so compare each only when both metadata values provide it.
+/// Prefer content identity, then version identity, falling back to size and time
+/// only when neither identifier can be compared.
 fn file_metadata_matches(cached: &ObjectMeta, current: &ObjectMeta) -> bool {
-    cached.size == current.size
-        && cached.last_modified == current.last_modified
-        && cached
-            .e_tag
-            .as_ref()
-            .zip(current.e_tag.as_ref())
-            .is_none_or(|(cached, current)| cached == current)
-        && cached
-            .version
-            .as_ref()
-            .zip(current.version.as_ref())
-            .is_none_or(|(cached, current)| cached == current)
+    // The HTTP object store passes through weak ETags, which do not guarantee
+    // identical bytes. Treat them as missing and try the remaining validators.
+    if let (Some(cached), Some(current)) =
+        (cached.e_tag.as_deref(), current.e_tag.as_deref())
+        && !cached.starts_with("W/")
+        && !current.starts_with("W/")
+    {
+        // Compare opaque values verbatim. Some stores (e.g. Azure) return
+        // unquoted ETags in listings and quoted ETags in HEAD responses. This
+        // can cause conservative cache misses, but cannot reuse stale metadata.
+        return cached == current;
+    }
+    if let Some((cached, current)) = cached.version.as_ref().zip(current.version.as_ref())
+    {
+        return cached == current;
+    }
+    cached.size == current.size && cached.last_modified == current.last_modified
 }
 
 impl CacheValue for CachedFileMetadata {
@@ -302,8 +307,8 @@ impl CachedFileMetadataEntry {
 
     /// Check if this cached entry is still valid for the given metadata.
     ///
-    /// The file size and last modified time must match. ETag and version must
-    /// also match when present in both metadata values.
+    /// Uses a shared strong ETag, otherwise a shared version, otherwise the file
+    /// size and last modified time. Weak ETags are treated as missing.
     pub fn is_valid_for(&self, current_meta: &ObjectMeta) -> bool {
         file_metadata_matches(&self.meta, current_meta)
     }
@@ -592,18 +597,33 @@ mod tests {
 
     #[test]
     fn test_metadata_validation_etag_and_version() {
-        let identifiers = [
-            (Some("same"), Some("same"), true),
-            (Some("old"), Some("new"), false),
-            (Some("old"), None, true),
-            (None, Some("new"), true),
-            (None, None, true),
+        let etags = [
+            (Some("same"), Some("same"), Some(true)),
+            (Some("old"), Some("new"), Some(false)),
+            (Some("old"), None, None),
+            (None, Some("new"), None),
+            (None, None, None),
+            (Some("W/\"same\""), Some("W/\"same\""), None),
+            (Some("W/\"old\""), Some("W/\"new\""), None),
+            (Some("W/\"same\""), Some("\"same\""), None),
+            (Some("\"same\""), Some("W/\"same\""), None),
+            // Azure listing and HEAD values remain opaque, not normalized.
+            (
+                Some("0x8D93C7D4629C227"),
+                Some("\"0x8D93C7D4629C227\""),
+                Some(false),
+            ),
+        ];
+        let versions = [
+            (Some("same"), Some("same"), Some(true)),
+            (Some("old"), Some("new"), Some(false)),
+            (Some("old"), None, None),
+            (None, Some("new"), None),
+            (None, None, None),
         ];
 
-        // Each identifier is checked independently, including when the other
-        // identifier matches or is unavailable in either metadata value.
-        for (cached_etag, current_etag, etag_matches) in identifiers {
-            for (cached_version, current_version, version_matches) in identifiers {
+        for (cached_etag, current_etag, etag_matches) in etags {
+            for (cached_version, current_version, version_matches) in versions {
                 let cached_meta = ObjectMeta {
                     e_tag: cached_etag.map(str::to_owned),
                     version: cached_version.map(str::to_owned),
@@ -617,7 +637,7 @@ mod tests {
                 assert_metadata_validity(
                     &cached_meta,
                     &current_meta,
-                    etag_matches && version_matches,
+                    etag_matches.or(version_matches).unwrap_or(true),
                 );
             }
         }
@@ -625,20 +645,76 @@ mod tests {
 
     #[test]
     fn test_metadata_validation_size_and_last_modified() {
-        for identifier in [None, Some("same")] {
+        // Missing, weak, and one-sided identifiers all use the fallback.
+        for (cached_etag, current_etag) in [
+            (None, None),
+            (Some("W/\"same\""), Some("W/\"same\"")),
+            (Some("same"), None),
+            (None, Some("same")),
+            (Some("W/\"same\""), Some("\"same\"")),
+            (Some("\"same\""), Some("W/\"same\"")),
+        ] {
             let cached_meta = ObjectMeta {
-                e_tag: identifier.map(str::to_owned),
-                version: identifier.map(str::to_owned),
+                e_tag: cached_etag.map(str::to_owned),
                 ..test_object_meta()
             };
-            let mut current_meta = cached_meta.clone();
+            let current_meta = ObjectMeta {
+                e_tag: current_etag.map(str::to_owned),
+                ..test_object_meta()
+            };
+            assert_metadata_validity(&cached_meta, &current_meta, true);
+            let mut current_meta = current_meta;
             current_meta.size += 1;
             assert_metadata_validity(&cached_meta, &current_meta, false);
 
-            let mut current_meta = cached_meta.clone();
+            current_meta.size = cached_meta.size;
             current_meta.last_modified += chrono::Duration::seconds(1);
             assert_metadata_validity(&cached_meta, &current_meta, false);
         }
+    }
+
+    #[test]
+    fn test_metadata_validation_identifiers_override_size_and_time() {
+        for (etag, cached_version, current_version) in [
+            (Some("same"), Some("old"), Some("new")),
+            (None, Some("same"), Some("same")),
+            (Some("W/\"same\""), Some("same"), Some("same")),
+        ] {
+            let cached_meta = ObjectMeta {
+                e_tag: etag.map(str::to_owned),
+                version: cached_version.map(str::to_owned),
+                ..test_object_meta()
+            };
+            let current_meta = ObjectMeta {
+                size: cached_meta.size + 1,
+                last_modified: cached_meta.last_modified + chrono::Duration::seconds(1),
+                version: current_version.map(str::to_owned),
+                ..cached_meta.clone()
+            };
+            assert_metadata_validity(&cached_meta, &current_meta, true);
+        }
+    }
+
+    #[test]
+    fn test_matching_etag_does_not_override_schema_validation() {
+        use arrow::datatypes::{DataType, Field};
+
+        let meta = ObjectMeta {
+            e_tag: Some("same".into()),
+            ..test_object_meta()
+        };
+        let original = Schema::new(vec![Field::new("value", DataType::Int32, false)]);
+        let changed = Schema::new(vec![Field::new("value", DataType::Int64, false)]);
+        let cached = CachedFileMetadata::new(
+            meta.clone(),
+            Arc::new(SchemaFingerprint::from_schema(&original)),
+            Arc::new(Statistics::new_unknown(&original)),
+            None,
+        );
+        assert!(
+            !cached
+                .is_valid_for(&meta, &Arc::new(SchemaFingerprint::from_schema(&changed)))
+        );
     }
 
     /// Test to verify that TTL is preserved when not explicitly set in config.

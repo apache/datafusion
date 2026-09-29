@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use datafusion_common::{DataFusionError, Result, TableReference};
 use datafusion_execution::cache::cache_manager::CachedFileList;
-use datafusion_execution::cache::cache_manager::TableScopedPath;
+use datafusion_execution::cache::cache_manager::{StoreScopedPath, TableScopedPath};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_session::Session;
 
@@ -366,6 +366,8 @@ impl ListingTableUrl {
 /// # Arguments
 /// * `ctx` - The session context
 /// * `store` - The object store to list from
+/// * `object_store_url` - The registered store URL used to scope cache entries
+/// * `table_ref` - Optional table reference used for table-level cache invalidation
 /// * `table_base_path` - The table's base path (the stable cache key)
 /// * `prefix` - Optional prefix relative to table base for filtering results
 ///
@@ -400,13 +402,17 @@ async fn list_with_cache<'b>(
 
             let table_scoped_base_path = TableScopedPath {
                 table: table_ref.cloned(),
-                object_store_url: object_store_url.clone(),
-                path: table_base_path.clone(),
+                store_path: StoreScopedPath::new(
+                    object_store_url.clone(),
+                    table_base_path.clone(),
+                ),
             };
             let table_scoped_list_path = TableScopedPath {
                 table: table_ref.cloned(),
-                object_store_url: object_store_url.clone(),
-                path: full_prefix.clone(),
+                store_path: StoreScopedPath::new(
+                    object_store_url.clone(),
+                    full_prefix.clone(),
+                ),
             };
 
             let vec = if let Some(cached) = cache.get(&table_scoped_base_path) {

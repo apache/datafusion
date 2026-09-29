@@ -310,7 +310,7 @@ mod tests {
     use crate::cache::default_cache::TimeProvider;
     use crate::cache::{Cache, CacheEntryInfo};
     use crate::cache::{CacheKey, CacheValue};
-    use crate::cache::{ObjectStorePath, SchemaFingerprint, TableScopedPath};
+    use crate::cache::{SchemaFingerprint, StoreScopedPath, TableScopedPath};
     use crate::object_store::ObjectStoreUrl;
     use arrow::array::{Int32Array, ListArray, RecordBatch};
     use arrow::buffer::{OffsetBuffer, ScalarBuffer};
@@ -367,19 +367,19 @@ mod tests {
         }
     }
 
-    fn metadata_cache_key(path: &Path) -> ObjectStorePath {
-        ObjectStorePath::new(ObjectStoreUrl::local_filesystem(), path.clone())
+    fn metadata_cache_key(path: &Path) -> StoreScopedPath {
+        StoreScopedPath::new(ObjectStoreUrl::local_filesystem(), path.clone())
     }
 
     #[test]
     fn test_file_metadata_cache_separates_object_stores() {
         let cache = DefaultCache::new(1024);
         let meta = create_test_object_meta("data.parquet", 100);
-        let first_key = ObjectStorePath::new(
+        let first_key = StoreScopedPath::new(
             ObjectStoreUrl::parse("s3://first").unwrap(),
             meta.location.clone(),
         );
-        let second_key = ObjectStorePath::new(
+        let second_key = StoreScopedPath::new(
             ObjectStoreUrl::parse("s3://second").unwrap(),
             meta.location.clone(),
         );
@@ -896,9 +896,11 @@ mod tests {
         )]);
 
         let path = TableScopedPath {
-            object_store_url: ObjectStoreUrl::local_filesystem(),
-            path: meta.location.clone(),
             table: None,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                meta.location.clone(),
+            ),
         };
         let schema_fingerprint = Arc::new(SchemaFingerprint::from_schema(&schema));
 
@@ -958,9 +960,11 @@ mod tests {
         assert_eq!(entries.len(), 1);
 
         let path_3 = TableScopedPath {
-            object_store_url: ObjectStoreUrl::local_filesystem(),
-            path: Path::from("test"),
             table: None,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                Path::from("test"),
+            ),
         };
 
         let entry = entries.get(&path_3).unwrap();
@@ -1034,9 +1038,11 @@ mod tests {
         );
 
         let path = TableScopedPath {
-            object_store_url: ObjectStoreUrl::local_filesystem(),
-            path: meta.location.clone(),
             table: None,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                meta.location.clone(),
+            ),
         };
 
         cache.put(&path, cached_value);
@@ -1064,9 +1070,11 @@ mod tests {
     fn test_cache_invalidation_on_file_modification() {
         let cache = DefaultCache::new(DEFAULT_FILE_STATISTICS_MEMORY_LIMIT);
         let path = TableScopedPath {
-            object_store_url: ObjectStoreUrl::local_filesystem(),
-            path: Path::from("test.parquet"),
             table: None,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                Path::from("test.parquet"),
+            ),
         };
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let schema_fingerprint = Arc::new(SchemaFingerprint::from_schema(&schema));
@@ -1107,16 +1115,18 @@ mod tests {
     fn test_ordering_cache_invalidation_on_file_modification() {
         let cache = DefaultCache::new(DEFAULT_FILE_STATISTICS_MEMORY_LIMIT);
         let path = TableScopedPath {
-            object_store_url: ObjectStoreUrl::local_filesystem(),
-            path: Path::from("test.parquet"),
             table: None,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                Path::from("test.parquet"),
+            ),
         };
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let schema_fingerprint = Arc::new(SchemaFingerprint::from_schema(&schema));
 
         // Cache with original metadata and ordering
         let meta_v1 = ObjectMeta {
-            location: path.path.clone(),
+            location: path.store_path.path.clone(),
             last_modified: DateTime::parse_from_rfc3339("2022-09-27T22:36:00+02:00")
                 .unwrap()
                 .into(),
@@ -1140,7 +1150,7 @@ mod tests {
 
         // File modified (size changed)
         let meta_v2 = ObjectMeta {
-            location: path.path.clone(),
+            location: path.store_path.path.clone(),
             last_modified: DateTime::parse_from_rfc3339("2022-09-28T10:00:00+02:00")
                 .unwrap()
                 .into(),
@@ -1188,9 +1198,11 @@ mod tests {
         );
 
         let path_1 = TableScopedPath {
-            object_store_url: ObjectStoreUrl::local_filesystem(),
-            path: meta1.location.clone(),
             table: None,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                meta1.location.clone(),
+            ),
         };
 
         cache.put(&path_1, cached_value_1.clone());
@@ -1203,9 +1215,11 @@ mod tests {
         );
 
         let path_2 = TableScopedPath {
-            object_store_url: ObjectStoreUrl::local_filesystem(),
-            path: meta2.location.clone(),
             table: None,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                meta2.location.clone(),
+            ),
         };
 
         cache.put(&path_2, cached_value_2.clone());
@@ -1258,15 +1272,19 @@ mod tests {
         // create a cache with a limit which fits exactly 2 entries
         let cache = DefaultCache::new(limit_for_2_entries);
         let path_1 = TableScopedPath {
-            object_store_url: ObjectStoreUrl::local_filesystem(),
-            path: meta_1.location.clone(),
             table: None,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                meta_1.location.clone(),
+            ),
         };
 
         let path_2 = TableScopedPath {
-            object_store_url: ObjectStoreUrl::local_filesystem(),
-            path: meta_2.location.clone(),
             table: None,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                meta_2.location.clone(),
+            ),
         };
 
         cache.put(&path_1, value_1.clone());
@@ -1281,9 +1299,11 @@ mod tests {
         assert_eq!(result_2.unwrap(), value_2);
 
         let path_3 = TableScopedPath {
-            object_store_url: ObjectStoreUrl::local_filesystem(),
-            path: meta_3.location.clone(),
             table: None,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                meta_3.location.clone(),
+            ),
         };
 
         // adding the third entry evicts the first entry
@@ -1330,9 +1350,11 @@ mod tests {
         let cache = DefaultCache::new(limit_less_than_the_entry);
 
         let path_1 = TableScopedPath {
-            object_store_url: ObjectStoreUrl::local_filesystem(),
-            path: meta.location.clone(),
             table: None,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                meta.location.clone(),
+            ),
         };
 
         cache.put(&path_1, value_too_large.clone());
@@ -1445,9 +1467,11 @@ mod tests {
         table: Option<TableReference>,
     ) -> (TableScopedPath, CachedFileList) {
         let key = TableScopedPath {
-            object_store_url: ObjectStoreUrl::local_filesystem(),
             table,
-            path: Path::from(path),
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                Path::from(path),
+            ),
         };
         let metas: Vec<ObjectMeta> = (0..count)
             .map(|i| create_object_meta(&format!("file{i}"), meta_size))
@@ -1462,9 +1486,8 @@ mod tests {
         let table_ref = Some(TableReference::from("table"));
         let path = Path::from("test_path");
         let key = TableScopedPath {
-            object_store_url: ObjectStoreUrl::local_filesystem(),
             table: table_ref.clone(),
-            path,
+            store_path: StoreScopedPath::new(ObjectStoreUrl::local_filesystem(), path),
         };
 
         // Initially cache is empty
@@ -1978,9 +2001,11 @@ mod tests {
         // Cache the full table listing
         let table_ref = Some(TableReference::from("table"));
         let key = TableScopedPath {
-            object_store_url: ObjectStoreUrl::local_filesystem(),
             table: table_ref,
-            path: table_base,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                table_base,
+            ),
         };
         cache.put(&key, CachedFileList::new(files));
 
@@ -2023,9 +2048,11 @@ mod tests {
 
         let table_ref = Some(TableReference::from("table"));
         let key = TableScopedPath {
-            object_store_url: ObjectStoreUrl::local_filesystem(),
             table: table_ref,
-            path: table_base,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                table_base,
+            ),
         };
         cache.put(&key, CachedFileList::new(files));
         let result = cache.get(&key).unwrap();
@@ -2058,9 +2085,11 @@ mod tests {
 
         let table_ref = Some(TableReference::from("table"));
         let key = TableScopedPath {
-            object_store_url: ObjectStoreUrl::local_filesystem(),
             table: table_ref,
-            path: table_base,
+            store_path: StoreScopedPath::new(
+                ObjectStoreUrl::local_filesystem(),
+                table_base,
+            ),
         };
         cache.put(&key, CachedFileList::new(files));
         let result = cache.get(&key).unwrap();

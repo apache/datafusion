@@ -489,6 +489,8 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use arrow::array::{ArrayRef, RecordBatch, StringArray};
+    use arrow::datatypes::DataType;
     use datafusion::execution::cache::default_cache::DefaultCache;
     use datafusion::{
         common::test_util::batches_to_string,
@@ -606,6 +608,79 @@ mod tests {
         +-----------------------------------------------------------------+--------------+--------------------+-----------------------+-----------------+-----------+-------------+------------+----------------+------------+-----------+-----------+------------------+----------------------+-----------------+-----------------+--------------------+--------------------------+-------------------+------------------------+------------------+-----------------------+-------------------------+
         "#);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cache_functions_object_store_identity() -> Result<(), DataFusionError> {
+        let ctx = SessionContext::new();
+        let cache_manager = &ctx.runtime_env().cache_manager;
+        ctx.register_udtf(
+            "metadata_cache",
+            Arc::new(MetadataCacheFunc::new(Arc::clone(cache_manager))),
+        );
+        ctx.register_udtf(
+            "statistics_cache",
+            Arc::new(StatisticsCacheFunc::new(Arc::clone(cache_manager))),
+        );
+        ctx.register_udtf(
+            "list_files_cache",
+            Arc::new(ListFilesCacheFunc::new(Arc::clone(cache_manager))),
+        );
+
+        for store in ["first", "second"] {
+            ctx.register_object_store(
+                &Url::parse(&format!("mem://{store}")).unwrap(),
+                Arc::new(InMemory::new()),
+            );
+            ctx.sql(&format!(
+                "COPY (SELECT 1 AS value) TO 'mem://{store}/data/file.parquet' STORED AS PARQUET"
+            ))
+            .await?
+            .collect()
+            .await?;
+            ctx.read_parquet(
+                format!("mem://{store}/data/"),
+                ParquetReadOptions::default(),
+            )
+            .await?
+            .collect()
+            .await?;
+        }
+
+        for (function, expected_path) in [
+            ("metadata_cache", "data/file.parquet"),
+            ("statistics_cache", "data/file.parquet"),
+            ("list_files_cache", "data"),
+        ] {
+            let df = ctx
+                .sql(&format!(
+                    "SELECT object_store_url, path FROM {function}() ORDER BY object_store_url"
+                ))
+                .await?;
+            let field = df
+                .schema()
+                .field_with_unqualified_name("object_store_url")?;
+            assert_eq!(field.data_type(), &DataType::Utf8, "{function}");
+            assert!(!field.is_nullable(), "{function}");
+            let results = df.collect().await?;
+            let expected = RecordBatch::try_from_iter([
+                (
+                    "object_store_url",
+                    Arc::new(StringArray::from(vec!["mem://first/", "mem://second/"]))
+                        as ArrayRef,
+                ),
+                (
+                    "path",
+                    Arc::new(StringArray::from(vec![expected_path, expected_path])),
+                ),
+            ])?;
+            assert_eq!(
+                batches_to_string(&results),
+                batches_to_string(&[expected]),
+                "{function}"
+            );
+        }
         Ok(())
     }
 

@@ -2136,7 +2136,7 @@ mod test {
     };
     use datafusion_datasource::morsel::{Morsel, Morselizer};
     use datafusion_datasource::{PartitionedFile, TableSchema, TableSchemaBuilder};
-    use datafusion_execution::cache::ObjectStorePath;
+    use datafusion_execution::cache::StoreScopedPath;
     use datafusion_execution::cache::cache_manager::{
         CachedFileMetadataEntry, FileMetadataCache,
     };
@@ -4084,7 +4084,7 @@ mod test {
             ));
         }
         let cached = cache
-            .get(&ObjectStorePath::new(
+            .get(&StoreScopedPath::new(
                 ObjectStoreUrl::local_filesystem(),
                 file.object_meta.location.clone(),
             ))
@@ -4220,7 +4220,7 @@ mod test {
             assert_eq!(pruning_metrics.pruned(), 2);
             assert!(
                 cache
-                    .get(&ObjectStorePath::new(
+                    .get(&StoreScopedPath::new(
                         ObjectStoreUrl::local_filesystem(),
                         file.object_meta.location.clone(),
                     ))
@@ -5026,7 +5026,7 @@ mod test {
 
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
         let metadata_cache: Arc<FileMetadataCache> = Arc::new(DefaultCache::<
-            ObjectStorePath,
+            StoreScopedPath,
             CachedFileMetadataEntry,
         >::new(
             64 * 1024 * 1024
@@ -5080,7 +5080,7 @@ mod test {
         assert_eq!(counter_metric_value(&metrics, "page_index_load_skipped"), 1);
 
         let cached = metadata_cache
-            .get(&ObjectStorePath::new(
+            .get(&StoreScopedPath::new(
                 ObjectStoreUrl::local_filesystem(),
                 Path::from("test.parquet"),
             ))
