@@ -919,6 +919,8 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// the optimizer maps results back to filters by position, so reordering
     /// them would mark the wrong filters as handled and produce incorrect
     /// results. The helper methods below preserve that order by construction.
+    /// This only constrains the reported results: a node is free to evaluate
+    /// the filters it absorbs in whatever order it likes.
     ///
     /// **Helper Methods for Customization:**
     /// There are various helper methods to simplify implementing this method:

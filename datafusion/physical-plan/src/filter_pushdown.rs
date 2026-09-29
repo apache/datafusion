@@ -304,7 +304,9 @@ impl<T> FilterPushdownPropagation<T> {
     /// in `filters`, whether it was pushed down.
     ///
     /// The result is built by mapping over `filters`, so it always has one
-    /// entry per filter, in the same order. Prefer this over
+    /// entry per filter, in the same order. The order only matters for
+    /// reporting results back to the optimizer: the node may evaluate the
+    /// filters it absorbs in any order. Prefer this over
     /// [`Self::with_parent_pushdown_result`], which requires the caller to
     /// preserve that order by hand.
     ///
