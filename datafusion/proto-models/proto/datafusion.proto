@@ -1183,9 +1183,10 @@ message PhysicalBinaryExprNode {
   PhysicalExprNode l = 1;
   PhysicalExprNode r = 2;
   string op = 3;
-  // Linearized operands for chains of the same operator (e.g. a AND b AND c).
+  // Linearized operands for chains of the same operator and overflow policy.
   // When present, `l` and `r` are ignored and `operands` holds the flattened list.
   repeated PhysicalExprNode operands = 4;
+  bool fail_on_overflow = 5;
 }
 
 message PhysicalDateTimeIntervalExprNode {
@@ -1620,7 +1621,12 @@ message PhysicalHashRepartition {
 
 message PhysicalRangePartitioning {
   repeated PhysicalSortExprNode sort_expr = 1;
+  // Effective split points. Kept for compatibility with older readers.
   repeated PhysicalRangeSplitPoint split_point = 2;
+  // Maximum-resolution sample points used to derive effective split points.
+  repeated PhysicalRangeSplitPoint sample_point = 3;
+  // Zero in legacy payloads means split_point.len() + 1.
+  uint64 partition_count = 4;
 }
 
 message PhysicalRangeSplitPoint {

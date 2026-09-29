@@ -118,10 +118,6 @@ impl OptimizerRule for EliminateCrossJoin {
                 return rewrite_children(self, LogicalPlan::Filter(filter), config);
             }
 
-            if !can_flatten_join_inputs(&filter.input) {
-                return Ok(Transformed::no(LogicalPlan::Filter(filter)));
-            }
-
             let Filter {
                 input, predicate, ..
             } = filter;
@@ -136,7 +132,7 @@ impl OptimizerRule for EliminateCrossJoin {
                 &mut possible_join_keys,
                 &mut all_inputs,
                 &mut all_filters,
-            )?;
+            );
 
             extract_possible_join_keys(&predicate, &mut possible_join_keys);
             Some(predicate)
@@ -147,15 +143,12 @@ impl OptimizerRule for EliminateCrossJoin {
                     null_equality: original_null_equality,
                     ..
                 }) => {
-                    if !can_flatten_join_inputs(&plan) {
-                        return Ok(Transformed::no(plan));
-                    }
                     flatten_join_inputs(
                         plan,
                         &mut possible_join_keys,
                         &mut all_inputs,
                         &mut all_filters,
-                    )?;
+                    );
                     null_equality = original_null_equality;
                     None
                 }
@@ -266,18 +259,15 @@ fn rewrite_children(
     }
 }
 
-/// Recursively accumulate possible_join_keys and inputs from inner joins
-/// (including cross joins).
-///
-/// Assumes can_flatten_join_inputs has returned true and thus the plan can be
-/// flattened. Adds all leaf inputs to `all_inputs` and join_keys to
-/// possible_join_keys
+/// Recursively collect inputs, join keys, and filters from inner joins
+/// (including cross joins). Other nodes are retained as inputs without
+/// flattening them.
 fn flatten_join_inputs(
     plan: LogicalPlan,
     possible_join_keys: &mut JoinKeySet,
     all_inputs: &mut Vec<LogicalPlan>,
     all_filters: &mut Vec<Expr>,
-) -> Result<()> {
+) {
     match plan {
         LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {
             if let Some(filter) = join.filter {
@@ -289,43 +279,18 @@ fn flatten_join_inputs(
                 possible_join_keys,
                 all_inputs,
                 all_filters,
-            )?;
+            );
             flatten_join_inputs(
                 Arc::unwrap_or_clone(join.right),
                 possible_join_keys,
                 all_inputs,
                 all_filters,
-            )?;
+            );
         }
         _ => {
             all_inputs.push(plan);
         }
     }
-    Ok(())
-}
-
-/// Returns true if the plan is a Join or Cross join could be flattened with
-/// `flatten_join_inputs`
-///
-/// Must stay in sync with `flatten_join_inputs`
-fn can_flatten_join_inputs(plan: &LogicalPlan) -> bool {
-    // can only flatten inner / cross joins
-    match plan {
-        LogicalPlan::Join(join) if join.join_type == JoinType::Inner => {}
-        _ => return false,
-    }
-
-    for child in plan.inputs() {
-        if let LogicalPlan::Join(Join {
-            join_type: JoinType::Inner,
-            ..
-        }) = child
-            && !can_flatten_join_inputs(child)
-        {
-            return false;
-        }
-    }
-    true
 }
 
 /// Finds the next to join with the left input plan,
@@ -1388,6 +1353,36 @@ mod tests {
                 TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
                 TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
               TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn preserve_outer_join_boundary() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan_with_name("t1")?)
+            .join(
+                test_table_scan_with_name("t2")?,
+                JoinType::Left,
+                (vec!["t1.a"], vec!["t2.a"]),
+                Some(col("t1.b").gt(col("t2.b"))),
+            )?
+            .join(
+                test_table_scan_with_name("t3")?,
+                JoinType::Inner,
+                (vec!["t1.a"], vec!["t3.a"]),
+                Some(col("t3.c").gt(lit(7u32))),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Filter: t3.c > UInt32(7) [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N, a:UInt32, b:UInt32, c:UInt32]
+          Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N, a:UInt32, b:UInt32, c:UInt32]
+            Left Join: t1.a = t2.a Filter: t1.b > t2.b [a:UInt32, b:UInt32, c:UInt32, a:UInt32;N, b:UInt32;N, c:UInt32;N]
+              TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
+              TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
