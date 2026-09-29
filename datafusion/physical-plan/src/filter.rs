@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::{Any, TypeId};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
@@ -64,7 +65,7 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{
-    BinaryExpr, Column, InListExpr, IsNotNullExpr, Literal, lit,
+    BinaryExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr, Literal, lit,
 };
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::collect_columns;
@@ -380,17 +381,8 @@ impl FilterExec {
         let match_limit = unique_match_limit(predicate, &input_stats);
 
         let (selectivity, num_rows, column_statistics) = if is_infeasible {
-            // Contradictory predicate: no rows survive. Row-bounded counts are
-            // zero; value statistics are undefined on an empty column.
-            let mut cs = input_stats.to_inexact().column_statistics;
-            for col_stat in &mut cs {
-                col_stat.distinct_count = Precision::Exact(0);
-                col_stat.null_count = Precision::Exact(0);
-                col_stat.min_value = Precision::Absent;
-                col_stat.max_value = Precision::Absent;
-                col_stat.sum_value = Precision::Absent;
-                col_stat.byte_size = Precision::Exact(0);
-            }
+            // Contradictory predicate: no rows survive.
+            let cs = vec![empty_column_statistics(); input_stats.column_statistics.len()];
             (0.0, Precision::Exact(0), cs)
         } else {
             let null_rejecting_columns = collect_null_rejecting_columns(predicate);
@@ -454,6 +446,87 @@ impl FilterExec {
             total_byte_size,
             column_statistics,
         })
+    }
+
+    /// Applies the filter's `fetch` to its output statistics for `partition`,
+    /// or for all partitions when `partition` is `None`. The fetch stops each
+    /// partition separately.
+    #[inline]
+    pub(crate) fn statistics_with_fetch(
+        &self,
+        stats: Statistics,
+        partition: Option<usize>,
+    ) -> Result<Statistics> {
+        match self.fetch {
+            Some(fetch) => self.statistics_under_fetch(stats, fetch, partition),
+            None => Ok(stats),
+        }
+    }
+
+    fn statistics_under_fetch(
+        &self,
+        stats: Statistics,
+        fetch: usize,
+        partition: Option<usize>,
+    ) -> Result<Statistics> {
+        if stats
+            .num_rows
+            .get_value()
+            .is_some_and(|rows| *rows <= fetch)
+        {
+            // No partition reaches the fetch, so no rows are dropped.
+            return Ok(stats);
+        }
+        let partitions = self.properties().partitioning.partition_count();
+        let single = partition.is_some() || partitions <= 1;
+        let bound = if single {
+            fetch
+        } else {
+            fetch.saturating_mul(partitions)
+        };
+        let input_columns = stats.column_statistics.clone();
+        let stats = if single {
+            stats
+        } else {
+            // Any partition can hold more than `fetch` rows, so the total
+            // under the fetch is only an estimate.
+            stats.to_inexact()
+        };
+
+        let mut stats = stats.with_fetch(Some(bound), 0, 1)?;
+        if stats.num_rows == Precision::Exact(0) {
+            stats.total_byte_size = Precision::Exact(0);
+            stats.column_statistics.fill(empty_column_statistics());
+            return Ok(stats);
+        }
+        // A fetch only drops rows. A count that is exactly zero stays exact, and
+        // so does a column with one value in every row while rows remain.
+        for (column_stats, input) in stats.column_statistics.iter_mut().zip(input_columns)
+        {
+            if input.null_count == Precision::Exact(0) {
+                if fetch > 0 && input.is_singleton() {
+                    column_stats.min_value = input.min_value;
+                    column_stats.max_value = input.max_value;
+                    if input.distinct_count == Precision::Exact(1) {
+                        column_stats.distinct_count = input.distinct_count;
+                    }
+                }
+                column_stats.null_count = input.null_count;
+            } else {
+                column_stats.null_count =
+                    cap_at_rows(column_stats.null_count, stats.num_rows);
+            }
+            if input.distinct_count == Precision::Exact(0) {
+                column_stats.distinct_count = input.distinct_count;
+            }
+        }
+        if let Some((column, true)) = null_check_column(self.predicate())
+            && let Some(column_stats) = stats.column_statistics.get_mut(column)
+        {
+            // Every surviving row is still null after the fetch.
+            column_stats.null_count = stats.num_rows;
+        }
+        Ok(stats)
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -673,7 +746,7 @@ impl ExecutionPlan for FilterExec {
     fn statistics_from_inputs(
         &self,
         input_stats: &[Arc<Statistics>],
-        _args: &StatisticsArgs,
+        args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
         let input_stats = input_stats[0].as_ref().clone();
         let stats = Self::statistics_helper(
@@ -682,6 +755,7 @@ impl ExecutionPlan for FilterExec {
             self.predicate(),
             self.default_selectivity,
         )?;
+        let stats = self.statistics_with_fetch(stats, args.partition())?;
         Ok(Arc::new(stats.project(self.projection.as_ref())))
     }
 
@@ -1205,6 +1279,34 @@ fn collect_null_rejecting_columns(predicate: &Arc<dyn PhysicalExpr>) -> HashSet<
     }
 
     columns
+}
+
+/// Returns the checked column index, and whether the check is `IS NULL`, when
+/// `predicate` is a bare `IS NULL` or `IS NOT NULL` check on a column.
+pub(crate) fn null_check_column(
+    predicate: &Arc<dyn PhysicalExpr>,
+) -> Option<(usize, bool)> {
+    // One type check keeps every other predicate cheap.
+    let type_id = (predicate.as_ref() as &dyn Any).type_id();
+    let (arg, is_null) = if type_id == TypeId::of::<IsNullExpr>() {
+        (predicate.downcast_ref::<IsNullExpr>()?.arg(), true)
+    } else if type_id == TypeId::of::<IsNotNullExpr>() {
+        (predicate.downcast_ref::<IsNotNullExpr>()?.arg(), false)
+    } else {
+        return None;
+    };
+    Some((arg.downcast_ref::<Column>()?.index(), is_null))
+}
+
+/// Column statistics of an exactly empty output: no nulls, distinct values or
+/// bytes, and no value bounds.
+fn empty_column_statistics() -> ColumnStatistics {
+    ColumnStatistics {
+        null_count: Precision::Exact(0),
+        distinct_count: Precision::Exact(0),
+        byte_size: Precision::Exact(0),
+        ..ColumnStatistics::new_unknown()
+    }
 }
 
 /// Converts an interval bound to a [`Precision`] value. NULL bounds (which
@@ -4171,6 +4273,125 @@ mod tests {
             statistics.column_statistics[0].distinct_count,
             Precision::Inexact(20)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_statistics_fetch_preserves_singleton() -> Result<()> {
+        use Precision::{Absent, Exact, Inexact};
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics::new_unknown(&schema),
+            schema,
+        ));
+        let filter = FilterExecBuilder::new(lit(true), input)
+            .with_fetch(Some(3))
+            .build()?;
+        // A positive fetch keeps the singleton that its input reports, for
+        // both overall and partition stats.
+        for num_rows in [Exact(100), Inexact(100), Absent] {
+            for partition in [None, Some(0)] {
+                let stats = filter.statistics_with_fetch(
+                    Statistics {
+                        num_rows,
+                        total_byte_size: Absent,
+                        column_statistics: vec![ColumnStatistics {
+                            null_count: Exact(0),
+                            distinct_count: Exact(1),
+                            min_value: Exact(ScalarValue::Int32(Some(5))),
+                            max_value: Exact(ScalarValue::Int32(Some(5))),
+                            ..Default::default()
+                        }],
+                    },
+                    partition,
+                )?;
+                let column = &stats.column_statistics[0];
+                assert_eq!(column.null_count, Exact(0));
+                assert!(column.is_singleton());
+                assert_eq!(column.distinct_count, Exact(1));
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_filter_fetch_statistics_match_execution() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from_iter_values(0..100))],
+        )?;
+        for partitions in [1, 2] {
+            let input: Arc<dyn ExecutionPlan> = test::TestMemoryExec::try_new_exec(
+                &vec![vec![batch.clone()]; partitions],
+                Arc::clone(&schema),
+                None,
+            )?;
+            for fetch in [0, 3] {
+                let filter: Arc<dyn ExecutionPlan> = Arc::new(
+                    FilterExecBuilder::new(lit(true), Arc::clone(&input))
+                        .with_fetch(Some(fetch))
+                        .build()?,
+                );
+                let stats = StatisticsContext::new()
+                    .compute(filter.as_ref(), &StatisticsArgs::new())?;
+                let partition_stats = StatisticsContext::new().compute(
+                    filter.as_ref(),
+                    &StatisticsArgs::new().with_partition(Some(0)),
+                )?;
+                assert_eq!(stats.num_rows.get_value(), Some(&(fetch * partitions)));
+                assert_eq!(partition_stats.num_rows.get_value(), Some(&fetch));
+                let batches = crate::execution_plan::collect(
+                    filter,
+                    Arc::new(TaskContext::default()),
+                )
+                .await?;
+                assert_eq!(
+                    batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+                    fetch * partitions
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_fetch_null_column_statistics() -> Result<()> {
+        use Precision::{Exact, Inexact};
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let stats = Statistics {
+            num_rows: Exact(100),
+            total_byte_size: Exact(400),
+            column_statistics: vec![ColumnStatistics {
+                null_count: Exact(100),
+                distinct_count: Exact(0),
+                byte_size: Exact(400),
+                ..Default::default()
+            }],
+        };
+        let input: Arc<dyn ExecutionPlan> = Arc::new(
+            StatisticsExec::new(stats.clone(), schema.clone())
+                .with_partition_statistics(vec![stats.clone()]),
+        );
+        for fetch in [0, 3, 200] {
+            let filter =
+                FilterExecBuilder::new(is_null(col("a", &schema)?)?, Arc::clone(&input))
+                    .with_fetch(Some(fetch))
+                    .build()?;
+            let output = filter.statistics_with_fetch(stats.clone(), None)?;
+            assert_eq!(output.num_rows, Exact(fetch.min(100)));
+            assert_eq!(output.column_statistics[0].null_count, output.num_rows);
+            assert_eq!(output.column_statistics[0].distinct_count, Exact(0));
+            let expected_bytes = match fetch {
+                0 => Exact(0),
+                3 => Inexact(12),
+                _ => Exact(400),
+            };
+            assert_eq!(output.total_byte_size, expected_bytes);
+            assert_eq!(output.column_statistics[0].byte_size, expected_bytes);
+        }
         Ok(())
     }
 

@@ -663,6 +663,7 @@ impl StatisticsProvider for FilterStatisticsProvider {
             }
         }
 
+        let stats = filter.statistics_with_fetch(stats, None)?;
         let stats = stats.project(filter.projection().as_ref());
         Ok(StatisticsResult::Computed(ExtendedStatistics::new(stats)))
     }
@@ -1817,6 +1818,21 @@ mod tests {
 
         let stats = compute(&registry, filter.as_ref())?;
         assert!(stats.base.num_rows.get_value().unwrap_or(&0) <= &1000);
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_provider_applies_fetch() -> Result<()> {
+        use crate::filter::FilterExecBuilder;
+
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(FilterStatisticsProvider)]);
+        let source = make_source(1000);
+        let filter = FilterExecBuilder::new(lit(true), source)
+            .with_fetch(Some(3))
+            .build()?;
+        let stats = compute(&registry, &filter)?;
+        assert_eq!(stats.base.num_rows, Precision::Inexact(3));
         Ok(())
     }
 
