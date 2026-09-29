@@ -578,6 +578,75 @@ ORDER BY l.range_key;
 35 350 350
 
 ##########
+# TEST 13A: Sample-Backed Range Join Scales to More Partitions
+# The source has three effective partitions at [20, 40], but retains five
+# samples. Increasing parallelism to five partitions should repartition by
+# the derived range boundaries rather than by hash.
+##########
+
+query TT
+EXPLAIN SELECT l.range_key, l.value, r.value
+FROM sampled_range_partitioned l
+JOIN sampled_range_partitioned r ON l.range_key = r.range_key;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(range_key@0, range_key@0)], projection=[range_key@0, value@1, value@3]
+02)--RepartitionExec: partitioning=Range([range_key@0 ASC], [(20), (30), (40), (50)], 5, max 6), input_partitions=3
+03)----StreamingTableExec: partition_sizes=3, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(20), (40)], 3, max 6)
+04)--RepartitionExec: partitioning=Range([range_key@0 ASC], [(20), (30), (40), (50)], 5, max 6), input_partitions=3
+05)----StreamingTableExec: partition_sizes=3, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(20), (40)], 3, max 6)
+
+query III
+SELECT l.range_key, l.value, r.value
+FROM sampled_range_partitioned l
+JOIN sampled_range_partitioned r ON l.range_key = r.range_key
+ORDER BY l.range_key;
+----
+1 10 10
+10 100 100
+20 200 200
+30 300 300
+40 400 400
+50 500 500
+
+##########
+# TEST 13B: Exhausted Samples Fall Back to Hash Repartitioning
+# Five samples support at most six partitions. A target of seven still
+# increases parallelism, using the existing hash fallback.
+##########
+
+statement ok
+set datafusion.execution.target_partitions = 7;
+
+query TT
+EXPLAIN SELECT l.range_key, l.value, r.value
+FROM sampled_range_partitioned l
+JOIN sampled_range_partitioned r ON l.range_key = r.range_key;
+----
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(range_key@0, range_key@0)], projection=[range_key@0, value@1, value@3]
+02)--RepartitionExec: partitioning=Hash([range_key@0], 7), input_partitions=3
+03)----StreamingTableExec: partition_sizes=3, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(20), (40)], 3, max 6)
+04)--RepartitionExec: partitioning=Hash([range_key@0], 7), input_partitions=3
+05)----StreamingTableExec: partition_sizes=3, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(20), (40)], 3, max 6)
+
+query III
+SELECT l.range_key, l.value, r.value
+FROM sampled_range_partitioned l
+JOIN sampled_range_partitioned r ON l.range_key = r.range_key
+ORDER BY l.range_key;
+----
+1 10 10
+10 100 100
+20 200 200
+30 300 300
+40 400 400
+50 500 500
+
+statement ok
+set datafusion.execution.target_partitions = 5;
+
+##########
 # TEST 14: Preserve File Partitions Preserves Range Join Inputs
 # preserve_file_partitions preserves compatible Range inputs for partitioned
 # joins even when target_partitions is higher than the input partition count.
