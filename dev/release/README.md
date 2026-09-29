@@ -303,26 +303,45 @@ git push apache 50.3.0
 
 #### Publish the versioned documentation
 
-For the initial `55.0.0` proof of concept, make the final exact tag available
-locally and build its complete documentation site into a temporary publication
-package:
+After the final release tag is available, build its complete documentation
+using the configuration from the tag. The small configuration overlay adds the
+version picker and the correct URL prefix to older tags without changing their
+documentation source. For example, from the repository root, for `55.0.0`:
 
 ```shell
-uv run --package datafusion-docs python docs/scripts/snapshot_site.py 55.0.0 55.0.0 /tmp/datafusion-release-site
+git fetch origin tag 55.0.0
+git worktree add --detach /tmp/datafusion-55.0.0 55.0.0
+cd /tmp/datafusion-55.0.0/docs
+DATAFUSION_DOCS_SOURCE="$PWD/source" DATAFUSION_DOCS_VERSION=55.0.0 \
+  SPHINXOPTS="-W -c /path/to/current/datafusion/docs/scripts/release" \
+  uv run --package datafusion-docs --with sphinx-sitemap ./build.sh
 ```
 
-The command verifies the tag's peeled commit and creates the one immutable
-publication unit `versions/55.0.0/`. Manually copy that directory to the same
-location on the `asf-site` branch, then review, commit, and push the branch. The
-command never commits or pushes and refuses to replace an existing release.
+Replace the version and paths for each release. Use an absolute path to the
+overlay in your current checkout. The existing `build.sh` generates the tagged
+dependency graph and builds the HTML with warnings treated as errors. The
+`--with sphinx-sitemap` option supplies the sitemap extension for older tags.
 
-Do not simply publish the snapshot before merging the feature PR: the old docs
-deployment can erase it with `rsync --delete`. Keep the feature PR in draft until
-maintainers choose either a preliminary retention-only merge before publication,
-or a coordinated window that confirms no old docs deployment is running or
-queued, publishes the snapshot, merges the retention and picker change, and
-verifies `asf-site/versions/55.0.0/` after the new deployment. Automating future
-release publication and backfilling older releases remain follow-up work.
+From the current checkout, prepare a separate PR targeting `asf-site`:
+
+```shell
+git fetch origin asf-site
+git worktree add -b docs/publish-55.0.0 /tmp/datafusion-asf-site origin/asf-site
+mkdir -p /tmp/datafusion-asf-site/versions/55.0.0
+rsync -a --exclude '/.buildinfo' \
+  /tmp/datafusion-55.0.0/docs/build/html/ \
+  /tmp/datafusion-asf-site/versions/55.0.0/
+```
+
+Check that the release directory does not already exist before copying it.
+Review the generated files and open the publication PR for review.
+Once it is published, add its entry to `docs/source/_static/versions.json` on
+`main` so the picker offers only working destinations. Remove the temporary
+worktrees afterward.
+
+Merge the separate documentation-retention workflow change before publishing
+the first release documentation; otherwise the next `main` deployment would
+delete `/versions/`.
 
 ### 10. Publish on Crates.io
 

@@ -19,142 +19,72 @@
 
 # DataFusion Documentation
 
-This folder contains the sources for https://datafusion.apache.org/. The root
-site is built continuously from `main`. Complete, immutable release sites are
-published under `/versions/<version>/`.
+This folder contains the source content of the [User Guide](./source/user-guide)
+and [Contributor Guide](./source/contributor-guide). The site root shows the
+development documentation built from `main`. Released versions of the complete
+site are available under `/versions/<version>/`.
 
 ## Dependencies
 
-From the repository root, install the documentation dependencies using
+Install build dependencies and build the documentation using
 [uv](https://docs.astral.sh/uv/):
 
 ```sh
-uv sync --package datafusion-docs
+uv sync
+uv run bash build.sh
 ```
 
 The docs build regenerates the workspace dependency graph via
 `docs/scripts/generate_dependency_graph.sh`, so ensure `cargo`, `cargo-depgraph`
 (`cargo install cargo-depgraph --version ^1.6 --locked`), and Graphviz `dot`
 (`brew install graphviz` or `sudo apt-get install -y graphviz`) are available.
-`.gitattributes` keeps documentation shell scripts LF-terminated so the same
-scripts run from Linux and WSL checkouts.
 
-## Build and Preview
+## Build & Preview
 
-Build the current complete site from the repository root:
+Run the provided script to build the HTML pages.
 
 ```bash
-uv run --package datafusion-docs docs/build.sh
+# If using venv, ensure you have activated it
+./build.sh
 ```
 
-The HTML is generated in `docs/build/html`. Serve it over HTTP because browsers
-do not load the version manifest from `file:` URLs:
+The HTML will be generated into a `build` directory. Serve the site over HTTP
+to test the version switcher (it cannot fetch JSON from a `file:` URL):
 
 ```bash
-python3 -m http.server --directory docs/build/html 8000
+python3 -m http.server --directory build/html 8000
 ```
 
-Then open http://localhost:8000/.
+The version switcher reads `source/_static/versions.json` from the site root.
+Add an entry only when that release's documentation is published. For the manual
+release build and publication procedure, see
+[the release guide](../dev/release/README.md#publish-the-versioned-documentation).
 
-The public and assembled layouts are:
+For a local or fork preview, set `DATAFUSION_DOCS_BASE_URL` to the preview's root
+URL when building both development and released docs, and change the URLs in
+the preview's `_static/versions.json` to that same root. For example, use
+`http://localhost:8000/` locally or `https://<username>.github.io/datafusion/`
+on GitHub Pages. Serve the combined site, with released docs under `versions/`,
+and check the picker in both directions, a page missing from a release, search,
+and static assets. Only the preview manifest should contain preview URLs.
 
-```text
-https://datafusion.apache.org/
-|-- user-guide/
-|-- library-user-guide/
-|-- contributor-guide/
-|-- _static/versions.json
-`-- versions/55.0.0/
-    |-- user-guide/
-    |-- library-user-guide/
-    |-- contributor-guide/
-    |-- download.html
-    |-- search.html
-    |-- _sources/
-    |-- _static/
-    `-- sitemap.xml
-```
+## Making Changes
 
-## Release Snapshots
+To make changes to the docs, simply make a Pull Request with your
+proposed changes as normal. When the PR is merged the docs will be
+automatically updated.
 
-`docs/source/_static/versions.json` is both the PyData version-picker manifest
-and the release catalog. It contains `Development` at the site root and records
-each release's semantic version, exact tag, and exact 40-character commit.
+## Release Process
 
-The first snapshot is the lightweight tag `55.0.0`, which peels to
-`d5552342012888b7d1a3ab88d92e3d292fc0cde0`. Create its publication package
-from the repository root with the tag available locally:
+This documentation is hosted at https://datafusion.apache.org/
 
-```bash
-uv run --package datafusion-docs python docs/scripts/snapshot_site.py \
-  55.0.0 55.0.0 /tmp/datafusion-release-site
-```
+When a PR is merged to the `main` branch of the DataFusion
+repository, a [github workflow](https://github.com/apache/datafusion/blob/main/.github/workflows/docs.yaml) which:
 
-The command creates only
-`/tmp/datafusion-release-site/versions/55.0.0/`. It refuses to overwrite that
-directory, rejects output overlapping the repository, builds in an isolated
-detached worktree, and does not commit or push.
+1. Builds the html content
+2. Pushes the html content to the [`asf-site`](https://github.com/apache/datafusion/tree/asf-site) branch in this repository.
 
-The snapshot uses the tag's complete documentation tree, templates, static
-files, helper extension, build script dependency graph, and locked documentation
-dependencies. `release_conf.py` supplies only the publication prefix, canonical
-base URL, exactly pinned `sphinx-sitemap` extension, version picker, exact GitHub
-tag, corrected repository name, and a release-local redirect. After Sphinx
-builds, `snapshot_site.py` rewrites only published links that would otherwise
-escape to current DataFusion docs or mutable DataFusion `main` and `latest`
-targets, including links in the agent-facing `llms.txt`. This includes one narrow
-fix for the tagged broken `/contributor-guide/gsoc_application_guidelines.html`
-link, which is redirected to the tagged
-`contributor-guide/gsoc/gsoc_application_guidelines_2025.html` page. Tagged
-source files and generated `_sources` files are never modified. In particular,
-the tagged statement that 55.0.0 has not been released yet remains unchanged.
-
-Validate a complete assembled site with:
-
-```bash
-uv run --package datafusion-docs python docs/scripts/assemble_site.py \
-  --current-site docs/build/html \
-  --published-site /tmp/datafusion-release-site \
-  --output-site /tmp/datafusion-site
-uv run --package datafusion-docs python docs/scripts/validate_site.py \
-  --site-root /tmp/datafusion-site --require-snapshots
-```
-
-The assembler starts with a fresh current build, copies the existing complete
-`asf-site/versions/` archive unchanged, and creates a root sitemap index. It does
-not use picker entries as a deletion list, so removing an old release from the
-picker cannot erase its archive.
-
-## Publication Bootstrap
-
-The old deployment uses unrestricted `rsync --delete`, so publishing a snapshot
-before snapshot retention reaches `main` is not race-free. Keep the feature PR
-in draft until maintainers agree on one of these bootstrap procedures:
-
-1. Merge a preliminary retention-only workflow change, wait for it to deploy,
-   publish `versions/55.0.0/` manually to `asf-site`, then merge the picker and
-   validation changes.
-2. Use a coordinated window: confirm no old documentation deployment is running
-   or queued, publish the snapshot, merge this change immediately, wait for the
-   new serialized deployment, and verify `asf-site/versions/55.0.0/` afterward.
-
-For manual publication, copy the single generated `versions/55.0.0/` directory
-to the same location in an `asf-site` worktree. Review, commit, and push that
-branch manually. Never replace an existing release directory. The snapshot
-tooling never commits, pushes, or publishes.
-
-## Site Deployment
-
-When a documentation change reaches `main`, the deployment workflow:
-
-1. Builds the current complete site and replaces all current root files.
-2. Copies the entire pre-existing `asf-site/versions/` archive without using the
-   picker as a retention registry.
-3. Builds `sitemap.xml` as an index over `sitemap-main.xml` and every retained
-   complete release sitemap.
-4. Deliberately installs `.asf.yaml` and `.nojekyll`, then uses `rsync --delete`
-   while excluding `.git` to remove stale current output.
-5. Serializes deployments and pushes a normal, non-force commit.
-
-The Apache Software Foundation serves the branch according to
-[`.asf.yaml`](https://github.com/apache/datafusion/blob/main/.asf.yaml).
+The Apache Software Foundation provides https://datafusion.apache.org/,
+which serves content based on the configuration in
+[.asf.yaml](https://github.com/apache/datafusion/blob/main/.asf.yaml),
+which specifies the target as https://datafusion.apache.org/.
