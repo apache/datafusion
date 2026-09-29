@@ -400,7 +400,7 @@ impl DynamicFilterPhysicalExpr {
 
     /// Returns `true` if this filter has been marked complete via
     /// [`Self::mark_complete`] and will therefore never change again.
-    pub(crate) fn is_complete(&self) -> bool {
+    pub fn is_complete(&self) -> bool {
         self.inner.read().is_complete
     }
 
