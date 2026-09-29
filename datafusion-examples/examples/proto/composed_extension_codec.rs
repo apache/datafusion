@@ -160,7 +160,7 @@ impl PhysicalExtensionCodec for ParentPhysicalExtensionCodec {
         _ctx: &TaskContext,
         _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if buf == "ParentExec".as_bytes() {
+        if buf == b"ParentExec" {
             Ok(Arc::new(ParentExec {
                 input: inputs[0].clone(),
             }))
@@ -176,7 +176,7 @@ impl PhysicalExtensionCodec for ParentPhysicalExtensionCodec {
         _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<()> {
         if node.is::<ParentExec>() {
-            buf.extend_from_slice("ParentExec".as_bytes());
+            buf.extend_from_slice(b"ParentExec");
             Ok(())
         } else {
             internal_err!("Not supported")
@@ -258,7 +258,7 @@ impl PhysicalExtensionCodec for ChildPhysicalExtensionCodec {
         _ctx: &TaskContext,
         _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if buf == "ChildExec".as_bytes() {
+        if buf == b"ChildExec" {
             Ok(Arc::new(ChildExec {}))
         } else {
             internal_err!("Not supported")
@@ -272,7 +272,7 @@ impl PhysicalExtensionCodec for ChildPhysicalExtensionCodec {
         _proto_converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<()> {
         if node.is::<ChildExec>() {
-            buf.extend_from_slice("ChildExec".as_bytes());
+            buf.extend_from_slice(b"ChildExec");
             Ok(())
         } else {
             internal_err!("Not supported")

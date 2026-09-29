@@ -24,7 +24,7 @@ use arrow::array::types::{
     TimestampSecondType,
 };
 use arrow::array::{ArrayRef, AsArray, PrimitiveArray};
-use arrow::datatypes::DataType::{Time32, Time64, Timestamp};
+use arrow::datatypes::DataType::{Null, Time32, Time64, Timestamp};
 use arrow::datatypes::IntervalUnit::{DayTime, MonthDayNano};
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{
@@ -38,6 +38,7 @@ use datafusion_common::{
     Result, ScalarValue, exec_datafusion_err, exec_err, not_impl_err, plan_err,
 };
 use datafusion_expr::TypeSignature::Exact;
+use datafusion_expr::interval_arithmetic::Interval as ExprInterval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -268,14 +269,23 @@ impl ScalarUDFImpl for DateBinFunc {
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
-        // The DATE_BIN function preserves the order of its second argument.
         let step = &input[0];
         let date_value = &input[1];
         let reference = input.get(2);
 
-        if step.sort_properties.eq(&SortProperties::Singleton)
+        // Scaling these representations to nanoseconds can overflow and turn
+        // otherwise valid input rows into NULL. Unknown ranges use the Null
+        // type and can hide one of these representations. The generated NULLs
+        // need not have the same placement as the source ordering.
+        let scale_can_overflow = matches!(
+            date_value.range.data_type(),
+            Null | Timestamp(Second | Millisecond | Microsecond, _) | Time64(Microsecond)
+        );
+
+        if !scale_can_overflow
+            && step.sort_properties == SortProperties::Singleton
             && reference
-                .map(|r| r.sort_properties.eq(&SortProperties::Singleton))
+                .map(|r| r.sort_properties == SortProperties::Singleton)
                 .unwrap_or(true)
         {
             Ok(date_value.sort_properties)
@@ -283,6 +293,12 @@ impl ScalarUDFImpl for DateBinFunc {
             Ok(SortProperties::Unordered)
         }
     }
+
+    fn evaluate_bounds(&self, inputs: &[&ExprInterval]) -> Result<ExprInterval> {
+        // DATE_BIN returns the same type as its source argument.
+        ExprInterval::make_unbounded(&inputs[1].data_type())
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
@@ -685,7 +701,7 @@ fn date_bin_impl(
                 stride: i64,
                 stride_fn: BinFunction,
                 array: &ArrayRef,
-                tz_opt: &Option<Arc<str>>,
+                tz_opt: Option<&Arc<str>>,
             ) -> Result<ColumnarValue>
             where
                 T: ArrowTimestampType,
@@ -697,29 +713,45 @@ fn date_bin_impl(
                     date_bin_timestamp_value::<T>(val, origin, stride, stride_fn)
                 });
 
-                let array = result.with_timezone_opt(tz_opt.clone());
+                let array = result.with_timezone_opt(tz_opt.cloned());
                 Ok(ColumnarValue::Array(Arc::new(array)))
             }
 
             match array.data_type() {
                 Timestamp(Nanosecond, tz_opt) => {
                     transform_array_with_stride::<TimestampNanosecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
+                        origin,
+                        stride,
+                        stride_fn,
+                        array,
+                        tz_opt.as_ref(),
                     )?
                 }
                 Timestamp(Microsecond, tz_opt) => {
                     transform_array_with_stride::<TimestampMicrosecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
+                        origin,
+                        stride,
+                        stride_fn,
+                        array,
+                        tz_opt.as_ref(),
                     )?
                 }
                 Timestamp(Millisecond, tz_opt) => {
                     transform_array_with_stride::<TimestampMillisecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
+                        origin,
+                        stride,
+                        stride_fn,
+                        array,
+                        tz_opt.as_ref(),
                     )?
                 }
                 Timestamp(Second, tz_opt) => {
                     transform_array_with_stride::<TimestampSecondType>(
-                        origin, stride, stride_fn, array, tz_opt,
+                        origin,
+                        stride,
+                        stride_fn,
+                        array,
+                        tz_opt.as_ref(),
                     )?
                 }
                 Time32(Millisecond) => {
@@ -797,10 +829,11 @@ mod tests {
     use arrow::array::types::TimestampNanosecondType;
     use arrow::array::{Array, IntervalDayTimeArray, TimestampNanosecondArray};
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
-    use arrow::datatypes::{DataType, Field, FieldRef, TimeUnit};
+    use arrow::datatypes::{DataType, Field, FieldRef, IntervalUnit, TimeUnit};
 
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use datafusion_common::{DataFusionError, ScalarValue};
+    use datafusion_expr::interval_arithmetic::Interval as ExprInterval;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
     use chrono::TimeDelta;
@@ -849,6 +882,28 @@ mod tests {
             err.strip_backtrace().contains("overflows i64"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn evaluate_bounds_preserves_source_type() {
+        let stride =
+            ExprInterval::make_unbounded(&DataType::Interval(IntervalUnit::DayTime))
+                .unwrap();
+        let source_types = [
+            DataType::Timestamp(TimeUnit::Second, None),
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            DataType::Time32(TimeUnit::Millisecond),
+            DataType::Time64(TimeUnit::Microsecond),
+        ];
+        let function = DateBinFunc::new();
+
+        for source_type in source_types {
+            let source = ExprInterval::make_unbounded(&source_type).unwrap();
+            let bounds = function.evaluate_bounds(&[&stride, &source]).unwrap();
+
+            assert!(bounds.is_unbounded());
+            assert_eq!(bounds.data_type(), source_type);
+        }
     }
 
     #[test]
@@ -1153,49 +1208,47 @@ mod tests {
             ),
         ];
 
-        cases
-            .iter()
-            .for_each(|(original, tz_opt, origin, expected)| {
-                let input = original
-                    .iter()
-                    .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
-                    .collect::<TimestampNanosecondArray>()
-                    .with_timezone_opt(tz_opt.clone());
-                let right = expected
-                    .iter()
-                    .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
-                    .collect::<TimestampNanosecondArray>()
-                    .with_timezone_opt(tz_opt.clone());
-                let batch_len = input.len();
-                let args = vec![
-                    ColumnarValue::Scalar(ScalarValue::new_interval_dt(1, 0)),
-                    ColumnarValue::Array(Arc::new(input)),
-                    ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                        Some(string_to_timestamp_nanos(origin).unwrap()),
-                        tz_opt.clone(),
-                    )),
-                ];
-                let return_field = &Arc::new(Field::new(
-                    "f",
-                    DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
-                    true,
-                ));
-                let result =
-                    invoke_date_bin_with_args(args, batch_len, return_field).unwrap();
+        for (original, tz_opt, origin, expected) in &cases {
+            let input = original
+                .iter()
+                .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
+                .collect::<TimestampNanosecondArray>()
+                .with_timezone_opt(tz_opt.clone());
+            let right = expected
+                .iter()
+                .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
+                .collect::<TimestampNanosecondArray>()
+                .with_timezone_opt(tz_opt.clone());
+            let batch_len = input.len();
+            let args = vec![
+                ColumnarValue::Scalar(ScalarValue::new_interval_dt(1, 0)),
+                ColumnarValue::Array(Arc::new(input)),
+                ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                    Some(string_to_timestamp_nanos(origin).unwrap()),
+                    tz_opt.clone(),
+                )),
+            ];
+            let return_field = &Arc::new(Field::new(
+                "f",
+                DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone()),
+                true,
+            ));
+            let result =
+                invoke_date_bin_with_args(args, batch_len, return_field).unwrap();
 
-                if let ColumnarValue::Array(result) = result {
-                    assert_eq!(
-                        result.data_type(),
-                        &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone())
-                    );
-                    let left = arrow::array::cast::as_primitive_array::<
-                        TimestampNanosecondType,
-                    >(&result);
-                    assert_eq!(left, &right);
-                } else {
-                    panic!("unexpected column type");
-                }
-            });
+            if let ColumnarValue::Array(result) = result {
+                assert_eq!(
+                    result.data_type(),
+                    &DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone())
+                );
+                let left = arrow::array::cast::as_primitive_array::<
+                    TimestampNanosecondType,
+                >(&result);
+                assert_eq!(left, &right);
+            } else {
+                panic!("unexpected column type");
+            }
+        }
     }
 
     #[test]
@@ -1243,18 +1296,16 @@ mod tests {
             ),
         ];
 
-        cases
-            .iter()
-            .for_each(|((stride, source, origin), expected)| {
-                let stride = stride.unwrap();
-                let stride1 = stride.num_nanoseconds().unwrap();
-                let source1 = string_to_timestamp_nanos(source).unwrap();
-                let origin1 = string_to_timestamp_nanos(origin).unwrap();
+        for ((stride, source, origin), expected) in &cases {
+            let stride = stride.unwrap();
+            let stride1 = stride.num_nanoseconds().unwrap();
+            let source1 = string_to_timestamp_nanos(source).unwrap();
+            let origin1 = string_to_timestamp_nanos(origin).unwrap();
 
-                let expected1 = string_to_timestamp_nanos(expected).unwrap();
-                let result = date_bin_nanos_interval(stride1, source1, origin1).unwrap();
-                assert_eq!(result, expected1, "{source} = {expected}");
-            })
+            let expected1 = string_to_timestamp_nanos(expected).unwrap();
+            let result = date_bin_nanos_interval(stride1, source1, origin1).unwrap();
+            assert_eq!(result, expected1, "{source} = {expected}");
+        }
     }
 
     #[test]
@@ -1274,7 +1325,7 @@ mod tests {
             ),
         ];
 
-        cases.iter().for_each(|((stride, source), expected)| {
+        for ((stride, source), expected) in &cases {
             let stride = stride.unwrap();
             let stride1 = stride.num_nanoseconds().unwrap();
             let source1 = string_to_timestamp_nanos(source).unwrap();
@@ -1282,7 +1333,7 @@ mod tests {
             let expected1 = string_to_timestamp_nanos(expected).unwrap();
             let result = date_bin_nanos_interval(stride1, source1, 0).unwrap();
             assert_eq!(result, expected1, "{source} = {expected}");
-        })
+        }
     }
 
     #[test]

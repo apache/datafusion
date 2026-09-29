@@ -190,6 +190,7 @@ serde_json = { workspace = true }
 sysinfo = "0.39.3"
 test-utils = { path = "../../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
+unicode-width = "0.2"
 
 [package.metadata.cargo-machete]
 ignored = ["datafusion-doc", "datafusion-macros", "dashmap"]
@@ -227,6 +228,10 @@ name = "distinct_query_sql"
 [[bench]]
 harness = false
 name = "push_down_filter"
+
+[[bench]]
+harness = false
+name = "pwmj_semi_anti_sql"
 
 [[bench]]
 harness = false
@@ -335,3 +340,7 @@ required-features = ["parquet"]
 [[bench]]
 harness = false
 name = "reset_plan_states"
+
+[[bench]]
+harness = false
+name = "partition_metrics"

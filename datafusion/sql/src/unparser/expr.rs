@@ -360,8 +360,9 @@ impl Unparser<'_> {
                 negated: *negated,
                 expr: Box::new(self.expr_to_sql_inner(expr)?),
                 pattern: Box::new(self.expr_to_sql_inner(pattern)?),
-                escape_char: escape_char
-                    .map(|c| SingleQuotedString(c.to_string()).into()),
+                escape_char: escape_char.map(|c| {
+                    Box::new(ast::Expr::Value(SingleQuotedString(c.to_string()).into()))
+                }),
                 any: false,
             }),
             Expr::Like(Like {
@@ -371,22 +372,27 @@ impl Unparser<'_> {
                 escape_char,
                 case_insensitive,
             }) => {
+                let negated = *negated;
+                let expr = Box::new(self.expr_to_sql_inner(expr)?);
+                let pattern = Box::new(self.expr_to_sql_inner(pattern)?);
+                let escape_char = escape_char.map(|c| {
+                    Box::new(ast::Expr::Value(SingleQuotedString(c.to_string()).into()))
+                });
+
                 if *case_insensitive {
                     Ok(ast::Expr::ILike {
-                        negated: *negated,
-                        expr: Box::new(self.expr_to_sql_inner(expr)?),
-                        pattern: Box::new(self.expr_to_sql_inner(pattern)?),
-                        escape_char: escape_char
-                            .map(|c| SingleQuotedString(c.to_string()).into()),
+                        negated,
+                        expr,
+                        pattern,
+                        escape_char,
                         any: false,
                     })
                 } else {
                     Ok(ast::Expr::Like {
-                        negated: *negated,
-                        expr: Box::new(self.expr_to_sql_inner(expr)?),
-                        pattern: Box::new(self.expr_to_sql_inner(pattern)?),
-                        escape_char: escape_char
-                            .map(|c| SingleQuotedString(c.to_string()).into()),
+                        negated,
+                        expr,
+                        pattern,
+                        escape_char,
                         any: false,
                     })
                 }
@@ -402,20 +408,18 @@ impl Unparser<'_> {
                     ..
                 } = &agg.params;
 
-                let args_to_use;
-                let within_group;
-
                 // if this is a WITHIN GROUP aggregate, skip the prepended arg
-                if agg.func.supports_within_group_clause() && !order_by.is_empty() {
-                    args_to_use = self.function_args_to_sql(&args[1..])?;
-                    within_group = order_by
-                        .iter()
-                        .map(|sort_expr| self.sort_to_sql(sort_expr))
-                        .collect::<Result<Vec<ast::OrderByExpr>>>()?;
-                } else {
-                    args_to_use = self.function_args_to_sql(args)?;
-                    within_group = Vec::new();
-                }
+                let (args_to_use, within_group) =
+                    if agg.func.supports_within_group_clause() && !order_by.is_empty() {
+                        let args_to_use = self.function_args_to_sql(&args[1..])?;
+                        let within_group = order_by
+                            .iter()
+                            .map(|sort_expr| self.sort_to_sql(sort_expr))
+                            .collect::<Result<Vec<ast::OrderByExpr>>>()?;
+                        (args_to_use, within_group)
+                    } else {
+                        (self.function_args_to_sql(args)?, Vec::new())
+                    };
 
                 let filter = match filter {
                     Some(filter) => Some(Box::new(self.expr_to_sql_inner(filter)?)),
@@ -443,10 +447,7 @@ impl Unparser<'_> {
             }
             Expr::ScalarSubquery(subq) => {
                 let sub_statement = self.plan_to_sql(subq.subquery.as_ref())?;
-                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
-                {
-                    inner_query
-                } else {
+                let ast::Statement::Query(sub_query) = sub_statement else {
                     return plan_err!(
                         "Subquery must be a Query, but found {sub_statement:?}"
                     );
@@ -457,10 +458,7 @@ impl Unparser<'_> {
                 let inexpr = Box::new(self.expr_to_sql_inner(insubq.expr.as_ref())?);
                 let sub_statement =
                     self.plan_to_sql(insubq.subquery.subquery.as_ref())?;
-                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
-                {
-                    inner_query
-                } else {
+                let ast::Statement::Query(sub_query) = sub_statement else {
                     return plan_err!(
                         "Subquery must be a Query, but found {sub_statement:?}"
                     );
@@ -475,10 +473,7 @@ impl Unparser<'_> {
                 let left = Box::new(self.expr_to_sql_inner(set_cmp.expr.as_ref())?);
                 let sub_statement =
                     self.plan_to_sql(set_cmp.subquery.subquery.as_ref())?;
-                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
-                {
-                    inner_query
-                } else {
+                let ast::Statement::Query(sub_query) = sub_statement else {
                     return plan_err!(
                         "Subquery must be a Query, but found {sub_statement:?}"
                     );
@@ -500,10 +495,7 @@ impl Unparser<'_> {
             }
             Expr::Exists(Exists { subquery, negated }) => {
                 let sub_statement = self.plan_to_sql(subquery.subquery.as_ref())?;
-                let sub_query = if let ast::Statement::Query(inner_query) = sub_statement
-                {
-                    inner_query
-                } else {
+                let ast::Statement::Query(sub_query) = sub_statement else {
                     return plan_err!(
                         "Subquery must be a Query, but found {sub_statement:?}"
                     );
@@ -572,7 +564,6 @@ impl Unparser<'_> {
                     kind: ast::CastKind::TryCast,
                     expr: Box::new(inner_expr),
                     data_type: self.arrow_dtype_to_ast_dtype(field)?,
-                    array: false,
                     format: None,
                 })
             }
@@ -750,16 +741,18 @@ impl Unparser<'_> {
         );
 
         let args = args
-            .chunks_exact(2)
-            .map(|chunk| {
-                let key = match &chunk[0] {
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|[name, value]| {
+                let key = match name {
                     Expr::Literal(ScalarValue::Utf8(Some(s)), _) => self.new_ident_quoted_if_needs(s.to_string()),
-                    _ => return internal_err!("named_struct expects even arguments to be strings, but received: {:?}", &chunk[0])
+                    _ => return internal_err!("named_struct expects even arguments to be strings, but received: {name:?}")
                 };
 
                 Ok(ast::DictionaryField {
                     key,
-                    value: Box::new(self.expr_to_sql_with_nesting(&chunk[1])?),
+                    value: Box::new(self.expr_to_sql_with_nesting(value)?),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -876,7 +869,11 @@ impl Unparser<'_> {
         Ok(ast::OrderByExpr {
             expr: sql_parser_expr,
             options: OrderByOptions {
-                asc: Some(*asc),
+                sort: Some(if *asc {
+                    ast::OrderBySort::Asc
+                } else {
+                    ast::OrderBySort::Desc
+                }),
                 nulls_first,
             },
             with_fill: None,
@@ -1214,19 +1211,16 @@ impl Unparser<'_> {
     fn handle_timestamp<T: ArrowTemporalType>(
         &self,
         v: &ScalarValue,
-        tz: &Option<Arc<str>>,
+        tz: Option<&Arc<str>>,
     ) -> Result<ast::Expr>
     where
         i64: From<T::Native>,
     {
-        let time_unit = match T::DATA_TYPE {
-            DataType::Timestamp(unit, _) => unit,
-            _ => {
-                return Err(internal_datafusion_err!(
-                    "Expected Timestamp, got {:?}",
-                    T::DATA_TYPE
-                ));
-            }
+        let DataType::Timestamp(time_unit, _) = T::DATA_TYPE else {
+            return Err(internal_datafusion_err!(
+                "Expected Timestamp, got {:?}",
+                T::DATA_TYPE
+            ));
         };
 
         let ts = if let Some(tz) = tz {
@@ -1260,7 +1254,6 @@ impl Unparser<'_> {
             kind: ast::CastKind::Cast,
             expr: Box::new(ast::Expr::value(SingleQuotedString(ts))),
             data_type: self.dialect.timestamp_cast_dtype(&time_unit, &None),
-            array: false,
             format: None,
         })
     }
@@ -1283,7 +1276,6 @@ impl Unparser<'_> {
             kind: ast::CastKind::Cast,
             expr: Box::new(ast::Expr::value(SingleQuotedString(time))),
             data_type: ast::DataType::Time(None, TimezoneInfo::None),
-            array: false,
             format: None,
         })
     }
@@ -1304,7 +1296,6 @@ impl Unparser<'_> {
                     kind: ast::CastKind::Cast,
                     expr: Box::new(inner_expr),
                     data_type: self.arrow_dtype_to_ast_dtype(field)?,
-                    array: false,
                     format: None,
                 }),
             },
@@ -1312,7 +1303,6 @@ impl Unparser<'_> {
                 kind: ast::CastKind::Cast,
                 expr: Box::new(inner_expr),
                 data_type: self.arrow_dtype_to_ast_dtype(field)?,
-                array: false,
                 format: None,
             }),
         }
@@ -1463,7 +1453,6 @@ impl Unparser<'_> {
                         date.to_string(),
                     ))),
                     data_type: ast::DataType::Date,
-                    array: false,
                     format: None,
                 })
             }
@@ -1487,7 +1476,6 @@ impl Unparser<'_> {
                         datetime.to_string(),
                     ))),
                     data_type: self.ast_type_for_date64_in_cast(),
-                    array: false,
                     format: None,
                 })
             }
@@ -1513,25 +1501,25 @@ impl Unparser<'_> {
             }
             ScalarValue::Time64Nanosecond(None) => Ok(ast::Expr::value(ast::Value::Null)),
             ScalarValue::TimestampSecond(Some(_ts), tz) => {
-                self.handle_timestamp::<TimestampSecondType>(v, tz)
+                self.handle_timestamp::<TimestampSecondType>(v, tz.as_ref())
             }
             ScalarValue::TimestampSecond(None, _) => {
                 Ok(ast::Expr::value(ast::Value::Null))
             }
             ScalarValue::TimestampMillisecond(Some(_ts), tz) => {
-                self.handle_timestamp::<TimestampMillisecondType>(v, tz)
+                self.handle_timestamp::<TimestampMillisecondType>(v, tz.as_ref())
             }
             ScalarValue::TimestampMillisecond(None, _) => {
                 Ok(ast::Expr::value(ast::Value::Null))
             }
             ScalarValue::TimestampMicrosecond(Some(_ts), tz) => {
-                self.handle_timestamp::<TimestampMicrosecondType>(v, tz)
+                self.handle_timestamp::<TimestampMicrosecondType>(v, tz.as_ref())
             }
             ScalarValue::TimestampMicrosecond(None, _) => {
                 Ok(ast::Expr::value(ast::Value::Null))
             }
             ScalarValue::TimestampNanosecond(Some(_ts), tz) => {
-                self.handle_timestamp::<TimestampNanosecondType>(v, tz)
+                self.handle_timestamp::<TimestampNanosecondType>(v, tz.as_ref())
             }
             ScalarValue::TimestampNanosecond(None, _) => {
                 Ok(ast::Expr::value(ast::Value::Null))
@@ -2947,10 +2935,16 @@ mod tests {
                 "EXTRACT(MONTH FROM x)",
             ),
             (
+                DateFieldExtractStyle::Extract,
+                "MONS",
+                "EXTRACT(MONTH FROM x)",
+            ),
+            (
                 DateFieldExtractStyle::Strftime,
                 "MONTH",
                 "strftime('%m', x)",
             ),
+            (DateFieldExtractStyle::Strftime, "YRS", "strftime('%Y', x)"),
             (
                 DateFieldExtractStyle::DatePart,
                 "DAY",
@@ -3485,7 +3479,7 @@ mod tests {
         ] {
             let unparser = Unparser::new(dialect.as_ref());
             let expr = Expr::ScalarFunction(ScalarFunction {
-                func: Arc::new(ScalarUDF::from(FromUnixtimeFunc::new())),
+                func: Arc::new(ScalarUDF::from(FromUnixtimeFunc::default())),
                 args: vec![col("date_col")],
             });
 

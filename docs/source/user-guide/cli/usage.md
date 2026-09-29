@@ -52,6 +52,8 @@ Options:
           [possible values: numbers(0/10/...), inf(no limit)] [default: 40]
       --color
           Enables console syntax highlighting
+      --spark
+          Enable Apache Spark-compatible SQL dialect, functions, and expression planning
   -d, --disk-limit <DISK_LIMIT>
           Available disk space for spilling queries (e.g. '10g'), default to None (uses DataFusion's default value of '100g')
       --object-store-profiling <OBJECT_STORE_PROFILING>
@@ -62,6 +64,18 @@ Options:
   -V, --version
           Print version
 ```
+
+## Apache Spark compatibility
+
+Use `--spark` to enable the Apache Spark SQL dialect, expression planner, and
+function library for the CLI session:
+
+```bash
+datafusion-cli --spark -c "SELECT next_day('2015-07-27'::DATE, 'Sun'::STRING);"
+```
+
+Spark compatibility is disabled by default. Enabling it overrides DataFusion
+functions with the same name for the duration of the session.
 
 ## Commands
 

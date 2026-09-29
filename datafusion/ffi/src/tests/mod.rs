@@ -27,10 +27,13 @@ use datafusion_catalog::MemTable;
 use datafusion_catalog::{Session, TableProvider};
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Statistics};
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::{Result, ScalarValue, SplitPoint, exec_err};
 use datafusion_expr::{Expr, TableType, col, lit};
-use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::{
+    LexOrdering, PhysicalExpr, PhysicalSortExpr, RangePartitioning,
+};
+use datafusion_physical_plan::{ExecutionPlan, Partitioning};
 use sync_provider::create_sync_table_provider;
 use udf_udaf_udwf::{
     create_ffi_abs_func, create_ffi_first_value_func, create_ffi_random_func,
@@ -228,7 +231,63 @@ pub fn make_test_statistics() -> Statistics {
 
 pub(crate) extern "C" fn create_exec_with_statistics() -> FFI_ExecutionPlan {
     let schema = create_test_schema();
-    let plan = Arc::new(EmptyExec::new(schema).with_statistics(make_test_statistics()));
+    let ordering =
+        LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))])
+            .expect("non-empty ordering");
+    let samples = [10, 20, 30, 40, 50]
+        .into_iter()
+        .map(|value| SplitPoint::new(vec![ScalarValue::Int32(Some(value))]))
+        .collect();
+    let partitioning = Partitioning::Range(
+        RangePartitioning::try_new_with_samples(ordering, samples, 3)
+            .expect("valid sampled range partitioning"),
+    );
+    let plan = Arc::new(
+        EmptyExec::new(schema)
+            .with_statistics(make_test_statistics())
+            .with_partitioning(partitioning),
+    );
+    FFI_ExecutionPlan::new(plan, None)
+}
+
+/// Registers real Bytes-category [`MetricValue::Count`] and
+/// [`MetricValue::Gauge`] metrics (via the same [`MetricBuilder::bytes_counter`]
+/// and [`MetricBuilder::bytes_gauge`] constructors production code uses for
+/// `bytes_scanned`/`stream_memory_usage`) on the returned plan, so the
+/// consumer-side integration test can exercise the category-aware
+/// byte-formatting `Display` logic through a real cross-library `metrics()`
+/// FFI call rather than only the in-process `FFI_MetricValue` conversion
+/// tests in `physical_expr::metrics`.
+///
+/// This is deliberately exported as its own top-level symbol rather than a
+/// new field on [`ForeignLibraryModule`]: that struct is public and
+/// `#[repr(C)]` with no private/gated constructor, so every field is part of
+/// its exhaustive-construction ABI surface - adding one is exactly what
+/// `cargo-semver-checks`'s `constructible_struct_adds_field` lint flags, even
+/// for a test-only, `integration-tests`-gated struct like this one. A
+/// separate exported symbol, loaded the same way [`load_module`] loads
+/// `datafusion_ffi_get_module`, avoids touching that struct's layout at all.
+///
+/// [`MetricValue::Count`]: datafusion_physical_expr_common::metrics::MetricValue::Count
+/// [`MetricValue::Gauge`]: datafusion_physical_expr_common::metrics::MetricValue::Gauge
+#[unsafe(no_mangle)]
+pub extern "C" fn datafusion_ffi_test_create_exec_with_byte_metrics() -> FFI_ExecutionPlan
+{
+    use datafusion_physical_expr_common::metrics::{
+        ExecutionPlanMetricsSet, MetricBuilder,
+    };
+
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+
+    let metrics_set = ExecutionPlanMetricsSet::new();
+    MetricBuilder::new(&metrics_set)
+        .bytes_counter("bytes_scanned", 0)
+        .add(1536);
+    MetricBuilder::new(&metrics_set)
+        .bytes_gauge("stream_memory_usage", 0)
+        .add(2048);
+
+    let plan = Arc::new(EmptyExec::new(schema).with_metrics(metrics_set.clone_inner()));
     FFI_ExecutionPlan::new(plan, None)
 }
 
@@ -259,7 +318,7 @@ impl TableProvider for TableWithStats {
     async fn scan(
         &self,
         session: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

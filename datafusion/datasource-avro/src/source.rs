@@ -189,6 +189,20 @@ impl FileSource for AvroSource {
         use datafusion_proto_models::protobuf;
         use protobuf::physical_plan_node::PhysicalPlanType;
 
+        // Exhaustive destructure: adding a field to `AvroSource` without
+        // deciding how it is serialized is a compile error, not a silent
+        // round-trip gap.
+        let Self {
+            // Serialized in `base` and used to rebuild the source on decode.
+            table_schema: _,
+            // Set from `FileScanConfig` when the scan is opened.
+            batch_size: _,
+            // Serialized in `base` and reapplied on decode.
+            projection: _,
+            // Runtime metrics, not part of the plan.
+            metrics: _,
+        } = self;
+
         let node = protobuf::AvroScanExecNode {
             base_conf: Some(base.try_to_proto(ctx)?),
         };
@@ -208,16 +222,17 @@ impl AvroSource {
         use datafusion_datasource::source::DataSourceExec;
         use datafusion_proto_models::protobuf;
 
-        let scan = match &node.physical_plan_type {
-            Some(protobuf::physical_plan_node::PhysicalPlanType::AvroScan(scan)) => scan,
-            _ => {
-                return datafusion_common::internal_err!(
-                    "PhysicalPlanNode is not an AvroScan"
-                );
-            }
+        let Some(protobuf::physical_plan_node::PhysicalPlanType::AvroScan(scan)) =
+            &node.physical_plan_type
+        else {
+            return datafusion_common::internal_err!(
+                "PhysicalPlanNode is not an AvroScan"
+            );
         };
 
-        let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
+        let protobuf::AvroScanExecNode { base_conf } = scan;
+
+        let base_conf = base_conf.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "AvroScanExecNode is missing required field 'base_conf'"
             )
@@ -412,14 +427,14 @@ mod tests {
         assert_eq!(8, date_string_col.0);
         assert_eq!(&DataType::Binary, date_string_col.1.data_type());
         let col = get_col::<BinaryArray>(&batch, date_string_col).unwrap();
-        assert_eq!("01/01/09".as_bytes(), col.value(0));
-        assert_eq!("01/01/09".as_bytes(), col.value(1));
+        assert_eq!(b"01/01/09", col.value(0));
+        assert_eq!(b"01/01/09", col.value(1));
         let string_col = schema.column_with_name("string_col").unwrap();
         assert_eq!(9, string_col.0);
         assert_eq!(&DataType::Binary, string_col.1.data_type());
         let col = get_col::<BinaryArray>(&batch, string_col).unwrap();
-        assert_eq!("0".as_bytes(), col.value(0));
-        assert_eq!("1".as_bytes(), col.value(1));
+        assert_eq!(b"0", col.value(0));
+        assert_eq!(b"1", col.value(1));
         let timestamp_col = schema.column_with_name("timestamp_col").unwrap();
         assert_eq!(10, timestamp_col.0);
         assert_eq!(
@@ -456,8 +471,8 @@ mod tests {
             .as_any()
             .downcast_ref::<BinaryArray>()
             .unwrap();
-        assert_eq!("0".as_bytes(), col.value(0));
-        assert_eq!("1".as_bytes(), col.value(1));
+        assert_eq!(b"0", col.value(0));
+        assert_eq!(b"1", col.value(1));
 
         // Second column should be double_col (was at index 7 in original)
         assert_eq!("double_col", schema.field(1).name());

@@ -1642,8 +1642,10 @@ mod tests {
     };
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
+    use datafusion_functions_window::lead_lag::lead_udwf;
     use datafusion_functions_window::nth_value::last_value_udwf;
     use datafusion_functions_window::nth_value::nth_value_udwf;
+    use datafusion_functions_window::row_number::row_number_udwf;
     use datafusion_physical_expr::expressions::{Column, Literal, col};
     use datafusion_physical_expr::window::{PartitionKey, StandardWindowExpr};
     use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
@@ -1844,7 +1846,7 @@ mod tests {
             .is_ok()
         {
             return Err(exec_datafusion_err!("shouldn't have completed"));
-        };
+        }
 
         Ok(results)
     }
@@ -2183,6 +2185,115 @@ mod tests {
         Ok(())
     }
 
+    // In `Linear` mode, a partition may receive no new rows for several
+    // input batches while other partitions keep growing. The evaluation
+    // sweep skips a partition whose input is unchanged, so this test
+    // drives a partition through quiet batches and then resumes it: the
+    // results after the gap must continue from the retained evaluator
+    // state. ROW_NUMBER is causal, so the quiet partition is fully
+    // calculated while it waits; LEAD is not, so its result for the
+    // partition's last buffered row stays pending across the quiet
+    // batches and must materialize once the partition receives another
+    // row.
+    #[tokio::test]
+    async fn bounded_window_linear_quiet_partition_resume_standard() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("pk", DataType::UInt64, false),
+            Field::new("ts", DataType::UInt64, false),
+        ]));
+        let make_batch = |rows: &[(u64, u64)]| -> Result<RecordBatch> {
+            let mut pk = UInt64Builder::with_capacity(rows.len());
+            let mut ts = UInt64Builder::with_capacity(rows.len());
+            for (p, t) in rows {
+                pk.append_value(*p);
+                ts.append_value(*t);
+            }
+            Ok(RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(pk.finish()), Arc::new(ts.finish())],
+            )?)
+        };
+        // `ts` ascends globally; partition 0 is absent from the middle batches.
+        let batches = vec![
+            make_batch(&[(0, 0), (0, 1), (1, 2)])?,
+            make_batch(&[(1, 3), (1, 4)])?,
+            make_batch(&[(1, 5)])?,
+            make_batch(&[(0, 6), (1, 7)])?,
+        ];
+        let memory_exec =
+            TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+
+        let partition_by = vec![col("pk", &schema)?];
+        let order_by = [PhysicalSortExpr {
+            expr: col("ts", &schema)?,
+            options: SortOptions::default(),
+        }];
+        // Both functions use the default frame of a window with an ORDER BY
+        // clause (RANGE UNBOUNDED PRECEDING..CURRENT ROW).
+        let row_number_expr = create_window_expr(
+            &WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+            "row_number".to_string(),
+            &[],
+            &partition_by,
+            &order_by,
+            Arc::new(WindowFrame::new(Some(false))),
+            Arc::clone(&schema),
+            false,
+            false,
+            None,
+        )?;
+        let lead_expr = create_window_expr(
+            &WindowFunctionDefinition::WindowUDF(lead_udwf()),
+            "lead".to_string(),
+            &[col("ts", &schema)?],
+            &partition_by,
+            &order_by,
+            Arc::new(WindowFrame::new(Some(false))),
+            Arc::clone(&schema),
+            false,
+            false,
+            None,
+        )?;
+        let physical_plan = BoundedWindowAggExec::try_new(
+            vec![row_number_expr, lead_expr],
+            memory_exec,
+            InputOrderMode::Linear,
+            true,
+        )
+        .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>)?;
+
+        let batches = collect(physical_plan.execute(0, task_context())?).await?;
+
+        // The skip must not delay results that are ready to be finalized;
+        // they stream out as soon as every window expression has produced
+        // them. LEAD holds back only the last buffered row of a partition,
+        // so one row unblocks right after the first input batch, five more
+        // when partition 0 resumes in the last input batch, and the final
+        // two (whose LEAD results need the end of the input) in the flush
+        // after the input is exhausted.
+        assert_eq!(
+            batches.iter().map(|b| b.num_rows()).collect::<Vec<_>>(),
+            vec![1, 5, 2],
+            "expected results to stream as they become final"
+        );
+
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+------------+------+
+        | pk | ts | row_number | lead |
+        +----+----+------------+------+
+        | 0  | 0  | 1          | 1    |
+        | 0  | 1  | 2          | 6    |
+        | 1  | 2  | 1          | 3    |
+        | 1  | 3  | 2          | 4    |
+        | 1  | 4  | 3          | 5    |
+        | 1  | 5  | 4          | 7    |
+        | 0  | 6  | 3          |      |
+        | 1  | 7  | 5          |      |
+        +----+----+------------+------+
+        ");
+        Ok(())
+    }
+
     // This test, tests whether most recent row guarantee by the input batch of the `BoundedWindowAggExec`
     // helps `BoundedWindowAggExec` to generate low latency result in the `Linear` mode.
     // Input data generated at the source is
@@ -2266,7 +2377,7 @@ mod tests {
         let chunk_length = 2;
         let n_future_range = 1;
 
-        let timeout_duration = Duration::from_millis(2000);
+        let timeout_duration = Duration::from_secs(2);
 
         let source =
             generate_never_ending_source(n_rows, chunk_length, 1, true, false, 5)?;

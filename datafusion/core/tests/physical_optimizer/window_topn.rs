@@ -20,6 +20,7 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
@@ -32,10 +33,13 @@ use datafusion_physical_expr::window::StandardWindowExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::window_topn::WindowTopN;
+use datafusion_physical_plan::collect;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::metrics::MetricValue;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::sorts::partitioned_topk::PartitionedTopKExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::windows::{BoundedWindowAggExec, create_udwf_window_expr};
 use datafusion_physical_plan::{ExecutionPlan, InputOrderMode};
@@ -454,8 +458,12 @@ fn build_ranking_topn_plan(
     Ok(filter)
 }
 
-/// Build a RANK plan with NO ORDER BY: every row ties at rank 1 — degenerate.
-fn build_rank_no_order_by_plan(limit_value: i64) -> Result<Arc<dyn ExecutionPlan>> {
+/// Build a RANK / DENSE_RANK plan with NO ORDER BY: every row ties at rank 1 — degenerate.
+fn build_no_order_by_plan(
+    udwf_factory: fn() -> Arc<datafusion_expr::WindowUDF>,
+    udwf_name: &str,
+    limit_value: i64,
+) -> Result<Arc<dyn ExecutionPlan>> {
     let s = schema();
     let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
 
@@ -469,7 +477,7 @@ fn build_rank_no_order_by_plan(limit_value: i64) -> Result<Arc<dyn ExecutionPlan
     let partition_by = vec![col("pk", &s)?];
 
     let window_expr = Arc::new(StandardWindowExpr::new(
-        create_udwf_window_expr(&rank_udwf(), &[], &s, "rank".to_string(), false)?,
+        create_udwf_window_expr(&udwf_factory(), &[], &s, udwf_name.to_string(), false)?,
         &partition_by,
         &[], // empty ORDER BY
         Arc::new(WindowFrame::new_bounds(
@@ -486,7 +494,7 @@ fn build_rank_no_order_by_plan(limit_value: i64) -> Result<Arc<dyn ExecutionPlan
         true,
     )?);
 
-    let rk_col = Arc::new(Column::new("rank", 2));
+    let rk_col = Arc::new(Column::new(udwf_name, 2));
     let limit_lit = lit(ScalarValue::UInt64(Some(limit_value as u64)));
     let predicate = Arc::new(BinaryExpr::new(rk_col, Operator::LtEq, limit_lit));
     let filter: Arc<dyn ExecutionPlan> =
@@ -548,7 +556,7 @@ fn rank_no_order_by_no_change() -> Result<()> {
     // Without ORDER BY, every row ties at rank 1 — the optimization is
     // degenerate (entire input would be retained, ties storage unbounded).
     // The rule must skip.
-    let plan = build_rank_no_order_by_plan(3)?;
+    let plan = build_no_order_by_plan(rank_udwf, "rank", 3)?;
     let before = plan_str(plan.as_ref());
     let optimized = optimize(plan)?;
     let after = plan_str(optimized.as_ref());
@@ -559,17 +567,163 @@ fn rank_no_order_by_no_change() -> Result<()> {
     Ok(())
 }
 
+// ----------------------------------------------------------------------
+// DENSE_RANK rule tests
+// ----------------------------------------------------------------------
+
 #[test]
-fn dense_rank_no_change() -> Result<()> {
-    // DENSE_RANK is not yet supported by the rule. The plan must pass
-    // through unchanged.
+fn basic_dense_rank_dr_lteq_3() -> Result<()> {
     let plan = build_ranking_topn_plan(dense_rank_udwf, "dense_rank", 3, Operator::LtEq)?;
+    let optimized = optimize(plan)?;
+    assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+    BoundedWindowAggExec: wdw=[dense_rank: Field { "dense_rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
+        PlaceholderRowExec
+    "#);
+    Ok(())
+}
+
+#[test]
+fn dense_rank_dr_lt_4_becomes_fetch_3() -> Result<()> {
+    let plan = build_ranking_topn_plan(dense_rank_udwf, "dense_rank", 4, Operator::Lt)?;
+    let optimized = optimize(plan)?;
+    assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+    BoundedWindowAggExec: wdw=[dense_rank: Field { "dense_rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
+        PlaceholderRowExec
+    "#);
+    Ok(())
+}
+
+#[test]
+fn dense_rank_flipped_3_gteq_dr() -> Result<()> {
+    let plan = build_ranking_topn_plan(dense_rank_udwf, "dense_rank", 3, Operator::GtEq)?;
+    let optimized = optimize(plan)?;
+    assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+    BoundedWindowAggExec: wdw=[dense_rank: Field { "dense_rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
+        PlaceholderRowExec
+    "#);
+    Ok(())
+}
+
+#[test]
+fn dense_rank_flipped_4_gt_dr_becomes_fetch_3() -> Result<()> {
+    let plan = build_ranking_topn_plan(dense_rank_udwf, "dense_rank", 4, Operator::Gt)?;
+    let optimized = optimize(plan)?;
+    assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+    BoundedWindowAggExec: wdw=[dense_rank: Field { "dense_rank": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+      PartitionedTopKExec: fn=dense_rank, fetch=3, partition=[pk@0], order=[val@1 ASC]
+        PlaceholderRowExec
+    "#);
+    Ok(())
+}
+
+#[test]
+fn dense_rank_no_order_by_no_change() -> Result<()> {
+    // Without ORDER BY, every row ties at dense_rank 1 — the optimization
+    // is degenerate (entire input would be retained). The rule must skip.
+    let plan = build_no_order_by_plan(dense_rank_udwf, "dense_rank", 3)?;
     let before = plan_str(plan.as_ref());
     let optimized = optimize(plan)?;
     let after = plan_str(optimized.as_ref());
     assert_eq!(
         before, after,
-        "DENSE_RANK is unsupported and must not be rewritten"
+        "DENSE_RANK with empty ORDER BY must not be rewritten"
     );
+    Ok(())
+}
+
+// ----------------------------------------------------------------------
+// Shared guard: `fn < 1` keeps nothing
+// ----------------------------------------------------------------------
+
+#[test]
+fn predicate_lt_1_no_change() -> Result<()> {
+    // `fn < 1` (and the flipped `1 > fn`) yields limit_n = 0. Since
+    // ROW_NUMBER / RANK / DENSE_RANK are always >= 1, the predicate keeps
+    // nothing and the rule must skip — a fetch=0 PartitionedTopK* would
+    // otherwise panic on its `k > 0` assertion at execution time.
+    type UdwfFactory = fn() -> Arc<datafusion_expr::WindowUDF>;
+    let cases: [(UdwfFactory, &str); 3] = [
+        (row_number_udwf, "row_number"),
+        (rank_udwf, "rank"),
+        (dense_rank_udwf, "dense_rank"),
+    ];
+    for (factory, name) in cases {
+        let plan = build_ranking_topn_plan(factory, name, 1, Operator::Lt)?;
+        let before = plan_str(plan.as_ref());
+        let optimized = optimize(plan)?;
+        let after = plan_str(optimized.as_ref());
+        assert_eq!(
+            before, after,
+            "`{name} < 1` (limit 0) must not be rewritten"
+        );
+    }
+    Ok(())
+}
+
+// ----------------------------------------------------------------------
+// Execution: metrics exposure
+// ----------------------------------------------------------------------
+
+/// Recursively finds the `PartitionedTopKExec` node in `plan`.
+fn find_partitioned_topk(
+    plan: &Arc<dyn ExecutionPlan>,
+) -> Option<Arc<dyn ExecutionPlan>> {
+    if plan.is::<PartitionedTopKExec>() {
+        return Some(Arc::clone(plan));
+    }
+    plan.children().into_iter().find_map(find_partitioned_topk)
+}
+
+/// Regression test for #24470: `PartitionedTopKExec` builds an
+/// `ExecutionPlanMetricsSet` and hands it to the top-K state, but used to omit
+/// `ExecutionPlan::metrics()`, so nothing it recorded was ever observable (and
+/// `EXPLAIN ANALYZE` showed no metrics for the operator).
+///
+/// The `output_batches` assertion also covers the emit-side counting fixed for
+/// #24468: the per-partition heaps are coalesced into `batch_size` batches, so
+/// the metric must count the coalesced output, not the per-partition inputs.
+#[tokio::test]
+async fn partitioned_topk_exec_exposes_metrics() -> Result<()> {
+    let mut config = SessionConfig::new()
+        .with_batch_size(10)
+        .with_target_partitions(1);
+    config.options_mut().optimizer.enable_window_topn = true;
+    let ctx = SessionContext::new_with_config(config);
+
+    // 10 partition keys x 5 rows each; top-5 per key keeps all 50 rows, which
+    // at batch_size 10 must be emitted as 5 batches.
+    ctx.sql(
+        "CREATE TABLE t AS
+         SELECT v % 10 AS pk, v AS val FROM (SELECT unnest(range(0, 50)) AS v)",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    let df = ctx
+        .sql(
+            "SELECT pk, val FROM (
+               SELECT *, ROW_NUMBER() OVER (PARTITION BY pk ORDER BY val) AS rn FROM t
+             ) WHERE rn <= 5",
+        )
+        .await?;
+    let plan = df.create_physical_plan().await?;
+    let batches = collect(Arc::clone(&plan), ctx.task_ctx()).await?;
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 50);
+
+    let topk = find_partitioned_topk(&plan).expect("plan has a PartitionedTopKExec");
+    let metrics = topk
+        .metrics()
+        .expect("PartitionedTopKExec should expose metrics");
+    assert_eq!(metrics.output_rows(), Some(50));
+    let output_batches = metrics
+        .sum(|m| matches!(m.value(), MetricValue::OutputBatches(_)))
+        .expect("output_batches metric")
+        .as_usize();
+    assert_eq!(output_batches, 5);
+
     Ok(())
 }

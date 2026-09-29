@@ -1,0 +1,23 @@
+description = "IN / NOT IN / EXISTS subqueries that appear in the SELECT list instead of a filter (apache/datafusion#25341). Each query projects the boolean result of a subquery and aggregates it, so the measured work is the decorrelation plan and not the output size. The decorrelation turns one projected IN into mark joins; when the join predicate is not hashable, or the correlation is not an equality, the plan keeps a nested-loop mark join and the cost grows with outer rows times inner rows. Query 07 correlates on `<` and stays on that path, so it is the control that must not change. The two tables are built inline by the load SQL and are sized with PSQ_ROWS."
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[[options]]
+name = "rows"
+short = "r"
+env = "PSQ_ROWS"
+default = "30000"
+values = ["30000", "..."]
+help = "Sets the number of rows in each of the two generated tables. The checked-in result files hold the counts for the default value, so --result-mode validate needs the default."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- projection_subquery"
+description = "Run every query with the default 30,000 rows per table."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- projection_subquery --query 1 --result-mode validate"
+description = "Run query 01 and compare the counts with the checked-in result file."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- projection_subquery -r 5000"
+description = "Run every query on smaller tables."

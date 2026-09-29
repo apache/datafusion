@@ -25,7 +25,7 @@ use DataType::{LargeUtf8, Utf8, Utf8View};
 use arrow::array::{Array, ArrayRef, AsArray, StringArrayType};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
-use datafusion_common::types::{NativeType, logical_string};
+use datafusion_common::types::logical_string;
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
@@ -62,10 +62,9 @@ impl ReverseFunc {
         Self {
             signature: Signature::coercible(
                 vec![
-                    Coercion::new_implicit(
-                        TypeSignatureClass::Native(logical_string()),
+                    Coercion::new_implicit_native(
+                        logical_string(),
                         vec![TypeSignatureClass::Any],
-                        NativeType::String,
                     )
                     .with_encoding_preservation(EncodingPreservation::dictionary()),
                 ],
@@ -228,8 +227,10 @@ mod tests {
     #[test]
     fn test_functions() -> Result<()> {
         test_reverse!(Some("abcde".into()), Ok(Some("edcba")));
-        test_reverse!(Some("loẅks".into()), Ok(Some("sk̈wol")));
-        test_reverse!(Some("loẅks".into()), Ok(Some("sk̈wol")));
+        // `reverse` works per `char`, so a decomposed grapheme is split from its base char ...
+        test_reverse!(Some("low\u{308}ks".into()), Ok(Some("sk\u{308}wol")));
+        // ... while the composed form is a single `char` and stays intact.
+        test_reverse!(Some("lo\u{1e85}ks".into()), Ok(Some("sk\u{1e85}ol")));
         test_reverse!(None, Ok(None));
         #[cfg(not(feature = "unicode_expressions"))]
         test_reverse!(

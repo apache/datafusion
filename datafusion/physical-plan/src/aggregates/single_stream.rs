@@ -17,33 +17,26 @@
 
 //! Single-stage hash aggregation stream implementation.
 //!
-//! This stream is part of the incremental migration from
-//! [`crate::aggregates::grouped_hash_stream::GroupedHashAggregateStream`].
-//!
-//! See issue for details: <https://github.com/apache/datafusion/issues/22710>
+//! See comments in [`SingleHashAggregateStream`] for details.
 
+use std::mem::size_of;
 use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result, internal_err};
+use datafusion_common::{DataFusionError, Result, assert_ne_or_internal_err};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
-use datafusion_physical_expr::PhysicalSortExpr;
-use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::stream::{Stream, StreamExt};
 
-use super::aggregate_hash_table::{AggregateHashTable, SingleMarker};
-use super::group_values::GroupByMetrics;
-use super::ordered_final_stream::OrderedFinalAggregateStream;
+use super::aggregate_hash_table::{
+    AggregateHashTable, OrderedAggregateTableMetrics, SingleMarker,
+};
+use super::spill::AggregateSpill;
 use super::{AggregateExec, create_schema};
 use crate::aggregates::AggregateMode;
-use crate::metrics::{BaselineMetrics, SpillMetrics};
-use crate::sorts::IncrementalSortIterator;
-use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
-use crate::spill::spill_manager::SpillManager;
-use crate::stream::{EmptyRecordBatchStream, ObservedStream, RecordBatchStreamAdapter};
+use crate::metrics::{BaselineMetrics, RecordOutput, SpillMetrics};
+use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
 use crate::{InputOrderMode, SendableRecordBatchStream};
 
 /// Hash aggregation can run the full logical aggregation in one operator. This
@@ -70,6 +63,14 @@ use crate::{InputOrderMode, SendableRecordBatchStream};
 /// This stream implements the complete aggregation without a partial/final
 /// split. It consumes raw input rows and emits final aggregate values.
 ///
+/// # Grouping Sets
+///
+/// `GROUPING SETS`, `CUBE` and `ROLLUP` are expanded while consuming raw input:
+/// every grouping set of an input batch is evaluated and interned into the same
+/// hash table, the same way [`super::hash_stream::PartialHashAggregateStream`]
+/// does it. When spilling, the expanded keys are sorted and replayed as a plain
+/// group by.
+///
 /// # Spilling
 ///
 /// During aggregation, group keys and states accumulate. If memory usage exceeds
@@ -81,7 +82,35 @@ use crate::{InputOrderMode, SendableRecordBatchStream};
 /// 3. Perform a sort-preserving merge of all spill files and feed the merged output
 ///    into an ordered streaming aggregation, which ensures bounded memory usage and
 ///    evaluates the final result.
-///    - [`OrderedFinalAggregateStream`] is reused for the streaming aggregation.
+///    - [`OrderedFinalAggregateStream`](super::ordered_final_stream::OrderedFinalAggregateStream) is reused for the streaming aggregation.
+///
+/// # Optimization: DISTINCT LIMIT Soft Limit
+///
+/// When the input has only one partition or the input is already partitioned,
+/// unordered distinct queries such as:
+///
+/// ```sql
+/// SELECT DISTINCT x FROM t LIMIT 10;
+/// ```
+///
+/// are optimized into a single-stage aggregate like:
+///
+/// ```txt
+/// LimitExec, limit=10
+/// --AggregateExec(Single), group_by=[x], aggr=[], soft_limit=10
+/// ---- Scan(t)
+/// ```
+///
+/// After each input batch, the stream checks whether the soft limit has been
+/// reached. If so, it emits the accumulated groups and stops reading input.
+///
+/// This early termination is skipped after spilling has occurred to keep the
+/// spill and replay path simple. In that case, the stream consumes the remaining
+/// input and merges all spill runs before producing output.
+///
+/// This operator does not guarantee an exact limit because a single batch can
+/// cross the threshold. The downstream limit operator enforces the exact result
+/// size.
 pub(crate) struct SingleHashAggregateStream {
     /// Output schema: group columns followed by final aggregate value columns.
     schema: SchemaRef,
@@ -95,188 +124,17 @@ pub(crate) struct SingleHashAggregateStream {
     /// Memory reservation for group keys, accumulators, and spill sorting.
     reservation: MemoryReservation,
 
+    /// See the "Optimization: DISTINCT LIMIT Soft Limit" section in
+    /// [`SingleHashAggregateStream`] for details.
+    group_values_soft_limit: Option<usize>,
+
     /// The hash table owns the lower-level state for emitting output batches.
     ///
-    /// This is optional so `create_stream` can take ownership and control when
-    /// the table's memory is released.
+    /// This is taken out when the stream starts executing.
     hash_table: Option<AggregateHashTable<SingleMarker>>,
 
-    /// Spill configuration when temporary files are enabled.
-    spill_context: Option<Box<SingleSpillContext>>,
-}
-
-/// Spill configuration and accumulated runs for single hash aggregation.
-///
-/// Each spill event drains all currently buffered groups, sorts their intermediate
-/// states by the full group key, and writes them to one spill file. All files are
-/// merged and replayed after the original input ends.
-struct SingleSpillContext {
-    /// Aggregate configuration used to construct the final replay stream.
-    ///
-    /// Spilled rows already contain evaluated group keys and intermediate
-    /// aggregate states. Replay must therefore use final aggregation semantics
-    /// and column-based group expressions rather than evaluating the raw input
-    /// expressions a second time. After the spill files are merged into ordered
-    /// input, this configuration is used to construct an
-    /// [`OrderedFinalAggregateStream`], and perform the final evaluation step.
-    final_agg: AggregateExec,
-    /// Task context.
-    context: Arc<TaskContext>,
-    /// Original partition index.
-    partition: usize,
-    /// Target batch size from configuration.
-    batch_size: usize,
-    /// Full group-key ordering kept by every spill file and the merged input.
-    spill_expr: LexOrdering,
-    /// Spill I/O and metrics manager.
-    spill_manager: SpillManager,
-    /// Spill runs waiting to be merged, they're all sorted by full group-by keys.
-    spills: Vec<SortedSpillFile>,
-}
-
-impl SingleSpillContext {
-    fn new(
-        agg: &AggregateExec,
-        context: &Arc<TaskContext>,
-        partition: usize,
-        batch_size: usize,
-        spill_schema: &SchemaRef,
-        spill_metrics: SpillMetrics,
-    ) -> Result<Self> {
-        let group_schema = agg.group_by.group_schema(&agg.input().schema())?;
-        let output_ordering = agg.cache.output_ordering();
-        let spill_sort_exprs =
-            group_schema
-                .fields()
-                .iter()
-                .enumerate()
-                .map(|(idx, field)| {
-                    let output_expr = Column::new(field.name(), idx);
-                    let sort_options = output_ordering
-                        .and_then(|ordering| ordering.get_sort_options(&output_expr))
-                        .unwrap_or_default();
-                    PhysicalSortExpr::new(Arc::new(output_expr), sort_options)
-                });
-        let Some(spill_expr) = LexOrdering::new(spill_sort_exprs) else {
-            return internal_err!("Single hash aggregate spill expression is empty");
-        };
-
-        let spill_manager = SpillManager::new(
-            context.runtime_env(),
-            spill_metrics,
-            Arc::clone(spill_schema),
-        )
-        .with_compression_type(context.session_config().spill_compression());
-
-        // See `SingleSpillContext::final_agg` comments for `final_agg`'s usage
-        let mut final_agg = agg.clone();
-        final_agg.mode = match agg.mode {
-            AggregateMode::Single => AggregateMode::Final,
-            AggregateMode::SinglePartitioned => AggregateMode::FinalPartitioned,
-            mode => {
-                return internal_err!(
-                    "Single hash aggregate spill cannot replay aggregate mode {mode:?}"
-                );
-            }
-        };
-        final_agg.group_by = Arc::new(agg.group_by.as_final());
-        final_agg.input_order_mode = InputOrderMode::Sorted;
-
-        Ok(Self {
-            final_agg,
-            context: Arc::clone(context),
-            partition,
-            batch_size,
-            spill_expr,
-            spill_manager,
-            spills: vec![],
-        })
-    }
-
-    fn has_spills(&self) -> bool {
-        !self.spills.is_empty()
-    }
-
-    /// Sorts and spills the aggregated groups. Memory reservation should be updated
-    /// by the caller.
-    ///
-    /// Individual spill files are ordered by the `group by` keys.
-    ///
-    /// See [`SingleHashAggregateStream`] for spilling details.
-    fn spill_table(
-        &mut self,
-        hash_table: &mut AggregateHashTable<SingleMarker>,
-    ) -> Result<()> {
-        let Some(batch) = hash_table.take_state_batch()? else {
-            return Ok(());
-        };
-
-        let sorted_iter =
-            IncrementalSortIterator::new(batch, self.spill_expr.clone(), self.batch_size);
-        let spill_file = self
-            .spill_manager
-            .spill_record_batch_iter_and_return_max_batch_memory(
-                sorted_iter,
-                "SingleHashAggregateSpill",
-            )?;
-
-        let Some((file, max_record_batch_memory)) = spill_file else {
-            return internal_err!("Single hash aggregation produced an empty spill");
-        };
-
-        self.spills.push(SortedSpillFile {
-            file,
-            max_record_batch_memory,
-        });
-
-        Ok(())
-    }
-
-    /// Merges every sorted run, and do the aggregate evaluation with
-    /// [`OrderedFinalAggregateStream`]
-    fn into_replay_stream(
-        self,
-        baseline_metrics: &BaselineMetrics,
-        group_by_metrics: GroupByMetrics,
-        reservation: MemoryReservation,
-    ) -> Result<SendableRecordBatchStream> {
-        let Self {
-            final_agg,
-            context,
-            partition,
-            batch_size,
-            spill_expr,
-            spill_manager,
-            spills,
-        } = self;
-
-        let spill_schema = Arc::clone(spill_manager.schema());
-        // The merge and replay table are two components of the same aggregate
-        // operator. Keep them under one consumer registration so a fair memory
-        // pool does not divide this operator's quota between its own phases.
-        let merge_reservation = reservation.new_empty();
-        let merged = StreamingMergeBuilder::new()
-            .with_schema(spill_schema)
-            .with_spill_manager(spill_manager)
-            .with_sorted_spill_files(spills)
-            .with_expressions(&spill_expr)
-            .with_metrics(baseline_metrics.intermediate())
-            .with_batch_size(batch_size)
-            .with_reservation(merge_reservation)
-            .build()?;
-        let replay = OrderedFinalAggregateStream::new_with_input_and_metrics(
-            &final_agg,
-            &context,
-            partition,
-            merged,
-            &InputOrderMode::Sorted,
-            baseline_metrics.intermediate(),
-            group_by_metrics,
-            None,
-            reservation,
-        )?;
-        Ok(Box::pin(replay))
-    }
+    /// `None` if spilling is not supported by the configured `DiskManager`.
+    spill_context: Option<Box<AggregateSpill>>,
 }
 
 impl SingleHashAggregateStream {
@@ -299,8 +157,8 @@ impl SingleHashAggregateStream {
         let spill_metrics = SpillMetrics::new(&agg.metrics, partition);
         let state_schema = Arc::new(create_schema(
             input_schema.as_ref(),
-            &agg.group_by,
-            &agg.aggr_expr,
+            agg.group_by(),
+            agg.aggr_expr(),
             AggregateMode::Partial,
         )?);
 
@@ -314,11 +172,13 @@ impl SingleHashAggregateStream {
 
         let can_spill = context.runtime_env().disk_manager.tmp_files_enabled();
         let spill_context = if can_spill {
-            Some(Box::new(SingleSpillContext::new(
+            Some(Box::new(AggregateSpill::try_new(
+                "SingleHashAggregateSpill",
                 agg,
                 context,
                 partition,
                 batch_size,
+                &InputOrderMode::Linear,
                 &state_schema,
                 spill_metrics,
             )?))
@@ -336,6 +196,7 @@ impl SingleHashAggregateStream {
             input,
             baseline_metrics,
             reservation,
+            group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
             hash_table: Some(hash_table),
             spill_context,
         })
@@ -343,46 +204,34 @@ impl SingleHashAggregateStream {
 
     pub(crate) fn into_stream(self) -> SendableRecordBatchStream {
         let schema = Arc::clone(&self.schema);
-        let baseline_metrics = self.baseline_metrics.clone();
-        let stream =
-            Box::pin(RecordBatchStreamAdapter::new(schema, self.create_stream()));
 
-        Box::pin(ObservedStream::new(stream, baseline_metrics, None))
+        Box::pin(RecordBatchStreamAdapter::new(schema, self.create_stream()))
     }
 
-    /// State transitions are implemented using the generator pattern; see the
-    /// comments in [`async_try_stream`].
+    /// Entry point for the single hash aggregate flow
     ///
-    /// Conceptually, the stream reads input and spills whenever its reservation
-    /// is exhausted. It then either drains the in-memory table directly or merges
-    /// and replays the spilled runs through an ordered final aggregation.
+    /// See comments in [`SingleHashAggregateStream`] for high-level ideas.
     fn create_stream(mut self) -> impl Stream<Item = Result<RecordBatch>> {
-        async_try_stream(|mut emitter| async move {
+        async_try_stream(|emitter| async move {
             let mut hash_table = self
                 .hash_table
                 .take()
-                .expect("SingleHashAggregateStream hash table should not be None");
+                .expect("hash_table should not be None");
+
             let mut spill_context = self.spill_context.take();
 
-            self.handle_reading_input(&mut hash_table, &mut spill_context)
+            self.consume_input(&mut hash_table, &mut spill_context)
                 .await?;
             self.close_input();
 
-            match spill_context {
-                Some(spill_context) if spill_context.has_spills() => {
-                    self.handle_spilled_output(hash_table, spill_context, &mut emitter)
-                        .await?;
+            match spill_context.filter(|s| s.has_spills()) {
+                // - If spilled before, perform merging spill runs
+                Some(spill_context) => {
+                    self.produce_output_from_spills(hash_table, spill_context, emitter)
+                        .await?
                 }
-                _ => {
-                    let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-                    let timer = elapsed_compute.timer();
-                    let result = hash_table.start_output();
-                    timer.done();
-                    result?;
-
-                    self.handle_producing_output(hash_table, &mut emitter)
-                        .await?;
-                }
+                // Either all the input fit in memory or hit soft group limit with no spilling
+                None => self.produce_output_from_memory(hash_table, emitter).await?,
             }
 
             Ok(())
@@ -394,14 +243,25 @@ impl SingleHashAggregateStream {
         self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
     }
 
+    /// See comments in [`Self::group_values_soft_limit`] for details.
+    fn hit_soft_group_limit(
+        &self,
+        hash_table: &AggregateHashTable<SingleMarker>,
+    ) -> bool {
+        self.group_values_soft_limit
+            .is_some_and(|limit| limit <= hash_table.building_group_count())
+    }
+
     /// Reserve memory for the current aggregate table.
     fn reservation_size_for_table(
         hash_table: &AggregateHashTable<SingleMarker>,
-        spill_context: Option<&SingleSpillContext>,
+        spill_context: Option<&AggregateSpill>,
     ) -> usize {
         let table_size = hash_table.memory_size();
         if spill_context.is_some() {
-            // See `SingleHashAggregateStream` comments for how this is estimated.
+            // Count extra space needed for in-memory sorting and spilling. Only
+            // count memory for indices, the payload will be materialize incrementally
+            // in smaller chunks.
             table_size.saturating_add(
                 hash_table
                     .building_group_count()
@@ -412,46 +272,75 @@ impl SingleHashAggregateStream {
         }
     }
 
-    /// Consumes raw input batches and updates the single-stage hash table.
+    /// Read input stream, if no memory, then spill and continue reading - aggregate raw input batches into the hash table.
     ///
-    /// When the table exceeds its reservation, all accumulated groups are
-    /// spilled before input processing resumes.
-    async fn handle_reading_input(
+    /// Spilling: The table cannot reserve enough memory.
+    ///           Move all current states into one fully group-key-sorted spill run.
+    async fn consume_input(
         &mut self,
         hash_table: &mut AggregateHashTable<SingleMarker>,
-        spill_context: &mut Option<Box<SingleSpillContext>>,
+        spill_context: &mut Option<Box<AggregateSpill>>,
     ) -> Result<()> {
-        debug_assert!(hash_table.is_building());
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
 
         while let Some(batch) = self.input.next().await.transpose()? {
-            let timer = elapsed_compute.timer();
+            let _timer = elapsed_compute.timer();
             hash_table.aggregate_batch(&batch)?;
-            timer.done();
 
-            let timer = elapsed_compute.timer();
+            // Soft group limits are usually small and rarely coincide with
+            // spilling. Once spilling has occurred, skip this optimization to
+            // make the internal logic simpler.
+            let spilled = spill_context
+                .as_ref()
+                .is_some_and(|context| context.has_spills());
+            if self.hit_soft_group_limit(hash_table) && !spilled {
+                break;
+            }
+
+            // Check memory reservation, and potentially spill.
             let resize_result =
                 self.reservation
                     .try_resize(Self::reservation_size_for_table(
                         hash_table,
                         spill_context.as_deref(),
                     ));
-            timer.done();
 
             match resize_result {
                 Ok(()) => {}
+
+                // The table cannot reserve enough memory.
+                // Move all current states into one fully group-key-sorted spill run.
                 Err(e @ DataFusionError::ResourcesExhausted(_)) => {
-                    let Some(spill_context) = spill_context.as_deref_mut() else {
-                        return Err(e.context(
-                            "Single hash aggregate cannot spill because temporary files are not enabled in the DiskManager",
-                        ));
-                    };
-                    if hash_table.building_group_count() == 0 {
-                        return internal_err!(
-                            "Single hash aggregate ran out of memory with no aggregated groups"
-                        );
-                    }
-                    self.handle_spilling(hash_table, spill_context)?;
+                    // OOM and don't support spilling from configuration
+                    let spill_context = spill_context.as_mut().ok_or_else(|| e.context(
+                        "Single hash aggregate cannot spill because temporary files are not enabled in the DiskManager",
+                    ))?;
+
+                    // Sanity check: impossible to OOM when there is no group aggregated.
+                    assert_ne_or_internal_err!(
+                        hash_table.building_group_count(),
+                        0,
+                        "Single hash aggregate ran out of memory with no aggregated groups"
+                    );
+
+                    // Sorts and spills one complete in-memory state run
+                    let result = hash_table
+                        .take_state_batch()
+                        .and_then(|batch| spill_context.sort_and_spill(batch));
+
+                    // Spilling shrinks the aggregate table and releases its accumulated
+                    // memory. Update the reservation accordingly.
+                    self.reservation
+                        .try_resize(hash_table.memory_size())
+                        .map_err(|e| {
+                            e.context(
+                                "Decreasing allocation after spilling should succeed",
+                            )
+                        })?;
+
+                    result?;
+
+                    // One sorted run was written; resume reading the original input.
                 }
                 Err(e) => return Err(e),
             }
@@ -460,95 +349,96 @@ impl SingleHashAggregateStream {
         Ok(())
     }
 
-    /// Sorts and spills one complete in-memory state run, then resumes input.
-    fn handle_spilling(
-        &mut self,
-        hash_table: &mut AggregateHashTable<SingleMarker>,
-        spill_context: &mut SingleSpillContext,
-    ) -> Result<()> {
-        // Sanity check: it is impossible to OOM when the table is empty.
-        if hash_table.building_group_count() == 0 {
-            return internal_err!(
-                "Single hash aggregation entered Spilling with an empty table"
-            );
-        }
-
-        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
-        let timer = elapsed_compute.timer();
-        let mut result = spill_context.spill_table(hash_table);
-
-        // Spilling shrinks the aggregate table and releases its accumulated
-        // memory. Update the reservation accordingly.
-        if let Err(e) = self.reservation.try_resize(hash_table.memory_size()) {
-            result =
-                Err(e.context("Decreasing allocation after spilling should succeed"));
-        }
-
-        timer.done();
-        result
-    }
-
-    /// Spills the final in-memory run, merges all runs, and emits the replayed
-    /// final aggregate output.
-    async fn handle_spilled_output(
+    /// Produce output from spills
+    /// 1. Spill in progress in-memory hash table
+    /// 2. Switch to ordered final stream
+    /// 3. passthrough stream output
+    async fn produce_output_from_spills(
         &mut self,
         mut hash_table: AggregateHashTable<SingleMarker>,
-        mut spill_context: Box<SingleSpillContext>,
-        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+        mut spill_context: Box<AggregateSpill>,
+        mut emitter: TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let timer = elapsed_compute.timer();
 
-        spill_context.spill_table(&mut hash_table)?;
-        let group_by_metrics = hash_table.group_by_metrics().clone();
-        drop(hash_table);
-        self.reservation.try_resize(0)?;
+        // Input was exhausted after spilling. Spill the last in-memory run
+        hash_table
+            .take_state_batch()
+            .and_then(|batch| spill_context.sort_and_spill(batch))?;
 
-        let replay_reservation = self.reservation.new_empty();
-        let mut replay = (*spill_context).into_replay_stream(
-            &self.baseline_metrics,
-            group_by_metrics,
-            replay_reservation,
-        )?;
+        // Construct the ordered input used to merge all spill files.
+        let mut output_stream =
+            self.switch_to_ordered_final_stream(hash_table, spill_context)?;
+
         timer.done();
 
-        while let Some(batch) = replay.next().await.transpose()? {
+        // Forwards output from the fully ordered stream that consumes the merged
+        // spill runs.
+        //
+        // Not wrapping in a timer and not record output batches since this is now `merge_stream` responsibility
+        // we just pass through
+        while let Some(batch) = output_stream.next().await.transpose()? {
             emitter.emit(batch).await;
         }
 
         Ok(())
     }
 
-    /// Emits final aggregate value batches after input is exhausted.
-    async fn handle_producing_output(
+    /// 1. Constructs a globally ordered input stream by applying a sort-preserving
+    ///    merge to all spills.
+    /// 2. Constructs a replay stream: an ordered final aggregate stream over the
+    ///    fully ordered input constructed from the spills.
+    ///
+    /// Returns the replay stream
+    fn switch_to_ordered_final_stream(
+        &mut self,
+        hash_table: AggregateHashTable<SingleMarker>,
+        spill_context: Box<AggregateSpill>,
+    ) -> Result<SendableRecordBatchStream> {
+        let metrics = OrderedAggregateTableMetrics::from_hash_table(&hash_table);
+        drop(hash_table);
+        self.reservation.try_resize(0)?;
+        spill_context.into_replay_stream(
+            &self.baseline_metrics,
+            metrics,
+            self.reservation.new_empty(),
+        )
+    }
+
+    /// Emit final aggregate value batches:
+    /// Input was exhausted without spilling, or the soft group limit was reached.
+    async fn produce_output_from_memory(
         &mut self,
         mut hash_table: AggregateHashTable<SingleMarker>,
-        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
+        mut emitter: TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
-        debug_assert!(!hash_table.is_building());
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
 
-        loop {
-            let timer = elapsed_compute.timer();
-            let batch = hash_table.next_output_batch();
-            timer.done();
+        let mut timer = elapsed_compute.timer();
+        hash_table.start_output()?;
 
-            let Some(batch) = batch? else {
-                drop(hash_table);
+        loop {
+            let Some(batch) = hash_table.next_output_batch()? else {
+                // Only reachable when the table held no groups at all: a
+                // non-empty table always reports its last batch together with
+                // the `Done` state, which the `try_resize` below already zeroes.
                 self.reservation.try_resize(0)?;
                 return Ok(());
             };
+
             debug_assert!(batch.num_rows() > 0);
 
-            if hash_table.is_done() {
-                drop(hash_table);
-                self.reservation.try_resize(0)?;
-                emitter.emit(batch).await;
-                return Ok(());
-            }
-
+            // The table hands over its groups as they are materialized and
+            // reports a size of 0 once it reaches `Done`, so this releases the
+            // reservation before the final batch goes downstream.
             self.reservation.try_resize(hash_table.memory_size())?;
-            emitter.emit(batch).await;
+
+            timer.done();
+            emitter
+                .emit(batch.record_output(&self.baseline_metrics))
+                .await;
+            timer = elapsed_compute.timer();
         }
     }
 }

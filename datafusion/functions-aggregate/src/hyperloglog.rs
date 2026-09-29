@@ -79,6 +79,10 @@ where
     /// Creates a HyperLogLog from already populated registers
     /// note that this method should not be invoked in untrusted environment
     /// because the internal structure of registers are not examined.
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "The registers are moved into the returned `Self`, so taking a reference would only add a copy"
+    )]
     pub(crate) fn new_with_registers(registers: [u8; NUM_REGISTERS]) -> Self {
         Self {
             registers,

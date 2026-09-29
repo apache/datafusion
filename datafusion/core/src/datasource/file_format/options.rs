@@ -50,7 +50,7 @@ use futures::future::BoxFuture;
 /// Options that control the reading of CSV files.
 ///
 /// Note this structure is supplied when a datasource is created and
-/// can not not vary from statement to statement. For settings that
+/// can not vary from statement to statement. For settings that
 /// can vary statement to statement see
 /// [`ConfigOptions`](crate::config::ConfigOptions).
 #[derive(Clone)]
@@ -246,7 +246,7 @@ impl<'a> CsvReadOptions<'a> {
 /// Options that control the reading of Parquet files.
 ///
 /// Note this structure is supplied when a datasource is created and
-/// can not not vary from statement to statement. For settings that
+/// can not vary from statement to statement. For settings that
 /// can vary statement to statement see
 /// [`ConfigOptions`](crate::config::ConfigOptions).
 #[derive(Clone)]
@@ -357,7 +357,7 @@ impl<'a> ParquetReadOptions<'a> {
 /// Options that control the reading of ARROW files.
 ///
 /// Note this structure is supplied when a datasource is created and
-/// can not not vary from statement to statement. For settings that
+/// can not vary from statement to statement. For settings that
 /// can vary statement to statement see
 /// [`ConfigOptions`](crate::config::ConfigOptions).
 #[derive(Clone)]
@@ -403,7 +403,7 @@ impl<'a> ArrowReadOptions<'a> {
 /// Options that control the reading of AVRO files.
 ///
 /// Note this structure is supplied when a datasource is created and
-/// can not not vary from statement to statement. For settings that
+/// can not vary from statement to statement. For settings that
 /// can vary statement to statement see
 /// [`ConfigOptions`](crate::config::ConfigOptions).
 #[derive(Clone)]
@@ -581,7 +581,7 @@ impl<'a> JsonReadOptions<'a> {
 }
 
 #[async_trait]
-/// ['ReadOptions'] is implemented by Options like ['CsvReadOptions'] that control the reading of respective files/sources.
+/// [`ReadOptions`] is implemented by Options like [`CsvReadOptions`] that control the reading of respective files/sources.
 pub trait ReadOptions<'a> {
     /// Helper to convert these user facing options to `ListingTable` options
     fn to_listing_options(
@@ -604,6 +604,8 @@ pub trait ReadOptions<'a> {
     }
 
     /// helper function to reduce repetitive code. Infers the schema from sources if not provided. Infinite data sources not supported through this function.
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn _get_resolved_schema<'life0, 'async_trait>(
         &'a self,
         config: &'life0 SessionConfig,
@@ -662,6 +664,8 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
             .with_file_sort_order(self.file_sort_order.clone())
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn get_resolved_schema<'life0, 'life1, 'async_trait>(
         &'life0 self,
         config: &'life1 SessionConfig,
@@ -713,6 +717,8 @@ impl ReadOptions<'_> for ParquetReadOptions<'_> {
             .with_file_sort_order(self.file_sort_order.clone())
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn get_resolved_schema<'life0, 'life1, 'async_trait>(
         &'life0 self,
         config: &'life1 SessionConfig,
@@ -751,6 +757,8 @@ impl ReadOptions<'_> for JsonReadOptions<'_> {
             .with_file_sort_order(self.file_sort_order.clone())
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn get_resolved_schema<'life0, 'life1, 'async_trait>(
         &'life0 self,
         config: &'life1 SessionConfig,
@@ -785,6 +793,8 @@ impl ReadOptions<'_> for AvroReadOptions<'_> {
             .with_table_partition_cols(self.table_partition_cols.clone())
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn get_resolved_schema<'life0, 'life1, 'async_trait>(
         &'life0 self,
         config: &'life1 SessionConfig,
@@ -818,6 +828,8 @@ impl ReadOptions<'_> for ArrowReadOptions<'_> {
             .with_table_partition_cols(self.table_partition_cols.clone())
     }
 
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
     fn get_resolved_schema<'life0, 'life1, 'async_trait>(
         &'life0 self,
         config: &'life1 SessionConfig,

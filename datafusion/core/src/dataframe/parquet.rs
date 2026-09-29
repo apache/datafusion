@@ -189,7 +189,7 @@ mod tests {
             let ctx = &test_df.session_state;
             ctx.runtime_env().register_object_store(&local_url, local);
             let mut options = TableParquetOptions::default();
-            options.global.compression = Some(compression.to_string());
+            options.global.compression = Some(compression.parse()?);
             df.write_parquet(
                 output_path,
                 DataFrameWriteOptions::new().with_single_file_output(true),
@@ -221,8 +221,7 @@ mod tests {
         // relative to datafusion.execution.batch_size does not panic
         let ctx = SessionContext::new_with_config(SessionConfig::from_string_hash_map(
             &HashMap::from_iter(
-                [("datafusion.execution.batch_size", "10")]
-                    .iter()
+                std::iter::once(&("datafusion.execution.batch_size", "10"))
                     .map(|(s1, s2)| ((*s1).to_string(), (*s2).to_string())),
             ),
         )?);
@@ -491,6 +490,21 @@ mod tests {
         let metrics = plan
             .metrics()
             .expect("DataSinkExec should return metrics from ParquetSink");
+        let selected = plan.metrics().unwrap().for_partition(0);
+        let expected: Vec<_> = metrics
+            .iter()
+            .filter(|metric| metric.partition() == Some(0))
+            .collect();
+        assert_eq!(selected.iter().count(), expected.len());
+        for (actual, expected) in selected.iter().zip(expected) {
+            assert!(Arc::ptr_eq(actual, expected));
+        }
+        // Sink-wide row counts are intentionally absent from a partition snapshot.
+        assert!(
+            selected
+                .iter()
+                .all(|metric| metric.value().name() != "rows_written")
+        );
         let aggregated = metrics.aggregate_by_name();
 
         // rows_written should be 100

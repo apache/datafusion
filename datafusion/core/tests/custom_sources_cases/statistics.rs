@@ -91,7 +91,7 @@ impl TableProvider for StatisticsValidation {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         // limit is ignored because it is not mandatory for a `TableProvider` to honor it
         _limit: Option<usize>,
@@ -102,7 +102,7 @@ impl TableProvider for StatisticsValidation {
             filters.len(),
             "Unsupported expressions should not be pushed down"
         );
-        let projection = match projection.cloned() {
+        let projection = match projection.map(|p| p.to_vec()) {
             Some(p) => p,
             None => (0..self.schema.fields().len()).collect(),
         };

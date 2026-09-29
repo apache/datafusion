@@ -27,11 +27,10 @@ use datafusion_common::Result;
 
 use crate::InputOrderMode;
 use crate::aggregates::aggregate_hash_table::FinalMarker;
-use crate::aggregates::group_values::GroupByMetrics;
-use crate::aggregates::{AggregateExec, AggregateMode};
+use crate::aggregates::{AggregateExec, AggregateMode, group_values::AccumulatorPhase};
 
 use super::common::HashAggregateAccumulator;
-use super::common_ordered::OrderedAggregateTable;
+use super::common_ordered::{OrderedAggregateTable, OrderedAggregateTableMetrics};
 
 /// Implementation specific to final aggregation, where the table stores partial
 /// aggregate states and the input rows are also partial states.
@@ -49,7 +48,7 @@ impl OrderedAggregateTable<FinalMarker> {
         output_schema: SchemaRef,
         batch_size: usize,
         input_order_mode: &InputOrderMode,
-        group_by_metrics: GroupByMetrics,
+        metrics: OrderedAggregateTableMetrics,
     ) -> Result<Self> {
         Self::new_for_mode(
             agg,
@@ -59,8 +58,8 @@ impl OrderedAggregateTable<FinalMarker> {
             batch_size,
             input_order_mode,
             &AggregateMode::Final,
-            vec![None; agg.aggr_expr.len()],
-            group_by_metrics,
+            vec![None; agg.aggr_expr().len()],
+            metrics,
         )
     }
 
@@ -77,13 +76,28 @@ impl OrderedAggregateTable<FinalMarker> {
         self.aggregate_evaluated_batch(
             &evaluated_batch,
             HashAggregateAccumulator::merge_batch,
+            AccumulatorPhase::Merge,
         )
     }
 
-    /// See comments in `ordered_partial_stream::next_output_batch`
-    pub(in crate::aggregates) fn next_output_batch(
+    /// Materializes final results for all groups proven complete by the input
+    /// ordering, leaving the active ordered-key range in the table.
+    ///
+    /// Returns None if there are no completed groups.
+    pub(in crate::aggregates) fn take_completed_result_batch(
         &mut self,
     ) -> Result<Option<RecordBatch>> {
-        self.next_output_batch_inner(HashAggregateAccumulator::evaluate_to_columns)
+        if self.is_empty() {
+            return Ok(None);
+        }
+        let Some(emit_to) = self.group_ordering().emit_to() else {
+            return Ok(None);
+        };
+        self.materialize_groups(
+            emit_to,
+            HashAggregateAccumulator::evaluate_to_columns,
+            AccumulatorPhase::Evaluate,
+        )
+        .map(Some)
     }
 }

@@ -19,17 +19,25 @@
 //! SQL benchmark harness.
 
 use crate::sql_benchmark::SqlBenchmark;
-use crate::util::{CommonOpt, print_memory_stats};
+use crate::util::{BenchmarkRun, CommonOpt, print_memory_stats};
+use clap::Parser;
 use criterion::{Criterion, SamplingMode};
 use datafusion::error::Result;
+use datafusion::execution::SessionStateBuilder;
+use datafusion::execution::memory_pool::{MemoryLimit, MemoryPool, PeakRecordingPool};
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{DataFusionError, exec_datafusion_err};
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Write as _;
 use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::runtime::Runtime;
+
+const CRITERION_MAX_DIRECTORY_NAME_LEN: usize = 64;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BenchmarkFilter {
@@ -49,12 +57,87 @@ pub struct SqlRunConfig {
     pub output: Option<PathBuf>,
 }
 
+#[derive(Debug, Parser)]
+#[command(ignore_errors = true)]
+struct CriterionHarnessEnv {
+    #[command(flatten)]
+    options: CommonOpt,
+
+    #[arg(
+        env = "BENCH_PERSIST_RESULTS",
+        long = "persist_results",
+        default_value = "false",
+        action = clap::ArgAction::SetTrue
+    )]
+    persist_results: bool,
+
+    #[arg(
+        env = "BENCH_VALIDATE",
+        long = "validate_results",
+        default_value = "false",
+        action = clap::ArgAction::SetTrue
+    )]
+    validate: bool,
+
+    #[arg(env = "BENCH_NAME")]
+    name: Option<String>,
+
+    #[arg(env = "BENCH_SUBGROUP")]
+    subgroup: Option<String>,
+
+    #[arg(env = "BENCH_QUERY")]
+    query: Option<String>,
+
+    #[arg(env = "BENCH_NAMESPACE")]
+    criterion_namespace: Option<String>,
+
+    /// Write each case's peak memory pool reservation to this path, in the
+    /// results JSON format `dfbench -o` writes. Timings stay with Criterion,
+    /// so every case's `iterations` list is empty.
+    #[arg(env = "BENCH_RESULTS_FILE", long = "results-file")]
+    results_file: Option<PathBuf>,
+}
+
+/// Builds the direct Criterion harness configuration from its `BENCH_*`
+/// environment variables.
+pub fn criterion_harness_config_from_env() -> (SqlRunConfig, Option<String>) {
+    let args = CriterionHarnessEnv::parse();
+    let config = SqlRunConfig {
+        common: args.options,
+        filter: BenchmarkFilter {
+            name: args.name,
+            subgroup: args.subgroup,
+            query: args.query,
+        },
+        replacements: default_criterion_replacements(),
+        query_filename: None,
+        persist_results: args.persist_results,
+        validate_results: args.validate,
+        output: args.results_file,
+    };
+
+    (config, args.criterion_namespace)
+}
+
 /// Runs the selected SQL benchmarks through a caller-provided Criterion instance.
 pub fn run_criterion_benchmarks_impl(
     benchmark_dir: &Path,
     config: &SqlRunConfig,
     criterion: &mut Criterion,
 ) -> Result<()> {
+    run_criterion_benchmarks_impl_with_namespace(benchmark_dir, config, None, criterion)
+}
+
+/// Runs the selected SQL benchmarks through a caller-provided Criterion instance,
+/// optionally appending a safe invocation namespace to each benchmark group.
+pub fn run_criterion_benchmarks_impl_with_namespace(
+    benchmark_dir: &Path,
+    config: &SqlRunConfig,
+    namespace: Option<&str>,
+    criterion: &mut Criterion,
+) -> Result<()> {
+    validate_criterion_namespace(namespace)?;
+
     let rt = make_tokio_runtime()?;
     let listing_ctx = make_ctx(&config.common)?;
     let all_benchmarks = rt.block_on(load_benchmark_definitions_for_query(
@@ -68,16 +151,46 @@ pub fn run_criterion_benchmarks_impl(
 
     ensure_selection(&config.filter, &all_benchmarks, &selected)?;
 
+    let mut named_benchmarks = Vec::with_capacity(selected.len());
     for (group_name, benchmarks) in selected {
-        let mut group = criterion.benchmark_group(group_name);
+        named_benchmarks
+            .push((criterion_group_name(&group_name, namespace)?, benchmarks));
+    }
+
+    let mut results = BenchmarkRun::new();
+    let outcome =
+        run_criterion_groups(&rt, named_benchmarks, config, criterion, &mut results);
+    // Written on failure too: a case that ran out of memory is one whose peak
+    // is worth seeing.
+    results.maybe_write_json(config.output.as_ref())?;
+
+    outcome
+}
+
+fn run_criterion_groups(
+    rt: &Runtime,
+    named_benchmarks: Vec<(String, Vec<SqlBenchmark>)>,
+    config: &SqlRunConfig,
+    criterion: &mut Criterion,
+    results: &mut BenchmarkRun,
+) -> Result<()> {
+    for (group_name, benchmarks) in named_benchmarks {
+        let mut group = criterion.benchmark_group(group_name.clone());
 
         group.sample_size(10);
         group.sampling_mode(SamplingMode::Flat);
 
         for mut benchmark in benchmarks {
             let ctx = make_ctx(&config.common)?;
-            let result =
-                run_criterion_benchmark(&rt, &ctx, &mut benchmark, config, &mut group);
+            let result = run_criterion_benchmark(
+                rt,
+                &ctx,
+                &mut benchmark,
+                config,
+                &group_name,
+                &mut group,
+                results,
+            );
             let cleanup_result = rt.block_on(benchmark.cleanup(&ctx));
 
             finish_benchmark(result, cleanup_result)?;
@@ -89,19 +202,74 @@ pub fn run_criterion_benchmarks_impl(
     Ok(())
 }
 
+fn validate_criterion_namespace(namespace: Option<&str>) -> Result<()> {
+    let Some(namespace) = namespace else {
+        return Ok(());
+    };
+
+    if namespace.is_empty()
+        || !namespace.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || "_-".contains(character)
+        })
+    {
+        return Err(exec_datafusion_err!(
+            "criterion namespace must be nonempty and contain only lowercase ASCII letters, digits, '_', or '-'"
+        ));
+    }
+
+    Ok(())
+}
+
+fn criterion_group_name(group_name: &str, namespace: Option<&str>) -> Result<String> {
+    validate_criterion_namespace(namespace)?;
+
+    let Some(namespace) = namespace else {
+        return Ok(group_name.to_string());
+    };
+
+    let group_name = format!("{group_name}__{namespace}");
+    if group_name.len() > CRITERION_MAX_DIRECTORY_NAME_LEN {
+        return Err(exec_datafusion_err!(
+            "criterion group with namespace must not exceed {CRITERION_MAX_DIRECTORY_NAME_LEN} bytes"
+        ));
+    }
+
+    Ok(group_name)
+}
+
 /// Runs one benchmark case inside Criterion and converts benchmark panics to errors.
+///
+/// Adds a case to `results` holding the peak memory pool reservation across
+/// every execution Criterion makes of the query, warm-up included. The
+/// untimed `load`, `init` and `assert` steps run before the case starts, so
+/// they are not in the reading.
 fn run_criterion_benchmark(
     rt: &Runtime,
     ctx: &SessionContext,
     benchmark: &mut SqlBenchmark,
     config: &SqlRunConfig,
+    group_name: &str,
     group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    results: &mut BenchmarkRun,
 ) -> Result<()> {
     rt.block_on(prepare_benchmark(ctx, benchmark, config))?;
 
     let name = criterion_function_name(benchmark);
+    // The id Criterion (and `critcmp`) reports the case under.
+    let case_id = format!("{group_name}/{name}");
+    results.set_memory_pool(&ctx.runtime_env().memory_pool);
+
+    // Criterion does not call the closure for a case its filter excludes, so
+    // the case is only started, and the peak reset, once it really runs.
+    let mut started = false;
     let result = catch_unwind(AssertUnwindSafe(|| {
         group.bench_function(name.clone(), |b| {
+            if !started {
+                results.start_new_case(&case_id);
+                started = true;
+            }
             b.iter(|| {
                 let _ = rt.block_on(async {
                     benchmark.run(ctx, false).await.unwrap_or_else(|err| {
@@ -114,10 +282,18 @@ fn run_criterion_benchmark(
 
     match result {
         Ok(()) => {
+            if started {
+                results.record_pool_peak();
+            }
             print_memory_stats(&*ctx.runtime_env().memory_pool);
             Ok(())
         }
-        Err(payload) => Err(panic_payload_to_error(payload.as_ref())),
+        Err(payload) => {
+            if started {
+                results.mark_failed();
+            }
+            Err(panic_payload_to_error(payload.as_ref()))
+        }
     }
 }
 
@@ -238,9 +414,9 @@ pub async fn load_benchmark_definitions_for_query(
 }
 
 pub fn sort_benchmarks(benchmarks: &mut BTreeMap<String, Vec<SqlBenchmark>>) {
-    benchmarks
-        .values_mut()
-        .for_each(|benchmarks| benchmarks.sort_by(|a, b| a.name().cmp(b.name())));
+    for benchmarks in benchmarks.values_mut() {
+        benchmarks.sort_by(|a, b| a.name().cmp(b.name()));
+    }
 }
 
 /// Applies benchmark, subgroup, and query filters to discovered benchmark groups.
@@ -357,7 +533,7 @@ pub fn format_benchmark_list(benchmarks: &BTreeMap<String, Vec<SqlBenchmark>>) -
         } else {
             "queries"
         };
-        output.push_str(&format!("  {name:<24} {} {query_word}\n", benchmarks.len()));
+        writeln!(output, "  {name:<24} {} {query_word}", benchmarks.len()).ok();
     }
 
     output.trim_end().to_string()
@@ -439,7 +615,7 @@ fn format_subgroup_list(benchmark_name: &str, benchmarks: &[SqlBenchmark]) -> St
         output.push_str("  <none>");
     } else {
         for entry in entries {
-            output.push_str(&format!("  {entry}\n"));
+            writeln!(output, "  {entry}").ok();
         }
     }
 
@@ -485,7 +661,7 @@ fn format_query_list(
         output.push_str("  <none>");
     } else {
         for entry in entries {
-            output.push_str(&format!("  {entry}\n"));
+            writeln!(output, "  {entry}").ok();
         }
     }
 
@@ -499,6 +675,7 @@ pub async fn prepare_benchmark(
     config: &SqlRunConfig,
 ) -> Result<()> {
     benchmark.initialize(ctx).await?;
+    record_pool_peak_after_init(ctx)?;
     benchmark.assert(ctx).await?;
 
     if config.persist_results {
@@ -507,6 +684,44 @@ pub async fn prepare_benchmark(
         let _ = benchmark.run(ctx, true).await?;
         benchmark.verify(ctx).await?;
     }
+
+    Ok(())
+}
+
+/// Puts a [`PeakRecordingPool`] back in front of the session's memory pool
+/// when the benchmark's own SQL replaced it.
+///
+/// [`CommonOpt::runtime_env_builder`] installs the recorder when the harness
+/// has a memory limit. A suite that sets its own limit with
+/// `SET datafusion.runtime.memory_limit` (`spill_views` does this in its `init`
+/// script) makes the `SessionContext` build a new `RuntimeEnv` with a new pool,
+/// and the recorder is lost. Without this step such a suite reports no peak,
+/// with or without a harness-level limit.
+///
+/// Only a pool with a finite limit gets a recorder, the same rule as
+/// `runtime_env_builder`, so a run with no limit at all still reports nothing.
+fn record_pool_peak_after_init(ctx: &SessionContext) -> Result<()> {
+    let runtime = ctx.runtime_env();
+    let pool = &runtime.memory_pool;
+    if PeakRecordingPool::from_pool(pool.as_ref()).is_some()
+        || !matches!(pool.memory_limit(), MemoryLimit::Finite(_))
+    {
+        return Ok(());
+    }
+
+    let recorder: Arc<dyn MemoryPool> =
+        Arc::new(PeakRecordingPool::new(Arc::clone(pool)));
+    let runtime = RuntimeEnvBuilder::from_runtime_env(&runtime)
+        .with_memory_pool(recorder)
+        .build_arc()?;
+
+    // The same replacement `SET datafusion.runtime.*` makes, so everything
+    // registered on the session (tables, config) is kept.
+    let state = ctx.state_ref();
+    let mut state = state.write();
+    *state = SessionStateBuilder::from(state.clone())
+        .with_runtime_env(runtime)
+        .build();
 
     Ok(())
 }
@@ -590,6 +805,110 @@ mod tests {
         fs::write(&path, contents).unwrap();
 
         path
+    }
+
+    fn common_opt(memory_limit: Option<usize>) -> CommonOpt {
+        CommonOpt {
+            iterations: 1,
+            partitions: None,
+            batch_size: None,
+            mem_pool_type: "fair".to_string(),
+            memory_limit,
+            sort_spill_reservation_bytes: None,
+            debug: false,
+            simulate_latency: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn sql_memory_limit_keeps_the_peak_recorder() {
+        // The harness installs a recorder for its own limit; the SQL limit
+        // replaces that pool, and the recorder must follow it.
+        let ctx = make_ctx(&common_opt(Some(1024 * 1024 * 1024))).unwrap();
+        ctx.sql("SET datafusion.runtime.memory_limit = '100M'")
+            .await
+            .unwrap();
+        let pool = &ctx.runtime_env().memory_pool;
+        assert!(PeakRecordingPool::from_pool(pool.as_ref()).is_none());
+
+        record_pool_peak_after_init(&ctx).unwrap();
+
+        let pool = Arc::clone(&ctx.runtime_env().memory_pool);
+        assert!(PeakRecordingPool::from_pool(pool.as_ref()).is_some());
+        assert!(matches!(
+            pool.memory_limit(),
+            MemoryLimit::Finite(limit) if limit == 100 * 1024 * 1024
+        ));
+
+        // A query planned after the swap reserves through the recorder.
+        ctx.sql(
+            "SELECT value % 1000, count(*) FROM generate_series(1, 100000) GROUP BY 1",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+        let recorder = PeakRecordingPool::from_pool(pool.as_ref()).unwrap();
+        assert!(recorder.peak_reserved() > 0);
+
+        // A pool that already records is left alone.
+        record_pool_peak_after_init(&ctx).unwrap();
+        assert!(Arc::ptr_eq(&pool, &ctx.runtime_env().memory_pool));
+    }
+
+    #[tokio::test]
+    async fn no_memory_limit_gets_no_recorder() {
+        let ctx = make_ctx(&common_opt(None)).unwrap();
+
+        record_pool_peak_after_init(&ctx).unwrap();
+
+        let pool = &ctx.runtime_env().memory_pool;
+        assert!(PeakRecordingPool::from_pool(pool.as_ref()).is_none());
+    }
+
+    #[test]
+    fn criterion_harness_writes_pool_peak_per_case() {
+        let temp = tempfile::tempdir().unwrap();
+        // Like spill_views: the limit comes from SQL in `init`, not from the
+        // harness.
+        write_benchmark(
+            temp.path(),
+            "alpha/benchmarks/q01.benchmark",
+            "name Q01\n\ninit\nSET datafusion.runtime.memory_limit = '100M';\n\n\
+             run\nSELECT value % 1000, count(*) FROM generate_series(1, 100000) GROUP BY 1\n",
+        );
+        let results_file = temp.path().join("results.json");
+        let criterion_dir = tempfile::tempdir().unwrap();
+        let mut criterion = Criterion::default()
+            .warm_up_time(std::time::Duration::from_millis(1))
+            .measurement_time(std::time::Duration::from_millis(10))
+            .without_plots()
+            .output_directory(criterion_dir.path());
+        let config = SqlRunConfig {
+            common: common_opt(None),
+            filter: BenchmarkFilter {
+                name: Some("alpha".to_string()),
+                subgroup: None,
+                query: None,
+            },
+            replacements: HashMap::new(),
+            query_filename: None,
+            persist_results: false,
+            validate_results: false,
+            output: Some(results_file.clone()),
+        };
+
+        run_criterion_benchmarks_impl(temp.path(), &config, &mut criterion).unwrap();
+
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&results_file).unwrap()).unwrap();
+        let queries = json["queries"].as_array().unwrap();
+        assert_eq!(queries.len(), 1);
+        assert_eq!(queries[0]["query"], "alpha/Q01");
+        assert_eq!(queries[0]["iterations"], serde_json::json!([]));
+        let peak = queries[0]["pool_peak_bytes"].as_u64().unwrap();
+        assert!(peak > 0 && peak <= 100 * 1024 * 1024, "{peak}");
     }
 
     #[tokio::test]
@@ -765,5 +1084,85 @@ mod tests {
 
         assert_eq!(benchmark.group(), "tpch");
         assert_eq!(criterion_function_name(&benchmark), "Q01_sf1");
+    }
+
+    #[test]
+    fn criterion_group_names_include_safe_namespaces() {
+        assert_eq!(criterion_group_name("tpch", None).unwrap(), "tpch");
+        assert_eq!(
+            criterion_group_name("tpch", Some("parquet-sf1")).unwrap(),
+            "tpch__parquet-sf1"
+        );
+        assert_eq!(
+            criterion_group_name("tpch", Some("memory_sf1")).unwrap(),
+            "tpch__memory_sf1"
+        );
+    }
+
+    #[test]
+    fn criterion_group_names_reject_unsafe_namespaces() {
+        for namespace in ["", "csv/sf1", "csv sf1", "csv.sf1", "parquét"] {
+            let error = criterion_group_name("tpch", Some(namespace)).unwrap_err();
+
+            assert!(error.to_string().contains("namespace"), "{error}");
+        }
+    }
+
+    #[test]
+    fn criterion_group_names_reject_windows_case_collisions() {
+        let error = criterion_group_name("tpch", Some("Parquet")).unwrap_err();
+
+        assert!(error.to_string().contains("lowercase"), "{error}");
+        assert_eq!(
+            criterion_group_name("tpch", Some("parquet")).unwrap(),
+            "tpch__parquet"
+        );
+    }
+
+    #[test]
+    fn criterion_group_names_reject_components_criterion_would_truncate() {
+        let group_name = "g".repeat(55);
+
+        assert_eq!(
+            criterion_group_name(&group_name, Some("1234567"))
+                .unwrap()
+                .len(),
+            64
+        );
+
+        let first = criterion_group_name(&group_name, Some("12345678"));
+        let second = criterion_group_name(&group_name, Some("12345679"));
+
+        assert!(first.unwrap_err().to_string().contains("64 bytes"));
+        assert!(second.unwrap_err().to_string().contains("64 bytes"));
+    }
+
+    #[test]
+    fn criterion_harness_reads_namespace_from_env_in_subprocess() {
+        const CHILD_ENV: &str = "DATAFUSION_CRITERION_HARNESS_ENV_TEST_CHILD";
+
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let (_, namespace) = criterion_harness_config_from_env();
+
+            assert_eq!(namespace.as_deref(), Some("parquet_sf1"));
+            return;
+        }
+
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "sql_benchmark_runner::tests::criterion_harness_reads_namespace_from_env_in_subprocess",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .env("BENCH_NAMESPACE", "parquet_sf1")
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "child failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

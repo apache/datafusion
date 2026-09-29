@@ -148,7 +148,7 @@ impl Debug for CustomDataSource {
 impl CustomDataSource {
     pub(crate) fn create_physical_plan(
         &self,
-        projections: Option<&Vec<usize>>,
+        projections: Option<&[usize]>,
         schema: SchemaRef,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(CustomExec::new(projections, schema, self.clone())))
@@ -203,7 +203,7 @@ impl TableProvider for CustomDataSource {
     async fn scan(
         &self,
         _state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         // filters and limit can be used here to inject some push-down operations if needed
         _filters: &[Expr],
         _limit: Option<usize>,
@@ -223,7 +223,7 @@ struct CustomExec {
 impl CustomExec {
     #[expect(clippy::needless_pass_by_value)]
     fn new(
-        projections: Option<&Vec<usize>>,
+        projections: Option<&[usize]>,
         schema: SchemaRef,
         db: CustomDataSource,
     ) -> Self {
@@ -231,7 +231,7 @@ impl CustomExec {
         let cache = Self::compute_properties(projected_schema.clone());
         Self {
             db,
-            projection: projections.cloned(),
+            projection: projections.map(|p| p.to_vec()),
             projected_schema,
             cache: Arc::new(cache),
         }

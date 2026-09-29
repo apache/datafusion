@@ -21,17 +21,17 @@ use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError, Result};
+use datafusion_expr::Expr;
 use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
     columnize_expr, find_aggregate_exprs, grouping_set_to_exprlist, merge_schema,
 };
-use datafusion_expr::{DmlStatement, Expr, WriteOp};
 
 use super::ExprSimplifier;
 use crate::optimizer::ApplyOrder;
 use crate::simplify_expressions::linear_aggregates::rewrite_multiple_linear_aggregates;
-use crate::utils::NamePreserver;
+use crate::utils::{NamePreserver, merge_into_schema};
 use crate::{OptimizerConfig, OptimizerRule};
 
 /// Optimizer Pass that simplifies [`LogicalPlan`]s by rewriting
@@ -77,19 +77,8 @@ impl SimplifyExpressions {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        let schema = if let LogicalPlan::Dml(DmlStatement {
-            op: WriteOp::MergeInto(_),
-            table_name,
-            target,
-            ..
-        }) = &plan
-        {
-            let mut schema = merge_schema(&plan.inputs());
-            schema.merge(&DFSchema::try_from_qualified_schema(
-                table_name.clone(),
-                &target.schema(),
-            )?);
-            DFSchemaRef::new(schema)
+        let schema = if let Some(merge_schema) = merge_into_schema(&plan)? {
+            DFSchemaRef::new(merge_schema)
         } else if !plan.inputs().is_empty() {
             DFSchemaRef::new(merge_schema(&plan.inputs()))
         } else if let LogicalPlan::TableScan(scan) = &plan {
@@ -1026,7 +1015,7 @@ mod tests {
         ]);
         let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
 
-        // Test `~ ".*"` transforms to true for any non-NULL string
+        // Test `~ ".*"` is TRUE for any non-NULL string and NULL for a NULL input
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .filter(binary_expr(col("a"), Operator::RegexMatch, lit(".*")))?
             .build()?;
@@ -1034,7 +1023,7 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @ r"
-        Filter: test.a IS NOT NULL
+        Filter: test.a IS NOT NULL OR Boolean(NULL)
           TableScan: test
         "
         )?;

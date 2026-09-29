@@ -207,6 +207,7 @@ Again, reading from bottom up:
 - `DataSourceExec`
   - `output_rows=99997497`: A total 99.9M rows were produced
   - `bytes_scanned=3703192723`: Of the 14GB file, 3.7GB were actually read (due to projection pushdown)
+  - `bytes_processed=14779976446`: All 14GB were accounted for: the 3.7GB read, plus the bytes of row groups that pruning ruled out. Comparing this against the total size of the files in the plan tells you how far along a scan is
   - `time_elapsed_opening=308.203002ms`: It took 300ms to open the file and prepare to read it
   - `time_elapsed_scanning_total=8.350342183s`: It took 8.3 seconds of CPU time (across 16 cores) to actually decode the parquet data
 - `FilterExec`
@@ -232,6 +233,7 @@ When predicate pushdown is enabled, `DataSourceExec` with `ParquetSource` gains 
 - `row_groups_pruned_bloom_filter`: number of row groups evaluated by Bloom Filters, reporting both total checked groups and groups that matched.
 - `row_groups_pruned_statistics`: number of row groups evaluated by row-group statistics (min/max), reporting both total checked groups and groups that matched.
 - `limit_pruned_row_groups`: number of row groups pruned by the limit.
+- `limit_pruned_rows`: number of rows skipped by limit pruning when fully matched page ranges contain enough rows to satisfy the limit.
 - `pushdown_rows_matched`: rows that were tested by any of the above filters, and passed all of them.
 - `pushdown_rows_pruned`: rows that were tested by any of the above filters, and did not pass at least one of them.
 - `predicate_evaluation_errors`: number of times evaluating the filter expression failed (expected to be zero in normal operation)

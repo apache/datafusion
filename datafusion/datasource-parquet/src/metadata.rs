@@ -43,12 +43,13 @@ use object_store::{ObjectMeta, ObjectStore};
 use parquet::DecodeResult;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::{parquet_column, parquet_to_arrow_schema};
+use parquet::basic::{ColumnOrder, SortOrder, Type as PhysicalType};
 use parquet::file::metadata::{
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataPushDecoder, ParquetMetaDataReader,
     RowGroupMetaData, SortingColumn,
 };
 use parquet::file::statistics::Statistics as ParquetStatistics;
-use parquet::schema::types::SchemaDescriptor;
+use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -56,6 +57,66 @@ use std::sync::Arc;
 /// merged result to be `Inexact` rather than `Absent`, as the estimate
 /// would be too unreliable otherwise.
 const PARTIAL_NDV_THRESHOLD: f64 = 0.75;
+
+fn requires_unsigned_byte_array_order(column: &ColumnDescriptor) -> bool {
+    matches!(
+        column.physical_type(),
+        PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY
+    ) && column.sort_order() != SortOrder::SIGNED
+}
+
+/// Whether a column's min/max bounds lack a comparison order matching Arrow's.
+///
+/// The deprecated Parquet `min`/`max` fields use signed comparison, unlike
+/// Arrow's string and binary comparisons. Even the modern bounds cannot be
+/// interpreted without the corresponding footer `column_orders` entry.
+/// Signed logical types, such as decimals, retain their existing behavior.
+/// Columns with undefined sort orders, such as `INT96`, never have usable
+/// min/max bounds regardless of their physical type. The `INT96` check is
+/// defensive because parquet-rs does not currently expose those bounds.
+pub(crate) fn has_untrusted_min_max_order(
+    parquet_schema: &SchemaDescriptor,
+    column_orders: Option<&[ColumnOrder]>,
+    parquet_column_index: usize,
+) -> bool {
+    let column = parquet_schema.column(parquet_column_index);
+    // As of arrow 60, INT96 columns report `SortOrder::INT96_TIMESTAMP`
+    // rather than `UNDEFINED`; keep treating their min/max as untrusted.
+    // until <https://github.com/apache/datafusion/issues/25484>
+    if matches!(
+        column.sort_order(),
+        SortOrder::UNDEFINED | SortOrder::INT96_TIMESTAMP
+    ) {
+        return true;
+    }
+    requires_unsigned_byte_array_order(&column)
+        && (column.sort_order() != SortOrder::UNSIGNED
+            || column_orders
+                .and_then(|orders| orders.get(parquet_column_index))
+                .copied()
+                != Some(ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED)))
+}
+
+/// Whether any row group provides byte-array bounds in the deprecated signed
+/// order, or the column's logical order is undefined.
+pub(crate) fn has_untrusted_byte_array_stats<'a>(
+    parquet_schema: &SchemaDescriptor,
+    parquet_column_index: Option<usize>,
+    row_groups: impl IntoIterator<Item = &'a RowGroupMetaData>,
+) -> bool {
+    parquet_column_index.is_some_and(|index| {
+        let column = parquet_schema.column(index);
+        requires_unsigned_byte_array_order(&column)
+            && (column.sort_order() != SortOrder::UNSIGNED
+                || row_groups.into_iter().any(|group| {
+                    group.column(index).statistics().is_some_and(|stats| {
+                        stats.is_min_max_deprecated()
+                            && (stats.min_bytes_opt().is_some()
+                                || stats.max_bytes_opt().is_some())
+                    })
+                }))
+    })
+}
 
 /// Handles fetching Parquet file schema, metadata and statistics
 /// from object store.
@@ -258,12 +319,13 @@ impl<'a> DFParquetMetadata<'a> {
     }
 
     /// Check whether `metadata` already has both the column index and the
-    /// offset index populated (see [`ParquetMetaData::column_index`] and
-    /// [`ParquetMetaData::offset_index`]).
+    /// offset index populated (see [`ParquetMetaData::page_index`]).
     ///
     /// Used to decide whether page index I/O can be skipped.
     fn metadata_has_page_index(metadata: &ParquetMetaData) -> bool {
-        metadata.column_index().is_some() && metadata.offset_index().is_some()
+        metadata
+            .page_index()
+            .is_some_and(|page_index| page_index.is_complete())
     }
 
     /// Store `metadata` in the configured [`FileMetadataCache`], keyed by
@@ -350,7 +412,10 @@ impl<'a> DFParquetMetadata<'a> {
         object_meta: &ObjectMeta,
         metadata: Arc<ParquetMetaData>,
     ) -> Result<Arc<ParquetMetaData>> {
-        if metadata.column_index().is_some() && metadata.offset_index().is_some() {
+        if metadata
+            .page_index()
+            .is_some_and(|page_index| page_index.is_complete())
+        {
             return Ok(metadata);
         }
         let metadata =
@@ -496,6 +561,27 @@ impl<'a> DFParquetMetadata<'a> {
                         file_metadata.schema_descr(),
                     ) {
                         Ok(stats_converter) => {
+                            // An omitted count must not become an exact zero in
+                            // file statistics used for pruning and aggregates.
+                            let stats_converter =
+                                stats_converter.with_missing_null_counts_as_zero(false);
+                            let parquet_index = stats_converter.parquet_column_index();
+                            if parquet_index.is_some_and(|index| {
+                                has_untrusted_min_max_order(
+                                    file_metadata.schema_descr(),
+                                    file_metadata.column_orders().map(Vec::as_slice),
+                                    index,
+                                )
+                            }) || has_untrusted_byte_array_stats(
+                                file_metadata.schema_descr(),
+                                parquet_index,
+                                row_groups_metadata,
+                            ) {
+                                // The remaining row groups cannot establish bounds
+                                // for the whole file. Keep unrelated statistics.
+                                min_accs[idx] = None;
+                                max_accs[idx] = None;
+                            }
                             let mut accumulators = StatisticsAccumulators {
                                 min_accs: &mut min_accs,
                                 max_accs: &mut max_accs,
@@ -667,9 +753,9 @@ fn summarize_column_statistics(
 ) -> Result<()> {
     let parquet_index = stats_converter.parquet_column_index();
 
-    if let Some(max_acc) = &mut accumulators.max_accs[logical_schema_index] {
+    if accumulators.max_accs[logical_schema_index].is_some() {
         accumulators.is_max_value_exact[logical_schema_index] = summarize_bound(
-            max_acc,
+            &mut accumulators.max_accs[logical_schema_index],
             &stats_converter.row_group_maxes(row_groups_metadata)?,
             parquet_index,
             row_groups_metadata,
@@ -678,9 +764,9 @@ fn summarize_column_statistics(
         )?;
     }
 
-    if let Some(min_acc) = &mut accumulators.min_accs[logical_schema_index] {
+    if accumulators.min_accs[logical_schema_index].is_some() {
         accumulators.is_min_value_exact[logical_schema_index] = summarize_bound(
-            min_acc,
+            &mut accumulators.min_accs[logical_schema_index],
             &stats_converter.row_group_mins(row_groups_metadata)?,
             parquet_index,
             row_groups_metadata,
@@ -713,13 +799,41 @@ fn summarize_column_statistics(
 /// parquet statistics. `row_group_exactness` rebuilds the exactness as a Boolean
 /// array and is only called for the rare case where row groups disagree.
 fn summarize_bound<A: Accumulator>(
-    acc: &mut A,
+    acc: &mut Option<A>,
     values: &ArrayRef,
     parquet_index: Option<usize>,
     row_groups_metadata: &[RowGroupMetaData],
     is_exact: impl Fn(&ParquetStatistics) -> bool,
     row_group_exactness: impl FnOnce() -> Result<BooleanArray>,
 ) -> Result<Option<bool>> {
+    // A NULL converted bound can mean missing statistics, not just all-NULL
+    // data. Ignoring it in MIN/MAX would let another row group's exact endpoint
+    // incorrectly establish an exact bound for the whole file. Drop this bound
+    // unless the row group is empty or is proven to contain only NULLs.
+    if values.null_count() > 0
+        && parquet_index.is_some_and(|column_index| {
+            row_groups_metadata
+                .iter()
+                .enumerate()
+                .any(|(index, group)| {
+                    if values.is_valid(index) || group.num_rows() == 0 {
+                        return false;
+                    }
+                    let column = group.column(column_index);
+                    let all_null = column
+                        .statistics()
+                        .and_then(|stats| stats.null_count_opt())
+                        .is_some_and(|nulls| nulls == column.num_values() as u64);
+                    !all_null
+                })
+        })
+    {
+        *acc = None;
+        return Ok(None);
+    }
+    let Some(acc) = acc.as_mut() else {
+        return Ok(None);
+    };
     acc.update_batch(&[Arc::clone(values)])?;
 
     Ok(
@@ -945,8 +1059,10 @@ impl FileMetadata for CachedParquetMetaData {
     }
 
     fn extra_info(&self) -> HashMap<String, String> {
-        let page_index =
-            self.0.column_index().is_some() && self.0.offset_index().is_some();
+        let page_index = self
+            .0
+            .page_index()
+            .is_some_and(|page_index| page_index.is_complete());
         HashMap::from([("page_index".to_owned(), page_index.to_string())])
     }
 }
@@ -1209,7 +1325,7 @@ mod tests {
         );
     }
 
-    mod ndv_tests {
+    mod statistics_tests {
         use super::*;
         use arrow::datatypes::Field;
         use parquet::basic::Type as PhysicalType;
@@ -1292,6 +1408,43 @@ mod tests {
             );
 
             ParquetMetaData::new(file_meta, row_groups)
+        }
+
+        #[test]
+        fn test_statistics_preserve_missing_null_counts() {
+            let schema_descr = create_schema_descr(1);
+            let arrow_schema = create_arrow_schema(1);
+            for (null_counts, expected) in [
+                (vec![None], Precision::Absent),
+                (vec![Some(0), None], Precision::Inexact(0)),
+                (vec![Some(2), None], Precision::Inexact(2)),
+                (vec![Some(0), Some(0)], Precision::Exact(0)),
+            ] {
+                let row_groups = null_counts
+                    .into_iter()
+                    .map(|null_count| {
+                        create_row_group_with_stats(
+                            &schema_descr,
+                            vec![Some(ParquetStatistics::int32(
+                                Some(1),
+                                Some(10),
+                                None,
+                                null_count,
+                                false,
+                            ))],
+                            10,
+                        )
+                    })
+                    .collect();
+                let metadata =
+                    create_parquet_metadata(Arc::clone(&schema_descr), row_groups);
+                let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
+                    &metadata,
+                    &arrow_schema,
+                )
+                .unwrap();
+                assert_eq!(statistics.column_statistics[0].null_count, expected);
+            }
         }
 
         #[test]
@@ -1604,6 +1757,108 @@ mod tests {
                 result.column_statistics[2].distinct_count,
                 Precision::Exact(100)
             );
+        }
+
+        #[test]
+        fn test_min_max_require_complete_row_group_bounds() {
+            let known =
+                || ParquetStatistics::int32(Some(1), Some(3), None, Some(0), false);
+            let exact = |v| Precision::Exact(ScalarValue::Int32(Some(v)));
+            let cases = [
+                (None, 3, Precision::Absent, Precision::Absent),
+                (
+                    Some(ParquetStatistics::int32(
+                        None,
+                        Some(6),
+                        None,
+                        Some(0),
+                        false,
+                    )),
+                    3,
+                    Precision::Absent,
+                    exact(6),
+                ),
+                (
+                    Some(ParquetStatistics::int32(
+                        Some(4),
+                        None,
+                        None,
+                        Some(0),
+                        false,
+                    )),
+                    3,
+                    exact(1),
+                    Precision::Absent,
+                ),
+                (
+                    Some(ParquetStatistics::int32(None, None, None, None, false)),
+                    3,
+                    Precision::Absent,
+                    Precision::Absent,
+                ),
+                (
+                    Some(ParquetStatistics::int32(None, None, None, Some(2), false)),
+                    3,
+                    Precision::Absent,
+                    Precision::Absent,
+                ),
+                // Empty and proven all-NULL row groups do not contribute extrema.
+                (None, 0, exact(1), exact(3)),
+                (
+                    Some(ParquetStatistics::int32(None, None, None, Some(3), false)),
+                    3,
+                    exact(1),
+                    exact(3),
+                ),
+                (
+                    Some(ParquetStatistics::int32(
+                        Some(4),
+                        Some(6),
+                        None,
+                        Some(0),
+                        false,
+                    )),
+                    3,
+                    exact(1),
+                    exact(6),
+                ),
+            ];
+            for (other, rows, expected_min, expected_max) in cases {
+                for reverse in [false, true] {
+                    let schema_descr = create_schema_descr(1);
+                    let arrow_schema = create_arrow_schema(1);
+                    let mut groups = vec![
+                        create_row_group_with_stats(
+                            &schema_descr,
+                            vec![Some(known())],
+                            3,
+                        ),
+                        create_row_group_with_stats(
+                            &schema_descr,
+                            vec![other.clone()],
+                            rows,
+                        ),
+                    ];
+                    if reverse {
+                        groups.reverse();
+                    }
+                    let metadata = create_parquet_metadata(schema_descr, groups);
+                    let stats = DFParquetMetadata::statistics_from_parquet_metadata(
+                        &metadata,
+                        &arrow_schema,
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        stats.column_statistics[0].min_value, expected_min,
+                        "other={other:?}, rows={rows}, reverse={reverse}"
+                    );
+                    assert_eq!(
+                        stats.column_statistics[0].max_value, expected_max,
+                        "other={other:?}, rows={rows}, reverse={reverse}"
+                    );
+                    assert_eq!(stats.num_rows, Precision::Exact((3 + rows) as usize));
+                }
+            }
         }
 
         #[test]
