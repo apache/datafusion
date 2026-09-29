@@ -2846,7 +2846,9 @@ mod tests {
     async fn sql_create_catalog() -> Result<()> {
         // the information schema used to introduce cyclic Arcs
         let ctx = SessionContext::new_with_config(
-            SessionConfig::new().with_information_schema(true).with_system_catalog(Some(String::from("system"))),
+            SessionConfig::new()
+                .with_information_schema(true)
+                .with_system_catalog(Some(String::from("system"))),
         );
 
         // Create catalog
