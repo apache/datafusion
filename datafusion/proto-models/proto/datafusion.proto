@@ -1093,6 +1093,8 @@ message PhysicalExprNode {
     PhysicalLambdaVariableExprNode lambda_variable = 26;
     PhysicalRangeExprNode range_expr = 27;
     PhysicalSqlSimilarToPatternNode sql_similar_to_pattern = 28;
+
+    PhysicalOptionalFilterNode optional_filter = 29;
   }
 }
 
@@ -1102,6 +1104,11 @@ message PhysicalDynamicFilterNode {
   uint64 generation = 3;
   PhysicalExprNode inner_expr = 4;
   bool is_complete = 5;
+}
+
+// Marks the wrapped filter as optional: it is not needed for correctness.
+message PhysicalOptionalFilterNode {
+  PhysicalExprNode inner = 1;
 }
 
 message PhysicalSqlSimilarToPatternNode {
@@ -1331,6 +1338,10 @@ message ParquetScanExecNode {
 
   // Source-specific footer prefetch size. Absent means no hint.
   optional uint64 metadata_size_hint = 7;
+
+  // If true, the scan uses `predicate` only to prune: a filter above the
+  // scan applies it.
+  bool pruning_only_predicate = 8;
 }
 
 message CsvScanExecNode {

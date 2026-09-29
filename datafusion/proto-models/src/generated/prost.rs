@@ -1613,7 +1613,7 @@ pub struct PhysicalExprNode {
     pub expr_id: ::core::option::Option<u64>,
     #[prost(
         oneof = "physical_expr_node::ExprType",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29"
     )]
     pub expr_type: ::core::option::Option<physical_expr_node::ExprType>,
 }
@@ -1682,6 +1682,8 @@ pub mod physical_expr_node {
         SqlSimilarToPattern(
             ::prost::alloc::boxed::Box<super::PhysicalSqlSimilarToPatternNode>,
         ),
+        #[prost(message, tag = "29")]
+        OptionalFilter(::prost::alloc::boxed::Box<super::PhysicalOptionalFilterNode>),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1696,6 +1698,12 @@ pub struct PhysicalDynamicFilterNode {
     pub inner_expr: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(bool, tag = "5")]
     pub is_complete: bool,
+}
+/// Marks the wrapped filter as optional: it is not needed for correctness.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalOptionalFilterNode {
+    #[prost(message, optional, boxed, tag = "1")]
+    pub inner: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalSqlSimilarToPatternNode {
@@ -2035,6 +2043,10 @@ pub struct ParquetScanExecNode {
     /// Source-specific footer prefetch size. Absent means no hint.
     #[prost(uint64, optional, tag = "7")]
     pub metadata_size_hint: ::core::option::Option<u64>,
+    /// If true, the scan uses `predicate` only to prune: a filter above the
+    /// scan applies it.
+    #[prost(bool, tag = "8")]
+    pub pruning_only_predicate: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CsvScanExecNode {
