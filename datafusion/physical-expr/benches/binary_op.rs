@@ -261,28 +261,49 @@ fn benchmark_conjunction(c: &mut Criterion) {
     let mut rng = StdRng::seed_from_u64(25035);
     let urls = generate_test_strings(NUM_ROWS).0;
 
-    // (conjuncts, pass rate, kind, null rate, regex suffix)
-    for (num_conjuncts, pass_rate, kind, null_rate, regex) in [
-        (4, 0.5, Lt, 0.0, false),
-        (8, 0.7, Lt, 0.0, false),
-        (8, 0.9, Lt, 0.0, false),
-        (16, 0.7, Lt, 0.0, false),
-        (8, 0.7, Lt, 0.0, true),
-        (8, 0.7, CastLt, 0.0, false),
-        (8, 0.7, InList, 0.0, false),
-        (4, 0.5, Lt, 0.1, true),
-        (8, 0.7, Plus, 0.0, false),
+    // (per-conjunct pass rates, label, kind, null rate, regex suffix)
+    for (pass_rates, pass_rate_label, kind, null_rate, regex) in [
+        (&[0.5; 4] as &[f64], "0.5", Lt, 0.0, false),
+        (&[0.7; 8], "0.7", Lt, 0.0, false),
+        (&[0.9; 8], "0.9", Lt, 0.0, false),
+        (&[0.7; 16], "0.7", Lt, 0.0, false),
+        (&[0.7; 8], "0.7", Lt, 0.0, true),
+        (&[0.7; 8], "0.7", CastLt, 0.0, false),
+        (&[0.7; 8], "0.7", InList, 0.0, false),
+        // Nulls disable pre-selection (check_short_circuit returns None when the
+        // LHS has nulls), so both shapes should match; baseline for an n-ary fix.
+        (&[0.5; 4], "0.5", Lt, 0.1, true),
+        (&[0.7; 8], "0.7", Plus, 0.0, false),
+        // Selective c0 enables pre-selection in both shapes. Cover cheap and
+        // expensive remaining work to catch regressions where it helps today.
+        (
+            &[0.1, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9],
+            "0.1_then0.9",
+            Lt,
+            0.0,
+            false,
+        ),
+        (
+            &[0.1, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9],
+            "0.1_then0.9",
+            Lt,
+            0.0,
+            true,
+        ),
     ] {
+        let num_conjuncts = pass_rates.len();
         // `InList` draws values from 0..10, the others from 0..1000.
         let domain = if kind == InList { 10 } else { 1000 };
-        let cutoff = (pass_rate * domain as f64) as i32;
         let conjunct_schema = Schema::new(
             (0..num_conjuncts)
                 .map(|i| Field::new(format!("c{i}"), DataType::Int32, null_rate > 0.0))
                 .collect::<Vec<_>>(),
         );
-        let mut conjuncts: Vec<Arc<dyn PhysicalExpr>> = (0..num_conjuncts)
-            .map(|i| {
+        let mut conjuncts: Vec<Arc<dyn PhysicalExpr>> = pass_rates
+            .iter()
+            .enumerate()
+            .map(|(i, pass_rate)| {
+                let cutoff = (pass_rate * domain as f64) as i32;
                 let column = Arc::new(Column::new(&format!("c{i}"), i)) as _;
                 match kind {
                     Lt => Arc::new(BinaryExpr::new(
@@ -339,11 +360,9 @@ fn benchmark_conjunction(c: &mut Criterion) {
             .reduce(|r, l| Arc::new(BinaryExpr::new(l, Operator::And, r)))
             .unwrap();
 
-        for payload_columns in [0, 32] {
-            let mut fields = conjunct_schema.fields().to_vec();
-            let mut columns: Vec<ArrayRef> = vec![];
-            for _ in 0..num_conjuncts {
-                columns.push(Arc::new(if null_rate > 0.0 {
+        let conjunct_columns: Vec<ArrayRef> = (0..num_conjuncts)
+            .map(|_| {
+                Arc::new(if null_rate > 0.0 {
                     Int32Array::from_iter((0..NUM_ROWS).map(|_| {
                         let value = rng.random_range(0..domain);
                         (!rng.random_bool(null_rate)).then_some(value)
@@ -352,8 +371,13 @@ fn benchmark_conjunction(c: &mut Criterion) {
                     Int32Array::from_iter_values(
                         (0..NUM_ROWS).map(|_| rng.random_range(0..domain)),
                     )
-                }));
-            }
+                }) as ArrayRef
+            })
+            .collect();
+
+        for payload_columns in [0, 32] {
+            let mut fields = conjunct_schema.fields().to_vec();
+            let mut columns = conjunct_columns.clone();
             if regex {
                 fields.push(Arc::new(Field::new("url", DataType::Utf8, false)));
                 columns.push(Arc::new(StringArray::from(urls.clone())));
@@ -385,7 +409,7 @@ fn benchmark_conjunction(c: &mut Criterion) {
             {
                 c.bench_function(
                     &format!(
-                        "conjunction/k{num_conjuncts}_p{pass_rate}{suffix}_w{payload_columns}/{shape}"
+                        "conjunction/k{num_conjuncts}_p{pass_rate_label}{suffix}_w{payload_columns}/{shape}"
                     ),
                     |b| b.iter(|| expr.evaluate(black_box(&batch)).unwrap()),
                 );
