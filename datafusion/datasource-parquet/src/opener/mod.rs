@@ -1665,8 +1665,8 @@ impl RowGroupsPrunedParquetOpen {
         //
         // 2. `reverse`: flip the iteration order for DESC requests, applied
         //    AFTER any reorder so the reversed order is correct whether or
-        //    not reorder changed anything. Also handles `row_selection`
-        //    remapping.
+        //    not reorder changed anything. Local selections move with their
+        //    row groups.
         //
         // For sorted data: reorder is a no-op, reverse gives perfect DESC.
         // For unsorted data: reorder fixes the order, reverse flips for DESC.
@@ -1685,7 +1685,7 @@ impl RowGroupsPrunedParquetOpen {
                     )?;
                 }
                 if prepared.reverse_row_groups {
-                    prepared_plan = prepared_plan.reverse(file_metadata.as_ref())?;
+                    prepared_plan = prepared_plan.reverse();
                 }
                 Ok(prepared_plan)
             };
@@ -1720,9 +1720,9 @@ impl RowGroupsPrunedParquetOpen {
         } = {
             // Build the prepared access plan first — `prepare_access_plan` may
             // call `reorder_by_statistics` (for `sort_order_for_reorder`) and
-            // `reverse` (for `reverse_row_groups`), both of which mutate
-            // `row_group_indexes` to the physical scan order the decoder will
-            // actually read. We MUST build our `rg_plan` from this reordered
+            // `reverse` (for `reverse_row_groups`), both of which arrange row
+            // groups in the physical scan order the decoder will read.
+            // We MUST build our `rg_plan` from this reordered
             // list, otherwise our per-RG pruner check would consult the
             // metadata of a different RG than the decoder is about to yield.
             let decoder_config = DecoderBuilderConfig {
@@ -1734,35 +1734,23 @@ impl RowGroupsPrunedParquetOpen {
             };
 
             let prepared_access_plan = prepare_access_plan(access_plan)?;
-            // #24355: a row selection (from page-index pruning, or an externally
-            // supplied `ParquetRowSelection`) is carried by the decoder as one
-            // flat selection over the concatenation of the remaining row groups.
-            // The runtime pruner's `into_builder().with_row_groups(...)` rebuild
-            // drops row groups without slicing that selection to match, so record
-            // whether a selection is present and disable runtime pruning below
-            // when it is (mirroring `reorder_by_statistics`, which also bails when
-            // a row selection is present). The proper fix that keeps pruning
-            // under a live selection is tracked in
-            // https://github.com/apache/arrow-rs/issues/10624 /
-            // https://github.com/apache/datafusion/issues/24358.
-            let has_row_selection = prepared_access_plan.row_selection.is_some();
-            // Build `rg_plan` parallel to the decoder's view: the
-            // `prepared_access_plan` has already had its empty-selection
-            // row groups stripped, so 1:1 correspondence with the readers
-            // arrow-rs will hand back is restored. We zip with the
-            // `fully_matched` flag so the stream can toggle the per-row
-            // `RowFilter` per RG.
-            let rg_plan: VecDeque<RgPlanEntry> = prepared_access_plan
-                .row_group_indexes
-                .iter()
-                .copied()
-                .zip(prepared_access_plan.fully_matched.iter().copied())
-                .map(|(rg_index, fully_matched)| RgPlanEntry {
-                    rg_index,
-                    fully_matched,
-                    bytes: row_group_bytes(&rg_metadata[rg_index]),
-                })
-                .collect();
+            let has_row_selection = prepared_access_plan.has_row_selection;
+            // Move selections into the decoder, retaining only the metadata
+            // needed for pruning, filter toggles, and byte accounting.
+            let (selections, rg_plan): (Vec<_>, VecDeque<RgPlanEntry>) =
+                prepared_access_plan
+                    .row_groups
+                    .into_iter()
+                    .map(|rg| {
+                        let rg_index = rg.selection.row_group_index();
+                        let entry = RgPlanEntry {
+                            rg_index,
+                            bytes: row_group_bytes(&rg_metadata[rg_index]),
+                            fully_matched: rg.fully_matched,
+                        };
+                        (rg.selection, entry)
+                    })
+                    .unzip();
 
             // Decide the initial row filter state based on the first RG to
             // read. If that RG is `fully_matched` the per-row predicate is
@@ -1778,8 +1766,7 @@ impl RowGroupsPrunedParquetOpen {
             let first_rg_fully_matched = rg_plan.front().is_some_and(|e| e.fully_matched);
             let row_filter_context = precomputed_context;
 
-            let mut builder =
-                decoder_config.build(prepared_access_plan, reader_metadata.clone());
+            let mut builder = decoder_config.build(selections, reader_metadata.clone());
             let mut filter_installed = false;
             if let Some(ctx) = row_filter_context.as_ref() {
                 if first_rg_fully_matched {
@@ -1857,11 +1844,9 @@ impl RowGroupsPrunedParquetOpen {
         // via the `DynamicFilterTracker` watch channel (#22460), so detecting
         // a threshold change is a single atomic load — not a tree walk per
         // RG check.
-        // Also disabled when a row selection is live (#24355) — page-index
-        // pruning is the common source: the pruner rebuilds the decoder via
-        // `with_row_groups(...)`, which drops row groups without slicing the
-        // carried selection to match, so pruning under a live selection returns
-        // wrong results. Decline to prune in that case.
+        // Preserve the current policy for scans with selections. Enabling
+        // runtime pruning for them is separate from adopting the local API
+        // and is tracked in https://github.com/apache/datafusion/issues/24358.
         let row_group_pruner =
             match (&prepared.predicate, rg_plan.len() > 1, has_row_selection) {
                 (Some(predicate), true, false)
