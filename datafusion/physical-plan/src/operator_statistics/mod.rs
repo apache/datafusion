@@ -86,7 +86,7 @@ use datafusion_common::{Result, Statistics};
 use crate::ExecutionPlan;
 use crate::aggregates::{AggregateExec, AggregateMode};
 use crate::execution_plan::CardinalityEffect;
-use crate::filter::FilterExec;
+use crate::filter::{FilterExec, null_check_column};
 use crate::joins::{CrossJoinExec, HashJoinExec, JoinOnRef, SortMergeJoinExec};
 use crate::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::projection::ProjectionExec;
@@ -646,6 +646,13 @@ impl StatisticsProvider for FilterStatisticsProvider {
             // TODO: pass filter.expression_analyzer_registry() once #21122 lands
         )?;
 
+        // `IS NOT NULL` keeps every non-null value of its column, so the
+        // helper's distinct count for that column stands.
+        let all_values_kept = match null_check_column(filter.predicate()) {
+            Some((column, false)) => Some(column),
+            _ => None,
+        };
+
         // Adjust distinct_count for each column using the selectivity ratio
         // via the probabilistic survival model from
         // ndv_after_selectivity to account for rows removed by the filter.
@@ -655,7 +662,14 @@ impl StatisticsProvider for FilterStatisticsProvider {
             && filtered_rows < orig_rows
         {
             let selectivity = filtered_rows as f64 / orig_rows as f64;
-            for col_stat in &mut stats.column_statistics {
+            for (idx, col_stat) in stats.column_statistics.iter_mut().enumerate() {
+                // Skip the `IS NOT NULL` column, whose values all survive, and
+                // an exact zero, which cannot shrink.
+                if all_values_kept == Some(idx)
+                    || col_stat.distinct_count == Precision::Exact(0)
+                {
+                    continue;
+                }
                 if let Some(&ndv) = col_stat.distinct_count.get_value() {
                     let adjusted = ndv_after_selectivity(ndv, orig_rows, selectivity);
                     col_stat.distinct_count = Precision::Inexact(adjusted);
@@ -1818,6 +1832,50 @@ mod tests {
 
         let stats = compute(&registry, filter.as_ref())?;
         assert!(stats.base.num_rows.get_value().unwrap_or(&0) <= &1000);
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_is_null_column_stats_with_missing_counts() -> Result<()> {
+        use crate::filter::FilterExecBuilder;
+        use Precision::{Absent, Exact};
+        use datafusion_physical_expr::expressions::is_null;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let registry =
+            StatisticsRegistry::with_providers(vec![Arc::new(FilterStatisticsProvider)]);
+        for num_rows in [Exact(100), Absent] {
+            for null_count in [Exact(30), Absent] {
+                let source: Arc<dyn ExecutionPlan> =
+                    Arc::new(MockSourceExec::with_column_stats(
+                        Arc::clone(&schema),
+                        num_rows,
+                        vec![ColumnStatistics {
+                            null_count,
+                            distinct_count: Exact(50),
+                            min_value: Exact(ScalarValue::Int32(Some(1))),
+                            max_value: Exact(ScalarValue::Int32(Some(50))),
+                            sum_value: Exact(ScalarValue::Int64(Some(1000))),
+                            ..Default::default()
+                        }],
+                    ));
+                for fetch in [None, Some(10)] {
+                    let filter = FilterExecBuilder::new(
+                        is_null(col("a", &schema)?)?,
+                        Arc::clone(&source),
+                    )
+                    .with_fetch(fetch)
+                    .build()?;
+                    let stats = compute(&registry, &filter)?;
+                    let column = &stats.base.column_statistics[0];
+                    assert_eq!(column.distinct_count, Exact(0));
+                    assert_eq!(column.null_count, stats.base.num_rows);
+                    assert_eq!(column.min_value, Absent);
+                    assert_eq!(column.max_value, Absent);
+                    assert_eq!(column.sum_value, Absent);
+                }
+            }
+        }
         Ok(())
     }
 
