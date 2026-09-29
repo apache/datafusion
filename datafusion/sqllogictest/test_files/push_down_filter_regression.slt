@@ -698,14 +698,14 @@ EXPLAIN SELECT k, c FROM (SELECT random() < 0.5 AS k, count(*) AS c FROM generat
 logical_plan
 01)Projection: random() < Float64(0.5) AS k, count(Int64(1)) AS c
 02)--Filter: random() < Float64(0.5)
-03)----Aggregate: groupBy=[[random() < Float64(0.5)]], aggr=[[count(Int64(1))]]
+03)----Aggregate: groupBy=[[random() < Float64(0.5)]], aggr=[[count() AS count(Int64(1))]]
 04)------TableScan: generate_series() projection=[]
 physical_plan
 01)ProjectionExec: expr=[random() < Float64(0.5)@0 as k, count(Int64(1))@1 as c]
 02)--FilterExec: random() < Float64(0.5)@0
-03)----AggregateExec: mode=FinalPartitioned, gby=[random() < Float64(0.5)@0 as random() < Float64(0.5)], aggr=[count(Int64(1))]
+03)----AggregateExec: mode=FinalPartitioned, gby=[random() < Float64(0.5)@0 as random() < Float64(0.5)], aggr=[count() as count(Int64(1))]
 04)------RepartitionExec: partitioning=Hash([random() < Float64(0.5)@0], 4), input_partitions=4
-05)--------AggregateExec: mode=Partial, gby=[random() < 0.5 as random() < Float64(0.5)], aggr=[count(Int64(1))]
+05)--------AggregateExec: mode=Partial, gby=[random() < 0.5 as random() < Float64(0.5)], aggr=[count() as count(Int64(1))]
 06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=10000, batch_size=8192]
 

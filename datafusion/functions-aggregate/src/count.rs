@@ -39,7 +39,8 @@ use datafusion_expr::{
     GroupsAccumulator, ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs,
     TypeSignature, Volatility, WindowFunctionDefinition,
     expr::WindowFunction,
-    function::{AccumulatorArgs, StateFieldsArgs},
+    function::{AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs},
+    simplify::SimplifyContext,
     utils::{AggregateOrderSensitivity, format_state_name},
 };
 use datafusion_functions_aggregate_common::aggregate::count_distinct::PrimitiveDistinctCountGroupsAccumulator;
@@ -362,11 +363,11 @@ impl AggregateUDFImpl for Count {
         arg_types: &[DataType],
         is_distinct: bool,
     ) -> Option<bool> {
+        if !is_distinct {
+            return Some(arg_types.len() <= 1);
+        }
         if arg_types.len() != 1 {
             return Some(false);
-        }
-        if !is_distinct {
-            return Some(true);
         }
         // Keep in step with `create_distinct_count_groups_accumulator`.
         Some(matches!(
@@ -400,17 +401,34 @@ impl AggregateUDFImpl for Count {
         AggregateOrderSensitivity::Insensitive
     }
 
+    fn simplify(&self) -> Option<AggregateFunctionSimplification> {
+        Some(Box::new(|mut aggregate_function, info| {
+            let params = &aggregate_function.params;
+            // Every row is counted when none of the arguments can be null
+            if !params.distinct
+                && !params.args.is_empty()
+                && params
+                    .args
+                    .iter()
+                    .all(|arg| is_safe_non_null_count_arg(arg, info))
+            {
+                aggregate_function.params.args.clear();
+            }
+            Ok(Expr::AggregateFunction(aggregate_function))
+        }))
+    }
+
     fn default_value(&self, _data_type: &DataType) -> Result<ScalarValue> {
         Ok(ScalarValue::Int64(Some(0)))
     }
 
     fn value_from_stats(&self, statistics_args: &StatisticsArgs) -> Option<ScalarValue> {
-        let [expr] = statistics_args.exprs else {
-            return None;
-        };
         let col_stats = &statistics_args.statistics.column_statistics;
 
         if statistics_args.is_distinct {
+            let [expr] = statistics_args.exprs else {
+                return None;
+            };
             // Only column references can be resolved from statistics;
             // expressions like casts or literals are not supported.
             let col_expr = expr.downcast_ref::<expressions::Column>()?;
@@ -422,6 +440,15 @@ impl AggregateUDFImpl for Count {
         }
 
         let Precision::Exact(num_rows) = statistics_args.statistics.num_rows else {
+            return None;
+        };
+
+        if statistics_args.exprs.is_empty() {
+            let num_rows = i64::try_from(num_rows).ok()?;
+            return Some(ScalarValue::Int64(Some(num_rows)));
+        }
+
+        let [expr] = statistics_args.exprs else {
             return None;
         };
 
@@ -463,6 +490,16 @@ impl AggregateUDFImpl for Count {
             let acc = CountAccumulator::new();
             Ok(Box::new(acc))
         }
+    }
+}
+
+/// Returns true if `expr` is a non-null literal or non-nullable column that is
+/// safe to elide from `COUNT`.
+fn is_safe_non_null_count_arg(expr: &Expr, info: &SimplifyContext) -> bool {
+    match expr {
+        Expr::Literal(value, _) => !value.is_null(),
+        Expr::Column(_) => matches!(info.nullable(expr), Ok(false)),
+        _ => false,
     }
 }
 
@@ -614,6 +651,19 @@ impl Accumulator for CountAccumulator {
         Ok(())
     }
 
+    fn update_batch_with_num_rows(
+        &mut self,
+        values: &[ArrayRef],
+        num_rows: usize,
+    ) -> Result<()> {
+        if values.is_empty() {
+            self.count += num_rows as i64;
+            Ok(())
+        } else {
+            self.update_batch(values)
+        }
+    }
+
     fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array = &values[0];
         self.count -= (array.len() - null_count_for_multiple_cols(values)) as i64;
@@ -673,15 +723,18 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
-        assert_eq!(values.len(), 1, "single argument to update_batch");
-        let values = &values[0];
+        assert!(
+            values.len() <= 1,
+            "COUNT expects zero or one argument to update_batch"
+        );
+        let logical_nulls = values.first().and_then(|values| values.logical_nulls());
 
         // Add one to each group's counter for each non null, non
         // filtered value
         self.counts.resize(total_num_groups, 0);
         accumulate_indices(
             group_indices,
-            values.logical_nulls().as_ref(),
+            logical_nulls.as_ref(),
             opt_filter,
             |group_index| {
                 // SAFETY: group_index is guaranteed to be in bounds
@@ -769,12 +822,35 @@ impl GroupsAccumulator for CountGroupsAccumulator {
         values: &[ArrayRef],
         opt_filter: Option<&BooleanArray>,
     ) -> Result<Vec<ArrayRef>> {
-        let values = &values[0];
+        let Some(values) = values.first() else {
+            return internal_err!(
+                "Nullary COUNT requires convert_to_state_with_num_rows"
+            );
+        };
+        self.convert_to_state_with_num_rows(
+            std::slice::from_ref(values),
+            opt_filter,
+            values.len(),
+        )
+    }
 
-        let state_array = match (values.logical_nulls(), opt_filter) {
+    fn convert_to_state_with_num_rows(
+        &self,
+        values: &[ArrayRef],
+        opt_filter: Option<&BooleanArray>,
+        num_rows: usize,
+    ) -> Result<Vec<ArrayRef>> {
+        if values.len() > 1 {
+            return internal_err!(
+                "COUNT expects zero or one argument to convert_to_state"
+            );
+        }
+        let logical_nulls = values.first().and_then(|values| values.logical_nulls());
+
+        let state_array = match (logical_nulls, opt_filter) {
             (None, None) => {
                 // In case there is no nulls in input and no filter, returning array of 1
-                Arc::new(Int64Array::from_value(1, values.len()))
+                Arc::new(Int64Array::from_value(1, num_rows))
             }
             (Some(nulls), None) => {
                 // If there are any nulls in input values -- casting `nulls` (true for values, false for nulls)
@@ -958,10 +1034,14 @@ mod tests {
 
     use super::*;
     use arrow::{
-        array::{DictionaryArray, Int32Array, Int64Array, NullArray, StringArray},
+        array::{
+            BooleanArray, DictionaryArray, Int32Array, Int64Array, NullArray, StringArray,
+        },
         datatypes::{DataType, Field, Int32Type, Schema},
     };
+    use datafusion_common::DFSchema;
     use datafusion_expr::function::AccumulatorArgs;
+    use datafusion_expr::{col, lit};
     use datafusion_physical_expr::{PhysicalExpr, expressions::Column};
     use std::sync::Arc;
     /// Helper function to create a dictionary array with non-null keys but some null values
@@ -1000,6 +1080,107 @@ mod tests {
         let mut accumulator = CountAccumulator::new();
         accumulator.update_batch(&[Arc::new(NullArray::new(10))])?;
         assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(0)));
+        Ok(())
+    }
+
+    #[test]
+    fn count_accumulator_nullary() -> Result<()> {
+        let mut accumulator = CountAccumulator::new();
+        accumulator.update_batch_with_num_rows(&[], 10)?;
+        assert_eq!(accumulator.evaluate()?, ScalarValue::Int64(Some(10)));
+        Ok(())
+    }
+
+    #[test]
+    fn count_nullary_value_from_stats() {
+        let statistics = datafusion_common::Statistics {
+            num_rows: Precision::Exact(42),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![],
+        };
+        let return_type = DataType::Int64;
+        let statistics_args = StatisticsArgs {
+            statistics: &statistics,
+            return_type: &return_type,
+            is_distinct: false,
+            exprs: &[],
+        };
+
+        assert_eq!(
+            Count::new().value_from_stats(&statistics_args),
+            Some(ScalarValue::Int64(Some(42)))
+        );
+    }
+
+    #[test]
+    fn count_groups_accumulator_nullary() -> Result<()> {
+        let mut accumulator = CountGroupsAccumulator::new();
+        accumulator.update_batch(&[], &[0, 1, 0, 2], None, 3)?;
+
+        let result = accumulator.evaluate(EmitTo::All)?;
+        let expected = Int64Array::from(vec![2, 1, 1]);
+        assert_eq!(result.as_primitive::<Int64Type>(), &expected);
+
+        let state = accumulator.convert_to_state_with_num_rows(&[], None, 3)?;
+        let expected = Int64Array::from(vec![1, 1, 1]);
+        assert_eq!(state[0].as_primitive::<Int64Type>(), &expected);
+
+        let filter = BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]);
+        let mut filtered_accumulator = CountGroupsAccumulator::new();
+        filtered_accumulator.update_batch(&[], &[0, 1, 0, 2], Some(&filter), 3)?;
+        let result = filtered_accumulator.evaluate(EmitTo::All)?;
+        let expected = Int64Array::from(vec![1, 0, 1]);
+        assert_eq!(result.as_primitive::<Int64Type>(), &expected);
+
+        let state = accumulator.convert_to_state_with_num_rows(&[], Some(&filter), 4)?;
+        let expected = Int64Array::from(vec![1, 0, 0, 1]);
+        assert_eq!(state[0].as_primitive::<Int64Type>(), &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn simplify_count_safe_non_null_args() -> Result<()> {
+        let schema = DFSchema::try_from(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, true),
+        ]))?;
+        let info = SimplifyContext::builder()
+            .with_schema(Arc::new(schema))
+            .build();
+        let simplify = Count::new().simplify().unwrap();
+        let simplified_args = |args: Vec<Expr>, distinct: bool| -> Result<Vec<Expr>> {
+            let aggregate_function = datafusion_expr::expr::AggregateFunction::new_udf(
+                count_udaf(),
+                args,
+                distinct,
+                None,
+                vec![],
+                None,
+            );
+            match simplify(aggregate_function, &info)? {
+                Expr::AggregateFunction(f) => Ok(f.params.args),
+                other => internal_err!("unexpected expression {other}"),
+            }
+        };
+
+        for args in [
+            vec![lit(1i64)],
+            vec![lit("x")],
+            vec![col("a")],
+            vec![col("a"), lit(2)],
+        ] {
+            assert!(simplified_args(args, false)?.is_empty());
+        }
+        for args in [
+            vec![lit(ScalarValue::Null)],
+            vec![col("b")],
+            vec![col("a"), col("b")],
+            vec![col("a") + lit(1)],
+        ] {
+            assert_eq!(simplified_args(args.clone(), false)?, args);
+        }
+        assert!(simplified_args(vec![], false)?.is_empty());
+        assert_eq!(simplified_args(vec![lit(1i64)], true)?, vec![lit(1i64)]);
         Ok(())
     }
 

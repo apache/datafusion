@@ -32,7 +32,7 @@ EXPLAIN SELECT COUNT() FROM (SELECT 1 AS a, 2 AS b) AS t;
 ----
 logical_plan
 01)Projection: count(Int64(1)) AS count()
-02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+02)--Aggregate: groupBy=[[]], aggr=[[count() AS count(Int64(1))]]
 03)----SubqueryAlias: t
 04)------EmptyRelation: rows=1
 physical_plan
@@ -44,13 +44,13 @@ EXPLAIN SELECT t1.a, COUNT() FROM t1 GROUP BY t1.a;
 ----
 logical_plan
 01)Projection: t1.a, count(Int64(1)) AS count()
-02)--Aggregate: groupBy=[[t1.a]], aggr=[[count(Int64(1))]]
+02)--Aggregate: groupBy=[[t1.a]], aggr=[[count() AS count(Int64(1))]]
 03)----TableScan: t1 projection=[a]
 physical_plan
 01)ProjectionExec: expr=[a@0 as a, count(Int64(1))@1 as count()]
-02)--AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(Int64(1))]
+02)--AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count() as count(Int64(1))]
 03)----RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
-04)------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(Int64(1))]
+04)------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count() as count(Int64(1))]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
@@ -59,14 +59,14 @@ EXPLAIN SELECT t1.a, COUNT() AS cnt FROM t1 GROUP BY t1.a HAVING COUNT() > 0;
 logical_plan
 01)Projection: t1.a, count(Int64(1)) AS count() AS cnt
 02)--Filter: count(Int64(1)) > Int64(0)
-03)----Aggregate: groupBy=[[t1.a]], aggr=[[count(Int64(1))]]
+03)----Aggregate: groupBy=[[t1.a]], aggr=[[count() AS count(Int64(1))]]
 04)------TableScan: t1 projection=[a]
 physical_plan
 01)ProjectionExec: expr=[a@0 as a, count(Int64(1))@1 as cnt]
 02)--FilterExec: count(Int64(1))@1 > 0
-03)----AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(Int64(1))]
+03)----AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count() as count(Int64(1))]
 04)------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
-05)--------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(Int64(1))]
+05)--------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count() as count(Int64(1))]
 06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query II

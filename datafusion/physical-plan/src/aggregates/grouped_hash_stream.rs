@@ -1469,7 +1469,13 @@ impl GroupedHashAggregateStream {
             output.extend(self.aggregate_accumulator_metrics.time(
                 idx,
                 AccumulatorPhase::ConvertToState,
-                || acc.convert_to_state(values, opt_filter),
+                || {
+                    acc.convert_to_state_with_num_rows(
+                        values,
+                        opt_filter,
+                        batch.num_rows(),
+                    )
+                },
             )?);
         }
 

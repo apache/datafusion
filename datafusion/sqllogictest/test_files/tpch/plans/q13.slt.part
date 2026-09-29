@@ -42,7 +42,7 @@ limit 10;
 logical_plan
 01)Sort: custdist DESC NULLS FIRST, c_orders.c_count DESC NULLS FIRST, fetch=10
 02)--Projection: c_orders.c_count, count(Int64(1)) AS count(*) AS custdist
-03)----Aggregate: groupBy=[[c_orders.c_count]], aggr=[[count(Int64(1))]]
+03)----Aggregate: groupBy=[[c_orders.c_count]], aggr=[[count() AS count(Int64(1))]]
 04)------SubqueryAlias: c_orders
 05)--------Projection: count(orders.o_orderkey) AS c_count
 06)----------Aggregate: groupBy=[[customer.c_custkey]], aggr=[[count(orders.o_orderkey)]]
@@ -56,9 +56,9 @@ physical_plan
 01)SortPreservingMergeExec: [custdist@1 DESC, c_count@0 DESC], fetch=10
 02)--ProjectionExec: expr=[c_count@0 as c_count, count(Int64(1))@1 as custdist]
 03)----SortExec: TopK(fetch=10), expr=[count(Int64(1))@1 DESC, c_count@0 DESC], preserve_partitioning=[true]
-04)------AggregateExec: mode=FinalPartitioned, gby=[c_count@0 as c_count], aggr=[count(Int64(1))]
+04)------AggregateExec: mode=FinalPartitioned, gby=[c_count@0 as c_count], aggr=[count() as count(Int64(1))]
 05)--------RepartitionExec: partitioning=Hash([c_count@0], 4), input_partitions=4
-06)----------AggregateExec: mode=Partial, gby=[c_count@0 as c_count], aggr=[count(Int64(1))]
+06)----------AggregateExec: mode=Partial, gby=[c_count@0 as c_count], aggr=[count() as count(Int64(1))]
 07)------------ProjectionExec: expr=[count(orders.o_orderkey)@1 as c_count]
 08)--------------AggregateExec: mode=SinglePartitioned, gby=[c_custkey@0 as c_custkey], aggr=[count(orders.o_orderkey)]
 09)----------------HashJoinExec: mode=Partitioned, join_type=Left, on=[(c_custkey@0, o_custkey@1)], projection=[c_custkey@0, o_orderkey@1]
