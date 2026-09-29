@@ -662,27 +662,6 @@ impl SessionState {
             statement,
             enable_ident_normalization,
         )?;
-
-        let table_refs = if let Some(system_catalog) = self.config().system_catalog() {
-            table_refs
-                .iter()
-                .map(|table_ref| match table_ref {
-                    TableReference::Partial { schema, table }
-                        if schema.as_ref() == INFORMATION_SCHEMA =>
-                    {
-                        TableReference::Full {
-                            catalog: Arc::from(system_catalog),
-                            schema: Arc::clone(schema),
-                            table: Arc::clone(table),
-                        }
-                    }
-                    r => r.clone(),
-                })
-                .collect()
-        } else {
-            table_refs
-        };
-
         Ok(table_refs)
     }
 
