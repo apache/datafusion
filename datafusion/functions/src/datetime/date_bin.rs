@@ -429,6 +429,10 @@ fn date_bin_nanos_interval_wide(
 // from i128::MIN, so none of these operations can overflow.
 fn compute_distance_wide(time_diff: i128, stride: i128) -> i128 {
     let time_delta = time_diff - time_diff % stride;
+    // `%` rounds toward zero, so a negative `time_diff` between two bins is
+    // rounded up to the later bin; move back one bin. This must match
+    // `compute_distance`, so it does not use `rem_euclid`, which rounds
+    // negative strides differently.
     if time_diff < 0 && stride > 1 && time_delta != time_diff {
         time_delta - stride
     } else {
