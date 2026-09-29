@@ -320,6 +320,33 @@ async fn test_named_parameter_not_bound() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_optimize_union_of_aliased_placeholders_before_binding() -> Result<()> {
+    let ctx = SessionContext::new();
+    let state = ctx.state();
+    let plan = state
+        .create_logical_plan("SELECT $1 AS a UNION ALL SELECT $2 AS a")
+        .await?;
+
+    let optimized = state.optimize(&plan)?;
+    let bound = optimized.replace_params_with_values(&ParamValues::List(vec![
+        ScalarValue::from("x").into(),
+        ScalarValue::from("y").into(),
+    ]))?;
+    let batches = ctx.execute_logical_plan(bound).await?.collect().await?;
+
+    assert_snapshot!(batches_to_sort_string(&batches), @r"
+    +---+
+    | a |
+    +---+
+    | x |
+    | y |
+    +---+
+    ");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_query_parameters_with_metadata() -> Result<()> {
     let ctx = SessionContext::new();
 

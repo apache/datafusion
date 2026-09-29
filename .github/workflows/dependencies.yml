@@ -24,6 +24,10 @@ concurrency:
 on:
   push:
     branches-ignore:
+      # Commits reach main through the merge queue, which runs this workflow at
+      # the same SHA, so do not repeat the jobs after the merge. Release
+      # branches and every other branch keep their post-push runs.
+      - 'main'
       - 'gh-readonly-queue/**'
       - 'dependabot/**'
   pull_request:
@@ -51,9 +55,7 @@ jobs:
         with:
           rust-version: stable
       - name: Check dependencies
-        working-directory: dev/depcheck
-        run: |
-          cargo run --locked
+        run: bash ci/scripts/check_circular_dependencies.sh
 
   detect-unused-dependencies:
     name: Detect Unused Dependencies
@@ -62,9 +64,13 @@ jobs:
       image: amd64/rust
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Load tool versions
+        run: |
+          . ci/scripts/utils/tool_versions.sh
+          echo "CARGO_MACHETE_VERSION=${CARGO_MACHETE_VERSION}" >> "$GITHUB_ENV"
       - name: Install cargo-machete
-        uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375  # v2.87.12
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3  # v2.87.16
         with:
-          tool: cargo-machete@0.9
+          tool: cargo-machete@${{ env.CARGO_MACHETE_VERSION }}
       - name: Detect unused dependencies
-        run: cargo machete --with-metadata
+        run: bash ci/scripts/check_unused_dependencies.sh

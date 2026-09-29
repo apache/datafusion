@@ -17,16 +17,12 @@
 
 use std::sync::{Arc, OnceLock};
 
-use arrow::array::{
-    Array, ArrayRef, Capacities, MutableArrayData, Scalar, cast::AsArray, make_array,
-    make_comparator,
-};
-use arrow::array::{BooleanArray, layout};
-use arrow::buffer::NullBuffer;
-use arrow::compute::{SortOptions, nullif};
+use arrow::array::{Array, cast::AsArray};
+use arrow::compute::take;
 use arrow::datatypes::{DataType, Field, FieldRef};
 
 use datafusion_common::cast::{as_map_array, as_struct_array};
+use datafusion_common::utils::apply_parent_nulls;
 use datafusion_common::{
     Result, ScalarValue, exec_datafusion_err, exec_err, internal_err, plan_datafusion_err,
 };
@@ -40,6 +36,7 @@ use datafusion_macros::user_doc;
 
 use super::named_struct::NamedStructFunc;
 use super::r#struct::StructFunc;
+use crate::utils::map_lookup;
 
 #[user_doc(
     doc_section(label = "Other Functions"),
@@ -101,137 +98,6 @@ impl Default for GetFieldFunc {
     }
 }
 
-/// Process a map array with a non-nested key type by comparing the single
-/// lookup key against every map key with the `eq` kernel, then scanning the
-/// result for each row.
-///
-/// `eq` does not support nested types, so list, struct, and map keys go
-/// through [`process_map_with_nested_key`] instead.
-fn process_map_array(
-    array: &dyn Array,
-    key_array: Arc<dyn Array>,
-) -> Result<ColumnarValue> {
-    let map_array = as_map_array(array)?;
-    let be_compared = Scalar::new(key_array);
-    let keys = arrow::compute::kernels::cmp::eq(&be_compared, map_array.keys())?;
-
-    let original_data = map_array.entries().column(1).to_data();
-    let capacity = Capacities::Array(original_data.len());
-    let mut mutable =
-        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
-
-    let offsets = map_array.value_offsets();
-    // Scan the comparison result in place: slicing it per entry would allocate
-    // a new array for every row of the map. Map keys are non-null by
-    // definition, so the comparison result carries no nulls to check here.
-    let matches = keys.values();
-
-    for entry in 0..map_array.len() {
-        if map_array.is_null(entry) {
-            mutable.try_extend_nulls(1)?;
-            continue;
-        }
-        let start = offsets[entry] as usize;
-        let end = offsets[entry + 1] as usize;
-
-        let matched = (start..end).find(|&i| matches.value(i));
-
-        match matched {
-            Some(i) => mutable.try_extend(0, i, i + 1)?,
-            None => mutable.try_extend_nulls(1)?,
-        }
-    }
-
-    let data = mutable.freeze();
-    let data = make_array(data);
-    Ok(ColumnarValue::Array(data))
-}
-
-/// Process a map array with a nested key type by iterating through entries
-/// and using a comparator for key matching.
-///
-/// This specialized version is used when the key type is nested (e.g., struct, list).
-fn process_map_with_nested_key(
-    array: &dyn Array,
-    key_array: &dyn Array,
-) -> Result<ColumnarValue> {
-    let map_array = as_map_array(array)?;
-
-    let comparator =
-        make_comparator(map_array.keys().as_ref(), key_array, SortOptions::default())?;
-
-    let original_data = map_array.entries().column(1).to_data();
-    let capacity = Capacities::Array(original_data.len());
-    let mut mutable =
-        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
-
-    for entry in 0..map_array.len() {
-        if map_array.is_null(entry) {
-            mutable.try_extend_nulls(1)?;
-            continue;
-        }
-        let start = map_array.value_offsets()[entry] as usize;
-        let end = map_array.value_offsets()[entry + 1] as usize;
-
-        let mut found_match = false;
-        for i in start..end {
-            if comparator(i, 0).is_eq() {
-                mutable.try_extend(0, i, i + 1)?;
-                found_match = true;
-                break;
-            }
-        }
-
-        if !found_match {
-            mutable.try_extend_nulls(1)?;
-        }
-    }
-
-    let data = mutable.freeze();
-    let data = make_array(data);
-    Ok(ColumnarValue::Array(data))
-}
-
-/// Apply a struct's nulls to one of its fields.
-fn apply_parent_nulls(
-    col: &ArrayRef,
-    parent_nulls: Option<&NullBuffer>,
-) -> Result<ArrayRef> {
-    let Some(parent_nulls) = parent_nulls else {
-        // If there are no parent nulls to apply, we can just return
-        return Ok(Arc::clone(col));
-    };
-
-    // NullArray is already entirely null and cannot have a validity bitmap.
-    // If we have 0 parent nulls, we can also avoid extra work.
-    if col.data_type().is_null() || parent_nulls.null_count() == 0 {
-        return Ok(Arc::clone(col));
-    }
-
-    if layout(col.data_type()).can_contain_null_mask {
-        // `nullif` marks a row null where the mask is true and keeps the
-        // field's own nulls. Only the validity bitmap is rebuilt; the value
-        // buffers and child arrays are shared with `col`.
-        let null_parents = BooleanArray::new(!parent_nulls.inner(), None);
-        return Ok(nullif(col.as_ref(), &null_parents)?);
-    }
-
-    // Unions and run-end encoded arrays have no validity bitmap of their own
-    // and represent nulls in their children. Rebuild the array so null parents
-    // become null values in those children.
-    let data = col.to_data();
-    let mut mutable = MutableArrayData::new(vec![&data], true, data.len());
-    let mut end = 0;
-    for (start, valid_end) in parent_nulls.valid_slices() {
-        mutable.try_extend_nulls(start - end)?;
-        mutable.try_extend(0, start, valid_end)?;
-        end = valid_end;
-    }
-    mutable.try_extend_nulls(data.len() - end)?;
-
-    Ok(make_array(mutable.freeze()))
-}
-
 /// Extract a single field from a struct or map array
 fn extract_single_field(base: ColumnarValue, name: ScalarValue) -> Result<ColumnarValue> {
     let arrays = ColumnarValue::values_to_arrays(&[base])?;
@@ -258,14 +124,11 @@ fn extract_single_field(base: ColumnarValue, name: ScalarValue) -> Result<Column
             Ok(ColumnarValue::Array(dict.with_values(field_col)))
         }
         (DataType::Map(_, _), key, _) => {
-            // The lookup key is a single scalar. `eq` does not support nested
-            // key types, so those are matched with a comparator instead.
-            let key_array = key.to_array()?;
-            if key_array.data_type().is_nested() {
-                process_map_with_nested_key(&array, key_array.as_ref())
-            } else {
-                process_map_array(&array, key_array)
-            }
+            // The lookup key is a single scalar
+            let map_array = as_map_array(array.as_ref())?;
+            let indices = map_lookup(map_array, key.to_array()?.as_ref())?;
+            let values = take(map_array.values().as_ref(), &indices, None)?;
+            Ok(ColumnarValue::Array(values))
         }
         (DataType::Struct(_), _, Some(k)) => {
             let as_struct_array = as_struct_array(&array)?;
@@ -712,6 +575,7 @@ mod tests {
         ArrayRef, Int32Array, Int32Builder, ListArray, ListBuilder, MapBuilder, RunArray,
         StructArray, UnionArray,
     };
+    use arrow::buffer::NullBuffer;
     use arrow::datatypes::{Fields, Int32Type, UnionFields};
 
     #[test]

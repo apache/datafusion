@@ -105,12 +105,42 @@ The maximum supported precision for `DECIMAL` types is 76.
 
 ## Date/Time Types
 
-| SQL DataType | Arrow DataType                   |
-| ------------ | :------------------------------- |
-| `DATE`       | `Date32`                         |
-| `TIME`       | `Time64(Nanosecond)`             |
-| `TIMESTAMP`  | `Timestamp(Nanosecond, None)`    |
-| `INTERVAL`   | `Interval(IntervalMonthDayNano)` |
+| SQL DataType                                                  | Arrow DataType                                             |
+| ------------------------------------------------------------- | :--------------------------------------------------------- |
+| `DATE`                                                        | `Date32`                                                   |
+| `TIME`                                                        | `Time64(Nanosecond)`                                       |
+| `TIMESTAMP`, `TIMESTAMP(p)`, `TIMESTAMP(p) WITHOUT TIME ZONE` | `Timestamp(unit, None)`                                    |
+| `TIMESTAMPTZ(p)`, `TIMESTAMP(p) WITH TIME ZONE`               | `Timestamp(unit, None)` by default — see the warning below |
+| `INTERVAL`                                                    | `Interval(MonthDayNano)`                                   |
+
+:::{warning}
+`TIMESTAMPTZ` and `TIMESTAMP WITH TIME ZONE` do **not** give a timezone-aware
+type by default. The zone comes from the
+[`datafusion.execution.time_zone`] setting, and that setting is unset unless you
+set it. So `'2024-01-01T12:00:00Z'::timestamptz` gives `Timestamp(unit, None)`
+by default: the result type does not keep timezone metadata.
+
+An explicit offset in the input is still applied. DataFusion normalizes the
+value to UTC. For example, with the default setting,
+`'2024-01-01T12:00:00+07:00'::timestamptz` gives `2024-01-01T05:00:00`. It is
+not read as the local time `12:00:00`.
+
+This is a known bug. See [issue #25166]. PostgreSQL and DuckDB always give an
+aware type here, because their session time zone always has a value.
+
+Set `datafusion.execution.time_zone` to make these types aware. `'UTC'` is a
+good value.
+:::
+
+`unit` comes from the optional precision `p` on the two `TIMESTAMP` rows. Use
+`0`, `3`, `6` or `9` for `Second`, `Millisecond`, `Microsecond` or `Nanosecond`.
+DataFusion rejects each other value of `p`. If you omit `p`, the unit is
+`Nanosecond`. The precision goes after `TIMESTAMPTZ`, but before
+`WITH TIME ZONE`: use `TIMESTAMPTZ(3)` or `TIMESTAMP(3) WITH TIME ZONE`.
+`DATE`, `TIME` and `INTERVAL` do not accept a precision.
+
+[`datafusion.execution.time_zone`]: ../configs.md
+[issue #25166]: https://github.com/apache/datafusion/issues/25166
 
 ## Boolean Types
 

@@ -17,10 +17,13 @@
 
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
+use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
-    ColumnarValue, Expr, ExpressionPlacement, ScalarFunctionArgs, ScalarUDF,
-    ScalarUDFImpl, Signature, TypeSignature, Volatility, lit,
+    Accumulator, AggregateUDFImpl, ColumnarValue, DistinctHandling, Expr,
+    ExpressionPlacement, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility, lit,
 };
+use std::hash::{Hash, Hasher};
 
 /// A configurable test UDF for optimizer tests.
 /// Defaults to `MoveTowardsLeafNodes` placement. Use `with_placement()` to override.
@@ -165,4 +168,59 @@ impl ScalarUDFImpl for GetFieldLikeUDF {
 pub fn get_field_like(base: Expr, key: &str) -> Expr {
     let udf = ScalarUDF::new_from_impl(GetFieldLikeUDF::new());
     udf.call(vec![base, lit(key)])
+}
+
+/// A test aggregate that reports the [`DistinctHandling`] it was built with.
+///
+/// Built-in functions only cover the variants they happen to carry. This one
+/// exercises the public API a third-party function uses: an
+/// [`AggregateUDFImpl::distinct_handling`] override.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DistinctHandlingTestUDAF {
+    name: &'static str,
+    handling: DistinctHandling,
+    signature: Signature,
+}
+
+impl DistinctHandlingTestUDAF {
+    pub fn new(name: &'static str, handling: DistinctHandling) -> Self {
+        Self {
+            name,
+            handling,
+            signature: Signature::any(1, Volatility::Immutable),
+        }
+    }
+
+    /// Set the volatility of the aggregate function itself.
+    pub fn with_volatility(mut self, volatility: Volatility) -> Self {
+        self.signature.volatility = volatility;
+        self
+    }
+}
+
+/// Hashed by name and signature. `DistinctHandling` is not `Hash`, and
+/// `AggregateUDFImpl` requires one through `DynHash`.
+impl Hash for DistinctHandlingTestUDAF {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.signature.hash(state);
+    }
+}
+
+impl AggregateUDFImpl for DistinctHandlingTestUDAF {
+    fn name(&self) -> &str {
+        self.name
+    }
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::UInt32)
+    }
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        panic!("DistinctHandlingTestUDAF: not intended for execution")
+    }
+    fn distinct_handling(&self) -> DistinctHandling {
+        self.handling
+    }
 }
