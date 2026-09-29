@@ -15,18 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::{ArrayRef, Int32Array, Int64Array};
 use arrow::{array::StringArray, record_batch::RecordBatch};
 use arrow::{
     array::{BooleanArray, Date32Array, Date64Array},
     datatypes::{DataType, Field, Schema},
 };
 use criterion::{Criterion, criterion_group, criterion_main};
+use datafusion_common::ScalarValue;
 use datafusion_expr::{Operator, and, binary_expr, col, lit, or};
 use datafusion_physical_expr::{
     PhysicalExpr,
-    expressions::{BinaryExpr, Column},
+    expressions::{BinaryExpr, Column, Literal, cast, in_list},
     planner::logical2physical,
 };
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use std::hint::black_box;
 use std::sync::Arc;
 
@@ -234,6 +238,162 @@ fn benchmark_binary_op_in_short_circuit(c: &mut Criterion) {
     }
 }
 
+/// How each conjunct in [`benchmark_conjunction`] tests its column.
+#[derive(Clone, Copy, PartialEq)]
+enum ConjunctKind {
+    /// `c < x`
+    Lt,
+    /// `CAST(c AS BIGINT) < x`
+    CastLt,
+    /// `c IN (...)`
+    InList,
+    /// `c + 1 < x`
+    Plus,
+}
+
+/// Benchmarks left- and right-deep `AND` chains across selectivity, expression
+/// types, NULLs, and unused columns (#25035).
+///
+/// Run with `cargo bench --bench binary_op -- conjunction`.
+fn benchmark_conjunction(c: &mut Criterion) {
+    use ConjunctKind::*;
+    const NUM_ROWS: usize = 8192;
+    let mut rng = StdRng::seed_from_u64(25035);
+    let urls = generate_test_strings(NUM_ROWS).0;
+
+    // (conjuncts, pass rate, kind, null rate, regex suffix)
+    for (num_conjuncts, pass_rate, kind, null_rate, regex) in [
+        (4, 0.5, Lt, 0.0, false),
+        (8, 0.7, Lt, 0.0, false),
+        (8, 0.9, Lt, 0.0, false),
+        (16, 0.7, Lt, 0.0, false),
+        (8, 0.7, Lt, 0.0, true),
+        (8, 0.7, CastLt, 0.0, false),
+        (8, 0.7, InList, 0.0, false),
+        (4, 0.5, Lt, 0.1, true),
+        (8, 0.7, Plus, 0.0, false),
+    ] {
+        // `InList` draws values from 0..10, the others from 0..1000.
+        let domain = if kind == InList { 10 } else { 1000 };
+        let cutoff = (pass_rate * domain as f64) as i32;
+        let conjunct_schema = Schema::new(
+            (0..num_conjuncts)
+                .map(|i| Field::new(format!("c{i}"), DataType::Int32, null_rate > 0.0))
+                .collect::<Vec<_>>(),
+        );
+        let mut conjuncts: Vec<Arc<dyn PhysicalExpr>> = (0..num_conjuncts)
+            .map(|i| {
+                let column = Arc::new(Column::new(&format!("c{i}"), i)) as _;
+                match kind {
+                    Lt => Arc::new(BinaryExpr::new(
+                        column,
+                        Operator::Lt,
+                        Arc::new(Literal::new(ScalarValue::Int32(Some(cutoff)))),
+                    )) as _,
+                    CastLt => Arc::new(BinaryExpr::new(
+                        cast(column, &conjunct_schema, DataType::Int64).unwrap(),
+                        Operator::Lt,
+                        Arc::new(Literal::new(ScalarValue::Int64(Some(cutoff as i64)))),
+                    )),
+                    Plus => Arc::new(BinaryExpr::new(
+                        Arc::new(BinaryExpr::new(
+                            column,
+                            Operator::Plus,
+                            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                        )),
+                        Operator::Lt,
+                        Arc::new(Literal::new(ScalarValue::Int32(Some(cutoff + 1)))),
+                    )),
+                    InList => in_list(
+                        column,
+                        (0..cutoff)
+                            .map(|v| {
+                                Arc::new(Literal::new(ScalarValue::Int32(Some(v)))) as _
+                            })
+                            .collect(),
+                        &false,
+                        &conjunct_schema,
+                    )
+                    .unwrap(),
+                }
+            })
+            .collect();
+        if regex {
+            conjuncts.push(Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("url", num_conjuncts)),
+                Operator::RegexMatch,
+                Arc::new(Literal::new(ScalarValue::from(
+                    r#"^https://(\w+\.)?example\.(com|org)/"#,
+                ))),
+            )));
+        }
+        let left_deep = conjuncts
+            .iter()
+            .cloned()
+            .reduce(|l, r| Arc::new(BinaryExpr::new(l, Operator::And, r)))
+            .unwrap();
+        let right_deep = conjuncts
+            .iter()
+            .cloned()
+            .rev()
+            .reduce(|r, l| Arc::new(BinaryExpr::new(l, Operator::And, r)))
+            .unwrap();
+
+        for payload_columns in [0, 32] {
+            let mut fields = conjunct_schema.fields().to_vec();
+            let mut columns: Vec<ArrayRef> = vec![];
+            for _ in 0..num_conjuncts {
+                columns.push(Arc::new(if null_rate > 0.0 {
+                    Int32Array::from_iter((0..NUM_ROWS).map(|_| {
+                        let value = rng.random_range(0..domain);
+                        (!rng.random_bool(null_rate)).then_some(value)
+                    }))
+                } else {
+                    Int32Array::from_iter_values(
+                        (0..NUM_ROWS).map(|_| rng.random_range(0..domain)),
+                    )
+                }));
+            }
+            if regex {
+                fields.push(Arc::new(Field::new("url", DataType::Utf8, false)));
+                columns.push(Arc::new(StringArray::from(urls.clone())));
+            }
+            for i in 0..payload_columns {
+                fields.push(Arc::new(Field::new(
+                    format!("p{i}"),
+                    DataType::Int64,
+                    false,
+                )));
+                columns.push(Arc::new(Int64Array::from_iter_values(
+                    (0..NUM_ROWS).map(|_| rng.random()),
+                )));
+            }
+            let batch =
+                RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap();
+
+            let suffix = [
+                (kind == CastLt, "_cast"),
+                (kind == InList, "_inlist"),
+                (kind == Plus, "_plus"),
+                (null_rate > 0.0, "_nulls"),
+                (regex, "_regex"),
+            ]
+            .into_iter()
+            .filter_map(|(on, tag)| on.then_some(tag))
+            .collect::<String>();
+            for (shape, expr) in [("left_deep", &left_deep), ("right_deep", &right_deep)]
+            {
+                c.bench_function(
+                    &format!(
+                        "conjunction/k{num_conjuncts}_p{pass_rate}{suffix}_w{payload_columns}/{shape}"
+                    ),
+                    |b| b.iter(|| expr.evaluate(black_box(&batch)).unwrap()),
+                );
+            }
+        }
+    }
+}
+
 /// Generate test data with computationally expensive patterns
 fn generate_test_strings(num_rows: usize) -> (Vec<String>, Vec<String>) {
     // Extended URL patterns with query parameters and paths
@@ -385,6 +545,7 @@ fn benchmark_date64_subtract(c: &mut Criterion) {
 criterion_group!(
     benches,
     benchmark_binary_op_in_short_circuit,
+    benchmark_conjunction,
     benchmark_date32_subtract,
     benchmark_date64_subtract
 );
