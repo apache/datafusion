@@ -330,26 +330,15 @@ impl Hash for HashTableLookupExpr {
         self.on_columns.dyn_hash(state);
         self.description.hash(state);
         self.random_state.seed().hash(state);
-        // Note that we compare hash_map by pointer equality.
-        // Actually comparing the contents of the hash maps would be expensive.
-        // The way these hash maps are used in actuality is that HashJoinExec creates
-        // one per partition per query execution, thus it is never possible for two different
-        // hash maps to have the same content in practice.
-        // Theoretically this is a public API and users could create identical hash maps,
-        // but that seems unlikely and not worth paying the cost of deep comparison all the time.
+        // Hash immutable map identity, consistently with pointer equality below.
         Arc::as_ptr(&self.map).hash(state);
     }
 }
 
 impl PartialEq for HashTableLookupExpr {
     fn eq(&self, other: &Self) -> bool {
-        // Note that we compare hash_map by pointer equality.
-        // Actually comparing the contents of the hash maps would be expensive.
-        // The way these hash maps are used in actuality is that HashJoinExec creates
-        // one per partition per query execution, thus it is never possible for two different
-        // hash maps to have the same content in practice.
-        // Theoretically this is a public API and users could create identical hash maps,
-        // but that seems unlikely and not worth paying the cost of deep comparison all the time.
+        // Sharing an immutable map implies equal contents, including across
+        // prepared-build consumers. Distinct maps need no expensive deep comparison.
         self.on_columns == other.on_columns
             && self.description == other.description
             && self.random_state.seed() == other.random_state.seed()

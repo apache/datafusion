@@ -1878,6 +1878,32 @@ mod tests {
     }
 
     #[test]
+    fn test_interleave_rejects_different_range_scaling_capacity() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let ordering = [PhysicalSortExpr::new_default(col("a", &schema)?)].into();
+        let samples = (10..=90)
+            .step_by(10)
+            .map(|value| SplitPoint::new(vec![ScalarValue::Int32(Some(value))]))
+            .collect();
+        let sampled = RangePartitioning::try_new_with_samples(ordering, samples, 4)?;
+        let source = Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+        let sampled: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+            source,
+            Partitioning::Range(sampled),
+        )?);
+        let exact = make_range_exec(&schema, vec![30, 50, 70], SortOptions::default())?;
+        assert!(can_interleave([&sampled, &sampled].into_iter()));
+        for inputs in [
+            vec![Arc::clone(&sampled), Arc::clone(&exact)],
+            vec![exact, sampled],
+        ] {
+            assert!(!can_interleave(inputs.iter()));
+            assert!(InterleaveExec::try_new(inputs).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_can_interleave_matrix() -> Result<()> {
         let name_column = "name";
         let age_column = "age";
