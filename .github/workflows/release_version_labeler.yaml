@@ -14,42 +14,35 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-#
 
-name: "CodeQL"
+# Add the expected target version as a label to a merged PR.
+# The "target_version" is automatically updated by the dev/update_datafusion_versions.py script.
+
+name: Release Version Labeler
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
 
 on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-  schedule:
-    - cron: '16 4 * * 1'
-
-permissions:
-  contents: read
+  pull_request_target:
+    types:
+      - closed
+    branches:
+      - main
 
 jobs:
-  analyze:
-    name: Analyze Actions
+  label:
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-slim
     permissions:
+      pull-requests: write
       contents: read
-      security-events: write
-      packages: read
-
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      with:
-        persist-credentials: false
-
-    - name: Initialize CodeQL
-      uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
-      with:
-        languages: actions
-
-    - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4
-      with:
-        category: "/language:actions"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Add the target release version
+        uses: actions/github-script@v9.0.0
+        with:
+          script: |
+            const labeler = require('./ci/scripts/release_version_labeler.js');
+            await labeler({ github, context });
