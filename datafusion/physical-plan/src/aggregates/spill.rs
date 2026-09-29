@@ -300,7 +300,7 @@ impl AggregateSpill {
             .with_expressions(&spill_expr)
             .with_metrics(baseline_metrics.intermediate())
             .with_batch_size(batch_size)
-            .with_max_batch_bytes(SPILL_BATCH_TARGET_BYTES)
+            .with_max_batch_bytes(Some(SPILL_BATCH_TARGET_BYTES))
             .with_reservation(merge_reservation)
             .with_replay_headroom()
             .with_intermediate_merge_sizing(Some(min_spill_batch_rows))
@@ -331,8 +331,9 @@ impl AggregateSpill {
     }
 }
 
-/// Combines consecutive batches of `input` into batches of up to `batch_size`
-/// rows and `max_bytes`, passing larger batches on as they are.
+/// Combines consecutive small batches of `input` into batches of up to
+/// `batch_size` rows and `max_bytes`. Batches of at least half that size are
+/// passed on as they are.
 fn coalesce(
     mut input: SendableRecordBatchStream,
     batch_size: usize,
@@ -346,19 +347,23 @@ fn coalesce(
         let (mut rows, mut bytes) = (0, 0);
         while let Some(batch) = input.next().await.transpose()? {
             let batch_bytes = get_record_batch_memory_size(&batch);
-            if rows + batch.num_rows() > batch_size || bytes + batch_bytes > max_bytes {
+            let passed_on =
+                batch.num_rows() >= batch_size / 2 || batch_bytes >= max_bytes / 2;
+            if passed_on
+                || rows + batch.num_rows() > batch_size
+                || bytes + batch_bytes > max_bytes
+            {
                 emit_combined(&schema, &mut pending, &mut emitter, &elapsed_compute)
                     .await?;
                 (rows, bytes) = (0, 0);
+            }
+            if passed_on {
+                emitter.emit(batch).await;
+                continue;
             }
             rows += batch.num_rows();
             bytes += batch_bytes;
             pending.push(batch);
-            if rows >= batch_size || bytes >= max_bytes {
-                emit_combined(&schema, &mut pending, &mut emitter, &elapsed_compute)
-                    .await?;
-                (rows, bytes) = (0, 0);
-            }
         }
         emit_combined(&schema, &mut pending, &mut emitter, &elapsed_compute).await
     });
@@ -372,16 +377,14 @@ async fn emit_combined(
     emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     elapsed_compute: &Time,
 ) -> Result<()> {
-    let batch = match pending.len() {
-        0 => return Ok(()),
-        1 => pending.pop().unwrap(),
-        _ => {
-            let _timer = elapsed_compute.timer();
-            let batch = concat_batches(schema, pending.iter())?;
-            pending.clear();
-            batch
-        }
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let batch = {
+        let _timer = elapsed_compute.timer();
+        concat_batches(schema, pending.iter())?
     };
+    pending.clear();
     emitter.emit(batch).await;
     Ok(())
 }
@@ -395,11 +398,9 @@ mod tests {
 
     #[tokio::test]
     async fn coalesce_combines_small_batches() -> Result<()> {
-        // Batches of keys `start..end`, where `value_len` sets the size of the
-        // value of the first row
+        // Keys `start..end`, each with a value of `value_len` bytes
         let batch = |start: i32, end: i32, value_len: usize| {
-            let values = (start..end)
-                .map(|key| "x".repeat(if key == start { value_len } else { 0 }));
+            let values = (start..end).map(|_| "x".repeat(value_len));
             RecordBatch::try_from_iter([
                 (
                     "key",
@@ -420,6 +421,7 @@ mod tests {
             batch(12, 14, 20_000),
             batch(14, 17, 0),
             batch(17, 20, 0),
+            batch(20, 25, 0),
         ];
         let schema = input[0].schema();
         let input = Box::pin(RecordBatchStreamAdapter::new(
@@ -429,10 +431,10 @@ mod tests {
 
         let output = collect(coalesce(input, 8, 10_000, Time::new())).await?;
 
-        // Small batches are combined up to 8 rows, and the large batch is
-        // passed on alone
+        // Small batches are combined up to 8 rows. The batch over half of
+        // 10,000 bytes and the batch of half of 8 rows are passed on alone.
         let num_rows: Vec<usize> = output.iter().map(RecordBatch::num_rows).collect();
-        assert_eq!(num_rows, vec![6, 6, 2, 6]);
+        assert_eq!(num_rows, vec![6, 6, 2, 6, 5]);
         let keys: Vec<i32> = output
             .iter()
             .flat_map(|batch| {
@@ -443,7 +445,7 @@ mod tests {
                     .to_vec()
             })
             .collect();
-        assert_eq!(keys, (0..20).collect::<Vec<_>>());
+        assert_eq!(keys, (0..25).collect::<Vec<_>>());
         Ok(())
     }
 }

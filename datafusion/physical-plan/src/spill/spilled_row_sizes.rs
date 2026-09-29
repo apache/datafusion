@@ -31,27 +31,27 @@ use super::VIEW_SIZE_BYTES;
 /// variable-width values, and the elements of its nested values. Buffers that
 /// every row shares, such as validity bitmaps and dictionary values, are not
 /// counted.
-pub(crate) struct SpilledRowSizes {
-    columns: Vec<ColumnSize>,
-}
+pub(crate) struct SpilledRowSizes(ColumnSize);
 
 impl SpilledRowSizes {
     pub(crate) fn new(batch: &RecordBatch) -> Self {
-        Self {
-            columns: batch
+        Self(ColumnSize::Struct(
+            batch
                 .columns()
                 .iter()
                 .map(|column| ColumnSize::new(column.as_ref()))
                 .collect(),
-        }
+        ))
     }
 
     /// Returns the size in bytes of row `row`.
     pub(crate) fn row(&self, row: usize) -> usize {
-        self.columns
-            .iter()
-            .map(|column| column.rows(row, row + 1))
-            .sum()
+        self.0.rows(row, row + 1)
+    }
+
+    /// Returns the size in bytes of every row, if they all have the same size.
+    pub(crate) fn fixed(&self) -> Option<usize> {
+        self.0.fixed()
     }
 }
 
@@ -116,6 +116,16 @@ impl ColumnSize {
                 let bytes = array.to_data().get_slice_memory_size().unwrap_or_default();
                 bytes / array.len().max(1)
             })),
+        }
+    }
+
+    /// Returns the size in bytes of every row, if they all have the same size.
+    fn fixed(&self) -> Option<usize> {
+        match self {
+            Self::Fixed(width) => Some(*width),
+            Self::FixedSizeList(size, values) => values.fixed().map(|width| size * width),
+            Self::Struct(fields) => fields.iter().map(Self::fixed).sum(),
+            Self::Bytes(_) | Self::Views(_) | Self::List(_, _) => None,
         }
     }
 
@@ -192,19 +202,22 @@ mod tests {
         ArrayRef, BooleanArray, DictionaryArray, FixedSizeBinaryArray, Int32Array,
         Int64Array, ListArray, StringArray, StringViewArray, StructArray,
     };
-    use arrow::buffer::{Buffer, ScalarBuffer};
-    use arrow::datatypes::{DataType, Field, Int32Type, Int64Type};
-    use arrow::record_batch::RecordBatch;
+    use arrow::buffer::Buffer;
+    use arrow::datatypes::{Field, Int32Type, Int64Type};
     use std::sync::Arc;
 
-    fn row_sizes(columns: Vec<ArrayRef>) -> Vec<usize> {
-        let batch = RecordBatch::try_from_iter(
+    fn batch(columns: Vec<ArrayRef>) -> RecordBatch {
+        RecordBatch::try_from_iter(
             columns
                 .into_iter()
                 .enumerate()
                 .map(|(i, column)| (format!("c{i}"), column)),
         )
-        .unwrap();
+        .unwrap()
+    }
+
+    fn row_sizes(columns: Vec<ArrayRef>) -> Vec<usize> {
+        let batch = batch(columns);
         let sizes = SpilledRowSizes::new(&batch);
         (0..batch.num_rows()).map(|row| sizes.row(row)).collect()
     }
@@ -215,6 +228,23 @@ mod tests {
         let strings: ArrayRef = Arc::new(StringArray::from(vec!["a", "bbbb"]));
         // 8 bytes of Int64, plus a 4 byte offset and the string bytes
         assert_eq!(row_sizes(vec![ints, strings]), vec![13, 16]);
+    }
+
+    #[test]
+    fn rows_of_fixed_width_columns_have_one_size() {
+        let ints: ArrayRef = Arc::new(Int64Array::from(vec![1, 2]));
+        let fixed: ArrayRef = Arc::new(FixedSizeBinaryArray::new(
+            3,
+            Buffer::from(vec![0u8; 6]),
+            None,
+        ));
+        let strings: ArrayRef = Arc::new(StringArray::from(vec!["a", "bbbb"]));
+        let sizes = SpilledRowSizes::new(&batch(vec![Arc::clone(&ints), fixed]));
+        assert_eq!(sizes.fixed(), Some(11));
+        assert_eq!(
+            SpilledRowSizes::new(&batch(vec![ints, strings])).fixed(),
+            None
+        );
     }
 
     #[test]

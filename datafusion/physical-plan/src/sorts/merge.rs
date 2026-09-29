@@ -28,7 +28,6 @@ use crate::metrics::BaselineMetrics;
 use crate::sorts::builder::BatchBuilder;
 use crate::sorts::cursor::{Cursor, CursorValues};
 use crate::sorts::stream::PartitionedStream;
-use crate::spill::get_record_batch_memory_size;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 
 use arrow::datatypes::SchemaRef;
@@ -90,8 +89,7 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// See [`Self::with_max_batch_bytes`]
     max_batch_bytes: Option<usize>,
 
-    /// The average memory size of the rows of each input's current batch,
-    /// tracked when `max_batch_bytes` is set
+    /// The average memory size of the rows of each input's current batch
     row_bytes: Vec<usize>,
 
     /// The estimated memory size of the in-progress rows, tracked when
@@ -207,11 +205,13 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             Some(Err(e)) => Poll::Ready(Err(e)),
             Some(Ok((cursor, batch))) => {
                 self.cursors[idx] = Some(Cursor::new(cursor));
-                if self.max_batch_bytes.is_some() {
-                    self.row_bytes[idx] = get_record_batch_memory_size(&batch)
-                        .div_ceil(batch.num_rows().max(1));
-                }
-                Poll::Ready(self.in_progress.push_batch(idx, batch))
+                let num_rows = batch.num_rows();
+                let size = match self.in_progress.push_batch(idx, batch) {
+                    Ok(size) => size,
+                    Err(e) => return Poll::Ready(Err(e)),
+                };
+                self.row_bytes[idx] = size.div_ceil(num_rows.max(1));
+                Poll::Ready(Ok(()))
             }
         }
     }

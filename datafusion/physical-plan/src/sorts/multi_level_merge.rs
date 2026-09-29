@@ -552,10 +552,8 @@ impl MultiLevelMergeBuilder {
                 self.metrics.intermediate()
             })
             .with_round_robin_tie_breaker(self.enable_round_robin_tie_breaker)
-            .with_streams(streams);
-        if let Some(max_batch_bytes) = self.max_batch_bytes {
-            builder = builder.with_max_batch_bytes(max_batch_bytes);
-        }
+            .with_streams(streams)
+            .with_max_batch_bytes(self.max_batch_bytes);
 
         if !all_in_memory {
             // Don't track memory used by this stream as we reserve that memory by worst case sceneries

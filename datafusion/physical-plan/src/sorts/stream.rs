@@ -306,8 +306,6 @@ pub(crate) struct IncrementalSortIterator {
     /// See [`Self::with_max_batch_bytes`].
     max_batch_bytes: Option<usize>,
     indices: Option<UInt32Array>,
-    /// Row sizes of `batch`, measured with `indices` when `max_batch_bytes` is set.
-    row_sizes: Option<SpilledRowSizes>,
     cursor: usize,
 }
 
@@ -324,7 +322,6 @@ impl IncrementalSortIterator {
             max_batch_bytes: None,
             cursor: 0,
             indices: None,
-            row_sizes: None,
         }
     }
 
@@ -336,14 +333,17 @@ impl IncrementalSortIterator {
         self
     }
 
-    /// Returns how many of the rows at `indices` fit in `max_batch_bytes`, at
-    /// least one.
+    /// Returns how many of the rows at `indices` fit in `max_batch_bytes`.
     fn rows_within(&self, indices: &[u32]) -> usize {
-        let (Some(max_batch_bytes), Some(row_sizes)) =
-            (self.max_batch_bytes, &self.row_sizes)
-        else {
+        let Some(max_batch_bytes) = self.max_batch_bytes else {
             return indices.len();
         };
+        let row_sizes = SpilledRowSizes::new(&self.batch);
+        if let Some(row_bytes) = row_sizes.fixed() {
+            return (max_batch_bytes / row_bytes.max(1))
+                .max(1)
+                .min(indices.len());
+        }
         let mut bytes = 0;
         for (rows, &row) in indices.iter().enumerate() {
             bytes += row_sizes.row(row as usize);
@@ -380,9 +380,6 @@ impl Iterator for IncrementalSortIterator {
                     Err(e) => return Some(Err(e.into())),
                 };
                 self.indices = Some(indices);
-                if self.max_batch_bytes.is_some() {
-                    self.row_sizes = Some(SpilledRowSizes::new(&self.batch));
-                }
 
                 // Call again, this time it will hit the Some(indices) branch and return the first batch
                 self.next()
@@ -407,7 +404,6 @@ impl Iterator for IncrementalSortIterator {
                     let schema = self.batch.schema();
                     let _ = mem::replace(&mut self.batch, RecordBatch::new_empty(schema));
                     self.indices = None;
-                    self.row_sizes = None;
                 }
 
                 // Return the new batch
@@ -633,9 +629,15 @@ mod tests {
 
         // Two large rows fit in 2500 bytes. The last large row leaves room for
         // many small rows, up to 50 rows per batch.
-        let iter = IncrementalSortIterator::new(batch, expressions, 50)
+        let iter = IncrementalSortIterator::new(batch.clone(), expressions.clone(), 50)
             .with_max_batch_bytes(2500);
         assert_eq!(chunk_lens(iter)?, vec![2, 2, 50, 47]);
+
+        // Without the values, every row takes the 4 bytes of its key
+        let keys = batch.project(&[0])?;
+        let iter =
+            IncrementalSortIterator::new(keys, expressions, 50).with_max_batch_bytes(100);
+        assert_eq!(chunk_lens(iter)?, vec![25, 25, 25, 25, 1]);
         Ok(())
     }
 

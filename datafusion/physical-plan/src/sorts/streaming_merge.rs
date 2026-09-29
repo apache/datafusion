@@ -150,10 +150,9 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
-    /// Also emits a batch once its rows take about `max_batch_bytes`, before
-    /// it has `batch_size` rows.
-    pub(crate) fn with_max_batch_bytes(mut self, max_batch_bytes: usize) -> Self {
-        self.max_batch_bytes = Some(max_batch_bytes);
+    /// See [`SortPreservingMergeStream::with_max_batch_bytes`]
+    pub(crate) fn with_max_batch_bytes(mut self, max_batch_bytes: Option<usize>) -> Self {
+        self.max_batch_bytes = max_batch_bytes;
         self
     }
 
@@ -345,7 +344,6 @@ mod tests {
         from_spill_files: bool,
         max_batch_bytes: Option<usize>,
     ) -> Result<Vec<RecordBatch>> {
-        let task_ctx = Arc::new(TaskContext::default());
         let schema = Arc::new(Schema::new(vec![
             Field::new("key", DataType::Int32, false),
             Field::new("value", DataType::Utf8, false),
@@ -366,11 +364,6 @@ mod tests {
             .map(|i| batch(10 + i * 100..10 + (i + 1) * 100, 1))
             .collect();
 
-        let spill_manager = SpillManager::new(
-            task_ctx.runtime_env(),
-            SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
-            Arc::clone(&schema),
-        );
         let sort: LexOrdering =
             [PhysicalSortExpr::new_default(col("key", &schema)?)].into();
         let mut builder = StreamingMergeBuilder::new()
@@ -378,8 +371,14 @@ mod tests {
             .with_expressions(&sort)
             .with_metrics(BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0))
             .with_batch_size(100)
+            .with_max_batch_bytes(max_batch_bytes)
             .with_bypass_mempool();
         if from_spill_files {
+            let spill_manager = SpillManager::new(
+                Arc::new(TaskContext::default()).runtime_env(),
+                SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+                Arc::clone(&schema),
+            );
             let spill = |batches: &[RecordBatch]| SortedSpillFile {
                 file: spill_manager
                     .spill_record_batch_and_finish(batches, "test")
@@ -393,7 +392,7 @@ mod tests {
             };
             builder = builder
                 .with_sorted_spill_files(vec![spill(&wide), spill(&narrow)])
-                .with_spill_manager(spill_manager.clone());
+                .with_spill_manager(spill_manager);
         } else {
             let stream = |batches: Vec<RecordBatch>| {
                 Box::pin(RecordBatchStreamAdapter::new(
@@ -402,9 +401,6 @@ mod tests {
                 )) as SendableRecordBatchStream
             };
             builder = builder.with_streams(vec![stream(wide), stream(narrow)]);
-        }
-        if let Some(max_batch_bytes) = max_batch_bytes {
-            builder = builder.with_max_batch_bytes(max_batch_bytes);
         }
         let batches = collect(builder.build()?).await?;
 
@@ -425,17 +421,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_max_batch_bytes_limits_merged_batches() -> Result<()> {
+        let num_rows = |batches: &[RecordBatch]| -> Vec<usize> {
+            batches.iter().map(RecordBatch::num_rows).collect()
+        };
         for from_spill_files in [true, false] {
-            let num_rows = |batches: &[RecordBatch]| -> Vec<usize> {
-                batches.iter().map(RecordBatch::num_rows).collect()
-            };
-
             // By rows only, the five large rows end up in the first batch
             let batches = merge_wide_and_narrow_rows(from_spill_files, None).await?;
-            assert_eq!(
-                num_rows(&batches),
-                [100; 10].iter().copied().chain([5]).collect::<Vec<_>>()
-            );
+            assert_eq!(num_rows(&batches), [vec![100; 10], vec![5]].concat());
 
             // Three large rows exceed 3000 bytes, so the first batch holds
             // fewer. Once the large rows are merged, batches of small rows
