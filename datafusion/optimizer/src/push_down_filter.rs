@@ -1109,7 +1109,15 @@ impl OptimizerRule for PushDownFilter {
                 let mut push_predicates = vec![];
                 for expr in predicates {
                     let cols = expr.column_refs();
-                    if cols.iter().all(|c| potential_partition_keys.contains(c)) {
+                    // A volatile predicate has to stay above the window. Pushing it
+                    // changes which rows the window function sees, and so the value
+                    // it computes for the rows that do survive. Checking this first
+                    // also covers a volatile predicate that reads no columns at all,
+                    // such as `random() < 0.5`, which would otherwise satisfy the
+                    // partition-key test vacuously.
+                    if !expr.is_volatile()
+                        && cols.iter().all(|c| potential_partition_keys.contains(c))
+                    {
                         push_predicates.push(expr);
                     } else {
                         keep_predicates.push(expr);
@@ -1919,6 +1927,43 @@ mod tests {
             @r"
         Filter: test.a + test.b > Int64(10)
           WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            TableScan: test
+        "
+        )
+    }
+
+    /// verifies that a volatile predicate is not pushed through a window, even
+    /// when it reads no columns and so trivially satisfies the partition-key test
+    #[test]
+    fn filter_volatile_keep_window() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("a")])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
+            signature: Signature::exact(vec![], Volatility::Volatile),
+        });
+        let volatile = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            .filter(volatile.gt(lit(10i64)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: TestScalarUDF() > Int64(10)
+          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
             TableScan: test
         "
         )
