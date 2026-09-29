@@ -17,7 +17,7 @@
 
 use arrow::{array::StringArray, record_batch::RecordBatch};
 use arrow::{
-    array::{BooleanArray, Date32Array, Date64Array},
+    array::{ArrayRef, BooleanArray, Date32Array, Date64Array, Int32Array},
     datatypes::{DataType, Field, Schema},
 };
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -234,6 +234,62 @@ fn benchmark_binary_op_in_short_circuit(c: &mut Criterion) {
     }
 }
 
+/// Compare optional strict masks on a cheap RHS, including unrelated columns whose
+/// filtering cost is visible in wide input batches. Inputs are deterministic and
+/// avoid errors so both modes perform the same successful computation.
+fn benchmark_strict_short_circuit(c: &mut Criterion) {
+    let num_rows = 8192_usize;
+    for width in [2, 64] {
+        let mut fields = vec![Field::new("a", DataType::Boolean, false)];
+        fields.extend(
+            (1..width).map(|i| Field::new(format!("v{i}"), DataType::Int32, false)),
+        );
+        let schema = Arc::new(Schema::new(fields));
+        let values: ArrayRef = Arc::new(Int32Array::from_iter_values(
+            (0..num_rows).map(|i| (i % 3) as i32 - 1),
+        ));
+        for op in [Operator::And, Operator::Or] {
+            let name = if op == Operator::And { "and" } else { "or" };
+            for selected_percent in [0, 50, 100] {
+                let left = BooleanArray::from(
+                    (0..num_rows)
+                        .map(|i| {
+                            let selected = i % 100 < selected_percent;
+                            if op == Operator::And {
+                                selected
+                            } else {
+                                !selected
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                );
+                let mut columns = vec![Arc::new(left) as ArrayRef];
+                columns.extend((1..width).map(|_| Arc::clone(&values)));
+                let batch = RecordBatch::try_new(Arc::clone(&schema), columns).unwrap();
+                let right = logical2physical(
+                    &binary_expr(col("v1"), Operator::Gt, lit(0_i32)),
+                    &schema,
+                );
+                for strict in [false, true] {
+                    let expr = BinaryExpr::new(
+                        Arc::new(Column::new("a", 0)),
+                        op,
+                        Arc::clone(&right),
+                    )
+                    .with_strict_short_circuit(strict);
+                    let mode = if strict { "strict" } else { "default" };
+                    c.bench_function(
+                        &format!(
+                            "predicate_masks/{name}/width={width}/selected={selected_percent}%/{mode}"
+                        ),
+                        |b| b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap())),
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Generate test data with computationally expensive patterns
 fn generate_test_strings(num_rows: usize) -> (Vec<String>, Vec<String>) {
     // Extended URL patterns with query parameters and paths
@@ -385,6 +441,7 @@ fn benchmark_date64_subtract(c: &mut Criterion) {
 criterion_group!(
     benches,
     benchmark_binary_op_in_short_circuit,
+    benchmark_strict_short_circuit,
     benchmark_date32_subtract,
     benchmark_date64_subtract
 );

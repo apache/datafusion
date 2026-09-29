@@ -1833,12 +1833,14 @@ pub struct PhysicalBinaryExprNode {
     pub r: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
     #[prost(string, tag = "3")]
     pub op: ::prost::alloc::string::String,
-    /// Linearized operands for chains of the same operator and overflow policy.
+    /// Linearized operands for chains of the same operator and evaluation policies.
     /// When present, `l` and `r` are ignored and `operands` holds the flattened list.
     #[prost(message, repeated, tag = "4")]
     pub operands: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     #[prost(bool, tag = "5")]
     pub fail_on_overflow: bool,
+    #[prost(bool, tag = "6")]
+    pub strict_short_circuit: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalDateTimeIntervalExprNode {
@@ -1884,6 +1886,8 @@ pub struct PhysicalInListNode {
     pub list: ::prost::alloc::vec::Vec<PhysicalExprNode>,
     #[prost(bool, tag = "3")]
     pub negated: bool,
+    #[prost(bool, tag = "4")]
+    pub strict_short_circuit: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalCaseNode {

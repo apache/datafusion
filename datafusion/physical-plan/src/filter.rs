@@ -67,7 +67,9 @@ use datafusion_physical_expr::expressions::{
     BinaryExpr, Column, InListExpr, IsNotNullExpr, Literal, lit,
 };
 use datafusion_physical_expr::intervals::utils::check_support;
-use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr::utils::{
+    collect_columns, split_conjunction_for_evaluation,
+};
 use datafusion_physical_expr::{
     AcrossPartitions, AnalysisContext, ConstExpr, ExprBoundaries, PhysicalExpr, analyze,
     conjunction, split_conjunction,
@@ -725,7 +727,7 @@ impl ExecutionPlan for FilterExec {
         if phase == FilterPushdownPhase::Pre {
             child = child.map(|child| {
                 child.with_self_filters(
-                    split_conjunction(&self.predicate)
+                    split_conjunction_for_evaluation(&self.predicate)
                         .into_iter()
                         .cloned()
                         .collect(),
@@ -2833,6 +2835,33 @@ mod tests {
         let output_schema = filter.schema();
         assert_eq!(output_schema.fields().len(), 2);
 
+        Ok(())
+    }
+
+    #[test]
+    fn strict_conjunction_remains_whole_during_filter_pushdown() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, true)]));
+        let strict: Arc<dyn PhysicalExpr> = Arc::new(
+            BinaryExpr::new(col("a", &schema)?, Operator::And, lit(true))
+                .with_strict_short_circuit(true),
+        );
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::clone(&strict),
+            Operator::And,
+            lit(false),
+        ));
+        // Metadata consumers can still inspect every conjunct.
+        assert_eq!(split_conjunction(&predicate).len(), 3);
+        let filter = FilterExec::try_new(predicate, Arc::new(EmptyExec::new(schema)))?;
+        let description = filter.gather_filters_for_pushdown(
+            FilterPushdownPhase::Pre,
+            vec![],
+            &ConfigOptions::new(),
+        )?;
+        let filters = description.self_filters();
+        assert_eq!(filters[0].len(), 2);
+        assert!(filters[0][0].eq(&strict));
         Ok(())
     }
 

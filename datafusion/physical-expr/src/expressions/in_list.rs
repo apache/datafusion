@@ -22,12 +22,13 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
+use crate::expressions::{Column, Literal};
 use crate::physical_expr::physical_exprs_bag_equal;
 
 use arrow::array::*;
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::SortOptions;
-use arrow::compute::kernels::boolean::{not, or_kleene};
+use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::cmp::eq as arrow_eq;
 use arrow::datatypes::*;
 
@@ -55,6 +56,7 @@ pub struct InListExpr {
     list: Vec<Arc<dyn PhysicalExpr>>,
     negated: bool,
     static_filter: Option<StaticFilterRef>,
+    strict_short_circuit: bool,
 }
 
 impl Debug for InListExpr {
@@ -158,6 +160,7 @@ impl InListExpr {
             list,
             negated,
             static_filter,
+            strict_short_circuit: false,
         }
     }
 
@@ -182,6 +185,11 @@ impl InListExpr {
     /// Is this negated e.g. NOT IN LIST
     pub fn negated(&self) -> bool {
         self.negated
+    }
+
+    /// Whether list entries are evaluated only for non-null, unmatched rows.
+    pub fn strict_short_circuit(&self) -> bool {
+        self.strict_short_circuit
     }
 
     /// Create a new InList expression directly from an array, bypassing expression evaluation.
@@ -236,6 +244,30 @@ impl InListExpr {
         negated: bool,
         schema: &Schema,
     ) -> Result<Self> {
+        Self::try_new_impl(expr, list, negated, schema, false)
+    }
+
+    /// Create an IN expression that evaluates list entries in order, only for
+    /// non-null rows that have not matched an earlier entry.
+    ///
+    /// Unlike [`Self::try_new`], this constructor never evaluates non-literal
+    /// entries while planning. Literal-only lists retain the static lookup.
+    pub fn try_new_with_strict_short_circuit(
+        expr: Arc<dyn PhysicalExpr>,
+        list: Vec<Arc<dyn PhysicalExpr>>,
+        negated: bool,
+        schema: &Schema,
+    ) -> Result<Self> {
+        Self::try_new_impl(expr, list, negated, schema, true)
+    }
+
+    fn try_new_impl(
+        expr: Arc<dyn PhysicalExpr>,
+        list: Vec<Arc<dyn PhysicalExpr>>,
+        negated: bool,
+        schema: &Schema,
+        strict_short_circuit: bool,
+    ) -> Result<Self> {
         // Check the data types match
         let expr_data_type = expr.data_type(schema)?;
         for list_expr in list.iter() {
@@ -243,13 +275,19 @@ impl InListExpr {
             assert_inlist_data_types_match(&expr_data_type, &list_expr_data_type)?;
         }
 
-        // Try to create a static filter if all list expressions are constants
-        let static_filter = match try_evaluate_constant_list(&list, schema)? {
-            Some(in_array) => Some(instantiate_static_filter(in_array, &expr_data_type)?),
-            None => None, // Non-constant expressions, fall back to dynamic evaluation
-        };
+        let static_filter =
+            if strict_short_circuit && !list.iter().all(|expr| expr.is::<Literal>()) {
+                None
+            } else {
+                try_evaluate_constant_list(&list, schema)?
+                    .map(|array| instantiate_static_filter(array, &expr_data_type))
+                    .transpose()?
+            };
 
-        Ok(Self::new(expr, list, negated, static_filter))
+        Ok(Self {
+            strict_short_circuit,
+            ..Self::new(expr, list, negated, static_filter)
+        })
     }
 
     #[cfg(feature = "proto")]
@@ -269,17 +307,19 @@ impl InListExpr {
             expr,
             list,
             negated,
+            strict_short_circuit,
         } = &**node;
 
         let expr =
             ctx.decode_required_expression(expr.as_deref(), "InListExpr", "expr")?;
         let list = ctx.decode_children_expressions(list)?;
 
-        Ok(Arc::new(InListExpr::try_new(
+        Ok(Arc::new(InListExpr::try_new_impl(
             expr,
             list,
             *negated,
             ctx.schema(),
+            *strict_short_circuit,
         )?))
     }
 }
@@ -325,6 +365,11 @@ impl PhysicalExpr for InListExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let num_rows = batch.num_rows();
+        if self.strict_short_circuit && self.list.is_empty() {
+            return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(
+                self.negated,
+            ))));
+        }
         let value = self.expr.evaluate(batch)?;
         let r = match &self.static_filter {
             Some(filter) => {
@@ -372,10 +417,12 @@ impl PhysicalExpr for InListExpr {
                 // comparator for unsupported types (nested, RunEndEncoded, etc.).
                 let value = value.into_array(num_rows)?;
                 let lhs_supports_arrow_eq = supports_arrow_eq(value.data_type());
+                let cheap_comparison = value.data_type().is_primitive()
+                    || value.data_type() == &DataType::Boolean;
 
                 // Helper: compare value against a single list expression
-                let compare_one = |expr: &Arc<dyn PhysicalExpr>| -> Result<BooleanArray> {
-                    match expr.evaluate(batch)? {
+                let compare_one = |item: ColumnarValue| -> Result<BooleanArray> {
+                    match item {
                         ColumnarValue::Array(array) => {
                             if lhs_supports_arrow_eq
                                 && supports_arrow_eq(array.data_type())
@@ -421,21 +468,52 @@ impl PhysicalExpr for InListExpr {
                     }
                 };
 
-                // Evaluate first expression directly to avoid a redundant
-                // or_kleene with an all-false accumulator.
-                let mut found = if let Some(first) = self.list.first() {
-                    compare_one(first)?
+                let probe_nulls = self
+                    .strict_short_circuit
+                    .then(|| value.logical_nulls())
+                    .flatten();
+                let mut list = self.list.iter();
+                let mut found = if self.strict_short_circuit {
+                    BooleanArray::new(
+                        BooleanBuffer::new_unset(num_rows),
+                        probe_nulls.clone(),
+                    )
+                } else if let Some(first) = list.next() {
+                    // Keep the eager path's direct first comparison.
+                    compare_one(first.evaluate(batch)?)?
                 } else {
                     BooleanArray::new(BooleanBuffer::new_unset(num_rows), None)
                 };
-
-                for expr in self.list.iter().skip(1) {
-                    // Short-circuit: if every non-null row is already true,
-                    // no further list items can change the result.
-                    if found.null_count() == 0 && !found.has_false() {
-                        break;
-                    }
-                    found = or_kleene(&found, &compare_one(expr)?)?;
+                for expr in list {
+                    let comparison = if self.strict_short_circuit {
+                        let mut selection = !found.values();
+                        if let Some(nulls) = found.nulls() {
+                            selection = &selection | &!nulls.inner();
+                        }
+                        if let Some(nulls) = &probe_nulls {
+                            selection = &selection & nulls.inner();
+                        }
+                        let selection = BooleanArray::new(selection, None);
+                        if !selection.has_true() {
+                            break;
+                        }
+                        let item = if expr.is::<Literal>()
+                            || (cheap_comparison && expr.is::<Column>())
+                        {
+                            // Avoid copying cheap values; keep variable-width and
+                            // nested columns masked before their costly comparisons.
+                            expr.evaluate(batch)?
+                        } else {
+                            expr.evaluate_selection(batch, &selection)?
+                        };
+                        and_kleene(&compare_one(item)?, &selection)?
+                    } else {
+                        if found.null_count() == 0 && !found.has_false() {
+                            break;
+                        }
+                        compare_one(expr.evaluate(batch)?)?
+                    };
+                    found = or_kleene(&found, &comparison)?;
                 }
 
                 if self.negated { not(&found)? } else { found }
@@ -455,12 +533,15 @@ impl PhysicalExpr for InListExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         // assume the static_filter will not change during the rewrite process
-        Ok(Arc::new(InListExpr::new(
-            Arc::clone(&children[0]),
-            children[1..].to_vec(),
-            self.negated,
-            self.static_filter.as_ref().map(Arc::clone),
-        )))
+        Ok(Arc::new(Self {
+            strict_short_circuit: self.strict_short_circuit,
+            ..Self::new(
+                Arc::clone(&children[0]),
+                children[1..].to_vec(),
+                self.negated,
+                self.static_filter.as_ref().map(Arc::clone),
+            )
+        }))
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -492,6 +573,7 @@ impl PhysicalExpr for InListExpr {
             negated,
             // Lookup set rebuilt from `list` by `try_new` on decode.
             static_filter: _,
+            strict_short_circuit,
         } = self;
 
         Ok(Some(protobuf::PhysicalExprNode {
@@ -501,6 +583,7 @@ impl PhysicalExpr for InListExpr {
                     expr: Some(Box::new(ctx.encode_child(expr)?)),
                     list: ctx.encode_children_expressions(list)?,
                     negated: *negated,
+                    strict_short_circuit: *strict_short_circuit,
                 },
             ))),
         }))
@@ -510,7 +593,12 @@ impl PhysicalExpr for InListExpr {
 impl PartialEq for InListExpr {
     fn eq(&self, other: &Self) -> bool {
         self.expr.eq(&other.expr)
-            && physical_exprs_bag_equal(&self.list, &other.list)
+            && self.strict_short_circuit == other.strict_short_circuit
+            && (if self.strict_short_circuit {
+                self.list == other.list
+            } else {
+                physical_exprs_bag_equal(&self.list, &other.list)
+            })
             && self.negated == other.negated
     }
 }
@@ -521,6 +609,7 @@ impl Hash for InListExpr {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.expr.hash(state);
         self.negated.hash(state);
+        self.strict_short_circuit.hash(state);
         // Add `self.static_filter` when hash is available
         self.list.hash(state);
     }
@@ -3176,6 +3265,171 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn strict_in_masks_nulls_matches_and_required_errors() -> Result<()> {
+        use crate::expressions::BinaryExpr;
+        use datafusion_expr::Operator;
+
+        let batch = RecordBatch::try_from_iter([
+            (
+                "value",
+                Arc::new(Int64Array::from(vec![Some(0), Some(1), None, Some(2)]))
+                    as ArrayRef,
+            ),
+            ("divisor", Arc::new(Int64Array::from(vec![0, 1, 0, 2]))),
+            (
+                "candidate",
+                Arc::new(Int64Array::from(vec![Some(9), None, None, Some(3)])),
+            ),
+        ])?;
+        let schema = batch.schema();
+        let probe = col("value", &schema)?;
+        let division: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            lit(1_i64),
+            Operator::Divide,
+            col("divisor", &schema)?,
+        ));
+        for (negated, expected) in [
+            (false, vec![Some(true), Some(true), None, Some(false)]),
+            (true, vec![Some(false), Some(false), None, None]),
+        ] {
+            let mut list = vec![lit(0_i64), col("candidate", &schema)?];
+            if negated {
+                list.push(lit(ScalarValue::Int64(None)));
+            }
+            list.push(Arc::clone(&division));
+            let expr = InListExpr::try_new_with_strict_short_circuit(
+                Arc::clone(&probe),
+                list,
+                negated,
+                &schema,
+            )?;
+            let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+            assert_eq!(result.as_boolean(), &BooleanArray::from(expected));
+            let children = expr.children().into_iter().cloned().collect();
+            let rewritten = Arc::new(expr).with_new_children(children)?;
+            assert!(
+                rewritten
+                    .downcast_ref::<InListExpr>()
+                    .unwrap()
+                    .strict_short_circuit()
+            );
+            assert_eq!(
+                rewritten
+                    .evaluate(&batch)?
+                    .into_array(batch.num_rows())?
+                    .as_boolean(),
+                result.as_boolean()
+            );
+        }
+        let expr = InListExpr::try_new_with_strict_short_circuit(
+            Arc::clone(&probe),
+            vec![Arc::clone(&division), lit(0_i64)],
+            false,
+            &schema,
+        )?;
+        assert!(expr.evaluate(&batch).is_err());
+        let reversed = InListExpr::try_new_with_strict_short_circuit(
+            probe,
+            vec![lit(0_i64), division],
+            false,
+            &schema,
+        )?;
+        assert_ne!(expr, reversed);
+        Ok(())
+    }
+
+    #[test]
+    fn strict_in_preserves_encoded_probe_nulls() -> Result<()> {
+        let run_ends = Int32Array::from(vec![1, 2]);
+        let probe = RunArray::<Int32Type>::try_new(
+            &run_ends,
+            &Int32Array::from(vec![None, Some(1)]),
+        )?;
+        let candidate =
+            RunArray::<Int32Type>::try_new(&run_ends, &Int32Array::from(vec![42, 1]))?;
+        let batch = RecordBatch::try_from_iter([
+            ("probe", Arc::new(probe) as ArrayRef),
+            ("candidate", Arc::new(candidate) as ArrayRef),
+        ])?;
+        let schema = batch.schema();
+        for negated in [false, true] {
+            let expr = InListExpr::try_new_with_strict_short_circuit(
+                col("probe", &schema)?,
+                vec![col("candidate", &schema)?],
+                negated,
+                &schema,
+            )?;
+            let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+            assert_eq!(
+                result.as_boolean(),
+                &BooleanArray::from(vec![None, Some(!negated)])
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn strict_in_preserves_runtime_evaluation_and_literal_lookup() -> Result<()> {
+        use crate::ScalarFunctionExpr;
+        use datafusion_expr::{Volatility, create_udf};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&calls);
+        let udf = create_udf(
+            "sequence",
+            vec![],
+            DataType::Int64,
+            Volatility::Volatile,
+            Arc::new(move |_| {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(Some(
+                    counter.fetch_add(1, Ordering::SeqCst) as i64 + 1,
+                ))))
+            }),
+        );
+        let item: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::new(
+            "sequence",
+            Arc::new(udf),
+            vec![],
+            Arc::new(Field::new("sequence", DataType::Int64, false)),
+            Arc::default(),
+        ));
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(Int64Array::from(vec![0, 1])) as ArrayRef,
+        )])?;
+        let schema = batch.schema();
+        let probe = col("value", &schema)?;
+        let expr = InListExpr::try_new_with_strict_short_circuit(
+            Arc::clone(&probe),
+            vec![lit(0_i64), item],
+            false,
+            &schema,
+        )?;
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        for expected in [vec![true, true], vec![true, false]] {
+            let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+            assert_eq!(result.as_boolean(), &BooleanArray::from(expected));
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        let literals = InListExpr::try_new_with_strict_short_circuit(
+            probe,
+            vec![lit(0_i64), lit(1_i64)],
+            false,
+            &schema,
+        )?;
+        assert!(literals.static_filter.is_some());
+        assert_eq!(
+            literals
+                .evaluate(&batch)?
+                .into_array(batch.num_rows())?
+                .as_boolean(),
+            &BooleanArray::from(vec![true, true])
+        );
+        Ok(())
+    }
+
     /// Helper: creates an InListExpr with `static_filter = None`
     /// to force the column-reference evaluation path.
     fn make_in_list_with_columns(
@@ -3986,6 +4240,7 @@ mod proto_tests {
                     expr,
                     list,
                     negated,
+                    strict_short_circuit: false,
                 },
             ))),
         }
