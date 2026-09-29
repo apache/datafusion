@@ -4321,12 +4321,30 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_string_selectivity_non_string_literal() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, true)]));
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("name", 0)),
+            Operator::Eq,
+            lit(42_i32),
+        ));
+        let statistics = Statistics::new_unknown(&schema);
+
+        // SQL coerces comparison operands, so exercise this defensive fallback directly.
+        assert_eq!(
+            string_selectivity(&predicate, &schema, &statistics, 0.2),
+            None
+        );
+    }
+
     fn like_filter_statistics(
         num_rows: Precision<usize>,
         column: ColumnStatistics,
         pattern: Option<&str>,
         negated: bool,
-    ) -> Result<Arc<Statistics>> {
+    ) -> Arc<Statistics> {
         let schema = Schema::new(vec![Field::new("name", DataType::Utf8, true)]);
         let input = Arc::new(StatisticsExec::new(
             Statistics {
@@ -4339,15 +4357,17 @@ mod tests {
         let predicate = Arc::new(LikeExpr::new(
             negated,
             false,
-            col("name", &schema)?,
+            col("name", &schema).expect("name column exists"),
             lit(ScalarValue::Utf8(pattern.map(str::to_owned))),
         ));
-        let filter = FilterExec::try_new(predicate, input)?;
-        StatisticsContext::new().compute(&filter, &StatisticsArgs::new())
+        let filter = FilterExec::try_new(predicate, input).expect("valid LIKE filter");
+        StatisticsContext::new()
+            .compute(&filter, &StatisticsArgs::new())
+            .expect("LIKE filter statistics")
     }
 
     #[test]
-    fn test_filter_statistics_like_literal_patterns() -> Result<()> {
+    fn test_filter_statistics_like_literal_patterns() {
         // SQL simplification rewrites these patterns before FilterExec sees
         // them. Construct LIKE directly to exercise physical-plan callers too.
         for (pattern, positive_rows, negative_rows) in [
@@ -4372,7 +4392,7 @@ mod tests {
                     },
                     pattern,
                     negated,
-                )?;
+                );
                 assert_eq!(
                     statistics.num_rows,
                     Precision::Inexact(expected_rows),
@@ -4384,11 +4404,10 @@ mod tests {
                 );
             }
         }
-        Ok(())
     }
 
     #[test]
-    fn test_filter_statistics_like_missing_or_zero_counts() -> Result<()> {
+    fn test_filter_statistics_like_missing_or_zero_counts() {
         use Precision::{Absent, Exact, Inexact};
 
         for (rows, nulls, distinct, positive_rows, negative_rows) in [
@@ -4417,7 +4436,7 @@ mod tests {
                     },
                     Some(""),
                     negated,
-                )?;
+                );
                 assert_eq!(
                     statistics.num_rows, expected_rows,
                     "rows={rows:?}, nulls={nulls:?}, distinct={distinct:?}, negated={negated}"
@@ -4425,11 +4444,10 @@ mod tests {
                 assert_eq!(statistics.column_statistics[0].null_count, Exact(0));
             }
         }
-        Ok(())
     }
 
     #[test]
-    fn test_filter_statistics_like_column_pattern_rejects_nulls() -> Result<()> {
+    fn test_filter_statistics_like_column_pattern_rejects_nulls() {
         let schema = Schema::new(vec![
             Field::new("name", DataType::Utf8, true),
             Field::new("pattern", DataType::Utf8, true),
@@ -4453,12 +4471,14 @@ mod tests {
             let predicate = Arc::new(LikeExpr::new(
                 negated,
                 false,
-                col("name", &schema)?,
-                col("pattern", &schema)?,
+                col("name", &schema).expect("name column exists"),
+                col("pattern", &schema).expect("pattern column exists"),
             ));
-            let filter = FilterExec::try_new(predicate, input)?;
-            let statistics =
-                StatisticsContext::new().compute(&filter, &StatisticsArgs::new())?;
+            let filter =
+                FilterExec::try_new(predicate, input).expect("valid LIKE filter");
+            let statistics = StatisticsContext::new()
+                .compute(&filter, &StatisticsArgs::new())
+                .expect("LIKE filter statistics");
             // A varying pattern retains the fallback estimate, but neither
             // operand can be NULL in any surviving row.
             assert_eq!(statistics.num_rows, Precision::Inexact(200));
@@ -4466,7 +4486,6 @@ mod tests {
                 assert_eq!(column.null_count, Precision::Exact(0));
             }
         }
-        Ok(())
     }
 
     #[tokio::test]
