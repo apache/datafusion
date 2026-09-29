@@ -51,7 +51,8 @@ use crate::{InputOrderMode, SendableRecordBatchStream};
 ///   extra index array is used in later sorting before spilling.
 /// - On memory pressure, materialize all group states into one batch.
 /// - Use [`IncrementalSortIterator`](crate::sorts::IncrementalSortIterator) to compute the full-batch index, then
-///   materialize and write one sorted `batch_size` slice at a time. The original
+///   materialize and write one sorted slice of at most `batch_size` rows at a
+///   time, fewer when the rows are large (see [`AggregateSpill`]). The original
 ///   batch and full index remain live until the run is written.
 /// - After input ends, merge the sorted runs and replay them through a fully
 ///   ordered final aggregate stream.

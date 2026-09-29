@@ -34,16 +34,28 @@ use super::{AggregateExec, AggregateMode};
 use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::sorts::IncrementalSortIterator;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
-use crate::spill::spill_manager::SpillManager;
+use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
 use crate::{InputOrderMode, SendableRecordBatchStream};
+
+/// Approximate size in bytes of each batch written to a spill file.
+///
+/// Replay reads a spill file one batch at a time, and merging several files
+/// reserves memory for the largest batch of each, so a spilled batch must fit
+/// in memory alongside the groups being replayed. A limit of `batch_size` rows
+/// alone does not bound its size: a few groups with large state, such as
+/// `array_agg` over a low-cardinality key, would be written as a single batch
+/// holding every group. With the default `batch_size` of 8192, only rows
+/// averaging more than 128 bytes are written in batches of fewer rows.
+const SPILL_BATCH_TARGET_BYTES: usize = 1024 * 1024;
 
 /// Spill configuration and accumulated runs of one grouped aggregation stream.
 ///
 /// Every aggregation stream that spills does so the same way. Each spill event
 /// drains all currently buffered groups as intermediate state (see
 /// `take_state_batch` on the aggregate tables), sorts them by the full group
-/// key, and writes them to one spill file. After the original input ends, all
-/// files are merged and replayed through an [`OrderedFinalAggregateStream`],
+/// key, and writes them to one spill file, in batches of at most `batch_size`
+/// rows and about [`SPILL_BATCH_TARGET_BYTES`]. After the original input ends,
+/// all files are merged and replayed through an [`OrderedFinalAggregateStream`],
 /// which merges the states and evaluates the final aggregate values.
 pub(super) struct AggregateSpill {
     /// Aggregate configuration used to construct the replay stream.
@@ -110,6 +122,10 @@ pub(super) struct AggregateSpill {
     partition: usize,
     /// Target batch size from configuration.
     batch_size: usize,
+    /// Fewest rows per batch written to any spill file. Replay merges with
+    /// this batch size, so that it does not combine the rows of small spilled
+    /// batches back into one large batch.
+    merge_batch_size: usize,
     /// Full group-key ordering kept by every spill file and the merged input.
     spill_expr: LexOrdering,
     /// Spill I/O and metrics manager.
@@ -197,6 +213,7 @@ impl AggregateSpill {
             context: Arc::clone(context),
             partition,
             batch_size,
+            merge_batch_size: batch_size,
             spill_expr,
             spill_manager,
             spills: vec![],
@@ -219,10 +236,12 @@ impl AggregateSpill {
             return Ok(());
         };
 
+        let rows_per_batch = spill_batch_rows(&state_batch, self.batch_size)?;
+        self.merge_batch_size = self.merge_batch_size.min(rows_per_batch);
         let sorted_iter = IncrementalSortIterator::new(
             state_batch,
             self.spill_expr.clone(),
-            self.batch_size,
+            rows_per_batch,
         );
         let spill_file = self
             .spill_manager
@@ -255,7 +274,8 @@ impl AggregateSpill {
             replay_agg,
             context,
             partition,
-            batch_size,
+            batch_size: _,
+            merge_batch_size,
             spill_expr,
             spill_manager,
             spills,
@@ -273,7 +293,7 @@ impl AggregateSpill {
             .with_sorted_spill_files(spills)
             .with_expressions(&spill_expr)
             .with_metrics(baseline_metrics.intermediate())
-            .with_batch_size(batch_size)
+            .with_batch_size(merge_batch_size)
             .with_reservation(merge_reservation)
             .with_replay_headroom()
             .build()?;
@@ -289,5 +309,47 @@ impl AggregateSpill {
             reservation,
         )?;
         Ok(replay.into_stream())
+    }
+}
+
+/// Returns how many rows of `batch` to write per spilled batch: at most
+/// `batch_size`, and at least one, but few enough that a batch of average-sized
+/// rows holds about [`SPILL_BATCH_TARGET_BYTES`].
+///
+/// Rows larger than average can make a batch exceed the target.
+fn spill_batch_rows(batch: &RecordBatch, batch_size: usize) -> Result<usize> {
+    let row_bytes = batch
+        .get_sliced_size()?
+        .div_ceil(batch.num_rows().max(1))
+        .max(1);
+    Ok((SPILL_BATCH_TARGET_BYTES / row_bytes)
+        .min(batch_size)
+        .max(1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{ArrayRef, FixedSizeBinaryArray};
+    use arrow::buffer::Buffer;
+
+    /// A batch of `num_rows` rows of `row_bytes` bytes each.
+    fn batch_of(row_bytes: usize, num_rows: usize) -> RecordBatch {
+        let values = Buffer::from(vec![0u8; row_bytes * num_rows]);
+        let array = FixedSizeBinaryArray::new(row_bytes as i32, values, None);
+        RecordBatch::try_from_iter([("v", Arc::new(array) as ArrayRef)]).unwrap()
+    }
+
+    #[test]
+    fn spill_batch_rows_holds_target_bytes() -> Result<()> {
+        // Small rows keep `batch_size` rows.
+        assert_eq!(spill_batch_rows(&batch_of(8, 10), 4)?, 4);
+        // Rows of a quarter of the target are written four to a batch.
+        let quarter = SPILL_BATCH_TARGET_BYTES / 4;
+        assert_eq!(spill_batch_rows(&batch_of(quarter, 10), 8192)?, 4);
+        // A row larger than the target is written alone.
+        let large = SPILL_BATCH_TARGET_BYTES + 1;
+        assert_eq!(spill_batch_rows(&batch_of(large, 2), 8192)?, 1);
+        Ok(())
     }
 }
