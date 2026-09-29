@@ -148,9 +148,9 @@ impl BlockedEmitTo {
 /// [`Self::block_size`] groups, and emitting returns one array per block
 /// instead of one large array.
 ///
-/// Hash aggregation uses a `BlockedGroupsAccumulator` only when every
-/// aggregate in the query (and the group keys) support blocked storage;
-/// otherwise the whole aggregation uses [`GroupsAccumulator`].
+/// Hash aggregation uses a `BlockedGroupsAccumulator` for every aggregate
+/// that has one, and a [`GroupsAccumulator`] for the others, in the same
+/// aggregation.
 ///
 /// [`GroupsAccumulator`]: crate::groups_accumulator::GroupsAccumulator
 pub trait BlockedGroupsAccumulator: Send + Any {

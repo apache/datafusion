@@ -685,10 +685,9 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         not_impl_err!("GroupsAccumulator hasn't been implemented for {self:?} yet")
     }
 
-    /// If this aggregate has a [`BlockedGroupsAccumulator`]. When every
-    /// aggregate in a hash aggregation returns `true` (and the group key is
-    /// supported), group state is stored in blocks and released block by
-    /// block. Defaults to `false`.
+    /// If this aggregate has a [`BlockedGroupsAccumulator`]. When `true`,
+    /// hash aggregation stores this aggregate's group state in blocks and
+    /// releases it block by block. Defaults to `false`.
     fn blocked_groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {
         false
     }
