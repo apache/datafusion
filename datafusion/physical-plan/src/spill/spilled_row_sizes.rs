@@ -31,27 +31,51 @@ use super::VIEW_SIZE_BYTES;
 /// variable-width values, and the elements of its nested values. Buffers that
 /// every row shares, such as validity bitmaps and dictionary values, are not
 /// counted.
-pub(crate) struct SpilledRowSizes(ColumnSize);
+pub(crate) struct SpilledRowSizes {
+    /// Bytes that every row takes in the fixed-width columns
+    fixed: usize,
+    /// The other columns
+    variable: Vec<ColumnSize>,
+    /// See [`Self::max_row`]
+    max_row: usize,
+}
 
 impl SpilledRowSizes {
     pub(crate) fn new(batch: &RecordBatch) -> Self {
-        Self(ColumnSize::Struct(
-            batch
-                .columns()
-                .iter()
-                .map(|column| ColumnSize::new(column.as_ref()))
-                .collect(),
-        ))
+        let mut fixed = 0;
+        let mut variable = vec![];
+        for column in batch.columns() {
+            let column = ColumnSize::new(column.as_ref());
+            match column.fixed() {
+                Some(width) => fixed += width,
+                None => variable.push(column),
+            }
+        }
+        let max_row = variable.iter().fold(fixed, |bytes, column| {
+            bytes.saturating_add(column.max_row())
+        });
+        Self {
+            fixed,
+            variable,
+            max_row,
+        }
     }
 
     /// Returns the size in bytes of row `row`.
     pub(crate) fn row(&self, row: usize) -> usize {
-        self.0.rows(row, row + 1)
+        self.variable.iter().fold(self.fixed, |bytes, column| {
+            bytes + column.rows(row, row + 1)
+        })
     }
 
     /// Returns the size in bytes of every row, if they all have the same size.
     pub(crate) fn fixed(&self) -> Option<usize> {
-        self.0.fixed()
+        self.variable.is_empty().then_some(self.fixed)
+    }
+
+    /// Returns an upper bound on the size in bytes of any row.
+    pub(crate) fn max_row(&self) -> usize {
+        self.max_row
     }
 }
 
@@ -129,6 +153,30 @@ impl ColumnSize {
         }
     }
 
+    /// Returns an upper bound on the size in bytes of a row.
+    fn max_row(&self) -> usize {
+        match self {
+            Self::Fixed(width) => *width,
+            Self::Bytes(offsets) => offsets.width() + offsets.max_len(),
+            Self::Views(views) => {
+                let max_len = views
+                    .iter()
+                    .map(|&view| view as u32)
+                    .filter(|&len| len > MAX_INLINE_VIEW_LEN)
+                    .max()
+                    .unwrap_or_default();
+                VIEW_SIZE_BYTES + max_len as usize
+            }
+            Self::List(offsets, values) => offsets
+                .width()
+                .saturating_add(offsets.max_len().saturating_mul(values.max_row())),
+            Self::FixedSizeList(size, values) => size.saturating_mul(values.max_row()),
+            Self::Struct(fields) => fields
+                .iter()
+                .fold(0, |bytes, field| bytes.saturating_add(field.max_row())),
+        }
+    }
+
     /// Returns the size in bytes of rows `start..end`.
     fn rows(&self, start: usize, end: usize) -> usize {
         let num_rows = end - start;
@@ -180,6 +228,21 @@ impl Offsets {
             Self::Small(offsets) => offsets[index] as usize,
             Self::Large(offsets) => offsets[index] as usize,
         }
+    }
+
+    /// Returns the largest distance between consecutive offsets.
+    fn max_len(&self) -> usize {
+        match self {
+            Self::Small(offsets) => offsets
+                .windows(2)
+                .map(|pair| (pair[1] - pair[0]) as usize)
+                .max(),
+            Self::Large(offsets) => offsets
+                .windows(2)
+                .map(|pair| (pair[1] - pair[0]) as usize)
+                .max(),
+        }
+        .unwrap_or_default()
     }
 }
 
@@ -244,6 +307,36 @@ mod tests {
         assert_eq!(
             SpilledRowSizes::new(&batch(vec![ints, strings])).fixed(),
             None
+        );
+    }
+
+    #[test]
+    fn largest_row_bounds_every_row() {
+        let ints: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
+        let strings: ArrayRef = Arc::new(StringArray::from(vec!["a", "bbbb", ""]));
+        // 8 bytes of Int64, plus a 4 byte offset and the longest string
+        assert_eq!(
+            SpilledRowSizes::new(&batch(vec![ints, strings])).max_row(),
+            16
+        );
+
+        let long = "a string longer than twelve";
+        let views: ArrayRef = Arc::new(StringViewArray::from(vec!["short", long]));
+        assert_eq!(
+            SpilledRowSizes::new(&batch(vec![views])).max_row(),
+            16 + long.len()
+        );
+
+        // An offset plus the most elements in a row, each of the largest size
+        let list: ArrayRef =
+            Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+                Some(vec![Some(1), Some(2), Some(3)]),
+                Some(vec![]),
+                Some(vec![Some(4)]),
+            ]));
+        assert_eq!(
+            SpilledRowSizes::new(&batch(vec![list])).max_row(),
+            4 + 3 * 8
         );
     }
 

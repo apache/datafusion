@@ -306,6 +306,8 @@ pub(crate) struct IncrementalSortIterator {
     /// See [`Self::with_max_batch_bytes`].
     max_batch_bytes: Option<usize>,
     indices: Option<UInt32Array>,
+    /// Row sizes of `batch`, measured with `indices` when `max_batch_bytes` is set
+    row_sizes: Option<SpilledRowSizes>,
     cursor: usize,
 }
 
@@ -322,6 +324,7 @@ impl IncrementalSortIterator {
             max_batch_bytes: None,
             cursor: 0,
             indices: None,
+            row_sizes: None,
         }
     }
 
@@ -335,14 +338,18 @@ impl IncrementalSortIterator {
 
     /// Returns how many of the rows at `indices` fit in `max_batch_bytes`.
     fn rows_within(&self, indices: &[u32]) -> usize {
-        let Some(max_batch_bytes) = self.max_batch_bytes else {
+        let (Some(max_batch_bytes), Some(row_sizes)) =
+            (self.max_batch_bytes, &self.row_sizes)
+        else {
             return indices.len();
         };
-        let row_sizes = SpilledRowSizes::new(&self.batch);
         if let Some(row_bytes) = row_sizes.fixed() {
             return (max_batch_bytes / row_bytes.max(1))
                 .max(1)
                 .min(indices.len());
+        }
+        if row_sizes.max_row().saturating_mul(indices.len()) <= max_batch_bytes {
+            return indices.len();
         }
         let mut bytes = 0;
         for (rows, &row) in indices.iter().enumerate() {
@@ -380,6 +387,9 @@ impl Iterator for IncrementalSortIterator {
                     Err(e) => return Some(Err(e.into())),
                 };
                 self.indices = Some(indices);
+                if self.max_batch_bytes.is_some() {
+                    self.row_sizes = Some(SpilledRowSizes::new(&self.batch));
+                }
 
                 // Call again, this time it will hit the Some(indices) branch and return the first batch
                 self.next()
@@ -404,6 +414,7 @@ impl Iterator for IncrementalSortIterator {
                     let schema = self.batch.schema();
                     let _ = mem::replace(&mut self.batch, RecordBatch::new_empty(schema));
                     self.indices = None;
+                    self.row_sizes = None;
                 }
 
                 // Return the new batch
