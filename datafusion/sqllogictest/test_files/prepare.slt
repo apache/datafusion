@@ -472,3 +472,40 @@ EXECUTE my_plan(1, 2)
 
 statement ok
 DEALLOCATE my_plan
+
+# Untyped aliased placeholders in UNION arms
+statement ok
+PREPARE my_plan AS SELECT $1 AS a UNION ALL SELECT $2 AS a;
+
+query T rowsort
+EXECUTE my_plan('x', 'y')
+----
+x
+y
+
+statement ok
+DEALLOCATE my_plan
+
+statement ok
+create table keys_t (k1 varchar, k2 varchar) as values ('a0', 'b0'), ('a1', 'b1'), ('a2', 'b2');
+
+statement ok
+PREPARE my_plan AS
+WITH keys AS (
+  SELECT $1 AS k1, $2 AS k2
+  UNION ALL
+  SELECT $3 AS k1, $4 AS k2
+)
+SELECT t.k1 FROM keys_t t JOIN keys ON t.k1 = keys.k1 AND t.k2 = keys.k2;
+
+query T rowsort
+EXECUTE my_plan('a0', 'b0', 'a2', 'b2')
+----
+a0
+a2
+
+statement ok
+DEALLOCATE my_plan
+
+statement ok
+drop table keys_t

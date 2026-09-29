@@ -23,11 +23,10 @@ WHERE o.z > 900
         SELECT i.id_n0 FROM small_inner i WHERE i.k = o.k AND i.z < o.z
       );
 ----
-# Pinned to today's behaviour, which is incorrect. See
-# https://github.com/apache/datafusion/issues/25336 -- the fix flips this.
-false
+true
 
 expect_plan HashJoinExec
+expect_plan null_aware
 
 run
 -- Q8: NOT IN correlated by both an equality and a non-equality, 50% NULL on

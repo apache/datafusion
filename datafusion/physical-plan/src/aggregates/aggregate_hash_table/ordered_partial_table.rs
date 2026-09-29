@@ -70,7 +70,7 @@ impl OrderedAggregateTable<PartialMarker> {
             batch_size,
             &agg.input_order_mode,
             &AggregateMode::Partial,
-            agg.filter_expr.iter().cloned().collect(),
+            agg.filter_expr().to_vec(),
             metrics,
         )
     }
