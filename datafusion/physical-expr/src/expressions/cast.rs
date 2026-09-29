@@ -2486,7 +2486,7 @@ mod proto_tests {
     fn cast_target_field_survives_proto_round_trip() {
         let schema = Schema::new(vec![Field::new("a", Int32, true)]);
         let target = Arc::new(Field::new("target", Int64, false).with_metadata(
-            HashMap::from([("extension".to_string(), "value".to_string())]),
+            Metadata::from([("extension".to_string(), "value".to_string())]),
         ));
         let cast = CastExpr::new_with_target_field(
             col("a", &schema).unwrap(),
@@ -2506,7 +2506,7 @@ mod proto_tests {
     #[test]
     fn explicit_default_shaped_cast_target_is_encoded() {
         let schema = Schema::new(vec![Field::new("a", Int32, false).with_metadata(
-            HashMap::from([("source".to_string(), "value".to_string())]),
+            Metadata::from([("source".to_string(), "value".to_string())]),
         )]);
         let cast = CastExpr::new_with_target_field(
             col("a", &schema).unwrap(),
@@ -2516,7 +2516,7 @@ mod proto_tests {
 
         assert!(encode_cast(&cast).target_field.is_some());
         let decoded = round_trip_cast(&cast, &schema);
-        assert_eq!(decoded.target_metadata(), Some(&HashMap::new()));
+        assert_eq!(decoded.target_metadata(), Some(&Metadata::default()));
         assert_eq!(decoded.target_nullable(), Some(true));
         let output = decoded.return_field(&schema).unwrap();
         assert!(output.metadata().is_empty());
@@ -2525,7 +2525,7 @@ mod proto_tests {
 
     #[test]
     fn type_only_cast_target_is_omitted_and_remains_type_only() {
-        let metadata = HashMap::from([("source".to_string(), "value".to_string())]);
+        let metadata = Metadata::from([("source".to_string(), "value".to_string())]);
         let schema = Schema::new(vec![
             Field::new("a", Int32, false).with_metadata(metadata.clone()),
         ]);

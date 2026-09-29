@@ -1084,7 +1084,7 @@ mod proto_tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
         let target =
             Arc::new(Field::new("target", DataType::Int32, false).with_metadata(
-                HashMap::from([("extension".to_string(), "value".to_string())]),
+                Metadata::from([("extension".to_string(), "value".to_string())]),
             ));
         let try_cast = TryCastExpr::new_with_target_field(
             col("a", &schema).unwrap(),
@@ -1102,7 +1102,7 @@ mod proto_tests {
     fn explicit_default_shaped_try_cast_target_is_encoded() {
         let schema =
             Schema::new(vec![Field::new("a", DataType::Utf8, false).with_metadata(
-                HashMap::from([("source".to_string(), "value".to_string())]),
+                Metadata::from([("source".to_string(), "value".to_string())]),
             )]);
         let try_cast = TryCastExpr::new_with_target_field(
             col("a", &schema).unwrap(),
@@ -1111,13 +1111,13 @@ mod proto_tests {
 
         assert!(encode_try_cast(&try_cast).target_field.is_some());
         let decoded = round_trip_try_cast(&try_cast, &schema);
-        assert_eq!(decoded.target_metadata(), Some(&HashMap::new()));
+        assert_eq!(decoded.target_metadata(), Some(&Metadata::default()));
         assert!(decoded.return_field(&schema).unwrap().metadata().is_empty());
     }
 
     #[test]
     fn type_only_try_cast_target_is_omitted_and_remains_type_only() {
-        let metadata = HashMap::from([("source".to_string(), "value".to_string())]);
+        let metadata = Metadata::from([("source".to_string(), "value".to_string())]);
         let schema = Schema::new(vec![
             Field::new("a", DataType::Utf8, false).with_metadata(metadata.clone()),
         ]);
