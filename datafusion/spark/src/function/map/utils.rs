@@ -25,7 +25,7 @@ use arrow::array::{
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::{filter, take};
 use arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{Result, ScalarValue, exec_err};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err};
 
 /// Helper function to get element [`DataType`]
 /// from [`List`](DataType::List)/[`LargeList`](DataType::LargeList)/[`FixedSizeList`](DataType::FixedSizeList)<br>
@@ -70,8 +70,14 @@ pub fn get_list_offsets(array: &ArrayRef) -> Result<Cow<'_, [i32]>> {
                 .as_list::<i64>()
                 .offsets()
                 .iter()
-                .map(|i| *i as i32)
-                .collect::<Vec<_>>(),
+                .map(|offset| {
+                    i32::try_from(*offset).map_err(|_| {
+                        exec_datafusion_err!(
+                            "get_list_offsets: LargeList offset {offset} cannot be represented as i32"
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
         )),
         DataType::FixedSizeList(_, size) => Ok(Cow::Owned(
             (0..=array.len() as i32).map(|i| size * i).collect(),
@@ -259,7 +265,7 @@ fn map_deduplicate_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int32Array, StringArray};
+    use arrow::array::{Int32Array, LargeListArray, NullArray, StringArray};
     use arrow::datatypes::Int32Type;
 
     fn int32_utf8_inputs(
@@ -269,6 +275,24 @@ mod tests {
         let keys: ArrayRef = Arc::new(Int32Array::from(keys));
         let values: ArrayRef = Arc::new(StringArray::from(values));
         (keys, values)
+    }
+
+    #[test]
+    fn large_list_offsets_do_not_truncate() {
+        let start = i64::from(i32::MAX) + 1;
+        let values: ArrayRef = Arc::new(NullArray::new((start + 1) as usize));
+        let array: ArrayRef = Arc::new(
+            LargeListArray::new(
+                Arc::new(Field::new_list_field(DataType::Null, true)),
+                OffsetBuffer::new(vec![0, start, start + 1].into()),
+                values,
+                None,
+            )
+            .slice(1, 1),
+        );
+
+        let err = get_list_offsets(&array).unwrap_err().to_string();
+        assert!(err.contains("cannot be represented as i32"), "{err}");
     }
 
     #[test]

@@ -674,7 +674,11 @@ impl StatisticsProvider for ProjectionStatisticsProvider {
         // so expression-level NDV/min/max feeds into projected column stats.
         let stats = proj
             .projection_expr()
-            .project_statistics(input_stats, &output_schema)?;
+            .project_statistics_with_input_schema(
+                input_stats,
+                proj.input().schema().as_ref(),
+                &output_schema,
+            )?;
         Ok(StatisticsResult::Computed(ExtendedStatistics::new(stats)))
     }
 }
