@@ -30,6 +30,8 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
+use crate::object_store::ObjectStoreUrl;
+
 /// Base trait for cache implementations with common operations.
 ///
 /// This trait provides the fundamental cache operations (`get`, `put`, `remove`, etc.)
@@ -143,27 +145,71 @@ impl CacheKey for TableScopedPath {
     }
 }
 
-/// Each entry is scoped to its use within a specific table so that the cache
-/// can differentiate between identical paths in different tables, and
+/// Identifies an object within its registered object store.
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub struct ObjectStorePath {
+    /// URL identifying the registered object store.
+    pub object_store_url: ObjectStoreUrl,
+    /// Location relative to that store.
+    pub path: Path,
+}
+
+impl ObjectStorePath {
+    /// Create a cache key for a path in the given object store.
+    pub fn new(object_store_url: ObjectStoreUrl, path: Path) -> Self {
+        Self {
+            object_store_url,
+            path,
+        }
+    }
+}
+
+impl CacheKey for ObjectStorePath {
+    fn size(&self) -> usize {
+        self.heap_size(&mut DFHeapSizeCtx::default())
+    }
+
+    fn table_ref(&self) -> Option<&TableReference> {
+        None
+    }
+}
+
+impl DFHeapSize for ObjectStorePath {
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        self.object_store_url.as_str().heap_size(ctx) + self.path.as_ref().heap_size(ctx)
+    }
+}
+
+impl Display for ObjectStorePath {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}{}", self.object_store_url, self.path)
+    }
+}
+
+/// Scopes a path to its object store and optional table, supporting
 /// table-level cache invalidation.
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub struct TableScopedPath {
     pub table: Option<TableReference>,
+    /// URL identifying the store containing `path`.
+    pub object_store_url: ObjectStoreUrl,
     pub path: Path,
 }
 
 impl DFHeapSize for TableScopedPath {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
-        self.path.as_ref().heap_size(ctx) + self.table.heap_size(ctx)
+        self.object_store_url.as_str().heap_size(ctx)
+            + self.path.as_ref().heap_size(ctx)
+            + self.table.heap_size(ctx)
     }
 }
 
 impl Display for TableScopedPath {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if let Some(table) = &self.table {
-            write!(f, "{}, {}", self.path, table)
+            write!(f, "{}{}, {}", self.object_store_url, self.path, table)
         } else {
-            write!(f, "{}", self.path)
+            write!(f, "{}{}", self.object_store_url, self.path)
         }
     }
 }

@@ -16,7 +16,9 @@
 // under the License.
 
 use crate::cache::default_cache::DefaultCache;
-pub use crate::cache::{Cache, CacheValue, SchemaFingerprint, TableScopedPath};
+pub use crate::cache::{
+    Cache, CacheValue, ObjectStorePath, SchemaFingerprint, TableScopedPath,
+};
 use datafusion_common::HashMap;
 use datafusion_common::heap_size::{DFHeapSize, DFHeapSizeCtx};
 use datafusion_common::{Result, Statistics};
@@ -40,7 +42,7 @@ pub const DEFAULT_METADATA_CACHE_LIMIT: usize = 50 * 1024 * 1024; // 50M
 /// A cache for file statistics and orderings.
 ///
 /// This cache stores [`CachedFileMetadata`] which includes:
-/// - File metadata for validation (size, last_modified)
+/// - File metadata for validation (size, last_modified, e_tag, version)
 /// - Statistics for the file
 /// - Ordering information for the file
 ///
@@ -75,6 +77,7 @@ pub type ListFilesCache = dyn Cache<TableScopedPath, CachedFileList>;
 ///
 /// This cache stores per-file metadata in the form of [`CachedFileMetadataEntry`],
 /// which includes the [`ObjectMeta`] for validation.
+/// Entries are keyed by the object store URL and the path within that store.
 ///
 /// For example, the built in [`ListingTable`] uses this cache to avoid parsing
 /// Parquet footers multiple times for the same file.
@@ -87,7 +90,7 @@ pub type ListFilesCache = dyn Cache<TableScopedPath, CachedFileList>;
 /// See [`crate::runtime_env::RuntimeEnv`] for more details.
 ///
 /// [`ListingTable`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
-pub type FileMetadataCache = dyn Cache<Path, CachedFileMetadataEntry>;
+pub type FileMetadataCache = dyn Cache<ObjectStorePath, CachedFileMetadataEntry>;
 
 /// Cached metadata for a file, including statistics and ordering.
 ///
@@ -95,7 +98,7 @@ pub type FileMetadataCache = dyn Cache<Path, CachedFileMetadataEntry>;
 /// the `file_schema` fingerprint, cached statistics, and ordering information.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedFileMetadata {
-    /// File metadata used for cache validation (size, last_modified).
+    /// File metadata used for cache validation (size, last_modified, e_tag, version).
     pub meta: ObjectMeta,
     /// Fingerprint of the `file_schema` used to compute `statistics`.
     pub schema_fingerprint: Arc<SchemaFingerprint>,
@@ -124,17 +127,34 @@ impl CachedFileMetadata {
     /// Check if this cached entry is still valid for the given metadata.
     ///
     /// Returns true if the file size, last modified time, and schema match.
+    /// ETag and version must also match when present in both metadata values.
     pub fn is_valid_for(
         &self,
         current_meta: &ObjectMeta,
         current_schema_fingerprint: &Arc<SchemaFingerprint>,
     ) -> bool {
-        self.meta.size == current_meta.size
-            && self.meta.last_modified == current_meta.last_modified
+        file_metadata_matches(&self.meta, current_meta)
             && (Arc::ptr_eq(&self.schema_fingerprint, current_schema_fingerprint)
                 || self.schema_fingerprint.as_ref()
                     == current_schema_fingerprint.as_ref())
     }
+}
+
+/// Size and modification time must always match. Some stores or requests omit
+/// object identifiers, so compare each only when both metadata values provide it.
+fn file_metadata_matches(cached: &ObjectMeta, current: &ObjectMeta) -> bool {
+    cached.size == current.size
+        && cached.last_modified == current.last_modified
+        && cached
+            .e_tag
+            .as_ref()
+            .zip(current.e_tag.as_ref())
+            .is_none_or(|(cached, current)| cached == current)
+        && cached
+            .version
+            .as_ref()
+            .zip(current.version.as_ref())
+            .is_none_or(|(cached, current)| cached == current)
 }
 
 impl CacheValue for CachedFileMetadata {
@@ -259,7 +279,7 @@ pub trait FileMetadata: Any + Send + Sync {
 /// Cached file metadata entry with validation information.
 #[derive(Clone)]
 pub struct CachedFileMetadataEntry {
-    /// File metadata used for cache validation (size, last_modified).
+    /// File metadata used for cache validation (size, last_modified, e_tag, version).
     pub meta: ObjectMeta,
     /// The cached file metadata.
     pub file_metadata: Arc<dyn FileMetadata>,
@@ -281,9 +301,11 @@ impl CachedFileMetadataEntry {
     }
 
     /// Check if this cached entry is still valid for the given metadata.
+    ///
+    /// The file size and last modified time must match. ETag and version must
+    /// also match when present in both metadata values.
     pub fn is_valid_for(&self, current_meta: &ObjectMeta) -> bool {
-        self.meta.size == current_meta.size
-            && self.meta.last_modified == current_meta.last_modified
+        file_metadata_matches(&self.meta, current_meta)
     }
 }
 
@@ -512,6 +534,112 @@ impl CacheManagerConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::datatypes::Schema;
+
+    struct TestFileMetadata;
+
+    impl FileMetadata for TestFileMetadata {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn memory_size(&self) -> usize {
+            0
+        }
+
+        fn extra_info(&self) -> HashMap<String, String> {
+            HashMap::new()
+        }
+    }
+
+    fn test_object_meta() -> ObjectMeta {
+        ObjectMeta {
+            location: Path::from("data.parquet"),
+            last_modified: chrono::DateTime::UNIX_EPOCH,
+            size: 100,
+            e_tag: None,
+            version: None,
+        }
+    }
+
+    fn assert_metadata_validity(
+        cached_meta: &ObjectMeta,
+        current_meta: &ObjectMeta,
+        expected: bool,
+    ) {
+        let schema = Schema::empty();
+        let fingerprint = Arc::new(SchemaFingerprint::from_schema(&schema));
+        let cached_statistics = CachedFileMetadata::new(
+            cached_meta.clone(),
+            Arc::clone(&fingerprint),
+            Arc::new(Statistics::new_unknown(&schema)),
+            None,
+        );
+        let cached_metadata =
+            CachedFileMetadataEntry::new(cached_meta.clone(), Arc::new(TestFileMetadata));
+
+        assert_eq!(
+            cached_statistics.is_valid_for(current_meta, &fingerprint),
+            expected,
+            "statistics: cached={cached_meta:?}, current={current_meta:?}"
+        );
+        assert_eq!(
+            cached_metadata.is_valid_for(current_meta),
+            expected,
+            "metadata: cached={cached_meta:?}, current={current_meta:?}"
+        );
+    }
+
+    #[test]
+    fn test_metadata_validation_etag_and_version() {
+        let identifiers = [
+            (Some("same"), Some("same"), true),
+            (Some("old"), Some("new"), false),
+            (Some("old"), None, true),
+            (None, Some("new"), true),
+            (None, None, true),
+        ];
+
+        // Each identifier is checked independently, including when the other
+        // identifier matches or is unavailable in either metadata value.
+        for (cached_etag, current_etag, etag_matches) in identifiers {
+            for (cached_version, current_version, version_matches) in identifiers {
+                let cached_meta = ObjectMeta {
+                    e_tag: cached_etag.map(str::to_owned),
+                    version: cached_version.map(str::to_owned),
+                    ..test_object_meta()
+                };
+                let current_meta = ObjectMeta {
+                    e_tag: current_etag.map(str::to_owned),
+                    version: current_version.map(str::to_owned),
+                    ..test_object_meta()
+                };
+                assert_metadata_validity(
+                    &cached_meta,
+                    &current_meta,
+                    etag_matches && version_matches,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_metadata_validation_size_and_last_modified() {
+        for identifier in [None, Some("same")] {
+            let cached_meta = ObjectMeta {
+                e_tag: identifier.map(str::to_owned),
+                version: identifier.map(str::to_owned),
+                ..test_object_meta()
+            };
+            let mut current_meta = cached_meta.clone();
+            current_meta.size += 1;
+            assert_metadata_validity(&cached_meta, &current_meta, false);
+
+            let mut current_meta = cached_meta.clone();
+            current_meta.last_modified += chrono::Duration::seconds(1);
+            assert_metadata_validity(&cached_meta, &current_meta, false);
+        }
+    }
 
     /// Test to verify that TTL is preserved when not explicitly set in config.
     /// This fixes issue #19396 where TTL was being unset from DefaultListFilesCache

@@ -853,11 +853,13 @@ impl ListingTable {
                 lfc.drop_table_entries(table_ref)?;
             } else {
                 let table_prefix = table_path.prefix();
+                let object_store_url = table_path.object_store();
                 let keys: Vec<_> = lfc
                     .list_entries()
                     .into_keys()
                     .filter(|key| {
                         key.table.is_none()
+                            && key.object_store_url == object_store_url
                             && (key.path.prefix_matches(table_prefix)
                                 || table_prefix.prefix_matches(&key.path))
                     })
@@ -1129,13 +1131,16 @@ impl ListingTable {
         store: &Arc<dyn ObjectStore>,
         part_file: &PartitionedFile,
     ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
+        // ListingTable paths share a single object store.
+        let object_store_url = self.table_paths[0].object_store();
         let path = TableScopedPath {
             table: part_file.table_reference.clone(),
+            object_store_url: object_store_url.clone(),
             path: part_file.object_meta.location.clone(),
         };
         let meta = &part_file.object_meta;
 
-        // Check cache first. The key stays `{table, path}` for cheap lookups;
+        // Check cache first. The key identifies the store, table and path;
         // the cached value carries the schema fingerprint to prevent reusing
         // stats computed under a different file schema.
         if let Some(cache) = &self.collected_statistics
@@ -1150,7 +1155,13 @@ impl ListingTable {
         let file_meta = self
             .options
             .format
-            .infer_stats_and_ordering(ctx, store, Arc::clone(&self.file_schema), meta)
+            .infer_stats_and_ordering(
+                ctx,
+                store,
+                &object_store_url,
+                Arc::clone(&self.file_schema),
+                meta,
+            )
             .await?;
 
         let statistics = Arc::new(file_meta.statistics);

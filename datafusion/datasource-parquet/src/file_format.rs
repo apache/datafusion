@@ -54,6 +54,7 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::write::get_writer_schema;
+use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::ExecutionPlan;
@@ -331,6 +332,7 @@ impl FileFormat for ParquetFormat {
         &self,
         state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
+        object_store_url: &ObjectStoreUrl,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
         let coerce_int96 = match self.coerce_int96() {
@@ -359,7 +361,10 @@ impl FileFormat for ParquetFormat {
                 let result = DFParquetMetadata::new(store.as_ref(), object)
                     .with_metadata_size_hint(self.metadata_size_hint())
                     .with_decryption_properties(file_decryption_properties)
-                    .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
+                    .with_file_metadata_cache(
+                        Some(Arc::clone(&file_metadata_cache)),
+                        object_store_url.clone(),
+                    )
                     .with_coerce_int96(coerce_int96)
                     .with_coerce_int96_tz(coerce_int96_tz.clone())
                     .fetch_schema_with_location()
@@ -425,6 +430,7 @@ impl FileFormat for ParquetFormat {
         &self,
         state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
+        object_store_url: &ObjectStoreUrl,
         table_schema: SchemaRef,
         object: &ObjectMeta,
     ) -> Result<Statistics> {
@@ -436,7 +442,7 @@ impl FileFormat for ParquetFormat {
         DFParquetMetadata::new(store, object)
             .with_metadata_size_hint(self.metadata_size_hint())
             .with_decryption_properties(file_decryption_properties)
-            .with_file_metadata_cache(Some(file_metadata_cache))
+            .with_file_metadata_cache(Some(file_metadata_cache), object_store_url.clone())
             .fetch_statistics(&table_schema)
             .await
     }
@@ -445,6 +451,7 @@ impl FileFormat for ParquetFormat {
         &self,
         state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
+        object_store_url: &ObjectStoreUrl,
         table_schema: SchemaRef,
         object: &ObjectMeta,
     ) -> Result<Option<LexOrdering>> {
@@ -456,7 +463,7 @@ impl FileFormat for ParquetFormat {
         let metadata = DFParquetMetadata::new(store, object)
             .with_metadata_size_hint(self.metadata_size_hint())
             .with_decryption_properties(file_decryption_properties)
-            .with_file_metadata_cache(Some(file_metadata_cache))
+            .with_file_metadata_cache(Some(file_metadata_cache), object_store_url.clone())
             .fetch_metadata()
             .await?;
         crate::metadata::ordering_from_parquet_metadata(&metadata, &table_schema)
@@ -466,6 +473,7 @@ impl FileFormat for ParquetFormat {
         &self,
         state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
+        object_store_url: &ObjectStoreUrl,
         table_schema: SchemaRef,
         object: &ObjectMeta,
     ) -> Result<datafusion_datasource::file_format::FileMeta> {
@@ -477,7 +485,7 @@ impl FileFormat for ParquetFormat {
         let metadata = DFParquetMetadata::new(store, object)
             .with_metadata_size_hint(self.metadata_size_hint())
             .with_decryption_properties(file_decryption_properties)
-            .with_file_metadata_cache(Some(file_metadata_cache))
+            .with_file_metadata_cache(Some(file_metadata_cache), object_store_url.clone())
             .fetch_metadata()
             .await?;
         let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
@@ -515,8 +523,11 @@ impl FileFormat for ParquetFormat {
         let store = state
             .runtime_env()
             .object_store(conf.object_store_url.clone())?;
-        let cached_parquet_read_factory =
-            Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
+        let cached_parquet_read_factory = Arc::new(CachedParquetFileReaderFactory::new(
+            store,
+            conf.object_store_url.clone(),
+            metadata_cache,
+        ));
         source = source.with_parquet_file_reader_factory(cached_parquet_read_factory);
 
         if let Some(metadata_size_hint) = metadata_size_hint {

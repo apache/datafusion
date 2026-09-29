@@ -36,7 +36,7 @@ use datafusion::{
         table_schema::TableSchema,
     },
     error::Result,
-    execution::session_state::SessionStateBuilder,
+    execution::{object_store::ObjectStoreUrl, session_state::SessionStateBuilder},
     physical_expr_common::sort_expr::LexRequirement,
     physical_plan::ExecutionPlan,
     prelude::SessionContext,
@@ -124,10 +124,11 @@ impl FileFormat for TSVFileFormat {
         &self,
         state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
+        object_store_url: &ObjectStoreUrl,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
         self.csv_file_format
-            .infer_schema(state, store, objects)
+            .infer_schema(state, store, object_store_url, objects)
             .await
     }
 
@@ -135,11 +136,12 @@ impl FileFormat for TSVFileFormat {
         &self,
         state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
+        object_store_url: &ObjectStoreUrl,
         table_schema: SchemaRef,
         object: &ObjectMeta,
     ) -> Result<Statistics> {
         self.csv_file_format
-            .infer_stats(state, store, table_schema, object)
+            .infer_stats(state, store, object_store_url, table_schema, object)
             .await
     }
 

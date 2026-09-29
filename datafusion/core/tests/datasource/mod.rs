@@ -19,6 +19,7 @@
 //!
 //! Note tests for the Parquet format are in `parquet_integration` binary
 
+mod cache_object_identity;
 // Include tests in csv module
 mod csv;
 mod object_store_access;

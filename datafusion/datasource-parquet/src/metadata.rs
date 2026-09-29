@@ -31,8 +31,9 @@ use datafusion_common::{
     internal_datafusion_err,
 };
 use datafusion_execution::cache::cache_manager::{
-    CachedFileMetadataEntry, FileMetadata, FileMetadataCache,
+    CachedFileMetadataEntry, FileMetadata, FileMetadataCache, ObjectStorePath,
 };
+use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -139,8 +140,8 @@ pub struct DFParquetMetadata<'a> {
     /// [`ParquetMetaDataReader::with_decryption_properties`].
     decryption_properties: Option<Arc<FileDecryptionProperties>>,
     /// Optional cache of previously fetched [`ParquetMetaData`], keyed by
-    /// file location.
-    file_metadata_cache: Option<Arc<FileMetadataCache>>,
+    /// object store URL and file location.
+    file_metadata_cache: Option<(Arc<FileMetadataCache>, ObjectStoreUrl)>,
     /// Policy controlling whether the Parquet page index (column and offset
     /// indexes) is fetched, mirroring
     /// [`ParquetMetaDataReader::with_page_index_policy`].
@@ -199,11 +200,15 @@ impl<'a> DFParquetMetadata<'a> {
 
     /// Set an optional [`FileMetadataCache`] used to avoid re-fetching
     /// [`ParquetMetaData`] for files that have already been read.
+    /// `object_store_url` identifies the store supplying this file, so equal
+    /// paths in different stores cannot reuse each other's metadata.
     pub fn with_file_metadata_cache(
         mut self,
         file_metadata_cache: Option<Arc<FileMetadataCache>>,
+        object_store_url: ObjectStoreUrl,
     ) -> Self {
-        self.file_metadata_cache = file_metadata_cache;
+        self.file_metadata_cache =
+            file_metadata_cache.map(|cache| (cache, object_store_url));
         self
     }
 
@@ -270,8 +275,12 @@ impl<'a> DFParquetMetadata<'a> {
         let page_index_policy = self.effective_page_index_policy(cache_metadata);
 
         if cache_metadata
-            && let Some(file_metadata_cache) = self.file_metadata_cache.as_ref()
-            && let Some(cached) = file_metadata_cache.get(&self.object_meta.location)
+            && let Some((file_metadata_cache, object_store_url)) =
+                self.file_metadata_cache.as_ref()
+            && let Some(cached) = file_metadata_cache.get(&ObjectStorePath::new(
+                object_store_url.clone(),
+                self.object_meta.location.clone(),
+            ))
             && cached.is_valid_for(self.object_meta)
             && let Some(cached_parquet) = cached
                 .file_metadata
@@ -329,14 +338,17 @@ impl<'a> DFParquetMetadata<'a> {
     }
 
     /// Store `metadata` in the configured [`FileMetadataCache`], keyed by
-    /// the file's location.
+    /// the object store URL and file's location.
     ///
     /// This is a no-op unless a cache has been configured via
     /// [`Self::with_file_metadata_cache`].
     fn cache_metadata(&self, metadata: Arc<ParquetMetaData>) -> Result<()> {
-        if let Some(file_metadata_cache) = &self.file_metadata_cache {
+        if let Some((file_metadata_cache, object_store_url)) = &self.file_metadata_cache {
             file_metadata_cache.put(
-                &self.object_meta.location,
+                &ObjectStorePath::new(
+                    object_store_url.clone(),
+                    self.object_meta.location.clone(),
+                ),
                 CachedFileMetadataEntry::new(
                     self.object_meta.clone(),
                     Arc::new(CachedParquetMetaData::new(metadata)),
@@ -1204,6 +1216,111 @@ mod tests {
     use arrow::array::Int32Array;
     use arrow::compute::SortOptions;
     use arrow::datatypes::Field;
+    use arrow::record_batch::RecordBatch;
+    use datafusion_execution::cache::default_cache::DefaultCache;
+    use object_store::ObjectStoreExt;
+    use object_store::memory::InMemory;
+    use parquet::arrow::ArrowWriter;
+
+    async fn write_cached_test_file(store: &InMemory, value: i32) -> ObjectMeta {
+        let batch = RecordBatch::try_from_iter(vec![(
+            "value",
+            Arc::new(Int32Array::from(vec![value])) as ArrayRef,
+        )])
+        .unwrap();
+        let mut bytes = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut bytes, batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let path = Path::from("data.parquet");
+        store.put(&path, bytes.into()).await.unwrap();
+        store.head(&path).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn metadata_cache_invalidates_changed_object_identity() {
+        for use_version in [false, true] {
+            let store = InMemory::new();
+            let cache: Arc<FileMetadataCache> = Arc::new(DefaultCache::new(1024 * 1024));
+            let url = ObjectStoreUrl::parse("s3://bucket").unwrap();
+            let mut original = write_cached_test_file(&store, 100).await;
+            if use_version {
+                original.e_tag = None;
+                original.version = Some("v1".into());
+            }
+            let original_reader = DFParquetMetadata::new(&store, &original)
+                .with_file_metadata_cache(Some(Arc::clone(&cache)), url.clone())
+                .with_page_index_policy(Some(PageIndexPolicy::Skip));
+            let original_metadata = original_reader.fetch_metadata().await.unwrap();
+            assert!(Arc::ptr_eq(
+                &original_metadata,
+                &original_reader.fetch_metadata().await.unwrap()
+            ));
+
+            let mut overwritten = write_cached_test_file(&store, 200).await;
+            assert_eq!(original.size, overwritten.size);
+            overwritten.last_modified = original.last_modified;
+            if use_version {
+                overwritten.e_tag = None;
+                overwritten.version = Some("v2".into());
+            } else {
+                assert_ne!(original.e_tag, overwritten.e_tag);
+            }
+            let reader = DFParquetMetadata::new(&store, &overwritten)
+                .with_file_metadata_cache(Some(Arc::clone(&cache)), url)
+                .with_page_index_policy(Some(PageIndexPolicy::Skip));
+            let metadata = reader.fetch_metadata().await.unwrap();
+            assert!(!Arc::ptr_eq(&original_metadata, &metadata));
+            let ParquetStatistics::Int32(stats) =
+                metadata.row_group(0).column(0).statistics().unwrap()
+            else {
+                panic!("expected Int32 statistics");
+            };
+            assert_eq!(stats.min_opt(), Some(&200));
+            assert_eq!(stats.max_opt(), Some(&200));
+            assert!(Arc::ptr_eq(
+                &metadata,
+                &reader.fetch_metadata().await.unwrap()
+            ));
+            assert_eq!(cache.len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn metadata_cache_separates_object_stores() {
+        let first_store = InMemory::new();
+        let second_store = InMemory::new();
+        let meta = write_cached_test_file(&first_store, 100).await;
+        let second_meta = write_cached_test_file(&second_store, 200).await;
+        assert_eq!(meta.size, second_meta.size);
+        let cache: Arc<FileMetadataCache> = Arc::new(DefaultCache::new(1024 * 1024));
+        // Use identical metadata deliberately: store identity must distinguish
+        // the files even when their paths and all validation fields coincide.
+        for _ in 0..2 {
+            for (store, url, expected) in [
+                (&first_store, "s3://first", 100),
+                (&second_store, "s3://second", 200),
+            ] {
+                let metadata = DFParquetMetadata::new(store, &meta)
+                    .with_file_metadata_cache(
+                        Some(Arc::clone(&cache)),
+                        ObjectStoreUrl::parse(url).unwrap(),
+                    )
+                    .with_page_index_policy(Some(PageIndexPolicy::Skip))
+                    .fetch_metadata()
+                    .await
+                    .unwrap();
+                let ParquetStatistics::Int32(stats) =
+                    metadata.row_group(0).column(0).statistics().unwrap()
+                else {
+                    panic!("expected Int32 statistics");
+                };
+                assert_eq!(stats.min_opt(), Some(&expected));
+                assert_eq!(stats.max_opt(), Some(&expected));
+            }
+        }
+        assert_eq!(cache.len(), 2);
+    }
 
     #[test]
     fn test_lex_ordering_to_sorting_columns_uses_writer_schema() -> Result<()> {
