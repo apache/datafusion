@@ -196,6 +196,7 @@ use datafusion_expr::{Accumulator, Aggregate, AggregateMetrics};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::filter::FilterConjunct;
 use datafusion_physical_expr::{
     ConstExpr, EquivalenceProperties, physical_exprs_contains,
 };
@@ -2627,7 +2628,7 @@ impl ExecutionPlan for AggregateExec {
     fn gather_filters_for_pushdown(
         &self,
         phase: FilterPushdownPhase,
-        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        parent_filters: Vec<FilterConjunct>,
         config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         // It's safe to push down filters through aggregates when filters only reference

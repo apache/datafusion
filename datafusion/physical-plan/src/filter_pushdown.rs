@@ -22,7 +22,7 @@
 //!    on the parent node, passing in parent predicates and phase. The parent node creates a [`FilterDescription`]
 //!    by inspecting its logic and children's schemas, determining which filters can be pushed to each child.
 //! 2. **Optimizer Executes Pushdown**: The optimizer recursively pushes down filters for each child,
-//!    passing the appropriate filters (`Vec<Arc<dyn PhysicalExpr>>`) for that child.
+//!    passing the appropriate filters (`Vec<FilterConjunct>`) for that child.
 //! 3. **Optimizer Gathers Results**: The optimizer collects [`FilterPushdownPropagation`] results from children,
 //!    containing information about which filters were successfully pushed down vs. unsupported.
 //! 4. **Parent Responds**: The optimizer calls [`ExecutionPlan::handle_child_pushdown_result`] on the parent,
@@ -94,20 +94,24 @@ impl std::fmt::Display for FilterPushdownPhase {
 /// before pushing it down to a child node (e.g. to adjust a projection)
 /// or can directly take ownership of filters that their children
 /// could not handle.
+///
+/// The predicate is a [`FilterConjunct`], thus it keeps the properties of
+/// the filter (for example, the optional flag). A node that rewrites a parent
+/// filter must use [`FilterConjunct::with_expr`] to keep these properties.
 #[derive(Debug, Clone)]
 pub struct PushedDownPredicate {
     pub discriminant: PushedDown,
-    pub predicate: Arc<dyn PhysicalExpr>,
+    pub predicate: FilterConjunct,
 }
 
 impl PushedDownPredicate {
-    /// Return the wrapped [`PhysicalExpr`], discarding whether it is supported or unsupported.
-    pub fn into_inner(self) -> Arc<dyn PhysicalExpr> {
+    /// Return the wrapped [`FilterConjunct`], discarding whether it is supported or unsupported.
+    pub fn into_inner(self) -> FilterConjunct {
         self.predicate
     }
 
     /// Create a new [`PushedDownPredicate`] with supported pushdown.
-    pub fn supported(predicate: Arc<dyn PhysicalExpr>) -> Self {
+    pub fn supported(predicate: FilterConjunct) -> Self {
         Self {
             discriminant: PushedDown::Yes,
             predicate,
@@ -115,7 +119,7 @@ impl PushedDownPredicate {
     }
 
     /// Create a new [`PushedDownPredicate`] with unsupported pushdown.
-    pub fn unsupported(predicate: Arc<dyn PhysicalExpr>) -> Self {
+    pub fn unsupported(predicate: FilterConjunct) -> Self {
         Self {
             discriminant: PushedDown::No,
             predicate,
@@ -162,11 +166,11 @@ impl PushedDown {
         }
     }
 
-    /// Wrap a [`PhysicalExpr`] with this pushdown result.
-    pub fn wrap_expression(self, expr: Arc<dyn PhysicalExpr>) -> PushedDownPredicate {
+    /// Wrap a [`FilterConjunct`] with this pushdown result.
+    pub fn wrap_expression(self, predicate: FilterConjunct) -> PushedDownPredicate {
         PushedDownPredicate {
             discriminant: self,
-            predicate: expr,
+            predicate,
         }
     }
 }
@@ -174,35 +178,13 @@ impl PushedDown {
 /// The result of pushing down a single parent filter into all children.
 #[derive(Debug, Clone)]
 pub struct ChildFilterPushdownResult {
-    pub filter: Arc<dyn PhysicalExpr>,
+    /// The parent filter, with its properties (for example, the optional
+    /// flag).
+    pub filter: FilterConjunct,
     pub child_results: Vec<PushedDown>,
-    /// `true` if the node that created this filter does not need it for
-    /// correctness. See [`FilterConjunct::is_optional`].
-    optional: bool,
 }
 
 impl ChildFilterPushdownResult {
-    /// Create a result for `filter`, with the properties of the conjunct
-    /// (for example, the optional flag).
-    pub fn new(filter: FilterConjunct, child_results: Vec<PushedDown>) -> Self {
-        let optional = filter.is_optional();
-        Self {
-            filter: filter.into_expr(),
-            child_results,
-            optional,
-        }
-    }
-
-    /// This filter as a [`FilterConjunct`], with its properties.
-    pub fn conjunct(&self) -> FilterConjunct {
-        let filter = Arc::clone(&self.filter);
-        if self.optional {
-            FilterConjunct::optional(filter)
-        } else {
-            FilterConjunct::required(filter)
-        }
-    }
-
     /// Combine all child results using OR logic.
     /// Returns `Yes` if **any** child supports the filter.
     /// Returns `No` if **all** children reject the filter or if there are no children.
@@ -456,7 +438,7 @@ impl ChildFilterDescription {
     ///
     /// See [`FilterDescription::from_children`] for more details
     pub fn from_child(
-        parent_filters: &[Arc<dyn PhysicalExpr>],
+        parent_filters: &[FilterConjunct],
         child: &Arc<dyn crate::ExecutionPlan>,
     ) -> Result<Self> {
         if parent_filters.is_empty() {
@@ -477,7 +459,7 @@ impl ChildFilterDescription {
         note = "use `from_child` for matching schemas or `from_child_with_column_mapping` when positions differ"
     )]
     pub fn from_child_with_allowed_indices(
-        parent_filters: &[Arc<dyn PhysicalExpr>],
+        parent_filters: &[FilterConjunct],
         allowed_indices: HashSet<usize>,
         child: &Arc<dyn crate::ExecutionPlan>,
     ) -> Result<Self> {
@@ -489,7 +471,7 @@ impl ChildFilterDescription {
         let child_schema = child.schema();
         let column_mapping = parent_filters
             .iter()
-            .flat_map(collect_columns)
+            .flat_map(|filter| collect_columns(filter.expr()))
             .filter(move |col| allowed_indices.contains(&col.index()))
             .filter_map(|col| {
                 child_schema
@@ -510,7 +492,7 @@ impl ChildFilterDescription {
     /// Join keys may also be mapped to a differently named column on the
     /// other side.
     pub fn from_child_with_column_mapping(
-        parent_filters: &[Arc<dyn PhysicalExpr>],
+        parent_filters: &[FilterConjunct],
         column_mapping: HashMap<usize, usize>,
         child: &Arc<dyn crate::ExecutionPlan>,
     ) -> Result<Self> {
@@ -523,16 +505,18 @@ impl ChildFilterDescription {
     }
 
     fn remap_filters(
-        parent_filters: &[Arc<dyn PhysicalExpr>],
+        parent_filters: &[FilterConjunct],
         remapper: &FilterRemapper,
     ) -> Result<Self> {
         let mut child_parent_filters = Vec::with_capacity(parent_filters.len());
         for filter in parent_filters {
-            if let Some(remapped) = remapper.try_remap(filter)? {
-                child_parent_filters.push(PushedDownPredicate::supported(remapped));
+            if let Some(remapped) = remapper.try_remap(filter.expr())? {
+                child_parent_filters.push(PushedDownPredicate::supported(
+                    filter.clone().with_expr(remapped),
+                ));
             } else {
                 child_parent_filters
-                    .push(PushedDownPredicate::unsupported(Arc::clone(filter)));
+                    .push(PushedDownPredicate::unsupported(filter.clone()));
             }
         }
 
@@ -551,11 +535,11 @@ impl ChildFilterDescription {
     }
 
     /// Mark all parent filters as unsupported for this child.
-    pub fn all_unsupported(parent_filters: &[Arc<dyn PhysicalExpr>]) -> Self {
+    pub fn all_unsupported(parent_filters: &[FilterConjunct]) -> Self {
         Self {
             parent_filters: parent_filters
                 .iter()
-                .map(|f| PushedDownPredicate::unsupported(Arc::clone(f)))
+                .map(|f| PushedDownPredicate::unsupported(f.clone()))
                 .collect(),
             self_filters: vec![],
         }
@@ -630,7 +614,7 @@ impl FilterDescription {
     /// - Otherwise, it cannot be pushed down to that child
     #[expect(clippy::needless_pass_by_value)]
     pub fn from_children(
-        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        parent_filters: Vec<FilterConjunct>,
         children: &[&Arc<dyn crate::ExecutionPlan>],
     ) -> Result<Self> {
         let mut desc = Self::new();
@@ -646,7 +630,7 @@ impl FilterDescription {
 
     /// Mark all parent filters as unsupported for all children.
     pub fn all_unsupported(
-        parent_filters: &[Arc<dyn PhysicalExpr>],
+        parent_filters: &[FilterConjunct],
         children: &[&Arc<dyn crate::ExecutionPlan>],
     ) -> Self {
         let mut desc = Self::new();

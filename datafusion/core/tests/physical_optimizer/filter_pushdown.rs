@@ -1703,7 +1703,7 @@ fn test_repartition_filter_pushdown_preserves_duplicate_column_indices() {
         let filters = repartition
             .gather_filters_for_pushdown(
                 phase,
-                vec![Arc::clone(&predicate)],
+                vec![FilterConjunct::required(Arc::clone(&predicate))],
                 &ConfigOptions::default(),
             )
             .unwrap()
@@ -1746,7 +1746,10 @@ fn test_filter_with_projection_pushdown_preserves_duplicate_column_indices() {
         let filters = filter
             .gather_filters_for_pushdown(
                 phase,
-                vec![id_eq_x(0), id_eq_x(1)],
+                vec![
+                    FilterConjunct::required(id_eq_x(0)),
+                    FilterConjunct::required(id_eq_x(1)),
+                ],
                 &ConfigOptions::default(),
             )
             .unwrap()
@@ -1783,7 +1786,11 @@ fn test_projection_pushdown_preserves_duplicate_aliases() {
     let filters = projection
         .gather_filters_for_pushdown(
             FilterPushdownPhase::Pre,
-            vec![id_eq_x(0), id_eq_x(1), id_eq_x(2)],
+            vec![
+                FilterConjunct::required(id_eq_x(0)),
+                FilterConjunct::required(id_eq_x(1)),
+                FilterConjunct::required(id_eq_x(2)),
+            ],
             &ConfigOptions::default(),
         )
         .unwrap()
@@ -1820,7 +1827,10 @@ fn test_aggregate_pushdown_preserves_duplicate_grouping_columns() {
     let filters = aggregate
         .gather_filters_for_pushdown(
             FilterPushdownPhase::Pre,
-            vec![id_eq_x(0), id_eq_x(1)],
+            vec![
+                FilterConjunct::required(id_eq_x(0)),
+                FilterConjunct::required(id_eq_x(1)),
+            ],
             &ConfigOptions::default(),
         )
         .unwrap()
@@ -1864,7 +1874,7 @@ fn test_hashjoin_parent_filter_pushdown_semi_join_expression_key() {
         let filters = join
             .gather_filters_for_pushdown(
                 FilterPushdownPhase::Pre,
-                vec![id_eq_x(0)],
+                vec![FilterConjunct::required(id_eq_x(0))],
                 &ConfigOptions::default(),
             )
             .unwrap()
@@ -1895,8 +1905,14 @@ fn test_from_child_rejects_column_name_mismatch() {
         Operator::Eq,
         Arc::new(Literal::new(ScalarValue::from("x"))),
     ));
-    let child =
-        ChildFilterDescription::from_child(&[mismatched, id_eq_x(0)], &input).unwrap();
+    let child = ChildFilterDescription::from_child(
+        &[
+            FilterConjunct::required(mismatched),
+            FilterConjunct::required(id_eq_x(0)),
+        ],
+        &input,
+    )
+    .unwrap();
     let filters = FilterDescription::new().with_child(child).parent_filters();
     assert!(matches!(filters[0][0].discriminant, PushedDown::No));
     assert!(matches!(filters[0][1].discriminant, PushedDown::Yes));
@@ -1919,10 +1935,10 @@ fn test_filter_with_projection_rejects_out_of_range_parent_filter() {
     let result = filter.handle_child_pushdown_result(
         FilterPushdownPhase::Pre,
         ChildPushdownResult {
-            parent_filters: vec![ChildFilterPushdownResult::new(
-                FilterConjunct::required(id_eq_x(1)),
-                vec![PushedDown::No],
-            )],
+            parent_filters: vec![ChildFilterPushdownResult {
+                filter: FilterConjunct::required(id_eq_x(1)),
+                child_results: vec![PushedDown::No],
+            }],
             self_filters: vec![vec![]],
         },
         &ConfigOptions::default(),
@@ -1946,7 +1962,11 @@ fn test_from_child_with_allowed_indices_preserves_name_resolution() {
 
     let input = TestScanBuilder::new(duplicate_id_schema()).build();
     let child = ChildFilterDescription::from_child_with_allowed_indices(
-        &[id_eq_x(0), id_eq_x(1), id_eq_x(3)],
+        &[
+            FilterConjunct::required(id_eq_x(0)),
+            FilterConjunct::required(id_eq_x(1)),
+            FilterConjunct::required(id_eq_x(3)),
+        ],
         HashSet::from([1, 3]),
         &input,
     )
@@ -1975,7 +1995,7 @@ fn test_from_child_with_allowed_indices_rejects_unresolvable_name() {
         Arc::new(Literal::new(ScalarValue::from("x"))),
     ));
     let child = ChildFilterDescription::from_child_with_allowed_indices(
-        &[Arc::clone(&predicate)],
+        &[FilterConjunct::required(Arc::clone(&predicate))],
         HashSet::from([1]),
         &input,
     )
@@ -2023,7 +2043,7 @@ fn test_hashjoin_parent_filter_pushdown_duplicate_child_columns() {
             let filters = join
                 .gather_filters_for_pushdown(
                     FilterPushdownPhase::Pre,
-                    vec![predicate],
+                    vec![FilterConjunct::required(predicate)],
                     &ConfigOptions::default(),
                 )
                 .unwrap()
@@ -2083,7 +2103,7 @@ fn test_hashjoin_parent_filter_pushdown_semi_join_key_mapping() {
         let filters = join
             .gather_filters_for_pushdown(
                 FilterPushdownPhase::Pre,
-                vec![predicate],
+                vec![FilterConjunct::required(predicate)],
                 &ConfigOptions::default(),
             )
             .unwrap()

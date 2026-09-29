@@ -570,7 +570,7 @@ impl ExecutionPlan for DataSourceExec {
         let parent_filter: PhysicalFilter = child_pushdown_result
             .parent_filters
             .iter()
-            .map(|f| f.conjunct())
+            .map(|f| f.filter.clone())
             .collect();
         let res = self
             .data_source

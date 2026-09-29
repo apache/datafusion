@@ -64,6 +64,7 @@ use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_expr::ColumnarValue;
+use datafusion_physical_expr::filter::FilterConjunct;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, RangePartitioning};
 use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -2006,7 +2007,7 @@ impl ExecutionPlan for RepartitionExec {
     fn gather_filters_for_pushdown(
         &self,
         _phase: FilterPushdownPhase,
-        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        parent_filters: Vec<FilterConjunct>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         FilterDescription::from_children(parent_filters, &self.children())

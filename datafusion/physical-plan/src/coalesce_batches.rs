@@ -37,6 +37,7 @@ use datafusion_common::Result;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr::filter::FilterConjunct;
 
 use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::execution_plan::{CardinalityEffect, replace_children_if_necessary};
@@ -291,7 +292,7 @@ impl ExecutionPlan for CoalesceBatchesExec {
     fn gather_filters_for_pushdown(
         &self,
         _phase: FilterPushdownPhase,
-        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        parent_filters: Vec<FilterConjunct>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         FilterDescription::from_children(parent_filters, &self.children())

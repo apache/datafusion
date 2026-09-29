@@ -53,6 +53,7 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::ExpressionPlacement;
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
+use datafusion_physical_expr::filter::FilterConjunct;
 use datafusion_physical_expr::projection::Projector;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
 use datafusion_physical_expr_common::sort_expr::{
@@ -521,7 +522,7 @@ impl ExecutionPlan for ProjectionExec {
     fn gather_filters_for_pushdown(
         &self,
         _phase: FilterPushdownPhase,
-        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
+        parent_filters: Vec<FilterConjunct>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         // expand alias column to original expr in parent filters
@@ -533,9 +534,10 @@ impl ExecutionPlan for ProjectionExec {
             // Check that every column is a valid output column of this
             // projection, then replace each one with the expression at that
             // output position.
-            if let Some(reassigned) = remapper.try_remap(&filter)? {
+            if let Some(reassigned) = remapper.try_remap(filter.expr())? {
                 let rewritten = self.projection_expr().unproject_expr(&reassigned)?;
-                child_parent_filters.push(PushedDownPredicate::supported(rewritten));
+                child_parent_filters
+                    .push(PushedDownPredicate::supported(filter.with_expr(rewritten)));
             } else {
                 child_parent_filters.push(PushedDownPredicate::unsupported(filter));
             }
@@ -2210,7 +2212,7 @@ mod tests {
 
         let description = projection.gather_filters_for_pushdown(
             FilterPushdownPhase::Post,
-            vec![filter],
+            vec![filter.into()],
             &ConfigOptions::default(),
         )?;
 
@@ -2279,7 +2281,7 @@ mod tests {
 
         let description = projection.gather_filters_for_pushdown(
             FilterPushdownPhase::Post,
-            vec![filter1, filter2],
+            vec![filter1.into(), filter2.into()],
             &ConfigOptions::default(),
         )?;
 
@@ -2359,7 +2361,7 @@ mod tests {
 
         let description = projection.gather_filters_for_pushdown(
             FilterPushdownPhase::Post,
-            vec![filter1, filter2],
+            vec![filter1.into(), filter2.into()],
             &ConfigOptions::default(),
         )?;
 
@@ -2425,7 +2427,7 @@ mod tests {
 
         let description = projection.gather_filters_for_pushdown(
             FilterPushdownPhase::Post,
-            vec![filter1, filter2],
+            vec![filter1.into(), filter2.into()],
             &ConfigOptions::default(),
         )?;
 
@@ -2478,7 +2480,7 @@ mod tests {
 
         let description = projection.gather_filters_for_pushdown(
             FilterPushdownPhase::Post,
-            vec![filter],
+            vec![filter.into()],
             &ConfigOptions::default(),
         )?;
 
@@ -2520,7 +2522,7 @@ mod tests {
 
         let description = projection.gather_filters_for_pushdown(
             FilterPushdownPhase::Post,
-            vec![filter],
+            vec![filter.into()],
             &ConfigOptions::default(),
         )?;
 
@@ -2581,11 +2583,14 @@ mod tests {
 
         let description = projection.gather_filters_for_pushdown(
             FilterPushdownPhase::Post,
-            vec![dyn_phy_expr],
+            vec![FilterConjunct::optional(dyn_phy_expr)],
             &ConfigOptions::default(),
         )?;
 
         let pushed_filters = &description.parent_filters()[0][0];
+
+        // The projection rewrites the filter, but it keeps its properties.
+        assert!(pushed_filters.predicate.is_optional());
 
         // Check currently pushed_filters is lit(true)
         assert_eq!(
