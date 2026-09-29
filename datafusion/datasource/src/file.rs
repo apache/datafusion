@@ -111,8 +111,29 @@ pub trait FileSource: Any + Send + Sync {
     /// Returns the filter expression that will be applied *during* the file scan.
     ///
     /// These expressions are in terms of the unprojected [`Self::table_schema`].
+    ///
+    /// See also [`Self::physical_filter`], which keeps the properties of each
+    /// conjunct.
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
         None
+    }
+
+    /// Returns the filter that will be applied *during* the file scan, with
+    /// the properties of each conjunct (for example
+    /// [`FilterConjunct::is_optional`]).
+    ///
+    /// The filter is in terms of the unprojected [`Self::table_schema`]. An
+    /// empty filter means that there is no filter.
+    ///
+    /// The default implementation returns [`Self::filter`] as one required
+    /// conjunct. A source that keeps the properties of its conjuncts (for
+    /// example, from [`Self::try_pushdown_filter`]) should override this
+    /// method. [`Self::filter`] must then return the `AND` of the same
+    /// conjuncts ([`PhysicalFilter::to_expr_opt`]).
+    fn physical_filter(&self) -> PhysicalFilter {
+        self.filter()
+            .map(PhysicalFilter::from_expr)
+            .unwrap_or_default()
     }
 
     /// Returns the part of [`Self::filter`] that every output row is
