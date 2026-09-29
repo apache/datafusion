@@ -255,4 +255,3 @@ fn dot_and_squares(
     }
     (dot, sq1, sq2)
 }
-
