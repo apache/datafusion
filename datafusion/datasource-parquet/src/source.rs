@@ -64,7 +64,9 @@ use datafusion_physical_expr_common::sort_expr::{
 };
 use datafusion_physical_plan::DisplayFormatType;
 use datafusion_physical_plan::SortOrderPushdownResult;
-use datafusion_physical_plan::filter_pushdown::{FilterPushdownPropagation, PushedDown};
+use datafusion_physical_plan::filter_pushdown::{
+    FilterPushdownPropagation, PushedDown, PushedDownPredicate,
+};
 use datafusion_physical_plan::metrics::Count;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use log::warn;
@@ -874,13 +876,22 @@ impl FileSource for ParquetSource {
         let table_pushdown_enabled = self.pushdown_filters();
         let pushdown_filters = table_pushdown_enabled || config_pushdown_enabled;
 
-        let can_push = |filter: &Arc<dyn PhysicalExpr>| {
-            can_expr_be_pushed_down_with_schemas(filter, pushable_schema)
-        };
+        // Classify each filter once; the result below is built by mapping
+        // over `filters`, so it stays in the same order as the input.
+        let filters: Vec<PushedDownPredicate> = filters
+            .into_iter()
+            .map(|filter| {
+                if can_expr_be_pushed_down_with_schemas(&filter, pushable_schema) {
+                    PushedDownPredicate::supported(filter)
+                } else {
+                    PushedDownPredicate::unsupported(filter)
+                }
+            })
+            .collect();
         let allowed_filters = filters
             .iter()
-            .filter(|f| can_push(f))
-            .cloned()
+            .filter(|f| matches!(f.discriminant, PushedDown::Yes))
+            .map(|f| Arc::clone(&f.predicate))
             .collect_vec();
         if allowed_filters.is_empty() {
             // No filters can be pushed down, so we can just return the remaining filters
@@ -902,8 +913,8 @@ impl FileSource for ParquetSource {
         // If pushdown_filters is false we tell our parents that they still have to handle the filters,
         // even if we updated the predicate to include the filters (they will only be used for stats pruning).
         Ok(FilterPushdownPropagation::from_filters(&filters, |f| {
-            if pushdown_filters && can_push(f) {
-                PushedDown::Yes
+            if pushdown_filters {
+                f.discriminant
             } else {
                 PushedDown::No
             }

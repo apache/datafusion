@@ -310,6 +310,11 @@ impl<T> FilterPushdownPropagation<T> {
     /// [`Self::with_parent_pushdown_result`], which requires the caller to
     /// preserve that order by hand.
     ///
+    /// `filters` is usually the input filters themselves, but can be any
+    /// per-filter state derived from them in order (e.g. a
+    /// `Vec<PushedDownPredicate>` built by mapping over the input), so a
+    /// node does not have to redo per-filter work to build the result.
+    ///
     /// ```
     /// # use std::sync::Arc;
     /// # use datafusion_physical_expr::expressions::lit;
@@ -320,10 +325,7 @@ impl<T> FilterPushdownPropagation<T> {
     ///     FilterPushdownPropagation::from_filters(&filters, |_| PushedDown::No);
     /// assert_eq!(result.filters.len(), 2);
     /// ```
-    pub fn from_filters(
-        filters: &[Arc<dyn PhysicalExpr>],
-        f: impl FnMut(&Arc<dyn PhysicalExpr>) -> PushedDown,
-    ) -> Self {
+    pub fn from_filters<F>(filters: &[F], f: impl FnMut(&F) -> PushedDown) -> Self {
         Self {
             filters: filters.iter().map(f).collect(),
             updated_node: None,
