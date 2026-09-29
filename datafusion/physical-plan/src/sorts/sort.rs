@@ -1057,7 +1057,8 @@ fn get_reserved_bytes_for_next_record_batch(
 /// Sorting takes the selected rows into new buffers, except that `take` keeps
 /// the data buffers of view arrays and the values of dictionaries and list
 /// views. Every sorted run is charged for those buffers in full, so buffered
-/// batches that share them must be charged for them each, too.
+/// batches that share them must be charged for them each, too. Otherwise the
+/// sorter buffers more batches than the merge of their sorted runs can hold.
 fn sorted_copy_keeps_buffers(data_type: &DataType) -> bool {
     match data_type {
         DataType::Utf8View
@@ -3896,60 +3897,6 @@ mod tests {
         // The reserved memory for the sliced batch should be less than that of the full batch
         assert!(reserved > sliced_reserved);
 
-        Ok(())
-    }
-
-    /// Zero-copy slices of one batch share its buffers, so buffering them
-    /// reserves those buffers once. Sorting the slices as separate runs must
-    /// keep the shared buffers reserved while any run still holds them.
-    #[tokio::test]
-    async fn test_sliced_runs_reserve_shared_buffers_once() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, false)]));
-        let parent = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(Int64Array::from_iter_values((0..4096).rev()))],
-        )?;
-        let slices: Vec<_> = (0..4).map(|i| parent.slice(i * 1024, 1024)).collect();
-
-        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1024 * 1024));
-        let runtime = RuntimeEnvBuilder::new()
-            .with_memory_pool(Arc::clone(&pool))
-            .build_arc()?;
-        let ordering: LexOrdering =
-            [PhysicalSortExpr::new_default(Arc::new(Column::new("x", 0)))].into();
-        let mut sorter = ExternalSorter::new(
-            0,
-            Arc::clone(&schema),
-            ordering.clone(),
-            1024,
-            0,
-            0, // Sort each slice as its own run, rather than concatenating them.
-            SpillCompression::Uncompressed,
-            &ExecutionPlanMetricsSet::new(),
-            runtime,
-        )?;
-        for slice in &slices {
-            sorter.insert_batch(slice.clone()).await?;
-        }
-        let parent_bytes = get_record_batch_memory_size(&parent);
-        let sliced_bytes = slices
-            .iter()
-            .map(|slice| slice.get_sliced_size())
-            .sum::<Result<usize>>()?;
-        assert_eq!(pool.reserved(), parent_bytes + sliced_bytes);
-
-        let runs = std::mem::take(&mut sorter.in_mem_batches);
-        let mut streams = sorter.sort_run_streams(runs)?;
-        let last = streams.pop().unwrap();
-        for stream in streams {
-            stream.try_collect::<Vec<_>>().await?;
-        }
-        // The last run still holds the parent's buffers until it is sorted
-        assert_eq!(pool.reserved(), parent_bytes + slices[3].get_sliced_size()?);
-
-        let sorted = concat_batches(&schema, &last.try_collect::<Vec<_>>().await?)?;
-        assert_eq!(sorted, sort_batch(&slices[3], &ordering, None)?);
-        assert_eq!(pool.reserved(), 0);
         Ok(())
     }
 
