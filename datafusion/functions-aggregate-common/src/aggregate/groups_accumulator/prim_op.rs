@@ -174,73 +174,51 @@ where
         values: &[ArrayRef],
         opt_filter: Option<&BooleanArray>,
     ) -> Result<Vec<ArrayRef>> {
-        convert_to_state::<T, F>(
-            values,
-            opt_filter,
-            self.starting_value,
-            &self.prim_fn,
-            &self.data_type,
-        )
+        let values = values[0].as_primitive::<T>().clone();
+
+        // Initializing state with starting values
+        let initial_state =
+            PrimitiveArray::<T>::from_value(self.starting_value, values.len());
+
+        // Recalculating values in case there is filter
+        let values = match opt_filter {
+            None => values,
+            Some(filter) => {
+                let (filter_values, filter_nulls) = filter.clone().into_parts();
+                // Calculating filter mask as a result of bitand of filter, and converting it to null buffer
+                let filter_bool = match filter_nulls {
+                    Some(filter_nulls) => filter_nulls.inner() & &filter_values,
+                    None => filter_values,
+                };
+                let filter_nulls = NullBuffer::from(filter_bool);
+
+                // Rebuilding input values with a new nulls mask, which is equal to
+                // the union of original nulls and filter mask
+                let (dt, values_buf, original_nulls) = values.into_parts();
+                let nulls_buf =
+                    NullBuffer::union(original_nulls.as_ref(), Some(&filter_nulls));
+                PrimitiveArray::<T>::new(values_buf, nulls_buf).with_data_type(dt)
+            }
+        };
+
+        let state_values = compute::binary_mut(initial_state, &values, |mut x, y| {
+            (self.prim_fn)(&mut x, y);
+            x
+        });
+        let state_values = state_values
+            .map_err(|_| {
+                internal_datafusion_err!(
+                    "initial_values underlying buffer must not be shared"
+                )
+            })?
+            .map_err(DataFusionError::from)?
+            .with_data_type(self.data_type.clone());
+
+        Ok(vec![Arc::new(state_values)])
     }
     fn size(&self) -> usize {
         self.values.capacity() * size_of::<T::Native>() + self.null_state.size()
     }
-}
-
-/// Converts an input batch directly to the state of a primitive accumulator
-/// (flat or blocked): `prim_fn` applied to `starting_value` and every non
-/// null, non filtered value, and null otherwise.
-pub(crate) fn convert_to_state<T, F>(
-    values: &[ArrayRef],
-    opt_filter: Option<&BooleanArray>,
-    starting_value: T::Native,
-    prim_fn: &F,
-    data_type: &DataType,
-) -> Result<Vec<ArrayRef>>
-where
-    T: ArrowPrimitiveType,
-    F: Fn(&mut T::Native, T::Native),
-{
-    let values = values[0].as_primitive::<T>().clone();
-
-    // Initializing state with starting values
-    let initial_state = PrimitiveArray::<T>::from_value(starting_value, values.len());
-
-    // Recalculating values in case there is filter
-    let values = match opt_filter {
-        None => values,
-        Some(filter) => {
-            let (filter_values, filter_nulls) = filter.clone().into_parts();
-            // Calculating filter mask as a result of bitand of filter, and converting it to null buffer
-            let filter_bool = match filter_nulls {
-                Some(filter_nulls) => filter_nulls.inner() & &filter_values,
-                None => filter_values,
-            };
-            let filter_nulls = NullBuffer::from(filter_bool);
-
-            // Rebuilding input values with a new nulls mask, which is equal to
-            // the union of original nulls and filter mask
-            let (dt, values_buf, original_nulls) = values.into_parts();
-            let nulls_buf =
-                NullBuffer::union(original_nulls.as_ref(), Some(&filter_nulls));
-            PrimitiveArray::<T>::new(values_buf, nulls_buf).with_data_type(dt)
-        }
-    };
-
-    let state_values = compute::binary_mut(initial_state, &values, |mut x, y| {
-        prim_fn(&mut x, y);
-        x
-    });
-    let state_values = state_values
-        .map_err(|_| {
-            internal_datafusion_err!(
-                "initial_values underlying buffer must not be shared"
-            )
-        })?
-        .map_err(DataFusionError::from)?
-        .with_data_type(data_type.clone());
-
-    Ok(vec![Arc::new(state_values)])
 }
 
 #[cfg(test)]

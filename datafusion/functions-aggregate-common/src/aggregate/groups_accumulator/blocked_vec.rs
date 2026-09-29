@@ -19,24 +19,12 @@
 
 use std::mem::size_of;
 
-use arrow::array::{Array, ArrowPrimitiveType, BooleanArray, PrimitiveArray};
+use arrow::array::BooleanArray;
 use arrow::buffer::NullBuffer;
 
 use datafusion_expr_common::blocked_groups_accumulator::BlocksIndex;
 
-use super::accumulate::{accumulate_blocked, accumulate_blocked_indices};
-
-/// Told about the group of every row whose value is used by
-/// [`BlockedVec::update_values`], e.g. to track which groups saw a value.
-pub trait SeenGroups {
-    fn mark(&mut self, index: BlocksIndex);
-}
-
-/// Tracks nothing, so marking compiles away.
-impl SeenGroups for () {
-    #[inline(always)]
-    fn mark(&mut self, _index: BlocksIndex) {}
-}
+use super::accumulate::accumulate_blocked_indices;
 
 /// Rows per chunk whose element addresses are resolved before any of them is
 /// updated, see [`BlockedVec::update`].
@@ -64,21 +52,10 @@ const RESOLVE_CHUNK: usize = 256;
 ///
 /// # Implementation Notes
 ///
-/// ## Items that own heap memory (`T` is not `Copy`)
+/// ## Why `T: Copy`?
 ///
-/// `T` only needs to be `Clone` (for [`Self::grow_to`]), so it can own heap
-/// memory, like the `Option<Vec<u8>>` of `min` / `max` on bytes. Then:
-///
-/// 1. [`BlockedVec::allocated_size`] only counts the slots (`size_of::<T>()`
-///    each), not the heap allocations the items own, which the caller must
-///    track itself.
-/// 2. The mutable access given by [`Self::update`] and friends can change the
-///    heap memory of an item without [`BlockedVec::allocated_size`] changing,
-///    which is another reason the caller tracks that memory.
-/// 3. Reading an item's heap memory is one more dependent load after the
-///    block and the slot, which the address-resolve loops cannot hide.
-///    Accumulators should read the stored items as rarely as possible, e.g.
-///    once per group per batch instead of once per row.
+/// 1. So the [`BlockedVec::allocated_size`] will be accurate since the size of T is known, and not include heap allocations (like `String` or `Vec`) that are not part of the allocated size of the `BlockedVec`
+/// 2. So we can provide mutable access to the items (e.g. `IndexMut`) since if `T` is not `Copy` (like when `T` is a `Vec`) we could change the size of it without the [`BlockedVec::allocated_size`] changing, which would be confusing and lead to bugs
 ///
 /// [`BlockedGroupsAccumulator`]: datafusion_expr_common::blocked_groups_accumulator::BlockedGroupsAccumulator
 #[derive(Debug)]
@@ -93,17 +70,6 @@ pub struct BlockedVec<T, const FIXED_BLOCK_SIZE: bool = true> {
 }
 
 impl<T: Copy, const FIXED_BLOCK_SIZE: bool> BlockedVec<T, FIXED_BLOCK_SIZE> {
-    /// Returns the element at `index`.
-    ///
-    /// # Panics
-    /// If `index` is out of bounds.
-    #[inline]
-    pub fn get(&self, index: BlocksIndex) -> T {
-        self.blocks[index.block_index()][index.index_in_block()]
-    }
-}
-
-impl<T: Clone, const FIXED_BLOCK_SIZE: bool> BlockedVec<T, FIXED_BLOCK_SIZE> {
     /// Creates an empty vector.
     ///
     /// # Panics
@@ -153,7 +119,7 @@ impl<T: Clone, const FIXED_BLOCK_SIZE: bool> BlockedVec<T, FIXED_BLOCK_SIZE> {
             let last_len = self.last_block_for_append();
             let additional = (new_len - self.len).min(self.block_size - last_len);
             let last = self.reserve_last(last_len + additional);
-            last.resize(last_len + additional, value.clone());
+            last.resize(last_len + additional, value);
             self.len += additional;
         }
     }
@@ -209,22 +175,13 @@ impl<T: Clone, const FIXED_BLOCK_SIZE: bool> BlockedVec<T, FIXED_BLOCK_SIZE> {
         last
     }
 
-    /// Returns a reference to the element at `index`.
+    /// Returns the element at `index`.
     ///
     /// # Panics
     /// If `index` is out of bounds.
     #[inline]
-    pub fn get_ref(&self, index: BlocksIndex) -> &T {
-        &self.blocks[index.block_index()][index.index_in_block()]
-    }
-
-    /// Returns a mutable reference to the element at `index`.
-    ///
-    /// # Panics
-    /// If `index` is out of bounds.
-    #[inline]
-    pub fn get_mut(&mut self, index: BlocksIndex) -> &mut T {
-        &mut self.blocks[index.block_index()][index.index_in_block()]
+    pub fn get(&self, index: BlocksIndex) -> T {
+        self.blocks[index.block_index()][index.index_in_block()]
     }
 
     /// Returns a mutable reference to the element at `index`.
@@ -380,88 +337,6 @@ impl<T: Clone, const FIXED_BLOCK_SIZE: bool> BlockedVec<T, FIXED_BLOCK_SIZE> {
                 // while `ptrs` lives
                 update_fn(unsafe { &mut *addr }, value);
             }
-        }
-    }
-
-    /// Grows the vector to `total_num_groups` elements (new ones are
-    /// `starting_value`), then, for every row of `values` that is not null
-    /// and is selected by `opt_filter`, calls `seen.mark` with the row's group
-    /// and `update_fn` with the group's element and the row's value.
-    ///
-    /// Chooses the loop once per call, like [`Self::update`].
-    ///
-    /// `group_indices` must only point to the first `total_num_groups`
-    /// groups, like for [`Self::update`].
-    ///
-    /// # Panics
-    /// If `values` and `group_indices` have different lengths.
-    #[expect(clippy::too_many_arguments, reason = "mirrors `NullState::accumulate`")]
-    pub fn update_values<V, S, F>(
-        &mut self,
-        total_num_groups: usize,
-        starting_value: T,
-        group_indices: &[BlocksIndex],
-        values: &PrimitiveArray<V>,
-        opt_filter: Option<&BooleanArray>,
-        seen: &mut S,
-        mut update_fn: F,
-    ) where
-        V: ArrowPrimitiveType,
-        S: SeenGroups,
-        F: FnMut(&mut T, V::Native),
-    {
-        assert_eq!(group_indices.len(), values.len());
-        self.grow_to(total_num_groups, starting_value);
-        self.debug_assert_in_bounds(group_indices);
-        let all_valid = values.null_count() == 0 && opt_filter.is_none();
-
-        if let Some(block) = self.as_single_block_mut() {
-            if all_valid {
-                for (&index, &value) in group_indices.iter().zip(values.values()) {
-                    seen.mark(index);
-                    // SAFETY: indices are in bounds, see the method docs
-                    update_fn(
-                        unsafe { block.get_unchecked_mut(index.index_in_block()) },
-                        value,
-                    );
-                }
-            } else {
-                accumulate_blocked(group_indices, values, opt_filter, |index, value| {
-                    seen.mark(index);
-                    // SAFETY: indices are in bounds, see the method docs
-                    update_fn(
-                        unsafe { block.get_unchecked_mut(index.index_in_block()) },
-                        value,
-                    )
-                });
-            }
-            return;
-        }
-
-        let ptrs = self.block_ptrs_mut();
-        if all_valid {
-            let mut addrs = [std::ptr::null_mut::<T>(); RESOLVE_CHUNK];
-            for (indices, values) in group_indices
-                .chunks(RESOLVE_CHUNK)
-                .zip(values.values().chunks(RESOLVE_CHUNK))
-            {
-                for (addr, &index) in addrs.iter_mut().zip(indices) {
-                    // SAFETY: indices are in bounds, see the method docs
-                    *addr = unsafe { ptrs.ptr(index) };
-                }
-                for ((&addr, &index), &value) in addrs.iter().zip(indices).zip(values) {
-                    seen.mark(index);
-                    // SAFETY: resolved above from a block that is not touched
-                    // while `ptrs` lives
-                    update_fn(unsafe { &mut *addr }, value);
-                }
-            }
-        } else {
-            accumulate_blocked(group_indices, values, opt_filter, |index, value| {
-                seen.mark(index);
-                // SAFETY: indices are in bounds, see the method docs
-                update_fn(unsafe { &mut *ptrs.ptr(index) }, value)
-            });
         }
     }
 

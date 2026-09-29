@@ -40,12 +40,10 @@ use datafusion_expr::expr_fn::cast;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, BlockedGroupsAccumulator, Coercion, Documentation,
-    Expr, GroupsAccumulator,
+    Accumulator, AggregateUDFImpl, Coercion, Documentation, Expr, GroupsAccumulator,
     Operator, ReversedUDAF, SetMonotonicity, Signature, StatisticsArgs, TypeSignature,
     TypeSignatureClass, Volatility,
 };
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::blocked_prim_op::BlockedPrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::aggregate::sum_distinct::DistinctSumAccumulator;
 use datafusion_macros::user_doc;
@@ -312,27 +310,6 @@ impl AggregateUDFImpl for Sum {
             ($t:ty, $dt:expr) => {
                 Ok(Box::new(PrimitiveGroupsAccumulator::<$t, _>::new(
                     &$dt,
-                    |x, y| *x = x.add_wrapping(y),
-                )))
-            };
-        }
-        downcast_sum!(args, helper)
-    }
-
-    fn blocked_groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
-        self.groups_accumulator_supported(args)
-    }
-
-    fn create_blocked_groups_accumulator(
-        &self,
-        args: AccumulatorArgs,
-        block_size: usize,
-    ) -> Result<Box<dyn BlockedGroupsAccumulator>> {
-        macro_rules! helper {
-            ($t:ty, $dt:expr) => {
-                Ok(Box::new(BlockedPrimitiveGroupsAccumulator::<$t, _>::new(
-                    &$dt,
-                    block_size,
                     |x, y| *x = x.add_wrapping(y),
                 )))
             };

@@ -22,11 +22,7 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 use datafusion_common::hash_map::Entry;
 use datafusion_common::{HashMap, Result, internal_err};
-use datafusion_expr::{
-    BlockedEmitTo, BlockedGroupsAccumulator, BlocksIndex, EmitTo, GroupSelection,
-    GroupsAccumulator,
-};
-use datafusion_functions_aggregate_common::aggregate::groups_accumulator::blocked_vec::BlockedVec;
+use datafusion_expr::{EmitTo, GroupSelection, GroupsAccumulator};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::apply_filter_as_nulls;
 use std::mem::size_of;
 use std::sync::Arc;
@@ -73,101 +69,93 @@ impl MinMaxBytesAccumulator {
         num_values: usize,
         data_capacity: usize,
     ) -> Result<ArrayRef> {
-        build_bytes_array(&self.inner.data_type, min_maxes, num_values, data_capacity)
+        let result: ArrayRef = match self.inner.data_type {
+            DataType::Utf8 => {
+                let mut builder = StringBuilder::with_capacity(num_values, data_capacity);
+                for value in min_maxes {
+                    match value {
+                        None => builder.append_null(),
+                        // SAFETY: update_batch only accepts the configured input type.
+                        Some(value) => builder.append_value(unsafe {
+                            std::str::from_utf8_unchecked(value)
+                        }),
+                    }
+                }
+                Arc::new(builder.finish())
+            }
+            DataType::LargeUtf8 => {
+                let mut builder =
+                    LargeStringBuilder::with_capacity(num_values, data_capacity);
+                for value in min_maxes {
+                    match value {
+                        None => builder.append_null(),
+                        // SAFETY: update_batch only accepts the configured input type.
+                        Some(value) => builder.append_value(unsafe {
+                            std::str::from_utf8_unchecked(value)
+                        }),
+                    }
+                }
+                Arc::new(builder.finish())
+            }
+            DataType::Utf8View => {
+                let block_size = capacity_to_view_block_size(data_capacity);
+                let mut builder = StringViewBuilder::with_capacity(num_values)
+                    .with_fixed_block_size(block_size);
+                for value in min_maxes {
+                    match value {
+                        None => builder.append_null(),
+                        // SAFETY: update_batch only accepts the configured input type.
+                        Some(value) => builder.append_value(unsafe {
+                            std::str::from_utf8_unchecked(value)
+                        }),
+                    }
+                }
+                Arc::new(builder.finish())
+            }
+            DataType::Binary => {
+                let mut builder = BinaryBuilder::with_capacity(num_values, data_capacity);
+                for value in min_maxes {
+                    match value {
+                        None => builder.append_null(),
+                        Some(value) => builder.append_value(value),
+                    }
+                }
+                Arc::new(builder.finish())
+            }
+            DataType::LargeBinary => {
+                let mut builder =
+                    LargeBinaryBuilder::with_capacity(num_values, data_capacity);
+                for value in min_maxes {
+                    match value {
+                        None => builder.append_null(),
+                        Some(value) => builder.append_value(value),
+                    }
+                }
+                Arc::new(builder.finish())
+            }
+            DataType::BinaryView => {
+                let block_size = capacity_to_view_block_size(data_capacity);
+                let mut builder = BinaryViewBuilder::with_capacity(num_values)
+                    .with_fixed_block_size(block_size);
+                for value in min_maxes {
+                    match value {
+                        None => builder.append_null(),
+                        Some(value) => builder.append_value(value),
+                    }
+                }
+                Arc::new(builder.finish())
+            }
+            _ => {
+                return internal_err!(
+                    "Unexpected data type for MinMaxBytesAccumulator: {:?}",
+                    self.inner.data_type
+                );
+            }
+        };
+
+        assert_eq!(&self.inner.data_type, result.data_type());
+        Ok(result)
     }
-}
-
-/// Builds an array of `data_type` from the min/max values of groups. Shared
-/// by the flat and blocked accumulators.
-fn build_bytes_array<'a>(
-    data_type: &DataType,
-    min_maxes: impl Iterator<Item = Option<&'a [u8]>>,
-    num_values: usize,
-    data_capacity: usize,
-) -> Result<ArrayRef> {
-    let result: ArrayRef = match *data_type {
-        DataType::Utf8 => {
-            let mut builder = StringBuilder::with_capacity(num_values, data_capacity);
-            for value in min_maxes {
-                match value {
-                    None => builder.append_null(),
-                    // SAFETY: update_batch only accepts the configured input type.
-                    Some(value) => builder
-                        .append_value(unsafe { std::str::from_utf8_unchecked(value) }),
-                }
-            }
-            Arc::new(builder.finish())
-        }
-        DataType::LargeUtf8 => {
-            let mut builder =
-                LargeStringBuilder::with_capacity(num_values, data_capacity);
-            for value in min_maxes {
-                match value {
-                    None => builder.append_null(),
-                    // SAFETY: update_batch only accepts the configured input type.
-                    Some(value) => builder
-                        .append_value(unsafe { std::str::from_utf8_unchecked(value) }),
-                }
-            }
-            Arc::new(builder.finish())
-        }
-        DataType::Utf8View => {
-            let block_size = capacity_to_view_block_size(data_capacity);
-            let mut builder = StringViewBuilder::with_capacity(num_values)
-                .with_fixed_block_size(block_size);
-            for value in min_maxes {
-                match value {
-                    None => builder.append_null(),
-                    // SAFETY: update_batch only accepts the configured input type.
-                    Some(value) => builder
-                        .append_value(unsafe { std::str::from_utf8_unchecked(value) }),
-                }
-            }
-            Arc::new(builder.finish())
-        }
-        DataType::Binary => {
-            let mut builder = BinaryBuilder::with_capacity(num_values, data_capacity);
-            for value in min_maxes {
-                match value {
-                    None => builder.append_null(),
-                    Some(value) => builder.append_value(value),
-                }
-            }
-            Arc::new(builder.finish())
-        }
-        DataType::LargeBinary => {
-            let mut builder =
-                LargeBinaryBuilder::with_capacity(num_values, data_capacity);
-            for value in min_maxes {
-                match value {
-                    None => builder.append_null(),
-                    Some(value) => builder.append_value(value),
-                }
-            }
-            Arc::new(builder.finish())
-        }
-        DataType::BinaryView => {
-            let block_size = capacity_to_view_block_size(data_capacity);
-            let mut builder = BinaryViewBuilder::with_capacity(num_values)
-                .with_fixed_block_size(block_size);
-            for value in min_maxes {
-                match value {
-                    None => builder.append_null(),
-                    Some(value) => builder.append_value(value),
-                }
-            }
-            Arc::new(builder.finish())
-        }
-        _ => {
-            return internal_err!(
-                "Unexpected data type for MinMaxBytesAccumulator: {:?}",
-                *data_type
-            );
-        }
-    };
-
-    assert_eq!(data_type, result.data_type());
-    Ok(result)
 }
 
 impl GroupsAccumulator for MinMaxBytesAccumulator {
@@ -185,13 +173,126 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
         // apply filter if needed
         let array = apply_filter_as_nulls(array, opt_filter)?;
 
-        dispatch_update(
-            &mut self.inner,
-            self.is_min,
-            &array,
-            group_indices,
-            total_num_groups,
-        )
+        // dispatch to appropriate kernel / specialized implementation
+        fn string_min(a: &[u8], b: &[u8]) -> bool {
+            // safety: only called from this function, which ensures a and b come
+            // from an array with valid utf8 data
+            unsafe {
+                let a = std::str::from_utf8_unchecked(a);
+                let b = std::str::from_utf8_unchecked(b);
+                a < b
+            }
+        }
+        fn string_max(a: &[u8], b: &[u8]) -> bool {
+            // safety: only called from this function, which ensures a and b come
+            // from an array with valid utf8 data
+            unsafe {
+                let a = std::str::from_utf8_unchecked(a);
+                let b = std::str::from_utf8_unchecked(b);
+                a > b
+            }
+        }
+        fn binary_min(a: &[u8], b: &[u8]) -> bool {
+            a < b
+        }
+
+        fn binary_max(a: &[u8], b: &[u8]) -> bool {
+            a > b
+        }
+
+        fn str_to_bytes<'a>(
+            it: impl Iterator<Item = Option<&'a str>>,
+        ) -> impl Iterator<Item = Option<&'a [u8]>> {
+            it.map(|s| s.map(|s| s.as_bytes()))
+        }
+
+        match (self.is_min, &self.inner.data_type) {
+            // Utf8/LargeUtf8/Utf8View Min
+            (true, &DataType::Utf8) => self.inner.update_batch(
+                str_to_bytes(array.as_string::<i32>().iter()),
+                group_indices,
+                total_num_groups,
+                string_min,
+            ),
+            (true, &DataType::LargeUtf8) => self.inner.update_batch(
+                str_to_bytes(array.as_string::<i64>().iter()),
+                group_indices,
+                total_num_groups,
+                string_min,
+            ),
+            (true, &DataType::Utf8View) => self.inner.update_batch(
+                str_to_bytes(array.as_string_view().iter()),
+                group_indices,
+                total_num_groups,
+                string_min,
+            ),
+
+            // Utf8/LargeUtf8/Utf8View Max
+            (false, &DataType::Utf8) => self.inner.update_batch(
+                str_to_bytes(array.as_string::<i32>().iter()),
+                group_indices,
+                total_num_groups,
+                string_max,
+            ),
+            (false, &DataType::LargeUtf8) => self.inner.update_batch(
+                str_to_bytes(array.as_string::<i64>().iter()),
+                group_indices,
+                total_num_groups,
+                string_max,
+            ),
+            (false, &DataType::Utf8View) => self.inner.update_batch(
+                str_to_bytes(array.as_string_view().iter()),
+                group_indices,
+                total_num_groups,
+                string_max,
+            ),
+
+            // Binary/LargeBinary/BinaryView Min
+            (true, &DataType::Binary) => self.inner.update_batch(
+                array.as_binary::<i32>().iter(),
+                group_indices,
+                total_num_groups,
+                binary_min,
+            ),
+            (true, &DataType::LargeBinary) => self.inner.update_batch(
+                array.as_binary::<i64>().iter(),
+                group_indices,
+                total_num_groups,
+                binary_min,
+            ),
+            (true, &DataType::BinaryView) => self.inner.update_batch(
+                array.as_binary_view().iter(),
+                group_indices,
+                total_num_groups,
+                binary_min,
+            ),
+
+            // Binary/LargeBinary/BinaryView Max
+            (false, &DataType::Binary) => self.inner.update_batch(
+                array.as_binary::<i32>().iter(),
+                group_indices,
+                total_num_groups,
+                binary_max,
+            ),
+            (false, &DataType::LargeBinary) => self.inner.update_batch(
+                array.as_binary::<i64>().iter(),
+                group_indices,
+                total_num_groups,
+                binary_max,
+            ),
+            (false, &DataType::BinaryView) => self.inner.update_batch(
+                array.as_binary_view().iter(),
+                group_indices,
+                total_num_groups,
+                binary_max,
+            ),
+
+            _ => internal_err!(
+                "Unexpected combination for MinMaxBytesAccumulator: ({:?}, {:?})",
+                self.is_min,
+                self.inner.data_type
+            ),
+        }
     }
 
     fn evaluate(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
@@ -260,159 +361,6 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
     fn size(&self) -> usize {
         self.inner.size()
     }
-}
-
-/// Updates the min/max values of a flat or blocked state, see
-/// [`MinMaxBytesUpdate`].
-fn dispatch_update<S, Idx>(
-    state: &mut S,
-    is_min: bool,
-    array: &ArrayRef,
-    group_indices: &[Idx],
-    total_num_groups: usize,
-) -> Result<()>
-where
-    S: MinMaxBytesUpdate<Idx>,
-{
-    let data_type = state.data_type().clone();
-    // dispatch to appropriate kernel / specialized implementation
-    fn string_min(a: &[u8], b: &[u8]) -> bool {
-        // safety: only called from this function, which ensures a and b come
-        // from an array with valid utf8 data
-        unsafe {
-            let a = std::str::from_utf8_unchecked(a);
-            let b = std::str::from_utf8_unchecked(b);
-            a < b
-        }
-    }
-    fn string_max(a: &[u8], b: &[u8]) -> bool {
-        // safety: only called from this function, which ensures a and b come
-        // from an array with valid utf8 data
-        unsafe {
-            let a = std::str::from_utf8_unchecked(a);
-            let b = std::str::from_utf8_unchecked(b);
-            a > b
-        }
-    }
-    fn binary_min(a: &[u8], b: &[u8]) -> bool {
-        a < b
-    }
-
-    fn binary_max(a: &[u8], b: &[u8]) -> bool {
-        a > b
-    }
-
-    fn str_to_bytes<'a>(
-        it: impl Iterator<Item = Option<&'a str>>,
-    ) -> impl Iterator<Item = Option<&'a [u8]>> {
-        it.map(|s| s.map(|s| s.as_bytes()))
-    }
-
-    match (is_min, &data_type) {
-        // Utf8/LargeUtf8/Utf8View Min
-        (true, &DataType::Utf8) => state.update_batch(
-            str_to_bytes(array.as_string::<i32>().iter()),
-            group_indices,
-            total_num_groups,
-            string_min,
-        ),
-        (true, &DataType::LargeUtf8) => state.update_batch(
-            str_to_bytes(array.as_string::<i64>().iter()),
-            group_indices,
-            total_num_groups,
-            string_min,
-        ),
-        (true, &DataType::Utf8View) => state.update_batch(
-            str_to_bytes(array.as_string_view().iter()),
-            group_indices,
-            total_num_groups,
-            string_min,
-        ),
-
-        // Utf8/LargeUtf8/Utf8View Max
-        (false, &DataType::Utf8) => state.update_batch(
-            str_to_bytes(array.as_string::<i32>().iter()),
-            group_indices,
-            total_num_groups,
-            string_max,
-        ),
-        (false, &DataType::LargeUtf8) => state.update_batch(
-            str_to_bytes(array.as_string::<i64>().iter()),
-            group_indices,
-            total_num_groups,
-            string_max,
-        ),
-        (false, &DataType::Utf8View) => state.update_batch(
-            str_to_bytes(array.as_string_view().iter()),
-            group_indices,
-            total_num_groups,
-            string_max,
-        ),
-
-        // Binary/LargeBinary/BinaryView Min
-        (true, &DataType::Binary) => state.update_batch(
-            array.as_binary::<i32>().iter(),
-            group_indices,
-            total_num_groups,
-            binary_min,
-        ),
-        (true, &DataType::LargeBinary) => state.update_batch(
-            array.as_binary::<i64>().iter(),
-            group_indices,
-            total_num_groups,
-            binary_min,
-        ),
-        (true, &DataType::BinaryView) => state.update_batch(
-            array.as_binary_view().iter(),
-            group_indices,
-            total_num_groups,
-            binary_min,
-        ),
-
-        // Binary/LargeBinary/BinaryView Max
-        (false, &DataType::Binary) => state.update_batch(
-            array.as_binary::<i32>().iter(),
-            group_indices,
-            total_num_groups,
-            binary_max,
-        ),
-        (false, &DataType::LargeBinary) => state.update_batch(
-            array.as_binary::<i64>().iter(),
-            group_indices,
-            total_num_groups,
-            binary_max,
-        ),
-        (false, &DataType::BinaryView) => state.update_batch(
-            array.as_binary_view().iter(),
-            group_indices,
-            total_num_groups,
-            binary_max,
-        ),
-
-        _ => internal_err!(
-            "Unexpected combination for MinMaxBytesAccumulator: ({:?}, {:?})",
-            is_min,
-            data_type
-        ),
-    }
-}
-
-/// Min/max state updated by [`dispatch_update`].
-trait MinMaxBytesUpdate<Idx> {
-    fn data_type(&self) -> &DataType;
-
-    /// `cmp` is called like `cmp(new_val, existing_val)` and returns true if
-    /// `new_val` should replace `existing_val`
-    fn update_batch<'a, F, I>(
-        &mut self,
-        iter: I,
-        group_indices: &[Idx],
-        total_num_groups: usize,
-        cmp: F,
-    ) -> Result<()>
-    where
-        F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
-        I: IntoIterator<Item = Option<&'a [u8]>>;
 }
 
 /// Returns the block size in (contiguous buffer size) to use
@@ -505,42 +453,6 @@ impl MinMaxBytesState {
         }
     }
 
-    /// Emits the specified min_max values
-    ///
-    /// Returns (data_capacity, min_maxes), updating the current value of total_data_bytes
-    ///
-    /// - `data_capacity`: the total length of all strings and their contents,
-    /// - `min_maxes`: the actual min/max values for each group
-    fn emit_to(&mut self, emit_to: EmitTo) -> (usize, Vec<Option<Vec<u8>>>) {
-        match emit_to {
-            EmitTo::All => {
-                (
-                    std::mem::take(&mut self.total_data_bytes), // reset total bytes and min_max
-                    std::mem::take(&mut self.min_max),
-                )
-            }
-            EmitTo::First(n) => {
-                let first_min_maxes = split_vec_min_alloc(&mut self.min_max, n);
-                let first_data_capacity: usize = first_min_maxes
-                    .iter()
-                    .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))
-                    .sum();
-                self.total_data_bytes -= first_data_capacity;
-                (first_data_capacity, first_min_maxes)
-            }
-        }
-    }
-
-    fn size(&self) -> usize {
-        self.total_data_bytes + self.min_max.len() * size_of::<Option<Vec<u8>>>()
-    }
-}
-
-impl MinMaxBytesUpdate<usize> for MinMaxBytesState {
-    fn data_type(&self) -> &DataType {
-        &self.data_type
-    }
-
     /// Updates the min/max values for the given string values
     ///
     /// `cmp` is the  comparison function to use, called like `cmp(new_val, existing_val)`
@@ -594,272 +506,41 @@ impl MinMaxBytesUpdate<usize> for MinMaxBytesState {
 
         Ok(())
     }
-}
 
-/// [`MinMaxBytesState`] with the value of each group stored in a
-/// [`BlockedVec`].
-///
-/// Reading a stored value is a load from the heap after the block and the
-/// slot, which the address-resolve loops of [`BlockedVec`] cannot hide.
-/// [`Self::update_batch`] follows the same algorithm as
-/// [`MinMaxBytesState::update_batch`].
-#[derive(Debug)]
-struct BlockedMinMaxBytesState {
-    /// The minimum/maximum value for each group
-    min_max: BlockedVec<Option<Vec<u8>>>,
-    data_type: DataType,
-    /// The total bytes of the string data (for pre-allocating the final array,
-    /// and tracking memory usage)
-    total_data_bytes: usize,
-}
-
-impl BlockedMinMaxBytesState {
-    fn new(data_type: DataType, block_size: usize) -> Self {
-        Self {
-            min_max: BlockedVec::new(block_size),
-            data_type,
-            total_data_bytes: 0,
-        }
-    }
-
-    /// Removes the groups selected by `emit_to`, one `Vec` per block.
-    fn emit_to(&mut self, emit_to: BlockedEmitTo) -> Vec<Vec<Option<Vec<u8>>>> {
-        let blocks = match emit_to {
-            BlockedEmitTo::All => self.min_max.take_all(),
-            BlockedEmitTo::NextBlock => {
-                self.min_max.take_next_block().into_iter().collect()
-            }
-            BlockedEmitTo::First(n) => vec![self.min_max.take_first(n)],
-        };
-        for value in blocks.iter().flatten() {
-            self.total_data_bytes -= value.as_ref().map_or(0, Vec::len);
-        }
-        blocks
-    }
-
-    fn size(&self) -> usize {
-        self.min_max.allocated_size() + self.total_data_bytes
-    }
-}
-
-impl MinMaxBytesUpdate<BlocksIndex> for BlockedMinMaxBytesState {
-    fn data_type(&self) -> &DataType {
-        &self.data_type
-    }
-
-    fn update_batch<'a, F, I>(
-        &mut self,
-        iter: I,
-        group_indices: &[BlocksIndex],
-        total_num_groups: usize,
-        mut cmp: F,
-    ) -> Result<()>
-    where
-        F: FnMut(&[u8], &[u8]) -> bool + Send + Sync,
-        I: IntoIterator<Item = Option<&'a [u8]>>,
-    {
-        self.min_max.grow_to(total_num_groups, None);
-        // Minimize value copies by calculating the new min/maxes for each group
-        // in this batch (either the existing min/max or the new input value)
-        // and updating the owned values in `self.min_max` at most once
-        let mut locations =
-            HashMap::<BlocksIndex, &[u8]>::with_capacity(group_indices.len());
-
-        // Figure out the new min value for each group
-        for (new_val, &group_index) in iter.into_iter().zip(group_indices) {
-            let Some(new_val) = new_val else {
-                continue; // skip nulls
-            };
-
-            match locations.entry(group_index) {
-                Entry::Occupied(mut occupied_entry) => {
-                    if cmp(new_val, occupied_entry.get()) {
-                        occupied_entry.insert(new_val);
-                    }
-                }
-                Entry::Vacant(vacant_entry) => {
-                    if let Some(old_val) = self.min_max.get_ref(group_index) {
-                        if cmp(new_val, old_val) {
-                            vacant_entry.insert(new_val);
-                        }
-                    } else {
-                        vacant_entry.insert(new_val);
-                    }
-                }
-            }
-        }
-
-        // Update `self.min_max` with any new min/max values found in the input
-        for (group_index, new_val) in locations {
-            match self.min_max.get_mut(group_index) {
-                existing @ None => {
-                    *existing = Some(new_val.to_vec());
-                    self.total_data_bytes += new_val.len();
-                }
-                Some(existing_val) => {
-                    // Copy data over to avoid re-allocating
-                    self.total_data_bytes -= existing_val.len();
-                    self.total_data_bytes += new_val.len();
-                    existing_val.clear();
-                    existing_val.extend_from_slice(new_val);
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-/// [`MinMaxBytesAccumulator`] with state stored in blocks.
-#[derive(Debug)]
-pub(crate) struct BlockedMinMaxBytesAccumulator {
-    inner: BlockedMinMaxBytesState,
-    /// if true, is `MIN` otherwise is `MAX`
-    is_min: bool,
-}
-
-impl BlockedMinMaxBytesAccumulator {
-    /// Create a new accumulator for computing `min(val)`
-    pub fn new_min(data_type: DataType, block_size: usize) -> Self {
-        Self {
-            inner: BlockedMinMaxBytesState::new(data_type, block_size),
-            is_min: true,
-        }
-    }
-
-    /// Create a new accumulator for computing `max(val)`
-    pub fn new_max(data_type: DataType, block_size: usize) -> Self {
-        Self {
-            inner: BlockedMinMaxBytesState::new(data_type, block_size),
-            is_min: false,
-        }
-    }
-}
-
-impl BlockedGroupsAccumulator for BlockedMinMaxBytesAccumulator {
-    fn block_size(&self) -> usize {
-        self.inner.min_max.block_size()
-    }
-
-    fn update_batch(
-        &mut self,
-        values: &[ArrayRef],
-        group_indices: &[BlocksIndex],
-        opt_filter: Option<&BooleanArray>,
-        total_num_groups: usize,
-    ) -> Result<()> {
-        let array = &values[0];
-        assert_eq!(array.len(), group_indices.len());
-        assert_eq!(array.data_type(), &self.inner.data_type);
-
-        // apply filter if needed
-        let array = apply_filter_as_nulls(array, opt_filter)?;
-
-        dispatch_update(
-            &mut self.inner,
-            self.is_min,
-            &array,
-            group_indices,
-            total_num_groups,
-        )
-    }
-
-    fn merge_batch(
-        &mut self,
-        values: &[ArrayRef],
-        group_indices: &[BlocksIndex],
-        total_num_groups: usize,
-    ) -> Result<()> {
-        // min/max are their own states (no transition needed)
-        self.update_batch(values, group_indices, None, total_num_groups)
-    }
-
-    fn evaluate(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<ArrayRef>> {
-        let data_type = self.inner.data_type.clone();
-        self.inner
-            .emit_to(emit_to)
-            .into_iter()
-            .map(|block| {
-                let data_capacity = block
-                    .iter()
-                    .map(|value| value.as_ref().map_or(0, Vec::len))
-                    .sum();
-                build_bytes_array(
-                    &data_type,
-                    block.iter().map(|value| value.as_deref()),
-                    block.len(),
-                    data_capacity,
+    /// Emits the specified min_max values
+    ///
+    /// Returns (data_capacity, min_maxes), updating the current value of total_data_bytes
+    ///
+    /// - `data_capacity`: the total length of all strings and their contents,
+    /// - `min_maxes`: the actual min/max values for each group
+    fn emit_to(&mut self, emit_to: EmitTo) -> (usize, Vec<Option<Vec<u8>>>) {
+        match emit_to {
+            EmitTo::All => {
+                (
+                    std::mem::take(&mut self.total_data_bytes), // reset total bytes and min_max
+                    std::mem::take(&mut self.min_max),
                 )
-            })
-            .collect()
-    }
-
-    fn state(&mut self, emit_to: BlockedEmitTo) -> Result<Vec<Vec<ArrayRef>>> {
-        // min/max are their own states (no transition needed)
-        Ok(self
-            .evaluate(emit_to)?
-            .into_iter()
-            .map(|array| vec![array])
-            .collect())
-    }
-
-    fn convert_to_state(
-        &self,
-        values: &[ArrayRef],
-        opt_filter: Option<&BooleanArray>,
-    ) -> Result<Vec<ArrayRef>> {
-        // Min/max do not change the values as they are their own states
-        // apply the filter by combining with the null mask, if any
-        let output = apply_filter_as_nulls(&values[0], opt_filter)?;
-        Ok(vec![output])
+            }
+            EmitTo::First(n) => {
+                let first_min_maxes = split_vec_min_alloc(&mut self.min_max, n);
+                let first_data_capacity: usize = first_min_maxes
+                    .iter()
+                    .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))
+                    .sum();
+                self.total_data_bytes -= first_data_capacity;
+                (first_data_capacity, first_min_maxes)
+            }
+        }
     }
 
     fn size(&self) -> usize {
-        self.inner.size()
+        self.total_data_bytes + self.min_max.len() * size_of::<Option<Vec<u8>>>()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn blocked_min_max_bytes_across_blocks() -> Result<()> {
-        let long = "z".repeat(30);
-        let indices = |flats: &[usize]| -> Vec<BlocksIndex> {
-            flats
-                .iter()
-                .map(|&f| BlocksIndex::from_flat(f, 4))
-                .collect()
-        };
-        let mut acc = BlockedMinMaxBytesAccumulator::new_max(DataType::Utf8, 4);
-        let values: ArrayRef = Arc::new(StringArray::from(vec![
-            Some("a"),
-            Some("c"),
-            None,
-            Some(long.as_str()),
-            Some("b"),
-        ]));
-        acc.update_batch(&[values], &indices(&[0, 0, 1, 5, 5]), None, 6)?;
-        assert!(acc.size() >= long.len(), "values are accounted");
-        // second batch: a smaller value must not replace, a larger one must
-        let values: ArrayRef = Arc::new(StringArray::from(vec!["b", "d"]));
-        acc.update_batch(&[values], &indices(&[0, 2]), None, 6)?;
-
-        let out = acc.evaluate(BlockedEmitTo::All)?;
-        let out: Vec<Vec<Option<&str>>> = out
-            .iter()
-            .map(|a| a.as_string::<i32>().iter().collect())
-            .collect();
-        assert_eq!(
-            out,
-            vec![
-                vec![Some("c"), None, Some("d"), None],
-                vec![None, Some(long.as_str())],
-            ]
-        );
-        assert_eq!(acc.inner.total_data_bytes, 0);
-        Ok(())
-    }
     use arrow::array::StringArray;
 
     #[test]

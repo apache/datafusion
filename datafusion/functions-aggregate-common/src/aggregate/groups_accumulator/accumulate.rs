@@ -423,38 +423,10 @@ pub fn accumulate<T, F>(
     group_indices: &[usize],
     values: &PrimitiveArray<T>,
     opt_filter: Option<&BooleanArray>,
-    value_fn: F,
+    mut value_fn: F,
 ) where
     T: ArrowPrimitiveType + Send,
     F: FnMut(usize, T::Native) + Send,
-{
-    accumulate_values(group_indices, values, opt_filter, value_fn)
-}
-
-/// [`accumulate`] for blocked group indices.
-pub fn accumulate_blocked<T, F>(
-    group_indices: &[BlocksIndex],
-    values: &PrimitiveArray<T>,
-    opt_filter: Option<&BooleanArray>,
-    value_fn: F,
-) where
-    T: ArrowPrimitiveType,
-    F: FnMut(BlocksIndex, T::Native),
-{
-    accumulate_values(group_indices, values, opt_filter, value_fn)
-}
-
-/// Shared implementation of [`accumulate`] and [`accumulate_blocked`].
-#[inline(always)]
-fn accumulate_values<I, T, F>(
-    group_indices: &[I],
-    values: &PrimitiveArray<T>,
-    opt_filter: Option<&BooleanArray>,
-    mut value_fn: F,
-) where
-    I: Copy,
-    T: ArrowPrimitiveType,
-    F: FnMut(I, T::Native),
 {
     let data: &[T::Native] = values.values();
     assert_eq!(data.len(), group_indices.len());

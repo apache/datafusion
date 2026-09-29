@@ -43,10 +43,7 @@ use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::{AggregateOrderSensitivity, format_state_name},
 };
-use datafusion_functions_aggregate_common::aggregate::count_distinct::{
-    BlockedPrimitiveDistinctCountGroupsAccumulator,
-    PrimitiveDistinctCountGroupsAccumulator,
-};
+use datafusion_functions_aggregate_common::aggregate::count_distinct::PrimitiveDistinctCountGroupsAccumulator;
 use datafusion_functions_aggregate_common::aggregate::{
     count_distinct::Bitmap65536DistinctCountAccumulator,
     count_distinct::Bitmap65536DistinctCountAccumulatorI16,
@@ -398,37 +395,15 @@ impl AggregateUDFImpl for Count {
     }
 
     fn blocked_groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
-        self.groups_accumulator_supported(args)
+        !args.is_distinct && self.groups_accumulator_supported(args)
     }
 
     fn create_blocked_groups_accumulator(
         &self,
-        args: AccumulatorArgs,
+        _args: AccumulatorArgs,
         block_size: usize,
     ) -> Result<Box<dyn BlockedGroupsAccumulator>> {
-        if !args.is_distinct {
-            return Ok(Box::new(BlockedCountGroupsAccumulator::new(block_size)));
-        }
-        macro_rules! distinct {
-            ($t:ty) => {
-                Ok(Box::new(
-                    BlockedPrimitiveDistinctCountGroupsAccumulator::<$t>::new(block_size),
-                ))
-            };
-        }
-        match args.expr_fields[0].data_type() {
-            DataType::Int8 => distinct!(Int8Type),
-            DataType::Int16 => distinct!(Int16Type),
-            DataType::Int32 => distinct!(Int32Type),
-            DataType::Int64 => distinct!(Int64Type),
-            DataType::UInt8 => distinct!(UInt8Type),
-            DataType::UInt16 => distinct!(UInt16Type),
-            DataType::UInt32 => distinct!(UInt32Type),
-            DataType::UInt64 => distinct!(UInt64Type),
-            data_type => not_impl_err!(
-                "BlockedGroupsAccumulator not supported for COUNT(DISTINCT) with {data_type}"
-            ),
-        }
+        Ok(Box::new(BlockedCountGroupsAccumulator::new(block_size)))
     }
 
     fn reverse_expr(&self) -> ReversedUDAF {

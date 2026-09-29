@@ -15,13 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod blocked_groups;
 mod bytes;
 mod dict;
 mod groups;
 mod native;
 
-pub use blocked_groups::BlockedPrimitiveDistinctCountGroupsAccumulator;
 pub use bytes::BytesDistinctCountAccumulator;
 pub use bytes::BytesViewDistinctCountAccumulator;
 pub use dict::DictionaryCountAccumulator;
