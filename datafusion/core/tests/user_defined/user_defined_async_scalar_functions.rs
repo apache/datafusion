@@ -89,6 +89,31 @@ async fn test_async_udf_with_non_modular_batch_size() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn test_async_udf_scalar_result_with_non_modular_batch_size() -> Result<()> {
+    let ctx = register_table_and_udf()?;
+
+    let df = ctx
+        .sql("SELECT test_async_udf('constant') AS result FROM test_table")
+        .await?;
+
+    let result = df.collect().await?;
+
+    assert_batches_eq!(
+        &[
+            "+----------+",
+            "| result   |",
+            "+----------+",
+            "| constant |",
+            "| constant |",
+            "| constant |",
+            "+----------+"
+        ],
+        &result
+    );
+
+    Ok(())
+}
 // This test checks if metrics are printed for `AsyncFuncExec`
 #[tokio::test]
 async fn test_async_udf_metrics() -> Result<()> {

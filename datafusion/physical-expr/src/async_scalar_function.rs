@@ -153,17 +153,19 @@ impl AsyncFuncExpr {
                     .iter()
                     .map(|e| e.evaluate(&current_batch))
                     .collect::<Result<Vec<_>>>()?;
-                result_batches.push(
+                let number_rows = current_batch.num_rows();
+                result_batches.push((
                     async_udf
                         .invoke_async_with_args(ScalarFunctionArgs {
                             args,
                             arg_fields: arg_fields.clone(),
-                            number_rows: current_batch.num_rows(),
+                            number_rows,
                             return_field: Arc::clone(&self.return_field),
                             config_options: Arc::clone(&config_options),
                         })
                         .await?,
-                );
+                    number_rows,
+                ));
             }
         } else {
             let args = scalar_function_expr
@@ -172,24 +174,28 @@ impl AsyncFuncExpr {
                 .map(|e| e.evaluate(batch))
                 .collect::<Result<Vec<_>>>()?;
 
-            result_batches.push(
+            let number_rows = batch.num_rows();
+            result_batches.push((
                 async_udf
                     .invoke_async_with_args(ScalarFunctionArgs {
                         args: args.to_vec(),
                         arg_fields,
-                        number_rows: batch.num_rows(),
+                        number_rows,
                         return_field: Arc::clone(&self.return_field),
                         config_options: Arc::clone(&config_options),
                     })
                     .await?,
-            );
+                number_rows,
+            ));
         }
 
         let datas = result_batches
             .into_iter()
-            .map(|cv| match cv {
+            .map(|(cv, number_rows)| match cv {
                 ColumnarValue::Array(arr) => Ok(arr),
-                ColumnarValue::Scalar(scalar) => Ok(scalar.to_array_of_size(1)?),
+                ColumnarValue::Scalar(scalar) => {
+                    Ok(scalar.to_array_of_size(number_rows)?)
+                }
             })
             .collect::<Result<Vec<_>>>()?;
 
