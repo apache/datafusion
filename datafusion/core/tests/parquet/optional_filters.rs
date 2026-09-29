@@ -26,7 +26,6 @@ use std::sync::Arc;
 use arrow::array::{Int64Array, RecordBatch};
 use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::{DataType, Field, Schema};
-use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
@@ -79,18 +78,18 @@ async fn context() -> (SessionContext, TempDir) {
     (ctx, dir)
 }
 
-/// The conjuncts of the filter of each Parquet scan in `plan`, with their
+/// The conjuncts of the filter of each file scan in `plan`, with their
 /// optional flag.
 fn scan_conjuncts(plan: &Arc<dyn ExecutionPlan>) -> Vec<Vec<(String, bool)>> {
     let mut scans = vec![];
     plan.apply(|node| {
-        if let Some(source) = node
+        if let Some(config) = node
             .downcast_ref::<DataSourceExec>()
             .and_then(|exec| exec.data_source().downcast_ref::<FileScanConfig>())
-            .and_then(|config| config.file_source().downcast_ref::<ParquetSource>())
         {
             scans.push(
-                source
+                config
+                    .file_source()
                     .physical_filter()
                     .conjuncts()
                     .iter()

@@ -387,11 +387,6 @@ impl ParquetSource {
         conf
     }
 
-    /// The filter of this scan, with the properties of each conjunct.
-    pub fn physical_filter(&self) -> &PhysicalFilter {
-        &self.filter
-    }
-
     /// The `AND` of all conjuncts of the filter, or `None` if there is no
     /// filter.
     fn predicate(&self) -> Option<Arc<dyn PhysicalExpr>> {
@@ -713,6 +708,10 @@ impl FileSource for ParquetSource {
 
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
         self.predicate()
+    }
+
+    fn physical_filter(&self) -> PhysicalFilter {
+        self.filter.clone()
     }
 
     /// The predicate is applied to every row only when filter pushdown is
