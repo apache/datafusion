@@ -23,9 +23,11 @@ use std::sync::Arc;
 use crate::DefaultParquetFileReaderFactory;
 use crate::ParquetFileReaderFactory;
 use crate::ParquetFileSchemaProvider;
+use crate::filter_placement::{PlacementOptions, PlacementSites};
 use crate::opener::ParquetMorselizer;
 use crate::opener::build_pruning_predicates;
 use crate::opener::build_virtual_columns_state;
+use crate::optional_filter::{DecodeCost, OptionalFilterOptions, OptionalFilterSites};
 use crate::row_filter::can_expr_be_pushed_down_with_schemas;
 use arrow_schema::Fields;
 use arrow_schema::extension::ExtensionType;
@@ -33,6 +35,7 @@ use arrow_schema::{DataType, Field};
 use datafusion_common::config::ConfigOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
+use datafusion_common::config::OptionalFilterMode;
 use datafusion_datasource::as_file_source;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::morsel::Morselizer;
@@ -49,8 +52,9 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_functions::core::file_row_index::FileRowIndexFunc;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
+use datafusion_physical_expr::optional_filter_gate::OptionalFilterGateConfig;
 use datafusion_physical_expr::projection::ProjectionExprs;
-use datafusion_physical_expr::utils::split_conjunction;
+use datafusion_physical_expr::utils::{is_optional_filter, split_conjunction};
 use datafusion_physical_expr::{EquivalenceProperties, conjunction};
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_adapter::rewrite::{
@@ -305,6 +309,10 @@ pub struct ParquetSource {
     pub(crate) table_schema: TableSchema,
     /// Optional predicate for row filtering during parquet scan
     pub(crate) predicate: Option<Arc<dyn PhysicalExpr>>,
+    /// If true, the scan uses [`Self::predicate`] only to prune: a
+    /// `FilterExec` above the scan applies it (see
+    /// [`FileSource::try_pushdown_pruning_filters`]).
+    pub(crate) pruning_only_predicate: bool,
     /// Optional user defined parquet file reader factory
     pub(crate) parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
     /// Optional policy for deriving each file's Arrow schema after footer loading.
@@ -324,6 +332,30 @@ pub struct ParquetSource {
     /// Sort order driving `PreparedAccessPlan::reorder_by_statistics`
     /// in the opener.
     sort_order_for_reorder: Option<LexOrdering>,
+    /// How the row filter handles optional conjuncts of the predicate (see
+    /// `OptionalFilterPhysicalExpr`) when `pushdown_filters` is true.
+    /// [`FileSource::try_pushdown_filters`] sets it from
+    /// `datafusion.execution.optional_filter_mode`.
+    optional_filter_mode: OptionalFilterMode,
+    /// Configuration of the gates in [`OptionalFilterMode::Adaptive`].
+    /// [`FileSource::try_pushdown_filters`] sets it from
+    /// `datafusion.execution.optional_filter_min_saving_ns_per_row`.
+    optional_filter_gate_config: OptionalFilterGateConfig,
+    /// The measured decode speed of the output columns, shared by all
+    /// partitions and files of this scan. The gates of the optional filters
+    /// use it. Replaced each time the predicate changes.
+    optional_filter_decode_cost: Arc<DecodeCost>,
+    /// The shared pauses of the gates of each optional filter, shared by all
+    /// partitions and files of this scan. Replaced each time the predicate
+    /// changes.
+    optional_filter_sites: Arc<OptionalFilterSites>,
+    /// `datafusion.execution.adaptive_filter_placement`, see
+    /// [`crate::filter_placement`].
+    adaptive_filter_placement: bool,
+    /// Pooled measurements of the adaptive filter placement, shared by all
+    /// partitions and files of this scan. Replaced each time the predicate
+    /// changes.
+    filter_placement_sites: Arc<PlacementSites>,
 }
 
 impl ParquetSource {
@@ -343,6 +375,7 @@ impl ParquetSource {
             table_parquet_options: TableParquetOptions::default(),
             metrics: ExecutionPlanMetricsSet::new(),
             predicate: None,
+            pruning_only_predicate: false,
             parquet_file_reader_factory: None,
             schema_provider: None,
             batch_size: None,
@@ -351,6 +384,12 @@ impl ParquetSource {
             encryption_factory: None,
             reverse_row_groups: false,
             sort_order_for_reorder: None,
+            optional_filter_mode: OptionalFilterMode::default(),
+            optional_filter_gate_config: OptionalFilterGateConfig::default(),
+            optional_filter_decode_cost: Arc::default(),
+            optional_filter_sites: Arc::default(),
+            adaptive_filter_placement: false,
+            filter_placement_sites: Arc::default(),
         }
     }
 
@@ -383,6 +422,9 @@ impl ParquetSource {
     pub fn with_predicate(&self, predicate: Arc<dyn PhysicalExpr>) -> Self {
         let mut conf = self.clone();
         conf.predicate = Some(Arc::clone(&predicate));
+        conf.optional_filter_decode_cost = Arc::default();
+        conf.optional_filter_sites = Arc::default();
+        conf.filter_placement_sites = Arc::default();
         conf
     }
 
@@ -645,7 +687,7 @@ impl FileSource for ParquetSource {
             self.table_schema.virtual_columns(),
             self.table_schema.file_schema(),
             self.predicate.as_ref(),
-            self.pushdown_filters(),
+            self.pushdown_filters() && !self.pruning_only_predicate,
         )?;
 
         Ok(Box::new(ParquetMorselizer {
@@ -657,6 +699,7 @@ impl FileSource for ParquetSource {
             limit: base_config.limit,
             preserve_order: base_config.preserve_order,
             predicate: self.predicate.clone(),
+            pruning_only_predicate: self.pruning_only_predicate,
             table_schema: self.table_schema.clone(),
             metadata_size_hint: self.metadata_size_hint,
             metrics: self.metrics().clone(),
@@ -680,6 +723,17 @@ impl FileSource for ParquetSource {
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             virtual_state,
+            optional_filters: OptionalFilterOptions {
+                mode: self.optional_filter_mode,
+                gate_config: self.optional_filter_gate_config,
+                decode_cost: Arc::clone(&self.optional_filter_decode_cost),
+                sites: Arc::clone(&self.optional_filter_sites),
+            },
+            filter_placement: PlacementOptions::new(
+                self.adaptive_filter_placement && self.pushdown_filters(),
+                Arc::clone(&self.filter_placement_sites),
+                self.predicate.as_ref(),
+            ),
         }))
     }
 
@@ -703,17 +757,31 @@ impl FileSource for ParquetSource {
         self.predicate.clone()
     }
 
-    /// The predicate is applied to every row only when filter pushdown is
-    /// enabled, and then only the conjuncts that can become a `RowFilter`.
-    /// Otherwise the predicate is used only for pruning.
+    /// The scan applies each conjunct of its predicate to every row: as a
+    /// `RowFilter` predicate when filter pushdown is enabled, else (and for
+    /// the conjuncts that the `RowFilter` cannot evaluate) in the post-scan
+    /// filter. Only the conjuncts that can be pushed down are returned, the
+    /// same test that `try_pushdown_filters` uses before it replies
+    /// `PushedDown::Yes`.
+    ///
+    /// A pruning-only predicate (see
+    /// [`FileSource::try_pushdown_pruning_filters`]) is used only to prune:
+    /// a `FilterExec` above the scan applies it. Thus it is not exact.
+    ///
+    /// Optional conjuncts (see `split_optional`) are not exact either: in
+    /// the `adaptive` mode their gate can skip them (also in the post-scan
+    /// filter of the adaptive filter placement, and the placement can skip
+    /// them), in the `pruning_only` mode the scan does not evaluate them, and
+    /// the scan drops them when the `RowFilter` cannot evaluate them.
     fn exact_filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
-        if !self.pushdown_filters() {
+        if self.pruning_only_predicate {
             return None;
         }
         let predicate = self.predicate.as_ref()?;
         let pushable_schema = self.table_schema.schema_without_virtual_columns();
         let exact = split_conjunction(predicate)
             .into_iter()
+            .filter(|expr| !is_optional_filter(expr))
             .filter(|expr| can_expr_be_pushed_down_with_schemas(expr, pushable_schema))
             .cloned()
             .collect::<Vec<_>>();
@@ -912,20 +980,69 @@ impl FileSource for ParquetSource {
             None => conjunction(allowed_filters),
         };
         source.predicate = Some(predicate);
-        source = source.with_pushdown_filters(pushdown_filters);
-        let source = Arc::new(source);
-        // If pushdown_filters is false we tell our parents that they still have to handle the filters,
-        // even if we updated the predicate to include the filters (they will only be used for stats pruning).
-        if !pushdown_filters {
+        if self.pruning_only_predicate {
+            // The scan applies all conjuncts of its predicate or none of
+            // them. It uses its predicate only to prune (a `FilterExec`
+            // above the scan applies the filters that it got before), thus it
+            // uses the new filters only to prune too.
             return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
                 vec![PushedDown::No; filters.len()],
             )
-            .with_updated_node(source));
+            .with_updated_node(Arc::new(source) as _));
         }
+        source = source.with_pushdown_filters(pushdown_filters);
+        // Optional filters (for example dynamic filters from joins) are
+        // handled as the session configuration says. The predicate changed,
+        // thus the decode speed measurement starts again.
+        source.optional_filter_mode = config.execution.optional_filter_mode;
+        source.optional_filter_gate_config = (&config.execution).into();
+        source.optional_filter_decode_cost = Arc::default();
+        source.optional_filter_sites = Arc::default();
+        source.adaptive_filter_placement = config.execution.adaptive_filter_placement;
+        source.filter_placement_sites = Arc::default();
+        let source = Arc::new(source);
+        // The parquet scan always accepts pushable filters: report each
+        // pushable filter as accepted (`Yes`) so the parent `FilterExec` is
+        // removed. The scan now owns these filters and guarantees they are
+        // applied — as a parquet `RowFilter` when `pushdown_filters` is
+        // enabled, or as the in-scan post-scan filter otherwise (and for any
+        // conjunct the `RowFilter` cannot evaluate on a given file). The
+        // `pushdown_filters` config is preserved because it still controls the
+        // `RowFilter` vs. post-scan placement downstream.
         Ok(FilterPushdownPropagation::with_parent_pushdown_result(
             filters.iter().map(|f| f.discriminant).collect(),
         )
         .with_updated_node(source))
+    }
+
+    /// Takes the pushable `filters` for pruning only, as the scan does with
+    /// all filters when `pushdown_filters` is false on main. The scan applies
+    /// either all conjuncts of its predicate or none of them, thus it refuses
+    /// (`None`) when it already has a predicate that it applies.
+    fn try_pushdown_pruning_filters(
+        &self,
+        filters: &[Arc<dyn PhysicalExpr>],
+        _config: &ConfigOptions,
+    ) -> datafusion_common::Result<Option<Arc<dyn FileSource>>> {
+        if self.predicate.is_some() && !self.pruning_only_predicate {
+            return Ok(None);
+        }
+        let pushable_schema = self.table_schema.schema_without_virtual_columns();
+        let pushable = filters
+            .iter()
+            .filter(|filter| {
+                can_expr_be_pushed_down_with_schemas(filter, pushable_schema)
+            })
+            .cloned()
+            .collect_vec();
+        if pushable.is_empty() {
+            return Ok(None);
+        }
+        let mut source = self.clone();
+        source.predicate =
+            Some(conjunction(self.predicate.iter().cloned().chain(pushable)));
+        source.pruning_only_predicate = true;
+        Ok(Some(Arc::new(source)))
     }
 
     /// Try to optimize the scan to produce data in the requested sort order.
@@ -1130,6 +1247,7 @@ impl FileSource for ParquetSource {
             // Carried by `base`.
             table_schema: _,
             predicate,
+            pruning_only_predicate,
             // Rebuilt from the decode context.
             parquet_file_reader_factory: _,
             // Requires a custom codec for serialization.
@@ -1144,6 +1262,17 @@ impl FileSource for ParquetSource {
                 encryption_factory: _,
             reverse_row_groups,
             sort_order_for_reorder,
+            // Not serialized: the decoded source uses the default
+            // (`always`) optional filter mode.
+            optional_filter_mode: _,
+            optional_filter_gate_config: _,
+            // Runtime state, recreated when the source is decoded.
+            optional_filter_decode_cost: _,
+            optional_filter_sites: _,
+            // Not serialized: the decoded source does not use adaptive
+            // filter placement.
+            adaptive_filter_placement: _,
+            filter_placement_sites: _,
         } = self;
 
         if schema_provider.is_some() {
@@ -1176,6 +1305,7 @@ impl FileSource for ParquetSource {
             sort_order_for_reorder,
             reverse_row_groups: *reverse_row_groups,
             metadata_size_hint,
+            pruning_only_predicate: *pruning_only_predicate,
         };
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::ParquetScan(node)),
@@ -1217,6 +1347,7 @@ impl ParquetSource {
             sort_order_for_reorder,
             reverse_row_groups,
             metadata_size_hint,
+            pruning_only_predicate,
         } = scan;
 
         let base_conf = base_conf.as_ref().ok_or_else(|| {
@@ -1301,6 +1432,7 @@ impl ParquetSource {
         if let Some(predicate) = predicate {
             source = source.with_predicate(predicate);
         }
+        source.pruning_only_predicate = *pruning_only_predicate;
         let base_config =
             FileScanConfig::try_from_proto(base_conf, ctx, Arc::new(source))?;
         Ok(DataSourceExec::from_data_source(base_config))
@@ -2162,6 +2294,122 @@ mod tests {
         }
     }
 
+    /// Filters for pruning only stay above the scan. The scan applies all
+    /// conjuncts of its predicate or none of them.
+    #[test]
+    fn pruning_filters_stay_above_the_scan() {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::{col, lit as logical_lit};
+        use datafusion_physical_expr::planner::logical2physical;
+        use datafusion_physical_plan::filter_pushdown::PushedDown;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let filter = |v: i64| logical2physical(&col("value").gt(logical_lit(v)), &schema);
+        let config = ConfigOptions::default();
+        let downcast = |source: &Arc<dyn FileSource>| {
+            source.downcast_ref::<ParquetSource>().unwrap().clone()
+        };
+
+        // A source without a predicate takes filters for pruning only.
+        let source = ParquetSource::new(Arc::clone(&schema));
+        let pruning = downcast(
+            &source
+                .try_pushdown_pruning_filters(&[filter(1)], &config)
+                .unwrap()
+                .expect("the source takes filters for pruning only"),
+        );
+        assert!(pruning.pruning_only_predicate);
+        assert_eq!(
+            pruning.predicate.as_ref().unwrap().to_string(),
+            "value@0 > 1"
+        );
+        // A pruning-only predicate is not exact: a `FilterExec` above the
+        // scan applies it.
+        assert!(pruning.exact_filter().is_none());
+
+        // It uses later filters only to prune too.
+        let prop = pruning
+            .try_pushdown_filters(vec![filter(2)], &config)
+            .unwrap();
+        assert!(matches!(prop.filters[..], [PushedDown::No]));
+        let later = downcast(&prop.updated_node.unwrap());
+        assert!(later.pruning_only_predicate);
+        assert_eq!(
+            later.predicate.as_ref().unwrap().to_string(),
+            "value@0 > 1 AND value@0 > 2"
+        );
+
+        // A source that applies its predicate does not take filters for
+        // pruning only.
+        let prop = source
+            .try_pushdown_filters(vec![filter(1)], &config)
+            .unwrap();
+        assert!(matches!(prop.filters[..], [PushedDown::Yes]));
+        let applied = downcast(&prop.updated_node.unwrap());
+        assert!(!applied.pruning_only_predicate);
+        // The scan applies the accepted filter to every row, also with
+        // `pushdown_filters = false` (in the post-scan filter).
+        assert!(!applied.pushdown_filters());
+        assert_eq!(applied.exact_filter().unwrap().to_string(), "value@0 > 1");
+        assert!(
+            applied
+                .try_pushdown_pruning_filters(&[filter(2)], &config)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// An optional conjunct is not exact: the scan does not evaluate it
+    /// after the decode, and drops it when the `RowFilter` cannot evaluate
+    /// it. Thus it must not give equivalences.
+    #[test]
+    fn exact_filter_excludes_optional_conjuncts() {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::{col, lit as logical_lit};
+        use datafusion_physical_expr::expressions::OptionalFilterPhysicalExpr;
+        use datafusion_physical_expr::planner::logical2physical;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
+        ]));
+        let required = logical2physical(&col("a").eq(logical_lit(1i64)), &schema);
+        let optional: Arc<dyn PhysicalExpr> = Arc::new(OptionalFilterPhysicalExpr::new(
+            logical2physical(&col("b").eq(logical_lit(2i64)), &schema),
+        ));
+        for pushdown_filters in [false, true] {
+            let mut config = ConfigOptions::default();
+            config.execution.parquet.pushdown_filters = pushdown_filters;
+            let prop = ParquetSource::new(Arc::clone(&schema))
+                .try_pushdown_filters(
+                    vec![Arc::clone(&required), Arc::clone(&optional)],
+                    &config,
+                )
+                .unwrap();
+            let source = prop.updated_node.unwrap();
+            let source = source.downcast_ref::<ParquetSource>().unwrap();
+            assert_eq!(
+                source.exact_filter().unwrap().to_string(),
+                "a@0 = 1",
+                "pushdown_filters = {pushdown_filters}"
+            );
+        }
+
+        // A predicate with only optional conjuncts is not exact.
+        let prop = ParquetSource::new(Arc::clone(&schema))
+            .try_pushdown_filters(vec![Arc::clone(&optional)], &ConfigOptions::default())
+            .unwrap();
+        let source = prop.updated_node.unwrap();
+        let source = source.downcast_ref::<ParquetSource>().unwrap();
+        assert!(source.exact_filter().is_none());
+    }
+
     #[test]
     fn test_try_pushdown_filters_rejects_virtual_column_refs() {
         // Virtual columns are produced by the reader and cannot be referenced
@@ -2237,5 +2485,59 @@ mod tests {
             "file_row_index() rewrites to a virtual column and must not be \
              pushed down"
         );
+    }
+
+    #[test]
+    fn try_pushdown_filters_reads_optional_filter_config() {
+        use arrow::datatypes::{DataType, Field, Schema};
+        use datafusion_expr::{col, lit as logical_lit};
+        use datafusion_physical_expr::expressions::OptionalFilterPhysicalExpr;
+        use datafusion_physical_expr::planner::logical2physical;
+        use datafusion_physical_plan::filter_pushdown::PushedDown;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            false,
+        )]));
+        let source = ParquetSource::new(Arc::clone(&schema));
+        assert_eq!(source.optional_filter_mode, OptionalFilterMode::Always);
+
+        let filter = logical2physical(&col("value").eq(logical_lit(1i64)), &schema);
+        let optional: Arc<dyn PhysicalExpr> =
+            Arc::new(OptionalFilterPhysicalExpr::new(filter));
+
+        let mut config = ConfigOptions::default();
+        config.execution.parquet.pushdown_filters = true;
+        config.execution.optional_filter_mode = OptionalFilterMode::Adaptive;
+        config.execution.optional_filter_min_saving_ns_per_row = 7.5;
+        let prop = source
+            .try_pushdown_filters(vec![optional], &config)
+            .expect("try_pushdown_filters must not error");
+        assert!(matches!(prop.filters[0], PushedDown::Yes));
+
+        let updated = prop.updated_node.expect("source should be updated");
+        let updated = (updated.as_ref() as &dyn std::any::Any)
+            .downcast_ref::<ParquetSource>()
+            .expect("ParquetSource");
+        assert_eq!(updated.optional_filter_mode, OptionalFilterMode::Adaptive);
+        assert_eq!(
+            updated.optional_filter_gate_config.min_saving_ns_per_row,
+            7.5
+        );
+        assert_eq!(
+            updated.predicate.as_ref().unwrap().to_string(),
+            "Optional(value@0 = 1)"
+        );
+        // The predicate changed, thus the decode speed measurement is new.
+        assert!(!Arc::ptr_eq(
+            &updated.optional_filter_decode_cost,
+            &source.optional_filter_decode_cost
+        ));
+        // And the shared pauses of the gates are new.
+        assert!(!Arc::ptr_eq(
+            &updated.optional_filter_sites,
+            &source.optional_filter_sites
+        ));
     }
 }

@@ -1236,7 +1236,11 @@ enum ShortCircuitStrategy {
 /// the side that cannot short-circuit the operator is rare:
 /// - for `AND`, when the proportion of `true` is less than or equal to 0.2
 /// - for `OR`, when the proportion of `false` is less than or equal to 0.2
-const PRE_SELECTION_THRESHOLD: f32 = 0.2;
+///
+/// Public only so that the adaptive conjunct ordering of `FilterExec` can
+/// model the same rule. Not part of the stable API.
+#[doc(hidden)]
+pub const PRE_SELECTION_THRESHOLD: f32 = 0.2;
 
 /// Checks if a logical operator (`AND`/`OR`) can short-circuit evaluation based on the left-hand side (lhs) result.
 ///
