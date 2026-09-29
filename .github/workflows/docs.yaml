@@ -71,6 +71,7 @@ jobs:
             -a \
             --delete \
             --exclude '/.git/' \
+            --exclude '/versions/' \
             ../docs/build/html/ \
             ./
           cp ../.asf.yaml .
