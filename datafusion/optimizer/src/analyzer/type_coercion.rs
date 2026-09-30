@@ -152,8 +152,7 @@ fn analyze_internal(
     let mut expr_rewrite = TypeCoercionRewriter::new(&schema);
 
     let name_preserver = NamePreserver::new(&plan);
-    // apply coercion rewrite all expressions in the plan individually
-    plan.map_expressions(|expr| {
+    let mut coerce_expr = |expr: Expr| {
         let original_name = name_preserver.save(&expr);
 
         // A lambda variable carries the field recorded when the plan was built, which
@@ -167,6 +166,17 @@ fn analyze_internal(
 
         expr.rewrite(&mut expr_rewrite)
             .map(|transformed| transformed.update_data(|e| original_name.restore(e)))
+    };
+
+    // apply coercion rewrite all expressions in the plan individually
+    plan.map_expressions(|expr| {
+        // Preserve the names of grouping set members, not of the grouping set itself.
+        // An aliased grouping set is no longer recognized as a grouping set.
+        if let Expr::GroupingSet(_) = &expr {
+            expr.map_children(&mut coerce_expr)
+        } else {
+            coerce_expr(expr)
+        }
     })?
     // some plans need extra coercion after their expressions are coerced
     .map_data(|plan| expr_rewrite.coerce_plan(plan))?
@@ -1631,10 +1641,10 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, TimeUnit};
     use insta::assert_snapshot;
 
-    use crate::analyzer::Analyzer;
     use crate::analyzer::type_coercion::{
         TypeCoercion, TypeCoercionRewriter, coerce_case_expression,
     };
+    use crate::analyzer::{Analyzer, AnalyzerRule};
     use crate::assert_analyzed_plan_with_config_eq_snapshot;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
@@ -1642,13 +1652,13 @@ mod test {
         DFSchema, DFSchemaRef, Result, ScalarValue, Spans, TableReference,
     };
     use datafusion_expr::expr::{self, InSubquery, Like, ScalarFunction};
-    use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort};
+    use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort, table_scan};
     use datafusion_expr::test::function_stub::avg_udaf;
     use datafusion_expr::{
         AccumulatorFactoryFunction, AggregateUDF, BinaryExpr, Case, ColumnarValue, Expr,
         ExprSchemable, Filter, LogicalPlan, Operator, ScalarFunctionArgs, ScalarUDF,
         ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery, Union, Volatility, cast,
-        col, create_udaf, is_true, lit,
+        col, create_udaf, grouping_set, is_true, lit,
     };
     use datafusion_functions_aggregate::average::AvgAccumulator;
 
@@ -2225,6 +2235,41 @@ mod test {
           EmptyRelation: rows=0
         "
         )
+    }
+
+    #[test]
+    fn scalar_udf_in_grouping_set() -> Result<()> {
+        let udf = ScalarUDF::from(TestScalarUDF {
+            signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
+        })
+        .call(vec![lit(123_i32)]);
+        let schema = Schema::new(vec![Field::new("a", Utf8, false)]);
+        let plan = table_scan(Some("t"), &schema, None)?
+            .aggregate(
+                vec![grouping_set(vec![
+                    vec![col("t.a"), udf.clone()],
+                    vec![udf],
+                    vec![],
+                ])],
+                Vec::<Expr>::new(),
+            )?
+            .build()?;
+
+        // Each renamed member is aliased to its original name, not the grouping set
+        let analyzed = TypeCoercion::new().analyze(plan, &ConfigOptions::default())?;
+        assert_snapshot!(
+            analyzed,
+            @r#"
+        Aggregate: groupBy=[[GROUPING SETS ((t.a, TestScalarUDF(Float32(123)) AS TestScalarUDF(Int32(123))), (TestScalarUDF(Float32(123)) AS TestScalarUDF(Int32(123))), ())]], aggr=[[]]
+          TableScan: t
+        "#
+        );
+
+        // A second pass leaves the plan unchanged
+        let reanalyzed =
+            TypeCoercion::new().analyze(analyzed.clone(), &ConfigOptions::default())?;
+        assert_eq!(analyzed, reanalyzed);
+        Ok(())
     }
 
     #[test]
