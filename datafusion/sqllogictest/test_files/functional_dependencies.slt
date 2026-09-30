@@ -297,6 +297,93 @@ statement ok
 drop table t_probe;
 
 ##########
+## List unnest invalidates dependencies on the input row
+##########
+
+statement ok
+CREATE TABLE t_unnest_fd (k VARCHAR, v INT) AS VALUES ('a', 1), ('a', 2), ('b', 3);
+
+# DISTINCT must retain the unnested value in its grouping key.
+query I
+WITH g AS (SELECT k, array_agg(v) AS vs FROM t_unnest_fd GROUP BY k),
+     u AS (SELECT k, unnest(vs) AS v FROM g)
+SELECT count(*) AS n FROM (SELECT DISTINCT k, v FROM u);
+----
+3
+
+# The equivalent GROUP BY must also retain the unnested value.
+query I
+WITH g AS (SELECT k, array_agg(v) AS vs FROM t_unnest_fd GROUP BY k),
+     u AS (SELECT k, unnest(vs) AS v FROM g)
+SELECT count(*) AS n FROM (SELECT k, v FROM u GROUP BY k, v);
+----
+3
+
+# There is no projection between Unnest and DISTINCT to discard a stale target.
+query I
+WITH g AS (SELECT k, array_agg(v) AS vs FROM t_unnest_fd GROUP BY k)
+SELECT count(*) AS n FROM (SELECT DISTINCT * FROM (SELECT k, unnest(vs) FROM g));
+----
+3
+
+# An unnested list of structs also creates multiple values per input key.
+query I
+WITH g AS (
+    SELECT k, array_agg(named_struct('id', v)) AS rs
+    FROM t_unnest_fd GROUP BY k
+), u AS (SELECT k, unnest(rs) AS r FROM g)
+SELECT count(*) AS n FROM (SELECT DISTINCT k, r['id'] FROM u);
+----
+3
+
+# Struct expansion shifts the following list output onto an old dependency
+# target index. DISTINCT must still include the list output.
+query I
+WITH g AS (
+    SELECT k, named_struct('x', min(v), 'y', max(v)) AS s,
+           array_agg(v) AS vs, sum(v) AS n
+    FROM t_unnest_fd GROUP BY k
+)
+SELECT count(*) FROM (
+    SELECT DISTINCT * FROM (SELECT k, unnest(s), unnest(vs), n FROM g)
+);
+----
+3
+
+# ORDER BY k has ties after unnest. Its default RANGE frame includes both rows with k = 'a'.
+query I
+WITH g AS (SELECT k, array_agg(v) AS vs FROM t_unnest_fd GROUP BY k),
+     u AS (SELECT k, unnest(vs) AS v FROM g)
+SELECT count(DISTINCT s) AS n FROM (SELECT sum(v) OVER (ORDER BY k) AS s FROM u);
+----
+2
+
+# Expanding a struct before k shifts the inherited dependency's column indices.
+# The two sy values tie, so their default RANGE frames have the same sum.
+query I
+WITH g AS (
+    SELECT named_struct('x', min(v), 'y', length(k)) AS s,
+           k, sum(v) AS n
+    FROM t_unnest_fd GROUP BY k
+), u(sx, sy, k, n) AS (SELECT unnest(s), k, n FROM g)
+SELECT count(DISTINCT running_sum) FROM (
+    SELECT sum(n) OVER (ORDER BY sy) AS running_sum FROM u
+);
+----
+1
+
+# A row-preserving, single-element unnest remains correct.
+query I
+SELECT count(*) AS n
+FROM (SELECT DISTINCT k, v
+      FROM (SELECT k, unnest(make_array(v)) AS v FROM t_unnest_fd));
+----
+3
+
+statement ok
+drop table t_unnest_fd;
+
+##########
 ## Cleanup
 ##########
 
