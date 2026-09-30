@@ -27,12 +27,14 @@ use crate::coalesce::{LimitedBatchCoalescer, PushBatchStatus};
 use crate::joins::Map;
 use crate::joins::MapOffset;
 use crate::joins::PartitionMode;
-use crate::joins::hash_join::exec::{JoinLeftData, NullAwareMode};
+use crate::joins::hash_join::exec::{JoinLeftData, MultiBatchBuildData, NullAwareMode};
 use crate::joins::hash_join::probe_completion::ProbeSideSummary;
 use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
-use crate::joins::utils::{OnceFut, equal_rows_arr, matchable_join_keys};
+use crate::joins::utils::{
+    OnceFut, equal_rows_arr, equal_rows_arr_multi, matchable_join_keys,
+};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
     RecordBatchStream, SendableRecordBatchStream, handle_state,
@@ -40,7 +42,8 @@ use crate::{
     joins::utils::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
         StatefulStreamResult, adjust_indices_by_join_type, apply_join_filter_to_indices,
-        build_batch_empty_build_side, build_batch_from_indices,
+        apply_join_filter_to_indices_multi, build_batch_empty_build_side,
+        build_batch_from_indices, build_batch_from_indices_multi,
         build_null_aware_left_mark_column, need_produce_result_in_final,
     },
 };
@@ -467,6 +470,7 @@ impl RecordBatchStream for HashJoinStream {
 pub(super) fn lookup_join_hashmap(
     build_hashmap: &dyn JoinHashMapType,
     build_side_values: &[ArrayRef],
+    multi_batch: Option<&MultiBatchBuildData>,
     probe_side_values: &[ArrayRef],
     null_equality: NullEquality,
     hashes_buffer: &[u64],
@@ -492,13 +496,25 @@ pub(super) fn lookup_join_hashmap(
 
     // TODO: optimize equal_rows_arr to avoid allocation of intermediate arrays
     // https://github.com/apache/datafusion/issues/12131
-    let (build_indices, probe_indices) = equal_rows_arr(
-        &build_indices_unfiltered,
-        &probe_indices_unfiltered,
-        build_side_values,
-        probe_side_values,
-        null_equality,
-    )?;
+    let (build_indices, probe_indices) = if let Some(multi_batch) = multi_batch {
+        let gather_indices = multi_batch.gather_indices(&build_indices_unfiltered);
+        equal_rows_arr_multi(
+            &build_indices_unfiltered,
+            &probe_indices_unfiltered,
+            multi_batch.values(),
+            probe_side_values,
+            &gather_indices,
+            null_equality,
+        )?
+    } else {
+        equal_rows_arr(
+            &build_indices_unfiltered,
+            &probe_indices_unfiltered,
+            build_side_values,
+            probe_side_values,
+            null_equality,
+        )?
+    };
 
     // Reclaim buffers
     *build_indices_buffer = build_indices_unfiltered.into_parts().1.into();
@@ -638,10 +654,18 @@ impl HashJoinStream {
         // Use the logical null count: a dictionary key whose entry points at a
         // NULL dictionary value is a NULL key even though the key bitmap has no
         // physical nulls (`null_count() == 0` but `logical_null_count() > 0`).
-        let keys_have_null = left_data
-            .values()
-            .iter()
-            .any(|array| array.logical_null_count() > 0);
+        let keys_have_null = if let Some(multi_batch) = left_data.multi_batch() {
+            multi_batch
+                .values()
+                .iter()
+                .flatten()
+                .any(|array| array.logical_null_count() > 0)
+        } else {
+            left_data
+                .values()
+                .iter()
+                .any(|array| array.logical_null_count() > 0)
+        };
 
         let build_data = match self.mode {
             PartitionMode::Partitioned => PartitionBuildData::Partitioned {
@@ -886,6 +910,7 @@ impl HashJoinStream {
             Map::HashMap(map) => lookup_join_hashmap(
                 map.as_ref(),
                 build_side.left_data.values(),
+                build_side.left_data.multi_batch(),
                 &state.values,
                 self.null_equality,
                 &self.hashes_buffer,
@@ -923,16 +948,29 @@ impl HashJoinStream {
 
         // apply join filter if exists
         let (left_indices, right_indices) = if let Some(filter) = &self.filter {
-            apply_join_filter_to_indices(
-                build_side.left_data.batch(),
-                &state.batch,
-                left_indices,
-                right_indices,
-                filter,
-                JoinSide::Left,
-                None,
-                self.join_type,
-            )?
+            if let Some(multi_batch) = build_side.left_data.multi_batch() {
+                let gather_indices = multi_batch.gather_indices(&left_indices);
+                apply_join_filter_to_indices_multi(
+                    multi_batch.batches(),
+                    &gather_indices,
+                    &state.batch,
+                    left_indices,
+                    right_indices,
+                    filter,
+                    self.join_type,
+                )?
+            } else {
+                apply_join_filter_to_indices(
+                    build_side.left_data.batch(),
+                    &state.batch,
+                    left_indices,
+                    right_indices,
+                    filter,
+                    JoinSide::Left,
+                    None,
+                    self.join_type,
+                )?
+            }
         } else {
             (left_indices, right_indices)
         };
@@ -989,24 +1027,43 @@ impl HashJoinStream {
         }
 
         // Build output batch and push to coalescer
-        let (build_batch, probe_batch, join_side) =
-            if self.join_type == JoinType::RightMark {
-                (&state.batch, build_side.left_data.batch(), JoinSide::Right)
-            } else {
-                (build_side.left_data.batch(), &state.batch, JoinSide::Left)
-            };
+        let batch = if self.join_type != JoinType::RightMark
+            && let Some(multi_batch) = build_side.left_data.multi_batch()
+        {
+            let gather_indices = multi_batch.gather_indices(&left_indices);
+            build_batch_from_indices_multi(
+                &self.schema,
+                multi_batch.batches(),
+                &gather_indices,
+                &state.batch,
+                &left_indices,
+                &right_indices,
+                &self.column_indices,
+                self.join_type,
+                None,
+            )?
+        } else {
+            // RightMark emits only probe columns and a mark. Its aligned left
+            // indices refer to the probe batch, not to retained build rows.
+            let (build_batch, probe_batch, join_side) =
+                if self.join_type == JoinType::RightMark {
+                    (&state.batch, build_side.left_data.batch(), JoinSide::Right)
+                } else {
+                    (build_side.left_data.batch(), &state.batch, JoinSide::Left)
+                };
 
-        let batch = build_batch_from_indices(
-            &self.schema,
-            build_batch,
-            probe_batch,
-            &left_indices,
-            &right_indices,
-            &self.column_indices,
-            join_side,
-            self.join_type,
-            None,
-        )?;
+            build_batch_from_indices(
+                &self.schema,
+                build_batch,
+                probe_batch,
+                &left_indices,
+                &right_indices,
+                &self.column_indices,
+                join_side,
+                self.join_type,
+                None,
+            )?
+        };
 
         let push_status = self.output_buffer.push_batch(batch)?;
 
@@ -1148,17 +1205,32 @@ impl HashJoinStream {
         // Push this chunk of final indices to output buffer
         if !left_side.is_empty() {
             let empty_right_batch = RecordBatch::new_empty(self.right.schema());
-            let batch = build_batch_from_indices(
-                &self.schema,
-                build_side.left_data.batch(),
-                &empty_right_batch,
-                &left_side,
-                &right_side,
-                &self.column_indices,
-                JoinSide::Left,
-                self.join_type,
-                mark_column.as_ref(),
-            )?;
+            let batch = if let Some(multi_batch) = build_side.left_data.multi_batch() {
+                let gather_indices = multi_batch.gather_indices(&left_side);
+                build_batch_from_indices_multi(
+                    &self.schema,
+                    multi_batch.batches(),
+                    &gather_indices,
+                    &empty_right_batch,
+                    &left_side,
+                    &right_side,
+                    &self.column_indices,
+                    self.join_type,
+                    mark_column.as_ref(),
+                )?
+            } else {
+                build_batch_from_indices(
+                    &self.schema,
+                    build_side.left_data.batch(),
+                    &empty_right_batch,
+                    &left_side,
+                    &right_side,
+                    &self.column_indices,
+                    JoinSide::Left,
+                    self.join_type,
+                    mark_column.as_ref(),
+                )?
+            };
             let push_status = self.output_buffer.push_batch(batch)?;
 
             // If limit reached, finish the coalescer and stop emitting
@@ -1560,6 +1632,7 @@ fn for_each_scope_match(
         let (build_indices, probe_indices, next_offset) = lookup_join_hashmap(
             scope_map,
             build_scope_values,
+            None,
             probe_scope_values,
             NullEquality::NullEqualsNothing,
             hashes_buffer,

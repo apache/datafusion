@@ -17,6 +17,13 @@
 
 //! Join related functionality used both on logical and physical plans
 
+mod multi_batch;
+
+pub(crate) use multi_batch::{
+    apply_join_filter_to_indices_multi, build_batch_from_indices_multi,
+    equal_rows_arr_multi,
+};
+
 use std::cmp::{Ordering, min};
 use std::collections::HashSet;
 use std::fmt::{self, Debug};
