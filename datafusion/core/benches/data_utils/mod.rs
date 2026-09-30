@@ -26,13 +26,15 @@ use arrow::datatypes::Int32Type;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
-use datafusion_common::DataFusionError;
+use datafusion_common::{
+    DataFusionError,
+    utils::hex::{HexCase, encode_bytes_into_string},
+};
 use rand::prelude::IndexedRandom;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use rand_distr::Distribution;
 use rand_distr::{Normal, Pareto};
-use std::fmt::Write;
 use std::sync::Arc;
 
 /// create an in-memory table given the partition len, array len, and batch size,
@@ -215,23 +217,19 @@ pub(crate) fn make_data(
     let schema = test_schema(use_view);
     let mut partitions = vec![];
     let mut cur_time = 16909000000000i64;
+    let mut id_out = String::with_capacity(32);
+
     for _ in 0..partition_cnt {
         // Choose the appropriate builder based on use_view.
+        let sample_cnt = sample_cnt as usize;
         let mut id_builder = if use_view {
-            TraceIdBuilder::Utf8View(StringViewBuilder::new())
+            TraceIdBuilder::Utf8View(StringViewBuilder::with_capacity(sample_cnt))
         } else {
-            TraceIdBuilder::Utf8(StringBuilder::new())
+            TraceIdBuilder::Utf8(StringBuilder::with_capacity(sample_cnt, 32))
         };
 
-        let mut ts_builder = Int64Builder::new();
-        let gen_id = |rng: &mut rand::rngs::SmallRng| {
-            rng.random::<[u8; 16]>()
-                .iter()
-                .fold(String::new(), |mut output, b| {
-                    let _ = write!(output, "{b:02X}");
-                    output
-                })
-        };
+        let mut ts_builder = Int64Builder::with_capacity(sample_cnt);
+        let gen_id = |rng: &mut rand::rngs::SmallRng| rng.random::<[u8; 16]>();
         let gen_sample_cnt =
             |mut rng: &mut rand::rngs::SmallRng| pareto.sample(&mut rng).ceil() as u32;
         let mut group_ids = (0..simultaneous_group_cnt)
@@ -240,6 +238,7 @@ pub(crate) fn make_data(
         let mut group_sample_cnts = (0..simultaneous_group_cnt)
             .map(|_| gen_sample_cnt(&mut rng))
             .collect::<Vec<_>>();
+
         for _ in 0..sample_cnt {
             let random_index = rng.random_range(0..simultaneous_group_cnt);
             let trace_id = &mut group_ids[random_index];
@@ -250,7 +249,9 @@ pub(crate) fn make_data(
                 *sample_cnt = gen_sample_cnt(&mut rng);
             }
 
-            id_builder.append_value(trace_id);
+            id_out.clear();
+            encode_bytes_into_string(trace_id, HexCase::Upper, &mut id_out);
+            id_builder.append_value(&id_out);
             ts_builder.append_value(cur_time);
 
             if asc {
