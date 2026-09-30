@@ -1988,7 +1988,11 @@ mod tests {
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .window(vec![window])?
-            .filter(col("a").gt(lit(1i64)).or(add(col("a"), col("b")).gt(lit(10i64))))?
+            .filter(
+                col("a")
+                    .gt(lit(1i64))
+                    .or(add(col("a"), col("b")).gt(lit(10i64))),
+            )?
             .build()?;
 
         assert_optimized_plan_equal!(
@@ -2034,6 +2038,240 @@ mod tests {
         )
     }
 
+    /// verifies that a predicate on a *function* expression key is pushed. This is
+    /// the shape the rule exists for: `PARTITION BY NULLIF(c, '')` with a predicate
+    /// on `NULLIF(c, '')`, where the key is not an arithmetic expression and the
+    /// column it reads is not a key on its own.
+    #[test]
+    fn filter_move_window_function_expression_key() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![immutable_udf_call(col("c"))])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            .filter(immutable_udf_call(col("c")).is_not_null())?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        WindowAggr: windowExpr=[[rank() PARTITION BY [TestScalarUDF(test.c)] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+          TableScan: test, full_filters=[TestScalarUDF(test.c) IS NOT NULL]
+        "
+        )
+    }
+
+    /// verifies that matching is structural, so a predicate written with the
+    /// operands in the other order does not match the key and stays above the
+    /// window. Conservative rather than wrong.
+    #[test]
+    fn filter_keep_window_expression_key_operand_order() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![add(col("a"), col("b"))]) // PARTITION BY a + b
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            .filter(add(col("b"), col("a")).gt(lit(10i64)))? // b + a, not a + b
+            .build()?;
+        assert_plan_not_transformed!(plan.clone());
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.b + test.a > Int64(10)
+          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            TableScan: test
+        "
+        )
+    }
+
+    /// verifies that a predicate built *on top of* an expression key is pushed:
+    /// the key subtree accounts for everything it reads, and the literal around it
+    /// reads nothing, so the predicate is still constant within each partition
+    #[test]
+    fn filter_move_window_expression_key_subtree() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![add(col("a"), col("b"))]) // PARTITION BY a + b
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            .filter(add(add(col("a"), col("b")), lit(1i64)).gt(lit(10i64)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+          TableScan: test, full_filters=[test.a + test.b + Int64(1) > Int64(10)]
+        "
+        )
+    }
+
+    /// verifies that an expression key shared by every window function is pushed,
+    /// the expression-key counterpart of filter_multiple_windows_common_partitions
+    #[test]
+    fn filter_multiple_windows_common_expression_partition() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window1 = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![add(col("a"), col("b"))])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let window2 = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("b"), add(col("a"), col("b"))])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window1, window2])?
+            .filter(add(col("a"), col("b")).gt(lit(10i64)))? // a + b is in both
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, rank() PARTITION BY [test.b, test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+          TableScan: test, full_filters=[test.a + test.b > Int64(10)]
+        "
+        )
+    }
+
+    /// verifies that an expression key present in only one of the window functions
+    /// is not pushed, since the other function's partitions would change
+    #[test]
+    fn filter_multiple_windows_disjoint_expression_partition() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window1 = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![add(col("a"), col("b"))])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let window2 = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![col("a")])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window1, window2])?
+            .filter(add(col("a"), col("b")).gt(lit(10i64)))? // a + b is in one only
+            .build()?;
+        assert_plan_not_transformed!(plan.clone());
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.a + test.b > Int64(10)
+          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, rank() PARTITION BY [test.a] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            TableScan: test
+        "
+        )
+    }
+
+    /// verifies that the volatile check still wins over an expression key: the
+    /// predicate matches the key structurally, but pushing it would change which
+    /// rows each partition contains and so the window values of the survivors
+    #[test]
+    fn filter_volatile_keep_window_expression_key() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let window = Expr::from(WindowFunction::new(
+            WindowFunctionDefinition::WindowUDF(
+                datafusion_functions_window::rank::rank_udwf(),
+            ),
+            vec![],
+        ))
+        .partition_by(vec![add(col("a"), col("b"))])
+        .order_by(vec![col("c").sort(true, true)])
+        .build()
+        .unwrap();
+
+        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
+            signature: Signature::exact(vec![], Volatility::Volatile),
+        });
+        let volatile =
+            Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .window(vec![window])?
+            .filter(add(col("a"), col("b")).gt(volatile))?
+            .build()?;
+        assert_plan_not_transformed!(plan.clone());
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test.a + test.b > TestScalarUDF()
+          WindowAggr: windowExpr=[[rank() PARTITION BY [test.a + test.b] ORDER BY [test.c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+            TableScan: test
+        "
+        )
+    }
+
+    /// An immutable one-argument UDF call, for building an expression partition
+    /// key that is a function call rather than an arithmetic expression.
+    fn immutable_udf_call(arg: Expr) -> Expr {
+        let fun = ScalarUDF::new_from_impl(TestScalarUDF {
+            signature: Signature::any(1, Volatility::Immutable),
+        });
+        Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![arg]))
+    }
+
     /// verifies that a volatile predicate is not pushed through a window, even
     /// when it reads no columns and so trivially satisfies the partition-key test
     #[test]
@@ -2054,7 +2292,8 @@ mod tests {
         let fun = ScalarUDF::new_from_impl(TestScalarUDF {
             signature: Signature::exact(vec![], Volatility::Volatile),
         });
-        let volatile = Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
+        let volatile =
+            Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![]));
 
         let plan = LogicalPlanBuilder::from(table_scan)
             .window(vec![window])?
