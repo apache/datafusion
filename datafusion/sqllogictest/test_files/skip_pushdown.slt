@@ -730,6 +730,93 @@ SELECT id, val FROM skip_arrow ORDER BY id OFFSET 7 LIMIT 6
 11 110
 12 120
 
+####################
+# Edge cases
+####################
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# Nested OFFSETs are merged by `push_down_limit` and pushed as one skip
+query TT
+EXPLAIN SELECT id FROM (SELECT id FROM skip_parquet OFFSET 3 LIMIT 10) OFFSET 4 LIMIT 3
+----
+logical_plan
+01)Limit: skip=0, fetch=3
+02)--TableScan: skip_parquet projection=[id], fetch=3, skip=7
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM (SELECT id FROM skip_parquet OFFSET 3 LIMIT 10) OFFSET 4 LIMIT 3)
+----
+3
+
+# OFFSET / LIMIT near i64::MAX: `skip + limit` must saturate, not overflow
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet OFFSET 9223372036854775807 LIMIT 3)
+----
+0
+
+query I
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet OFFSET 18 LIMIT 9223372036854775807)
+----
+2
+
+# Parameters only become literals after binding
+statement ok
+PREPARE skip_q(BIGINT, BIGINT) AS
+SELECT COUNT(*) FROM (SELECT id FROM skip_parquet LIMIT $1 OFFSET $2);
+
+query I
+EXECUTE skip_q(3, 18);
+----
+2
+
+query I
+EXECUTE skip_q(3, 20);
+----
+0
+
+statement ok
+DEALLOCATE skip_q;
+
+# Hive partitioned table: filters on the partition column are `Exact`, so the
+# skip is pushed below them and must apply to the pruned file set only
+query I
+COPY (SELECT id, val, id / 4 AS part FROM skip_src)
+TO 'test_files/scratch/skip_pushdown/hive/'
+STORED AS PARQUET
+PARTITIONED BY (part);
+----
+20
+
+statement ok
+CREATE EXTERNAL TABLE skip_hive (id BIGINT, val BIGINT, part BIGINT)
+STORED AS PARQUET
+PARTITIONED BY (part)
+LOCATION 'test_files/scratch/skip_pushdown/hive/';
+
+query TT
+EXPLAIN SELECT id FROM skip_hive WHERE part = 2 OFFSET 1 LIMIT 2
+----
+logical_plan
+01)Limit: skip=0, fetch=2
+02)--TableScan: skip_hive projection=[id], full_filters=[skip_hive.part = Int64(2)], fetch=2, skip=1
+
+statement ok
+reset datafusion.explain.logical_plan_only;
+
+query I
+SELECT id FROM skip_hive WHERE part = 2 OFFSET 1 LIMIT 2
+----
+9
+10
+
+statement ok
+DROP TABLE skip_hive;
+
 # Config reset
 # The SLT runner sets `target_partitions` to 4 instead of using the
 # default, so reset it explicitly.
