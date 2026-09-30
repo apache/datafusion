@@ -37,7 +37,7 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{
     BinaryExpr, Cast, Distinct, EmptyRelation, Expr, ExprSchemable, FetchType,
-    LogicalPlan, LogicalPlanBuilder, Operator, Window, expr, lit,
+    LogicalPlan, LogicalPlanBuilder, Operator, expr, lit,
 };
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -563,30 +563,17 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 );
                 // A filter that reads only `PARTITION BY` columns keeps or drops
                 // whole partitions, so each window function sees the same rows
-                // above it or below it.
-                if local_correlated_cols.is_empty()
-                    || window
+                // above it or below it. A filter on any other column changes the
+                // rows of a partition.
+                if !local_correlated_cols.is_empty()
+                    && !window
                         .window_expr
                         .iter()
                         .all(|expr| partitions_by_all(expr, &local_correlated_cols))
                 {
-                    return self.pass_through_pulled_up_cols(plan);
-                }
-                // A filter that fixes the value of each column it reads for each
-                // outer row, like `inner.y = outer.k`, keeps the rows of one
-                // value of those columns. Partitioning by those columns as well
-                // gives each window function the same rows once the filter is
-                // above it. This is what the pull up does for an Aggregate too.
-                if !self.can_pull_over_aggregation
-                    || self.collected_count_expr_map.contains_key(&*window.input)
-                {
                     self.can_pull_up = false;
-                    return self.pass_through_pulled_up_cols(plan);
                 }
-                Ok(Transformed::yes(partition_window_by(
-                    window,
-                    &local_correlated_cols,
-                )?))
+                self.pass_through_pulled_up_cols(plan)
             }
             // `f_down` checked that the pulled up filters do not read an
             // unnested column.
@@ -788,54 +775,6 @@ fn correlated_filter_columns(plan: &LogicalPlan) -> Vec<Column> {
     })
     .expect("apply closure is infallible");
     cols
-}
-
-/// Adds `cols` to the `PARTITION BY` of every window function of `window`.
-/// That changes the names of the window function columns, so a Projection on
-/// top gives them their old names back.
-fn partition_window_by(window: &Window, cols: &BTreeSet<Column>) -> Result<LogicalPlan> {
-    let new_window_expr = window
-        .window_expr
-        .iter()
-        .map(|expr| add_partition_by(expr, cols))
-        .collect::<Vec<_>>();
-    let mut proj_exprs = window
-        .input
-        .schema()
-        .columns()
-        .into_iter()
-        .map(Expr::Column)
-        .collect::<Vec<_>>();
-    for (old, new) in window.window_expr.iter().zip(&new_window_expr) {
-        let new_col = Expr::Column(Column::from_name(new.schema_name().to_string()));
-        proj_exprs.push(new_col.alias(old.schema_name().to_string()));
-    }
-    LogicalPlanBuilder::from(LogicalPlan::Window(Window::try_new(
-        new_window_expr,
-        Arc::clone(&window.input),
-    )?))
-    .project(proj_exprs)?
-    .build()
-}
-
-fn add_partition_by(expr: &Expr, cols: &BTreeSet<Column>) -> Expr {
-    match expr {
-        Expr::Alias(alias) => Expr::Alias(Alias {
-            expr: Box::new(add_partition_by(&alias.expr, cols)),
-            ..alias.clone()
-        }),
-        Expr::WindowFunction(window_fun) => {
-            let mut window_fun = window_fun.clone();
-            for col in cols {
-                let col = Expr::Column(col.clone());
-                if !window_fun.params.partition_by.contains(&col) {
-                    window_fun.params.partition_by.push(col);
-                }
-            }
-            Expr::WindowFunction(window_fun)
-        }
-        _ => expr.clone(),
-    }
 }
 
 /// Whether the window function `expr` lists each of `cols` as a plain
