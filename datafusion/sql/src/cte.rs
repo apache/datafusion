@@ -81,8 +81,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // Each `WITH` block can change the column names in the last projection
             // (e.g. "WITH table(t1, t2) AS SELECT 1, 2"). Recursive CTEs apply those
             // to the static term in recursive_cte(), so only the relation name here.
-            let is_materialized =
-                cte.materialized == Some(CteAsMaterialized::Materialized);
+            // A body that refers to an outer query would have to run once
+            // per outer row, which is not supported. Such a CTE is inlined,
+            // as if MATERIALIZED was not given.
+            let is_materialized = cte.materialized
+                == Some(CteAsMaterialized::Materialized)
+                && cte_plan.all_out_ref_exprs().is_empty();
             let final_plan = if is_recursive {
                 LogicalPlanBuilder::from(cte_plan)
                     .alias(TableReference::bare(
