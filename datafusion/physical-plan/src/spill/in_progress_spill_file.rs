@@ -21,12 +21,16 @@ use datafusion_common::{Result, internal_datafusion_err};
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, GenericByteViewArray, OffsetSizeTrait, RecordBatch,
-    UInt32Array,
+    AnyDictionaryArray, Array, ArrayRef, AsArray, BooleanBufferBuilder,
+    FixedSizeListArray, GenericByteArray, GenericByteViewArray, GenericListArray,
+    GenericListViewArray, MapArray, OffsetSizeTrait, RecordBatch, RecordBatchOptions,
+    StructArray, make_array,
 };
-use arrow::compute::take_record_batch;
-use arrow::datatypes::{ByteViewType, DataType};
-use arrow_data::MAX_INLINE_VIEW_LEN;
+use arrow::buffer::{BooleanBuffer, OffsetBuffer, ScalarBuffer};
+use arrow::datatypes::{
+    ArrowNativeType, ByteArrayType, ByteViewType, DataType, FieldRef,
+};
+use arrow_data::{ArrayData, MAX_INLINE_VIEW_LEN, transform::MutableArrayData};
 use arrow_select::dictionary::garbage_collect_any_dictionary;
 use datafusion_common::exec_datafusion_err;
 use datafusion_execution::spill_file::SpillFile;
@@ -124,6 +128,16 @@ impl InProgressSpillFile {
 
     /// Appends a `RecordBatch` using the asynchronous spill writer.
     pub async fn append_batch_async(&mut self, batch: &RecordBatch) -> Result<usize> {
+        Ok(self.append_batch_async_with_stats(batch).await?.0)
+    }
+
+    /// Like [`Self::append_batch_async`], but returns both the memory size and the row
+    /// count of the largest batch written. When the batch is split, both describe the
+    /// pieces a reader decodes, not the appended batch.
+    pub(crate) async fn append_batch_async_with_stats(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<(usize, usize)> {
         if self.in_progress_file.is_none() {
             return Err(exec_datafusion_err!(
                 "Append operation failed: No active in-progress file. The file may have already been finalized."
@@ -172,7 +186,8 @@ impl InProgressSpillFile {
                 ));
             }
         }
-        Ok(max_piece_size(&pieces))
+        let max_rows = pieces.iter().map(|(piece, _)| piece.num_rows()).max();
+        Ok((max_piece_size(&pieces), max_rows.unwrap_or(0)))
     }
 
     pub fn flush(&mut self) -> Result<()> {
@@ -259,11 +274,14 @@ impl InProgressSpillFile {
 }
 
 /// Compacts `batch` for spilling and, when `max_batch_bytes` is set, splits it into row
-/// ranges of at most that size by recursive halving. Returns each piece with its post-GC
-/// sliced size, which is what a reader measures when it decodes the piece.
+/// ranges of at most that size by recursive halving. Returns each piece with the size that
+/// a reader measures when it decodes the piece.
 ///
-/// The split is decided on [`referenced_size`], the bytes a row range points at, and only
-/// the final pieces are compacted. The sliced size of an uncompacted slice counts every
+/// Without a bound, the batch is written whole after [`gc_view_arrays`], as before.
+///
+/// With a bound, the split is decided on [`referenced_size`], which models what the IPC
+/// writer encodes for a row range, and each range is then compacted by [`compact_array`]
+/// so that it matches that model. The sliced size of an uncompacted slice counts every
 /// buffer the slice keeps alive, so a slice of a large view array would report the whole
 /// parent, and no split would ever seem to help.
 ///
@@ -275,49 +293,20 @@ fn split_for_spill(
     max_batch_bytes: Option<usize>,
 ) -> Result<Vec<(RecordBatch, usize)>> {
     let Some(max_batch_bytes) = max_batch_bytes else {
-        return Ok(vec![compact_piece(batch, false)?]);
+        let gc_batch = gc_view_arrays(batch)?;
+        let size = gc_batch.get_sliced_size()?;
+        return Ok(vec![(gc_batch, size)]);
     };
     let size = referenced_batch_size(batch)?;
-    if size <= max_batch_bytes || batch.num_rows() <= 1 {
-        return Ok(vec![compact_piece(batch, false)?]);
-    }
     let mut ranges = Vec::new();
     split_ranges(batch, size, max_batch_bytes, &mut ranges)?;
-    if ranges.len() == 1 {
-        return Ok(vec![compact_piece(batch, false)?]);
-    }
-    let mut pieces = Vec::with_capacity(ranges.len());
-    for range in ranges {
-        compact_range(&range, max_batch_bytes, &mut pieces)?;
-    }
-    Ok(pieces)
+    ranges.iter().map(compact_piece).collect()
 }
 
-/// Compacts one range from [`split_ranges`]. The estimate can be lower than the compacted
-/// size (a view builder allocates its data blocks with spare capacity), so a range that the
-/// estimate put within the budget but that compacts to more is halved again. A range that
-/// [`split_ranges`] kept over the budget on purpose (one row, or an undivided payload) is
-/// written as it is.
-fn compact_range(
-    range: &RecordBatch,
-    max_batch_bytes: usize,
-    out: &mut Vec<(RecordBatch, usize)>,
-) -> Result<()> {
-    let (piece, size) = compact_piece(range, true)?;
-    if size <= max_batch_bytes
-        || range.num_rows() <= 1
-        || referenced_batch_size(range)? > max_batch_bytes
-    {
-        out.push((piece, size));
-        return Ok(());
-    }
-    let mid = range.num_rows() / 2;
-    compact_range(&range.slice(0, mid), max_batch_bytes, out)?;
-    compact_range(
-        &range.slice(mid, range.num_rows() - mid),
-        max_batch_bytes,
-        out,
-    )
+/// The size recorded for `batch` when a bounded spill file writes it unsplit.
+#[cfg(test)]
+pub(crate) fn bounded_spill_size(batch: &RecordBatch) -> Result<usize> {
+    Ok(compact_piece(batch)?.1)
 }
 
 /// Halves `batch` until each range is within `max_batch_bytes`, pushing the ranges in row
@@ -350,35 +339,195 @@ fn split_ranges(
     split_ranges(&right, right_size, max_batch_bytes, out)
 }
 
-/// Compacts a piece for writing and returns it with its post-GC sliced size.
+/// Compacts a piece for writing with [`compact_array`] and returns it with the size of
+/// the batch a reader decodes: its [`referenced_batch_size`] plus the IPC padding.
+fn compact_piece(batch: &RecordBatch) -> Result<(RecordBatch, usize)> {
+    let columns = batch
+        .columns()
+        .iter()
+        .map(compact_array)
+        .collect::<Result<Vec<_>>>()?;
+    let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+    let piece = RecordBatch::try_new_with_options(batch.schema(), columns, &options)?;
+    let padding: usize = piece
+        .columns()
+        .iter()
+        .map(|column| ipc_padding(&column.to_data()))
+        .sum();
+    let size = referenced_batch_size(&piece)? + padding;
+    Ok((piece, size))
+}
+
+/// Rewrites the parts of a (possibly sliced) array that the IPC writer would encode whole,
+/// so that what is written is what [`referenced_size`] counts:
 ///
-/// A piece of a split batch is a slice, and a slice keeps the buffers of its parent alive:
-/// the children of lists and maps, the data buffers of view arrays, and the values of
-/// dictionaries. `split` copies the piece out first, so it holds only its own rows, then
-/// drops unused dictionary values. [`gc_view_arrays`] compacts view arrays in both cases.
-fn compact_piece(batch: &RecordBatch, split: bool) -> Result<(RecordBatch, usize)> {
-    let batch = if split {
-        let rows = u32::try_from(batch.num_rows()).map_err(|_| {
-            internal_datafusion_err!("spill batch has more than u32::MAX rows")
-        })?;
-        let copied = take_record_batch(batch, &UInt32Array::from_iter_values(0..rows))?;
-        let columns = copied
-            .columns()
-            .iter()
-            .map(|array| match array.data_type() {
-                DataType::Dictionary(_, _) => {
-                    Ok(garbage_collect_any_dictionary(array.as_any_dictionary())?)
-                }
-                _ => Ok(Arc::clone(array)),
-            })
-            .collect::<Result<Vec<ArrayRef>>>()?;
-        RecordBatch::try_new(copied.schema(), columns)?
-    } else {
-        batch.clone()
+/// - View arrays keep every data buffer they point into: they are garbage collected.
+/// - Dictionaries keep all their values: the unused values are dropped.
+/// - List views keep their whole child: the used child ranges are copied out.
+///
+/// The IPC writer already narrows flat arrays and the children of lists and maps to the
+/// slice, so those are left as they are unless a descendant needs one of the rewrites
+/// above. Other types (unions, run-end encoded arrays) are written as they are.
+fn compact_array(array: &ArrayRef) -> Result<ArrayRef> {
+    if !needs_compaction(array.data_type()) {
+        return Ok(Arc::clone(array));
+    }
+    let compacted: ArrayRef = match array.data_type() {
+        DataType::Utf8View => compact_view(array.as_string_view()),
+        DataType::BinaryView => compact_view(array.as_binary_view()),
+        DataType::Dictionary(_, _) => {
+            let dictionary = array.as_any_dictionary();
+            let used = used_dictionary_values(dictionary);
+            let gc = if used.count_set_bits() < dictionary.values().len() {
+                garbage_collect_any_dictionary(dictionary)?
+            } else {
+                Arc::clone(array)
+            };
+            let dictionary = gc.as_any_dictionary();
+            dictionary.with_values(compact_array(dictionary.values())?)
+        }
+        DataType::List(field) => compact_list(Arc::clone(field), array.as_list::<i32>())?,
+        DataType::LargeList(field) => {
+            compact_list(Arc::clone(field), array.as_list::<i64>())?
+        }
+        DataType::Map(field, ordered) => {
+            let map = array.as_map();
+            let (start, len) = used_child_range(map.value_offsets());
+            let entries: ArrayRef = Arc::new(map.entries().slice(start, len));
+            let entries = compact_array(&entries)?.as_struct().clone();
+            Arc::new(MapArray::try_new(
+                Arc::clone(field),
+                rebase_offsets(map.offsets()),
+                entries,
+                map.nulls().cloned(),
+                *ordered,
+            )?)
+        }
+        DataType::Struct(fields) => {
+            let structs = array.as_struct();
+            let columns = structs
+                .columns()
+                .iter()
+                .map(compact_array)
+                .collect::<Result<Vec<_>>>()?;
+            Arc::new(StructArray::try_new_with_length(
+                fields.clone(),
+                columns,
+                structs.nulls().cloned(),
+                structs.len(),
+            )?)
+        }
+        DataType::FixedSizeList(field, size) => {
+            let list = array.as_fixed_size_list();
+            Arc::new(FixedSizeListArray::try_new(
+                Arc::clone(field),
+                *size,
+                compact_array(list.values())?,
+                list.nulls().cloned(),
+            )?)
+        }
+        DataType::ListView(field) => {
+            compact_list_view(Arc::clone(field), array.as_list_view::<i32>())?
+        }
+        DataType::LargeListView(field) => {
+            compact_list_view(Arc::clone(field), array.as_list_view::<i64>())?
+        }
+        _ => Arc::clone(array),
     };
-    let gc_batch = gc_view_arrays(&batch)?;
-    let size = gc_batch.get_sliced_size()?;
-    Ok((gc_batch, size))
+    Ok(compacted)
+}
+
+/// Whether [`compact_array`] rewrites arrays of this type, which it does when the type or
+/// one of its descendants is a view array, a dictionary or a list view.
+fn needs_compaction(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Utf8View
+        | DataType::BinaryView
+        | DataType::Dictionary(_, _)
+        | DataType::ListView(_)
+        | DataType::LargeListView(_) => true,
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::Map(field, _) => needs_compaction(field.data_type()),
+        DataType::Struct(fields) => fields
+            .iter()
+            .any(|field| needs_compaction(field.data_type())),
+        _ => false,
+    }
+}
+
+/// Garbage collects a view array whose data buffers hold more than its long values.
+fn compact_view<T: ByteViewType + ?Sized>(array: &GenericByteViewArray<T>) -> ArrayRef {
+    let buffers: usize = array.data_buffers().iter().map(|b| b.len()).sum();
+    if buffers > array.total_buffer_bytes_used() {
+        Arc::new(array.gc())
+    } else {
+        Arc::new(array.clone())
+    }
+}
+
+/// Narrows a list to the child range its offsets use, and compacts that range.
+fn compact_list<O: OffsetSizeTrait>(
+    field: FieldRef,
+    list: &GenericListArray<O>,
+) -> Result<ArrayRef> {
+    let (start, len) = used_child_range(list.value_offsets());
+    let values = compact_array(&list.values().slice(start, len))?;
+    Ok(Arc::new(GenericListArray::<O>::try_new(
+        field,
+        rebase_offsets(list.offsets()),
+        values,
+        list.nulls().cloned(),
+    )?))
+}
+
+/// Copies the child range of each list view row into a new child, in row order.
+fn compact_list_view<O: OffsetSizeTrait>(
+    field: FieldRef,
+    list: &GenericListViewArray<O>,
+) -> Result<ArrayRef> {
+    let child = list.values().to_data();
+    let total: usize = list.value_sizes().iter().map(|size| size.as_usize()).sum();
+    let mut values = MutableArrayData::new(vec![&child], false, total);
+    let mut offsets = Vec::with_capacity(list.len());
+    let mut position = 0;
+    for (offset, size) in list.value_offsets().iter().zip(list.value_sizes()) {
+        offsets.push(O::usize_as(position));
+        let (offset, size) = (offset.as_usize(), size.as_usize());
+        if size > 0 {
+            values.try_extend(0, offset, offset + size)?;
+        }
+        position += size;
+    }
+    let values = compact_array(&make_array(values.freeze()))?;
+    Ok(Arc::new(GenericListViewArray::<O>::try_new(
+        field,
+        ScalarBuffer::from(offsets),
+        list.sizes().clone(),
+        values,
+        list.nulls().cloned(),
+    )?))
+}
+
+/// The start and length of the child range that list offsets use.
+fn used_child_range<O: OffsetSizeTrait>(offsets: &[O]) -> (usize, usize) {
+    match (offsets.first(), offsets.last()) {
+        (Some(first), Some(last)) => {
+            (first.as_usize(), last.as_usize() - first.as_usize())
+        }
+        _ => (0, 0),
+    }
+}
+
+/// List offsets that start at zero, for a child narrowed with [`used_child_range`].
+fn rebase_offsets<O: OffsetSizeTrait>(offsets: &OffsetBuffer<O>) -> OffsetBuffer<O> {
+    let first = offsets[0].as_usize();
+    if first == 0 {
+        return offsets.clone();
+    }
+    let rebased = offsets.iter().map(|o| O::usize_as(o.as_usize() - first));
+    OffsetBuffer::new(ScalarBuffer::from_iter(rebased))
 }
 
 fn referenced_batch_size(batch: &RecordBatch) -> Result<usize> {
@@ -389,8 +538,8 @@ fn referenced_batch_size(batch: &RecordBatch) -> Result<usize> {
         .sum::<Result<usize>>()
 }
 
-/// Estimates the bytes that a (possibly sliced) array points at, which is about its size
-/// once compacted.
+/// Estimates the bytes of a (possibly sliced) array once [`compact_array`] compacts it and
+/// the IPC writer writes it: about the size a reader decodes.
 ///
 /// [`arrow::array::ArrayData::get_slice_memory_size`] narrows only the top level of a
 /// slice: a sliced list or map reports its whole child, and a sliced view array reports all
@@ -400,20 +549,21 @@ fn referenced_batch_size(batch: &RecordBatch) -> Result<usize> {
 /// - View arrays: 16 bytes per view, plus each value too long to be stored inline.
 /// - Dictionaries: the keys, plus the values that the keys use.
 /// - Lists, large lists and maps: the offsets, plus the child range that the offsets use.
+/// - List views: the offsets and sizes, plus the child range of each row.
 /// - Structs and fixed-size lists: their children, which `slice` already narrows.
-/// - Other types: `get_slice_memory_size`, which is exact for flat types.
+/// - Other types: `get_slice_memory_size`, which is exact for flat types. Unions and
+///   run-end encoded arrays are counted with all their children.
 fn referenced_size(array: &ArrayRef) -> Result<usize> {
     let nulls = array
         .nulls()
         .map_or(0, |n| n.buffer().len().min(n.len().div_ceil(8)));
     let size = match array.data_type() {
-        DataType::Utf8View => nulls + view_values_size(array.as_string_view()),
-        DataType::BinaryView => nulls + view_values_size(array.as_binary_view()),
+        DataType::Utf8View => nulls + view_array_size(array.as_string_view()),
+        DataType::BinaryView => nulls + view_array_size(array.as_binary_view()),
         DataType::Dictionary(_, _) => {
             let dictionary = array.as_any_dictionary();
             let keys = dictionary.keys().to_data().get_slice_memory_size()?;
-            let used = garbage_collect_any_dictionary(dictionary)?;
-            keys + referenced_size(used.as_any_dictionary().values())?
+            keys + dictionary_values_size(dictionary)?
         }
         DataType::List(_) => {
             let list = array.as_list::<i32>();
@@ -427,6 +577,10 @@ fn referenced_size(array: &ArrayRef) -> Result<usize> {
             let map = array.as_map();
             let entries: ArrayRef = Arc::new(map.entries().clone());
             nulls + list_size(map.value_offsets(), &entries)?
+        }
+        DataType::ListView(_) => nulls + list_view_size(array.as_list_view::<i32>())?,
+        DataType::LargeListView(_) => {
+            nulls + list_view_size(array.as_list_view::<i64>())?
         }
         DataType::Struct(_) => {
             nulls
@@ -447,28 +601,109 @@ fn referenced_size(array: &ArrayRef) -> Result<usize> {
 
 /// The offsets of a list or map, plus the size of the child range that they use.
 fn list_size<O: OffsetSizeTrait>(offsets: &[O], child: &ArrayRef) -> Result<usize> {
-    let (Some(first), Some(last)) = (offsets.first(), offsets.last()) else {
-        return Ok(0);
-    };
-    let start = first.as_usize();
-    let used = child.slice(start, last.as_usize() - start);
-    Ok(size_of_val(offsets) + referenced_size(&used)?)
+    let (start, len) = used_child_range(offsets);
+    Ok(size_of_val(offsets) + referenced_size(&child.slice(start, len))?)
 }
 
-fn view_values_size<T: ByteViewType + ?Sized>(array: &GenericByteViewArray<T>) -> usize {
-    let long_values: usize = array
-        .views()
-        .iter()
-        .map(|view| {
-            let len = *view as u32 as usize;
-            if len > MAX_INLINE_VIEW_LEN as usize {
+/// The offsets and sizes of a list view, plus the child range of each row.
+fn list_view_size<O: OffsetSizeTrait>(list: &GenericListViewArray<O>) -> Result<usize> {
+    let mut size = size_of_val(list.value_offsets()) + size_of_val(list.value_sizes());
+    for (offset, len) in list.value_offsets().iter().zip(list.value_sizes()) {
+        if len.as_usize() > 0 {
+            size +=
+                referenced_size(&list.values().slice(offset.as_usize(), len.as_usize()))?;
+        }
+    }
+    Ok(size)
+}
+
+fn view_array_size<T: ByteViewType + ?Sized>(array: &GenericByteViewArray<T>) -> usize {
+    array.len() * size_of::<u128>() + array.total_buffer_bytes_used()
+}
+
+/// An upper bound on the padding that the IPC writer adds after each buffer of `data`,
+/// which a reader keeps: buffers are written aligned to 64 bytes.
+fn ipc_padding(data: &ArrayData) -> usize {
+    const IPC_ALIGNMENT: usize = 64;
+    let buffers = data.buffers().len() + usize::from(data.nulls().is_some());
+    buffers * (IPC_ALIGNMENT - 1)
+        + data.child_data().iter().map(ipc_padding).sum::<usize>()
+}
+
+/// Marks the dictionary values that at least one non-null key uses.
+fn used_dictionary_values(dictionary: &dyn AnyDictionaryArray) -> BooleanBuffer {
+    let values_len = dictionary.values().len();
+    let mut used = BooleanBufferBuilder::new(values_len);
+    used.append_n(values_len, false);
+    let keys = dictionary.keys();
+    for (row, key) in dictionary.normalized_keys().into_iter().enumerate() {
+        if key < values_len && keys.is_valid(row) {
+            used.set_bit(key, true);
+        }
+    }
+    used.finish()
+}
+
+/// The size of the dictionary values that the keys use, which is what is left of the
+/// values after [`compact_array`] drops the unused ones.
+///
+/// Measured from a bitmap of the used values for byte, view and primitive values, so it
+/// allocates one bit per value instead of copying the used values out. Other value types
+/// fall back to garbage collecting the dictionary.
+fn dictionary_values_size(dictionary: &dyn AnyDictionaryArray) -> Result<usize> {
+    let values = dictionary.values();
+    let used = used_dictionary_values(dictionary);
+    let used_count = used.count_set_bits();
+    if used_count == values.len() {
+        return referenced_size(values);
+    }
+    let size = match values.data_type() {
+        DataType::Utf8 => byte_values_size(values.as_string::<i32>(), &used),
+        DataType::LargeUtf8 => byte_values_size(values.as_string::<i64>(), &used),
+        DataType::Binary => byte_values_size(values.as_binary::<i32>(), &used),
+        DataType::LargeBinary => byte_values_size(values.as_binary::<i64>(), &used),
+        DataType::Utf8View => view_values_size(values.as_string_view(), &used),
+        DataType::BinaryView => view_values_size(values.as_binary_view(), &used),
+        data_type if data_type.is_primitive() => {
+            used_count * data_type.primitive_width().unwrap_or(0)
+        }
+        _ => {
+            let gc = garbage_collect_any_dictionary(dictionary)?;
+            return referenced_size(gc.as_any_dictionary().values());
+        }
+    };
+    let nulls = values.nulls().map_or(0, |_| used_count.div_ceil(8));
+    Ok(nulls + size)
+}
+
+fn byte_values_size<T: ByteArrayType>(
+    values: &GenericByteArray<T>,
+    used: &BooleanBuffer,
+) -> usize {
+    let offset_size = size_of::<T::Offset>();
+    let lengths: usize = used
+        .set_indices()
+        .map(|i| values.value_length(i).as_usize() + offset_size)
+        .sum();
+    lengths + offset_size
+}
+
+fn view_values_size<T: ByteViewType + ?Sized>(
+    values: &GenericByteViewArray<T>,
+    used: &BooleanBuffer,
+) -> usize {
+    let views = values.views();
+    used.set_indices()
+        .map(|i| {
+            let len = views[i] as u32 as usize;
+            let long = if len > MAX_INLINE_VIEW_LEN as usize {
                 len
             } else {
                 0
-            }
+            };
+            size_of::<u128>() + long
         })
-        .sum();
-    array.len() * size_of::<u128>() + long_values
+        .sum()
 }
 
 fn max_piece_size(pieces: &[(RecordBatch, usize)]) -> usize {
@@ -484,6 +719,7 @@ mod tests {
     };
     use arrow_schema::{Field, Fields, Schema, SchemaRef};
     use datafusion_common::DataFusionError;
+    use datafusion_common::utils::memory::get_record_batch_memory_size;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_physical_expr_common::metrics::{
         ExecutionPlanMetricsSet, SpillMetrics,
@@ -587,6 +823,17 @@ mod tests {
             .read_spill_as_stream(file, Some(max_memory))?
             .try_collect::<Vec<_>>()
             .await?;
+        // The reader only logs a batch larger than the recorded size, so check it here:
+        // the merge reserves memory from the recorded size. A decoded batch shares one
+        // allocation per IPC message, which `get_sliced_size` counts once per view data
+        // buffer, so compare the memory the batch actually holds.
+        for batch in &read {
+            let size = get_record_batch_memory_size(batch);
+            assert!(
+                size <= max_memory,
+                "read back a batch of {size} bytes, recorded {max_memory}"
+            );
+        }
         Ok((read, max_memory))
     }
 
@@ -634,8 +881,8 @@ mod tests {
         Ok(())
     }
 
-    /// Repeated values are deduplicated within each piece, so the pieces do not add up to the
-    /// parent. The bound and the row order must still hold.
+    /// Many rows share each long value, so the pieces reference overlapping parts of the
+    /// parent's data buffers. The bound and the row order must still hold.
     #[tokio::test]
     async fn repeated_view_values_are_split_and_kept_in_order() -> Result<()> {
         let values = (0..256).map(|i| wide_value(i % 4));
@@ -839,6 +1086,124 @@ mod tests {
             read.len()
         );
         assert_same_rows(&read, &[batch]);
+        Ok(())
+    }
+
+    fn dictionary_type(values: DataType) -> DataType {
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(values))
+    }
+
+    /// A small batch whose keys use a few values of a large dictionary, as `take` produces
+    /// when a sort emits a chunk. It is within the budget and not split, but it must still
+    /// drop the unused values, or the reader decodes the whole dictionary with it.
+    #[tokio::test]
+    async fn unsplit_batch_drops_unused_dictionary_values() -> Result<()> {
+        let values = StringArray::from_iter_values((0..256).map(wide_value));
+        let keys = Int32Array::from_iter_values([3, 7, 7, 200]);
+        let dictionary = DictionaryArray::try_new(keys, Arc::new(values))?;
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "d",
+                dictionary_type(DataType::Utf8),
+                false,
+            )])),
+            vec![Arc::new(dictionary)],
+        )?;
+        let budget = 1024 * 1024;
+        let (read, max_memory) = round_trip(std::slice::from_ref(&batch), budget).await?;
+        assert_eq!(read.len(), 1);
+        assert!(
+            max_memory <= 4 * WIDE,
+            "recorded {max_memory} bytes for 3 used values"
+        );
+        assert_eq!(read[0].column(0).as_any_dictionary().values().len(), 3);
+        Ok(())
+    }
+
+    /// A dictionary inside a struct is compacted like a top-level one, so halving shrinks
+    /// the pieces instead of writing one-row pieces that each carry the whole dictionary.
+    #[tokio::test]
+    async fn nested_dictionary_is_divided() -> Result<()> {
+        let values = StringArray::from_iter_values((0..128).map(wide_value));
+        let keys = Int32Array::from_iter_values(0..128);
+        let dictionary: ArrayRef =
+            Arc::new(DictionaryArray::try_new(keys, Arc::new(values))?);
+        let fields = Fields::from(vec![Field::new(
+            "d",
+            dictionary_type(DataType::Utf8),
+            false,
+        )]);
+        let structs: ArrayRef = Arc::new(StructArray::try_new(
+            fields.clone(),
+            vec![dictionary],
+            None,
+        )?);
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "s",
+                DataType::Struct(fields),
+                false,
+            )])),
+            vec![structs],
+        )?;
+        let budget = 1024 * 1024;
+        let (read, max_memory) = round_trip(std::slice::from_ref(&batch), budget).await?;
+        assert!(
+            max_memory <= budget,
+            "largest spilled batch is {max_memory} bytes"
+        );
+        assert!(
+            (8..=32).contains(&read.len()),
+            "expected 8 to 32 pieces, got {}",
+            read.len()
+        );
+        Ok(())
+    }
+
+    /// A list view keeps its whole child when it is sliced, and the IPC writer writes that
+    /// child whole, so each piece must copy out only the child ranges its rows use.
+    #[tokio::test]
+    async fn list_view_column_is_split() -> Result<()> {
+        let list = wide_list(256);
+        let list_view: ArrayRef = Arc::new(arrow::array::ListViewArray::from(
+            list.as_list::<i32>().clone(),
+        ));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "l",
+            list_view.data_type().clone(),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![list_view.slice(64, 128)])?;
+        let budget = 1024 * 1024;
+        let (read, max_memory) = round_trip(std::slice::from_ref(&batch), budget).await?;
+        assert!(
+            max_memory <= budget,
+            "largest spilled batch is {max_memory} bytes"
+        );
+        assert!(
+            read.len() >= 8,
+            "expected at least 8 pieces, got {}",
+            read.len()
+        );
+        assert_same_rows(&read, &[batch]);
+        Ok(())
+    }
+
+    /// The largest row count returned with the size describes the pieces, not the
+    /// appended batch.
+    #[tokio::test]
+    async fn stats_count_rows_per_piece() -> Result<()> {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("v", DataType::Utf8, false)])),
+            vec![Arc::new(StringArray::from_iter_values(
+                (0..64).map(wide_value),
+            ))],
+        )?;
+        let manager = manager(batch.schema(), Some(4 * WIDE + WIDE / 2))?;
+        let mut file = manager.create_in_progress_file("test")?;
+        let (size, rows) = file.append_batch_async_with_stats(&batch).await?;
+        assert!(size <= 4 * WIDE + WIDE / 2);
+        assert_eq!(rows, 4);
         Ok(())
     }
 }

@@ -71,7 +71,11 @@ impl SpillManager {
     /// (best effort: one row, or a payload that no split divides, can be larger), and each
     /// range is written as its own IPC message. Row order is kept, but one appended batch
     /// can come back as several batches when the file is read.
-    pub fn with_max_batch_bytes(mut self, max_batch_bytes: Option<usize>) -> Self {
+    ///
+    /// Only for readers that read a file until it ends. Readers that expect one batch
+    /// per append, such as [`crate::spill::spill_pool`] and the sort-merge join's
+    /// spilled buffered batches, must use a manager without a bound.
+    pub(crate) fn with_max_batch_bytes(mut self, max_batch_bytes: Option<usize>) -> Self {
         self.max_batch_bytes = max_batch_bytes;
         self
     }
@@ -175,10 +179,12 @@ impl SpillManager {
 
             while let Some(batch) = stream.next().await {
                 let batch = batch?;
-                let gc_sliced_size = in_progress_file.append_batch_async(&batch).await?;
+                let (gc_sliced_size, rows) = in_progress_file
+                    .append_batch_async_with_stats(&batch)
+                    .await?;
 
                 max_record_batch_size = max_record_batch_size.max(gc_sliced_size);
-                max_batch_rows = max_batch_rows.max(batch.num_rows());
+                max_batch_rows = max_batch_rows.max(rows);
             }
 
             let file = in_progress_file.finish_async().await?;

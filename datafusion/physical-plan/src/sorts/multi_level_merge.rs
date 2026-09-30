@@ -542,6 +542,11 @@ impl MultiLevelMergeBuilder {
                 self.metrics.intermediate()
             })
             .with_round_robin_tie_breaker(self.enable_round_robin_tie_breaker)
+            // Bound merged batches by the same size as spilled ones. A merge reserves
+            // memory for the largest batch of each spill file it reads but not for its
+            // own output, so wide rows would otherwise build `batch_size`-row outputs
+            // many times larger than that reservation.
+            .with_max_batch_bytes(self.spill_manager.max_batch_bytes)
             .with_streams(streams);
 
         if !all_in_memory {

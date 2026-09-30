@@ -26,14 +26,16 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, Int64Array, ListBuilder, RecordBatch, StringArray, StringBuilder,
+    ArrayRef, AsArray, Int64Array, ListBuilder, RecordBatch, StringArray, StringBuilder,
     StringViewArray,
 };
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::datasource::MemTable;
 use datafusion::execution::memory_pool::FairSpillPool;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::physical_plan::collect;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::utils::memory::get_record_batch_memory_size;
 
 /// 64 KiB per row.
 const ROW_BYTES: usize = 64 * 1024;
@@ -43,6 +45,22 @@ const ROWS: usize = 512;
 const INPUT_BATCH_ROWS: usize = 4;
 /// Holds about 190 rows, less than half of `ROWS`, so the sort must spill.
 const POOL_BYTES: usize = 12 * 1024 * 1024;
+const SPILL_RESERVATION_BYTES: usize = 1024 * 1024;
+/// The sort bounds spilled and merged batches by a quarter of
+/// `sort_spill_reservation_bytes`, but by no less than 1 MiB.
+const MAX_MERGED_BATCH_BYTES: usize = 1024 * 1024;
+
+fn compact_views(batch: &RecordBatch) -> RecordBatch {
+    let columns = batch
+        .columns()
+        .iter()
+        .map(|column| match column.as_string_view_opt() {
+            Some(views) => Arc::new(views.gc()) as ArrayRef,
+            None => Arc::clone(column),
+        })
+        .collect();
+    RecordBatch::try_new(batch.schema(), columns).unwrap()
+}
 
 fn payload(i: usize) -> String {
     format!("{i:08}{}", "x".repeat(ROW_BYTES))
@@ -93,17 +111,36 @@ async fn sort_wide_rows(data_type: DataType) {
         .with_target_partitions(1)
         // 512 rows of 64 KiB is 32 MiB, more than the pool.
         .with_batch_size(ROWS)
-        .with_sort_spill_reservation_bytes(1024 * 1024);
+        .with_sort_spill_reservation_bytes(SPILL_RESERVATION_BYTES);
     let ctx = SessionContext::new_with_config_rt(config, runtime);
     ctx.register_table("t", Arc::new(table)).unwrap();
 
-    let result = ctx
+    let plan = ctx
         .sql("SELECT id, payload FROM t ORDER BY id DESC")
         .await
         .unwrap()
-        .collect()
+        .create_physical_plan()
+        .await
+        .unwrap();
+    let result = collect(Arc::clone(&plan), ctx.task_ctx())
         .await
         .expect("the sort must spill and finish");
+
+    let spill_count = plan.metrics().and_then(|m| m.spill_count()).unwrap_or(0);
+    assert!(spill_count > 0, "the sort must spill, plan:\n{plan:?}");
+
+    // The merge of the spill files reserves memory for the largest spilled batch of each
+    // file, not for its output, so it must bound its output batches in bytes too (by at
+    // least 1 MiB), plus up to one row. Merged view arrays point into the input batches'
+    // data buffers, so compact them to measure what the output itself holds.
+    for batch in &result {
+        let size = get_record_batch_memory_size(&compact_views(batch));
+        assert!(
+            size <= MAX_MERGED_BATCH_BYTES + 2 * ROW_BYTES,
+            "merged a batch of {size} bytes ({} rows)",
+            batch.num_rows()
+        );
+    }
 
     let ids: Vec<i64> = result
         .iter()

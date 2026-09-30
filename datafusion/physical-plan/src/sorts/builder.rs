@@ -76,6 +76,13 @@ pub struct BatchBuilder {
     /// The accumulated stream indexes from which to pull rows
     /// Consists of a tuple of `(batch_idx, row_idx)`
     indices: Vec<(usize, usize)>,
+
+    /// Estimated bytes per row of the current batch of each stream: the batch's memory
+    /// size divided by its row count.
+    cursor_row_bytes: Vec<usize>,
+
+    /// Estimated size of the rows in `indices`, the sum of their `cursor_row_bytes`.
+    in_progress_bytes: usize,
 }
 
 impl BatchBuilder {
@@ -95,6 +102,8 @@ impl BatchBuilder {
             reservation,
             batches_mem_used: 0,
             initial_reservation,
+            cursor_row_bytes: vec![0; stream_count],
+            in_progress_bytes: 0,
         }
     }
 
@@ -106,6 +115,7 @@ impl BatchBuilder {
         // usage exceeds the current reservation (which may include
         // pre-reserved bytes from sort_spill_reservation_bytes).
         try_grow_reservation_to_at_least(&mut self.reservation, self.batches_mem_used)?;
+        self.cursor_row_bytes[stream_idx] = size / batch.num_rows().max(1);
         let batch_idx = self.batches.len();
         self.batches.push((stream_idx, batch));
         self.cursors[stream_idx] = BatchCursor {
@@ -129,6 +139,16 @@ impl BatchBuilder {
         let row_idx = cursor.row_idx;
         cursor.row_idx += 1;
         self.indices.push((cursor.batch_idx, row_idx));
+        self.in_progress_bytes += self.cursor_row_bytes[stream_idx];
+    }
+
+    /// Returns the estimated in-memory size of the in-progress rows, from the average
+    /// row size of the batch each row comes from.
+    ///
+    /// This is an estimate: rows of one batch can differ in size, and the interleaved
+    /// output can be smaller than its share of the input buffers (e.g. dictionaries).
+    pub fn in_progress_bytes(&self) -> usize {
+        self.in_progress_bytes
     }
 
     /// Returns the number of in-progress rows in this [`BatchBuilder`]
@@ -171,8 +191,16 @@ impl BatchBuilder {
         rows_to_emit: usize,
         columns: Vec<ArrayRef>,
     ) -> Result<RecordBatch> {
-        // Remove consumed indices, keeping any remaining for the next call.
+        // Remove consumed indices, keeping any remaining for the next call. The
+        // remaining rows keep their proportional share of the size estimate.
+        let rows_before = self.indices.len();
         self.indices.drain(..rows_to_emit);
+        self.in_progress_bytes = if self.indices.is_empty() {
+            0
+        } else {
+            (self.in_progress_bytes as u128 * self.indices.len() as u128
+                / rows_before as u128) as usize
+        };
 
         if self.indices.is_empty() {
             self.retain_cursor_batches();
@@ -509,5 +537,18 @@ mod tests {
             .unwrap_err();
 
         assert!(is_offset_overflow(&error));
+    }
+
+    #[test]
+    fn test_in_progress_bytes_tracks_rows_and_partial_emit() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let mut builder = BatchBuilder::new(Arc::clone(&schema), 1, 8, reservation());
+        let batch = int_batch((0..8).collect());
+        let row_bytes = get_record_batch_memory_size(&batch) / 8;
+        builder.push_batch(0, batch).unwrap();
+        push_n_rows(&mut builder, 0, 4);
+        assert_eq!(builder.in_progress_bytes(), 4 * row_bytes);
+        emit_n_rows(&mut builder, 4);
+        assert_eq!(builder.in_progress_bytes(), 0);
     }
 }
