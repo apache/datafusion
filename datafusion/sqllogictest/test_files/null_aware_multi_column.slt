@@ -296,9 +296,10 @@ WHERE (a, b) NOT IN (SELECT x, y FROM mc_float_inner_null);
 ----
 2 5
 
-# A null-aware hash join needs every value pair as a hashable equi-join key.
-# RunEndEncoded is not hashable, so the join is rejected instead of reading a
-# correlation key as a value key.
+# A null-aware hash join reads its first keys as the tuple elements. A
+# RunEndEncoded element is not hashable, so it would stay in the join filter
+# and a correlation key would take its key position; the tuple is rejected
+# instead.
 statement ok
 CREATE TABLE mc_ree_outer AS
 SELECT k, arrow_cast(a, 'RunEndEncoded("run_ends": non-null Int32, "values": Int32)') AS a, b
@@ -309,13 +310,19 @@ CREATE TABLE mc_ree_inner AS
 SELECT k, arrow_cast(x, 'RunEndEncoded("run_ends": non-null Int32, "values": Int32)') AS x, y
 FROM mc_lt_inner;
 
-statement error NOT IN subquery comparing .* is not supported: the pair is not a hashable equi-join key
+statement error Multi-column NOT IN subquery is not supported when a tuple element is not a hashable equi-join key
 SELECT * FROM mc_ree_outer o
 WHERE (a, b) NOT IN (SELECT x, y FROM mc_ree_inner i WHERE i.k = o.k);
 
-statement error NOT IN subquery comparing .* is not supported: the pair is not a hashable equi-join key
+# A scalar NOT IN has a fallback for this case. k=1 holds 1; k=3 holds NULL
+# and 9, so its NULL value is UNKNOWN; the other rows have an empty scope.
+query I?I rowsort
 SELECT * FROM mc_ree_outer o
 WHERE a NOT IN (SELECT x FROM mc_ree_inner i WHERE i.k = o.k);
+----
+2 1 2
+4 7 7
+5 4 2
 
 #############
 ## Tuple and subquery column counts

@@ -155,6 +155,16 @@ fn analyze_internal(
     // apply coercion rewrite all expressions in the plan individually
     plan.map_expressions(|expr| {
         let original_name = name_preserver.save(&expr);
+
+        // A lambda variable carries the field recorded when the plan was built, which
+        // need not be the one its function derives from the arguments. Resolve them
+        // before coercing, so lambda bodies are coerced against the types they receive.
+        let expr = if expr.exists(|e| Ok(matches!(e, Expr::HigherOrderFunction(_))))? {
+            expr.resolve_lambda_variables(&schema)?.data
+        } else {
+            expr
+        };
+
         expr.rewrite(&mut expr_rewrite)
             .map(|transformed| transformed.update_data(|e| original_name.restore(e)))
     })?
