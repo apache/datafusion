@@ -483,7 +483,9 @@ impl ExecutionPlan for PartitionedTopKExec {
 ///    this operator instance.
 ///
 /// 2. **Emission** — `emit` drains all per-partition state in sorted
-///    partition-key order, returning a coalesced batch stream. For
+///    partition-key order. `ROW_NUMBER` interleaves the retained rows out
+///    of its shared store in `batch_size` chunks, so its output needs no
+///    coalescing; `RANK` and `DENSE_RANK` still coalesce. For
 ///    `RANK`, boundary-tied rows are materialized and emitted after
 ///    each partition's heap rows. For `DENSE_RANK`, rows are emitted
 ///    from a K-bounded map of distinct ob keys, sorted ascending.
@@ -492,7 +494,9 @@ impl ExecutionPlan for PartitionedTopKExec {
 ///
 /// - Time: O(N log K) where N = total rows, K = fetch
 /// - Memory: O(K × P × row_size) where P = number of distinct partitions
-///   plus, for RANK, the boundary ties' rows
+///   plus, for RANK, the boundary ties' rows. `ROW_NUMBER` holds its rows
+///   by reference into gathered batches, so its constant is the store's
+///   compaction ratio, and one in-flight gather is pinned on top.
 #[expect(clippy::too_many_arguments)]
 async fn do_partitioned_topk(
     partition_id: usize,

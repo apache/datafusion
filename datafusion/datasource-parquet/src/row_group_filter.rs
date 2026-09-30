@@ -101,10 +101,6 @@ impl RowGroupAccessPlanFilter {
     }
 
     /// Returns a reference to the inner access plan.
-    ///
-    /// Test-only accessor used by the shared assertion helpers in
-    /// [`crate::test_util`].
-    #[cfg(test)]
     pub(crate) fn access_plan(&self) -> &ParquetAccessPlan {
         &self.access_plan
     }
@@ -452,6 +448,11 @@ impl RowGroupAccessPlanFilter {
         assert_eq!(row_group_bloom_filters.len(), self.access_plan.len());
         for (idx, stats) in row_group_bloom_filters.iter().enumerate() {
             if !self.access_plan.should_scan(idx) {
+                continue;
+            }
+
+            if self.access_plan.is_fully_matched(idx) {
+                metrics.row_groups_pruned_bloom_filter.add_matched(1);
                 continue;
             }
 
